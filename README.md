@@ -11,9 +11,9 @@ GitHub project.
 ## What is IDD?
 
 IDD is a multi-agent GitHub automation workflow where AI agents work
-through a repeating pipeline driven entirely by GitHub Issues:
-
-**Discover → Claim → Work → PR Submit → CI Wait → Review Triage → Review Fix → Merge → Loop**
+through a repeating pipeline driven entirely by GitHub Issues. The
+phases are: Discover → Claim → Work → PR Submit → CI Wait →
+Review Triage → Review Fix → Merge → Loop.
 
 Each phase is encoded as a `.github/instructions/` file that any
 compatible AI agent can load — GitHub Copilot, Claude Code, Codex CLI,

@@ -27,7 +27,7 @@ Open `ONBOARDING.md` and follow the instructions there.
 
 ## Files
 
-```
+```text
 .github/instructions/
   idd-overview.instructions.md       ← shared definitions, auto-loaded (applyTo: **)
   idd-discover.instructions.md       ← A1–A4: find and select next issue

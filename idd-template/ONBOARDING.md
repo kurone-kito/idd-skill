@@ -59,7 +59,7 @@ the repo (e.g., the repo name itself).
 Copy the following files from this template into the target repository,
 preserving their relative paths:
 
-```
+```text
 .github/instructions/idd-overview.instructions.md
 .github/instructions/idd-discover.instructions.md
 .github/instructions/idd-claim.instructions.md
