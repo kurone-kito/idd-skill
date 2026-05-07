@@ -1,0 +1,23 @@
+{
+  "explorer.fileNesting.enabled": true,
+  "explorer.fileNesting.expand": false,
+  "explorer.fileNesting.patterns": {
+    "*.md": "${capture}.*.md",
+    ".gitattributes": ".gitignore, .gitmessage",
+    ".markdownlint.*": ".markdownlint-cli2.*",
+    "AGENTS.md": "CLAUDE.md, GEMINI.md"
+  },
+  "files.associations": {
+    ".gitmessage": "git-commit",
+    ".imgbotconfig": "json",
+    "LICENSE": "plaintext"
+  },
+  "git.branchProtection": ["main"],
+  "material-icon-theme.files.associations": {
+    ".imgbotconfig": "robots"
+  },
+  "yaml.schemas": {
+    "https://raw.githubusercontent.com/streetsidesoftware/cspell/main/packages/cspell-types/cspell.schema.json": ".cspell.config.yml",
+    "https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json": ".coderabbit.yaml"
+  }
+}
