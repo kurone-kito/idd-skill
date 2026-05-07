@@ -92,6 +92,33 @@ Base URL: `https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-temp
 Fetch all files with `gh api` (recommended — handles auth automatically):
 
 ```sh
+DEST="."  # root of the target repository
+
+mkdir -p "${DEST}/.github/instructions" "${DEST}/docs"
+
+for FILE in \
+  ".github/instructions/idd-overview.instructions.md" \
+  ".github/instructions/idd-discover.instructions.md" \
+  ".github/instructions/idd-claim.instructions.md" \
+  ".github/instructions/idd-work.instructions.md" \
+  ".github/instructions/idd-pr-submit.instructions.md" \
+  ".github/instructions/idd-ci.instructions.md" \
+  ".github/instructions/idd-review-triage.instructions.md" \
+  ".github/instructions/idd-review-fix.instructions.md" \
+  ".github/instructions/idd-merge.instructions.md" \
+  ".github/instructions/idd-resume.instructions.md" \
+  "docs/idd-workflow.md"
+do
+  gh api -H "Accept: application/vnd.github.raw+json" \
+    "repos/kurone-kito/idd-skill/contents/idd-template/${FILE}" \
+    > "${DEST}/${FILE}"
+done
+```
+
+Alternatively, use `curl` (no authentication required — idd-skill is a public
+repository):
+
+```sh
 BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template"
 DEST="."  # root of the target repository
 
@@ -110,21 +137,8 @@ for FILE in \
   ".github/instructions/idd-resume.instructions.md" \
   "docs/idd-workflow.md"
 do
-  gh api --paginate -H "Accept: application/vnd.github.raw+json" \
-    "repos/kurone-kito/idd-skill/contents/idd-template/${FILE}" \
-    > "${DEST}/${FILE}"
+  curl -fsSL "${BASE}/${FILE}" -o "${DEST}/${FILE}"
 done
-```
-
-Alternatively, use `curl` with a GitHub personal-access token:
-
-```sh
-BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template"
-# Set GH_TOKEN to a token with 'contents: read' permission if the repo
-# is private; for a public repo the token is optional.
-AUTH="${GH_TOKEN:+-H "Authorization: token ${GH_TOKEN}"}"
-# Then for each FILE in the list above:
-curl -fsSL ${AUTH} "${BASE}/${FILE}" -o "${DEST}/${FILE}"
 ```
 
 ### Option B — Local copy (idd-skill cloned)
