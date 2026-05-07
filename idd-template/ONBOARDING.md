@@ -4,10 +4,17 @@ This document is the entry point for an AI agent tasked with importing
 and configuring the IDD (Issue-Driven Development) workflow template into
 a new repository.
 
-> **Tip for agents invoked via the trigger phrase**: if you arrived here
-> by fetching this URL, you do not need to clone the idd-skill repository.
-> Step 2 below provides raw-content URLs for every template file so you
-> can download them directly.
+> **Invoked via the trigger phrase?** If the operator told you to read
+> this URL and onboard, you are in the right place. You do not need to
+> clone the idd-skill repository — Step 2 Option A below provides the
+> commands to download every template file directly from GitHub.
+>
+> The canonical trigger phrase users give their AI agent is:
+>
+> _"I want to use `github:idd-skill`'s Issue-Driven Development in this
+> repository. Read
+> `https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md`
+> and onboard me."_
 
 ## What you are setting up
 
