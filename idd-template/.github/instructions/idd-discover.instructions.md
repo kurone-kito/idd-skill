@@ -18,14 +18,8 @@ Read the **issue-scope** value from the Project commands table in
 
 ## A0-O — Discover orphan issues
 
-First, check whether any open issue contains a
-`<!-- {{PROJECT_MARKER_PREFIX}}-roadmap-id: … -->` marker. If such an
-issue exists (a roadmap is active), skip A0-O entirely and fall back
-to **A1**. The `orphan-first` path is only active when no roadmap issue
-exists.
-
-If no roadmap issue exists, search all open issues in the repository.
-Collect every issue whose body satisfies **all** of the following:
+Search all open issues in the repository. Collect every issue whose
+body satisfies **all** of the following:
 
 - Does NOT contain any
   `<!-- {{PROJECT_MARKER_PREFIX}}-roadmap-id: … -->` marker (the issue
@@ -92,6 +86,10 @@ include only **open** issues in the A2 candidate set.
 **Permitted repo-wide queries** — only the following scoped lookups may
 touch issues outside the roadmap traversal graph:
 
+- **A0-O only** (when `issue-scope` is `orphan-first`): a repo-wide
+  open-issue query to find issues without
+  `{{PROJECT_MARKER_PREFIX}}-roadmap-id` or
+  `{{PROJECT_MARKER_PREFIX}}-blocked-by` markers.
 - **A1 only**: any method (including `gh issue list`, `gh search`, or
   label-based queries) to locate the roadmap issue itself.
 - **A3 only**: a body-content search (e.g.,
