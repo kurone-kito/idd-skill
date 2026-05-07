@@ -1,6 +1,9 @@
 # Guidelines for AI Agents
 
-This project is a language-independent generic project template.
+This repository distributes the IDD (Issue-Driven Development)
+workflow — a portable set of `.github/instructions/` files that wire up
+a multi-agent issue-driven pipeline for any GitHub project.
+
 It is currently optimized for GitHub Copilot tooling, but `CLAUDE.md`
 exists so Claude Code can still receive the minimum project rules
 immediately, without depending on a redirect.
@@ -42,21 +45,15 @@ disabled). Feature branches are always rebased onto `main`, never
 merged. See the full rules in
 [.github/copilot-instructions.md](.github/copilot-instructions.md#branch-strategy).
 
-## Onboarding detection
+## IDD Workflow
 
-When starting a session, check whether this repository is the base
-template or a derived project:
+This project uses Issue-Driven Development (IDD) with parallel AI
+agents. Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
+cross-agent entry path and phase routing.
 
-- If the repository name is exactly `template`, it is the base
-  template — no action needed.
-- If the name differs **and** this file still contains the phrase
-  `language-independent generic project template`, the guidelines
-  have not been customized yet.
-
-In that case, **proactively propose an onboarding workflow** to
-customize the project's documentation, tooling, and AI guidelines.
-See the full onboarding checklist in
-[.github/copilot-instructions.md](.github/copilot-instructions.md).
+`.github/instructions/idd-overview.instructions.md` loads automatically
+because it has `applyTo: "**"`. Open the routed phase file manually when
+the current step changes.
 
 ## Canonical reference
 

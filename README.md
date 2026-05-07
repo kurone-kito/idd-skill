@@ -1,59 +1,49 @@
-# 📄 Generic repository template
+# IDD Skill — Issue-Driven Development workflow
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Linting](https://github.com/kurone-kito/template/actions/workflows/lint.yml/badge.svg)](https://github.com/kurone-kito/template/actions/workflows/lint.yml)
+[![Linting](https://github.com/kurone-kito/idd-skill/actions/workflows/lint.yml/badge.svg)](https://github.com/kurone-kito/idd-skill/actions/workflows/lint.yml)
 [![CodeRabbit](https://img.shields.io/badge/review-CodeRabbit-green?logo=coderabbit)](https://www.coderabbit.ai/)
 
-A language-agnostic project template designed as the root of a hierarchy
-of derived templates.
+A portable set of `.github/instructions/` files and documentation that
+wire up an Issue-Driven Development (IDD) multi-agent pipeline for any
+GitHub project.
 
-## Features
+## What is IDD?
 
-- AI agent guidance with a Copilot-first compatibility layout
-  ([GitHub Copilot canonical guide](.github/copilot-instructions.md),
-  [OpenAI Codex adapter](AGENTS.md),
-  [Claude Code adapter](CLAUDE.md),
-  [Gemini CLI adapter](GEMINI.md),
-  [strategy notes](docs/ai-strategy.md))
-- CI/CD
-  - [CodeRabbit](https://www.coderabbit.ai/)
-  - [ImgBot](https://imgbot.net/)
-  - Linting on GitHub Actions
-  - Stale issues and pull requests management on GitHub Actions
-- [Conventional Commits](https://www.conventionalcommits.org/)
-- Documents for GitHub
-- Git attributes
-- Linters
-  - [CSpell](https://cspell.org/)
-  - [EditorConfig](https://editorconfig.org/)
-  - [MarkdownLint](https://github.com/DavidAnson/markdownlint)
+IDD is a multi-agent GitHub automation workflow where AI agents work
+through a repeating pipeline driven entirely by GitHub Issues:
 
-### Recommended NeoVim / Vim plugins
+**Discover → Claim → Work → PR Submit → CI Wait → Review Triage → Review Fix → Merge → Loop**
 
-- [editorconfig-vim](https://github.com/editorconfig/editorconfig-vim) —
-  EditorConfig support
-- [cspell.nvim](https://github.com/davidmh/cspell.nvim) — CSpell
-  integration for NeoVim (via null-ls / none-ls)
+Each phase is encoded as a `.github/instructions/` file that any
+compatible AI agent can load — GitHub Copilot, Claude Code, Codex CLI,
+or Gemini CLI.
 
-## Using this template
+## Importing IDD into your project
 
-1. Click "Use this template" on GitHub to create your repository.
-2. Replace the LICENSE file if you prefer a different license.
-3. Review workflows under `.github/workflows` and adjust them to your needs.
-4. Customize the configuration files:
-   - `.editorconfig` sets editor rules.
-   - `.gitattributes` manages line ending normalization and export rules.
-   - `.imgbotconfig` controls image optimization.
-   - `.markdownlint.yml` and `.markdownlint-cli2.yaml` define Markdown
-     lint rules.
-   - `.cspell.config.yml` configures spell checking.
-   - `.coderabbit.yaml` contains CodeRabbit settings.
-   - `.vscode/` provides recommended settings for VS Code.
-5. Update documents in `.github/` such as CONTRIBUTING.md to match your
-   policies.
-6. Review `docs/ai-strategy.md`, then update `AGENTS.md`,
-   `CLAUDE.md`, `GEMINI.md`, and `.github/copilot-instructions.md` to
-   reflect your project specifics and preferred tooling order.
+### With an AI agent (recommended)
+
+Start a session in your target repository and ask your agent:
+
+> Read `https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md`
+> and follow the instructions to import IDD into this repository.
+
+The agent will ask for a few project-specific values (repo name,
+validation commands) and then copy the instruction files and update
+your agent entry files automatically.
+
+### Manually
+
+1. Clone or download this repository.
+2. Copy the `idd-template/` directory contents into your target repository.
+3. Follow `idd-template/ONBOARDING.md` to fill in the placeholders and
+   update your agent entry files.
+
+## This repository
+
+This repository is itself maintained with the IDD workflow. See
+[docs/idd-workflow.md](docs/idd-workflow.md) for the active workflow
+guide and `.github/instructions/` for the full instruction set.
 
 ## License
 
