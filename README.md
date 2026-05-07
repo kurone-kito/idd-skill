@@ -8,6 +8,19 @@ A portable set of `.github/instructions/` files and documentation that
 wire up an Issue-Driven Development (IDD) multi-agent pipeline for any
 GitHub project.
 
+## Quick start
+
+Open a session in your target repository and tell your AI agent:
+
+> I want to use `github:idd-skill`'s Issue-Driven Development in this
+> repository. Read
+> `https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md`
+> and onboard me.
+
+The agent will collect a few project-specific values (repo name,
+validation commands) and then set up the full IDD workflow
+automatically — no manual file copying required.
+
 ## What is IDD?
 
 IDD is a multi-agent GitHub automation workflow where AI agents work
@@ -19,20 +32,7 @@ Each phase is encoded as a `.github/instructions/` file that any
 compatible AI agent can load — GitHub Copilot, Claude Code, Codex CLI,
 or Gemini CLI.
 
-## Importing IDD into your project
-
-### With an AI agent (recommended)
-
-Start a session in your target repository and ask your agent:
-
-> Read `https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md`
-> and follow the instructions to import IDD into this repository.
-
-The agent will ask for a few project-specific values (repo name,
-validation commands) and then copy the instruction files and update
-your agent entry files automatically.
-
-### Manually
+## Importing IDD manually
 
 1. Clone or download this repository.
 2. Copy the `idd-template/` directory contents into your target repository.
