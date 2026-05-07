@@ -137,7 +137,9 @@ Two hidden HTML comment markers are used in issue bodies to support the
 discover phase:
 
 - **Roadmap identity** (`idd-skill-roadmap-id`): placed in the roadmap
-  issue body. A1 uses this to identify the roadmap.
+  issue body. A3 uses this marker to resolve `blocked-by` dependency
+  lookups. A1 identifies the roadmap by its `roadmap` label or umbrella
+  structure — not by this marker.
 - **Sequential dependency** (`idd-skill-blocked-by`): placed in an
   issue body to express a hard dependency — this issue **cannot start
   until** the roadmap with the matching `roadmap-id` is closed.
