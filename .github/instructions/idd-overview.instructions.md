@@ -255,9 +255,16 @@ their `{{placeholder}}` forms:
 
 | Live value (`.github/instructions/`) | Template form (`idd-template/`) |
 | ------------------------------------ | -------------------------------- |
-| `idd-skill` | `{{REPO_NAME}}` / `{{PROJECT_MARKER_PREFIX}}` |
-| `npx markdownlint-cli2 …` | `{{FIX_VALIDATE_COMMANDS}}` |
-| _(other resolved values)_ | _(matching placeholder)_ |
+| `idd-skill` in repo-name contexts | `{{REPO_NAME}}` |
+| `idd-skill` in marker-prefix contexts (e.g. `idd-skill-roadmap-id`) | `{{PROJECT_MARKER_PREFIX}}` |
+| **fix-validate** command string | `{{FIX_VALIDATE_COMMANDS}}` |
+| **pre-push-validate** command string | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
+| **post-fix-validate** command string | `{{POST_FIX_VALIDATE_COMMANDS}}` |
+| **install-deps** command string | `{{INSTALL_DEPS_COMMAND}}` |
+
+Match by the named command row in the Project commands table, not by
+command prefix, to avoid confusing commands that share the same
+executable.
 
 Commits that modify live instruction files without updating the template
 are incomplete; include both changes in the same atomic commit.
