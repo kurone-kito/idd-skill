@@ -1,4 +1,4 @@
-# IDD — Discover Phase (A1–A4)
+# IDD — Discover Phase (A0–A4)
 
 Read this file when starting a new task. It covers finding and selecting
 the next issue to work on. After selecting, read
@@ -7,16 +7,56 @@ the next issue to work on. After selecting, read
 **Abort conditions**: A1, A3 (default; see decision tree). **Early stop
 condition**: A4 (no claim made — see below).
 
+## A0 — Check issue-scope setting
+
+Read the **issue-scope** value from the Project commands table in
+`idd-overview.instructions.md`.
+
+- If `issue-scope` is `roadmap` (the default): skip A0-O and proceed to
+  A1 as normal.
+- If `issue-scope` is `orphan-first`: proceed to A0-O.
+
+## A0-O — Discover orphan issues
+
+Search all open issues in the repository. Collect every issue whose
+body satisfies **all** of the following:
+
+- Does NOT contain any
+  `<!-- {{PROJECT_MARKER_PREFIX}}-roadmap-id: … -->` marker (the issue
+  is not itself a roadmap).
+- Does NOT contain any
+  `<!-- {{PROJECT_MARKER_PREFIX}}-blocked-by: … -->` marker.
+- Does NOT have a `status:blocked-by-human` or `status:needs-decision`
+  label.
+- Does NOT contain visible `Blocked by #NNN` lines where the referenced
+  issue is open (apply the same fail-safe as A3: if a reference cannot
+  be resolved, treat as blocked).
+
+If at least one orphan issue is found: pass the collected set directly
+to **A4** (viability gate). Skip A1–A3 entirely.
+
+If no orphan issues are found: fall back to the roadmap path. Proceed
+to **A1** and continue with the normal A1 → A2 → A3 → A4 sequence.
+
+The A3 decision tree (abort / ask operator in unattended mode) is
+reached when the active discovery path(s) produce zero results: when
+`orphan-first` is active, this means both the orphan path and the
+roadmap fallback returned zero; when `issue-scope` is `roadmap`, only
+the roadmap path runs and A3 applies when it returns zero.
+
 ## A1 — Find the roadmap
 
 Use GH CLI or GH MCP to find the roadmap among open issues. Identify it
 by the `roadmap` label (project field) or by recognizing it as an
 umbrella issue. If no roadmap issue exists, report and abort.
 
-**Note**: A1 is the only IDD phase that may use repo-wide or label-based
-issue queries to locate an issue — solely to find the roadmap. The A3
-`{{PROJECT_MARKER_PREFIX}}-blocked-by` dependency check also permits a
-narrow body-content search; see A2 for details.
+**Note**: Repo-wide or label-based issue queries are permitted only in
+**A0-O** (when `issue-scope` is `orphan-first`, to find orphan issues),
+**A1** (to locate the roadmap), and **A3** (narrow body-content lookup
+for `{{PROJECT_MARKER_PREFIX}}-roadmap-id` to resolve
+`{{PROJECT_MARKER_PREFIX}}-blocked-by` dependency markers; see A2 for
+details). Outside these three contexts, repo-wide and label-based
+queries are prohibited.
 
 ## A2 — Enumerate sub-issues
 
@@ -46,6 +86,10 @@ include only **open** issues in the A2 candidate set.
 **Permitted repo-wide queries** — only the following scoped lookups may
 touch issues outside the roadmap traversal graph:
 
+- **A0-O only** (when `issue-scope` is `orphan-first`): a repo-wide
+  open-issue query to find issues without
+  `{{PROJECT_MARKER_PREFIX}}-roadmap-id` or
+  `{{PROJECT_MARKER_PREFIX}}-blocked-by` markers.
 - **A1 only**: any method (including `gh issue list`, `gh search`, or
   label-based queries) to locate the roadmap issue itself.
 - **A3 only**: a body-content search (e.g.,
@@ -145,7 +189,8 @@ scope:
 
 ### Step 1 — Viability gate
 
-For each issue from A3, evaluate **all three** criteria. Fail any one →
+For each candidate from A0-O or A3, evaluate **all three** criteria.
+Fail any one →
 discard the issue.
 
 | Criterion                 | Pass                                                                                                                | Fail examples                                                                                    |
