@@ -111,7 +111,7 @@ for FILE in \
 do
   gh api -H "Accept: application/vnd.github.raw+json" \
     "repos/kurone-kito/idd-skill/contents/idd-template/${FILE}" \
-    > "${DEST}/${FILE}"
+    > "${DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
 done
 ```
 
@@ -137,7 +137,7 @@ for FILE in \
   ".github/instructions/idd-resume.instructions.md" \
   "docs/idd-workflow.md"
 do
-  curl -fsSL "${BASE}/${FILE}" -o "${DEST}/${FILE}"
+  curl -fsSL "${BASE}/${FILE}" -o "${DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
 done
 ```
 
