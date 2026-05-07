@@ -244,3 +244,20 @@ agent; only the mechanism differs.
 When a phase file says "run a critique pass", apply the row for your
 agent above. If no subagent mechanism is available, perform the critique
 as a structured self-review step within the same response.
+
+## Template sync
+
+This repository is the canonical source of the IDD template distributed
+via `idd-template/`. When modifying any `idd-*.instructions.md` file or
+`docs/idd-workflow.md`, apply the equivalent change to the corresponding
+file in `idd-template/`, replacing resolved project-specific values with
+their `{{placeholder}}` forms:
+
+| Live value (`.github/instructions/`) | Template form (`idd-template/`) |
+| ------------------------------------ | -------------------------------- |
+| `idd-skill` | `{{REPO_NAME}}` / `{{PROJECT_MARKER_PREFIX}}` |
+| `npx markdownlint-cli2 …` | `{{FIX_VALIDATE_COMMANDS}}` |
+| _(other resolved values)_ | _(matching placeholder)_ |
+
+Commits that modify live instruction files without updating the template
+are incomplete; include both changes in the same atomic commit.
