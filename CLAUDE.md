@@ -51,9 +51,9 @@ This project uses Issue-Driven Development (IDD) with parallel AI
 agents. Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
 cross-agent entry path and phase routing.
 
-`.github/instructions/idd-overview.instructions.md` loads automatically
-because it has `applyTo: "**"`. Open the routed phase file manually when
-the current step changes.
+Before starting IDD work, open
+`.github/instructions/idd-overview.instructions.md`. Open the routed
+phase file manually when the current step changes.
 
 ## Canonical reference
 
