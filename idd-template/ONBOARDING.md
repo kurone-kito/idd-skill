@@ -188,12 +188,46 @@ any of the copied files.
 
 ## Step 4 — Update agent entry files
 
+By default, leave the repository with root entry files for every
+manually-routed non-Copilot agent named in `docs/idd-workflow.md`:
+`CLAUDE.md`, `AGENTS.md`, and `GEMINI.md`.
+
+- If the file already exists, append or adapt an IDD section without
+  replacing unrelated repository guidance.
+- If the file is missing, create a minimal stub.
+- Only skip creating a missing root agent entry file when the operator
+  explicitly opts out of adding new files.
+
 ### CLAUDE.md
 
-Add the following section (adapt wording to fit the existing document
-style):
+If `CLAUDE.md` already exists, add the following section (adapt wording
+to fit the existing document style):
 
 ```markdown
+## IDD Workflow
+
+This project uses Issue-Driven Development (IDD) with parallel AI
+agents. Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
+cross-agent entry path and phase routing.
+
+Before starting IDD work, open
+`.github/instructions/idd-overview.instructions.md`. Open the routed
+phase file manually when the current step changes.
+```
+
+If `CLAUDE.md` does not exist, create a minimal file such as:
+
+```markdown
+# Guidelines for AI Agents
+
+## Immediate rules
+
+- Match the conversational language to the user's language.
+- Write comments and documentation in English unless there is a clear
+  project-specific reason otherwise.
+- If uncertainty, hidden risk, or missing context blocks a safe change,
+  stop and ask a concise question before proceeding.
+
 ## IDD Workflow
 
 This project uses Issue-Driven Development (IDD) with parallel AI
@@ -210,15 +244,64 @@ phase file manually when the current step changes.
 Add a parallel section so GitHub Copilot surfaces also receive the IDD
 context. The content can mirror the CLAUDE.md addition above.
 
-### AGENTS.md (if present, for Codex CLI)
+### AGENTS.md (for Codex CLI)
 
-Add a note that agents must manually open
-`.github/instructions/idd-overview.instructions.md` and the relevant
-phase file before starting IDD work.
+If `AGENTS.md` already exists, add a short IDD workflow section that
+points to `docs/idd-workflow.md` and tells Codex CLI agents to manually
+open `.github/instructions/idd-overview.instructions.md` and the
+relevant phase file before starting IDD work.
 
-### GEMINI.md (if present)
+If `AGENTS.md` does not exist, create a minimal file such as:
 
-Same guidance as AGENTS.md.
+```markdown
+# Guidelines for AI Agents
+
+## Immediate rules
+
+- Match the conversational language to the user's language.
+- Write comments and documentation in English unless there is a clear
+  project-specific reason otherwise.
+- If uncertainty, hidden risk, or missing context blocks a safe change,
+  stop and ask a concise question before proceeding.
+
+## IDD Workflow
+
+Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
+cross-agent entry path and phase routing.
+
+Before starting IDD work, open
+`.github/instructions/idd-overview.instructions.md`. Open the routed
+phase file manually when the current step changes.
+```
+
+### GEMINI.md
+
+If `GEMINI.md` already exists, apply the same IDD guidance as
+`AGENTS.md`, adapted to Gemini CLI's wording and still pointing to
+`docs/idd-workflow.md`.
+
+If `GEMINI.md` does not exist, create a minimal file such as:
+
+```markdown
+# Guidelines for AI Agents
+
+## Immediate rules
+
+- Match the conversational language to the user's language.
+- Write comments and documentation in English unless there is a clear
+  project-specific reason otherwise.
+- If uncertainty, hidden risk, or missing context blocks a safe change,
+  stop and ask a concise question before proceeding.
+
+## IDD Workflow
+
+Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
+cross-agent entry path and phase routing.
+
+Before starting IDD work, open
+`.github/instructions/idd-overview.instructions.md`. Open the routed
+phase file manually when the current step changes.
+```
 
 ---
 
@@ -232,7 +315,14 @@ After completing the steps above, confirm each item:
 - [ ] No `{{...}}` placeholders remain in any copied file.
 - [ ] `idd-overview.instructions.md` has `applyTo: "**"` in its
       frontmatter.
-- [ ] Agent entry file(s) reference `docs/idd-workflow.md`.
+- [ ] `CLAUDE.md` exists and references `docs/idd-workflow.md`, unless
+      the operator explicitly opted out of creating it.
+- [ ] `AGENTS.md` exists and references `docs/idd-workflow.md`, unless
+      the operator explicitly opted out of creating it.
+- [ ] `GEMINI.md` exists and references `docs/idd-workflow.md`, unless
+      the operator explicitly opted out of creating it.
+- [ ] If `.github/copilot-instructions.md` existed before onboarding,
+      it now includes the IDD workflow reference as well.
 - [ ] The `Project commands` table in `idd-overview.instructions.md`
       contains the correct commands for this project.
 - [ ] The `{{PROJECT_MARKER_PREFIX}}-roadmap-id` and
