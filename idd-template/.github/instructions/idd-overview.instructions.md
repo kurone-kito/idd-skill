@@ -131,6 +131,26 @@ Keep the claim. Post the hold reason and resume condition to the PR or
 issue comment. After re-validating ownership, re-post the claim comment
 with the same `{claim-id}` every 12 h as heartbeat.
 
+## Roadmap markers
+
+Two hidden HTML comment markers are used in issue bodies to support the
+discover phase:
+
+- **Roadmap identity** (`{{PROJECT_MARKER_PREFIX}}-roadmap-id`): placed
+  in the roadmap issue body. A1 uses this to identify the roadmap.
+- **Sequential dependency** (`{{PROJECT_MARKER_PREFIX}}-blocked-by`):
+  placed in an issue body to express a hard dependency — this issue
+  **cannot start until** the roadmap with the matching `roadmap-id` is
+  closed.
+
+**Do not use `{{PROJECT_MARKER_PREFIX}}-blocked-by` to group sub-tasks
+under an active roadmap.** Sub-tasks that should be worked on while the
+roadmap is open belong in the roadmap's task list as `- [ ] #NNN`
+entries. The `blocked-by` marker is reserved for issues that must wait
+for a separate, prior roadmap to close before they can start (cross-
+phase sequential dependency). Using it for grouping causes A3 to block
+every sub-task for the entire lifetime of the roadmap.
+
 ## Scope invariant
 
 Agents must not widen issue-selection scope beyond what the roadmap

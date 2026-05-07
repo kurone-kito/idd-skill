@@ -64,6 +64,17 @@ The prefix makes these markers unique across projects when issues are
 shared or migrated. Choose a short, lowercase, hyphenated name matching
 the repo (e.g., the repo name itself).
 
+**Important — correct use of `blocked-by`**: the `blocked-by` marker
+expresses a hard sequential dependency. Place it in an issue only when
+that issue **must wait for the referenced roadmap to close** before work
+can start (e.g., Phase 2 issues that depend on Phase 1 completing).
+
+Do **not** use it to group sub-tasks under an active roadmap. Sub-tasks
+that should be worked on while the roadmap is open belong in the
+roadmap's task list as `- [ ] #NNN` entries. Using `blocked-by` for
+grouping causes the discover phase to block every sub-task for the
+entire lifetime of the roadmap.
+
 ---
 
 ## Step 2 — Fetch or copy template files
