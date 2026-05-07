@@ -1,4 +1,4 @@
-# IDD — Discover Phase (A1–A4)
+# IDD — Discover Phase (A0–A4)
 
 Read this file when starting a new task. It covers finding and selecting
 the next issue to work on. After selecting, read
@@ -6,6 +6,38 @@ the next issue to work on. After selecting, read
 
 **Abort conditions**: A1, A3 (default; see decision tree). **Early stop
 condition**: A4 (no claim made — see below).
+
+## A0 — Check issue-scope setting
+
+Read the **issue-scope** value from the Project commands table in
+`idd-overview.instructions.md`.
+
+- If `issue-scope` is `roadmap` (the default): skip A0-O and proceed to
+  A1 as normal.
+- If `issue-scope` is `orphan-first`: proceed to A0-O.
+
+## A0-O — Discover orphan issues
+
+Search all open issues in the repository. Collect every issue whose
+body satisfies **all** of the following:
+
+- Does NOT contain any
+  `<!-- {{PROJECT_MARKER_PREFIX}}-roadmap-id: … -->` marker (the issue
+  is not itself a roadmap).
+- Does NOT contain any
+  `<!-- {{PROJECT_MARKER_PREFIX}}-blocked-by: … -->` marker.
+- Does NOT have a `status:blocked-by-human` or `status:needs-decision`
+  label.
+
+If at least one orphan issue is found: pass the collected set directly
+to **A4** (viability gate). Skip A1–A3 entirely.
+
+If no orphan issues are found: fall back to the roadmap path. Proceed
+to **A1** and continue with the normal A1 → A2 → A3 → A4 sequence.
+
+The A3 decision tree (abort / ask operator in unattended mode) is
+reached only when both the orphan path and the roadmap fallback return
+zero results.
 
 ## A1 — Find the roadmap
 

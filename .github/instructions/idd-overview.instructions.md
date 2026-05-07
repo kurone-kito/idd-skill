@@ -159,9 +159,12 @@ explicitly references (directly or transitively) without explicit
 operator instruction. Specifically:
 
 - Repo-wide searches (`gh issue list`, `gh search`, label-based queries)
-  are permitted only in **A1** (to locate the roadmap itself) and for
-  the scoped `idd-skill-roadmap-id` body-content lookup
-  required by A3's dependency-marker check.
+  are permitted only in **A1** (to locate the roadmap itself), in
+  **A0-O** when `issue-scope` is `orphan-first` (body-content filter to
+  find issues lacking `idd-skill-roadmap-id` and
+  `idd-skill-blocked-by` markers), and for the scoped
+  `idd-skill-roadmap-id` body-content lookup required by A3's
+  dependency-marker check.
 - After a zero-result report at A3, an operator may grant a one-time
   opt-in for the current run, specifying an alternate scope. See
   `idd-discover.instructions.md` for the full decision tree.
@@ -219,6 +222,7 @@ different project.**
 | **pre-push-validate** | `npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress` |
 | **post-fix-validate** | `npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress` |
 | **install-deps**      | `true`     |
+| **issue-scope**       | `roadmap`  |
 
 `pre-push-validate` intentionally omits auto-fix — all code should
 already pass lint at the push step. If lint fails, run **fix-validate**
