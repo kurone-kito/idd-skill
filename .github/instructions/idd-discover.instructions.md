@@ -37,8 +37,10 @@ If no orphan issues are found: fall back to the roadmap path. Proceed
 to **A1** and continue with the normal A1 → A2 → A3 → A4 sequence.
 
 The A3 decision tree (abort / ask operator in unattended mode) is
-reached only when both the orphan path and the roadmap fallback return
-zero results.
+reached when the active discovery path(s) produce zero results: when
+`orphan-first` is active, this means both the orphan path and the
+roadmap fallback returned zero; when `issue-scope` is `roadmap`, only
+the roadmap path runs and A3 applies when it returns zero.
 
 ## A1 — Find the roadmap
 
@@ -46,10 +48,12 @@ Use GH CLI or GH MCP to find the roadmap among open issues. Identify it
 by the `roadmap` label (project field) or by recognizing it as an
 umbrella issue. If no roadmap issue exists, report and abort.
 
-**Note**: A1 is the only IDD phase that may use repo-wide or label-based
-issue queries to locate an issue — solely to find the roadmap. The A3
-`idd-skill-blocked-by` dependency check also permits a
-narrow body-content search; see A2 for details.
+**Note**: Repo-wide or label-based issue queries are permitted only in
+**A0-O** (when `issue-scope` is `orphan-first`, to find orphan issues),
+**A1** (to locate the roadmap), and **A3** (narrow body-content lookup
+for `idd-skill-roadmap-id` to resolve `idd-skill-blocked-by`
+dependency markers; see A2 for details). Outside these three contexts,
+repo-wide and label-based queries are prohibited.
 
 ## A2 — Enumerate sub-issues
 
