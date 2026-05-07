@@ -24,6 +24,13 @@ Review Triage → Review Fix → Merge → Loop) driven by GitHub Issues.
 The instruction files in `.github/instructions/` encode every rule for
 every phase.
 
+Important: the distributed default workflow is cross-agent for
+execution, but its later PR phases still include a GitHub Copilot
+advisory review step by default. If the operator does not want that PR
+policy, they should plan to customize
+`.github/instructions/idd-review-fix.instructions.md` and
+`.github/instructions/idd-merge.instructions.md` after import.
+
 ## Your task
 
 1. Read this entire document first.
@@ -88,6 +95,11 @@ entire lifetime of the roadmap.
 
 You need the following eleven files in the target repository. Use
 whichever method applies to your situation.
+
+Before importing, confirm whether the operator wants to keep the default
+Copilot advisory review policy described above. If not, note that they
+should customize `idd-review-fix.instructions.md` and
+`idd-merge.instructions.md` after the files are copied in.
 
 ### File list
 

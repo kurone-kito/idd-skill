@@ -21,6 +21,12 @@ The agent will collect a few project-specific values (repo name,
 validation commands) and then set up the full IDD workflow
 automatically — no manual file copying required.
 
+Note: the distributed default template is cross-agent for execution, but
+its later PR phases include a GitHub Copilot advisory review step by
+default. If adopters do not want that PR policy, they can customize
+`.github/instructions/idd-review-fix.instructions.md` and
+`.github/instructions/idd-merge.instructions.md` after onboarding.
+
 ## What is IDD?
 
 IDD is a multi-agent GitHub automation workflow where AI agents work
@@ -30,7 +36,9 @@ Review Triage → Review Fix → Merge → Loop.
 
 Each phase is encoded as a `.github/instructions/` file that any
 compatible AI agent can load — GitHub Copilot, Claude Code, Codex CLI,
-or Gemini CLI.
+or Gemini CLI. That execution model is cross-agent, even though the
+distributed default review policy still includes the Copilot advisory
+step noted above.
 
 ## Why idd-skill?
 

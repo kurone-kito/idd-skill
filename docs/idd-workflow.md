@@ -53,10 +53,11 @@ instruction files. Some older project text may still use "skill files"
 as shorthand, but these documents are not agent-native `SKILL.md`
 bundles.
 
-## Repository-specific Copilot advisory review addendum
+## Default PR policy: Copilot advisory review
 
-The core IDD flow is cross-agent, but later PR phases intentionally
-include a repository-specific GitHub Copilot advisory review step.
+The core IDD flow is cross-agent, but this repository's distributed
+default PR policy still includes a GitHub Copilot advisory review step
+in later PR phases.
 
 - `idd-review-fix.instructions.md` can request a GitHub Copilot
   re-review for the current PR head.
@@ -64,6 +65,8 @@ include a repository-specific GitHub Copilot advisory review step.
   review state.
 - This dependency is on GitHub's review integration, not on every local
   agent using Copilot as its CLI.
+- Adopters who do not want that default PR policy should edit
+  `idd-review-fix.instructions.md` and `idd-merge.instructions.md`.
 
 Non-Copilot agents can still drive the workflow end to end, but they
 should expect those later phases to interact with Copilot as a GitHub

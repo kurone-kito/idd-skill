@@ -14,6 +14,14 @@ multi-agent GitHub automation.
 
 Open `ONBOARDING.md` and follow the instructions there.
 
+## Default PR policy note
+
+The distributed template is cross-agent for execution, but its later PR
+phases include a GitHub Copilot advisory review step by default. If an
+adopter does not want that PR policy, they can customize
+`.github/instructions/idd-review-fix.instructions.md` and
+`.github/instructions/idd-merge.instructions.md` after import.
+
 ## Placeholders
 
 | Placeholder                      | Description                                      |
@@ -44,6 +52,9 @@ docs/
 ONBOARDING.md                        ← AI agent import guide (start here)
 README.md                            ← this file
 ```
+
+See `docs/idd-workflow.md` for the distinction between cross-agent
+execution and the default Copilot-backed PR policy.
 
 ## Origin
 
