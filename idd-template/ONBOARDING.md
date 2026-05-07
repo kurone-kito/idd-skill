@@ -266,7 +266,8 @@ If `AGENTS.md` does not exist, create a minimal file such as:
 
 ## IDD Workflow
 
-Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
+This project uses Issue-Driven Development (IDD) with parallel AI
+agents. Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
 cross-agent entry path and phase routing.
 
 Before starting IDD work, open
@@ -295,7 +296,8 @@ If `GEMINI.md` does not exist, create a minimal file such as:
 
 ## IDD Workflow
 
-Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
+This project uses Issue-Driven Development (IDD) with parallel AI
+agents. Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
 cross-agent entry path and phase routing.
 
 Before starting IDD work, open
