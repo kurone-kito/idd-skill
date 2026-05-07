@@ -233,6 +233,12 @@ If **fix-validate** or **post-fix-validate** produces file changes
 (auto-fixes), stage and commit those changes before any push, rebase, or
 next step that requires no uncommitted changes.
 
+**Tool availability**: the commands above are required when the listed
+tools are present. In repositories without a specific tool, replace
+that command with `true` — the same no-op convention used by
+**install-deps**. Set `{{INSTALL_DEPS_COMMAND}}` to `true` if the
+project has no install step.
+
 ## Phase routing table
 
 Start by reading this file for shared definitions, then load the phase
