@@ -1,6 +1,8 @@
 # Guidelines for AI Agents
 
-This project is a language-independent generic project template.
+This repository distributes the IDD (Issue-Driven Development)
+workflow — a portable set of `.github/instructions/` files that wire up
+a multi-agent issue-driven pipeline for any GitHub project.
 
 When contributing to this repository using AI agents, adhere to the
 following guidelines to ensure high-quality contributions that align with
@@ -214,56 +216,12 @@ feat: add auth system and refactor database layer and update docs
 - **Do not** modify community documents (CODE_OF_CONDUCT, CONTRIBUTING)
   without explicit approval
 
-## Onboarding
+## IDD Workflow
 
-This project template is generic and language-independent.
-If you plan to implement a language-specific project based on this one,
-**submit a proposal to customize this documentation first**.
+This project uses Issue-Driven Development (IDD) with parallel AI
+agents. Start with [docs/idd-workflow.md](../docs/idd-workflow.md) for
+the cross-agent entry path and phase routing.
 
-### Derived-repository detection
-
-When an AI agent starts a session, it should determine whether this
-repository is the **base template** or a **derived project**:
-
-1. **Check the repository name** — inspect the git remote URL
-   (e.g., `git remote get-url origin`), the working-directory name,
-   or any GitHub API context available to the agent. If the
-   repository name is exactly `template`, treat it as the base
-   template. Any other name indicates a derived project.
-2. **Check for generic content** — look for the sentinel phrase
-   `language-independent generic project template` in this file or
-   in the repository's AI instruction files. Its presence means the
-   guidelines have **not yet been customized**.
-
-If both conditions are met — the repository is derived **and** the
-guidelines are still generic — the agent should **proactively
-propose an onboarding workflow** before proceeding with the user's
-request. The proposal should be conversational, brief, and
-non-blocking (the user may decline and continue normally).
-
-### Onboarding proposal
-
-When proposing onboarding, suggest customizing the following areas
-in a single plan:
-
-1. **Project description** — update `README.md` and the opening
-   lines of AI instruction files to reflect the project's purpose
-2. **Language / framework** — identify the primary language and
-   framework; add relevant linter, formatter, and build tooling
-3. **Dependency management** — set up the appropriate package
-   manager (npm, pip, cargo, etc.) and lock-file conventions
-4. **Testing strategy** — define the test runner, coverage targets,
-   and test-file conventions
-5. **CI/CD workflows** — adjust `.github/workflows/` to match the
-   project's build, test, and deploy pipeline
-6. **AI guideline specialization** — rewrite this file,
-   `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` to include
-   project-specific rules, coding patterns, and architecture notes
-7. **README rewrite** — replace the template README with
-   project-specific content (badges, installation, usage, etc.)
-8. **License review** — confirm or replace the MIT license if the
-   project requires a different one
-
-Present these items as a checklist proposal (e.g., in Plan mode for
-Copilot, or as a numbered list for other agents). Let the user
-select which items to tackle and in what order.
+`.github/instructions/idd-overview.instructions.md` loads automatically
+for GitHub Copilot because it has `applyTo: "**"`. Open the routed phase
+file manually when the current step changes.
