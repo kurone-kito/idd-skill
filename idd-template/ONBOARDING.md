@@ -50,6 +50,13 @@ request missing values.
 | `{{POST_FIX_VALIDATE_COMMANDS}}` | Commands that auto-fix and fully verify after review fixes. Usually a superset of the other two.                                          | `npm run lint:fix && npm run lint && npm run build && npm run test` |
 | `{{INSTALL_DEPS_COMMAND}}`     | Command to install dependencies in a fresh worktree.                                                                                        | `npm install`                                     |
 
+> **No-op substitution**: any command that is not applicable to your
+> project can be set to `true`. For example, a repository without a
+> dependency install step uses `{{INSTALL_DEPS_COMMAND}}` = `true`.
+> The same applies to validation commands in projects that do not use
+> the listed tools — set the relevant placeholder to `true` to skip
+> that step without breaking the workflow.
+
 ### Notes on `{{PROJECT_MARKER_PREFIX}}`
 
 This prefix appears in two places in issue bodies as hidden HTML
