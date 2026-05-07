@@ -244,3 +244,28 @@ agent; only the mechanism differs.
 When a phase file says "run a critique pass", apply the row for your
 agent above. If no subagent mechanism is available, perform the critique
 as a structured self-review step within the same response.
+
+## Template sync
+
+If this repository distributes IDD as a template (i.e., it maintains an
+`idd-template/` directory alongside the live `.github/instructions/`
+files), any change to a live `idd-*.instructions.md` file or
+`docs/idd-workflow.md` must be mirrored in the corresponding file under
+`idd-template/`, replacing resolved project-specific values with their
+`{{placeholder}}` forms:
+
+| In `.github/instructions/` (live) | In `idd-template/` (template) |
+| --------------------------------- | ----------------------------- |
+| Resolved repo name | `{{REPO_NAME}}` |
+| Resolved marker prefix | `{{PROJECT_MARKER_PREFIX}}` |
+| **fix-validate** command string | `{{FIX_VALIDATE_COMMANDS}}` |
+| **pre-push-validate** command string | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
+| **post-fix-validate** command string | `{{POST_FIX_VALIDATE_COMMANDS}}` |
+| **install-deps** command string | `{{INSTALL_DEPS_COMMAND}}` |
+
+Match by the named command row in the Project commands table, not by
+command prefix, to avoid confusing commands that share the same
+executable.
+
+Commits that modify only one copy are incomplete; include both changes in
+the same atomic commit.
