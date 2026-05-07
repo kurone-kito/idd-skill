@@ -44,9 +44,11 @@ or Gemini CLI.
 - **Zero infrastructure** — No SaaS account, no GitHub Actions runner,
   no server required. Copy 11 Markdown files into any repository and the
   workflow is ready.
-- **Agent-agnostic** — Works identically across GitHub Copilot, Claude
-  Code, OpenAI Codex CLI, and Gemini CLI. Switch or combine tools without
-  rewriting any instructions.
+- **Agent-agnostic** — Core phases work across GitHub Copilot, Claude
+  Code, OpenAI Codex CLI, and Gemini CLI without rewriting any
+  instructions. (The default template includes a Copilot advisory review
+  step in later phases; see [docs/positioning.md](docs/positioning.md)
+  for details.)
 - **Fully auditable** — Every rule is plain Markdown. Read it, fork it,
   adapt it. No black box.
 
