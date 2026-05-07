@@ -118,6 +118,16 @@ scope:
    out): report each candidate and the filter criterion it failed, then
    proceed to step 4.
 
+   **Diagnostic — all candidates blocked by an open roadmap**: if every
+   candidate is blocked because its `<!-- idd-skill-blocked-by: X -->`
+   marker points to a roadmap issue that is still open, the markers are
+   likely misused as grouping tags rather than as true sequential
+   dependencies. Sub-tasks that should be worked on while the roadmap is
+   open belong in the roadmap's task list as `- [ ] #NNN` entries; the
+   `blocked-by` marker is reserved for issues that must wait for a
+   separate, prior roadmap to close. Report this pattern explicitly so
+   the operator can correct the issue setup.
+
 4. **Request explicit opt-in** — ask the operator: "No roadmap-scoped
    issues are available. Do you want to expand the search scope for this
    run? If so, specify the alternate scope." An agent is **unattended**
