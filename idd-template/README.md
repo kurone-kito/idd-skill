@@ -29,8 +29,8 @@ Open `ONBOARDING.md` and follow the instructions there.
 
 ```text
 .github/instructions/
-  idd-overview.instructions.md       ← shared definitions, auto-loaded (applyTo: **)
-  idd-discover.instructions.md       ← A1–A4: find and select next issue
+  idd-overview.instructions.md       ← shared definitions; auto-loaded by Copilot surfaces (applyTo: "**"); see docs/idd-workflow.md for per-agent loading
+  idd-discover.instructions.md       ← A0–A4: find and select next issue
   idd-claim.instructions.md          ← A5: claim pre-checks and execution
   idd-work.instructions.md           ← B+C: branch, plan, implement, self-review
   idd-pr-submit.instructions.md      ← D: rebase, validate, push, open PR, CI wait
