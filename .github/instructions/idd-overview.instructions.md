@@ -219,6 +219,7 @@ file that matches your current situation.
 | Claimed, branch exists, no PR yet           | `idd-work.instructions.md`                                       |
 | PR open, CI running, no reviews yet         | `idd-pr-submit.instructions.md`                                  |
 | PR open, CI running, reviews exist          | `idd-review-triage.instructions.md` (E1 routes to fix if needed) |
+| PR open, CI passed, no reviews yet          | `idd-review-triage.instructions.md` (E3 empty-list → merge)      |
 | PR open, CI passed, reviews pending         | `idd-review-triage.instructions.md`                              |
 | Review feedback accepted, pushing fixes     | `idd-review-fix.instructions.md`                                 |
 | All checks passed, ready to merge           | `idd-merge.instructions.md`                                      |
