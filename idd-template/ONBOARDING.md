@@ -4,6 +4,11 @@ This document is the entry point for an AI agent tasked with importing
 and configuring the IDD (Issue-Driven Development) workflow template into
 a new repository.
 
+> **Tip for agents invoked via the trigger phrase**: if you arrived here
+> by fetching this URL, you do not need to clone the idd-skill repository.
+> Step 2 below provides raw-content URLs for every template file so you
+> can download them directly.
+
 ## What you are setting up
 
 IDD is a multi-agent GitHub automation workflow. Agents work through a
@@ -16,7 +21,7 @@ every phase.
 
 1. Read this entire document first.
 2. Ask the operator for any placeholder values that are missing.
-3. Copy the template files into the target repository.
+3. Fetch or copy the template files into the target repository.
 4. Replace every placeholder (see table below) with the correct value.
 5. Add IDD references to the repository's agent entry files.
 6. Verify the result with the checklist at the bottom.
@@ -54,10 +59,12 @@ the repo (e.g., the repo name itself).
 
 ---
 
-## Step 2 — Copy template files
+## Step 2 — Fetch or copy template files
 
-Copy the following files from this template into the target repository,
-preserving their relative paths:
+You need the following eleven files in the target repository. Use
+whichever method applies to your situation.
+
+### File list
 
 ```text
 .github/instructions/idd-overview.instructions.md
@@ -74,6 +81,57 @@ docs/idd-workflow.md
 ```
 
 Create the target directories if they do not exist.
+
+### Option A — Remote fetch (no local clone required)
+
+Use `gh api` or `curl` to download each file from the raw-content
+endpoint. Replace `{DEST}` with the root of the target repository.
+
+Base URL: `https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/`
+
+Fetch all files with `gh api` (recommended — handles auth automatically):
+
+```sh
+BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template"
+DEST="."  # root of the target repository
+
+mkdir -p "${DEST}/.github/instructions" "${DEST}/docs"
+
+for FILE in \
+  ".github/instructions/idd-overview.instructions.md" \
+  ".github/instructions/idd-discover.instructions.md" \
+  ".github/instructions/idd-claim.instructions.md" \
+  ".github/instructions/idd-work.instructions.md" \
+  ".github/instructions/idd-pr-submit.instructions.md" \
+  ".github/instructions/idd-ci.instructions.md" \
+  ".github/instructions/idd-review-triage.instructions.md" \
+  ".github/instructions/idd-review-fix.instructions.md" \
+  ".github/instructions/idd-merge.instructions.md" \
+  ".github/instructions/idd-resume.instructions.md" \
+  "docs/idd-workflow.md"
+do
+  gh api --paginate -H "Accept: application/vnd.github.raw+json" \
+    "repos/kurone-kito/idd-skill/contents/idd-template/${FILE}" \
+    > "${DEST}/${FILE}"
+done
+```
+
+Alternatively, use `curl` with a GitHub personal-access token:
+
+```sh
+BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template"
+# Set GH_TOKEN to a token with 'contents: read' permission if the repo
+# is private; for a public repo the token is optional.
+AUTH="${GH_TOKEN:+-H "Authorization: token ${GH_TOKEN}"}"
+# Then for each FILE in the list above:
+curl -fsSL ${AUTH} "${BASE}/${FILE}" -o "${DEST}/${FILE}"
+```
+
+### Option B — Local copy (idd-skill cloned)
+
+If you have cloned `https://github.com/kurone-kito/idd-skill`, copy
+the files from `idd-template/` into the target repository preserving
+their relative paths.
 
 ---
 
