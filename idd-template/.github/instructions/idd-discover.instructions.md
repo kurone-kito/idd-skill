@@ -28,6 +28,9 @@ body satisfies **all** of the following:
   `<!-- {{PROJECT_MARKER_PREFIX}}-blocked-by: … -->` marker.
 - Does NOT have a `status:blocked-by-human` or `status:needs-decision`
   label.
+- Does NOT contain visible `Blocked by #NNN` lines where the referenced
+  issue is open (apply the same fail-safe as A3: if a reference cannot
+  be resolved, treat as blocked).
 
 If at least one orphan issue is found: pass the collected set directly
 to **A4** (viability gate). Skip A1–A3 entirely.
@@ -177,7 +180,8 @@ scope:
 
 ### Step 1 — Viability gate
 
-For each issue from A3, evaluate **all three** criteria. Fail any one →
+For each candidate from A0-O or A3, evaluate **all three** criteria.
+Fail any one →
 discard the issue.
 
 | Criterion                 | Pass                                                                                                                | Fail examples                                                                                    |
