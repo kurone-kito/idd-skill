@@ -32,6 +32,27 @@ Each phase is encoded as a `.github/instructions/` file that any
 compatible AI agent can load — GitHub Copilot, Claude Code, Codex CLI,
 or Gemini CLI.
 
+## Why idd-skill?
+
+- **Parallel agent coordination** — A built-in claim/heartbeat protocol
+  (HTML comment markers in issue bodies) prevents multiple AI agents from
+  picking up the same issue simultaneously, making true parallel
+  development safe without a central orchestrator.
+- **End-to-end phase coverage** — 10 instruction files encode every step
+  from issue discovery to merge, including CI wait loops, review triage,
+  and review-fix cycles. Most tools stop at "open a PR".
+- **Zero infrastructure** — No SaaS account, no GitHub Actions runner,
+  no server required. Copy 11 Markdown files into any repository and the
+  workflow is ready.
+- **Agent-agnostic** — Works identically across GitHub Copilot, Claude
+  Code, OpenAI Codex CLI, and Gemini CLI. Switch or combine tools without
+  rewriting any instructions.
+- **Fully auditable** — Every rule is plain Markdown. Read it, fork it,
+  adapt it. No black box.
+
+See [docs/positioning.md](docs/positioning.md) for a detailed
+competitive landscape and strategic positioning analysis.
+
 ## Importing IDD manually
 
 1. Clone or download this repository.
