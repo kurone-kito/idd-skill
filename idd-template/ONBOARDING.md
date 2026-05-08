@@ -129,6 +129,7 @@ the files are copied in.
 .github/instructions/idd-merge.instructions.md
 .github/instructions/idd-resume.instructions.md
 docs/idd-workflow.md
+docs/idd-helper-scripts.md
 ```
 
 Create the target directories if they do not exist.
@@ -161,7 +162,8 @@ for FILE in \
   ".github/instructions/idd-pre-merge.instructions.md" \
   ".github/instructions/idd-merge.instructions.md" \
   ".github/instructions/idd-resume.instructions.md" \
-  "docs/idd-workflow.md"
+  "docs/idd-workflow.md" \
+  "docs/idd-helper-scripts.md"
 do
   gh api -H "Accept: application/vnd.github.raw+json" \
     "repos/kurone-kito/idd-skill/contents/idd-template/${FILE}" \
@@ -192,7 +194,8 @@ for FILE in \
   ".github/instructions/idd-pre-merge.instructions.md" \
   ".github/instructions/idd-merge.instructions.md" \
   ".github/instructions/idd-resume.instructions.md" \
-  "docs/idd-workflow.md"
+  "docs/idd-workflow.md" \
+  "docs/idd-helper-scripts.md"
 do
   curl -fsSL "${BASE}/${FILE}" -o "${DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
 done
@@ -355,7 +358,8 @@ After completing the steps above, confirm each item:
 
 - [ ] All thirteen `idd-*.instructions.md` files are present in
       `.github/instructions/`.
-- [ ] `docs/idd-workflow.md` is present.
+- [ ] `docs/idd-workflow.md` and `docs/idd-helper-scripts.md` are
+      present.
 - [ ] No `{{...}}` placeholders remain in any copied file.
 - [ ] `idd-overview.instructions.md` has `applyTo: "**"` and
       `excludeAgent: "code-review"` in its frontmatter.

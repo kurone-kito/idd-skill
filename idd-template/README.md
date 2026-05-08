@@ -60,6 +60,7 @@ adopter does not want that PR policy, they can customize
   idd-resume.instructions.md         ← resume after crash / handoff
 docs/
   idd-workflow.md                    ← cross-agent entry point and file map
+  idd-helper-scripts.md              ← optional helper-script evaluation and policy
 ONBOARDING.md                        ← AI agent import guide (start here)
 README.md                            ← this file
 ```
