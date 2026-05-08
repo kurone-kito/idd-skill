@@ -103,7 +103,7 @@ entire lifetime of the roadmap.
 
 ## Step 2 — Fetch or copy template files
 
-You need the following eleven files in the target repository. Use
+You need the following twelve files in the target repository. Use
 whichever method applies to your situation.
 
 Before importing, confirm whether the operator wants to keep the default
@@ -120,6 +120,7 @@ should customize `idd-review-fix.instructions.md` and
 .github/instructions/idd-work.instructions.md
 .github/instructions/idd-pr-submit.instructions.md
 .github/instructions/idd-ci.instructions.md
+.github/instructions/idd-advisory-wait.instructions.md
 .github/instructions/idd-review-triage.instructions.md
 .github/instructions/idd-review-fix.instructions.md
 .github/instructions/idd-merge.instructions.md
@@ -150,6 +151,7 @@ for FILE in \
   ".github/instructions/idd-work.instructions.md" \
   ".github/instructions/idd-pr-submit.instructions.md" \
   ".github/instructions/idd-ci.instructions.md" \
+  ".github/instructions/idd-advisory-wait.instructions.md" \
   ".github/instructions/idd-review-triage.instructions.md" \
   ".github/instructions/idd-review-fix.instructions.md" \
   ".github/instructions/idd-merge.instructions.md" \
@@ -178,6 +180,7 @@ for FILE in \
   ".github/instructions/idd-work.instructions.md" \
   ".github/instructions/idd-pr-submit.instructions.md" \
   ".github/instructions/idd-ci.instructions.md" \
+  ".github/instructions/idd-advisory-wait.instructions.md" \
   ".github/instructions/idd-review-triage.instructions.md" \
   ".github/instructions/idd-review-fix.instructions.md" \
   ".github/instructions/idd-merge.instructions.md" \
@@ -340,7 +343,7 @@ phase file manually when the current step changes.
 
 After completing the steps above, confirm each item:
 
-- [ ] All ten `idd-*.instructions.md` files are present in
+- [ ] All eleven `idd-*.instructions.md` files are present in
       `.github/instructions/`.
 - [ ] `docs/idd-workflow.md` is present.
 - [ ] No `{{...}}` placeholders remain in any copied file.
