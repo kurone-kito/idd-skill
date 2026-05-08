@@ -28,6 +28,9 @@ unless benchmark results justify a more neutral layout.
 - When editing `README.md`, also apply the equivalent change to
   `README.ja.md`, and vice versa. Keep both files in sync in the same
   commit.
+- Avoid hard-coded repository file counts in docs unless the number is
+  mechanically maintained. If count-based wording is necessary, update
+  every mirrored reference in the same commit.
 - If uncertainties, concerns, or other implementation issues arise while
   running in Agent mode, promptly switch to Plan mode and ask the user
   questions. In such cases, provide one or more recommended response

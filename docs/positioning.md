@@ -42,7 +42,7 @@ coordination at the issue-tracking level.
 | Criterion                    | idd-skill                          | GitHub Agentic Workflows | Awesome-Copilot skills | Kiro / Factory.ai | OpenHands            |
 | ---------------------------- | ---------------------------------- | ------------------------ | ---------------------- | ----------------- | -------------------- |
 | Parallel agent coordination  | ✓ (claim/heartbeat)                | ✗                        | ✗                      | Varies            | ✗                    |
-| End-to-end phase coverage    | ✓ (10 files, discovery to merge)   | Partial                  | ✗                      | ✓ (proprietary)   | Partial              |
+| End-to-end phase coverage    | ✓ (full discovery-to-merge set)    | Partial                  | ✗                      | ✓ (proprietary)   | Partial              |
 | Zero infrastructure          | ✓ (Markdown files only)            | ✗ (GitHub servers)       | ✓                      | ✗ (SaaS account)  | ✗ (runtime required) |
 | Agent-agnostic               | ✓ (Copilot, Claude, Codex, Gemini) | ✗ (GitHub Copilot only)  | ✓                      | ✗ (proprietary)   | ✗ (own runtime)      |
 | Fully auditable rules        | ✓ (plain Markdown)                 | ✗                        | ✓                      | ✗                 | ✓ (open source)      |
