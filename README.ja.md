@@ -29,16 +29,14 @@ https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOAR
 
 **短縮形** (WebFetch または `gh` CLI アクセスを持つエージェント向け):
 
-> - `github:kurone-kito/idd-skill` の IDD をこのリポジトリにインポート＆オンボーディングして
-> - Import and onboard `github:kurone-kito/idd-skill`'s IDD into this
->   repository.
+> `github:kurone-kito/idd-skill` の IDD をこのリポジトリに
+> インポート＆オンボーディングして
 
 **明示形** (すべてのエージェントで動作):
 
-> I want to use `github:idd-skill`'s Issue-Driven Development in this
-> repository. Read
-> `https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md`
-> and onboard me.
+> `github:idd-skill` の Issue-Driven Development をこの
+> リポジトリで使いたいです。`https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md`
+> を読んでオンボーディングしてください。
 
 エージェントはいくつかのプロジェクト固有の値 (リポジトリ名、バリデーション
 コマンド) を収集し、IDD ワークフロー全体を自動的に設定します —
