@@ -280,8 +280,11 @@ phase file manually when the current step changes.
 
 ### .github/copilot-instructions.md (if present)
 
-Add a parallel section so GitHub Copilot surfaces also receive the IDD
-context. The content can mirror the CLAUDE.md addition above.
+Add a parallel section so GitHub Copilot execution surfaces also receive
+the IDD context. The content can mirror the CLAUDE.md addition above.
+The template keeps the heavier `idd-overview.instructions.md` out of
+Copilot code review with `excludeAgent: "code-review"`; repository-wide
+`.github/copilot-instructions.md` guidance may still apply to reviews.
 
 ### AGENTS.md (for Codex CLI)
 
@@ -354,8 +357,8 @@ After completing the steps above, confirm each item:
       `.github/instructions/`.
 - [ ] `docs/idd-workflow.md` is present.
 - [ ] No `{{...}}` placeholders remain in any copied file.
-- [ ] `idd-overview.instructions.md` has `applyTo: "**"` in its
-      frontmatter.
+- [ ] `idd-overview.instructions.md` has `applyTo: "**"` and
+      `excludeAgent: "code-review"` in its frontmatter.
 - [ ] `CLAUDE.md` exists and references `docs/idd-workflow.md`, unless
       the operator explicitly opted out of creating it.
 - [ ] `AGENTS.md` exists and references `docs/idd-workflow.md`, unless

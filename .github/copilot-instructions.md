@@ -229,5 +229,7 @@ agents. Start with [docs/idd-workflow.md](../docs/idd-workflow.md) for
 the cross-agent entry path and phase routing.
 
 `.github/instructions/idd-overview.instructions.md` loads automatically
-for GitHub Copilot because it has `applyTo: "**"`. Open the routed phase
-file manually when the current step changes.
+for GitHub Copilot execution surfaces because it has `applyTo: "**"`,
+but it is excluded from Copilot code review with
+`excludeAgent: "code-review"` so reviewer-side context stays lighter.
+Open the routed phase file manually when the current step changes.

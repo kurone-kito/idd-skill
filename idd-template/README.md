@@ -45,7 +45,7 @@ adopter does not want that PR policy, they can customize
 
 ```text
 .github/instructions/
-  idd-overview.instructions.md       ← shared definitions; auto-loaded by Copilot surfaces (applyTo: "**"); see docs/idd-workflow.md for per-agent loading
+  idd-overview.instructions.md       ← shared definitions; auto-loaded by Copilot execution surfaces (applyTo: "**", excludeAgent: "code-review"); see docs/idd-workflow.md for per-agent loading
   idd-discover.instructions.md       ← A0–A4: find and select next issue
   idd-claim.instructions.md          ← A5: claim pre-checks and execution
   idd-work.instructions.md           ← B+C: branch, plan, implement, self-review
