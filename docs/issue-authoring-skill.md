@@ -182,6 +182,9 @@ to package them.
 - limited scope, clear verification, and autonomous completion all pass
 - no roadmap-level dependency or parallel track is needed
 - the work is unlikely to require multiple agent sessions
+- the target repository already discovers orphan issues through
+  `issue-scope: orphan-first`, or the draft explicitly tells the
+  operator to switch to that mode before starting the execution loop
 
 ### Create a roadmap when any are true
 
@@ -268,7 +271,8 @@ project-specific notes, but it should not omit the required structure.
 ### Orphan issue schema
 
 Use an orphan issue for one ready, autonomous task that does not need a
-roadmap.
+roadmap and will remain discoverable under the target repository's
+`issue-scope` setting.
 
 Required content:
 
@@ -290,6 +294,9 @@ Validation expectations:
 - acceptance criteria are testable or otherwise explicitly verifiable
 - scope is narrow enough to pass the IDD viability gate as a single
   issue
+- the draft preserves discoverability by using a repository configured
+  for `issue-scope: orphan-first`, or by surfacing that configuration
+  change before the operator starts the Discover -> Claim loop
 
 ### Roadmap issue schema
 
@@ -366,6 +373,22 @@ Before reporting or publishing issue drafts, the skill should verify:
   context
 - reuse or extension decisions are recorded when the skill chose not to
   create a new issue
+
+## Repository-local implementation surface
+
+This document is the canonical contract and schema for the repository's
+native issue authoring bundle at `skills/issue-authoring/`.
+
+Keep the implementation split on purpose:
+
+- `skills/issue-authoring/SKILL.md` should stay concise and point back
+  here for the normative rules, output schemas, and validation checklist
+- `.github/instructions/*.instructions.md` remain the execution-layer
+  files for the normal IDD loop after issue drafting is approved
+
+Do not treat the native skill bundle and the execution instructions as
+interchangeable entry points. The native bundle prepares issues; the
+instruction files execute them.
 
 ## Approval boundary
 
