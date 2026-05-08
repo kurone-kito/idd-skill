@@ -1,5 +1,6 @@
 ---
 applyTo: "**"
+excludeAgent: "code-review"
 ---
 
 # IDD (Issue-Driven Development) — Shared Definitions

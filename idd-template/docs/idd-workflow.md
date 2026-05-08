@@ -24,12 +24,12 @@ you are reading this guide first, start at step 1.
 
 ## Entry points and auto-load expectations
 
-| Agent / surface         | Read first                        | Automatically available IDD context                                                                                                         | Open manually                                                                 |
-| ----------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| GitHub Copilot surfaces | `.github/copilot-instructions.md` | `.github/instructions/idd-overview.instructions.md`; package-scoped `.instructions.md` files in VS Code Copilot when editing matching paths | The routed phase file when the current step changes                           |
-| Codex CLI               | `AGENTS.md`                       | None from `.github/instructions/`                                                                                                           | `.github/instructions/idd-overview.instructions.md` and the routed phase file |
-| Claude Code             | `CLAUDE.md`                       | None from `.github/instructions/` by default                                                                                                | `.github/instructions/idd-overview.instructions.md` and the routed phase file |
-| Gemini CLI              | `GEMINI.md`                       | None from `.github/instructions/`                                                                                                           | `.github/instructions/idd-overview.instructions.md` and the routed phase file |
+| Agent / surface         | Read first                        | Automatically available IDD context                                                                                                                                | Open manually                                                                 |
+| ----------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| GitHub Copilot surfaces | `.github/copilot-instructions.md` | `.github/instructions/idd-overview.instructions.md` for execution surfaces; package-scoped `.instructions.md` files in VS Code Copilot when editing matching paths | The routed phase file when the current step changes                           |
+| Codex CLI               | `AGENTS.md`                       | None from `.github/instructions/`                                                                                                                                  | `.github/instructions/idd-overview.instructions.md` and the routed phase file |
+| Claude Code             | `CLAUDE.md`                       | None from `.github/instructions/` by default                                                                                                                       | `.github/instructions/idd-overview.instructions.md` and the routed phase file |
+| Gemini CLI              | `GEMINI.md`                       | None from `.github/instructions/`                                                                                                                                  | `.github/instructions/idd-overview.instructions.md` and the routed phase file |
 
 During onboarding, create or update `CLAUDE.md`, `AGENTS.md`, and
 `GEMINI.md` so each non-Copilot agent listed above has a stable first
@@ -61,6 +61,21 @@ The files in `.github/instructions/*.instructions.md` are repository
 instruction files. Some older project text may still use "skill files"
 as shorthand, but these documents are not agent-native `SKILL.md`
 bundles.
+
+## Copilot review instruction scope
+
+The heavy shared overview keeps `applyTo: "**"` so GitHub Copilot
+execution surfaces can receive the IDD entry context automatically.
+However, it also sets `excludeAgent: "code-review"` so Copilot code
+review does not ingest the full operational workflow as reviewer-side
+context.
+
+This is an intentional middle path between the evaluated alternatives:
+keeping review coupled to the full overview, narrowing `applyTo` and
+risking execution-agent discoverability, or splitting a separate
+reviewer-only instruction file. Copilot code review may still use the
+lightweight repository-wide `.github/copilot-instructions.md`; only the
+heavier `idd-overview.instructions.md` is excluded from review.
 
 ## Default PR policy: Copilot advisory review
 
