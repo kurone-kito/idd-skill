@@ -194,16 +194,20 @@ three values into F3.
    PR_HEAD_SHA_F3=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')
    ```
 
-   Use `PR_HEAD_SHA_F3` as `PR_HEAD_SHA` for the protocol steps. Run
-   **AW1** and **AW2** (`idd-advisory-wait.instructions.md`) — do not
-   skip this even if F2 already ran them; F3 is a self-contained blocking
-   gate. Then apply **AW3**:
-
-   - **SATISFIED** → proceed with the merge.
-   - **HOLD** → post the hold comment from **AW4** and stop.
-   - **WAIT** → Do NOT execute the merge. Return to the **F2 advisory
-     bot wait check** (go back to the first condition in F2). F2 will
-     reuse the existing same-HEAD marker — do not post a new one.
+   Use `PR_HEAD_SHA_F3` as `PR_HEAD_SHA`. Run **AW1**
+   (`idd-advisory-wait.instructions.md`):
+   - If **SATISFIED** (`LAST_COPILOT_COMMIT == PR_HEAD_SHA_F3`) →
+     proceed with the merge.
+   - If `COPILOT_PENDING` is `"false"` (review completed or cancelled) →
+     this check is satisfied; proceed with the merge.
+   - Otherwise (`COPILOT_PENDING` is `"true"`, not yet reviewed): run
+     **AW2** and apply **AW3** — do not skip even if F2 ran them already,
+     as F3 is a self-contained blocking gate:
+     - **SATISFIED** → proceed with the merge.
+     - **HOLD** → post the hold comment from **AW4** and stop.
+     - **WAIT** → Do NOT execute the merge. Return to the **F2 advisory
+       bot wait check** (go back to the first condition in F2). F2 will
+       reuse the existing same-HEAD marker — do not post a new one.
 
 3. Merge the PR using a **merge commit**, binding to the validated SHA
    to prevent a race where a new push lands after the F3 freshness check

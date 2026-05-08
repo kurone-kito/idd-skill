@@ -70,19 +70,34 @@ the GitHub API. Never use the timestamp inside the marker body.
 
 Evaluate in this order (the first matching row wins):
 
-| `LAST_COPILOT_COMMIT` | `COPILOT_PENDING` | Marker state        | Elapsed  | Outcome                                                           |
-| --------------------- | ----------------- | ------------------- | -------- | ----------------------------------------------------------------- |
-| `== PR_HEAD_SHA`      | (any)             | (any)               | (any)    | **SATISFIED**                                                     |
-| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | —        | **HOLD** (inconsistent)                                           |
-| `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | ≥ 30 min | **SATISFIED** (window expired)                                    |
-| `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | < 30 min | **WAIT**                                                          |
-| `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | ≥ 10 min | **SATISFIED**                                                     |
-| `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | < 10 min | **WAIT**                                                          |
-| `!= PR_HEAD_SHA`      | `"false"`         | no same-head marker | —        | cap ≥ 30: **HOLD** (cap exhausted); cap < 30: **REQUEST\_NEEDED** |
+| `LAST_COPILOT_COMMIT` | `COPILOT_PENDING` | Marker state        | Elapsed  | Outcome                                                     |
+| --------------------- | ----------------- | ------------------- | -------- | ----------------------------------------------------------- |
+| `== PR_HEAD_SHA`      | (any)             | (any)               | (any)    | **SATISFIED**                                               |
+| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | —        | **HOLD** (inconsistent)                                     |
+| `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | ≥ 30 min | **SATISFIED** (window expired)                              |
+| `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | < 30 min | **WAIT**                                                    |
+| `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | ≥ 10 min | **SATISFIED**                                               |
+| `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | < 10 min | **WAIT**                                                    |
+| `!= PR_HEAD_SHA`      | `"false"`         | no same-head marker | —        | cap ≥ 30: **CAP\_EXHAUSTED**; cap < 30: **REQUEST\_NEEDED** |
 
 Note: evaluate the 30-minute SATISFIED condition before the WAIT
 condition for the `COPILOT_PENDING="true"` rows — the elapsed ≥ 30 min
 case must not be masked by a still-pending state.
+
+Callers handle outcomes differently:
+
+| Outcome         | E14                                | F2                                   | F3                           |
+| --------------- | ---------------------------------- | ------------------------------------ | ---------------------------- |
+| SATISFIED       | proceed to E15                     | continue to CI check                 | proceed with merge           |
+| HOLD            | post AW4 comment; stop             | post AW4 comment; stop               | post AW4 comment; stop       |
+| CAP\_EXHAUSTED  | skip advisory wait; proceed to E15 | post AW4 cap-exhausted comment; stop | not applicable (see F3 note) |
+| REQUEST\_NEEDED | request Copilot, post marker, poll | return to E14                        | not applicable (see F3 note) |
+| WAIT            | continue polling (active loop)     | poll F2 conditions every 2 min       | return to F2                 |
+
+**F3 note**: F3 only invokes AW3 when `COPILOT_PENDING` is `"true"` AND
+`LAST_COPILOT_COMMIT != PR_HEAD_SHA`. If `COPILOT_PENDING` is `"false"`,
+F3 treats the advisory check as satisfied without running AW2–AW3 — see
+the F3 caller instructions.
 
 ## AW4 — Hold comment templates
 

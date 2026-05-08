@@ -89,6 +89,8 @@ per PR** (this is a process limit, not a GitHub-enforced constraint).
 4. Apply the **AW3** decision table:
    - **SATISFIED** → proceed to E15.
    - **HOLD** → post the hold comment from **AW4** and stop.
+   - **CAP_EXHAUSTED** (`MARKER_COUNT` ≥ 30, no same-head marker) →
+     skip the advisory wait entirely; proceed directly to E15.
    - **REQUEST_NEEDED** (`COPILOT_PENDING` is `"false"`, cap < 30):
      request Copilot review and immediately post a plain-text marker:
 
