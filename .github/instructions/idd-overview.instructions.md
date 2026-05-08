@@ -263,6 +263,11 @@ file that matches your current situation.
 CI polling logic shared by D and E phases lives in
 `idd-ci.instructions.md`; callers declare their own on-success target.
 
+The Copilot advisory-wait protocol (commands, decision table, hold
+comment templates) is defined once in `idd-advisory-wait.instructions.md`
+and referenced by E14 (review-fix) and F2/F3 (merge). Do not duplicate
+these commands in caller files.
+
 ## Critique pass
 
 A **critique pass** is an independent review of a plan or diff that

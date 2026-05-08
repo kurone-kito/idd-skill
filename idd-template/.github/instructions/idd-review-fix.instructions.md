@@ -77,184 +77,78 @@ request a Copilot re-review if Copilot has not yet reviewed the current
 HEAD SHA. Subject to a **workflow cap of 30 Copilot re-review requests
 per PR** (this is a process limit, not a GitHub-enforced constraint).
 
-Use these commands to check and request:
+1. Fetch `PR_HEAD_SHA`:
 
-```sh
-# Step 1: Fetch the current PR HEAD SHA from GitHub (authoritative source).
-PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')
+   ```sh
+   PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')
+   ```
 
-# Step 2: Check if Copilot has reviewed the current HEAD SHA.
-OWNER=$(gh repo view --json owner --jq '.owner.login')
-REPO=$(gh repo view --json name --jq '.name')
-LAST_COPILOT_COMMIT=$(
-  gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/reviews" \
-    --paginate \
-    --jq '.[] | select(.user.login | startswith("copilot-pull-request-reviewer")) |
-               {sa: .submitted_at, cid: .commit_id}' \
-  | jq -rs 'sort_by(.sa) | last | .cid // ""'
-)
-# If LAST_COPILOT_COMMIT == PR_HEAD_SHA → Copilot already reviewed this HEAD;
-# skip request and marker. E14 Copilot processing is done.
+2. Run **AW1** (`idd-advisory-wait.instructions.md`). If **SATISFIED** →
+   E14 Copilot processing is done; proceed to E15.
+3. Run **AW2** to fetch markers.
+4. Apply the **AW3** decision table:
+   - **SATISFIED** → proceed to E15.
+   - **HOLD** → post the hold comment from **AW4** and stop.
+   - **CAP_EXHAUSTED** (`MARKER_COUNT` ≥ 30, no same-head marker) →
+     skip the advisory wait entirely; proceed directly to E15.
+   - **REQUEST_NEEDED** (`COPILOT_PENDING` is `"false"`, cap < 30):
+     request Copilot review and immediately post a plain-text marker:
 
-# Step 3: Check if Copilot review is already pending.
-COPILOT_PENDING=$(gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/requested_reviewers" \
-  --jq '.users | any(.login == "Copilot" or (.login | startswith("copilot-pull-request-reviewer")))')
-# "true" → Copilot is in requested_reviewers (review still pending);
-# "false" → review was submitted or the request was cancelled.
-# Note: GitHub uses "Copilot" (capital C) in the requested_reviewers API
-# and "copilot-pull-request-reviewer[bot]" in the reviews API — both are
-# matched here for robustness.
+     ```sh
+     gh pr edit {pr-number} --add-reviewer "@copilot"
+     ```
 
-# Step 4a: If COPILOT_PENDING is "true" — do NOT request again (avoids
-# resetting the advisory-wait clock). Use these commands to detect
-# whether a same-head advisory-wait marker exists and find the earliest.
-# Match by body format only (any IDD agent / prior session may have posted it).
-EARLIEST_SAME_HEAD_AT=$(
-  gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/comments" --paginate \
-    | jq -r -s "add
-         | [.[] | select(
-               (.body | test(\"^advisory-wait: [^ ]+ ${PR_HEAD_SHA}(?: |\$)\")) or
-               (.body | test(\"^<!-- advisory-wait: [^ ]+ ${PR_HEAD_SHA} [^ ]+ -->$\"))
-             )]
-         | min_by(.created_at) | .created_at // \"\""
-)
-# Matches both plain-text (new) and HTML-comment (legacy) marker formats.
-# If EARLIEST_SAME_HEAD_AT is empty → no same-head marker exists (see below).
-# If EARLIEST_SAME_HEAD_AT is non-empty → marker exists; value is the
-# earliest marker createdAt (use for all elapsed-time checks).
-#   - Marker exists: do NOT post a new marker. Skip to the polling
-#     section below; use EARLIEST_SAME_HEAD_AT as the advisory-clock start.
-#   - No marker exists: this is an inconsistent state (Copilot is
-#     pending but no marker was ever posted for this HEAD). Post a hold
-#     comment: "Copilot review is pending for HEAD {PR_HEAD_SHA} but no
-#     advisory-wait marker was found. E14 may have crashed before posting
-#     the marker. A maintainer must verify whether the Copilot review was
-#     formally requested and confirm its status before E14 can safely
-#     continue." **Stop.**
+     ```text
+     advisory-wait: {agent-id} {head-SHA} {ISO8601-requested-at}
+     ```
 
-# Step 4b: If COPILOT_PENDING is "false" — check the cap before requesting.
-# Count total advisory-wait markers for the 30-per-PR cap (all agents):
-MARKER_COUNT=$(
-  gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/comments" --paginate \
-    | jq -r -s 'add | [.[] | select(.body | test("^advisory-wait:|^<!-- advisory-wait:"))] | length'
-)
-# Each marker represents one --add-reviewer "@copilot" request.
-# If MARKER_COUNT >= 30 → do NOT request; skip the advisory wait entirely
-#   and proceed directly to E15.
-# If MARKER_COUNT < 30 → request Copilot review:
-gh pr edit {pr-number} --add-reviewer "@copilot"
-```
+     Use `PR_HEAD_SHA` as `{head-SHA}`. Post as plain text, not an HTML
+     comment block.
+   - **WAIT**, or after **REQUEST_NEEDED** marker is posted: enter the
+     active polling loop below.
 
-- Copilot and CI advisory bot comments are advisory; unanswered ones do
-  not block merge.
+Copilot and CI advisory bot comments are advisory; unanswered ones do
+not block merge.
 
-**Waiting for advisory bot re-reviews**: this section applies only when
-Step 4b ran (`COPILOT_PENDING` was `"false"` and the request was sent),
-or when Step 4a ran (`COPILOT_PENDING` was `"true"` and a same-head
-marker was found). **If `LAST_COPILOT_COMMIT == PR_HEAD_SHA` (Copilot
-already reviewed the current HEAD at Step 2), skip this entire section —
-E14 Copilot processing is complete.**
+**Active polling loop** (applies when `COPILOT_PENDING` is `"true"`, or
+immediately after a new request was sent above):
 
-For the Step 4b case (request just sent): persist the advisory wait
-start time by posting a plain-text marker comment:
+Do **not** post a new marker if a same-head marker already exists; reuse
+it. If multiple same-head markers exist, always use the one with the
+**earliest** `createdAt` — the advisory clock starts at the first
+request, not the last.
 
-```text
-advisory-wait: {agent-id} {head-SHA} {ISO8601-requested-at}
-```
-
-**Important**: post this as plain text, not as an HTML comment block.
-Use `PR_HEAD_SHA` as the `{head-SHA}` value so F2 and resume logic can
-distinguish waits for different pushes.
-
-For the Step 4a case (pending, marker already exists): do **not** post a
-new marker; reuse the existing same-head advisory-wait markers. If
-multiple same-head markers exist, use the one with the **earliest**
-`createdAt` (the advisory clock starts at the first request, not the
-last).
-
-For both Step 4b and Step 4a (marker-exists) cases: take a fresh
-snapshot of the activity universe (same scope as E1 Step 1: all threads,
+Take a fresh activity snapshot (same scope as E1 Step 1: all threads,
 review bodies, and regular comments, excluding agent operational
-markers). Record the highest `updatedAt` across all fetched items —
-including your own recent actions — as the **temporary polling
-watermark**. Do **not** post this as a `<!-- review-watermark -->` PR
-comment; it is ephemeral. (If the snapshot is empty, use the `createdAt`
-of the latest `<!-- review-watermark: {agent-id} {claim-id} … -->`
-comment whose embedded `{claim-id}` matches the current active claim. If
-no such same-claim watermark exists, stop waiting and return to E1 to
-create one — do not borrow another claim's watermark.) Then poll until
-an exit condition below is met:
+markers). Record the highest `updatedAt` as the **temporary polling
+watermark** — do **not** post it as a `<!-- review-watermark -->` PR
+comment. If the snapshot is empty, use the `createdAt` of the latest
+`<!-- review-watermark: {agent-id} {claim-id} … -->` comment whose
+`{claim-id}` matches the current active claim. If no same-claim
+watermark exists, stop and return to E1 to create one.
 
-- Poll every 2 minutes: at the start of each iteration, first re-fetch
-  `PR_HEAD_SHA` to detect if a push happened during the wait:
+Poll every 2 minutes:
 
-  ```sh
-  CURRENT_HEAD=$(gh pr view {pr-number} --json headRefOid \
-    --jq '.headRefOid')
-  # If CURRENT_HEAD != PR_HEAD_SHA → HEAD changed; a new push happened.
-  # Exit immediately to E1. A new advisory-wait marker will be needed
-  # for the new HEAD.
-  ```
+1. Re-fetch `PR_HEAD_SHA`:
 
-  If `CURRENT_HEAD != PR_HEAD_SHA` → stop waiting and return to E1. The
-  new HEAD must be re-evaluated; if Copilot has not reviewed it, E14/F2
-  will need a new advisory-wait marker for that HEAD.
+   ```sh
+   CURRENT_HEAD=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')
+   ```
 
-  Otherwise read all review threads, review bodies, and regular PR
-  comments, **excluding any regular PR comment authored by any IDD
-  agent** (this covers advisory-wait, review-watermark, review-baseline,
-  claim, hold notes, and any other operational comments an agent may
-  post); compare `updatedAt` against the polling watermark. Also check
-  `requested_reviewers` (via REST API) to determine whether Copilot's
-  review is still pending:
+   If `CURRENT_HEAD != PR_HEAD_SHA` → HEAD changed; return to E1.
 
-  ```sh
-  COPILOT_PENDING=$(gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/requested_reviewers" \
-    --jq '.users | any(.login == "Copilot" or (.login | startswith("copilot-pull-request-reviewer")))')
-  # "true" → review still pending; "false" → submitted or cancelled.
-  # Note: "Copilot" (capital C) is used in requested_reviewers; the OR
-  # condition also covers "copilot-pull-request-reviewer[bot]" for robustness.
-  ```
+2. Re-read review threads, review bodies, and regular PR comments,
+   **excluding any regular PR comment authored by any IDD agent** (covers
+   advisory-wait, review-watermark, review-baseline, claim, hold notes,
+   and other operational comments). If any item has `updatedAt` strictly
+   newer than the polling watermark → return to E1 immediately.
 
-  'Elapsed time' in all conditions below means the current UTC time
-  minus the `createdAt` of the **earliest** same-head advisory-wait PR
-  comment as returned by the GitHub API — not the timestamp inside the
-  marker body. If multiple same-head markers exist, always use the one
-  with the earliest `createdAt`. At the start of each poll iteration,
-  refresh the value with:
-
-  ```sh
-  EARLIEST_SAME_HEAD_AT=$(
-    gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/comments" --paginate \
-      | jq -r -s "add
-           | [.[] | select(
-                 (.body | test(\"^advisory-wait: [^ ]+ ${PR_HEAD_SHA}(?: |\$)\")) or
-                 (.body | test(\"^<!-- advisory-wait: [^ ]+ ${PR_HEAD_SHA} [^ ]+ -->$\"))
-               )]
-           | min_by(.created_at) | .created_at // \"\""
-  )
-  # Matches both plain-text (new) and HTML-comment (legacy) marker formats.
-  # Elapsed time = (current UTC time) − EARLIEST_SAME_HEAD_AT.
-  ```
-
-  If `EARLIEST_SAME_HEAD_AT` is empty after this refresh (marker deleted
-  or never posted): post a hold comment: "Advisory-wait marker for HEAD
-  `{PR_HEAD_SHA}` is missing during polling. Unable to compute elapsed
-  time. A maintainer must verify the Copilot advisory-wait state before
-  E14 can safely continue." **Stop.**
-
-- If **any** item has `updatedAt` strictly newer than the polling
-  watermark → stop waiting and return to E1 immediately to process it.
-- If elapsed time ≥ 30 minutes (hard cap) → proceed to E15 regardless of
-  `COPILOT_PENDING`. The advisory window has expired. (Evaluate this
-  before the 10-minute conditions; otherwise the pending-true branch
-  below masks this exit for a Haiku-level reader.)
-- If elapsed time ≥ 10 minutes AND `COPILOT_PENDING` is `"false"` →
-  proceed to E15. (Copilot submitted the review or the request was
-  cancelled; either counts as no longer pending.)
-- If elapsed time ≥ 10 minutes AND `COPILOT_PENDING` is `"true"` →
-  **continue polling**. Do NOT exit to E15 while the review is still
-  pending.
+3. Run **AW1** and **AW2** (refresh `COPILOT_PENDING`, `LAST_COPILOT_COMMIT`,
+   and `EARLIEST_SAME_HEAD_AT`). Apply **AW5** if `EARLIEST_SAME_HEAD_AT`
+   is empty. Then apply **AW3**:
+   - **SATISFIED** → exit polling; proceed to E15.
+   - **HOLD** → post hold comment from **AW4** or **AW5**; stop.
+   - **WAIT** → continue polling.
 
 Note: "advisory" means the agent is not obligated to accept every
 suggestion — it does **not** mean the agent can skip waiting for a
