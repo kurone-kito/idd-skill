@@ -55,7 +55,8 @@ This repository contains several AI-facing artifact types. Keep their
 ownership boundaries explicit:
 
 - **Live repository instructions**: `.github/instructions/*.instructions.md`
-  are the canonical workflow rules used by this repository.
+  are the canonical workflow rules used by this repository and drive
+  the execution loop.
 - **Exported template files**: `idd-template/` is the portable package
   copied into adopter repositories. When live IDD instruction files
   change, mirror the equivalent portable form into this template.
@@ -66,9 +67,15 @@ ownership boundaries explicit:
   and usage. They should avoid duplicating long operational rules that
   belong in `.github/instructions/`.
 - **Native skill bundles**: `SKILL.md` bundles, when present, are
-  separate agent-native helpers. They may reference the workflow docs
-  and schemas, but they should not duplicate or replace the exported IDD
-  instruction template.
+  separate agent-native helpers such as `skills/issue-authoring/`. They
+  may reference the workflow docs and schemas, but they should not
+  duplicate or replace the exported IDD instruction template.
+
+Use `skills/issue-authoring/` when you need pre-IDD issue drafting or
+decomposition. Use `.github/instructions/*.instructions.md` after the
+issue set is approved and the normal Discover -> Claim -> Work loop
+should start. The canonical contract and schema for the native bundle
+live in `docs/issue-authoring-skill.md`.
 
 The IDD workflow distributed from this repository is therefore an
 instruction template first. Native skills can sit beside it as helpers,
@@ -89,6 +96,10 @@ risking execution-agent discoverability, or splitting a separate
 reviewer-only instruction file. Copilot code review may still use the
 lightweight repository-wide `.github/copilot-instructions.md`; only the
 heavier `idd-overview.instructions.md` is excluded from review.
+
+Some older project text may still use "skill files" as shorthand for
+instructions, but the native skill bundle and execution instructions are
+related rather than interchangeable surfaces.
 
 ## Default PR policy: Copilot advisory review
 

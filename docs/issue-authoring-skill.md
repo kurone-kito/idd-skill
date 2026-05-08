@@ -367,6 +367,22 @@ Before reporting or publishing issue drafts, the skill should verify:
 - reuse or extension decisions are recorded when the skill chose not to
   create a new issue
 
+## Repository-local implementation surface
+
+This document is the canonical contract and schema for the repository's
+native issue authoring bundle at `skills/issue-authoring/`.
+
+Keep the implementation split on purpose:
+
+- `skills/issue-authoring/SKILL.md` should stay concise and point back
+  here for the normative rules, output schemas, and validation checklist
+- `.github/instructions/*.instructions.md` remain the execution-layer
+  files for the normal IDD loop after issue drafting is approved
+
+Do not treat the native skill bundle and the execution instructions as
+interchangeable entry points. The native bundle prepares issues; the
+instruction files execute them.
+
 ## Approval boundary
 
 Issue authoring and IDD execution are separate decisions.

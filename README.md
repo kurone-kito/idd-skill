@@ -128,6 +128,13 @@ This repository is itself maintained with the IDD workflow. See
 [docs/idd-workflow.md](docs/idd-workflow.md) for the active workflow
 guide and `.github/instructions/` for the full instruction set.
 
+It also ships a repository-local native skill bundle at
+`skills/issue-authoring/`. Use that bundle when you want an agent to
+draft or decompose IDD-ready issues before execution starts; use
+[docs/idd-workflow.md](docs/idd-workflow.md) plus
+`.github/instructions/` once the issue set is approved and the normal
+execution loop should begin.
+
 ## License
 
 [MIT](./LICENSE)
