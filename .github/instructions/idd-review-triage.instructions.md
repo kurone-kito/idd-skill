@@ -204,6 +204,6 @@ missing evidence is recorded.
 ## E8 — Accepted PATH A count check
 
 If the Accepted PATH A count is zero → proceed to
-`idd-merge.instructions.md`.
+`idd-pre-merge.instructions.md`.
 
 Otherwise continue to `idd-review-fix.instructions.md`.

@@ -19,7 +19,8 @@ Open `ONBOARDING.md` and follow the instructions there.
 The distributed template is cross-agent for execution, but its later PR
 phases include a GitHub Copilot advisory review step by default. If an
 adopter does not want that PR policy, they can customize
-`.github/instructions/idd-review-fix.instructions.md` and
+`.github/instructions/idd-review-fix.instructions.md`,
+`.github/instructions/idd-pre-merge.instructions.md`, and
 `.github/instructions/idd-merge.instructions.md` after import.
 
 ## Placeholders
@@ -47,7 +48,8 @@ adopter does not want that PR policy, they can customize
   idd-review-snapshot.instructions.md ← E1–E3: fetch activity, critique, empty check
   idd-review-triage.instructions.md  ← E4–E8: classify, score, and record dispositions
   idd-review-fix.instructions.md     ← E9–E15: fix, push, reply, CI wait
-  idd-merge.instructions.md          ← F: final checks, merge, cleanup, loop
+  idd-pre-merge.instructions.md      ← F1–F2: conflict resolution and pre-merge conditions
+  idd-merge.instructions.md          ← F3–F5: merge execution, cleanup, and loop
   idd-resume.instructions.md         ← resume after crash / handoff
 docs/
   idd-workflow.md                    ← cross-agent entry point and file map

@@ -45,7 +45,8 @@ you are reading this guide first, start at step 1.
 | `.github/instructions/idd-review-snapshot.instructions.md` | E1–E3: fetch activity snapshot, run critique, check if List A is empty |
 | `.github/instructions/idd-review-triage.instructions.md`   | E4–E8: classify items, score, record dispositions                      |
 | `.github/instructions/idd-review-fix.instructions.md`      | Fix accepted review items and push follow-up commits                   |
-| `.github/instructions/idd-merge.instructions.md`           | Re-check merge gates, resolve final conflicts, merge, and clean up     |
+| `.github/instructions/idd-pre-merge.instructions.md`       | F1–F2: resolve conflicts and verify all pre-merge conditions           |
+| `.github/instructions/idd-merge.instructions.md`           | F3–F5: execute the merge, clean up, and loop back to discover          |
 | `.github/instructions/idd-resume.instructions.md`          | Recover after a crash, timeout, or handoff                             |
 
 ## Instruction files, not agent-native skills
