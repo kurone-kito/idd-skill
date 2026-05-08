@@ -217,13 +217,13 @@ When a phase refers to a named command set, run the corresponding
 commands. **Adapt this section when applying this workflow to a
 different project.**
 
-| Name                  | Commands                       |
-| --------------------- | ------------------------------ |
-| **fix-validate**      | `{{FIX_VALIDATE_COMMANDS}}`    |
+| Name                  | Commands                         |
+| --------------------- | -------------------------------- |
+| **fix-validate**      | `{{FIX_VALIDATE_COMMANDS}}`      |
 | **pre-push-validate** | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
 | **post-fix-validate** | `{{POST_FIX_VALIDATE_COMMANDS}}` |
-| **install-deps**      | `{{INSTALL_DEPS_COMMAND}}`     |
-| **issue-scope**       | `roadmap`                      |
+| **install-deps**      | `{{INSTALL_DEPS_COMMAND}}`       |
+| **issue-scope**       | `roadmap`                        |
 
 `pre-push-validate` intentionally omits auto-fix — all code should
 already pass lint at the push step. If lint fails, run **fix-validate**
@@ -286,14 +286,14 @@ files), any change to a live `idd-*.instructions.md` file or
 `idd-template/`, replacing resolved project-specific values with their
 `{{placeholder}}` forms:
 
-| In `.github/instructions/` (live) | In `idd-template/` (template) |
-| --------------------------------- | ----------------------------- |
-| Resolved repo name | `{{REPO_NAME}}` |
-| Resolved marker prefix | `{{PROJECT_MARKER_PREFIX}}` |
-| **fix-validate** command string | `{{FIX_VALIDATE_COMMANDS}}` |
+| In `.github/instructions/` (live)    | In `idd-template/` (template)    |
+| ------------------------------------ | -------------------------------- |
+| Resolved repo name                   | `{{REPO_NAME}}`                  |
+| Resolved marker prefix               | `{{PROJECT_MARKER_PREFIX}}`      |
+| **fix-validate** command string      | `{{FIX_VALIDATE_COMMANDS}}`      |
 | **pre-push-validate** command string | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
 | **post-fix-validate** command string | `{{POST_FIX_VALIDATE_COMMANDS}}` |
-| **install-deps** command string | `{{INSTALL_DEPS_COMMAND}}` |
+| **install-deps** command string      | `{{INSTALL_DEPS_COMMAND}}`       |
 
 Match by the named command row in the Project commands table, not by
 command prefix, to avoid confusing commands that share the same
