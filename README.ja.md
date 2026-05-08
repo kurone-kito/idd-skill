@@ -48,6 +48,21 @@ https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOAR
 `.github/instructions/idd-review-fix.instructions.md` と
 `.github/instructions/idd-merge.instructions.md` をカスタマイズしてください。
 
+## IDD の使い方
+
+オンボーディングが終わったら、対象リポジトリで AI エージェントのセッションを開き、
+ワークフローの開始を依頼してください。エージェントはまず
+[docs/idd-workflow.md](docs/idd-workflow.md) を読み、次に
+`.github/instructions/idd-overview.instructions.md` を開いてから、
+Discover → Claim → Work → ... のループに入ります。
+
+**フレーズ例**:
+
+- `このリポジトリで IDD ワークフローを開始してください。`
+- `docs/idd-workflow.md` を読んで、次に
+  `.github/instructions/idd-overview.instructions.md` を開き、
+  Discover → Claim → Work のループを開始してください。
+
 ## IDD とは？
 
 IDD は、AI エージェントが GitHub Issues によって駆動される繰り返しパイプラインを
