@@ -51,6 +51,21 @@ default. If adopters do not want that PR policy, they can customize
 `.github/instructions/idd-review-fix.instructions.md` and
 `.github/instructions/idd-merge.instructions.md` after onboarding.
 
+## Using IDD
+
+After onboarding, open a session in your target repository and tell your
+AI agent to start the workflow. The agent should read
+[docs/idd-workflow.md](docs/idd-workflow.md), then
+`.github/instructions/idd-overview.instructions.md`, and continue into
+the Discover → Claim → Work → ... loop.
+
+**Example phrases**:
+
+- `Start the IDD workflow in this repository.`
+- `Read docs/idd-workflow.md`, then
+  `.github/instructions/idd-overview.instructions.md`, and begin the
+  Discover → Claim → Work loop.
+
 ## What is IDD?
 
 IDD is a multi-agent GitHub automation workflow where AI agents work
