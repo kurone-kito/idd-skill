@@ -42,8 +42,10 @@ adopter does not want that PR policy, they can customize
   idd-claim.instructions.md          ← A5: claim pre-checks and execution
   idd-work.instructions.md           ← B+C: branch, plan, implement, self-review
   idd-pr-submit.instructions.md      ← D: rebase, validate, push, open PR, CI wait
-  idd-ci.instructions.md             ← shared CI polling helper
-  idd-review-triage.instructions.md  ← E1–E8: fetch, classify, and triage review items
+  idd-ci.instructions.md              ← shared CI polling helper
+  idd-advisory-wait.instructions.md  ← shared Copilot advisory-wait protocol
+  idd-review-snapshot.instructions.md ← E1–E3: fetch activity, critique, empty check
+  idd-review-triage.instructions.md  ← E4–E8: classify, score, and record dispositions
   idd-review-fix.instructions.md     ← E9–E15: fix, push, reply, CI wait
   idd-merge.instructions.md          ← F: final checks, merge, cleanup, loop
   idd-resume.instructions.md         ← resume after crash / handoff

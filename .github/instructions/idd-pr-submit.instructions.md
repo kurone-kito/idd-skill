@@ -50,4 +50,4 @@ gh pr edit {pr-number} --add-reviewer {reviewer-login}
 
 Delegate to `idd-ci.instructions.md`.
 
-- **On success** → proceed to `idd-review-triage.instructions.md`
+- **On success** → proceed to `idd-review-snapshot.instructions.md`

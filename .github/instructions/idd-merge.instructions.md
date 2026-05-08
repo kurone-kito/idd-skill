@@ -33,7 +33,7 @@ If `mergeable` is `CONFLICTING` or `mergeStateStatus` is `BEHIND` or
 
 4. Push (use `--force-with-lease` if you rebased).
 5. If the HEAD changed (new commits were added): return to
-   `idd-review-triage.instructions.md` (E1) to re-evaluate reviews.
+   `idd-review-snapshot.instructions.md` (E1) to re-evaluate reviews.
 
 ## F2 — Pre-merge condition check
 
@@ -104,7 +104,7 @@ bracketed action:
   route to E1 — instead, request CODEOWNER/required reviewers directly
   (if not already requested), post a hold comment, and stop. Return to
   E1 only when there are actual review threads or comments to address (→
-  go to `idd-review-triage.instructions.md` only in that case).
+  go to `idd-review-snapshot.instructions.md` only in that case).
 - **No `CHANGES_REQUESTED`** (human/required/CODEOWNER reviewers only):
   No human, required, or CODEOWNER reviewer's latest state is
   `CHANGES_REQUESTED` (→ if not yet addressed, return to review triage;
@@ -223,7 +223,7 @@ three values into F3.
    - CI condition no longer met → return to
      `idd-pr-submit.instructions.md` D4 (CI wait)
    - Review condition no longer met → return to
-     `idd-review-triage.instructions.md` E1
+     `idd-review-snapshot.instructions.md` E1
    - Conversation resolution required and unresolved threads remain →
      for each unresolved thread: **(a)** new reviewer activity (not
      awaiting-reviewer) → return to E1; **(b)** awaiting-reviewer thread

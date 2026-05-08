@@ -39,18 +39,20 @@ entry file should be an explicit operator choice, not the default.
 
 ## IDD file map
 
-| File                                                     | Role                                                                   |
-| -------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `.github/instructions/idd-overview.instructions.md`      | Shared definitions, command sets, routing table, critique-pass mapping |
-| `.github/instructions/idd-discover.instructions.md`      | Find the next viable issue to start                                    |
-| `.github/instructions/idd-claim.instructions.md`         | Run claim pre-checks and claim verification                            |
-| `.github/instructions/idd-work.instructions.md`          | Create the worktree, plan, implement, and self-review                  |
-| `.github/instructions/idd-pr-submit.instructions.md`     | Rebase, validate, push, open the PR, and wait for CI                   |
-| `.github/instructions/idd-ci.instructions.md`            | Shared CI polling helper used by later phases                          |
-| `.github/instructions/idd-review-triage.instructions.md` | Collect review items, score them, and respond to rejections            |
-| `.github/instructions/idd-review-fix.instructions.md`    | Fix accepted review items and push follow-up commits                   |
-| `.github/instructions/idd-merge.instructions.md`         | Re-check merge gates, resolve final conflicts, merge, and clean up     |
-| `.github/instructions/idd-resume.instructions.md`        | Recover after a crash, timeout, or handoff                             |
+| File                                                       | Role                                                                   |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `.github/instructions/idd-overview.instructions.md`        | Shared definitions, command sets, routing table, critique-pass mapping |
+| `.github/instructions/idd-discover.instructions.md`        | Find the next viable issue to start                                    |
+| `.github/instructions/idd-claim.instructions.md`           | Run claim pre-checks and claim verification                            |
+| `.github/instructions/idd-work.instructions.md`            | Create the worktree, plan, implement, and self-review                  |
+| `.github/instructions/idd-pr-submit.instructions.md`       | Rebase, validate, push, open the PR, and wait for CI                   |
+| `.github/instructions/idd-ci.instructions.md`              | Shared CI polling helper used by later phases                          |
+| `.github/instructions/idd-advisory-wait.instructions.md`   | Shared Copilot advisory-wait protocol (E14, F2, F3)                    |
+| `.github/instructions/idd-review-snapshot.instructions.md` | E1–E3: fetch activity snapshot, run critique, check if List A is empty |
+| `.github/instructions/idd-review-triage.instructions.md`   | E4–E8: classify items, score, record dispositions                      |
+| `.github/instructions/idd-review-fix.instructions.md`      | Fix accepted review items and push follow-up commits                   |
+| `.github/instructions/idd-merge.instructions.md`           | Re-check merge gates, resolve final conflicts, merge, and clean up     |
+| `.github/instructions/idd-resume.instructions.md`          | Recover after a crash, timeout, or handoff                             |
 
 ## Instruction files, not agent-native skills
 
