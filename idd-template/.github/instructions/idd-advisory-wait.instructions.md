@@ -55,7 +55,8 @@ COPILOT_PENDING_COVERS_HEAD=$(
 )
 # "true" → the PR timeline proves the latest Copilot review request was
 # created after the current PR_HEAD_SHA entered the PR timeline.
-# "false" → pending reviewer exists, but recovery must stay on HOLD.
+# "false" → pending reviewer exists, but current-head coverage is unproven;
+# AW3 routes to REQUEST_NEEDED, or CAP_EXHAUSTED when the request cap is hit.
 ```
 
 If `LAST_COPILOT_COMMIT == PR_HEAD_SHA` → outcome is **SATISFIED**.

@@ -143,7 +143,8 @@ Copilot and CI advisory bot comments are advisory; unanswered ones do
 not block merge.
 
 **Active polling loop** (applies when `COPILOT_PENDING` is `"true"`, or
-immediately after a new request was sent above):
+immediately after posting a marker in the **REQUEST_NEEDED** or
+**RECOVERY_NEEDED** path above):
 
 Do **not** post a new marker if a same-head marker already exists; reuse
 it. If multiple same-head markers exist, always use the one with the
