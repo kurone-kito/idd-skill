@@ -9,7 +9,7 @@ the shared claim revalidation gate. The active claim must still use your
 current `{claim-id}`.
 
 **Skip condition E8**: if the Accepted PATH A count after verification
-is zero, proceed to `idd-merge.instructions.md`.
+is zero, proceed to `idd-pre-merge.instructions.md`.
 
 ## E4 — Classify and score List A
 
