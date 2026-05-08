@@ -1,7 +1,7 @@
 # IDD — Review Fix Phase (E9–E15)
 
-Read this file after `idd-review-triage.instructions.md` finds Accepted
-PATH A items. It covers implementing fixes, validating, pushing,
+Read this file after `idd-review-triage.instructions.md` (E8) finds
+Accepted PATH A items. It covers implementing fixes, validating, pushing,
 replying to reviewers, and waiting for CI.
 
 This phase also includes a repository-specific GitHub Copilot advisory
@@ -165,7 +165,7 @@ generic outcomes for this phase:
 CI wait, note them. After CI resolves (any outcome), return to E1 before
 proceeding to F — do not skip triage.
 
-- **On success** → return to `idd-review-triage.instructions.md` (E1)
+- **On success** → return to `idd-review-snapshot.instructions.md` (E1)
 - **On failure / code-caused**: fix, run **fix-validate**, commit
   atomically, then return to E11
 - **On failure / infra-flaky or pre-existing** (failure also present on

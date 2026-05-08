@@ -22,7 +22,7 @@ comments. Always post these using a direct HTTP `POST` with a JSON body
 
 `review-watermark` and `review-baseline` comments must additionally
 include a short visible note after the HTML comment token (see
-`idd-review-triage.instructions.md` for the required format). `claimed-by`
+`idd-review-snapshot.instructions.md` for the required format). `claimed-by`
 and `unclaimed-by` comments remain HTML-comment-only.
 
 - `{claim-id}` is an opaque unique token for one active claim lineage.
@@ -192,7 +192,7 @@ Operational restore markers (`review-watermark` and `review-baseline`)
 must include the current `{claim-id}` and must never be restored across
 a claim change. A takeover starts a new restore scope. These markers
 must also include a visible human-readable note (see
-`idd-review-triage.instructions.md`).
+`idd-review-snapshot.instructions.md`).
 
 ## Review item classes
 
@@ -254,9 +254,10 @@ file that matches your current situation.
 | Resuming after crash / rate-limit / handoff | `idd-resume.instructions.md`                                     |
 | Claimed, branch exists, no PR yet           | `idd-work.instructions.md`                                       |
 | PR open, CI running, no reviews yet         | `idd-pr-submit.instructions.md`                                  |
-| PR open, CI running, reviews exist          | `idd-review-triage.instructions.md` (E1 routes to fix if needed) |
-| PR open, CI passed, no reviews yet          | `idd-review-triage.instructions.md` (E3 empty-list → merge)      |
-| PR open, CI passed, reviews pending         | `idd-review-triage.instructions.md`                              |
+| PR open, CI running, reviews exist          | `idd-review-snapshot.instructions.md` (E1–E3)                    |
+| PR open, CI passed, no reviews yet          | `idd-review-snapshot.instructions.md` (E3 empty-list → merge)    |
+| PR open, CI passed, reviews pending         | `idd-review-snapshot.instructions.md`                            |
+| Snapshot done, List A non-empty             | `idd-review-triage.instructions.md` (E4–E8)                      |
 | Review feedback accepted, pushing fixes     | `idd-review-fix.instructions.md`                                 |
 | All checks passed, ready to merge           | `idd-merge.instructions.md`                                      |
 
