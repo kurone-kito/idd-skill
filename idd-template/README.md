@@ -14,6 +14,13 @@ multi-agent GitHub automation.
 
 Open `ONBOARDING.md` and follow the instructions there.
 
+## Artifact boundary
+
+This template exports the portable IDD instruction files, onboarding
+docs, and workflow docs that adopters copy into another repository. It
+does not export repository-local native `SKILL.md` bundles; those should
+remain separate helper artifacts when a project chooses to provide them.
+
 ## Default PR policy note
 
 The distributed template is cross-agent for execution, but its later PR

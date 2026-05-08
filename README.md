@@ -79,6 +79,19 @@ or Gemini CLI. That execution model is cross-agent, even though the
 distributed default review policy still includes the Copilot advisory
 step noted above.
 
+## Artifact model
+
+This repository primarily distributes an IDD instruction template, not a
+single agent-native skill. The exported package in `idd-template/`
+contains the portable `.github/instructions/` files, onboarding docs,
+and workflow docs that adopters copy into another repository.
+
+Agent entry files such as `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and
+`.github/copilot-instructions.md` are compatibility entry points for
+this repository. Native `SKILL.md` bundles, when present, are separate
+helpers that may reference the IDD docs but should not replace the
+instruction template itself.
+
 ## Why idd-skill?
 
 - **Parallel agent coordination** — A built-in claim/heartbeat protocol

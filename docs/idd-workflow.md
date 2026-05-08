@@ -49,12 +49,31 @@ you are reading this guide first, start at step 1.
 | `.github/instructions/idd-merge.instructions.md`           | F3–F5: execute the merge, clean up, and loop back to discover          |
 | `.github/instructions/idd-resume.instructions.md`          | Recover after a crash, timeout, or handoff                             |
 
-## Instruction files, not agent-native skills
+## Artifact taxonomy and ownership
 
-The files in `.github/instructions/*.instructions.md` are repository
-instruction files. Some older project text may still use "skill files"
-as shorthand, but these documents are not agent-native `SKILL.md`
-bundles.
+This repository contains several AI-facing artifact types. Keep their
+ownership boundaries explicit:
+
+- **Live repository instructions**: `.github/instructions/*.instructions.md`
+  are the canonical workflow rules used by this repository.
+- **Exported template files**: `idd-template/` is the portable package
+  copied into adopter repositories. When live IDD instruction files
+  change, mirror the equivalent portable form into this template.
+- **Agent entry files**: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and
+  `.github/copilot-instructions.md` are lightweight compatibility entry
+  points that tell each agent where to start.
+- **Workflow docs**: files under `docs/` explain architecture, policy,
+  and usage. They should avoid duplicating long operational rules that
+  belong in `.github/instructions/`.
+- **Native skill bundles**: `SKILL.md` bundles, when present, are
+  separate agent-native helpers. They may reference the workflow docs
+  and schemas, but they should not duplicate or replace the exported IDD
+  instruction template.
+
+The IDD workflow distributed from this repository is therefore an
+instruction template first. Native skills can sit beside it as helpers,
+but the synchronization contract for the portable workflow remains
+between the live `.github/instructions/` files and `idd-template/`.
 
 ## Default PR policy: Copilot advisory review
 
