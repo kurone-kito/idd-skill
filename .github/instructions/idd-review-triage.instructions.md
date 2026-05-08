@@ -84,7 +84,7 @@ reject bodies that consist entirely of HTML comments; this format
 includes visible text so that is not an issue, but the HTTP `POST` path
 is still recommended for reliability (`curl` with
 `-H "Content-Type: application/json"` and
-`-d '{"body":"<!-- ... -->\n\n_note_"}}'`).
+`-d '{"body":"<!-- ... -->\n\n_note_"}'`).
 
 On resume or restart, read the latest
 `<!-- review-watermark:
