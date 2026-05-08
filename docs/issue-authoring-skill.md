@@ -1,12 +1,13 @@
-# Issue Authoring Skill Contract
+# Issue Authoring Skill Contract and Schema
 
-This document defines the contract for an agent-facing issue authoring
-skill that prepares IDD-ready issues before the normal Discover →
-Claim → Work loop begins.
+This document defines the stable contract and output schema for an
+agent-facing issue authoring skill that prepares IDD-ready issues before
+the normal Discover → Claim → Work loop begins.
 
-It is a workflow contract, not a schema reference. Detailed draft
-formats, roadmap markers, and decomposition templates belong to the
-follow-up schema work.
+The contract explains when the skill should run and how it should
+behave. The schema explains what a ready orphan issue, roadmap issue,
+or sub-issue must contain so the later IDD discover phase can consume
+the result safely.
 
 ## Purpose
 
@@ -40,9 +41,8 @@ following are true:
 
 ## Stable phases
 
-The skill uses two stable phases.
-These phase names are normative and should be reused by later
-implementation work.
+The skill uses two stable phases. These phase names are normative and
+should be reused by later implementation work.
 
 ### 1. Intake and Clarification
 
@@ -85,8 +85,287 @@ In this phase, the agent:
   creating a new one
 
 This phase may draft a roadmap issue, sub-issues, or orphan issues as
-appropriate, but the detailed rules for those outputs are defined
-separately from this contract.
+appropriate. The remaining sections of this document define the
+normative rules for those outputs.
+
+## Output readiness model
+
+The skill must score each candidate task on the following axes before it
+decides whether to draft an issue, split the work, or route it into a
+non-ready bucket.
+
+### Required execution axes
+
+- **Limited scope**: the task fits a small, reviewable change. If the
+  work is too broad for one issue, split it or create a roadmap.
+- **Clear verification**: success can be checked through lint, tests,
+  CI, or other explicit verification steps. If verification depends on
+  unresolved product judgment, the work is not execution-ready.
+- **Autonomous completion**: the work can finish without waiting for
+  credentials, unavailable systems, or a human choice that has not yet
+  been made.
+
+These three axes align directly with the IDD viability gate in
+`idd-discover.instructions.md`. A task is not draft-ready for execution
+until all three pass.
+
+### Supporting drafting axes
+
+- **Dependency clarity**: dependencies are explicit, resolvable, and
+  encoded in a form the discover phase can parse safely.
+- **Confidence**: the agent has enough evidence to draft a stable issue
+  instead of guessing at hidden scope or silently dropping uncertain
+  work.
+
+These supporting axes determine whether a ready task becomes an orphan
+issue, a roadmap plus sub-issues, or a non-ready bucket.
+
+## Stable readiness buckets
+
+Low-confidence or low-readiness work must not be silently deleted. The
+skill should route it into one of these stable buckets:
+
+- **ready**: the work passes the execution axes and can be drafted as an
+  orphan issue or as part of a roadmap.
+- **deferred**: the idea is plausible, but priority, timing, or
+  decomposition is not strong enough to make it a ready execution item.
+- **needs-decision**: the work depends on a product, policy, or design
+  choice that should be surfaced explicitly before execution.
+- **blocked-by-human**: the work is waiting on a person, credential,
+  asset, or outside system and therefore cannot complete autonomously.
+- **out-of-scope**: the request does not belong in the repository or is
+  materially outside the skill's target problem.
+
+Recommended routing rules:
+
+- if only **limited scope** fails, split the work or draft a roadmap
+- if **clear verification** fails because intent is unresolved, route to
+  `needs-decision`
+- if **autonomous completion** fails because a human must act, route to
+  `blocked-by-human`
+- if **confidence** is too low but the request may still become valid,
+  route to `deferred`
+- if the work does not belong in this repository, route to
+  `out-of-scope`
+
+## Reuse-first issue policy
+
+Before creating any new issue, the skill should check whether the work
+already has a suitable home.
+
+Apply these checks in order:
+
+1. If an existing open issue already matches the task and only lacks the
+   new schema details, extend that issue instead of cloning it.
+2. If an existing open roadmap already owns the initiative, add or
+   refine task-list entries there instead of creating a competing
+   umbrella.
+3. If an existing issue is close but too broad, split follow-up work out
+   of it rather than widening the original issue further.
+4. If an existing issue is already claimed, has an open PR, or is
+   otherwise being actively executed, avoid repurposing it. Create a
+   follow-up issue or extend the roadmap around it instead.
+5. Create a brand-new issue only when no existing issue can absorb the
+   work without harming ownership, clarity, or reviewability.
+
+The skill should report when it reuses, extends, or declines to reuse
+an existing issue so a later session can follow the reasoning.
+
+## Decomposition and roadmap planning rules
+
+The skill should identify atomic execution units first, then decide how
+to package them.
+
+### Keep work as an orphan issue when all are true
+
+- one atomic issue is enough to complete the request
+- limited scope, clear verification, and autonomous completion all pass
+- no roadmap-level dependency or parallel track is needed
+- the work is unlikely to require multiple agent sessions
+
+### Create a roadmap when any are true
+
+- the request requires more than one autonomous issue
+- the work has a dependency chain that should be visible before
+  execution starts
+- two or more tracks can proceed in parallel and should be coordinated
+- the request is likely to span multiple sessions or handoffs
+- some tasks are ready now while others should be explicitly deferred,
+  blocked, or sequenced behind earlier work
+
+### Create sub-issues when a roadmap exists
+
+Each ready execution unit under the roadmap should become its own
+sub-issue when:
+
+- it can be reviewed independently
+- it has its own acceptance criteria
+- it can be claimed by one agent without owning the whole roadmap
+
+### Avoid these anti-patterns
+
+- do not create a roadmap only because a description is long
+- do not keep multiple unrelated atomic changes in one sub-issue
+- do not use hidden dependency markers to group active sub-tasks under
+  an open roadmap
+- do not hide low-confidence work by omitting it from the output
+
+## Dependency encoding rules
+
+The skill must encode dependencies in forms that the discover phase can
+read safely.
+
+### Roadmap identity marker
+
+Every roadmap issue must include exactly one hidden roadmap marker in
+its body:
+
+```html
+<!-- idd-skill-roadmap-id: <roadmap-id> -->
+```
+
+The `<roadmap-id>` should be stable, descriptive, and unique within the
+repository.
+
+### Roadmap membership
+
+Ready sub-issues that belong under an active roadmap should be linked
+from the roadmap body through task-list entries:
+
+```md
+- [ ] #123
+- [ ] #124
+```
+
+This is the primary grouping mechanism for active roadmap work.
+
+### Issue-to-issue dependencies
+
+When one issue depends on a specific issue, use a visible dependency
+line in the body:
+
+```md
+Blocked by #123
+```
+
+### Sequential roadmap dependency
+
+Use a hidden `idd-skill-blocked-by` marker only when an issue must wait
+for a separate roadmap to close before it becomes startable:
+
+```html
+<!-- idd-skill-blocked-by: <roadmap-id> -->
+```
+
+Do not use `idd-skill-blocked-by` to group children under the roadmap
+that already owns them. Grouping belongs in the roadmap task list.
+
+## Draft schemas
+
+The following schemas are normative. The skill may add small
+project-specific notes, but it should not omit the required structure.
+
+### Orphan issue schema
+
+Use an orphan issue for one ready, autonomous task that does not need a
+roadmap.
+
+Required content:
+
+- title with a concise user-facing summary
+- `## Background` or `## Goal`
+- `## Proposed change`
+- `## Acceptance criteria`
+
+Optional content:
+
+- `## Candidate files`
+- `Blocked by #NNN`
+- `## Notes`
+
+Validation expectations:
+
+- no `idd-skill-roadmap-id` marker
+- no `idd-skill-blocked-by` marker
+- acceptance criteria are testable or otherwise explicitly verifiable
+- scope is narrow enough to pass the IDD viability gate as a single
+  issue
+
+### Roadmap issue schema
+
+Use a roadmap issue when a request needs multiple issues, visible
+sequencing, or parallel tracks.
+
+Required content:
+
+- title that describes the umbrella initiative
+- `## Goal`
+- `## Why this matters` or `## Background`
+- `## Tracks`
+- `## Success criteria`
+- one `<!-- idd-skill-roadmap-id: <roadmap-id> -->` marker
+
+Recommended content inside `## Tracks`:
+
+- track headings for major streams of work
+- `- [ ] #NNN` task-list entries for ready child issues
+- short sequencing or parallelization notes when they reduce collisions
+
+Validation expectations:
+
+- every active child issue is referenced from the roadmap body
+- the roadmap explains why multiple issues exist instead of hiding them
+  as narrative text
+- dependency notes distinguish between active grouping and true
+  sequential blocking
+- the roadmap can survive multi-session handoffs without relying on
+  private session memory
+
+### Sub-issue schema
+
+Use a sub-issue for one atomic execution unit that belongs under a
+roadmap.
+
+Required content:
+
+- title with a concrete task summary
+- `## Background`
+- `## Proposed change`
+- `## Acceptance criteria`
+
+Optional content:
+
+- `## Candidate files`
+- `Blocked by #NNN`
+- `<!-- idd-skill-blocked-by: <roadmap-id> -->` when a separate roadmap
+  must close first
+- `## Notes`
+
+Validation expectations:
+
+- the issue is referenced from its parent roadmap task list
+- acceptance criteria are locally verifiable
+- any dependency marker is resolvable and intentionally chosen
+- the issue can be claimed independently without absorbing sibling work
+
+## Validation checklist for drafted output
+
+Before reporting or publishing issue drafts, the skill should verify:
+
+- each execution-ready issue passes limited scope, clear verification,
+  and autonomous completion
+- each deferred, blocked, or decision-dependent item was preserved in a
+  stable bucket instead of being dropped
+- each roadmap has one roadmap marker and uses task-list links for child
+  issues
+- each `Blocked by #NNN` reference resolves to the intended issue
+- each `idd-skill-blocked-by` marker points to a real roadmap and is
+  used only for true sequential dependencies
+- each issue body is explicit enough that a later discover pass can
+  decide whether the issue is ready without reconstructing hidden
+  context
+- reuse or extension decisions are recorded when the skill chose not to
+  create a new issue
 
 ## Approval boundary
 
@@ -107,12 +386,11 @@ Discover or Claim.
 
 ## Non-goals
 
-This contract does not define:
+This document does not define:
 
-- the exact issue body schema
-- the marker syntax for roadmap and dependency metadata
-- the scoring table for output readiness
 - the repository-local skill folder structure
+- the exact prompt text used by a future `SKILL.md` implementation
+- the GitHub API command sequences used to publish drafted issues
 
-Those details should be owned by the follow-up schema and implementation
-work so that this contract can remain stable across agent runtimes.
+Those details should stay in the implementation layer so this document
+can remain the stable contract and schema reference.
