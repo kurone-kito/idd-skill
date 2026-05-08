@@ -4,6 +4,8 @@
 [![Linting](https://github.com/kurone-kito/idd-skill/actions/workflows/lint.yml/badge.svg)](https://github.com/kurone-kito/idd-skill/actions/workflows/lint.yml)
 [![CodeRabbit](https://img.shields.io/badge/review-CodeRabbit-green?logo=coderabbit)](https://www.coderabbit.ai/)
 
+🌐 Language: **English** | [日本語](./README.ja.md)
+
 A portable set of `.github/instructions/` files and documentation that
 wire up an Issue-Driven Development (IDD) multi-agent pipeline for any
 GitHub project.
