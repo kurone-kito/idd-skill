@@ -25,6 +25,9 @@ unless benchmark results justify a more neutral layout.
   For example, if the user speaks in Japanese, respond in Japanese.
 - However, comments and documentation should be written in English unless
   there is a clear context otherwise.
+- When editing `README.md`, also apply the equivalent change to
+  `README.ja.md`, and vice versa. Keep both files in sync in the same
+  commit.
 - If uncertainties, concerns, or other implementation issues arise while
   running in Agent mode, promptly switch to Plan mode and ask the user
   questions. In such cases, provide one or more recommended response

@@ -13,6 +13,9 @@ immediately, without depending on a redirect.
 - Match the conversational language to the user's language.
 - Write comments and documentation in English unless there is a clear
   project-specific reason otherwise.
+- When editing `README.md`, also apply the equivalent change to
+  `README.ja.md`, and vice versa. Keep both files in sync in the same
+  commit.
 - If uncertainty, hidden risk, or missing context blocks a safe change,
   stop and ask a concise question before proceeding.
 - Keep changes small and reviewable. If you create commits, follow the
