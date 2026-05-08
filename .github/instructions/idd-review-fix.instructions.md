@@ -23,9 +23,25 @@ Commit fixes atomically — one logical change per commit.
 
 Run a critique pass to verify that the fixes in E9 address the root
 causes and are correct (see `idd-overview.instructions.md` for per-agent
-implementation). If the critique pass finds additional issues, fix them,
-commit atomically, and run E10 again. Repeat until the critique pass
-reports zero issues, then proceed to E11.
+implementation). Keep an E10 pass count for the current E9 fix batch.
+
+If the critique pass finds additional issues, fix them, commit
+atomically, and run E10 again while the findings are converging.
+
+Convergence guardrails:
+
+- "Meaningful progress" means a pass removes at least one Accepted
+  finding, narrows a remaining finding's root cause or scope, or yields
+  a materially new fix direction. Reworded duplicate findings do not
+  count.
+- If the same Accepted findings recur for 3 consecutive E10 passes
+  without meaningful progress, stop the auto-loop. Post a hold comment
+  on the PR summarizing the repeated findings and attempted fixes, and
+  wait for a maintainer decision before more E10 iterations.
+- Do not use this stop condition to bypass serious issues: unresolved
+  High or Medium findings remain blockers until fixed or explicitly
+  redirected by a maintainer.
+- If the critique pass reports zero issues, proceed to E11.
 
 ## E11 — Resolve conflicts with main
 
