@@ -103,8 +103,8 @@ entire lifetime of the roadmap.
 
 ## Step 2 — Fetch or copy template files
 
-You need the following fourteen files in the target repository. Use
-whichever method applies to your situation.
+You need the following files in the target repository. Use whichever
+method applies to your situation.
 
 Before importing, confirm whether the operator wants to keep the default
 Copilot advisory review policy described above. If not, note that they
