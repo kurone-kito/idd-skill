@@ -55,12 +55,30 @@ entry file should be an explicit operator choice, not the default.
 | `.github/instructions/idd-merge.instructions.md`           | F3–F5: execute the merge, clean up, and loop back to discover          |
 | `.github/instructions/idd-resume.instructions.md`          | Recover after a crash, timeout, or handoff                             |
 
-## Instruction files, not agent-native skills
+## Artifact taxonomy and ownership
 
-The files in `.github/instructions/*.instructions.md` are repository
-instruction files. Some older project text may still use "skill files"
-as shorthand, but these documents are not agent-native `SKILL.md`
-bundles.
+This exported template is instruction-template-first. Keep these
+ownership boundaries explicit:
+
+- **Live repository instructions**:
+  `.github/instructions/*.instructions.md` are the canonical workflow
+  rules that drive the execution loop.
+- **Agent entry files**: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and
+  `.github/copilot-instructions.md` tell each agent where to start.
+- **Workflow docs**: files under `docs/` explain architecture, policy,
+  and onboarding, but should not replace the operational instruction
+  files.
+- **Native skill bundles**: optional `SKILL.md` bundles may sit beside
+  this template in a downstream repository, but they are separate from
+  the exported instruction surface and must document their own boundary
+  to the execution loop.
+
+Some older project text may still use "skill files" as shorthand, but
+these instruction files are not agent-native `SKILL.md` bundles.
+
+The distributed workflow remains an instruction template first. Native
+skills can sit beside it as optional helpers, but they do not replace
+these execution-layer files.
 
 ## Copilot review instruction scope
 

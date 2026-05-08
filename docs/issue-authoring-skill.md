@@ -182,6 +182,9 @@ to package them.
 - limited scope, clear verification, and autonomous completion all pass
 - no roadmap-level dependency or parallel track is needed
 - the work is unlikely to require multiple agent sessions
+- the target repository already discovers orphan issues through
+  `issue-scope: orphan-first`, or the draft explicitly tells the
+  operator to switch to that mode before starting the execution loop
 
 ### Create a roadmap when any are true
 
@@ -268,7 +271,8 @@ project-specific notes, but it should not omit the required structure.
 ### Orphan issue schema
 
 Use an orphan issue for one ready, autonomous task that does not need a
-roadmap.
+roadmap and will remain discoverable under the target repository's
+`issue-scope` setting.
 
 Required content:
 
@@ -290,6 +294,9 @@ Validation expectations:
 - acceptance criteria are testable or otherwise explicitly verifiable
 - scope is narrow enough to pass the IDD viability gate as a single
   issue
+- the draft preserves discoverability by using a repository configured
+  for `issue-scope: orphan-first`, or by surfacing that configuration
+  change before the operator starts the Discover -> Claim loop
 
 ### Roadmap issue schema
 

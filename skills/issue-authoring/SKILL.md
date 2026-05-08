@@ -11,10 +11,12 @@ source for the full contract and schema.
 
 ## Workflow
 
-1. Read [the canonical contract and schema](../../docs/issue-authoring-skill.md).
+1. Read the bundled contract in
+   [references/contract.md](references/contract.md).
 2. Reuse or extend an existing issue before creating a new one.
 3. Choose the smallest safe output shape:
-   - orphan issue for one ready autonomous task
+   - orphan issue for one ready autonomous task only when the target
+     repository is discoverable through `issue-scope: orphan-first`
    - roadmap plus sub-issues for multi-task or multi-session work
    - stable non-ready buckets for deferred, needs-decision,
      blocked-by-human, or out-of-scope work
@@ -31,13 +33,17 @@ source for the full contract and schema.
 
 ## Reference Routing
 
-- For the normative contract, schemas, and validation checklist: read
-  [../../docs/issue-authoring-skill.md](../../docs/issue-authoring-skill.md).
-- For the boundary between this native skill bundle and the execution
-  instructions: read
-  [../../docs/idd-workflow.md](../../docs/idd-workflow.md).
+- For the bundled contract, output schemas, and discoverability guard:
+  read [references/contract.md](references/contract.md).
+- For the bundled boundary between pre-approval drafting and the IDD
+  execution loop: read
+  [references/workflow-boundary.md](references/workflow-boundary.md).
 - For concrete drafting patterns and example prompts: read
   [references/draft-patterns.md](references/draft-patterns.md).
+- When editing this bundle inside the source repository, keep the
+  bundled references synchronized with the canonical maintenance docs in
+  [../../docs/issue-authoring-skill.md](../../docs/issue-authoring-skill.md)
+  and [../../docs/idd-workflow.md](../../docs/idd-workflow.md).
 
 ## Output Checklist
 

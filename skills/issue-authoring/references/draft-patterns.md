@@ -1,8 +1,8 @@
 # Draft Patterns
 
 Load this file after reading
-[`../../../docs/issue-authoring-skill.md`](../../../docs/issue-authoring-skill.md)
-when you need concrete examples or a quick chooser for output shapes.
+[`contract.md`](contract.md) when you need concrete examples or a quick
+chooser for output shapes.
 
 ## Example triggers
 
@@ -15,7 +15,9 @@ when you need concrete examples or a quick chooser for output shapes.
 
 ## Output chooser
 
-Draft an orphan issue when one autonomous task can finish the work.
+Draft an orphan issue only when one autonomous task can finish the work
+and the target repository is discoverable through `issue-scope:
+orphan-first`.
 
 Draft a roadmap plus sub-issues when the request needs visible
 sequencing, parallel tracks, or multi-session handoff.
@@ -31,7 +33,10 @@ human decision, missing asset, or unclear verification.
 - optional `## Candidate files`
 
 Use this shape when the work is narrow enough to pass the IDD viability
-gate on its own.
+gate on its own and the target repository can actually discover orphan
+issues. If the repository keeps the default `issue-scope: roadmap`,
+prefer a one-item roadmap package instead of publishing a standalone
+orphan issue.
 
 ## Example roadmap package
 
