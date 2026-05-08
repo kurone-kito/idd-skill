@@ -8,9 +8,32 @@ A portable set of `.github/instructions/` files and documentation that
 wire up an Issue-Driven Development (IDD) multi-agent pipeline for any
 GitHub project.
 
+## For AI agents
+
+If you were pointed here by a trigger phrase such as
+`github:kurone-kito/idd-skill` and asked to onboard IDD, start with the
+onboarding guide:
+
+```text
+https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md
+```
+
+Fetch that file and follow its instructions. It will walk you through
+collecting placeholder values, copying the template files, and updating
+the repository's agent entry files — no cloning required.
+
 ## Quick start
 
-Open a session in your target repository and tell your AI agent:
+Open a session in your target repository and tell your AI agent one of
+the following:
+
+**Short form** (agents with WebFetch or `gh` CLI access):
+
+> - `github:kurone-kito/idd-skill` の IDD をこのリポジトリにインポート＆オンボーディングして
+> - Import and onboard `github:kurone-kito/idd-skill`'s IDD into this
+>   repository.
+
+**Explicit form** (works with any agent):
 
 > I want to use `github:idd-skill`'s Issue-Driven Development in this
 > repository. Read

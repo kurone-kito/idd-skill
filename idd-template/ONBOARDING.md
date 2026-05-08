@@ -9,12 +9,22 @@ a new repository.
 > clone the idd-skill repository — Step 2 Option A below provides the
 > commands to download every template file directly from GitHub.
 >
-> The canonical trigger phrase users give their AI agent is:
+> Recognized trigger phrases:
 >
-> _"I want to use `github:idd-skill`'s Issue-Driven Development in this
-> repository. Read
-> `https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md`
-> and onboard me."_
+> - Short form (Japanese):
+>   _"`github:kurone-kito/idd-skill` の IDD をこのリポジトリにインポート＆オンボーディングして"_
+> - Short form (English):
+>   _"Import and onboard `github:kurone-kito/idd-skill`'s IDD into this
+>   repository."_
+> - Explicit form (works with any agent):
+>   _"I want to use `github:idd-skill`'s Issue-Driven Development in this
+>   repository. Read
+>   `https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md`
+>   and onboard me."_
+>
+> All forms lead here. Agents that received only a `github:owner/repo`
+> reference and resolved this file by fetching the repository README are
+> also in the right place.
 
 ## What you are setting up
 
