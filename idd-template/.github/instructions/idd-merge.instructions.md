@@ -54,6 +54,10 @@ gate. The active claim must still use your current `{claim-id}`.
      - **RECOVERY_NEEDED** → post the recovery marker from **AW3-R** and
        return to the F2 advisory bot wait check. Do not merge in the
        same F3 pass that creates a recovery marker.
+     - **CAP_EXHAUSTED** → post the cap-exhausted hold comment from
+       **AW4** and stop.
+     - **REQUEST_NEEDED** → return to E14 to refresh/request Copilot
+       review and post a request marker. Do not merge.
      - **WAIT** → Do NOT execute the merge. Return to the **F2 advisory
        bot wait check** in `idd-pre-merge.instructions.md` (go back to
        the first condition in F2). F2 will reuse the existing same-HEAD

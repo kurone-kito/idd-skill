@@ -111,9 +111,20 @@ per PR** (this is a process limit, not a GitHub-enforced constraint).
    - **CAP_EXHAUSTED** (`REQUEST_MARKER_COUNT` ≥ 30, no same-head
      marker) →
      skip the advisory wait entirely; proceed directly to E15.
-   - **REQUEST_NEEDED** (`COPILOT_PENDING` is `"false"`, request cap <
-     30): request Copilot review and immediately post a plain-text
-     marker:
+   - **REQUEST_NEEDED** (`COPILOT_PENDING` is `"false"`, or
+     `COPILOT_PENDING` is `"true"` but current-head coverage is not
+     proven; request cap < 30): request Copilot review and immediately
+     post a plain-text marker. If `COPILOT_PENDING` is `"true"` in this
+     branch, first remove the stale/unproven pending reviewer request:
+
+     ```sh
+     gh pr edit {pr-number} --remove-reviewer "@copilot"
+     ```
+
+     If removal fails because Copilot is no longer pending, re-run
+     AW1–AW3. If removal fails for any other reason, post the AW4
+     pending-refresh-failed hold comment and stop. After removal
+     succeeds, request Copilot review:
 
      ```sh
      gh pr edit {pr-number} --add-reviewer "@copilot"
