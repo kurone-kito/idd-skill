@@ -16,6 +16,9 @@ immediately, without depending on a redirect.
 - When editing `README.md`, also apply the equivalent change to
   `README.ja.md`, and vice versa. Keep both files in sync in the same
   commit.
+- Avoid hard-coded repository file counts in docs unless the number is
+  mechanically maintained. If count-based wording is necessary, update
+  every mirrored reference in the same commit.
 - If uncertainty, hidden risk, or missing context blocks a safe change,
   stop and ask a concise question before proceeding.
 - Keep changes small and reviewable. If you create commits, follow the

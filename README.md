@@ -85,12 +85,12 @@ step noted above.
   (HTML comment markers in issue bodies) prevents multiple AI agents from
   picking up the same issue simultaneously, making true parallel
   development safe without a central orchestrator.
-- **End-to-end phase coverage** — 10 instruction files encode every step
-  from issue discovery to merge, including CI wait loops, review triage,
-  and review-fix cycles. Most tools stop at "open a PR".
+- **End-to-end phase coverage** — The instruction set encodes every
+  step from issue discovery to merge, including CI wait loops, review
+  triage, and review-fix cycles. Most tools stop at "open a PR".
 - **Zero infrastructure** — No SaaS account, no GitHub Actions runner,
-  no server required. Copy 11 Markdown files into any repository and the
-  workflow is ready.
+  no server required. Copy the `idd-template/` docs and instruction
+  files into any repository and the workflow is ready.
 - **Agent-agnostic** — Core phases work across GitHub Copilot, Claude
   Code, OpenAI Codex CLI, and Gemini CLI without rewriting any
   instructions. (The default template includes a Copilot advisory review
