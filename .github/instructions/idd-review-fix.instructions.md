@@ -105,10 +105,26 @@ per PR** (this is a process limit, not a GitHub-enforced constraint).
 4. Apply the **AW3** decision table:
    - **SATISFIED** → proceed to E15.
    - **HOLD** → post the hold comment from **AW4** and stop.
-   - **CAP_EXHAUSTED** (`MARKER_COUNT` ≥ 30, no same-head marker) →
+   - **RECOVERY_NEEDED** (`COPILOT_PENDING` is `"true"`, no same-head
+     marker): post the recovery marker from **AW3-R**. Do not request
+     another Copilot review.
+   - **CAP_EXHAUSTED** (`REQUEST_MARKER_COUNT` ≥ 30, no same-head
+     marker) →
      skip the advisory wait entirely; proceed directly to E15.
-   - **REQUEST_NEEDED** (`COPILOT_PENDING` is `"false"`, cap < 30):
-     request Copilot review and immediately post a plain-text marker:
+   - **REQUEST_NEEDED** (`COPILOT_PENDING` is `"false"`, or
+     `COPILOT_PENDING` is `"true"` but current-head coverage is not
+     proven; request cap < 30): request Copilot review and immediately
+     post a plain-text marker. If `COPILOT_PENDING` is `"true"` in this
+     branch, first remove the stale/unproven pending reviewer request:
+
+     ```sh
+     gh pr edit {pr-number} --remove-reviewer "@copilot"
+     ```
+
+     If removal fails because Copilot is no longer pending, re-run
+     AW1–AW3. If removal fails for any other reason, post the AW4
+     pending-refresh-failed hold comment and stop. After removal
+     succeeds, request Copilot review:
 
      ```sh
      gh pr edit {pr-number} --add-reviewer "@copilot"
@@ -120,14 +136,15 @@ per PR** (this is a process limit, not a GitHub-enforced constraint).
 
      Use `PR_HEAD_SHA` as `{head-SHA}`. Post as plain text, not an HTML
      comment block.
-   - **WAIT**, or after **REQUEST_NEEDED** marker is posted: enter the
-     active polling loop below.
+   - **WAIT**, or after a **REQUEST_NEEDED** or **RECOVERY_NEEDED**
+     marker is posted: enter the active polling loop below.
 
 Copilot and CI advisory bot comments are advisory; unanswered ones do
 not block merge.
 
 **Active polling loop** (applies when `COPILOT_PENDING` is `"true"`, or
-immediately after a new request was sent above):
+immediately after posting a marker in the **REQUEST_NEEDED** or
+**RECOVERY_NEEDED** path above):
 
 Do **not** post a new marker if a same-head marker already exists; reuse
 it. If multiple same-head markers exist, always use the one with the
@@ -155,9 +172,10 @@ Poll every 2 minutes:
 
 2. Re-read review threads, review bodies, and regular PR comments,
    **excluding any regular PR comment authored by any IDD agent** (covers
-   advisory-wait, review-watermark, review-baseline, claim, hold notes,
-   and other operational comments). If any item has `updatedAt` strictly
-   newer than the polling watermark → return to E1 immediately.
+   advisory-wait, advisory-wait-recovery, review-watermark,
+   review-baseline, claim, hold notes, and other operational comments).
+   If any item has `updatedAt` strictly newer than the polling watermark
+   → return to E1 immediately.
 
 3. Run **AW1** and **AW2** (refresh `COPILOT_PENDING`, `LAST_COPILOT_COMMIT`,
    and `EARLIEST_SAME_HEAD_AT`). Apply **AW5** if `EARLIEST_SAME_HEAD_AT`
