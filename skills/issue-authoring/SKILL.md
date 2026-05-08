@@ -20,14 +20,20 @@ source for the full contract and schema.
    - roadmap plus sub-issues for multi-task or multi-session work
    - stable non-ready buckets for deferred, needs-decision,
      blocked-by-human, or out-of-scope work
-4. Keep dependencies machine-readable:
-   - roadmap identity via `<!-- idd-skill-roadmap-id: ... -->`
+4. Resolve the target repository marker prefix before drafting hidden
+   dependency markers. Use the prefix documented by the target
+   repository's onboarding or IDD docs, and ask the user instead of
+   guessing when the prefix is not discoverable.
+5. Keep dependencies machine-readable:
+   - roadmap identity via
+     `<!-- <marker-prefix>-roadmap-id: ... -->`
    - active child issues via roadmap task-list links
    - issue-to-issue dependencies via `Blocked by #NNN`
    - sequential roadmap dependencies via
-     `<!-- idd-skill-blocked-by: ... -->` only when a separate roadmap
+     `<!-- <marker-prefix>-blocked-by: ... -->` only when a separate
+     roadmap
      must close first
-5. Stop at the approval boundary. Drafting issues does not authorize
+6. Stop at the approval boundary. Drafting issues does not authorize
    publishing them or starting the IDD execution loop unless the user
    explicitly asked for that.
 

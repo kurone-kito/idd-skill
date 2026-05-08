@@ -46,10 +46,11 @@ Roadmap issue:
 - `## Background` or `## Why this matters`
 - `## Tracks`
 - `## Success criteria`
-- one `<!-- idd-skill-roadmap-id: ... -->` marker
+- one `<!-- <marker-prefix>-roadmap-id: ... -->` marker
 
 Child issue:
 
+- title with a concrete task summary
 - `## Background`
 - `## Proposed change`
 - `## Acceptance criteria`
@@ -57,6 +58,10 @@ Child issue:
 
 Keep ready child issues in the roadmap task list rather than grouping
 them with hidden dependency markers.
+
+Resolve `<marker-prefix>` from the target repository's onboarding or IDD
+docs before publishing the draft. Use `idd-skill` only when the target
+repository actually configured that prefix.
 
 ## Publication boundary
 

@@ -4,6 +4,18 @@ This file keeps the `issue-authoring` bundle usable when it is installed
 or copied outside this repository root. It mirrors the canonical
 contract in `docs/issue-authoring-skill.md`.
 
+## Target marker prefix
+
+Resolve the target repository's hidden marker prefix before drafting any
+roadmap or blocked-by marker.
+
+- Use the prefix documented by the target repository's onboarding or
+  IDD instructions.
+- In this source repository the prefix is `idd-skill`, but installed
+  bundles must not assume that value elsewhere.
+- If the prefix is not discoverable from the repository docs or user
+  context, stop and ask instead of emitting a guessed marker.
+
 ## Trigger policy
 
 Use this bundle when direct implementation would skip the issue hygiene
@@ -25,6 +37,29 @@ Skip it when all of the following are true:
 - no roadmap, dependency marker, or issue split is needed
 - the user did not ask for issue drafting first
 
+## Reuse-first issue policy
+
+Before creating any new issue, check whether the work already has a
+suitable home.
+
+Apply these checks in order:
+
+1. If an existing open issue already matches the task and only lacks the
+   new schema details, extend that issue instead of cloning it.
+2. If an existing open roadmap already owns the initiative, add or
+   refine task-list entries there instead of creating a competing
+   umbrella.
+3. If an existing issue is close but too broad, split follow-up work
+   out of it rather than widening the original issue further.
+4. If an existing issue is already claimed, has an open PR, or is
+   otherwise being actively executed, avoid repurposing it. Create a
+   follow-up issue or extend the roadmap around it instead.
+5. Create a brand-new issue only when no existing issue can absorb the
+   work without harming ownership, clarity, or reviewability.
+
+Report when the bundle reuses, extends, or declines to reuse an issue
+so a later session can follow the reasoning.
+
 ## Output chooser
 
 Choose the smallest safe output shape:
@@ -41,11 +76,12 @@ Choose the smallest safe output shape:
 
 ## Required dependency encoding
 
-- Roadmap identity via `<!-- idd-skill-roadmap-id: ... -->`
+- Roadmap identity via `<!-- <marker-prefix>-roadmap-id: ... -->`
 - Active child issues via roadmap task-list links
 - Issue-to-issue dependencies via `Blocked by #NNN`
 - Sequential roadmap dependencies via
-  `<!-- idd-skill-blocked-by: ... -->` only when a separate roadmap
+  `<!-- <marker-prefix>-blocked-by: ... -->` only when a separate
+  roadmap
   must close first
 
 ## Required draft content
@@ -59,8 +95,8 @@ Choose the smallest safe output shape:
 
 Validation expectations:
 
-- no `idd-skill-roadmap-id` marker
-- no `idd-skill-blocked-by` marker
+- no `<marker-prefix>-roadmap-id` marker
+- no `<marker-prefix>-blocked-by` marker
 - acceptance criteria are explicitly verifiable
 - the issue stays discoverable under the target repository's
   `issue-scope` setting
@@ -72,7 +108,7 @@ Validation expectations:
 - `## Background` or `## Why this matters`
 - `## Tracks`
 - `## Success criteria`
-- one `<!-- idd-skill-roadmap-id: <roadmap-id> -->` marker
+- one `<!-- <marker-prefix>-roadmap-id: <roadmap-id> -->` marker
 
 Validation expectations:
 
@@ -82,6 +118,7 @@ Validation expectations:
 
 ### Child issue under a roadmap
 
+- title with a concrete task summary
 - `## Background`
 - `## Proposed change`
 - `## Acceptance criteria`

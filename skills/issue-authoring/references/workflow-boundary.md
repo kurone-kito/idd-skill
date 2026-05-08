@@ -17,6 +17,7 @@ Do not use it to:
   instructions
 - publish issues unless the user explicitly asked for publishing
 
-After the user approves the issue set, the execution loop should begin
-from the repository's normal entry file and routed
+After the user approves the issue set, wait for a separate request to
+publish the issues or start the IDD execution loop. Only then should
+the workflow hand off to the repository's normal entry file and routed
 `.github/instructions/*.instructions.md` phase files.
