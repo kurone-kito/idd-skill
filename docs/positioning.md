@@ -39,15 +39,15 @@ coordination at the issue-tracking level.
 
 ## Comparison matrix
 
-| Criterion | idd-skill | GitHub Agentic Workflows | Awesome-Copilot skills | Kiro / Factory.ai | OpenHands |
-| --------- | --------- | ----------------------- | --------------------- | ----------------- | --------- |
-| Parallel agent coordination | ✓ (claim/heartbeat) | ✗ | ✗ | Varies | ✗ |
-| End-to-end phase coverage | ✓ (10 files, discovery to merge) | Partial | ✗ | ✓ (proprietary) | Partial |
-| Zero infrastructure | ✓ (Markdown files only) | ✗ (GitHub servers) | ✓ | ✗ (SaaS account) | ✗ (runtime required) |
-| Agent-agnostic | ✓ (Copilot, Claude, Codex, Gemini) | ✗ (GitHub Copilot only) | ✓ | ✗ (proprietary) | ✗ (own runtime) |
-| Fully auditable rules | ✓ (plain Markdown) | ✗ | ✓ | ✗ | ✓ (open source) |
-| GitHub-hosted CI integration | ✓ (CI wait loop) | ✓ | ✗ | ✓ | Varies |
-| No vendor account required | ✓ | ✗ (GitHub account) | ✓ | ✗ | ✓ |
+| Criterion                    | idd-skill                          | GitHub Agentic Workflows | Awesome-Copilot skills | Kiro / Factory.ai | OpenHands            |
+| ---------------------------- | ---------------------------------- | ------------------------ | ---------------------- | ----------------- | -------------------- |
+| Parallel agent coordination  | ✓ (claim/heartbeat)                | ✗                        | ✗                      | Varies            | ✗                    |
+| End-to-end phase coverage    | ✓ (10 files, discovery to merge)   | Partial                  | ✗                      | ✓ (proprietary)   | Partial              |
+| Zero infrastructure          | ✓ (Markdown files only)            | ✗ (GitHub servers)       | ✓                      | ✗ (SaaS account)  | ✗ (runtime required) |
+| Agent-agnostic               | ✓ (Copilot, Claude, Codex, Gemini) | ✗ (GitHub Copilot only)  | ✓                      | ✗ (proprietary)   | ✗ (own runtime)      |
+| Fully auditable rules        | ✓ (plain Markdown)                 | ✗                        | ✓                      | ✗                 | ✓ (open source)      |
+| GitHub-hosted CI integration | ✓ (CI wait loop)                   | ✓                        | ✗                      | ✓                 | Varies               |
+| No vendor account required   | ✓                                  | ✗ (GitHub account)       | ✓                      | ✗                 | ✓                    |
 
 ## Strategic position
 
