@@ -95,3 +95,14 @@ phases.
 Non-Copilot agents can still drive the workflow end to end, but they
 should expect those later phases to interact with Copilot as a GitHub
 reviewer because that is part of this repository's current PR policy.
+
+## Optional helper scripts
+
+The current workflow does not require helper scripts. Shell / `gh` /
+`jq` snippets in `.github/instructions/*.instructions.md` remain the
+canonical portable path for adopters.
+
+See [IDD helper script evaluation](idd-helper-scripts.md) for the
+current inventory of high-friction query patterns, the reason helper
+scripts are not adopted yet, and the criteria for reconsidering optional
+read-only helpers later.
