@@ -8,7 +8,7 @@ Before posting any E-phase operational comment or GitHub reply, apply
 the shared claim revalidation gate. The active claim must still use your
 current `{claim-id}`.
 
-**If List A is empty after E3**: proceed to `idd-merge.instructions.md`.
+**If List A is empty after E3**: proceed to `idd-pre-merge.instructions.md`.
 **If List A is non-empty after E3**: proceed to
 `idd-review-triage.instructions.md` (E4).
 
@@ -151,6 +151,6 @@ comment token; use the HTTP `POST` path for reliability).
 
 ## E3 — Empty list check
 
-If List A is empty → proceed to `idd-merge.instructions.md`.
+If List A is empty → proceed to `idd-pre-merge.instructions.md`.
 
 Otherwise → proceed to `idd-review-triage.instructions.md` (E4).

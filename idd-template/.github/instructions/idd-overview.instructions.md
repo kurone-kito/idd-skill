@@ -261,7 +261,8 @@ file that matches your current situation.
 | PR open, CI passed, reviews pending         | `idd-review-snapshot.instructions.md`                            |
 | Snapshot done, List A non-empty             | `idd-review-triage.instructions.md` (E4–E8)                      |
 | Review feedback accepted, pushing fixes     | `idd-review-fix.instructions.md`                                 |
-| All checks passed, ready to merge           | `idd-merge.instructions.md`                                      |
+| Ready for pre-merge gate check              | `idd-pre-merge.instructions.md`                                  |
+| All pre-merge conditions satisfied          | `idd-merge.instructions.md`                                      |
 
 CI polling logic shared by D and E phases lives in
 `idd-ci.instructions.md`; callers declare their own on-success target.
