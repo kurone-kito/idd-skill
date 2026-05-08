@@ -108,10 +108,12 @@ per PR** (this is a process limit, not a GitHub-enforced constraint).
    - **RECOVERY_NEEDED** (`COPILOT_PENDING` is `"true"`, no same-head
      marker): post the recovery marker from **AW3-R**. Do not request
      another Copilot review.
-   - **CAP_EXHAUSTED** (`MARKER_COUNT` ≥ 30, no same-head marker) →
+   - **CAP_EXHAUSTED** (`REQUEST_MARKER_COUNT` ≥ 30, no same-head
+     marker) →
      skip the advisory wait entirely; proceed directly to E15.
-   - **REQUEST_NEEDED** (`COPILOT_PENDING` is `"false"`, cap < 30):
-     request Copilot review and immediately post a plain-text marker:
+   - **REQUEST_NEEDED** (`COPILOT_PENDING` is `"false"`, request cap <
+     30): request Copilot review and immediately post a plain-text
+     marker:
 
      ```sh
      gh pr edit {pr-number} --add-reviewer "@copilot"
@@ -158,9 +160,10 @@ Poll every 2 minutes:
 
 2. Re-read review threads, review bodies, and regular PR comments,
    **excluding any regular PR comment authored by any IDD agent** (covers
-   advisory-wait, review-watermark, review-baseline, claim, hold notes,
-   and other operational comments). If any item has `updatedAt` strictly
-   newer than the polling watermark → return to E1 immediately.
+   advisory-wait, advisory-wait-recovery, review-watermark,
+   review-baseline, claim, hold notes, and other operational comments).
+   If any item has `updatedAt` strictly newer than the polling watermark
+   → return to E1 immediately.
 
 3. Run **AW1** and **AW2** (refresh `COPILOT_PENDING`, `LAST_COPILOT_COMMIT`,
    and `EARLIEST_SAME_HEAD_AT`). Apply **AW5** if `EARLIEST_SAME_HEAD_AT`

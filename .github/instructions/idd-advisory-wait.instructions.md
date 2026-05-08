@@ -33,10 +33,36 @@ COPILOT_PENDING=$(gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/requested_rev
 # "true" → review still pending; "false" → submitted or cancelled.
 # GitHub uses "Copilot" (capital C) in requested_reviewers and
 # "copilot-pull-request-reviewer[bot]" in the reviews API — both matched here.
+
+COPILOT_PENDING_COVERS_HEAD=$(
+  gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/timeline" \
+    -H "Accept: application/vnd.github+json" \
+    --paginate \
+    | jq -r -s --arg sha "${PR_HEAD_SHA}" '
+        (add // [])
+        | to_entries
+        | (map(select(.value.event == "committed"
+             and ((.value.sha // .value.commit_id // "") == $sha)))
+           | last | .key // null) as $head_index
+        | (map(select(.value.event == "review_requested"
+             and (((.value.requested_reviewer.login // "") == "Copilot")
+                  or ((.value.requested_reviewer.login // "")
+                      | startswith("copilot-pull-request-reviewer")))))
+           | last | .key // null) as $request_index
+        | ($head_index != null and $request_index != null and
+           $request_index > $head_index)
+      '
+)
+# "true" → the PR timeline proves the latest Copilot review request was
+# created after the current PR_HEAD_SHA entered the PR timeline.
+# "false" → pending reviewer exists, but recovery must stay on HOLD.
 ```
 
 If `LAST_COPILOT_COMMIT == PR_HEAD_SHA` → outcome is **SATISFIED**.
 Caller proceeds to its designated next step without running AW2–AW3.
+
+Do not use commit author or committer timestamps as recovery proof; they
+do not prove when a commit entered the PR branch.
 
 ## AW2 — Fetch advisory-wait markers
 
@@ -46,19 +72,21 @@ EARLIEST_SAME_HEAD_AT=$(
     | jq -r -s "add
          | [.[] | select(
                (.body | test(\"^advisory-wait: [^ ]+ ${PR_HEAD_SHA}(?: |\$)\")) or
+               (.body | test(\"^advisory-wait-recovery: [^ ]+ ${PR_HEAD_SHA}(?: |\$)\")) or
                (.body | test(\"^<!-- advisory-wait: [^ ]+ ${PR_HEAD_SHA} [^ ]+ -->$\"))
              )]
          | min_by(.created_at) | .created_at // \"\""
 )
-# Matches plain-text (current) and HTML-comment (legacy) marker formats.
+# Matches request, recovery, and HTML-comment (legacy) marker formats.
 # Empty → no same-head marker exists.
 # Non-empty → earliest same-head marker createdAt (advisory-clock start).
 
-MARKER_COUNT=$(
+REQUEST_MARKER_COUNT=$(
   gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/comments" --paginate \
     | jq -r -s 'add | [.[] | select(.body | test("^advisory-wait:|^<!-- advisory-wait:"))] | length'
 )
-# Total advisory-wait markers for this PR (all HEADs). Used for the 30-per-PR cap.
+# Total Copilot re-review request markers for this PR (all HEADs). Used for
+# the 30-per-PR request cap. Recovery markers are excluded from this count.
 ```
 
 Refresh `EARLIEST_SAME_HEAD_AT` at the start of each polling iteration —
@@ -71,15 +99,16 @@ the GitHub API. Never use the timestamp inside the marker body.
 
 Evaluate in this order (the first matching row wins):
 
-| `LAST_COPILOT_COMMIT` | `COPILOT_PENDING` | Marker state        | Elapsed  | Outcome                                                     |
-| --------------------- | ----------------- | ------------------- | -------- | ----------------------------------------------------------- |
-| `== PR_HEAD_SHA`      | (any)             | (any)               | (any)    | **SATISFIED**                                               |
-| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | —        | **RECOVERY_NEEDED**                                         |
-| `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | ≥ 30 min | **SATISFIED** (window expired)                              |
-| `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | < 30 min | **WAIT**                                                    |
-| `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | ≥ 10 min | **SATISFIED**                                               |
-| `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | < 10 min | **WAIT**                                                    |
-| `!= PR_HEAD_SHA`      | `"false"`         | no same-head marker | —        | cap ≥ 30: **CAP\_EXHAUSTED**; cap < 30: **REQUEST\_NEEDED** |
+| `LAST_COPILOT_COMMIT` | `COPILOT_PENDING` | Marker state        | Head proof                         | Elapsed  | Outcome                                                             |
+| --------------------- | ----------------- | ------------------- | ---------------------------------- | -------- | ------------------------------------------------------------------- |
+| `== PR_HEAD_SHA`      | (any)             | (any)               | (any)                              | (any)    | **SATISFIED**                                                       |
+| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | `COPILOT_PENDING_COVERS_HEAD=true` | —        | **RECOVERY_NEEDED**                                                 |
+| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | not proven                         | —        | **HOLD** (unproven current-head coverage)                           |
+| `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | (any)                              | ≥ 30 min | **SATISFIED** (window expired)                                      |
+| `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | (any)                              | < 30 min | **WAIT**                                                            |
+| `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | (any)                              | ≥ 10 min | **SATISFIED**                                                       |
+| `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | (any)                              | < 10 min | **WAIT**                                                            |
+| `!= PR_HEAD_SHA`      | `"false"`         | no same-head marker | (any)                              | —        | request cap ≥ 30: **CAP\_EXHAUSTED**; cap < 30: **REQUEST\_NEEDED** |
 
 Note: evaluate the 30-minute SATISFIED condition before the WAIT
 condition for the `COPILOT_PENDING="true"` rows — the elapsed ≥ 30 min
@@ -106,11 +135,13 @@ the F3 caller instructions.
 Use this only when AW3 returns **RECOVERY_NEEDED**:
 
 1. Do **not** request another Copilot review. GitHub already reports a
-   pending Copilot reviewer for the current HEAD.
+   pending Copilot reviewer, and `COPILOT_PENDING_COVERS_HEAD=true`
+   proves the request was created after the current HEAD entered the PR
+   timeline.
 2. Post a plain-text marker for the current HEAD:
 
    ```text
-   advisory-wait: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time}
+   advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time}
    ```
 
 3. Use the marker comment's GitHub `created_at` as the advisory-clock
@@ -134,15 +165,24 @@ it.
 
 ## AW4 — Hold comment templates
 
-**Recovery failed** (COPILOT_PENDING is true, no same-head marker can be
-posted or read):
+**Unproven pending state** (COPILOT_PENDING is true, no same-head marker
+exists, and current-head coverage is not proven):
+
+> Copilot review is pending for this PR, but the PR timeline does not
+> prove that the request was created after HEAD `{PR_HEAD_SHA}` entered
+> the PR. A maintainer must verify or request the Copilot review before
+> this step can safely continue. Do not merge until the maintainer has
+> resolved this.
+
+**Recovery failed** (COPILOT_PENDING is true, a recovery marker was
+attempted, and no same-head marker can be posted or read):
 
 > Copilot review is pending for HEAD `{PR_HEAD_SHA}` but no
 > advisory-wait marker can be posted or read. A maintainer must verify
 > the Copilot advisory-wait state before this step can safely continue.
 > Do not merge until the maintainer has resolved this.
 
-**Cap exhausted** (no same-head marker, MARKER_COUNT ≥ 30):
+**Cap exhausted** (no same-head marker, REQUEST_MARKER_COUNT ≥ 30):
 
 > The 30-per-PR Copilot re-review cap is exhausted. A maintainer must
 > manually request and evaluate a Copilot review before merge.

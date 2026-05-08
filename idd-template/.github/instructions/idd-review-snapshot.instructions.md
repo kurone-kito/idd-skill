@@ -35,6 +35,7 @@ by any IDD agent):
 - `<!-- claimed-by:`
 - `<!-- unclaimed-by:`
 - `advisory-wait:`
+- `advisory-wait-recovery:`
 - `<!-- advisory-wait:`
 
 Additionally, fetch the **current CI state** for `{head-SHA}`:
