@@ -31,9 +31,8 @@ the following:
 
 **Short form** (agents with WebFetch or `gh` CLI access):
 
-> - `github:kurone-kito/idd-skill` の IDD をこのリポジトリにインポート＆オンボーディングして
-> - Import and onboard `github:kurone-kito/idd-skill`'s IDD into this
->   repository.
+> Import and onboard `github:kurone-kito/idd-skill`'s IDD into this
+> repository.
 
 **Explicit form** (works with any agent):
 
