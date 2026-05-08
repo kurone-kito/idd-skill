@@ -216,13 +216,13 @@ When a phase refers to a named command set, run the corresponding
 commands. **Adapt this section when applying this workflow to a
 different project.**
 
-| Name                  | Commands                                                                                                         |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **fix-validate**      | `npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"`                                       |
-| **pre-push-validate** | `npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress`                                          |
-| **post-fix-validate** | `npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress` |
-| **install-deps**      | `true`                                                                                                           |
-| **issue-scope**       | `roadmap`                                                                                                        |
+| Name                  | Commands                                                                                                                                     |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| **fix-validate**      | `npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"`                                       |
+| **pre-push-validate** | `npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress`                                        |
+| **post-fix-validate** | `npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress` |
+| **install-deps**      | `true`                                                                                                                                       |
+| **issue-scope**       | `roadmap`                                                                                                                                    |
 
 `pre-push-validate` intentionally omits auto-fix — all code should
 already pass lint at the push step. If lint fails, run **fix-validate**
