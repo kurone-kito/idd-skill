@@ -80,6 +80,10 @@ bracketed action:
      - **SATISFIED** → this check is **satisfied**; continue to the CI
        check.
      - **HOLD** → post the hold comment from **AW4** and stop.
+     - **RECOVERY_NEEDED** → post the recovery marker from **AW3-R**
+       without requesting another Copilot review, then enter the normal
+       WAIT polling path using refreshed AW2/AW3 state. Then **go back
+       to the first condition in F2**.
      - **REQUEST_NEEDED** → return to E14 to request Copilot review and
        post a fresh marker. Do not post a new request in F2.
      - **WAIT** (`COPILOT_PENDING` is `"true"`, elapsed < 30 min) →

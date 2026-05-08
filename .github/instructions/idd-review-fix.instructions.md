@@ -105,6 +105,9 @@ per PR** (this is a process limit, not a GitHub-enforced constraint).
 4. Apply the **AW3** decision table:
    - **SATISFIED** → proceed to E15.
    - **HOLD** → post the hold comment from **AW4** and stop.
+   - **RECOVERY_NEEDED** (`COPILOT_PENDING` is `"true"`, no same-head
+     marker): post the recovery marker from **AW3-R**. Do not request
+     another Copilot review.
    - **CAP_EXHAUSTED** (`MARKER_COUNT` ≥ 30, no same-head marker) →
      skip the advisory wait entirely; proceed directly to E15.
    - **REQUEST_NEEDED** (`COPILOT_PENDING` is `"false"`, cap < 30):
@@ -120,8 +123,8 @@ per PR** (this is a process limit, not a GitHub-enforced constraint).
 
      Use `PR_HEAD_SHA` as `{head-SHA}`. Post as plain text, not an HTML
      comment block.
-   - **WAIT**, or after **REQUEST_NEEDED** marker is posted: enter the
-     active polling loop below.
+   - **WAIT**, or after a **REQUEST_NEEDED** or **RECOVERY_NEEDED**
+     marker is posted: enter the active polling loop below.
 
 Copilot and CI advisory bot comments are advisory; unanswered ones do
 not block merge.

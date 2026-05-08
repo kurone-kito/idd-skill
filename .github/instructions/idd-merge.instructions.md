@@ -51,6 +51,9 @@ gate. The active claim must still use your current `{claim-id}`.
      as F3 is a self-contained blocking gate:
      - **SATISFIED** → proceed with the merge.
      - **HOLD** → post the hold comment from **AW4** and stop.
+     - **RECOVERY_NEEDED** → post the recovery marker from **AW3-R** and
+       return to the F2 advisory bot wait check. Do not merge in the
+       same F3 pass that creates a recovery marker.
      - **WAIT** → Do NOT execute the merge. Return to the **F2 advisory
        bot wait check** in `idd-pre-merge.instructions.md` (go back to
        the first condition in F2). F2 will reuse the existing same-HEAD

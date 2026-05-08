@@ -5,7 +5,8 @@ advisory-wait check. It is referenced by:
 
 - **E14** (`idd-review-fix.instructions.md`): request a Copilot
   re-review and wait for the advisory window
-- **F2** (`idd-merge.instructions.md`): gate check before allowing merge
+- **F2** (`idd-pre-merge.instructions.md`): gate check before allowing
+  merge
 - **F3** (`idd-merge.instructions.md`): final revalidation immediately
   before executing the merge command
 
@@ -73,7 +74,7 @@ Evaluate in this order (the first matching row wins):
 | `LAST_COPILOT_COMMIT` | `COPILOT_PENDING` | Marker state        | Elapsed  | Outcome                                                     |
 | --------------------- | ----------------- | ------------------- | -------- | ----------------------------------------------------------- |
 | `== PR_HEAD_SHA`      | (any)             | (any)               | (any)    | **SATISFIED**                                               |
-| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | —        | **HOLD** (inconsistent)                                     |
+| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | —        | **RECOVERY_NEEDED**                                         |
 | `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | ≥ 30 min | **SATISFIED** (window expired)                              |
 | `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | < 30 min | **WAIT**                                                    |
 | `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | ≥ 10 min | **SATISFIED**                                               |
@@ -90,6 +91,7 @@ Callers handle outcomes differently:
 | --------------- | ---------------------------------- | ------------------------------------ | ---------------------------- |
 | SATISFIED       | proceed to E15                     | continue to CI check                 | proceed with merge           |
 | HOLD            | post AW4 comment; stop             | post AW4 comment; stop               | post AW4 comment; stop       |
+| RECOVERY_NEEDED | post recovery marker; poll         | post recovery marker; poll           | post marker; return to F2    |
 | CAP\_EXHAUSTED  | skip advisory wait; proceed to E15 | post AW4 cap-exhausted comment; stop | not applicable (see F3 note) |
 | REQUEST\_NEEDED | request Copilot, post marker, poll | return to E14                        | not applicable (see F3 note) |
 | WAIT            | continue polling (active loop)     | poll F2 conditions every 2 min       | return to F2                 |
@@ -99,16 +101,46 @@ Callers handle outcomes differently:
 F3 treats the advisory check as satisfied without running AW2–AW3 — see
 the F3 caller instructions.
 
+## AW3-R — Recovery marker
+
+Use this only when AW3 returns **RECOVERY_NEEDED**:
+
+1. Do **not** request another Copilot review. GitHub already reports a
+   pending Copilot reviewer for the current HEAD.
+2. Post a plain-text marker for the current HEAD:
+
+   ```text
+   advisory-wait: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time}
+   ```
+
+3. Use the marker comment's GitHub `created_at` as the advisory-clock
+   start. The embedded timestamp is only human-readable context. Do not
+   use an inferred earlier reviewer-request time; recovery deliberately
+   starts a fresh conservative wait window.
+4. Treat the recovery marker as a wait-clock anchor only. It records an
+   already-pending reviewer state; it is not a new Copilot re-review
+   request.
+5. Re-run AW2 immediately. If the marker cannot be read, post the AW4
+   recovery-failed hold comment and stop.
+6. Continue through the caller's normal polling path. F3 must not merge
+   immediately after posting a recovery marker; it returns to F2.
+
+This recovery path covers Copilot reviewer requests created outside the
+current E14 request step, including GitHub auto-assignment, manual
+reviewer assignment, or a restart where the original request source is
+not knowable. A same-run E14 crash is still safe to recover because the
+new marker's `created_at` restarts the wait window instead of shortening
+it.
+
 ## AW4 — Hold comment templates
 
-**Inconsistent state** (COPILOT_PENDING is true, no same-head marker):
+**Recovery failed** (COPILOT_PENDING is true, no same-head marker can be
+posted or read):
 
 > Copilot review is pending for HEAD `{PR_HEAD_SHA}` but no
-> advisory-wait marker was found. E14 may have crashed before posting
-> the marker. A maintainer must verify whether the Copilot review was
-> formally requested and confirm its status before this step can safely
-> continue. Do not merge or post a new advisory-wait marker until the
-> maintainer has resolved this.
+> advisory-wait marker can be posted or read. A maintainer must verify
+> the Copilot advisory-wait state before this step can safely continue.
+> Do not merge until the maintainer has resolved this.
 
 **Cap exhausted** (no same-head marker, MARKER_COUNT ≥ 30):
 
