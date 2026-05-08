@@ -51,11 +51,19 @@ start of Step 1, compute `{max-activity-updatedAt}` as the highest
 the items that will appear in List A). Write `none` if the snapshot is
 empty. Compute `{total-item-count}` as the total number of items in the
 snapshot (0 if empty). Persist all six values immediately by posting a
-hidden PR comment:
+PR comment with this format:
 
-```html
+```markdown
 <!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->
+
+_{agent-id}: review triage snapshot — IDD automation marker. Do not edit._
 ```
+
+The HTML comment is the machine-readable token; the italic line is a
+visible note for human readers. Detect the language of the PR body and
+write the visible note in that language (default to English if
+ambiguous). Example Japanese note:
+`_{agent-id}: レビュートリアージのスナップショット — IDD 自動化マーカー。編集しないでください。_`
 
 - **`{head-SHA}`**: the value read at the very start of Step 1, before
   any fetching. F2 uses this to detect pushes that occurred between E1's
@@ -70,11 +78,13 @@ hidden PR comment:
 
 Use server-reported timestamps, not the local wall clock.
 
-Note: the watermark comment body consists entirely of an HTML comment.
-Some GitHub client tools (e.g., `gh issue comment`, `gh api -f body=`)
-silently reject such bodies. Post using a direct HTTP `POST` with a JSON
-body (e.g., `curl` with `-H "Content-Type: application/json"` and
-`-d '{"body":"<!-- ... -->"}'`).
+Note: the comment body begins with an HTML comment token. Some GitHub
+client tools (e.g., `gh issue comment`, `gh api -f body=`) silently
+reject bodies that consist entirely of HTML comments; this format
+includes visible text so that is not an issue, but the HTTP `POST` path
+is still recommended for reliability (`curl` with
+`-H "Content-Type: application/json"` and
+`-d '{"body":"<!-- ... -->\n\n_note_"}}'`).
 
 On resume or restart, read the latest
 `<!-- review-watermark:
@@ -117,20 +127,30 @@ implementation.
 
 **Incremental review**: on the second and later passes **within the same
 claim**, scope the review to the diff since the previous E2 execution's
-head SHA (tracked via
-`<!-- review-baseline: {agent-id} {claim-id} {SHA} -->` PR comments —
-post a new one after each E2 run; use the latest comment with that
-prefix whose embedded `{claim-id}` matches the current active claim).
-Reset to full-branch diff after a rebase, multi-fix batch, when the
-baseline SHA is not an ancestor of the current HEAD, or whenever the
-active `{claim-id}` changed due to restart or takeover. List A is
+head SHA (tracked via `<!-- review-baseline: … -->` PR comments — post
+a new one after each E2 run; use the latest comment with that prefix
+whose embedded `{claim-id}` matches the current active claim). Reset to
+full-branch diff after a rebase, multi-fix batch, when the baseline SHA
+is not an ancestor of the current HEAD, or whenever the active
+`{claim-id}` changed due to restart or takeover. List A is
 session-local; do not inherit a previous claim's critique findings
 unless they were persisted as reviewer-visible comments.
 
-After the critique pass completes, post a new
-`<!-- review-baseline: {agent-id} {claim-id} {SHA} -->` comment with the
-current HEAD SHA. As with the watermark, post using the GitHub REST API
-directly (the body consists entirely of an HTML comment).
+After the critique pass completes, post a new `review-baseline` comment
+with the current HEAD SHA using this format:
+
+```markdown
+<!-- review-baseline: {agent-id} {claim-id} {SHA} -->
+
+_{agent-id}: critique baseline — IDD automation marker. Do not edit._
+```
+
+Use the PR body's language for the visible note (same rule as the
+watermark). Example Japanese note:
+`_{agent-id}: クリティークのベースライン — IDD 自動化マーカー。編集しないでください。_`
+
+Post using the GitHub REST API directly (the body begins with an HTML
+comment token; use the HTTP `POST` path for reliability).
 
 ## E3 — Empty list check
 

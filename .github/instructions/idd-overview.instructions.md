@@ -12,13 +12,18 @@ Post this HTML comment to an issue to claim it or take it over:
 <!-- claimed-by: {agent-id} {claim-id} supersedes: {prior-claim-id|none} {ISO8601-timestamp} branch: {branch-name} -->
 ```
 
-**Important**: all operational comments (`claimed-by`, `unclaimed-by`,
-`review-watermark`, `review-baseline`) consist entirely of HTML
-comments. Some GitHub client tools (e.g., `gh issue comment`,
-`gh api -f body=`) silently reject such bodies. Always post these using
-a direct HTTP `POST` with a JSON body (e.g., `curl` with
-`-H "Content-Type: application/json"` and
+**Important**: the machine-readable token in every operational comment
+(`claimed-by`, `unclaimed-by`, `review-watermark`, `review-baseline`)
+is an HTML comment. Some GitHub client tools (e.g., `gh issue comment`,
+`gh api -f body=`) silently reject bodies that consist entirely of HTML
+comments. Always post these using a direct HTTP `POST` with a JSON body
+(e.g., `curl` with `-H "Content-Type: application/json"` and
 `-d '{"body":"<!-- ... -->"}'`).
+
+`review-watermark` and `review-baseline` comments must additionally
+include a short visible note after the HTML comment token (see
+`idd-review-triage.instructions.md` for the required format). `claimed-by`
+and `unclaimed-by` comments remain HTML-comment-only.
 
 - `{claim-id}` is an opaque unique token for one active claim lineage.
   Generate a fresh value on every fresh claim or takeover. Reuse the
@@ -183,10 +188,11 @@ without session context can understand the current state and continue
 correctly. Do not rely on session memory alone for information that
 another agent may need.
 
-Operational restore markers (for example `review-watermark` and
-`review-baseline`) must include the current `{claim-id}` and must never
-be restored across a claim change. A takeover starts a new restore
-scope.
+Operational restore markers (`review-watermark` and `review-baseline`)
+must include the current `{claim-id}` and must never be restored across
+a claim change. A takeover starts a new restore scope. These markers
+must also include a visible human-readable note (see
+`idd-review-triage.instructions.md`).
 
 ## Review item classes
 
