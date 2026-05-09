@@ -43,10 +43,13 @@ issues through the normal IDD loop.
 
 The distributed template is cross-agent for execution, but its later PR
 phases include a GitHub Copilot advisory review step by default. If an
-adopter does not want that PR policy, they can customize
+adopter does not want that PR policy, they should choose a profile in
+`docs/idd-review-policy-profiles.md` and apply the complete edit surface
+described there. At minimum, non-default profiles touch
 `.github/instructions/idd-review-fix.instructions.md`,
 `.github/instructions/idd-pre-merge.instructions.md`, and
-`.github/instructions/idd-merge.instructions.md` after import.
+`.github/instructions/idd-merge.instructions.md` after import; some
+profiles require additional files.
 
 ## Placeholders
 
@@ -78,6 +81,7 @@ adopter does not want that PR policy, they can customize
   idd-resume.instructions.md         ← resume after crash / handoff
 docs/
   idd-workflow.md                    ← cross-agent entry point and file map
+  idd-review-policy-profiles.md      ← default and alternative PR review policies
   idd-helper-scripts.md              ← optional helper-script evaluation and policy
   idd-comment-minimization.md        ← post-merge comment cleanup policy and experiment
   permissions.md                     ← permission profiles and threat model
@@ -94,7 +98,9 @@ skills/issue-authoring/
 ```
 
 See `docs/idd-workflow.md` for the distinction between cross-agent
-execution and the default Copilot-backed PR policy.
+execution and PR review policy, and
+`docs/idd-review-policy-profiles.md` for the default Copilot-backed
+policy plus alternatives.
 
 When maintaining the source repository, keep `skills/issue-authoring/`
 and its bundled references aligned with `docs/issue-authoring-skill.md`.

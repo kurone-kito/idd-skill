@@ -96,7 +96,8 @@ The full phase map lives in
   that can be inspected, forked, and customized in the target repo.
 - **Agent choice** — The core loop works across GitHub Copilot, Claude
   Code, OpenAI Codex CLI, and Gemini CLI. The distributed default PR
-  policy still includes a Copilot advisory review step.
+  policy still includes a Copilot advisory review step, with documented
+  review policy profiles for adopters who use another gate.
 - **No service to operate** — Import the template files; no separate
   server, scheduler, or SaaS account is required to start.
 
@@ -155,6 +156,8 @@ approval.
   the deeper documentation set.
 - [Workflow guide](docs/idd-workflow.md) — entry points, file map, and
   cross-agent routing.
+- [Review policy profiles](docs/idd-review-policy-profiles.md) — choose
+  the default Copilot advisory PR policy or a documented alternative.
 - [Positioning](docs/positioning.md) — competitive landscape and why
   IDD is different.
 - [Permissions and threat model](docs/permissions.md) — access profiles,

@@ -88,8 +88,9 @@ orchestration rather than task-specific capabilities.
 - **Copilot advisory review dependency in the default template.** The
   distributed default PR policy includes a GitHub Copilot advisory
   review step in the review-fix and merge phases. Adopters who do not
-  use GitHub Copilot must customise `idd-review-fix.instructions.md`
-  and `idd-merge.instructions.md` to remove or replace this step.
+  use GitHub Copilot should choose a profile in
+  [IDD review policy profiles](idd-review-policy-profiles.md) and
+  customise the listed phase files to remove or replace this step.
 - **Requires issue hygiene.** The workflow assumes that issues carry
   correct dependency markers (`blocked-by`, `roadmap-id`) and that
   roadmaps reference sub-issues via task lists. Silent misuse of these

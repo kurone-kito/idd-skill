@@ -37,9 +37,13 @@ every phase.
 Important: the distributed default workflow is cross-agent for
 execution, but its later PR phases still include a GitHub Copilot
 advisory review step by default. If the operator does not want that PR
-policy, they should plan to customize
-`.github/instructions/idd-review-fix.instructions.md` and
-`.github/instructions/idd-merge.instructions.md` after import.
+policy, choose another profile in `docs/idd-review-policy-profiles.md`
+and plan to customize the complete edit surface described there. At
+minimum, non-default profiles touch
+`.github/instructions/idd-review-fix.instructions.md`,
+`.github/instructions/idd-pre-merge.instructions.md`, and
+`.github/instructions/idd-merge.instructions.md`; some profiles require
+additional files after import.
 
 Before granting credentials to unattended or merge-capable agents, read
 `docs/permissions.md` and choose the narrowest access profile that can
@@ -123,10 +127,10 @@ runtime reads, such as `.github/skills/`, `.claude/skills/`, or
 pre-execution issue drafting or roadmap decomposition support.
 
 Before importing, confirm whether the operator wants to keep the default
-Copilot advisory review policy described above. If not, note that they
-should customize `idd-review-fix.instructions.md`,
-`idd-pre-merge.instructions.md`, and `idd-merge.instructions.md` after
-the files are copied in.
+Copilot advisory review policy described above. If not, choose the
+closest profile in `docs/idd-review-policy-profiles.md` and note which
+phase files and profile-specific surfaces must be customized after the
+files are copied in.
 
 ### File list
 
@@ -147,6 +151,7 @@ the files are copied in.
 .github/instructions/idd-merge.instructions.md
 .github/instructions/idd-resume.instructions.md
 docs/idd-workflow.md
+docs/idd-review-policy-profiles.md
 docs/idd-helper-scripts.md
 docs/idd-comment-minimization.md
 docs/permissions.md
@@ -201,6 +206,7 @@ for FILE in \
   ".github/instructions/idd-merge.instructions.md" \
   ".github/instructions/idd-resume.instructions.md" \
   "docs/idd-workflow.md" \
+  "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \
   "docs/idd-comment-minimization.md" \
   "docs/permissions.md"
@@ -262,6 +268,7 @@ for FILE in \
   ".github/instructions/idd-merge.instructions.md" \
   ".github/instructions/idd-resume.instructions.md" \
   "docs/idd-workflow.md" \
+  "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \
   "docs/idd-comment-minimization.md" \
   "docs/permissions.md"
@@ -471,9 +478,12 @@ After completing the steps above, confirm each item:
 
 - [ ] Every `idd-*.instructions.md` file listed in the generated core
       file list is present in `.github/instructions/`.
-- [ ] `docs/idd-workflow.md`, `docs/idd-helper-scripts.md`,
+- [ ] `docs/idd-workflow.md`, `docs/idd-review-policy-profiles.md`,
+      `docs/idd-helper-scripts.md`,
       `docs/idd-comment-minimization.md`, and `docs/permissions.md` are
       present.
+- [ ] The operator's selected PR review policy profile is recorded, and
+      any non-default profile has matching phase-file customizations.
 - [ ] If the operator opted into issue authoring,
       `skills/issue-authoring/SKILL.md`,
       `skills/issue-authoring/agents/openai.yaml`, and the
