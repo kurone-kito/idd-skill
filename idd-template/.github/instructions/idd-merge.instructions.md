@@ -115,12 +115,29 @@ gate. The active claim must still use your current `{claim-id}`.
      decisions, active holds, failed-CI context still needed by
      maintainers, non-operational human discussion, or any content that
      still participates in active F2/F3 gates.
-   - Use GitHub GraphQL `minimizeComment` with node IDs. Check
-     `viewerCanMinimize` and `isMinimized` before minimizing; skip
-     already-minimized comments and comments the viewer cannot minimize.
+   - When `scripts/audit-pr-cleanup.mjs` is available, run it first in
+     dry-run mode so eligible and skipped candidates are visible:
 
-   See `docs/idd-comment-minimization.md` for the investigation notes,
-   dry-run shape, and command examples.
+     ```sh
+     node scripts/audit-pr-cleanup.mjs --pr <pr-number> --dry-run --format table
+     ```
+
+     To apply the safe candidates during this claimed IDD run, pass the
+     active issue and claim token so the helper re-validates the claim
+     before each minimization mutation:
+
+     ```sh
+     node scripts/audit-pr-cleanup.mjs --pr <pr-number> --apply \
+       --claim-issue <issue-number> --claim-id <claim-id> --format table
+     ```
+
+   - If the helper is unavailable, use GitHub GraphQL `minimizeComment`
+     with node IDs. Check `viewerCanMinimize` and `isMinimized` before
+     minimizing; skip already-minimized comments and comments the viewer
+     cannot minimize. Re-validate the active claim before each mutation.
+
+   See `docs/idd-comment-minimization.md` for the helper report shape,
+   fallback GraphQL commands, and experiment notes.
 2. Delete the local worktree and local branch.
 3. Update the local `main` branch.
 4. If GitHub auto-delete is disabled: delete the remote branch too.

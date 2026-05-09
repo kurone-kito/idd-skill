@@ -105,8 +105,17 @@ Always skip candidates when any of these are true:
 
 ## Dry Run Shape
 
-Before applying minimization, produce a candidate table with at least
-these fields:
+When the repository-local helper is available, start with a dry-run
+report:
+
+```sh
+node scripts/audit-pr-cleanup.mjs --pr <pr-number> --dry-run --format table
+```
+
+The helper defaults to JSON output for stable machine inspection; use
+`--format table` for a compact terminal view. Before applying
+minimization, the dry-run report must show candidate and skipped rows
+with at least these fields:
 
 | Field               | Purpose                                                            |
 | ------------------- | ------------------------------------------------------------------ |
@@ -114,9 +123,41 @@ these fields:
 | `url`               | Direct audit link                                                  |
 | `type`              | `IssueComment`, `PullRequestReview`, or `PullRequestReviewComment` |
 | `classifier`        | `RESOLVED` or `OUTDATED`                                           |
-| `viewerCanMinimize` | Must be `true`                                                     |
-| `isMinimized`       | Must be `false`                                                    |
+| `viewerCanMinimize` | Capability state used for candidate / skip decisions               |
+| `isMinimized`       | Current minimization state used for candidate / skip decisions     |
 | `reason`            | Why the candidate is safe                                          |
+
+Candidate rows must have `viewerCanMinimize=true` and
+`isMinimized=false`. Skipped rows may report the opposite states and
+must include the skip reason.
+
+The helper also reports skipped cleanup-shaped nodes with reasons such
+as already minimized, no minimization permission, unresolved associated
+review threads, missing accept/reject dispositions, unsafe hold or
+decision context, or a non-merged PR.
+
+## Apply Shape
+
+Apply mode is explicit:
+
+```sh
+node scripts/audit-pr-cleanup.mjs --pr <pr-number> --apply \
+  --claim-issue <issue-number> --claim-id <claim-id> --format table
+```
+
+During an IDD F4 cleanup, pass the active issue and claim id. The helper
+re-reads the issue and verifies the active claim before every
+`minimizeComment` mutation. Maintainer-led audits outside an active IDD
+claim may use `--skip-claim-check`, but ordinary IDD agents should not.
+
+The helper applies only safe candidates and reports applied, skipped,
+and failed rows. A helper failure is still cleanup-only context; it does
+not retroactively block a merge that already passed F3.
+
+## Fallback GraphQL
+
+If the helper is unavailable, use the direct GraphQL capability checks
+below.
 
 Example capability check for one node ID:
 
