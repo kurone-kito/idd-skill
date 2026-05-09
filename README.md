@@ -10,46 +10,30 @@ A portable set of `.github/instructions/` files and documentation that
 wire up an Issue-Driven Development (IDD) multi-agent pipeline for any
 GitHub project.
 
-## For AI agents
+## What is IDD?
 
-If you were pointed here by a trigger phrase such as
-`github:kurone-kito/idd-skill` and asked to onboard IDD, start with the
-onboarding guide:
+IDD is a multi-agent GitHub automation workflow where AI agents work
+through a repeating pipeline driven entirely by GitHub Issues. The
+phases are: Discover → Claim → Work → PR Submit → CI Wait →
+Review Triage → Review Fix → Merge → Loop.
 
-```text
-https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md
-```
+Each phase is encoded as a `.github/instructions/` file that any
+compatible AI agent can load — GitHub Copilot, Claude Code, Codex CLI,
+or Gemini CLI. That execution model is cross-agent, even though the
+distributed default review policy still includes the Copilot advisory
+step noted below.
 
-Fetch that file and follow its instructions. It will walk you through
-collecting placeholder values, copying the template files, and updating
-the repository's agent entry files — no cloning required.
+## Getting started
 
-## Quick start
+Use IDD in two separate steps:
 
-Open a session in your target repository and tell your AI agent one of
-the following:
+1. [Install / onboard IDD](#install--onboard-idd) into a target
+   repository.
+2. [Run IDD after onboarding](#run-idd-after-onboarding) when the target
+   repository is ready for the execution loop.
 
-**Short form** (agents with WebFetch or `gh` CLI access):
-
-> Import and onboard `github:kurone-kito/idd-skill`'s IDD into this
-> repository.
-
-**Explicit form** (works with any agent):
-
-> I want to use `github:idd-skill`'s Issue-Driven Development in this
-> repository. Read
-> `https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md`
-> and onboard me.
-
-The agent will collect a few project-specific values (repo name,
-validation commands) and then set up the full IDD workflow
-automatically — no manual file copying required.
-
-Note: the distributed default template is cross-agent for execution, but
-its later PR phases include a GitHub Copilot advisory review step by
-default. If adopters do not want that PR policy, they can customize
-`.github/instructions/idd-review-fix.instructions.md` and
-`.github/instructions/idd-merge.instructions.md` after onboarding.
+If you are an AI agent and only need the raw onboarding entry point, use
+[For AI agents](#for-ai-agents).
 
 ## Runtime prerequisites
 
@@ -73,7 +57,48 @@ an agent can run it end to end:
 Optional helpers such as WorkTrunk, `git-wt`, and commit-signing aliases
 can make the loop smoother, but they are not baseline requirements.
 
-## Using IDD
+## Install / onboard IDD
+
+To install IDD into a target repository, open a session there and tell
+your AI agent one of the following:
+
+**Short form** (agents with WebFetch or `gh` CLI access):
+
+> Import and onboard `github:kurone-kito/idd-skill`'s IDD into this
+> repository.
+
+**Explicit form** (works with any agent):
+
+> I want to use `github:idd-skill`'s Issue-Driven Development in this
+> repository. Read
+> `https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md`
+> and onboard me.
+
+The agent will collect a few project-specific values (repo name,
+validation commands) and then set up the full IDD workflow
+automatically — no manual file copying required.
+
+Note: the distributed default template is cross-agent for execution, but
+its later PR phases include a GitHub Copilot advisory review step by
+default. If adopters do not want that PR policy, they can customize
+`.github/instructions/idd-review-fix.instructions.md` and
+`.github/instructions/idd-merge.instructions.md` after onboarding.
+
+## For AI agents
+
+If you were pointed here by a trigger phrase such as
+`github:kurone-kito/idd-skill` and asked to onboard IDD, start with the
+onboarding guide:
+
+```text
+https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md
+```
+
+Fetch that file and follow its instructions. It will walk you through
+collecting placeholder values, copying the template files, and updating
+the repository's agent entry files — no cloning required.
+
+## Run IDD after onboarding
 
 After onboarding, open a session in your target repository and tell your
 AI agent to start the workflow. The agent should read
@@ -87,32 +112,6 @@ the Discover → Claim → Work → ... loop.
 - `Read docs/idd-workflow.md`, then
   `.github/instructions/idd-overview.instructions.md`, and begin the
   Discover → Claim → Work loop.
-
-## What is IDD?
-
-IDD is a multi-agent GitHub automation workflow where AI agents work
-through a repeating pipeline driven entirely by GitHub Issues. The
-phases are: Discover → Claim → Work → PR Submit → CI Wait →
-Review Triage → Review Fix → Merge → Loop.
-
-Each phase is encoded as a `.github/instructions/` file that any
-compatible AI agent can load — GitHub Copilot, Claude Code, Codex CLI,
-or Gemini CLI. That execution model is cross-agent, even though the
-distributed default review policy still includes the Copilot advisory
-step noted above.
-
-## Artifact model
-
-This repository primarily distributes an IDD instruction template, not a
-single agent-native skill. The exported package in `idd-template/`
-contains the portable `.github/instructions/` files, onboarding docs,
-and workflow docs that adopters copy into another repository.
-
-Agent entry files such as `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and
-`.github/copilot-instructions.md` are compatibility entry points for
-this repository. Native `SKILL.md` bundles, when present, are separate
-helpers that may reference the IDD docs but should not replace the
-instruction template itself.
 
 ## Why idd-skill?
 
@@ -143,6 +142,19 @@ competitive landscape and strategic positioning analysis.
 2. Copy the `idd-template/` directory contents into your target repository.
 3. Follow `idd-template/ONBOARDING.md` to fill in the placeholders and
    update your agent entry files.
+
+## Artifact model
+
+This repository primarily distributes an IDD instruction template, not a
+single agent-native skill. The exported package in `idd-template/`
+contains the portable `.github/instructions/` files, onboarding docs,
+and workflow docs that adopters copy into another repository.
+
+Agent entry files such as `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and
+`.github/copilot-instructions.md` are compatibility entry points for
+this repository. Native `SKILL.md` bundles, when present, are separate
+helpers that may reference the IDD docs but should not replace the
+instruction template itself.
 
 ## This repository
 
