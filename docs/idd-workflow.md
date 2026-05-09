@@ -83,6 +83,11 @@ instruction template first. Native skills can sit beside it as helpers,
 but the synchronization contract for the portable workflow remains
 between the live `.github/instructions/` files and `idd-template/`.
 
+When an operator gives exactly one issue target, Discover can verify that
+target directly before Claim. The shortcut avoids broad roadmap
+enumeration, but it still applies targeted readiness checks and the A4
+viability gate before the normal A5 claim safety checks.
+
 ## Roadmap completion audits
 
 Discover owns roadmap-level state. After it finds an open roadmap, it

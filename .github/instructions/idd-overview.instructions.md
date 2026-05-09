@@ -172,8 +172,14 @@ Agents must not widen issue-selection scope beyond what the roadmap
 explicitly references (directly or transitively) without explicit
 operator instruction. Specifically:
 
+- A single explicit issue target provided by the operator in the current
+  run is explicit operator instruction for that one issue only. Use the
+  A0-T path in `idd-discover.instructions.md`; do not use the target as
+  permission to search for alternate issues.
 - Repo-wide searches (`gh issue list`, `gh search`, label-based queries)
   are permitted only in **A1** (to locate the roadmap itself), in
+  **A0-T** for the scoped body-content lookup needed to resolve the
+  explicit target's `idd-skill-blocked-by` markers, in
   **A0-O** when `issue-scope` is `orphan-first` (body-content filter to
   find issues lacking `idd-skill-roadmap-id` and
   `idd-skill-blocked-by` markers), and for the scoped
@@ -261,19 +267,20 @@ replace that command with `true` — the same no-op convention used by
 Start by reading this file for shared definitions, then load the phase
 file that matches your current situation.
 
-| Situation                                   | Read this file                                                   |
-| ------------------------------------------- | ---------------------------------------------------------------- |
-| Starting fresh (no active claim)            | `idd-discover.instructions.md`, then `idd-claim.instructions.md` |
-| Resuming after crash / rate-limit / handoff | `idd-resume.instructions.md`                                     |
-| Claimed, branch exists, no PR yet           | `idd-work.instructions.md`                                       |
-| PR open, CI running, no reviews yet         | `idd-pr-submit.instructions.md`                                  |
-| PR open, CI running, reviews exist          | `idd-review-snapshot.instructions.md` (E1–E3)                    |
-| PR open, CI passed, no reviews yet          | `idd-review-snapshot.instructions.md` (E3 empty-list → merge)    |
-| PR open, CI passed, reviews pending         | `idd-review-snapshot.instructions.md`                            |
-| Snapshot done, List A non-empty             | `idd-review-triage.instructions.md` (E4–E8)                      |
-| Review feedback accepted, pushing fixes     | `idd-review-fix.instructions.md`                                 |
-| Ready for pre-merge gate check              | `idd-pre-merge.instructions.md`                                  |
-| All pre-merge conditions satisfied          | `idd-merge.instructions.md`                                      |
+| Situation                                     | Read this file                                                        |
+| --------------------------------------------- | --------------------------------------------------------------------- |
+| Starting fresh (no active claim)              | `idd-discover.instructions.md`, then `idd-claim.instructions.md`      |
+| Starting fresh with one explicit issue target | `idd-discover.instructions.md` A0-T, then `idd-claim.instructions.md` |
+| Resuming after crash / rate-limit / handoff   | `idd-resume.instructions.md`                                          |
+| Claimed, branch exists, no PR yet             | `idd-work.instructions.md`                                            |
+| PR open, CI running, no reviews yet           | `idd-pr-submit.instructions.md`                                       |
+| PR open, CI running, reviews exist            | `idd-review-snapshot.instructions.md` (E1–E3)                         |
+| PR open, CI passed, no reviews yet            | `idd-review-snapshot.instructions.md` (E3 empty-list → merge)         |
+| PR open, CI passed, reviews pending           | `idd-review-snapshot.instructions.md`                                 |
+| Snapshot done, List A non-empty               | `idd-review-triage.instructions.md` (E4–E8)                           |
+| Review feedback accepted, pushing fixes       | `idd-review-fix.instructions.md`                                      |
+| Ready for pre-merge gate check                | `idd-pre-merge.instructions.md`                                       |
+| All pre-merge conditions satisfied            | `idd-merge.instructions.md`                                           |
 
 CI polling logic shared by D and E phases lives in
 `idd-ci.instructions.md`; callers declare their own on-success target.

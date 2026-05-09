@@ -1,11 +1,52 @@
-# IDD — Discover Phase (A0–A4)
+# IDD — Discover Phase (A0-T–A4)
 
 Read this file when starting a new task. It covers finding and selecting
-the next issue to work on. After selecting, read
+the next issue to work on, including an operator-provided exact issue
+target. After selecting or verifying a target, read
 `idd-claim.instructions.md` to claim it.
 
-**Abort conditions**: A1, A3 (default; see decision tree). **Early stop
-condition**: A4 (no claim made — see below).
+**Abort conditions**: A0-T, A1, A3 (default; see decision tree).
+**Early stop condition**: A0-T or A4 (no claim made — see below).
+
+## A0-T — Explicit issue target shortcut
+
+Use this shortcut only when the current operator request contains one
+unambiguous issue target in the current repository: either a single issue
+number such as `#123` or a single issue URL whose owner and repository
+match the current repository.
+
+Do not use this shortcut for ambiguous inputs, multiple issue numbers,
+cross-repository issue URLs, closed issues, inaccessible issues, pull
+requests, discussions, commits, or any other non-issue target. Report the
+reason and stop without claiming. Fall back to normal discovery only when
+the operator explicitly asks for normal discovery in the same run; do not
+silently search for another issue.
+
+For a valid open target, skip A0-O, A1, A1.5, A2, and candidate
+selection. Before A5, run targeted readiness and viability checks against
+that issue only:
+
+1. Re-fetch the target issue.
+2. Apply the same readiness intent as A3 to the target:
+   - no `status:blocked-by-human` or `status:needs-decision` label;
+   - no open dependent issues, except parent epics or aggregate issues
+     that are acceptable under A3;
+   - visible `Blocked by #NNN` references resolve to closed or otherwise
+     completed issues, with unresolved references treated as blocked;
+   - hidden `<!-- idd-skill-blocked-by: {roadmap-id} -->` markers
+     resolve through the same scoped body-content lookup used by A3, and
+     the matching roadmap work is closed or otherwise complete;
+   - no external human coordination is required to start.
+3. Run the normal A4 viability gate against the target only.
+
+If any targeted readiness or viability check fails, report the exact
+failed criterion and stop without claiming. Do not fall back to another
+issue unless the operator explicitly asks for normal discovery in the
+same run.
+
+If all checks pass, the target is selected. Continue directly to
+`idd-claim.instructions.md` A5. A5 claim-state, open-PR, takeover,
+branch-collision, and claim-verification rules remain unchanged.
 
 ## A0 — Check issue-scope setting
 
@@ -50,6 +91,8 @@ by the `roadmap` label (project field) or by recognizing it as an
 umbrella issue. If no roadmap issue exists, report and abort.
 
 **Note**: Repo-wide or label-based issue queries are permitted only in
+**A0-T** (the scoped `idd-skill-roadmap-id` lookup needed to resolve the
+explicit target's `idd-skill-blocked-by` markers),
 **A0-O** (when `issue-scope` is `orphan-first`, to find orphan issues),
 **A1** (to locate the roadmap), **A1.5** (narrow duplicate/reuse lookup
 for one specific autonomous gap), and **A3** (narrow body-content lookup
@@ -184,6 +227,10 @@ include only **open** issues in the A2 candidate set.
 **Permitted repo-wide queries** — only the following scoped lookups may
 touch issues outside the roadmap traversal graph:
 
+- **A0-T only**: the scoped body-content lookup needed to resolve
+  `idd-skill-blocked-by` markers on the explicit target. The result is
+  used solely to determine targeted readiness and is not added to any
+  candidate set.
 - **A0-O only** (when `issue-scope` is `orphan-first`): a repo-wide
   open-issue query to find issues without `roadmap-id` or `blocked-by`
   markers.
