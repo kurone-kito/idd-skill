@@ -98,6 +98,8 @@ gate. The active claim must still use your current `{claim-id}`.
    This cleanup is never a merge gate and must not run before F3
    succeeds. If cleanup fails, record the failure only if it is useful
    for a later audit, then continue with local cleanup.
+   Re-validate the active claim before each GitHub minimization
+   mutation.
 
    - Feedback or review parent comments may be minimized as `RESOLVED`
      only after every actionable child review comment/thread under that
