@@ -74,6 +74,7 @@ adopter does not want that PR policy, they can customize
 docs/
   idd-workflow.md                    ← cross-agent entry point and file map
   idd-helper-scripts.md              ← optional helper-script evaluation and policy
+  idd-comment-minimization.md        ← post-merge comment cleanup policy and experiment
 ONBOARDING.md                        ← AI agent import guide (start here)
 README.md                            ← this file
 
