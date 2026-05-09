@@ -116,6 +116,7 @@ async function buildReport(owner, repo, prNumber) {
   const reviews = fetchReviews(owner, repo, prNumber);
   const threads = fetchReviewThreads(owner, repo, prNumber);
   const threadIndex = indexThreadsByReview(threads);
+  const latestReviews = indexLatestReviewsByAuthor(reviews);
 
   const report = {
     repository: `${owner}/${repo}`,
@@ -134,7 +135,7 @@ async function buildReport(owner, repo, prNumber) {
   }
 
   for (const review of reviews) {
-    evaluateReviewParent(review, pr, threadIndex, report);
+    evaluateReviewParent(review, pr, threadIndex, latestReviews, report);
   }
 
   return report;
@@ -176,7 +177,7 @@ function evaluateOperationalComment(comment, pr, report) {
   });
 }
 
-function evaluateReviewParent(review, pr, threadIndex, report) {
+function evaluateReviewParent(review, pr, threadIndex, latestReviews, report) {
   const author = review.author?.login ?? "";
   if (!isKnownReviewBot(author)) {
     return;
@@ -184,6 +185,7 @@ function evaluateReviewParent(review, pr, threadIndex, report) {
 
   const subject = subjectFromNode(review, "PullRequestReview", "RESOLVED");
   const associated = threadIndex.get(review.id) ?? { total: 0, unresolved: 0, threadIds: [] };
+  const latestReview = latestReviews.get(author.toLowerCase());
 
   if (!pr.merged) {
     addSkipped(report, subject, "PR is not merged");
@@ -203,6 +205,11 @@ function evaluateReviewParent(review, pr, threadIndex, report) {
 
   if (!review.viewerCanMinimize) {
     addSkipped(report, subject, "viewer cannot minimize this review");
+    return;
+  }
+
+  if (review.state === "CHANGES_REQUESTED" || latestReview?.state === "CHANGES_REQUESTED") {
+    addSkipped(report, subject, "review author still has an active changes-requested state");
     return;
   }
 
@@ -300,6 +307,22 @@ function isKnownReviewBot(login) {
   return REVIEW_BOT_LOGINS.has(login.toLowerCase());
 }
 
+function indexLatestReviewsByAuthor(reviews) {
+  const index = new Map();
+  for (const review of reviews) {
+    const author = review.author?.login?.toLowerCase();
+    if (!author) {
+      continue;
+    }
+    const current = index.get(author);
+    const submittedAt = review.submittedAt ?? "";
+    if (!current || submittedAt > (current.submittedAt ?? "")) {
+      index.set(author, review);
+    }
+  }
+  return index;
+}
+
 function indexThreadsByReview(threads) {
   const index = new Map();
 
@@ -322,7 +345,7 @@ function indexThreadsByReview(threads) {
       if (!thread.isResolved) {
         current.unresolved += 1;
       }
-      if (!hasDisposition(thread)) {
+      if (!hasFreshDisposition(thread)) {
         current.missingDisposition += 1;
       }
       if (thread.comments?.pageInfo?.hasNextPage) {
@@ -336,11 +359,25 @@ function indexThreadsByReview(threads) {
   return index;
 }
 
-function hasDisposition(thread) {
-  return (thread.comments?.nodes ?? []).some((comment) => {
-    const body = (comment.body ?? "").trimStart();
-    return body.startsWith("**Accepted**") || body.startsWith("**Rejected**");
+function hasFreshDisposition(thread) {
+  const comments = thread.comments?.nodes ?? [];
+  const latestFeedbackAt = comments
+    .filter((comment) => !isDispositionComment(comment))
+    .map((comment) => comment.createdAt)
+    .sort()
+    .at(-1);
+
+  return comments.some((comment) => {
+    if (!isDispositionComment(comment)) {
+      return false;
+    }
+    return !latestFeedbackAt || comment.createdAt > latestFeedbackAt;
   });
+}
+
+function isDispositionComment(comment) {
+  const body = (comment.body ?? "").trimStart();
+  return body.startsWith("**Accepted**") || body.startsWith("**Rejected**");
 }
 
 function fetchPullRequest(owner, repo, number) {
@@ -537,6 +574,10 @@ function readActiveClaim(owner, repo, issueNumber) {
     if (claim) {
       if (active && claim.agentId === active.agentId && claim.claimId === active.claimId) {
         active.createdAt = claim.createdAt;
+        continue;
+      }
+
+      if (active && claim.claimId === active.claimId) {
         continue;
       }
 
