@@ -88,10 +88,13 @@ Current safe classes are:
 
 - CodeRabbit summary / walkthrough comments that explicitly report no
   actionable comments
-- CodeRabbit summary / walkthrough comments that have a later IDD
-  accept/reject disposition and no unresolved known-bot review threads
+- CodeRabbit summary / walkthrough comments that have no unresolved
+  known-bot review threads and either a later IDD disposition that names
+  CodeRabbit or resolved CodeRabbit review threads with fresh IDD
+  dispositions
 - CodeRabbit review-trigger acknowledgements after a later IDD
-  disposition confirms the requested review completed
+  disposition that names CodeRabbit confirms the requested review
+  completed
 
 Bot review parent bodies with no associated review threads are skipped
 by design, including Copilot error review bodies. They remain visible

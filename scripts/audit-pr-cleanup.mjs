@@ -480,10 +480,13 @@ function classifyRegularBotComment(comment, comments, threads) {
         reason: "CodeRabbit completed summary reported no actionable comments",
       };
     }
-    if (hasExplicitDispositionAfter(comment, comments)) {
+    if (
+      hasExplicitDispositionAfter(comment, comments)
+      || hasCompletedBotThreadDispositions(threads, isCodeRabbitLogin)
+    ) {
       return {
         classifier: "RESOLVED",
-        reason: "CodeRabbit completed summary has a later IDD disposition and no unresolved bot threads",
+        reason: "CodeRabbit completed summary has matched IDD disposition evidence",
       };
     }
     return null;
@@ -508,16 +511,33 @@ function isCodeRabbitLogin(login) {
 }
 
 function hasExplicitDispositionAfter(targetComment, comments) {
-  const targetTime = Date.parse(targetComment.updatedAt ?? targetComment.createdAt ?? "");
+  const targetTime = Date.parse(targetComment.createdAt ?? "");
   return comments.some((comment) => {
     const author = comment.author?.login ?? "";
     if (isKnownReviewBot(author) || !isDispositionComment(comment)) {
       return false;
     }
-    const dispositionTime = Date.parse(comment.updatedAt ?? comment.createdAt ?? "");
+    if (!/\bCodeRabbit\b/i.test(comment.body ?? "")) {
+      return false;
+    }
+    const dispositionTime = Date.parse(comment.createdAt ?? "");
     return Number.isFinite(targetTime)
       && Number.isFinite(dispositionTime)
       && dispositionTime > targetTime;
+  });
+}
+
+function hasCompletedBotThreadDispositions(threads, loginPredicate) {
+  const botThreads = threads.filter((thread) => {
+    return (thread.comments?.nodes ?? []).some((comment) => {
+      return loginPredicate(comment.author?.login ?? "") && !isDispositionComment(comment);
+    });
+  });
+
+  return botThreads.length > 0 && botThreads.every((thread) => {
+    return thread.isResolved
+      && !thread.comments?.pageInfo?.hasNextPage
+      && hasFreshDisposition(thread);
   });
 }
 
