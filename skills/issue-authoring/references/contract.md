@@ -37,6 +37,51 @@ Skip it when all of the following are true:
 - no roadmap, dependency marker, or issue split is needed
 - the user did not ask for issue drafting first
 
+## Stable phases
+
+The bundle uses two stable phases. These names mirror the canonical
+contract and should stay stable for copied bundles.
+
+### 1. Intake and Clarification
+
+In this phase, the agent:
+
+- inspects the relevant code, docs, and existing issues
+- identifies assumptions and ambiguity that affect issue quality
+- runs a secondary critique pass before drafting
+- asks the user only the questions that block safe issue drafting
+
+The critique pass is agent-neutral: use a subagent or rubber-duck
+reviewer when available, otherwise run an explicit self-critique
+locally. Clarification must be bounded; the default maximum is 3 rounds.
+If safe drafting is still impossible after that, stop and report the
+remaining blockers instead of looping indefinitely.
+
+### 2. Decompose and Draft
+
+In this phase, the agent:
+
+- restates the clarified request in implementation-facing terms
+- splits work into atomic tasks
+- checks whether each task is suitable for autonomous execution
+- reuses or extends existing issues before creating new ones
+- drafts orphan issues, roadmap packages, sub-issues, or non-ready
+  buckets as appropriate
+
+## Readiness buckets
+
+Do not silently drop low-confidence or low-readiness work. Route each
+candidate task into one stable bucket:
+
+- **ready**: passes limited scope, clear verification, and autonomous
+  completion
+- **deferred**: plausible, but priority, timing, or decomposition is not
+  strong enough for execution
+- **needs-decision**: depends on a product, policy, or design choice
+- **blocked-by-human**: waits on a person, credential, asset, or outside
+  system
+- **out-of-scope**: does not belong in the repository or skill scope
+
 ## Reuse-first issue policy
 
 Before creating any new issue, check whether the work already has a
