@@ -63,6 +63,7 @@
         "idd-template/.github/instructions/idd-merge.instructions.md",
         "idd-template/.github/instructions/idd-resume.instructions.md",
         "idd-template/docs/idd-workflow.md",
+        "idd-template/docs/idd-review-policy-profiles.md",
         "idd-template/docs/idd-helper-scripts.md",
         "idd-template/docs/idd-comment-minimization.md",
         "idd-template/docs/permissions.md"
@@ -203,6 +204,12 @@
       "id": "idd-helper-scripts-doc",
       "source": "idd-template/docs/idd-helper-scripts.md",
       "target": "docs/idd-helper-scripts.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-review-policy-profiles-doc",
+      "source": "idd-template/docs/idd-review-policy-profiles.md",
+      "target": "docs/idd-review-policy-profiles.md",
       "mode": "exact"
     },
     {

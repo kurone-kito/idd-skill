@@ -54,6 +54,7 @@ entry file should be an explicit operator choice, not the default.
 | `.github/instructions/idd-pre-merge.instructions.md`       | F1–F2: resolve conflicts and verify all pre-merge conditions           |
 | `.github/instructions/idd-merge.instructions.md`           | F3–F5: execute the merge, clean up, and loop back to discover          |
 | `.github/instructions/idd-resume.instructions.md`          | Recover after a crash, timeout, or handoff                             |
+| `docs/idd-review-policy-profiles.md`                       | PR review policy profiles and customization surfaces                   |
 | `docs/idd-comment-minimization.md`                         | Post-merge comment minimization policy, commands, and experiment notes |
 
 ## Artifact taxonomy and ownership
@@ -117,6 +118,13 @@ reviewer-only instruction file. Copilot code review may still use the
 lightweight repository-wide `.github/copilot-instructions.md`; only the
 heavier `idd-overview.instructions.md` is excluded from review.
 
+## Review Policy Profiles
+
+The execution loop is cross-agent, while PR review policy is a
+repository choice. See
+[IDD review policy profiles](idd-review-policy-profiles.md) before
+customizing the default Copilot advisory behavior.
+
 ## Default PR policy: Copilot advisory review
 
 The core IDD flow is cross-agent, but the distributed default PR policy
@@ -129,8 +137,9 @@ phases.
   review state.
 - This dependency is on GitHub's review integration, not on every local
   agent using Copilot as its CLI.
-- Adopters who do not want that default PR policy should edit
-  `idd-review-fix.instructions.md` and `idd-merge.instructions.md`.
+- Adopters who do not want that default PR policy should choose another
+  review policy profile and edit `idd-review-fix.instructions.md`,
+  `idd-pre-merge.instructions.md`, and `idd-merge.instructions.md`.
 
 Non-Copilot agents can still drive the workflow end to end, but they
 should expect those later phases to interact with Copilot as a GitHub

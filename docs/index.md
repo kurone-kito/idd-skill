@@ -10,13 +10,14 @@ also serve as the source for a future GitHub Pages site.
 
 ## Start Here
 
-| Need                      | Read first                                 | Why it helps                                                    |
-| ------------------------- | ------------------------------------------ | --------------------------------------------------------------- |
-| Run the IDD loop          | [IDD workflow guide](idd-workflow.md)      | Maps agent entry points, phase files, and Copilot advisory use. |
-| Import IDD into a repo    | [Template onboarding][template-onboarding] | Explains the portable template copy and placeholder flow.       |
-| Grant agent credentials   | [Permissions](permissions.md)              | Defines access profiles, forbidden scopes, and threat controls. |
-| Understand the value prop | [Positioning](positioning.md)              | Summarizes where idd-skill fits among adjacent tools.           |
-| Plan future publication   | [Pages strategy](pages-strategy.md)        | Records the low-cost path toward GitHub Pages.                  |
+| Need                      | Read first                                              | Why it helps                                                    |
+| ------------------------- | ------------------------------------------------------- | --------------------------------------------------------------- |
+| Run the IDD loop          | [IDD workflow guide](idd-workflow.md)                   | Maps agent entry points, phase files, and Copilot advisory use. |
+| Import IDD into a repo    | [Template onboarding][template-onboarding]              | Explains the portable template copy and placeholder flow.       |
+| Grant agent credentials   | [Permissions](permissions.md)                           | Defines access profiles, forbidden scopes, and threat controls. |
+| Choose PR review policy   | [Review policy profiles](idd-review-policy-profiles.md) | Names the default Copilot advisory policy and alternatives.     |
+| Understand the value prop | [Positioning](positioning.md)                           | Summarizes where idd-skill fits among adjacent tools.           |
+| Plan future publication   | [Pages strategy](pages-strategy.md)                     | Records the low-cost path toward GitHub Pages.                  |
 
 ## Reference Map
 
@@ -30,6 +31,9 @@ also serve as the source for a future GitHub Pages site.
 - [Permissions and threat model](permissions.md) describes the minimum
   GitHub access profiles, forbidden credentials, and operating controls
   for unattended or merge-capable agents.
+- [IDD review policy profiles](idd-review-policy-profiles.md) explains
+  the default Copilot advisory PR policy and non-default customization
+  surfaces.
 
 ### Workflow Internals
 
