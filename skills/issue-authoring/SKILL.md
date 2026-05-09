@@ -9,6 +9,22 @@ Use this skill to prepare issue-ready work before execution starts.
 Keep the skill concise and treat the repository docs as the canonical
 source for the full contract and schema.
 
+## Stable Phases
+
+Use two stable phases:
+
+1. **Intake and Clarification** — inspect relevant context, identify
+   ambiguity, run a secondary critique or explicit self-critique, and
+   ask only the questions that block safe issue drafting. Keep
+   clarification bounded; the default maximum is 3 rounds.
+2. **Decompose and Draft** — restate the request in implementation
+   terms, split it into atomic tasks, classify readiness, reuse existing
+   issues when safe, and draft the smallest issue shape that preserves
+   dependencies and reviewability.
+
+Preserve low-readiness work in stable buckets: ready, deferred,
+needs-decision, blocked-by-human, and out-of-scope.
+
 ## Workflow
 
 1. Read the bundled contract in
