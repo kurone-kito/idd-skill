@@ -38,7 +38,7 @@ If you are an AI agent and only need the raw onboarding entry point, use
 ## Runtime prerequisites
 
 The IDD loop needs the following local tools and GitHub access before an
-agent can run it end to end:
+agent can run it end-to-end:
 
 | Tool or access                                          | Status                      | Purpose                                                                                                                    |
 | ------------------------------------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
