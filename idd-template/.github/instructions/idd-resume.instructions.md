@@ -34,34 +34,31 @@ migration-only input. First check whether that latest legacy
 comment from the same agent — if so, treat the issue as **unclaimed**
 and proceed to the re-claim path below. Otherwise:
 
-- Legacy claim, **own agent ID** → migrate it via
-  `idd-claim.instructions.md` using the same branch and a fresh
-  `{claim-id}` with `supersedes: none`, then continue to Step 2.
-- Legacy claim, **other** agent ID, `created_at` < 24 h → **not
-  inheritable**, stop.
-- Legacy claim, **other** agent ID, `created_at` ≥ 24 h → **stale**.
-  Migrate it via `idd-claim.instructions.md` with a fresh `{claim-id}`
-  and `supersedes: none`, then continue to Step 2.
+- Latest legacy claim has `created_at` < 24 h → **not inheritable**,
+  stop. This includes matching `agent-id`; the legacy agent ID alone
+  does not prove same live-session ownership.
+- Latest legacy claim has `created_at` ≥ 24 h → **stale**. Migrate it
+  via `idd-claim.instructions.md` with a fresh `{claim-id}` and
+  `supersedes: none`, then continue to Step 2.
 
 Otherwise, determine claim state from the parsed active claim:
 
 - No active claim → **unclaimed**. Re-claim via
   `idd-claim.instructions.md`, then continue to Step 2.
-- Active claim, **own agent ID** → **takeover required**. Do **not**
-  silently inherit it. Re-enter `idd-claim.instructions.md` using the
-  same branch and a fresh `{claim-id}` whose `supersedes:` value is the
-  current active claim's `{claim-id}`, then continue to Step 2.
-- Active claim, **other** agent ID, latest valid `claimed-by`
-  `created_at` < 24 h → **not inheritable**, stop.
-- Active claim, **other** agent ID, latest valid `claimed-by`
-  `created_at` ≥ 24 h → **stale**. Take it over via
-  `idd-claim.instructions.md` with a fresh `{claim-id}` whose
-  `supersedes:` value is the current active claim's `{claim-id}`, then
-  continue to Step 2.
+- Active claim whose `{claim-id}` is already known and verified by this
+  current session → **already owned**. Continue to Step 2 with that same
+  `{claim-id}`; do not post a new claim.
+- Any other active claim, latest valid `claimed-by` `created_at` < 24 h
+  → **not inheritable**, stop. This includes matching `agent-id`; the
+  agent ID alone does not prove that this is the same live session.
+- Any other active claim, latest valid `claimed-by` `created_at` ≥ 24 h
+  → **stale**. Take it over via `idd-claim.instructions.md` with a fresh
+  `{claim-id}` whose `supersedes:` value is the current active claim's
+  `{claim-id}`, then continue to Step 2.
 
 A branch left by a stale or released claim is inheritable. An open PR or
 remote branch may be reused when it matches the branch recorded in the
-active claim you are taking over, or in the latest released claim.
+stale active claim you are taking over, or in the latest released claim.
 
 If the active or inherited branch field starts with `roadmap-audit/`,
 the claim is an A1.5 roadmap-audit coordination claim, not a work branch.
