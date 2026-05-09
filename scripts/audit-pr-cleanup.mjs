@@ -47,6 +47,8 @@ const UNSAFE_TEXT_RULES = [
   },
 ];
 
+const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
+
 const args = parseArgs(process.argv.slice(2));
 
 if (args.help) {
@@ -75,10 +77,7 @@ if (args.apply && !args.skipClaimCheck && (!args.claimIssue || !args.claimId)) {
 }
 
 const repository = args.repo ?? detectRepository();
-const [owner, repo] = repository.split("/");
-if (!owner || !repo) {
-  fail(`invalid repository ${repository}`);
-}
+const [owner, repo] = parseRepository(repository);
 
 const prNumber = parsePositiveInteger(args.pr, "--pr");
 
@@ -654,29 +653,40 @@ function readActiveClaim(owner, repo, issueNumber) {
 
 function parseClaim(body, createdAt) {
   const match = body.trim().match(
-    /^<!--\s*claimed-by:\s+(\S+)\s+(\S+)\s+supersedes:\s+(\S+)\s+\S+\s+branch:\s+([^\s>]+)\s*-->$/,
+    new RegExp(
+      `^<!--\\s*claimed-by:\\s+(\\S+)\\s+(\\S+)\\s+supersedes:\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s+branch:\\s+([^\\s>]+)\\s*-->$`,
+    ),
   );
-  if (!match) {
+  if (!match || !isValidIsoTimestamp(match[4])) {
     return null;
   }
   return {
     agentId: match[1],
     claimId: match[2],
     supersedes: match[3],
-    branch: match[4],
+    branch: match[5],
     createdAt,
   };
 }
 
 function parseRelease(body) {
-  const match = body.trim().match(/^<!--\s*unclaimed-by:\s+(\S+)\s+(\S+)\s+\S+\s*-->$/);
-  if (!match) {
+  const match = body.trim().match(
+    new RegExp(
+      `^<!--\\s*unclaimed-by:\\s+(\\S+)\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s*-->$`,
+    ),
+  );
+  if (!match || !isValidIsoTimestamp(match[3])) {
     return null;
   }
   return {
     agentId: match[1],
     claimId: match[2],
   };
+}
+
+function isValidIsoTimestamp(value) {
+  const time = Date.parse(value);
+  return Number.isFinite(time) && new Date(time).toISOString().replace(".000Z", "Z") === value;
 }
 
 function isStaleAt(activeCreatedAt, nextCreatedAt) {
@@ -738,6 +748,17 @@ function detectRepository() {
   return execFileSync("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], {
     encoding: "utf8",
   }).trim();
+}
+
+function parseRepository(value) {
+  const parts = value.split("/");
+  if (
+    parts.length !== 2
+    || parts.some((part) => part.length === 0 || /\s/.test(part))
+  ) {
+    fail(`invalid repository ${value}; expected owner/name`);
+  }
+  return parts;
 }
 
 function writeReport(report, format) {
