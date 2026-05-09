@@ -75,21 +75,30 @@ relationships. If the roadmap has no explicit child work, report that
 it is childless or malformed and continue to A2; do not close it based
 on absence of candidates.
 
-Fetch the selected roadmap, its explicit child references, GitHub
-sub-issue children, and linked or closing PR evidence for those child
-issues. This step must not use repo-wide search to add unrelated work to
-the roadmap.
+Fetch the selected roadmap, its explicit child references, transitive
+descendants, GitHub sub-issue children, and linked or closing PR evidence
+for those child issues. Use the same outbound traversal sources as A2,
+including closed umbrella children, so open descendants cannot be hidden
+behind a closed direct child. This step must not use repo-wide search to
+add unrelated work to the roadmap.
 
-- If any referenced child issue is open, inaccessible, or unresolved,
-  report the reason and continue to A2.
-- If any child or the roadmap itself has `status:blocked-by-human` or
-  `status:needs-decision`, report the blocker and continue to A2 or stop
-  according to the normal ready-to-start rules.
-- If all referenced child work is closed or otherwise complete, compare
-  the roadmap success criteria against the closed child issues, linked
-  merged PRs, task-list state, follow-up comments, and the current
-  repository state where feasible. Do not infer completion from checkbox
-  state alone.
+- If the roadmap itself has `status:blocked-by-human` or
+  `status:needs-decision`, report the blocker and stop before A2. Do not
+  continue selecting child issues under a blocked roadmap.
+- If any referenced child or descendant issue is open, inaccessible, or
+  unresolved, report the provenance path and reason, then continue to
+  A2.
+- If any open or unresolved child or descendant has
+  `status:blocked-by-human` or `status:needs-decision`, report the
+  blocker and continue to A2 or stop according to the normal
+  ready-to-start rules. Do not treat stale blocker labels on closed
+  children as audit blockers when their referenced descendants are
+  resolved.
+- If all referenced child and descendant work is closed or otherwise
+  complete, compare the roadmap success criteria against the closed child
+  issues, linked merged PRs, task-list state, follow-up comments, and the
+  current repository state where feasible. Do not infer completion from
+  checkbox state alone.
 
 A1.5 can publish roadmap-level GitHub side effects before a child task
 issue is selected. Before any such side effect, coordinate on the
