@@ -6,189 +6,150 @@
 
 🌐 Language: [English](./README.md) | **日本語**
 
-あらゆる GitHub プロジェクトに Issue-Driven Development (IDD) の
-マルチエージェントパイプラインを組み込むための、移植可能な
-`.github/instructions/` ファイル群とドキュメントです。
+複数の AI エージェントが GitHub Issues から作業しても、互いの作業を踏まないようにします。
 
-主な配布物は、導入先リポジトリへコピーする移植可能な IDD instruction
-template です。issue-authoring などのネイティブ `SKILL.md` bundle は、主配布物
-ではなく任意の companion です。
+IDD Skill は、リポジトリへ移植できる Issue-Driven Development
+ワークフローです。エージェントは ready な issue を探し、所有権を claim し、
+branch を切って実装し、PR を開き、review feedback を処理し、CI を待ち、
+merge して cleanup します。ループ全体は、リポジトリ内の Markdown
+instruction files として保持されます。
 
-## IDD とは？
+最初の PR を開いたところで AI エージェントが止まるのではなく、その後の
+handoff まで進み続けてほしいチームに向いています。
 
-IDD は、AI エージェントが GitHub Issues によって駆動される繰り返しパイプラインを
-通じて作業するマルチエージェント GitHub 自動化ワークフローです。
+## IDD が選ばれる理由
 
-| 番号   | 名前               | 概要                                                              |
-| ------ | ------------------ | ----------------------------------------------------------------- |
-| A0-A4  | Discover           | 設定されたスコープから ready な issue を探して選びます。          |
-| A5     | Claim              | 機械可読な claim marker で issue を予約します。                   |
-| B-C    | Work & Self-Review | branch/worktree を作り、計画、実装、自己レビューします。          |
-| D1-D4  | PR Submit          | branch を push して PR を開き、E1 前に validation を待ちます。    |
-| E1-E3  | Review Snapshot    | review activity を記録し、critique を実行して List A を作ります。 |
-| E4-E8  | Review Triage      | List A の項目を分類し、accept/reject の判断を記録します。         |
-| E9-E15 | Review Fix         | accepted feedback を反映し、必要に応じて再レビューを依頼します。  |
-| F1-F2  | Pre-Merge          | review、CI、comments、mergeability の鮮度を確認します。           |
-| F3-F5  | Merge              | 検証済み HEAD を merge し、cleanup 後に discovery へ戻ります。    |
+AI coding agent は強力ですが、チームの workflow はすぐに散らかります:
 
-各フェーズは `.github/instructions/` ファイルとしてエンコードされており、
-GitHub Copilot、Claude Code、Codex CLI、Gemini CLI などの互換 AI エージェントが
-読み込めます。実行モデルはクロスエージェントですが、配布される
-デフォルトのレビューポリシーには下記の Copilot アドバイザリーステップが
-含まれています。
+- 2 つの agent が同じ issue を拾ってしまう。
+- review comment を accepted にしたのに、修正が反映されない。
+- CI が終わった時点で、agent がもう見ていない。
+- 新しい review activity が届いている途中で PR が merge される。
+- workflow rule が vendor platform の中に隠れて、repo から監査できない。
 
-## はじめに
+IDD Skill は、これらの動きを GitHub-native で監査可能なループにします。
+Issue comment には claim、review snapshot、判断、hold、cleanup marker が残るため、
+別の agent が再開しても状況を推測する必要がありません。
 
-IDD は、次の 2 つの手順を分けて使います:
+## クイックスタート
 
-1. 対象リポジトリへ
-   [IDD をインストール / オンボーディング](#idd-のインストール--オンボーディング)
-   する。
-2. 対象リポジトリの準備ができてから
-   [オンボーディング後に IDD を実行する](#オンボーディング後に-idd-を実行する)。
+### IDD をインストールする
 
-AI エージェントとして raw onboarding entry point だけが必要な場合は、
-[AI エージェント向け](#ai-エージェント向け) を参照してください。
-
-## 実行前提
-
-IDD ループをエンドツーエンドで実行するには、次のローカルツールと GitHub
-アクセス手段が必要です:
-
-| ツール / アクセス                                   | 要否                | 用途                                                                                                                                     |
-| --------------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `git`                                               | 必須                | branch、worktree、fetch、rebase、merge、status、commit 操作。                                                                            |
-| 認証済みの `gh` CLI または同等の GH MCP integration | 必須                | GitHub issue、PR、review、checks、comments、branch protection/ruleset、merge へのアクセス。ドキュメント内の snippet は `gh` を使います。 |
-| `jq`                                                | 必須                | ページネーションされた GitHub API レスポンスを処理するドキュメント内の shell snippet の解析。                                            |
-| `npx` を使える Node.js/npm                          | 必須                | このリポジトリの validation command で使う `dprint`、`markdownlint-cli2`、`cspell` の実行。                                              |
-| `curl` または同等の REST client                     | marker 投稿時に必須 | HTML コメントで始まる operational marker で、`gh issue comment` の信頼性が足りない場合に使います。                                       |
-| WorkTrunk、`git-wt`、commit signing alias           | 任意                | worktree 操作や commit signing をスムーズにします。基本要件ではありません。                                                              |
-
-## IDD のインストール / オンボーディング
-
-対象リポジトリで AI エージェントのセッションを開き、次のいずれかを伝えてください:
-
-**短縮形** (WebFetch または `gh` CLI アクセスを持つエージェント向け):
+IDD を導入したいリポジトリで AI agent の session を開き、次のように依頼します:
 
 > `github:kurone-kito/idd-skill` の IDD をこのリポジトリに
-> インポート＆オンボーディングして
+> import and onboard してください。
 
-**明示形** (すべてのエージェントで動作):
+明示的な URL が必要な agent には、次のように依頼します:
 
-> `github:idd-skill` の Issue-Driven Development をこの
-> リポジトリで使いたいです。`https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md`
-> を読んでオンボーディングしてください。
+> `https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md`
+> を読んで、このリポジトリを Issue-Driven Development 用に
+> onboard してください。
 
-エージェントはいくつかのプロジェクト固有の値 (リポジトリ名、バリデーション
-コマンド) を収集し、IDD ワークフロー全体を自動的に設定します —
+Onboarding guide は project-specific な値を集め、portable template をコピーし、
+agent entry files を更新します。agent が必要な GitHub access を持っていれば、
 手動ファイルコピーは不要です。
 
-注: 配布されるデフォルトテンプレートはクロスエージェント実行に対応していますが、
-後半の PR フェーズにはデフォルトで GitHub Copilot アドバイザリーレビューステップが
-含まれます。このポリシーが不要な場合は、オンボーディング後に
-`.github/instructions/idd-review-fix.instructions.md` と
-`.github/instructions/idd-merge.instructions.md` をカスタマイズしてください。
+### ループを実行する
+
+onboarding 後、対象リポジトリで agent を起動して次のように依頼します:
+
+> このリポジトリで IDD workflow を開始してください。
+
+agent は workflow guide を読み、ready な issue を探して claim し、work、PR review、
+CI、merge、cleanup までループを進めます。
+
+ループを end-to-end で実行するには、agent が `git`、認証済みの `gh` CLI
+または同等の GitHub MCP integration、`jq`、`npx` を使える Node.js/npm、
+そして operational marker を確実に投稿するための `curl` などの REST client に
+アクセスできる必要があります。詳細な command contract は workflow docs を
+参照してください。
+
+## IDD が自動化すること
+
+IDD は、良い意味で退屈な workflow です。各 phase には名前付きの役割、
+再開可能な marker、次の手順があります。
+
+| ステージ    | Agent が行うこと                                                                           |
+| ----------- | ------------------------------------------------------------------------------------------ |
+| Discover    | roadmap または orphan issue から ready な作業を探し、scope を勝手に広げません。            |
+| Claim       | 機械可読な ownership marker で 1 つの issue を予約します。                                 |
+| Work        | branch/worktree を作り、plan、implement、self-review を行います。                          |
+| Submit PR   | push して PR を開き、review 可能になるまで validation を待ちます。                         |
+| Review Loop | review activity を記録し、feedback を accept / reject し、accepted items を直します。      |
+| Merge       | freshness、advisory review state、CI、unresolved threads、comments を再確認します。        |
+| Cleanup     | 検証済み HEAD を merge し、安全な場合は stale marker を隠して、次の discovery へ戻ります。 |
+
+完全な phase map は [docs/idd-workflow.md](docs/idd-workflow.md) と
+`.github/instructions/` にあります。
+
+## 得られるもの
+
+- **衝突しにくい並列作業** — claim と heartbeat marker によって、中央
+  coordinator なしで issue ownership が見えるようになります。
+- **止まりにくい PR** — initial pull request を開いた後も、review comment、CI、
+  follow-up fix を追い続けます。
+- **black box ではない portable rule** — workflow は target repo 内の plain
+  Markdown として残り、読めて、fork できて、customize できます。
+- **agent を選べる自由** — core loop は GitHub Copilot、Claude Code、OpenAI
+  Codex CLI、Gemini CLI で動作します。distributed default PR policy には
+  Copilot advisory review step が含まれます。
+- **運用する service が不要** — template files を import すれば始められます。
+  separate server、scheduler、SaaS account は不要です。
+
+より詳しい positioning は
+[docs/positioning.md](docs/positioning.md) を参照してください。
+
+## このリポジトリが配布するもの
+
+主な package は [`idd-template/`](idd-template/) です。これは adopter が自分の
+repository にコピーする portable な `.github/instructions/` files、onboarding
+docs、workflow docs のセットです。
+
+この repository には、異なる agent がここでどこから始めるかを知るための互換 entry
+files として `AGENTS.md`、`CLAUDE.md`、`GEMINI.md`、
+`.github/copilot-instructions.md` も含まれます。
+
+Native `SKILL.md` bundle は optional companion です。issue drafting など
+pre-execution task には役立ちますが、portable instruction template を
+置き換えるものではありません。
 
 ## AI エージェント向け
 
-`github:kurone-kito/idd-skill` のようなトリガーフレーズで誘導されてきた
-AI エージェントは、まずオンボーディングガイドを参照してください:
+ユーザーが `github:kurone-kito/idd-skill` を示して IDD onboarding を依頼したら、
+まずこの file を取得してください:
 
 ```text
 https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOARDING.md
 ```
 
-そのファイルをフェッチして手順に従ってください。プレースホルダー値の収集、
-テンプレートファイルのコピー、エージェントエントリーファイルの更新まで
-案内されます — リポジトリのクローンは不要です。
+その内容に正確に従ってください。copy する files、埋める placeholders、
+更新する target-repository entry files が説明されています。
 
-## オンボーディング後に IDD を実行する
+## リクエストが大きすぎるとき
 
-オンボーディングが終わったら、対象リポジトリで AI エージェントのセッションを開き、
-ワークフローの開始を依頼してください。エージェントはまず
-[docs/idd-workflow.md](docs/idd-workflow.md) を読み、次に
-`.github/instructions/idd-overview.instructions.md` を開いてから、
-Discover → Claim → Work → ... のループに入ります。
+request の分解、dependency encoding、roadmap / sub-issue drafting が必要な場合は、
+IDD execution loop の前に optional issue-authoring companion を使ってください。
 
-**フレーズ例**:
+この repository では、agent に次のように依頼します:
 
-- `このリポジトリで IDD ワークフローを開始してください。`
-- `docs/idd-workflow.md` を読んで、次に
-  `.github/instructions/idd-overview.instructions.md` を開き、
-  Discover → Claim → Work のループを開始してください。
-
-## 実行前に issue authoring を使う
-
-1 つのレビュー可能な変更には大きすぎる、または曖昧なリクエスト、
-roadmap や sub-issue への分解が必要なリクエスト、あるいは
-エージェントが作業を claim する前に依存関係を明示すべきリクエストでは、
-IDD execution loop の前に optional issue-authoring skill を使ってください。
-
-このリポジトリでは、次のいずれかのプロンプトでエージェントをネイティブ
-bundle にルーティングできます:
-
-- `$issue-authoring skill を使って IDD-ready な issue をドラフトしてください。`
+- `$issue-authoring skill を使って IDD-ready な issue を draft してください。`
 - `skills/issue-authoring/SKILL.md を開いて issue set を準備してください。`
 
-この skill はドラフトと issue hygiene の準備だけを行います。GitHub issue の公開や
-編集、Discover → Claim → Work の開始は別アクションであり、明示的な承認が必要です。
+Issue authoring は issue draft と hygiene を準備するだけです。issue の公開や
+Discover -> Claim -> Work の開始には、引き続き明示的な承認が必要です。
 
-完全な contract と schema は
-[docs/issue-authoring-skill.md](docs/issue-authoring-skill.md) にあります。
-`idd-template/` だけをインポートする adopter には、デフォルトではこの bundle は
-含まれません。必要な場合は [idd-template/README.md](idd-template/README.md) と
-[idd-template/ONBOARDING.md](idd-template/ONBOARDING.md) に従い、
-optional companion としてインストールしてください。
+## 詳細リファレンス
 
-## idd-skill で得られること
-
-- **安全な並列エージェント作業** — claim と heartbeat の marker が issue の
-  所有者を可視化するため、複数の AI エージェントが同じタスクを拾う事故を避けながら、
-  中央オーケストレーターなしで並行作業できます。
-- **handoff の抜け漏れ削減** — workflow は issue discovery から merge までを扱い、
-  CI wait、review triage、review-fix cycle も含みます。PR を開いた後も、
-  エージェントが次に何をするかを見失いにくくなります。
-- **追加インフラなしで運用開始** — `idd-template/` の docs と instruction files を
-  リポジトリへコピーすれば使えます。SaaS アカウント、GitHub Actions runner、
-  server は不要です。
-- **使うエージェントを選べる自由** — core phases は plain Markdown で、GitHub
-  Copilot、Claude Code、OpenAI Codex CLI、Gemini CLI で動作します。default
-  template には後半フェーズに Copilot advisory review step が含まれます。
-- **自分たちで制御できる監査可能な自動化** — すべての rule が repo 内の Markdown
-  として残るため、team は black box に頼らずに読み、fork し、調整できます。
-
-より詳しい比較は [docs/positioning.md](docs/positioning.md) を参照してください。
-
-## IDD の手動インポート
-
-1. このリポジトリをクローンまたはダウンロードします。
-2. `idd-template/` ディレクトリの内容を対象リポジトリにコピーします。
-3. `idd-template/ONBOARDING.md` に従ってプレースホルダーを埋め、
-   エージェントエントリーファイルを更新します。
-
-## アーティファクトモデル
-
-このリポジトリが主に配布しているのは IDD のインストラクションテンプレートであり、
-単一のエージェントネイティブ skill ではありません。`idd-template/` のエクスポート
-パッケージには、導入先リポジトリへコピーする移植可能な `.github/instructions/`
-ファイル、オンボーディングドキュメント、ワークフロードキュメントが含まれます。
-
-`AGENTS.md`、`CLAUDE.md`、`GEMINI.md`、
-`.github/copilot-instructions.md` などのエージェントエントリーファイルは、
-このリポジトリ向けの互換入口です。ネイティブ `SKILL.md` バンドルが存在する場合、
-それらは IDD ドキュメントを参照できる補助機能ですが、インストラクションテンプレート
-そのものを置き換えるものではありません。
-
-## このリポジトリについて
-
-このリポジトリ自体も IDD ワークフローで管理されています。
-アクティブなワークフローガイドは [docs/idd-workflow.md](docs/idd-workflow.md) を、
-完全なインストラクションセットは `.github/instructions/` を参照してください。
-
-あわせて、repo ローカルのネイティブ skill bundle
-`skills/issue-authoring/` も含まれています。ルーティング例と通常の実行ループ前の
-承認境界については
-[実行前に issue authoring を使う](#実行前に-issue-authoring-を使う) を参照してください。
+- [Workflow guide](docs/idd-workflow.md) — entry points、file map、
+  cross-agent routing。
+- [Positioning](docs/positioning.md) — competitive landscape と IDD の違い。
+- [Issue authoring contract](docs/issue-authoring-skill.md) — optional
+  pre-execution issue drafting model。
+- [Comment minimization](docs/idd-comment-minimization.md) —
+  post-merge cleanup policy。
+- [Template import guide](idd-template/ONBOARDING.md) — target repository
+  向けの raw onboarding instructions。
 
 ## ライセンス
 
