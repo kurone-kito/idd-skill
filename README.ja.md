@@ -19,7 +19,7 @@ Review Triage → Review Fix → Merge → Loop。
 
 各フェーズは `.github/instructions/` ファイルとしてエンコードされており、
 GitHub Copilot、Claude Code、Codex CLI、Gemini CLI などの互換 AI エージェントが
-読み込むことができます。実行モデルはクロスエージェントですが、配布される
+読み込めます。実行モデルはクロスエージェントですが、配布される
 デフォルトのレビューポリシーには下記の Copilot アドバイザリーステップが
 含まれています。
 
