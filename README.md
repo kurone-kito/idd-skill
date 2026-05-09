@@ -37,25 +37,17 @@ If you are an AI agent and only need the raw onboarding entry point, use
 
 ## Runtime prerequisites
 
-The IDD loop needs a few local tools and a GitHub access backend before
-an agent can run it end to end:
+The IDD loop needs the following local tools and GitHub access before an
+agent can run it end to end:
 
-- `git` for branch, worktree, fetch, rebase, merge, status, and commit
-  operations.
-- GitHub issue, pull request, review, checks, comments, branch
-  protection/ruleset, and merge access through authenticated `gh` CLI or
-  an equivalent GH MCP integration. The documented shell snippets use
-  `gh`.
-- `jq` for the documented shell snippets that parse paginated GitHub
-  API responses.
-- Node.js/npm with `npx` for the validation commands currently used by
-  this repository: `dprint`, `markdownlint-cli2`, and `cspell`.
-- `curl` or an equivalent REST client for posting HTML-comment
-  operational markers when a path more reliable than `gh issue
-  comment` is needed for comment bodies that start with HTML comments.
-
-Optional helpers such as WorkTrunk, `git-wt`, and commit-signing aliases
-can make the loop smoother, but they are not baseline requirements.
+| Tool or access                                          | Status                      | Purpose                                                                                                                    |
+| ------------------------------------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `git`                                                   | Required                    | Branch, worktree, fetch, rebase, merge, status, and commit operations.                                                     |
+| Authenticated `gh` CLI or equivalent GH MCP integration | Required                    | GitHub issue, PR, review, checks, comments, branch protection/ruleset, and merge access. The documented snippets use `gh`. |
+| `jq`                                                    | Required                    | Parse paginated GitHub API responses in the documented shell snippets.                                                     |
+| Node.js/npm with `npx`                                  | Required                    | Run this repository's validation commands: `dprint`, `markdownlint-cli2`, and `cspell`.                                    |
+| `curl` or equivalent REST client                        | Required for marker posting | Post HTML-comment operational markers when `gh issue comment` is not reliable enough for those bodies.                     |
+| WorkTrunk, `git-wt`, and commit-signing aliases         | Optional                    | Smooth repeated worktree and commit-signing steps; they are not baseline requirements.                                     |
 
 ## Install / onboard IDD
 
