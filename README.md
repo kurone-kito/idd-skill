@@ -147,6 +147,8 @@ approval.
 
 ## Deeper Reference
 
+- [Reference manual](docs/index.md) — a task-oriented entry point for
+  the deeper documentation set.
 - [Workflow guide](docs/idd-workflow.md) — entry points, file map, and
   cross-agent routing.
 - [Positioning](docs/positioning.md) — competitive landscape and why

@@ -1,0 +1,57 @@
+# IDD Reference Manual
+
+This directory is the deeper reference manual for idd-skill. The root
+README is the adopter landing page; use this page when you need the
+operational details, maintenance notes, or background material behind
+that overview.
+
+The reference is Markdown-first and keeps stable file names so it can
+also serve as the source for a future GitHub Pages site.
+
+## Start Here
+
+| Need                      | Read first                                           | Why it helps                                                    |
+| ------------------------- | ---------------------------------------------------- | --------------------------------------------------------------- |
+| Run the IDD loop          | [IDD workflow guide](idd-workflow.md)                | Maps agent entry points, phase files, and Copilot advisory use. |
+| Import IDD into a repo    | [Template onboarding](../idd-template/ONBOARDING.md) | Explains the portable template copy and placeholder flow.       |
+| Understand the value prop | [Positioning](positioning.md)                        | Summarizes where idd-skill fits among adjacent tools.           |
+
+## Reference Map
+
+### Adoption and Onboarding
+
+- [Template onboarding](../idd-template/ONBOARDING.md) is the canonical
+  guide for importing the portable IDD template into another
+  repository.
+- [IDD workflow guide](idd-workflow.md) explains where each supported
+  agent starts and which phase file to read next.
+
+### Workflow Internals
+
+- [IDD helper script evaluation](idd-helper-scripts.md) records why the
+  current workflow stays portable shell / `gh` / `jq` instructions
+  instead of requiring helper scripts.
+- [IDD comment minimization](idd-comment-minimization.md) defines the
+  safe post-merge cleanup policy for stale operational markers and
+  completed feedback.
+
+### Native Companions
+
+- [Issue authoring skill contract](issue-authoring-skill.md) describes
+  the optional pre-execution helper for drafting IDD-ready roadmap and
+  sub-issues before the Discover -> Claim -> Work loop begins.
+
+### Project Strategy
+
+- [Positioning](positioning.md) covers the competitive landscape,
+  differentiators, and known gaps.
+- [AI tooling strategy](ai-strategy.md) records the repository's
+  Copilot-first guidance policy and how compatibility entry files are
+  maintained for other agents.
+
+## Language Policy
+
+The root README is bilingual. Deeper reference pages are English-first
+unless a separate translation issue explicitly adds another language
+surface. This keeps the operational documentation easier to keep in
+sync while README remains friendly for first-time readers.
