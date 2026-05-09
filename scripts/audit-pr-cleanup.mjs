@@ -2,12 +2,27 @@
 
 import { execFileSync } from "node:child_process";
 
-const OPERATIONAL_MARKER_PREFIXES = [
-  "<!-- review-watermark:",
-  "<!-- review-baseline:",
-  "advisory-wait:",
-  "advisory-wait-recovery:",
-  "<!-- advisory-wait:",
+const OPERATIONAL_MARKERS = [
+  {
+    label: "<!-- review-watermark:",
+    pattern: /^<!--\s*review-watermark:\s+\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+\S+\s*-->/,
+  },
+  {
+    label: "<!-- review-baseline:",
+    pattern: /^<!--\s*review-baseline:\s+\S+\s+\S+\s+\S+\s*-->/,
+  },
+  {
+    label: "advisory-wait:",
+    pattern: /^advisory-wait:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*$/,
+  },
+  {
+    label: "advisory-wait-recovery:",
+    pattern: /^advisory-wait-recovery:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*$/,
+  },
+  {
+    label: "<!-- advisory-wait:",
+    pattern: /^<!--\s*advisory-wait:\s+\S+\s+[0-9a-f]{40}\s+\S+\s*-->\s*$/,
+  },
 ];
 
 const REVIEW_BOT_LOGINS = new Set([
@@ -291,7 +306,7 @@ function addSkipped(report, subject, reason) {
 
 function operationalMarkerPrefix(body) {
   const trimmed = body.trimStart();
-  return OPERATIONAL_MARKER_PREFIXES.find((prefix) => trimmed.startsWith(prefix)) ?? null;
+  return OPERATIONAL_MARKERS.find((marker) => marker.pattern.test(trimmed))?.label ?? null;
 }
 
 function unsafeTextReason(body) {
@@ -463,6 +478,7 @@ function fetchReviewThreads(owner, repo, number) {
                 id
                 url
                 body
+                createdAt
                 author{login}
                 pullRequestReview{id}
               }
@@ -534,8 +550,19 @@ function minimizeComment(subjectId, classifier) {
       }
     }
   }`;
-  const result = ghGraphql(query, { id: subjectId, classifier });
-  return result.data.minimizeComment.minimizedComment;
+  const result = ghGraphql(query, { id: subjectId, classifier }, { throwOnError: true });
+  if (result.errors?.length) {
+    throw new Error(
+      `GraphQL mutation failed: ${formatGraphqlErrors(result.errors)}; ${formatGraphqlContext(query, { id: subjectId, classifier })}`,
+    );
+  }
+  const minimized = result.data?.minimizeComment?.minimizedComment;
+  if (!minimized) {
+    throw new Error(
+      `GraphQL mutation returned no minimized comment; ${formatGraphqlContext(query, { id: subjectId, classifier })}`,
+    );
+  }
+  return minimized;
 }
 
 function assertActiveClaim(owner, repo, issueNumber, agentId, claimId) {
@@ -568,10 +595,15 @@ function readActiveClaim(owner, repo, issueNumber) {
   });
 
   let active = null;
+  const supersededClaimIds = new Set();
 
   for (const comment of comments) {
     const claim = parseClaim(comment.body, comment.createdAt);
     if (claim) {
+      if (supersededClaimIds.has(claim.claimId)) {
+        continue;
+      }
+
       if (active && claim.agentId === active.agentId && claim.claimId === active.claimId) {
         active.createdAt = claim.createdAt;
         continue;
@@ -591,6 +623,7 @@ function readActiveClaim(owner, repo, issueNumber) {
         && claim.supersedes === active.claimId
         && (claim.agentId === active.agentId || isStaleAt(active.createdAt, claim.createdAt))
       ) {
+        supersededClaimIds.add(active.claimId);
         active = claim;
       }
       continue;
@@ -642,7 +675,7 @@ function isStaleAt(activeCreatedAt, nextCreatedAt) {
   return new Date(nextCreatedAt).getTime() - new Date(activeCreatedAt).getTime() >= staleMs;
 }
 
-function ghGraphql(query, variables) {
+function ghGraphql(query, variables, options = {}) {
   const commandArgs = ["api", "graphql", "-f", `query=${query}`];
   for (const [key, value] of Object.entries(variables)) {
     if (value === undefined || value === null) {
@@ -662,14 +695,23 @@ function ghGraphql(query, variables) {
     const stderr = String(error.stderr ?? "").trim();
     const response = parseJsonOrNull(stdout);
     if (response?.errors?.length) {
-      fail(
+      handleGraphqlFailure(
         `GraphQL request failed: ${formatGraphqlErrors(response.errors)}; ${formatGraphqlContext(query, variables)}`,
+        options,
       );
     }
-    fail(
+    handleGraphqlFailure(
       `gh api graphql failed: ${stderr || error.message}; ${formatGraphqlContext(query, variables)}`,
+      options,
     );
   }
+}
+
+function handleGraphqlFailure(message, options) {
+  if (options.throwOnError) {
+    throw new Error(message);
+  }
+  fail(message);
 }
 
 function parseJsonOrNull(value) {
