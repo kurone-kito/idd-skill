@@ -45,7 +45,8 @@
       "stripPrefix": "idd-template/",
       "sourceGlobs": [
         "idd-template/.github/instructions/idd-*.instructions.md",
-        "idd-template/docs/idd-*.md"
+        "idd-template/docs/idd-*.md",
+        "idd-template/docs/permissions.md"
       ],
       "paths": [
         "idd-template/.github/instructions/idd-overview.instructions.md",
@@ -63,7 +64,8 @@
         "idd-template/.github/instructions/idd-resume.instructions.md",
         "idd-template/docs/idd-workflow.md",
         "idd-template/docs/idd-helper-scripts.md",
-        "idd-template/docs/idd-comment-minimization.md"
+        "idd-template/docs/idd-comment-minimization.md",
+        "idd-template/docs/permissions.md"
       ]
     },
     {
@@ -208,6 +210,12 @@
       "source": "idd-template/docs/idd-workflow.md",
       "target": "docs/idd-workflow.md",
       "mode": "structure"
+    },
+    {
+      "id": "permissions-doc",
+      "source": "idd-template/docs/permissions.md",
+      "target": "docs/permissions.md",
+      "mode": "exact"
     },
     {
       "id": "issue-authoring-contract-reference",

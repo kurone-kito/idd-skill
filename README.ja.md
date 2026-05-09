@@ -66,7 +66,8 @@ IDD を導入したいリポジトリで AI エージェントのセッション
 または同等の GitHub MCP 連携、`jq`、`npx` を使える Node.js/npm、
 そして運用マーカーを確実に投稿するための `curl` などの REST クライアントに
 アクセスできる必要があります。必要なコマンドの詳細はワークフロードキュメントを
-参照してください。
+参照してください。無人またはマージ可能なエージェントへ認証情報を渡す前に、
+[Permissions and threat model](docs/permissions.md) も確認してください。
 
 ## IDD が自動化すること
 
@@ -149,6 +150,8 @@ Discover -> Claim -> Work の開始には、引き続き明示的な承認が必
 - [Workflow guide](docs/idd-workflow.md) — 入口ファイル、ファイル構成、
   エージェント間の導線。
 - [Positioning](docs/positioning.md) — 競合との違いと IDD の位置づけ。
+- [Permissions and threat model](docs/permissions.md) — アクセスプロファイル、
+  禁止すべき認証情報、安全な運用ガイド。
 - [Issue authoring contract](docs/issue-authoring-skill.md) — 任意で使える、
   実行前の issue 下書きモデル。
 - [Comment minimization](docs/idd-comment-minimization.md) — マージ後の

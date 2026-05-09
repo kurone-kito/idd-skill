@@ -41,16 +41,22 @@ policy, they should plan to customize
 `.github/instructions/idd-review-fix.instructions.md` and
 `.github/instructions/idd-merge.instructions.md` after import.
 
+Before granting credentials to unattended or merge-capable agents, read
+`docs/permissions.md` and choose the narrowest access profile that can
+complete the intended phase.
+
 ## Your task
 
 1. Read this entire document first.
 2. Ask the operator for any placeholder values that are missing.
 3. Fetch or copy the template files into the target repository.
-4. Ask whether the operator wants the optional issue-authoring
+4. Review `docs/permissions.md` with the operator before granting agent
+   credentials.
+5. Ask whether the operator wants the optional issue-authoring
    companion skill for pre-execution issue drafting.
-5. Replace every placeholder (see table below) with the correct value.
-6. Add IDD references to the repository's agent entry files.
-7. Verify the result with the checklist at the bottom.
+6. Replace every placeholder (see table below) with the correct value.
+7. Add IDD references to the repository's agent entry files.
+8. Verify the result with the checklist at the bottom.
 
 ---
 
@@ -140,6 +146,7 @@ the files are copied in.
 docs/idd-workflow.md
 docs/idd-helper-scripts.md
 docs/idd-comment-minimization.md
+docs/permissions.md
 ```
 
 <!-- /audit:generated -->
@@ -192,7 +199,8 @@ for FILE in \
   ".github/instructions/idd-resume.instructions.md" \
   "docs/idd-workflow.md" \
   "docs/idd-helper-scripts.md" \
-  "docs/idd-comment-minimization.md"
+  "docs/idd-comment-minimization.md" \
+  "docs/permissions.md"
 do
   gh api -H "Accept: application/vnd.github.raw+json" \
     "repos/kurone-kito/idd-skill/contents/idd-template/${FILE}" \
@@ -251,7 +259,8 @@ for FILE in \
   ".github/instructions/idd-resume.instructions.md" \
   "docs/idd-workflow.md" \
   "docs/idd-helper-scripts.md" \
-  "docs/idd-comment-minimization.md"
+  "docs/idd-comment-minimization.md" \
+  "docs/permissions.md"
 do
   curl -fsSL "${BASE}/${FILE}" -o "${DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
 done
@@ -458,8 +467,9 @@ After completing the steps above, confirm each item:
 
 - [ ] Every `idd-*.instructions.md` file listed in the generated core
       file list is present in `.github/instructions/`.
-- [ ] `docs/idd-workflow.md`, `docs/idd-helper-scripts.md`, and
-      `docs/idd-comment-minimization.md` are present.
+- [ ] `docs/idd-workflow.md`, `docs/idd-helper-scripts.md`,
+      `docs/idd-comment-minimization.md`, and `docs/permissions.md` are
+      present.
 - [ ] If the operator opted into issue authoring,
       `skills/issue-authoring/SKILL.md`,
       `skills/issue-authoring/agents/openai.yaml`, and the
