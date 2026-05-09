@@ -14,8 +14,18 @@
 
 IDD は、AI エージェントが GitHub Issues によって駆動される繰り返しパイプラインを
 通じて作業するマルチエージェント GitHub 自動化ワークフローです。
-フェーズ: Discover → Claim → Work → PR Submit → CI Wait →
-Review Triage → Review Fix → Merge → Loop。
+
+| 番号   | 名前          | 概要                                                             |
+| ------ | ------------- | ---------------------------------------------------------------- |
+| A0-A4  | Discover      | 設定されたスコープから ready な issue を探して選びます。         |
+| A5     | Claim         | 機械可読な claim marker で issue を予約します。                  |
+| B      | Work          | branch/worktree を作り、計画、実装、自己レビューします。         |
+| D1-D3  | PR Submit     | branch を push し、issue に対応する pull request を開きます。    |
+| D4     | CI Wait       | review triage 前に必要な validation 完了を待ちます。             |
+| E1-E8  | Review Triage | review feedback を snapshot し、対応要否を分類します。           |
+| E9-E15 | Review Fix    | accepted feedback を反映し、必要に応じて再レビューを依頼します。 |
+| F1-F4  | Merge         | merge gate を再確認し、安全に merge して cleanup します。        |
+| F5     | Loop          | discovery に戻り、次の issue を選びます。                        |
 
 各フェーズは `.github/instructions/` ファイルとしてエンコードされており、
 GitHub Copilot、Claude Code、Codex CLI、Gemini CLI などの互換 AI エージェントが
