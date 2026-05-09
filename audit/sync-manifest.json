@@ -1,0 +1,219 @@
+{
+  "_comment": "Documentation audit contract. Use exact for mirrored files, concreted when the source becomes the target after listed replacements, and structure when the files intentionally differ but must keep the same heading map.",
+  "readmePairs": [
+    {
+      "id": "root-readme",
+      "files": [
+        "README.md",
+        "README.ja.md"
+      ],
+      "pairedChange": true,
+      "structure": "heading-levels",
+      "languageLinks": [
+        {
+          "file": "README.md",
+          "text": "[\u65e5\u672c\u8a9e](./README.ja.md)"
+        },
+        {
+          "file": "README.ja.md",
+          "text": "[English](./README.md)"
+        }
+      ]
+    }
+  ],
+  "fileSets": [
+    {
+      "id": "idd-instruction-template-dogfood-set",
+      "sourceGlob": "idd-template/.github/instructions/idd-*.instructions.md",
+      "targetGlob": ".github/instructions/idd-*.instructions.md",
+      "match": "basename",
+      "requireSyncPairs": true
+    },
+    {
+      "id": "idd-template-docs-set",
+      "sourceGlob": "idd-template/docs/*.md",
+      "targetGlob": "docs/*.md",
+      "match": "basename",
+      "allowExtraTargets": true,
+      "requireSyncPairs": true
+    }
+  ],
+  "generatedBlocks": [
+    {
+      "id": "idd-template-core-files",
+      "file": "idd-template/ONBOARDING.md",
+      "language": "text",
+      "stripPrefix": "idd-template/",
+      "sourceGlobs": [
+        "idd-template/.github/instructions/idd-*.instructions.md",
+        "idd-template/docs/idd-*.md"
+      ],
+      "paths": [
+        "idd-template/.github/instructions/idd-overview.instructions.md",
+        "idd-template/.github/instructions/idd-discover.instructions.md",
+        "idd-template/.github/instructions/idd-claim.instructions.md",
+        "idd-template/.github/instructions/idd-work.instructions.md",
+        "idd-template/.github/instructions/idd-pr-submit.instructions.md",
+        "idd-template/.github/instructions/idd-ci.instructions.md",
+        "idd-template/.github/instructions/idd-advisory-wait.instructions.md",
+        "idd-template/.github/instructions/idd-review-snapshot.instructions.md",
+        "idd-template/.github/instructions/idd-review-triage.instructions.md",
+        "idd-template/.github/instructions/idd-review-fix.instructions.md",
+        "idd-template/.github/instructions/idd-pre-merge.instructions.md",
+        "idd-template/.github/instructions/idd-merge.instructions.md",
+        "idd-template/.github/instructions/idd-resume.instructions.md",
+        "idd-template/docs/idd-workflow.md",
+        "idd-template/docs/idd-helper-scripts.md",
+        "idd-template/docs/idd-comment-minimization.md"
+      ]
+    },
+    {
+      "id": "issue-authoring-companion-files",
+      "file": "idd-template/ONBOARDING.md",
+      "language": "text",
+      "sourceGlobs": [
+        "skills/issue-authoring/**"
+      ],
+      "paths": [
+        "skills/issue-authoring/SKILL.md",
+        "skills/issue-authoring/agents/openai.yaml",
+        "skills/issue-authoring/references/contract.md",
+        "skills/issue-authoring/references/draft-patterns.md",
+        "skills/issue-authoring/references/workflow-boundary.md"
+      ]
+    }
+  ],
+  "syncPairs": [
+    {
+      "id": "idd-advisory-wait-instructions",
+      "source": "idd-template/.github/instructions/idd-advisory-wait.instructions.md",
+      "target": ".github/instructions/idd-advisory-wait.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-ci-instructions",
+      "source": "idd-template/.github/instructions/idd-ci.instructions.md",
+      "target": ".github/instructions/idd-ci.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-claim-instructions",
+      "source": "idd-template/.github/instructions/idd-claim.instructions.md",
+      "target": ".github/instructions/idd-claim.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-discover-instructions",
+      "source": "idd-template/.github/instructions/idd-discover.instructions.md",
+      "target": ".github/instructions/idd-discover.instructions.md",
+      "mode": "structure"
+    },
+    {
+      "id": "idd-merge-instructions",
+      "source": "idd-template/.github/instructions/idd-merge.instructions.md",
+      "target": ".github/instructions/idd-merge.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-overview-instructions",
+      "source": "idd-template/.github/instructions/idd-overview.instructions.md",
+      "target": ".github/instructions/idd-overview.instructions.md",
+      "mode": "structure"
+    },
+    {
+      "id": "idd-pr-submit-instructions",
+      "source": "idd-template/.github/instructions/idd-pr-submit.instructions.md",
+      "target": ".github/instructions/idd-pr-submit.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-pre-merge-instructions",
+      "source": "idd-template/.github/instructions/idd-pre-merge.instructions.md",
+      "target": ".github/instructions/idd-pre-merge.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-resume-instructions",
+      "source": "idd-template/.github/instructions/idd-resume.instructions.md",
+      "target": ".github/instructions/idd-resume.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-review-fix-instructions",
+      "source": "idd-template/.github/instructions/idd-review-fix.instructions.md",
+      "target": ".github/instructions/idd-review-fix.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-review-snapshot-instructions",
+      "source": "idd-template/.github/instructions/idd-review-snapshot.instructions.md",
+      "target": ".github/instructions/idd-review-snapshot.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-review-triage-instructions",
+      "source": "idd-template/.github/instructions/idd-review-triage.instructions.md",
+      "target": ".github/instructions/idd-review-triage.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-work-instructions",
+      "source": "idd-template/.github/instructions/idd-work.instructions.md",
+      "target": ".github/instructions/idd-work.instructions.md",
+      "mode": "concreted",
+      "replacements": [
+        {
+          "from": "{{REPO_NAME}}",
+          "to": "idd-skill"
+        }
+      ]
+    },
+    {
+      "id": "idd-comment-minimization-doc",
+      "source": "idd-template/docs/idd-comment-minimization.md",
+      "target": "docs/idd-comment-minimization.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-helper-scripts-doc",
+      "source": "idd-template/docs/idd-helper-scripts.md",
+      "target": "docs/idd-helper-scripts.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-workflow-doc",
+      "source": "idd-template/docs/idd-workflow.md",
+      "target": "docs/idd-workflow.md",
+      "mode": "structure"
+    },
+    {
+      "id": "issue-authoring-contract-reference",
+      "source": "docs/issue-authoring-skill.md",
+      "target": "skills/issue-authoring/references/contract.md",
+      "mode": "contains",
+      "requiredText": [
+        "It mirrors the canonical\ncontract in `docs/issue-authoring-skill.md`.",
+        "## Target marker prefix",
+        "## Publication boundary"
+      ]
+    },
+    {
+      "id": "issue-authoring-boundary-reference",
+      "source": "docs/issue-authoring-skill.md",
+      "target": "skills/issue-authoring/references/workflow-boundary.md",
+      "mode": "contains",
+      "requiredText": [
+        "This bundle handles pre-approval issue drafting only.",
+        "start the Discover -> Claim -> Work loop implicitly"
+      ]
+    }
+  ],
+  "forbiddenPatterns": [
+    {
+      "id": "hard-coded-idd-instruction-file-count",
+      "glob": "**/*.md",
+      "pattern": "\\b(thirteen|13)\\s+`?idd-\\*\\.instructions\\.md`?\\s+files\\b",
+      "message": "Avoid hard-coded IDD instruction file counts. Use a generated block or count-free wording."
+    }
+  ]
+}

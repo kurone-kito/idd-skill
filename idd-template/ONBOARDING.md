@@ -121,6 +121,8 @@ the files are copied in.
 
 ### File list
 
+<!-- audit:generated id=idd-template-core-files -->
+
 ```text
 .github/instructions/idd-overview.instructions.md
 .github/instructions/idd-discover.instructions.md
@@ -140,7 +142,11 @@ docs/idd-helper-scripts.md
 docs/idd-comment-minimization.md
 ```
 
+<!-- /audit:generated -->
+
 Optional companion files:
+
+<!-- audit:generated id=issue-authoring-companion-files -->
 
 ```text
 skills/issue-authoring/SKILL.md
@@ -149,6 +155,8 @@ skills/issue-authoring/references/contract.md
 skills/issue-authoring/references/draft-patterns.md
 skills/issue-authoring/references/workflow-boundary.md
 ```
+
+<!-- /audit:generated -->
 
 Create the target directories if they do not exist.
 
@@ -440,8 +448,8 @@ phase file manually when the current step changes.
 
 After completing the steps above, confirm each item:
 
-- [ ] All thirteen `idd-*.instructions.md` files are present in
-      `.github/instructions/`.
+- [ ] Every `idd-*.instructions.md` file listed in the generated core
+      file list is present in `.github/instructions/`.
 - [ ] `docs/idd-workflow.md`, `docs/idd-helper-scripts.md`, and
       `docs/idd-comment-minimization.md` are present.
 - [ ] If the operator opted into issue authoring,
