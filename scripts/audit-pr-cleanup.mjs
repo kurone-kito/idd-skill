@@ -451,12 +451,39 @@ function fetchConnection(query, baseVariables, pickConnection) {
       variables.after = after;
     }
     const result = ghGraphql(query, variables);
+    if (result.errors?.length) {
+      fail(
+        `GraphQL connection query failed: ${formatGraphqlErrors(result.errors)}; ${formatGraphqlContext(query, variables)}`,
+      );
+    }
+    if (!result.data) {
+      fail(
+        `GraphQL connection query returned no data; ${formatGraphqlContext(query, variables)}`,
+      );
+    }
     const connection = pickConnection(result.data);
+    if (!connection) {
+      fail(
+        `GraphQL connection query returned no connection; ${formatGraphqlContext(query, variables)}`,
+      );
+    }
     nodes.push(...(connection.nodes ?? []));
     after = connection.pageInfo?.hasNextPage ? connection.pageInfo.endCursor : null;
   } while (after);
 
   return nodes;
+}
+
+function formatGraphqlErrors(errors) {
+  return errors.map((error) => error.message ?? JSON.stringify(error)).join("; ");
+}
+
+function formatGraphqlContext(query, variables) {
+  const compactQuery = query.replace(/\s+/g, " ").trim();
+  const queryPreview = compactQuery.length > 240
+    ? `${compactQuery.slice(0, 237)}...`
+    : compactQuery;
+  return `query=${queryPreview}; variables=${JSON.stringify(variables)}`;
 }
 
 function minimizeComment(subjectId, classifier) {
