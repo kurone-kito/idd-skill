@@ -508,13 +508,16 @@ function isCodeRabbitLogin(login) {
 }
 
 function hasExplicitDispositionAfter(targetComment, comments) {
-  const targetTime = targetComment.updatedAt ?? targetComment.createdAt ?? "";
+  const targetTime = Date.parse(targetComment.updatedAt ?? targetComment.createdAt ?? "");
   return comments.some((comment) => {
     const author = comment.author?.login ?? "";
     if (isKnownReviewBot(author) || !isDispositionComment(comment)) {
       return false;
     }
-    return (comment.createdAt ?? "") > targetTime;
+    const dispositionTime = Date.parse(comment.updatedAt ?? comment.createdAt ?? "");
+    return Number.isFinite(targetTime)
+      && Number.isFinite(dispositionTime)
+      && dispositionTime > targetTime;
   });
 }
 
