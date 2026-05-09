@@ -176,7 +176,11 @@ operator instruction. Specifically:
   find issues lacking `idd-skill-roadmap-id` and
   `idd-skill-blocked-by` markers), and for the scoped
   `idd-skill-roadmap-id` body-content lookup required by A3's
-  dependency-marker check.
+  dependency-marker check. A1.5 may also run a narrow repo-wide
+  duplicate/reuse check for a specific autonomous gap before creating a
+  follow-up issue; the result may only prevent a duplicate or link an
+  existing issue back to the selected roadmap, not expand the candidate
+  set.
 - After a zero-result report at A3, an operator may grant a one-time
   opt-in for the current run, specifying an alternate scope. See
   `idd-discover.instructions.md` for the full decision tree.
