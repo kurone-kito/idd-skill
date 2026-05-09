@@ -614,7 +614,29 @@ function ghGraphql(query, variables) {
     }
   }
 
-  return JSON.parse(execFileSync("gh", commandArgs, { encoding: "utf8" }));
+  try {
+    return JSON.parse(execFileSync("gh", commandArgs, { encoding: "utf8" }));
+  } catch (error) {
+    const stdout = String(error.stdout ?? "").trim();
+    const stderr = String(error.stderr ?? "").trim();
+    const response = parseJsonOrNull(stdout);
+    if (response?.errors?.length) {
+      fail(
+        `GraphQL request failed: ${formatGraphqlErrors(response.errors)}; ${formatGraphqlContext(query, variables)}`,
+      );
+    }
+    fail(
+      `gh api graphql failed: ${stderr || error.message}; ${formatGraphqlContext(query, variables)}`,
+    );
+  }
+}
+
+function parseJsonOrNull(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 function detectRepository() {
