@@ -9,17 +9,30 @@ multi-agent GitHub automation.
 2. Fill in the placeholders listed in `ONBOARDING.md`.
 3. Update the agent entry files (`CLAUDE.md`, `copilot-instructions.md`,
    etc.) as described in `ONBOARDING.md`.
+4. Optional: install the issue-authoring companion skill if the project
+   wants pre-execution issue drafting.
 
 ## Quick start (AI agent)
 
-Open `ONBOARDING.md` and follow the instructions there.
+Open `ONBOARDING.md`, follow the core import instructions there, and
+install the optional issue-authoring companion only when the operator
+explicitly asks for it.
 
 ## Artifact boundary
 
 This template exports the portable IDD instruction files, onboarding
-docs, and workflow docs that adopters copy into another repository. It
-does not export repository-local native `SKILL.md` bundles; those should
-remain separate helper artifacts when a project chooses to provide them.
+docs, and workflow docs that adopters copy into another repository for
+the execution loop.
+
+The issue-authoring skill is a public optional companion artifact at
+`skills/issue-authoring/` in the source repository. It is not required
+to run the IDD execution loop. Install it intentionally when a project
+wants an agent to draft or decompose IDD-ready issues before execution
+starts.
+
+Keep the boundary clear: issue authoring prepares draft issues and
+roadmaps; `.github/instructions/*.instructions.md` execute approved
+issues through the normal IDD loop.
 
 ## Default PR policy note
 
@@ -63,10 +76,23 @@ docs/
   idd-helper-scripts.md              ← optional helper-script evaluation and policy
 ONBOARDING.md                        ← AI agent import guide (start here)
 README.md                            ← this file
+
+Optional companion artifact:
+skills/issue-authoring/
+  SKILL.md                           ← pre-execution issue drafting skill
+  agents/openai.yaml                 ← optional OpenAI agent metadata
+  references/contract.md             ← bundled issue authoring contract
+  references/draft-patterns.md       ← drafting examples and output chooser
+  references/workflow-boundary.md    ← publication/execution boundary
 ```
 
 See `docs/idd-workflow.md` for the distinction between cross-agent
 execution and the default Copilot-backed PR policy.
+
+When maintaining the source repository, keep `skills/issue-authoring/`
+and its bundled references aligned with `docs/issue-authoring-skill.md`.
+Adopter copies are helper artifacts and should not replace the execution
+instructions.
 
 ## Origin
 

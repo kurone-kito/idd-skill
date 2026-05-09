@@ -46,9 +46,11 @@ policy, they should plan to customize
 1. Read this entire document first.
 2. Ask the operator for any placeholder values that are missing.
 3. Fetch or copy the template files into the target repository.
-4. Replace every placeholder (see table below) with the correct value.
-5. Add IDD references to the repository's agent entry files.
-6. Verify the result with the checklist at the bottom.
+4. Ask whether the operator wants the optional issue-authoring
+   companion skill for pre-execution issue drafting.
+5. Replace every placeholder (see table below) with the correct value.
+6. Add IDD references to the repository's agent entry files.
+7. Verify the result with the checklist at the bottom.
 
 ---
 
@@ -103,8 +105,13 @@ entire lifetime of the roadmap.
 
 ## Step 2 — Fetch or copy template files
 
-You need the following files in the target repository. Use whichever
-method applies to your situation.
+You need the following core execution files in the target repository.
+Use whichever method applies to your situation.
+
+The issue-authoring skill is available as an optional companion artifact
+from `skills/issue-authoring/` in the source repository. Install it only
+when the operator explicitly wants pre-execution issue drafting or
+roadmap decomposition support.
 
 Before importing, confirm whether the operator wants to keep the default
 Copilot advisory review policy described above. If not, note that they
@@ -130,6 +137,16 @@ the files are copied in.
 .github/instructions/idd-resume.instructions.md
 docs/idd-workflow.md
 docs/idd-helper-scripts.md
+```
+
+Optional companion files:
+
+```text
+skills/issue-authoring/SKILL.md
+skills/issue-authoring/agents/openai.yaml
+skills/issue-authoring/references/contract.md
+skills/issue-authoring/references/draft-patterns.md
+skills/issue-authoring/references/workflow-boundary.md
 ```
 
 Create the target directories if they do not exist.
@@ -171,6 +188,28 @@ do
 done
 ```
 
+If the operator opts into the issue-authoring companion, fetch it
+separately:
+
+```sh
+DEST="."  # root of the target repository
+
+mkdir -p "${DEST}/skills/issue-authoring/agents" \
+  "${DEST}/skills/issue-authoring/references"
+
+for FILE in \
+  "SKILL.md" \
+  "agents/openai.yaml" \
+  "references/contract.md" \
+  "references/draft-patterns.md" \
+  "references/workflow-boundary.md"
+do
+  gh api -H "Accept: application/vnd.github.raw+json" \
+    "repos/kurone-kito/idd-skill/contents/skills/issue-authoring/${FILE}" \
+    > "${DEST}/skills/issue-authoring/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
+done
+```
+
 Alternatively, use `curl` (no authentication required — idd-skill is a public
 repository):
 
@@ -201,11 +240,53 @@ do
 done
 ```
 
+If the operator opts into the issue-authoring companion with `curl`,
+fetch it separately:
+
+```sh
+BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/skills/issue-authoring"
+DEST="."  # root of the target repository
+
+mkdir -p "${DEST}/skills/issue-authoring/agents" \
+  "${DEST}/skills/issue-authoring/references"
+
+for FILE in \
+  "SKILL.md" \
+  "agents/openai.yaml" \
+  "references/contract.md" \
+  "references/draft-patterns.md" \
+  "references/workflow-boundary.md"
+do
+  curl -fsSL "${BASE}/${FILE}" -o "${DEST}/skills/issue-authoring/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
+done
+```
+
 ### Option B — Local copy (idd-skill cloned)
 
 If you have cloned `https://github.com/kurone-kito/idd-skill`, copy
 the files from `idd-template/` into the target repository preserving
 their relative paths.
+
+If the operator opts into the issue-authoring companion, also copy
+`skills/issue-authoring/` from the source repository to
+`skills/issue-authoring/` in the target repository.
+
+### Optional companion boundary
+
+The issue-authoring companion drafts or refines IDD-ready issues,
+roadmaps, and sub-issues before execution starts. It does not authorize
+publishing issues, editing GitHub issues, or starting the Discover →
+Claim → Work loop unless the operator explicitly asks for that next
+step.
+
+Keep the companion separate from the execution instructions:
+
+- `skills/issue-authoring/` is a helper for drafting issue sets.
+- `.github/instructions/*.instructions.md` execute approved issues
+  through the IDD loop.
+- In the source `idd-skill` repository, maintainers must keep
+  `skills/issue-authoring/` and its bundled references aligned with
+  `docs/issue-authoring-skill.md`.
 
 ---
 
@@ -359,6 +440,9 @@ After completing the steps above, confirm each item:
 - [ ] All thirteen `idd-*.instructions.md` files are present in
       `.github/instructions/`.
 - [ ] `docs/idd-workflow.md` and `docs/idd-helper-scripts.md` are
+      present.
+- [ ] If the operator opted into issue authoring,
+      `skills/issue-authoring/SKILL.md` and its `references/` files are
       present.
 - [ ] No `{{...}}` placeholders remain in any copied file.
 - [ ] `idd-overview.instructions.md` has `applyTo: "**"` and
