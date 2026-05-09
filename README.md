@@ -10,6 +10,10 @@ A portable set of `.github/instructions/` files and documentation that
 wire up an Issue-Driven Development (IDD) multi-agent pipeline for any
 GitHub project.
 
+The primary artifact is the portable IDD instruction template that
+adopters copy into a repository. Native `SKILL.md` bundles, including
+issue-authoring, are optional companions rather than the main package.
+
 ## What is IDD?
 
 IDD is a multi-agent GitHub automation workflow where AI agents work

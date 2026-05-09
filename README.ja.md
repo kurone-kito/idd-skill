@@ -10,6 +10,10 @@
 マルチエージェントパイプラインを組み込むための、移植可能な
 `.github/instructions/` ファイル群とドキュメントです。
 
+主な配布物は、導入先リポジトリへコピーする移植可能な IDD instruction
+template です。issue-authoring などのネイティブ `SKILL.md` bundle は、主配布物
+ではなく任意の companion です。
+
 ## IDD とは？
 
 IDD は、AI エージェントが GitHub Issues によって駆動される繰り返しパイプラインを
