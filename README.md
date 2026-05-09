@@ -113,6 +113,31 @@ the Discover → Claim → Work → ... loop.
   `.github/instructions/idd-overview.instructions.md`, and begin the
   Discover → Claim → Work loop.
 
+## Use issue authoring before execution
+
+Use the optional issue-authoring skill before the IDD execution loop
+when a request is too large or ambiguous for one reviewable change,
+needs roadmap or sub-issue decomposition, or has dependencies that
+should be explicit before any agent claims work.
+
+In this repository, route an agent to the native bundle with one of
+these prompts:
+
+- `Use the $issue-authoring skill to draft IDD-ready issues.`
+- `Open skills/issue-authoring/SKILL.md and prepare the issue set.`
+
+The skill prepares drafts and issue hygiene only. Publishing or editing
+GitHub issues, and starting Discover → Claim → Work, are separate
+actions that require explicit approval.
+
+The full contract and schema are in
+[docs/issue-authoring-skill.md](docs/issue-authoring-skill.md).
+Adopters who import only `idd-template/` do not receive this bundle by
+default; install the optional companion with
+[idd-template/README.md](idd-template/README.md) and
+[idd-template/ONBOARDING.md](idd-template/ONBOARDING.md) when they want
+it.
+
 ## Why idd-skill?
 
 - **Parallel agent coordination** — A built-in claim/heartbeat protocol
@@ -163,11 +188,10 @@ This repository is itself maintained with the IDD workflow. See
 guide and `.github/instructions/` for the full instruction set.
 
 It also ships a repository-local native skill bundle at
-`skills/issue-authoring/`. Use that bundle when you want an agent to
-draft or decompose IDD-ready issues before execution starts; use
-[docs/idd-workflow.md](docs/idd-workflow.md) plus
-`.github/instructions/` once the issue set is approved and the normal
-execution loop should begin.
+`skills/issue-authoring/`. See
+[Use issue authoring before execution](#use-issue-authoring-before-execution)
+for routing examples and the approval boundary before the normal
+execution loop begins.
 
 ## License
 

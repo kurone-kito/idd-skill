@@ -110,6 +110,29 @@ Discover → Claim → Work → ... のループに入ります。
   `.github/instructions/idd-overview.instructions.md` を開き、
   Discover → Claim → Work のループを開始してください。
 
+## 実行前に issue authoring を使う
+
+1 つのレビュー可能な変更には大きすぎる、または曖昧なリクエスト、
+roadmap や sub-issue への分解が必要なリクエスト、あるいは
+エージェントが作業を claim する前に依存関係を明示すべきリクエストでは、
+IDD execution loop の前に optional issue-authoring skill を使ってください。
+
+このリポジトリでは、次のいずれかのプロンプトでエージェントをネイティブ
+bundle にルーティングできます:
+
+- `$issue-authoring skill を使って IDD-ready な issue をドラフトしてください。`
+- `skills/issue-authoring/SKILL.md を開いて issue set を準備してください。`
+
+この skill はドラフトと issue hygiene の準備だけを行います。GitHub issue の公開や
+編集、Discover → Claim → Work の開始は別アクションであり、明示的な承認が必要です。
+
+完全な contract と schema は
+[docs/issue-authoring-skill.md](docs/issue-authoring-skill.md) にあります。
+`idd-template/` だけをインポートする adopter には、デフォルトではこの bundle は
+含まれません。必要な場合は [idd-template/README.md](idd-template/README.md) と
+[idd-template/ONBOARDING.md](idd-template/ONBOARDING.md) に従い、
+optional companion としてインストールしてください。
+
 ## なぜ idd-skill？
 
 - **並列エージェント協調** — Issue ボディに埋め込まれた HTML コメントマーカーによる
@@ -159,11 +182,9 @@ Discover → Claim → Work → ... のループに入ります。
 完全なインストラクションセットは `.github/instructions/` を参照してください。
 
 あわせて、repo ローカルのネイティブ skill bundle
-`skills/issue-authoring/` も含まれています。実行前に IDD-ready な
-issue や roadmap をドラフト・分解したいときはその bundle を使い、
-issue セットの承認後に通常の実行ループへ入るときは
-[docs/idd-workflow.md](docs/idd-workflow.md) と
-`.github/instructions/` を使ってください。
+`skills/issue-authoring/` も含まれています。ルーティング例と通常の実行ループ前の
+承認境界については
+[実行前に issue authoring を使う](#実行前に-issue-authoring-を使う) を参照してください。
 
 ## ライセンス
 
