@@ -34,7 +34,8 @@ If at least one orphan issue is found: pass the collected set directly
 to **A4** (viability gate). Skip A1–A3 entirely.
 
 If no orphan issues are found: fall back to the roadmap path. Proceed
-to **A1** and continue with the normal A1 → A2 → A3 → A4 sequence.
+to **A1** and continue with the normal A1 → A1.5 → A2 → A3 → A4
+sequence.
 
 The A3 decision tree (abort / ask operator in unattended mode) is
 reached when the active discovery path(s) produce zero results: when
@@ -50,16 +51,116 @@ umbrella issue. If no roadmap issue exists, report and abort.
 
 **Note**: Repo-wide or label-based issue queries are permitted only in
 **A0-O** (when `issue-scope` is `orphan-first`, to find orphan issues),
-**A1** (to locate the roadmap), and **A3** (narrow body-content lookup
+**A1** (to locate the roadmap), **A1.5** (narrow duplicate/reuse lookup
+for one specific autonomous gap), and **A3** (narrow body-content lookup
 for `idd-skill-roadmap-id` to resolve `idd-skill-blocked-by`
-dependency markers; see A2 for details). Outside these three contexts,
+dependency markers; see A2 for details). Outside these contexts,
 repo-wide and label-based queries are prohibited.
+
+## A1.5 — Audit completed roadmaps
+
+After A1 selects an open roadmap, inspect whether the roadmap appears
+complete before enumerating more work. This step belongs in Discover
+because Discover owns roadmap selection and global readiness. F4 remains
+scoped to the just-merged PR and local cleanup while holding only the
+child issue claim; it must not close a parent roadmap as a side effect.
+F5 still loops back here, so the next Discover pass can evaluate parent
+roadmap state after child PRs merge.
+
+Run the completion audit only when the selected roadmap has explicit
+child work such as task-list issue references or GitHub sub-issue
+relationships. If the roadmap has no explicit child work, report that
+it is childless or malformed and continue to A2; do not close it based
+on absence of candidates.
+
+Fetch the selected roadmap, its explicit child references, transitive
+descendants, GitHub sub-issue children, and linked or closing PR evidence
+for those child issues. Use the same outbound traversal sources as A2,
+including closed umbrella children, so open descendants cannot be hidden
+behind a closed direct child. This step must not use repo-wide search to
+add unrelated work to the roadmap. The only repo-wide search allowed in
+A1.5 is a narrow duplicate/reuse check for a specific autonomous gap
+before creating a follow-up issue; use those results only to link
+existing gap work or avoid creating a duplicate, not to widen A2
+candidates.
+
+- If the roadmap itself has `status:blocked-by-human` or
+  `status:needs-decision`, report the blocker and stop before A2. Do not
+  continue selecting child issues under a blocked roadmap.
+- If any referenced child or descendant issue is open, inaccessible, or
+  unresolved, report the provenance path and reason, then continue to
+  A2.
+- If any referenced child or descendant has an open linked or closing PR
+  that is not merged or otherwise obsolete, treat that child work as
+  unresolved, report the PR, and continue to A2.
+- If any open or unresolved child or descendant has
+  `status:blocked-by-human` or `status:needs-decision`, report the
+  blocker and continue to A2 or stop according to the normal
+  ready-to-start rules. Do not treat stale blocker labels on closed
+  children as audit blockers when their referenced descendants are
+  resolved.
+- If all referenced child and descendant work is closed or otherwise
+  complete, compare the roadmap success criteria against the closed child
+  issues, linked merged PRs, task-list state, follow-up comments, and the
+  current repository state where feasible. Do not infer completion from
+  checkbox state alone.
+
+A1.5 can publish roadmap-level GitHub side effects before a child task
+issue is selected. Before any such side effect, coordinate on the
+roadmap issue itself:
+
+- Run the A5 claim-state, open-PR, and branch-collision checks against
+  the roadmap issue. Do not apply A5's assignee or project
+  `not started` readiness gate to roadmap-audit claims; roadmap
+  ownership and project status may represent parent coordination rather
+  than task readiness. If an active non-stale claim belongs to another
+  agent, do not mutate the roadmap; report the claim and continue to A2
+  or stop according to the normal ready-to-start rules.
+- If the roadmap is unclaimed, stale, or held by the same agent, post
+  and verify a normal `claimed-by` comment for the roadmap issue using a
+  `roadmap-audit/<number>-<slug>` branch field. This is a logical
+  coordination name, not a work branch, and it does not require creating
+  a branch or worktree unless the audit also needs git changes.
+- Re-validate that roadmap claim before every roadmap comment, follow-up
+  issue creation, body edit, label change, or close action.
+- If the roadmap remains open and no PR branch will continue from the
+  audit, release the roadmap-audit claim before returning to A2 or
+  stopping.
+
+Immediately before posting any completion summary, creating follow-up
+issues, editing the roadmap body, changing labels, or closing the
+roadmap, re-fetch the roadmap and child state and confirm the audit
+input still matches the evidence.
+
+Apply one outcome:
+
+- **Audit passes**: post an `IDD roadmap completion audit` comment with
+  a concise evidence summary, then close the roadmap. No child task
+  issue is claimed. Return to A1 and select the next open roadmap, if
+  any.
+- **Autonomous gaps found**: create or link follow-up issues using the
+  repository's issue-authoring rules, update the roadmap task list with
+  those links, and continue to A2 so the new work can be discovered.
+  Before creating a new issue, run the narrow A1.5 duplicate/reuse check
+  for that gap and link a matching existing issue instead. New follow-up
+  issue bodies must reference the roadmap (for example `Refs #NNN`) so a
+  later audit can rediscover them. After creating a follow-up issue,
+  update the roadmap task list with that link before creating another.
+  If the roadmap update fails or the roadmap claim is lost after issue
+  creation, create no more issues; report the created issue link so the
+  next audit can link it before considering duplicates.
+- **Non-autonomous gaps found**: comment with the decision or human
+  blocker, apply `status:needs-decision` or `status:blocked-by-human`
+  when those labels exist, and do not close the roadmap. Stop before A2
+  after reporting a non-autonomous gap, even if the repository does not
+  have the blocker labels, so the same unattended run cannot select
+  child work under a roadmap that needs human input.
 
 ## A2 — Enumerate sub-issues
 
-Starting from the roadmap found in A1, recursively collect all issues it
-references. Include transitively referenced issues. Collect only
-**open** issues.
+Starting from the roadmap found in A1 and not closed by A1.5,
+recursively collect all issues it references. Include transitively
+referenced issues. Collect only **open** issues.
 
 **Allowed traversal sources** (outbound references only):
 
@@ -88,6 +189,10 @@ touch issues outside the roadmap traversal graph:
   markers.
 - **A1 only**: any method (including `gh issue list`, `gh search`, or
   label-based queries) to locate the roadmap issue itself.
+- **A1.5 only**: a narrow duplicate/reuse lookup for one specific
+  autonomous gap before creating a follow-up issue. The result may only
+  be linked to the selected roadmap or used to avoid creating a
+  duplicate; it must not be added to the A2 candidate set.
 - **A3 only**: a body-content search (e.g.,
   `gh search issues --match-body`) to find the issue with a matching
   `idd-skill-roadmap-id` marker when checking

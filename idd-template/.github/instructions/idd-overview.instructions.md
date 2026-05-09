@@ -122,6 +122,14 @@ issue and parse the active claim. The active claim must still use your
 current `{claim-id}`. If it does not, the claim was lost. Stop, do not
 post further operational comments, and report the handoff or race.
 
+A1.5 roadmap completion audit side effects use the roadmap issue itself
+as the claim target. Even when the audit is GitHub-only and does not
+create a worktree, claim and re-validate the roadmap issue before
+commenting, editing, labeling, creating linked follow-up issues, or
+closing it. A1.5 coordination-only claims use a
+`roadmap-audit/<number>-<slug>` branch field so resume can distinguish
+them from normal implementation claims.
+
 ## Abort
 
 On abort, re-validate ownership first. If the active claim still uses
@@ -171,7 +179,11 @@ operator instruction. Specifically:
   find issues lacking `{{PROJECT_MARKER_PREFIX}}-roadmap-id` and
   `{{PROJECT_MARKER_PREFIX}}-blocked-by` markers), and for the scoped
   `{{PROJECT_MARKER_PREFIX}}-roadmap-id` body-content lookup required by
-  A3's dependency-marker check.
+  A3's dependency-marker check. A1.5 may also run a narrow repo-wide
+  duplicate/reuse check for a specific autonomous gap before creating a
+  follow-up issue; the result may only prevent a duplicate or link an
+  existing issue back to the selected roadmap, not expand the candidate
+  set.
 - After a zero-result report at A3, an operator may grant a one-time
   opt-in for the current run, specifying an alternate scope. See
   `idd-discover.instructions.md` for the full decision tree.
