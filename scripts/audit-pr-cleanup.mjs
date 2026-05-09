@@ -106,6 +106,17 @@ if (args.apply) {
       if (!freshCandidate) {
         continue;
       }
+      if (!args.skipClaimCheck) {
+        try {
+          assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId);
+        } catch (error) {
+          report.failed.push({
+            ...freshCandidate,
+            error: error.message,
+          });
+          break;
+        }
+      }
       const minimized = minimizeComment(freshCandidate.subjectId, freshCandidate.classifier);
       report.applied.push({
         ...freshCandidate,
@@ -150,6 +161,10 @@ async function buildReport(owner, repo, prNumber) {
 
   for (const comment of comments) {
     evaluateOperationalComment(comment, pr, report);
+  }
+
+  for (const thread of threads) {
+    evaluateReviewComments(thread, pr, report);
   }
 
   for (const review of reviews) {
@@ -288,6 +303,68 @@ function evaluateReviewParent(review, pr, threadIndex, latestGatingReviews, repo
   });
 }
 
+function evaluateReviewComments(thread, pr, report) {
+  for (const comment of thread.comments?.nodes ?? []) {
+    evaluateReviewComment(comment, thread, pr, report);
+  }
+}
+
+function evaluateReviewComment(comment, thread, pr, report) {
+  const author = comment.author?.login ?? "";
+  if (!isKnownReviewBot(author) || isDispositionComment(comment)) {
+    return;
+  }
+
+  const subject = subjectFromNode(comment, "PullRequestReviewComment", "RESOLVED");
+
+  if (!pr.merged) {
+    addSkipped(report, subject, "PR is not merged");
+    return;
+  }
+
+  const unsafeReason = unsafeTextReason(comment.body ?? "");
+  if (unsafeReason) {
+    addSkipped(report, subject, unsafeReason);
+    return;
+  }
+
+  if (comment.isMinimized) {
+    addSkipped(report, subject, "already minimized");
+    return;
+  }
+
+  if (!comment.viewerCanMinimize) {
+    addSkipped(report, subject, "viewer cannot minimize this review comment");
+    return;
+  }
+
+  if (!thread.isResolved) {
+    addSkipped(report, { ...subject, threadId: thread.id }, "review thread is unresolved");
+    return;
+  }
+
+  if (thread.comments?.pageInfo?.hasNextPage) {
+    addSkipped(report, { ...subject, threadId: thread.id }, "review thread comment data is truncated");
+    return;
+  }
+
+  if (!hasFreshDisposition(thread)) {
+    addSkipped(
+      report,
+      { ...subject, threadId: thread.id },
+      "review thread is missing an IDD accept/reject disposition",
+    );
+    return;
+  }
+
+  report.candidates.push({
+    ...subject,
+    author,
+    threadId: thread.id,
+    reason: "known bot feedback comment in a resolved review thread",
+  });
+}
+
 function subjectFromNode(node, type, classifier) {
   return {
     subjectId: node.id,
@@ -322,7 +399,8 @@ function unsafeTextReason(body) {
 }
 
 function isKnownReviewBot(login) {
-  return REVIEW_BOT_LOGINS.has(login.toLowerCase());
+  const normalized = login.toLowerCase();
+  return REVIEW_BOT_LOGINS.has(normalized) || normalized.startsWith("copilot-pull-request-reviewer");
 }
 
 function indexLatestGatingReviewsByAuthor(reviews) {
@@ -402,7 +480,7 @@ function isIddDispositionComment(comment) {
 }
 
 function isDispositionComment(comment) {
-  const body = (comment.body ?? "").trimStart();
+  const body = (comment.body ?? "").trimEnd();
   return body.startsWith("**Accepted**") || body.startsWith("**Rejected**");
 }
 
@@ -490,6 +568,9 @@ function fetchReviewThreads(owner, repo, number) {
                 url
                 body
                 createdAt
+                isMinimized
+                minimizedReason
+                viewerCanMinimize
                 author{login}
                 pullRequestReview{id}
               }
