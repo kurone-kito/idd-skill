@@ -140,28 +140,27 @@ default; install the optional companion with
 [idd-template/ONBOARDING.md](idd-template/ONBOARDING.md) when they want
 it.
 
-## Why idd-skill?
+## What you get with idd-skill
 
-- **Parallel agent coordination** — A built-in claim/heartbeat protocol
-  (HTML comment markers in issue bodies) prevents multiple AI agents from
-  picking up the same issue simultaneously, making true parallel
-  development safe without a central orchestrator.
-- **End-to-end phase coverage** — The instruction set encodes every
-  step from issue discovery to merge, including CI wait loops, review
-  triage, and review-fix cycles. Most tools stop at "open a PR".
-- **Zero infrastructure** — No SaaS account, no GitHub Actions runner,
-  no server required. Copy the `idd-template/` docs and instruction
-  files into any repository and the workflow is ready.
-- **Agent-agnostic** — Core phases work across GitHub Copilot, Claude
-  Code, OpenAI Codex CLI, and Gemini CLI without rewriting any
-  instructions. (The default template includes a Copilot advisory review
-  step in later phases; see [docs/positioning.md](docs/positioning.md)
-  for details.)
-- **Fully auditable** — Every rule is plain Markdown. Read it, fork it,
-  adapt it. No black box.
+- **Safe parallel agent work** — Claim and heartbeat markers make issue
+  ownership visible, so multiple AI agents can work at once without
+  picking up the same task or needing a central orchestrator.
+- **Fewer handoff gaps** — The workflow covers discovery through merge,
+  including CI waits, review triage, and review-fix cycles, so agents
+  can keep moving after a PR opens instead of stopping at handoff time.
+- **No extra infrastructure to operate** — Copy the `idd-template/`
+  docs and instruction files into a repository. No SaaS account, GitHub
+  Actions runner, or server is required to start using the loop.
+- **Freedom to choose the agent** — The core phases are plain Markdown
+  and work across GitHub Copilot, Claude Code, OpenAI Codex CLI, and
+  Gemini CLI. The default template still includes a Copilot advisory
+  review step in later phases.
+- **Auditable automation you control** — Every rule lives in the repo as
+  Markdown, so teams can inspect it, fork it, and adapt it without a
+  black box.
 
-See [docs/positioning.md](docs/positioning.md) for a detailed
-competitive landscape and strategic positioning analysis.
+For deeper competitive comparison, see
+[docs/positioning.md](docs/positioning.md).
 
 ## Importing IDD manually
 
