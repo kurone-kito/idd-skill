@@ -66,9 +66,9 @@ an agent can run it end to end:
   API responses.
 - Node.js/npm with `npx` for the validation commands currently used by
   this repository: `dprint`, `markdownlint-cli2`, and `cspell`.
-- `curl` or an equivalent REST client when posting HTML-comment
-  operational markers needs a path more reliable than `gh issue
-  comment` for comment bodies that start with HTML comments.
+- `curl` or an equivalent REST client for posting HTML-comment
+  operational markers when a path more reliable than `gh issue
+  comment` is needed for comment bodies that start with HTML comments.
 
 Optional helpers such as WorkTrunk, `git-wt`, and commit-signing aliases
 can make the loop smoother, but they are not baseline requirements.

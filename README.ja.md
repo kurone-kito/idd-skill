@@ -63,7 +63,7 @@ GitHub アクセス手段が必要です:
 - このリポジトリの validation command が現在使っている `dprint`、
   `markdownlint-cli2`、`cspell` を `npx` で実行するための Node.js/npm。
 - HTML コメントで始まる operational marker を投稿するときに、
-  `gh issue comment` より信頼できる経路が必要な場合の `curl` または同等の
+  `gh issue comment` より信頼できる経路が必要な場合に使う `curl` または同等の
   REST client。
 
 WorkTrunk、`git-wt`、commit signing alias などの任意ヘルパーはループを
