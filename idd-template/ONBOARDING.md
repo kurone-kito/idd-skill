@@ -155,6 +155,7 @@ docs/idd-review-policy-profiles.md
 docs/idd-helper-scripts.md
 docs/idd-comment-minimization.md
 docs/permissions.md
+docs/getting-started.md
 ```
 
 <!-- /audit:generated -->
@@ -209,7 +210,8 @@ for FILE in \
   "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \
   "docs/idd-comment-minimization.md" \
-  "docs/permissions.md"
+  "docs/permissions.md" \
+  "docs/getting-started.md"
 do
   gh api -H "Accept: application/vnd.github.raw+json" \
     "repos/kurone-kito/idd-skill/contents/idd-template/${FILE}" \
@@ -271,7 +273,8 @@ for FILE in \
   "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \
   "docs/idd-comment-minimization.md" \
-  "docs/permissions.md"
+  "docs/permissions.md" \
+  "docs/getting-started.md"
 do
   curl -fsSL "${BASE}/${FILE}" -o "${DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
 done
@@ -478,10 +481,11 @@ After completing the steps above, confirm each item:
 
 - [ ] Every `idd-*.instructions.md` file listed in the generated core
       file list is present in `.github/instructions/`.
-- [ ] `docs/idd-workflow.md`, `docs/idd-review-policy-profiles.md`,
+- [ ] `docs/getting-started.md`, `docs/idd-workflow.md`,
+      `docs/idd-review-policy-profiles.md`,
       `docs/idd-helper-scripts.md`,
-      `docs/idd-comment-minimization.md`, and `docs/permissions.md` are
-      present.
+      `docs/idd-comment-minimization.md`, and `docs/permissions.md`
+      are present.
 - [ ] The operator's selected PR review policy profile is recorded, and
       any non-default profile has matching phase-file customizations.
 - [ ] If the operator opted into issue authoring,
