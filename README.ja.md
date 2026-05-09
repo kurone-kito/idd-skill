@@ -141,6 +141,8 @@ Discover -> Claim -> Work の開始には、引き続き明示的な承認が必
 
 ## 詳細リファレンス
 
+- [リファレンスマニュアル](docs/index.md) — 詳細ドキュメント群への
+  task-oriented な入口。
 - [Workflow guide](docs/idd-workflow.md) — entry points、file map、
   cross-agent routing。
 - [Positioning](docs/positioning.md) — competitive landscape と IDD の違い。
