@@ -7,24 +7,32 @@ excludeAgent: "code-review"
 
 ## Claim format
 
-Post this HTML comment to an issue to claim it or take it over:
+Post this comment to an issue to claim it, heartbeat it, or take it
+over. The HTML comment token must remain the first bytes of the body;
+the visible note is for humans:
 
-```html
+```markdown
 <!-- claimed-by: {agent-id} {claim-id} supersedes: {prior-claim-id|none} {ISO8601-timestamp} branch: {branch-name} -->
+
+_{agent-id}: issue claim — IDD automation marker. Do not edit._
 ```
 
 **Important**: the machine-readable token in every operational comment
 (`claimed-by`, `unclaimed-by`, `review-watermark`, `review-baseline`)
 is an HTML comment. Some GitHub client tools (e.g., `gh issue comment`,
 `gh api -f body=`) silently reject bodies that consist entirely of HTML
-comments. Always post these using a direct HTTP `POST` with a JSON body
-(e.g., `curl` with `-H "Content-Type: application/json"` and
-`-d '{"body":"<!-- ... -->"}'`).
+comments. New operational comments include visible text, but agents
+should still post them using a direct HTTP `POST` with a JSON body for
+reliability (e.g., `curl` with `-H "Content-Type: application/json"` and
+`-d '{"body":"<!-- ... -->\n\n_note_"}'`).
 
-`review-watermark` and `review-baseline` comments must additionally
-include a short visible note after the HTML comment token (see
-`idd-review-snapshot.instructions.md` for the required format). `claimed-by`
-and `unclaimed-by` comments remain HTML-comment-only.
+Every new HTML-comment operational marker comment must include a short
+visible note after the HTML comment token. `review-watermark` and
+`review-baseline` use the phase-specific note formats in
+`idd-review-snapshot.instructions.md`; `claimed-by` and `unclaimed-by`
+use the claim and release notes shown here. Hidden-only legacy
+`claimed-by` and `unclaimed-by` comments remain valid for parsing and
+migration, but do not create new hidden-only claim comments.
 
 - `{claim-id}` is an opaque unique token for one active claim lineage
   and is the portable proof that the current session owns that claim.
@@ -43,8 +51,10 @@ and `unclaimed-by` comments remain HTML-comment-only.
 
 Post this comment to release a claim (on abort or voluntary release):
 
-```html
+```markdown
 <!-- unclaimed-by: {agent-id} {claim-id} {ISO8601-timestamp} -->
+
+_{agent-id}: issue claim released — IDD automation marker. Do not edit._
 ```
 
 ## Claim-state parsing
@@ -103,7 +113,7 @@ Treat these legacy comments as **migration-only** inputs:
   staleness. A matching legacy agent ID is not enough to prove same
   live-session ownership.
 - Then immediately post a new-format `claimed-by` comment with a fresh
-  `{claim-id}` before any further side effects.
+  `{claim-id}` and visible note before any further side effects.
 - Use `supersedes: none` for that one-time migration claim, because the
   legacy format has no `{claim-id}` to reference.
 - After a new-format claim exists, ignore all legacy claim and unclaim
