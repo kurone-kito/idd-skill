@@ -53,11 +53,12 @@ umbrella issue. If no roadmap issue exists, report and abort.
 
 **Note**: Repo-wide or label-based issue queries are permitted only in
 **A0-O** (when `issue-scope` is `orphan-first`, to find orphan issues),
-**A1** (to locate the roadmap), and **A3** (narrow body-content lookup
+**A1** (to locate the roadmap), **A1.5** (narrow duplicate/reuse lookup
+for one specific autonomous gap), and **A3** (narrow body-content lookup
 for `{{PROJECT_MARKER_PREFIX}}-roadmap-id` to resolve
 `{{PROJECT_MARKER_PREFIX}}-blocked-by` dependency markers; see A2 for
-details). Outside these three contexts, repo-wide and label-based
-queries are prohibited.
+details). Outside these contexts, repo-wide and label-based queries are
+prohibited.
 
 ## A1.5 — Audit completed roadmaps
 
@@ -92,6 +93,9 @@ candidates.
 - If any referenced child or descendant issue is open, inaccessible, or
   unresolved, report the provenance path and reason, then continue to
   A2.
+- If any referenced child or descendant has an open linked or closing PR
+  that is not merged or otherwise obsolete, treat that child work as
+  unresolved, report the PR, and continue to A2.
 - If any open or unresolved child or descendant has
   `status:blocked-by-human` or `status:needs-decision`, report the
   blocker and continue to A2 or stop according to the normal
@@ -151,9 +155,9 @@ Apply one outcome:
 - **Non-autonomous gaps found**: comment with the decision or human
   blocker, apply `status:needs-decision` or `status:blocked-by-human`
   when those labels exist, and do not close the roadmap. Stop before A2
-  after applying a roadmap-level blocker or needs-decision state, so the
-  same unattended run cannot select child work under the blocked
-  roadmap.
+  after reporting a non-autonomous gap, even if the repository does not
+  have the blocker labels, so the same unattended run cannot select
+  child work under a roadmap that needs human input.
 
 ## A2 — Enumerate sub-issues
 
