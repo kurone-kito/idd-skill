@@ -102,9 +102,13 @@ if (args.apply) {
       }
     }
     try {
-      const minimized = minimizeComment(candidate.subjectId, candidate.classifier);
+      const freshCandidate = await revalidateCandidate(owner, repo, prNumber, candidate, report);
+      if (!freshCandidate) {
+        continue;
+      }
+      const minimized = minimizeComment(freshCandidate.subjectId, freshCandidate.classifier);
       report.applied.push({
-        ...candidate,
+        ...freshCandidate,
         isMinimized: minimized.isMinimized,
         minimizedReason: minimized.minimizedReason,
       });
@@ -304,8 +308,8 @@ function addSkipped(report, subject, reason) {
 }
 
 function operationalMarkerPrefix(body) {
-  const trimmed = body.trimStart();
-  return OPERATIONAL_MARKERS.find((marker) => marker.pattern.test(trimmed))?.label ?? null;
+  const normalized = body.trimEnd();
+  return OPERATIONAL_MARKERS.find((marker) => marker.pattern.test(normalized))?.label ?? null;
 }
 
 function unsafeTextReason(body) {
@@ -572,6 +576,26 @@ function minimizeComment(subjectId, classifier) {
   return minimized;
 }
 
+async function revalidateCandidate(owner, repo, prNumber, candidate, report) {
+  const freshReport = await buildReport(owner, repo, prNumber);
+  const freshCandidate = freshReport.candidates.find((current) => {
+    return current.subjectId === candidate.subjectId && current.classifier === candidate.classifier;
+  });
+  if (freshCandidate) {
+    return freshCandidate;
+  }
+
+  const skipped = freshReport.skipped.find((current) => {
+    return current.subjectId === candidate.subjectId && current.classifier === candidate.classifier;
+  });
+  addSkipped(
+    report,
+    candidate,
+    `pre-minimize revalidation failed: ${skipped?.skipReason ?? "candidate is no longer eligible"}`,
+  );
+  return null;
+}
+
 function assertActiveClaim(owner, repo, issueNumber, agentId, claimId) {
   const active = readActiveClaim(owner, repo, issueNumber);
   if (!active || active.claimId !== claimId || (agentId && active.agentId !== agentId)) {
@@ -652,7 +676,7 @@ function readActiveClaim(owner, repo, issueNumber) {
 }
 
 function parseClaim(body, createdAt) {
-  const match = body.trim().match(
+  const match = body.trimEnd().match(
     new RegExp(
       `^<!--\\s*claimed-by:\\s+(\\S+)\\s+(\\S+)\\s+supersedes:\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s+branch:\\s+([^\\s>]+)\\s*-->$`,
     ),
@@ -670,7 +694,7 @@ function parseClaim(body, createdAt) {
 }
 
 function parseRelease(body) {
-  const match = body.trim().match(
+  const match = body.trimEnd().match(
     new RegExp(
       `^<!--\\s*unclaimed-by:\\s+(\\S+)\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s*-->$`,
     ),
