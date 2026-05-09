@@ -31,10 +31,9 @@
     },
     {
       "id": "idd-template-docs-set",
-      "sourceGlob": "idd-template/docs/*.md",
-      "targetGlob": "docs/*.md",
+      "sourceGlob": "idd-template/docs/idd-*.md",
+      "targetGlob": "docs/idd-*.md",
       "match": "basename",
-      "allowExtraTargets": true,
       "requireSyncPairs": true
     }
   ],
@@ -81,6 +80,30 @@
         "skills/issue-authoring/references/draft-patterns.md",
         "skills/issue-authoring/references/workflow-boundary.md"
       ]
+    }
+  ],
+  "shellFileLists": [
+    {
+      "id": "idd-template-core-gh-api-loop",
+      "file": "idd-template/ONBOARDING.md",
+      "generatedBlock": "idd-template-core-files"
+    },
+    {
+      "id": "issue-authoring-companion-gh-api-loop",
+      "file": "idd-template/ONBOARDING.md",
+      "generatedBlock": "issue-authoring-companion-files",
+      "stripPrefix": "skills/issue-authoring/"
+    },
+    {
+      "id": "idd-template-core-curl-loop",
+      "file": "idd-template/ONBOARDING.md",
+      "generatedBlock": "idd-template-core-files"
+    },
+    {
+      "id": "issue-authoring-companion-curl-loop",
+      "file": "idd-template/ONBOARDING.md",
+      "generatedBlock": "issue-authoring-companion-files",
+      "stripPrefix": "skills/issue-authoring/"
     }
   ],
   "syncPairs": [
@@ -188,7 +211,7 @@
     },
     {
       "id": "issue-authoring-contract-reference",
-      "source": "docs/issue-authoring-skill.md",
+      "reference": "docs/issue-authoring-skill.md",
       "target": "skills/issue-authoring/references/contract.md",
       "mode": "contains",
       "requiredText": [
@@ -199,7 +222,7 @@
     },
     {
       "id": "issue-authoring-boundary-reference",
-      "source": "docs/issue-authoring-skill.md",
+      "reference": "docs/issue-authoring-skill.md",
       "target": "skills/issue-authoring/references/workflow-boundary.md",
       "mode": "contains",
       "requiredText": [

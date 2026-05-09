@@ -22,6 +22,7 @@ const changedFiles = listChangedFiles();
 checkReadmePairs(manifest.readmePairs ?? []);
 checkFileSets(manifest.fileSets ?? [], manifest.syncPairs ?? []);
 checkGeneratedBlocks(manifest.generatedBlocks ?? []);
+checkShellFileLists(manifest.shellFileLists ?? [], manifest.generatedBlocks ?? []);
 checkSyncPairs(manifest.syncPairs ?? []);
 checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
 
@@ -152,7 +153,45 @@ function checkGeneratedBlocks(blocks) {
   }
 }
 
+function checkShellFileLists(lists, generatedBlocks) {
+  const blockById = new Map(generatedBlocks.map((block) => [block.id, block]));
+
+  for (const list of lists) {
+    const sourceBlock = blockById.get(list.generatedBlock);
+    if (!sourceBlock) {
+      errors.push(`${list.id}: unknown generated block ${list.generatedBlock}`);
+      continue;
+    }
+
+    const text = readText(list.file);
+    const marker = `<!-- audit:shell-list id=${list.id} -->`;
+    const markerIndex = text.indexOf(marker);
+    if (markerIndex === -1) {
+      errors.push(`${list.id}: ${list.file} is missing ${marker}`);
+      continue;
+    }
+
+    const code = nextFencedCodeBlock(text, markerIndex + marker.length, list.id);
+    if (code === null) {
+      continue;
+    }
+
+    const actual = extractShellForFiles(code, list.id);
+    const strip = list.stripPrefix ?? sourceBlock.stripPrefix;
+    const expected = resolveBlockFiles(sourceBlock).map((file) => stripPrefix(file, strip));
+    if (actual.join("\n") !== expected.join("\n")) {
+      errors.push(`${list.id}: shell file list in ${list.file} is stale`);
+    }
+  }
+}
+
 function renderGeneratedBlock(block) {
+  const files = resolveBlockFiles(block);
+  const renderedFiles = files.map((file) => stripPrefix(file, block.stripPrefix));
+  return `\n\n\`\`\`${block.language ?? "text"}\n${renderedFiles.join("\n")}\n\`\`\`\n\n`;
+}
+
+function resolveBlockFiles(block) {
   const files = block.paths
     ? [...block.paths]
     : uniqueSorted((block.sourceGlobs ?? []).flatMap(globFiles));
@@ -172,8 +211,7 @@ function renderGeneratedBlock(block) {
     }
   }
 
-  const renderedFiles = files.map((file) => stripPrefix(file, block.stripPrefix));
-  return `\n\n\`\`\`${block.language ?? "text"}\n${renderedFiles.join("\n")}\n\`\`\`\n\n`;
+  return files;
 }
 
 function checkSyncPairs(pairs) {
@@ -207,8 +245,8 @@ function checkSyncPairs(pairs) {
 }
 
 function checkContainsPair(pair) {
-  if (pair.source) {
-    readText(pair.source);
+  if (pair.reference) {
+    readText(pair.reference);
   }
 
   const target = readText(pair.target);
@@ -243,6 +281,7 @@ function checkForbiddenPatterns(patterns) {
 function listChangedFiles() {
   const candidates = [];
   const eventPath = process.env.GITHUB_EVENT_PATH;
+  let eventBefore = "";
 
   if (eventPath) {
     try {
@@ -251,7 +290,7 @@ function listChangedFiles() {
         candidates.push([`${event.pull_request.base.sha}...HEAD`]);
       }
       if (event.before && !/^0+$/.test(event.before)) {
-        candidates.push([`${event.before}...HEAD`]);
+        eventBefore = event.before;
       }
     } catch (error) {
       notices.push(`could not read GitHub event payload: ${error.message}`);
@@ -261,13 +300,16 @@ function listChangedFiles() {
   if (process.env.GITHUB_BASE_REF) {
     candidates.push([`origin/${process.env.GITHUB_BASE_REF}...HEAD`]);
   }
+  candidates.push(["origin/main...HEAD"]);
+  if (eventBefore) {
+    candidates.push([`${eventBefore}...HEAD`]);
+  }
   if (
     process.env.GITHUB_EVENT_BEFORE &&
     !/^0+$/.test(process.env.GITHUB_EVENT_BEFORE)
   ) {
     candidates.push([`${process.env.GITHUB_EVENT_BEFORE}...HEAD`]);
   }
-  candidates.push(["origin/main...HEAD"]);
 
   for (const args of candidates) {
     try {
@@ -378,6 +420,54 @@ function stripGeneratedBlocks(text) {
   );
 }
 
+function nextFencedCodeBlock(text, startIndex, id) {
+  const fenceStart = text.indexOf("```", startIndex);
+  if (fenceStart === -1) {
+    errors.push(`${id}: missing fenced code block after marker`);
+    return null;
+  }
+  const codeStart = text.indexOf("\n", fenceStart);
+  if (codeStart === -1) {
+    errors.push(`${id}: malformed fenced code block`);
+    return null;
+  }
+  const fenceEnd = text.indexOf("\n```", codeStart + 1);
+  if (fenceEnd === -1) {
+    errors.push(`${id}: fenced code block is not closed`);
+    return null;
+  }
+  return text.slice(codeStart + 1, fenceEnd);
+}
+
+function extractShellForFiles(code, id) {
+  const lines = code.split("\n");
+  const loopStart = lines.findIndex((line) => line.trim() === "for FILE in \\");
+  if (loopStart === -1) {
+    errors.push(`${id}: missing "for FILE in \\" loop`);
+    return [];
+  }
+  const loopEnd = lines.findIndex((line, index) => index > loopStart && line.trim() === "do");
+  if (loopEnd === -1) {
+    errors.push(`${id}: missing "do" after FILE loop`);
+    return [];
+  }
+
+  const files = [];
+  for (const line of lines.slice(loopStart + 1, loopEnd)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const match = /^"([^"]+)"(?:\s+\\)?$/.exec(trimmed);
+    if (!match) {
+      errors.push(`${id}: unsupported FILE entry ${JSON.stringify(trimmed)}`);
+      continue;
+    }
+    files.push(match[1]);
+  }
+  return files;
+}
+
 function stripPrefix(file, prefix) {
   if (!prefix) {
     return file;
@@ -390,7 +480,12 @@ function stripPrefix(file, prefix) {
 }
 
 function readText(file) {
-  return normalizeText(readFileSync(join(root, file), "utf8"));
+  try {
+    return normalizeText(readFileSync(join(root, file), "utf8"));
+  } catch (error) {
+    errors.push(`${file}: could not read file (${error.code ?? error.message})`);
+    return "";
+  }
 }
 
 function normalizeText(text) {

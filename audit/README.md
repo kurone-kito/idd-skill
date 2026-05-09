@@ -29,7 +29,8 @@ manifest has three main responsibilities:
   match. Use this only when prose is intentionally different but the
   navigational shape must stay aligned.
 - `contains`: the target must include each listed text fragment or
-  regular expression.
+  regular expression. An optional `reference` file only asserts that the
+  referenced source exists; it is not a semantic sync check.
 
 ## Intentional Exceptions
 

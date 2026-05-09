@@ -169,6 +169,8 @@ Base URL: `https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-temp
 
 Fetch all files with `gh api` (recommended — handles auth automatically):
 
+<!-- audit:shell-list id=idd-template-core-gh-api-loop -->
+
 ```sh
 DEST="."  # root of the target repository
 
@@ -201,6 +203,8 @@ done
 If the operator opts into the issue-authoring companion, fetch it
 separately:
 
+<!-- audit:shell-list id=issue-authoring-companion-gh-api-loop -->
+
 ```sh
 DEST="."  # root of the target repository
 
@@ -222,6 +226,8 @@ done
 
 Alternatively, use `curl` (no authentication required — idd-skill is a public
 repository):
+
+<!-- audit:shell-list id=idd-template-core-curl-loop -->
 
 ```sh
 BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template"
@@ -253,6 +259,8 @@ done
 
 If the operator opts into the issue-authoring companion with `curl`,
 fetch it separately:
+
+<!-- audit:shell-list id=issue-authoring-companion-curl-loop -->
 
 ```sh
 BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/skills/issue-authoring"
