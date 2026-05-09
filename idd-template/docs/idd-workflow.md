@@ -88,7 +88,9 @@ can audit whether all explicitly referenced child work is complete
 before selecting the next issue. Passing audits post a concise evidence
 summary and close the roadmap; failing audits either add/link
 autonomous follow-up issues or route human-dependent gaps to an explicit
-blocked or needs-decision state.
+blocked or needs-decision state. Roadmap-level side effects still use a
+temporary claim on the roadmap issue itself, so concurrent agents do not
+close or edit the same roadmap at the same time.
 
 This audit intentionally lives before A2 rather than in F4. F4 is
 limited to the PR that just merged and the local cleanup for that child

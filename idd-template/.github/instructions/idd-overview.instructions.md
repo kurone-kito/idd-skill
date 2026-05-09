@@ -122,6 +122,12 @@ issue and parse the active claim. The active claim must still use your
 current `{claim-id}`. If it does not, the claim was lost. Stop, do not
 post further operational comments, and report the handoff or race.
 
+A1.5 roadmap completion audit side effects use the roadmap issue itself
+as the claim target. Even when the audit is GitHub-only and does not
+create a worktree, claim and re-validate the roadmap issue before
+commenting, editing, labeling, creating linked follow-up issues, or
+closing it.
+
 ## Abort
 
 On abort, re-validate ownership first. If the active claim still uses

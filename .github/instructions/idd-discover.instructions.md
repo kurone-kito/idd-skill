@@ -88,6 +88,25 @@ the roadmap.
   repository state where feasible. Do not infer completion from checkbox
   state alone.
 
+A1.5 can publish roadmap-level GitHub side effects before a child task
+issue is selected. Before any such side effect, coordinate on the
+roadmap issue itself:
+
+- Run the normal A5 claim pre-checks against the roadmap issue. If an
+  active non-stale claim belongs to another agent, do not mutate the
+  roadmap; report the claim and continue to A2 or stop according to the
+  normal ready-to-start rules.
+- If the roadmap is unclaimed, stale, or held by the same agent, post
+  and verify a normal `claimed-by` comment for the roadmap issue using
+  the A5 branch naming convention. This is a roadmap-audit coordination
+  claim; it does not require creating a worktree unless the audit also
+  needs git changes.
+- Re-validate that roadmap claim before every roadmap comment, follow-up
+  issue creation, body edit, label change, or close action.
+- If the roadmap remains open and no PR branch will continue from the
+  audit, release the roadmap-audit claim before returning to A2 or
+  stopping.
+
 Immediately before posting any completion summary, creating follow-up
 issues, editing the roadmap body, changing labels, or closing the
 roadmap, re-fetch the roadmap and child state and confirm the audit
@@ -96,8 +115,9 @@ input still matches the evidence.
 Apply one outcome:
 
 - **Audit passes**: post an `IDD roadmap completion audit` comment with
-  a concise evidence summary, then close the roadmap. No task issue is
-  claimed. Return to A1 and select the next open roadmap, if any.
+  a concise evidence summary, then close the roadmap. No child task
+  issue is claimed. Return to A1 and select the next open roadmap, if
+  any.
 - **Autonomous gaps found**: create or link follow-up issues using the
   repository's issue-authoring rules, update the roadmap task list with
   those links, and continue to A2 so the new work can be discovered.
