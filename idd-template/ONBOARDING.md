@@ -38,10 +38,12 @@ Important: the distributed default workflow is cross-agent for
 execution, but its later PR phases still include a GitHub Copilot
 advisory review step by default. If the operator does not want that PR
 policy, choose another profile in `docs/idd-review-policy-profiles.md`
-and plan to customize
+and plan to customize the complete edit surface described there. At
+minimum, non-default profiles touch
 `.github/instructions/idd-review-fix.instructions.md`,
-`.github/instructions/idd-pre-merge.instructions.md` and
-`.github/instructions/idd-merge.instructions.md` after import.
+`.github/instructions/idd-pre-merge.instructions.md`, and
+`.github/instructions/idd-merge.instructions.md`; some profiles require
+additional files after import.
 
 Before granting credentials to unattended or merge-capable agents, read
 `docs/permissions.md` and choose the narrowest access profile that can
@@ -124,7 +126,8 @@ roadmap decomposition support.
 Before importing, confirm whether the operator wants to keep the default
 Copilot advisory review policy described above. If not, choose the
 closest profile in `docs/idd-review-policy-profiles.md` and note which
-phase files must be customized after the files are copied in.
+phase files and profile-specific surfaces must be customized after the
+files are copied in.
 
 ### File list
 

@@ -138,8 +138,12 @@ phases.
 - This dependency is on GitHub's review integration, not on every local
   agent using Copilot as its CLI.
 - Adopters who do not want that default PR policy should choose another
-  review policy profile and edit `idd-review-fix.instructions.md`,
-  `idd-pre-merge.instructions.md`, and `idd-merge.instructions.md`.
+  review policy profile and follow
+  [IDD review policy profiles](idd-review-policy-profiles.md) for the
+  complete edit surface.
+- At minimum, update `idd-review-fix.instructions.md`,
+  `idd-pre-merge.instructions.md`, and `idd-merge.instructions.md`;
+  some profiles, such as `external-bot`, require additional files.
 
 Non-Copilot agents can still drive the workflow end to end, but they
 should expect those later phases to interact with Copilot as a GitHub

@@ -41,10 +41,12 @@ issues through the normal IDD loop.
 The distributed template is cross-agent for execution, but its later PR
 phases include a GitHub Copilot advisory review step by default. If an
 adopter does not want that PR policy, they should choose a profile in
-`docs/idd-review-policy-profiles.md` and customize
+`docs/idd-review-policy-profiles.md` and apply the complete edit surface
+described there. At minimum, non-default profiles touch
 `.github/instructions/idd-review-fix.instructions.md`,
 `.github/instructions/idd-pre-merge.instructions.md`, and
-`.github/instructions/idd-merge.instructions.md` after import.
+`.github/instructions/idd-merge.instructions.md` after import; some
+profiles require additional files.
 
 ## Placeholders
 
