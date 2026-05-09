@@ -442,8 +442,9 @@ After completing the steps above, confirm each item:
 - [ ] `docs/idd-workflow.md` and `docs/idd-helper-scripts.md` are
       present.
 - [ ] If the operator opted into issue authoring,
-      `skills/issue-authoring/SKILL.md` and its `references/` files are
-      present.
+      `skills/issue-authoring/SKILL.md`,
+      `skills/issue-authoring/agents/openai.yaml`, and the
+      `skills/issue-authoring/references/` files are present.
 - [ ] No `{{...}}` placeholders remain in any copied file.
 - [ ] `idd-overview.instructions.md` has `applyTo: "**"` and
       `excludeAgent: "code-review"` in its frontmatter.
