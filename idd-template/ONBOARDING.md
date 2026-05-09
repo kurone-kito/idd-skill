@@ -137,6 +137,7 @@ the files are copied in.
 .github/instructions/idd-resume.instructions.md
 docs/idd-workflow.md
 docs/idd-helper-scripts.md
+docs/idd-comment-minimization.md
 ```
 
 Optional companion files:
@@ -180,7 +181,8 @@ for FILE in \
   ".github/instructions/idd-merge.instructions.md" \
   ".github/instructions/idd-resume.instructions.md" \
   "docs/idd-workflow.md" \
-  "docs/idd-helper-scripts.md"
+  "docs/idd-helper-scripts.md" \
+  "docs/idd-comment-minimization.md"
 do
   gh api -H "Accept: application/vnd.github.raw+json" \
     "repos/kurone-kito/idd-skill/contents/idd-template/${FILE}" \
@@ -234,7 +236,8 @@ for FILE in \
   ".github/instructions/idd-merge.instructions.md" \
   ".github/instructions/idd-resume.instructions.md" \
   "docs/idd-workflow.md" \
-  "docs/idd-helper-scripts.md"
+  "docs/idd-helper-scripts.md" \
+  "docs/idd-comment-minimization.md"
 do
   curl -fsSL "${BASE}/${FILE}" -o "${DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
 done
@@ -439,8 +442,8 @@ After completing the steps above, confirm each item:
 
 - [ ] All thirteen `idd-*.instructions.md` files are present in
       `.github/instructions/`.
-- [ ] `docs/idd-workflow.md` and `docs/idd-helper-scripts.md` are
-      present.
+- [ ] `docs/idd-workflow.md`, `docs/idd-helper-scripts.md`, and
+      `docs/idd-comment-minimization.md` are present.
 - [ ] If the operator opted into issue authoring,
       `skills/issue-authoring/SKILL.md`,
       `skills/issue-authoring/agents/openai.yaml`, and the

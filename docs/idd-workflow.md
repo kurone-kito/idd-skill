@@ -48,6 +48,7 @@ you are reading this guide first, start at step 1.
 | `.github/instructions/idd-pre-merge.instructions.md`       | F1–F2: resolve conflicts and verify all pre-merge conditions           |
 | `.github/instructions/idd-merge.instructions.md`           | F3–F5: execute the merge, clean up, and loop back to discover          |
 | `.github/instructions/idd-resume.instructions.md`          | Recover after a crash, timeout, or handoff                             |
+| `docs/idd-comment-minimization.md`                         | Post-merge comment minimization policy, commands, and experiment notes |
 
 ## Artifact taxonomy and ownership
 
@@ -130,3 +131,8 @@ See [IDD helper script evaluation](idd-helper-scripts.md) for the
 current inventory of high-friction query patterns, the reason helper
 scripts are not adopted yet, and the criteria for reconsidering optional
 read-only helpers later.
+
+See [IDD comment minimization](idd-comment-minimization.md) for the
+post-merge cleanup rule, GraphQL command shape, and merged-PR experiment
+for hiding completed feedback and stale operational markers without
+deleting the audit trail.

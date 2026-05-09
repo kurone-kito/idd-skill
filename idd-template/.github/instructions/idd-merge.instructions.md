@@ -94,10 +94,35 @@ gate. The active claim must still use your current `{claim-id}`.
 
 ## F4 — Cleanup
 
-1. Delete the local worktree and local branch.
-2. Update the local `main` branch.
-3. If GitHub auto-delete is disabled: delete the remote branch too.
-   (Worktrunk may be used for steps 1–3.)
+1. Run best-effort merged-PR comment cleanup when credentials permit.
+   This cleanup is never a merge gate and must not run before F3
+   succeeds. If cleanup fails, record the failure only if it is useful
+   for a later audit, then continue with local cleanup.
+
+   - Feedback or review parent comments may be minimized as `RESOLVED`
+     only after every actionable child review comment/thread under that
+     parent has been accepted or rejected, replied to as required, and
+     resolved.
+   - IDD operational marker comments may be minimized as `OUTDATED`
+     only after the PR is merged and the marker is no longer needed for
+     resume, advisory wait, or review-currency checks.
+   - Candidate marker prefixes include `<!-- review-watermark:`,
+     `<!-- review-baseline:`, `advisory-wait:`,
+     `advisory-wait-recovery:`, and `<!-- advisory-wait:`.
+   - Do not minimize comments that contain unresolved maintainer
+     decisions, active holds, failed-CI context still needed by
+     maintainers, non-operational human discussion, or any content that
+     still participates in active F2/F3 gates.
+   - Use GitHub GraphQL `minimizeComment` with node IDs. Check
+     `viewerCanMinimize` and `isMinimized` before minimizing; skip
+     already-minimized comments and comments the viewer cannot minimize.
+
+   See `docs/idd-comment-minimization.md` for the investigation notes,
+   dry-run shape, and command examples.
+2. Delete the local worktree and local branch.
+3. Update the local `main` branch.
+4. If GitHub auto-delete is disabled: delete the remote branch too.
+   (Worktrunk may be used for steps 2–4.)
 
 ## F5 — Loop
 
