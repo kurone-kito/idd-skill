@@ -156,14 +156,19 @@ roadmap issue itself:
   the roadmap issue. Do not apply A5's assignee or project
   `not started` readiness gate to roadmap-audit claims; roadmap
   ownership and project status may represent parent coordination rather
-  than task readiness. If an active non-stale claim belongs to another
-  agent, do not mutate the roadmap; report the claim and continue to A2
-  or stop according to the normal ready-to-start rules.
-- If the roadmap is unclaimed, stale, or held by the same agent, post
-  and verify a normal `claimed-by` comment for the roadmap issue using a
+  than task readiness. If an active non-stale claim uses any
+  `{claim-id}` other than one already known and verified by this current
+  session, do not mutate the roadmap; report the claim and continue to
+  A2 or stop according to the normal ready-to-start rules. A matching
+  agent ID alone is not ownership proof.
+- If the roadmap is unclaimed or stale, post and verify a normal
+  `claimed-by` comment for the roadmap issue using a
   `roadmap-audit/<number>-<slug>` branch field. This is a logical
   coordination name, not a work branch, and it does not require creating
   a branch or worktree unless the audit also needs git changes.
+- If the active roadmap claim already uses this current session's
+  verified `{claim-id}`, continue with that same claim and do not post a
+  new claim.
 - Re-validate that roadmap claim before every roadmap comment, follow-up
   issue creation, body edit, label change, or close action.
 - If the roadmap remains open and no PR branch will continue from the
