@@ -64,7 +64,8 @@ Before an agent can run the loop end to end, it needs access to `git`,
 an authenticated `gh` CLI or equivalent GitHub MCP integration, `jq`,
 Node.js/npm with `npx`, and a REST client such as `curl` for reliable
 operational marker posting. See the workflow docs for the detailed
-command contract.
+command contract. Review [Permissions and threat model](docs/permissions.md)
+before granting credentials to unattended or merge-capable agents.
 
 ## What IDD Automates
 
@@ -152,6 +153,8 @@ approval.
   cross-agent routing.
 - [Positioning](docs/positioning.md) — competitive landscape and why
   IDD is different.
+- [Permissions and threat model](docs/permissions.md) — access profiles,
+  forbidden credentials, and safe operating guidance.
 - [Issue authoring contract](docs/issue-authoring-skill.md) — optional
   pre-execution issue drafting model.
 - [Comment minimization](docs/idd-comment-minimization.md) —

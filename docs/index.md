@@ -14,6 +14,7 @@ also serve as the source for a future GitHub Pages site.
 | ------------------------- | ------------------------------------------ | --------------------------------------------------------------- |
 | Run the IDD loop          | [IDD workflow guide](idd-workflow.md)      | Maps agent entry points, phase files, and Copilot advisory use. |
 | Import IDD into a repo    | [Template onboarding][template-onboarding] | Explains the portable template copy and placeholder flow.       |
+| Grant agent credentials   | [Permissions](permissions.md)              | Defines access profiles, forbidden scopes, and threat controls. |
 | Understand the value prop | [Positioning](positioning.md)              | Summarizes where idd-skill fits among adjacent tools.           |
 | Plan future publication   | [Pages strategy](pages-strategy.md)        | Records the low-cost path toward GitHub Pages.                  |
 
@@ -26,6 +27,9 @@ also serve as the source for a future GitHub Pages site.
   repository.
 - [IDD workflow guide](idd-workflow.md) explains where each supported
   agent starts and which phase file to read next.
+- [Permissions and threat model](permissions.md) describes the minimum
+  GitHub access profiles, forbidden credentials, and operating controls
+  for unattended or merge-capable agents.
 
 ### Workflow Internals
 

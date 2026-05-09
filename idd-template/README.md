@@ -9,7 +9,9 @@ multi-agent GitHub automation.
 2. Fill in the placeholders listed in `ONBOARDING.md`.
 3. Update the agent entry files (`CLAUDE.md`, `copilot-instructions.md`,
    etc.) as described in `ONBOARDING.md`.
-4. Optional: install the issue-authoring companion skill if the project
+4. Review `docs/permissions.md` before granting credentials to
+   unattended or merge-capable agents.
+5. Optional: install the issue-authoring companion skill if the project
    wants pre-execution issue drafting.
 
 ## Quick start (AI agent)
@@ -75,6 +77,7 @@ docs/
   idd-workflow.md                    ← cross-agent entry point and file map
   idd-helper-scripts.md              ← optional helper-script evaluation and policy
   idd-comment-minimization.md        ← post-merge comment cleanup policy and experiment
+  permissions.md                     ← permission profiles and threat model
 ONBOARDING.md                        ← AI agent import guide (start here)
 README.md                            ← this file
 
