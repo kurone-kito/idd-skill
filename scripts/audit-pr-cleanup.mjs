@@ -3,15 +3,22 @@
 import { execFileSync } from "node:child_process";
 
 const ISO8601_UTC_WITH_OPTIONAL_FRACTION = String.raw`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z`;
+const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)`;
 
 const OPERATIONAL_MARKERS = [
   {
     label: "<!-- review-watermark:",
-    pattern: /^<!--\s*review-watermark:\s+\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+\S+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    pattern: new RegExp(
+      `^<!--\\s*review-watermark:\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\d+\\s+\\S+\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+      "i",
+    ),
   },
   {
     label: "<!-- review-baseline:",
-    pattern: /^<!--\s*review-baseline:\s+\S+\s+\S+\s+\S+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    pattern: new RegExp(
+      `^<!--\\s*review-baseline:\\s+\\S+\\s+\\S+\\s+\\S+\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+      "i",
+    ),
   },
   {
     label: "advisory-wait:",
@@ -915,7 +922,8 @@ function readActiveClaim(owner, repo, issueNumber) {
 function parseClaim(body, createdAt) {
   const match = body.trimEnd().match(
     new RegExp(
-      `^<!--\\s*claimed-by:\\s+(\\S+)\\s+(\\S+)\\s+supersedes:\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s+branch:\\s+([^\\s>]+)\\s*-->$`,
+      `^<!--\\s*claimed-by:\\s+(\\S+)\\s+(\\S+)\\s+supersedes:\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s+branch:\\s+([^\\s>]+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+      "i",
     ),
   );
   if (!match || !isValidIsoTimestamp(match[4])) {
@@ -933,7 +941,8 @@ function parseClaim(body, createdAt) {
 function parseRelease(body) {
   const match = body.trimEnd().match(
     new RegExp(
-      `^<!--\\s*unclaimed-by:\\s+(\\S+)\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s*-->$`,
+      `^<!--\\s*unclaimed-by:\\s+(\\S+)\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+      "i",
     ),
   );
   if (!match || !isValidIsoTimestamp(match[3])) {

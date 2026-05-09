@@ -88,10 +88,13 @@ Generate a fresh `{claim-id}`. Determine `{prior-claim-id}`:
 - **Migration from a legacy claim** → `none`
 - **Fresh claim** or claim after a released / unclaimed state → `none`
 
-Post the claim comment to the issue:
+Post the claim comment to the issue. Keep the HTML token at the start
+of the body, followed by the visible note:
 
-```html
+```markdown
 <!-- claimed-by: {agent-id} {claim-id} supersedes: {prior-claim-id|none} {ISO8601-timestamp} branch: {branch-name} -->
+
+_{agent-id}: issue claim — IDD automation marker. Do not edit._
 ```
 
 ## Claim verification
