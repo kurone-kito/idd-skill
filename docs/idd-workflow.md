@@ -123,16 +123,17 @@ reviewer because that is part of this repository's current PR policy.
 
 ## Optional helper scripts
 
-The current workflow does not require helper scripts. Shell / `gh` /
-`jq` snippets in `.github/instructions/*.instructions.md` remain the
-canonical portable path for adopters.
+The current workflow does not require helper scripts for pre-merge
+gates. Shell / `gh` / `jq` snippets in
+`.github/instructions/*.instructions.md` remain the canonical portable
+path for adopters.
 
 See [IDD helper script evaluation](idd-helper-scripts.md) for the
-current inventory of high-friction query patterns, the reason helper
-scripts are not adopted yet, and the criteria for reconsidering optional
-read-only helpers later.
+current inventory of high-friction query patterns, the narrow
+post-merge cleanup helper that is adopted in this source repository, and
+the criteria for reconsidering additional optional helpers later.
 
 See [IDD comment minimization](idd-comment-minimization.md) for the
-post-merge cleanup rule, GraphQL command shape, and merged-PR experiment
-for hiding completed feedback and stale operational markers without
-deleting the audit trail.
+post-merge cleanup helper, GraphQL fallback command shape, and merged-PR
+experiment for hiding completed feedback and stale operational markers
+without deleting the audit trail.
