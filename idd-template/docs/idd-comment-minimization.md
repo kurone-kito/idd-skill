@@ -114,7 +114,7 @@ node scripts/audit-pr-cleanup.mjs --pr <pr-number> --dry-run --format table
 
 The helper defaults to JSON output for stable machine inspection; use
 `--format table` for a compact terminal view. Before applying
-minimization, the dry-run report must show candidate or skipped rows
+minimization, the dry-run report must show candidate and skipped rows
 with at least these fields:
 
 | Field               | Purpose                                                            |
@@ -123,9 +123,13 @@ with at least these fields:
 | `url`               | Direct audit link                                                  |
 | `type`              | `IssueComment`, `PullRequestReview`, or `PullRequestReviewComment` |
 | `classifier`        | `RESOLVED` or `OUTDATED`                                           |
-| `viewerCanMinimize` | Must be `true`                                                     |
-| `isMinimized`       | Must be `false`                                                    |
+| `viewerCanMinimize` | Capability state used for candidate / skip decisions               |
+| `isMinimized`       | Current minimization state used for candidate / skip decisions     |
 | `reason`            | Why the candidate is safe                                          |
+
+Candidate rows must have `viewerCanMinimize=true` and
+`isMinimized=false`. Skipped rows may report the opposite states and
+must include the skip reason.
 
 The helper also reports skipped cleanup-shaped nodes with reasons such
 as already minimized, no minimization permission, unresolved associated

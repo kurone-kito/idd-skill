@@ -230,6 +230,7 @@ function subjectFromNode(node, type, classifier) {
     url: node.url,
     type,
     classifier,
+    viewerCanMinimize: Boolean(node.viewerCanMinimize),
     isMinimized: Boolean(node.isMinimized),
     minimizedReason: node.minimizedReason || null,
   };
@@ -416,7 +417,7 @@ function minimizeComment(subjectId, classifier) {
 
 function assertActiveClaim(owner, repo, issueNumber, agentId, claimId) {
   const active = readActiveClaim(owner, repo, issueNumber);
-  if (!active || active.agentId !== agentId || active.claimId !== claimId) {
+  if (!active || active.claimId !== claimId || (agentId && active.agentId !== agentId)) {
     const activeLabel = active ? `${active.agentId} ${active.claimId}` : "none";
     fail(`claim check failed for #${issueNumber}: active claim is ${activeLabel}`);
   }
@@ -565,6 +566,7 @@ function printRows(label, rows) {
       "subjectId",
       "type",
       "classifier",
+      "viewerCanMinimize",
       "isMinimized",
       "minimizedReason",
       "reason",
@@ -577,6 +579,7 @@ function printRows(label, rows) {
         row.subjectId,
         row.type,
         row.classifier,
+        row.viewerCanMinimize,
         row.isMinimized,
         row.minimizedReason ?? "",
         row.error ?? row.skipReason ?? row.reason ?? "",
@@ -588,7 +591,6 @@ function printRows(label, rows) {
 
 function parseArgs(argv) {
   const parsed = {
-    agentId: "codex-cli",
     format: "json",
   };
 
@@ -653,7 +655,7 @@ Options:
   --apply                           minimize safe candidates
   --claim-issue <number>            issue whose active claim protects apply mode
   --claim-id <id>                   active claim id required for apply mode
-  --agent-id <id>                   claim agent id (default: codex-cli)
+  --agent-id <id>                   optionally require this claim agent id
   --skip-claim-check                explicit maintainer override for apply mode
   --repo <owner/name>               repository override
   --format <json|table>             output format (default: json)
