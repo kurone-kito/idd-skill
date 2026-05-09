@@ -77,7 +77,15 @@ if (args.apply) {
   report.mode = "apply";
   for (const candidate of report.candidates) {
     if (!args.skipClaimCheck) {
-      assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId);
+      try {
+        assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId);
+      } catch (error) {
+        report.failed.push({
+          ...candidate,
+          error: error.message,
+        });
+        break;
+      }
     }
     try {
       const minimized = minimizeComment(candidate.subjectId, candidate.classifier);
@@ -203,6 +211,20 @@ function evaluateReviewParent(review, pr, threadIndex, report) {
     return;
   }
 
+  if (associated.incomplete) {
+    addSkipped(
+      report,
+      {
+        ...subject,
+        associatedThreads: associated.total,
+        unresolvedThreads: associated.unresolved,
+        missingDispositionThreads: associated.missingDisposition,
+      },
+      "associated review threads have truncated comment data",
+    );
+    return;
+  }
+
   if (associated.unresolved > 0) {
     addSkipped(
       report,
@@ -293,6 +315,7 @@ function indexThreadsByReview(threads) {
         total: 0,
         unresolved: 0,
         missingDisposition: 0,
+        incomplete: false,
         threadIds: [],
       };
       current.total += 1;
@@ -301,6 +324,9 @@ function indexThreadsByReview(threads) {
       }
       if (!hasDisposition(thread)) {
         current.missingDisposition += 1;
+      }
+      if (thread.comments?.pageInfo?.hasNextPage) {
+        current.incomplete = true;
       }
       current.threadIds.push(thread.id);
       index.set(reviewId, current);
@@ -395,6 +421,7 @@ function fetchReviewThreads(owner, repo, number) {
             id
             isResolved
             comments(first:100){
+              pageInfo{hasNextPage}
               nodes{
                 id
                 url
@@ -451,7 +478,7 @@ function assertActiveClaim(owner, repo, issueNumber, agentId, claimId) {
   const active = readActiveClaim(owner, repo, issueNumber);
   if (!active || active.claimId !== claimId || (agentId && active.agentId !== agentId)) {
     const activeLabel = active ? `${active.agentId} ${active.claimId}` : "none";
-    fail(`claim check failed for #${issueNumber}: active claim is ${activeLabel}`);
+    throw new Error(`claim check failed for #${issueNumber}: active claim is ${activeLabel}`);
   }
 }
 
