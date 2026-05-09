@@ -475,7 +475,7 @@ After completing the steps above, confirm each item:
 - [ ] Every `idd-*.instructions.md` file listed in the generated core
       file list is present in `.github/instructions/`.
 - [ ] `docs/idd-workflow.md`, `docs/idd-review-policy-profiles.md`,
-      `docs/idd-helper-scripts.md`, and
+      `docs/idd-helper-scripts.md`,
       `docs/idd-comment-minimization.md`, and `docs/permissions.md` are
       present.
 - [ ] The operator's selected PR review policy profile is recorded, and
