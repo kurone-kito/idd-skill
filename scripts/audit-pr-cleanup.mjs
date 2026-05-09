@@ -2,6 +2,8 @@
 
 import { execFileSync } from "node:child_process";
 
+const ISO8601_UTC_WITH_OPTIONAL_FRACTION = String.raw`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z`;
+
 const OPERATIONAL_MARKERS = [
   {
     label: "<!-- review-watermark:",
@@ -13,11 +15,15 @@ const OPERATIONAL_MARKERS = [
   },
   {
     label: "advisory-wait:",
-    pattern: /^advisory-wait:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*$/,
+    pattern: new RegExp(
+      `^advisory-wait:\\s+\\S+\\s+[0-9a-f]{40}\\s+${ISO8601_UTC_WITH_OPTIONAL_FRACTION}\\s*$`,
+    ),
   },
   {
     label: "advisory-wait-recovery:",
-    pattern: /^advisory-wait-recovery:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*$/,
+    pattern: new RegExp(
+      `^advisory-wait-recovery:\\s+\\S+\\s+[0-9a-f]{40}\\s+${ISO8601_UTC_WITH_OPTIONAL_FRACTION}\\s*$`,
+    ),
   },
   {
     label: "<!-- advisory-wait:",
@@ -160,7 +166,10 @@ async function buildReport(owner, repo, prNumber, options = {}) {
   };
 
   for (const comment of comments) {
-    evaluateOperationalComment(comment, pr, report);
+    if (evaluateOperationalComment(comment, pr, report)) {
+      continue;
+    }
+    evaluateRegularBotComment(comment, comments, threads, pr, report);
   }
 
   for (const thread of threads) {
@@ -177,17 +186,55 @@ async function buildReport(owner, repo, prNumber, options = {}) {
 function evaluateOperationalComment(comment, pr, report) {
   const prefix = operationalMarkerPrefix(comment.body);
   if (!prefix) {
-    return;
+    return false;
   }
 
   const subject = subjectFromNode(comment, "IssueComment", "OUTDATED");
 
   if (!pr.merged) {
     addSkipped(report, subject, "PR is not merged");
-    return;
+    return true;
   }
 
   const unsafeReason = unsafeTextReason(comment.body);
+  if (unsafeReason) {
+    addSkipped(report, subject, unsafeReason);
+    return true;
+  }
+
+  if (comment.isMinimized) {
+    addSkipped(report, subject, "already minimized");
+    return true;
+  }
+
+  if (!comment.viewerCanMinimize) {
+    addSkipped(report, subject, "viewer cannot minimize this comment");
+    return true;
+  }
+
+  report.candidates.push({
+    ...subject,
+    markerPrefix: prefix,
+    reason: "stale IDD operational marker on a merged PR",
+  });
+  return true;
+}
+
+function evaluateRegularBotComment(comment, comments, threads, pr, report) {
+  const author = comment.author?.login ?? "";
+  if (!isKnownReviewBot(author)) {
+    return;
+  }
+
+  const classification = classifyRegularBotComment(comment, comments, threads);
+  const subject = subjectFromNode(comment, "IssueComment", classification?.classifier ?? "RESOLVED");
+
+  if (!pr.merged) {
+    addSkipped(report, subject, "PR is not merged");
+    return;
+  }
+
+  const unsafeReason = unsafeTextReason(comment.body ?? "");
   if (unsafeReason) {
     addSkipped(report, subject, unsafeReason);
     return;
@@ -203,10 +250,15 @@ function evaluateOperationalComment(comment, pr, report) {
     return;
   }
 
+  if (!classification) {
+    addSkipped(report, subject, "known review-bot regular comment lacks a completed-review signal");
+    return;
+  }
+
   report.candidates.push({
     ...subject,
-    markerPrefix: prefix,
-    reason: "stale IDD operational marker on a merged PR",
+    author,
+    reason: classification.reason,
   });
 }
 
@@ -409,6 +461,77 @@ function isKnownReviewBot(login) {
   return REVIEW_BOT_LOGINS.has(normalized) || normalized.startsWith("copilot-pull-request-reviewer");
 }
 
+function classifyRegularBotComment(comment, comments, threads) {
+  const author = comment.author?.login ?? "";
+  if (!isCodeRabbitLogin(author)) {
+    return null;
+  }
+
+  if (hasUnresolvedKnownBotThreads(threads)) {
+    return null;
+  }
+
+  const body = (comment.body ?? "").trimStart();
+
+  if (body.startsWith("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->")) {
+    if (/No actionable comments were generated/i.test(body)) {
+      return {
+        classifier: "RESOLVED",
+        reason: "CodeRabbit completed summary reported no actionable comments",
+      };
+    }
+    if (hasExplicitDispositionAfter(comment, comments)) {
+      return {
+        classifier: "RESOLVED",
+        reason: "CodeRabbit completed summary has a later IDD disposition and no unresolved bot threads",
+      };
+    }
+    return null;
+  }
+
+  if (body.startsWith("<!-- This is an auto-generated reply by CodeRabbit -->")) {
+    if (/\b(Review triggered|Sure! I'll review|I'll review)\b/i.test(body)
+      && hasExplicitDispositionAfter(comment, comments)) {
+      return {
+        classifier: "OUTDATED",
+        reason: "stale CodeRabbit review-trigger acknowledgement after completed review",
+      };
+    }
+  }
+
+  return null;
+}
+
+function isCodeRabbitLogin(login) {
+  const normalized = login.toLowerCase();
+  return normalized === "coderabbitai" || normalized === "coderabbitai[bot]";
+}
+
+function hasExplicitDispositionAfter(targetComment, comments) {
+  const targetTime = targetComment.updatedAt ?? targetComment.createdAt ?? "";
+  return comments.some((comment) => {
+    const author = comment.author?.login ?? "";
+    if (isKnownReviewBot(author) || !isDispositionComment(comment)) {
+      return false;
+    }
+    return (comment.createdAt ?? "") > targetTime;
+  });
+}
+
+function hasUnresolvedKnownBotThreads(threads) {
+  return threads.some((thread) => {
+    if (thread.isResolved) {
+      return false;
+    }
+    if (thread.comments?.pageInfo?.hasNextPage) {
+      return true;
+    }
+    return (thread.comments?.nodes ?? []).some((comment) => {
+      return isKnownReviewBot(comment.author?.login ?? "");
+    });
+  });
+}
+
 function indexLatestGatingReviewsByAuthor(reviews) {
   const index = new Map();
   for (const review of reviews) {
@@ -518,6 +641,7 @@ function fetchIssueComments(owner, repo, number, options = {}) {
             url
             body
             createdAt
+            updatedAt
             isMinimized
             minimizedReason
             viewerCanMinimize

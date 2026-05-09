@@ -26,6 +26,8 @@ The cleanup helper is intentionally narrower than E/F gate helpers:
   is requested
 - apply mode is explicit and can re-validate an active claim before
   every minimization mutation
+- known review-bot regular comments are considered only after merge and
+  only when they match a completed-review or stale-notification signal
 - cleanup remains best-effort and never becomes a merge gate
 - direct GraphQL fallback commands remain documented in
   `docs/idd-comment-minimization.md`
