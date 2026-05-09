@@ -65,6 +65,11 @@ field in an inheritable claim comment as defined in (c) above.
 
 ## Claim execution
 
+Skip this section if pre-check (b) classified the issue as already
+claimed by this current session. Keep the recorded `{claim-id}` and
+branch, then proceed directly to Claim verification without posting a new
+claim.
+
 Determine `{branch-name}`:
 
 - **Re-claim / takeover**: use the exact branch name from the
