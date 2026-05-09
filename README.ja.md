@@ -136,27 +136,24 @@ bundle にルーティングできます:
 [idd-template/ONBOARDING.md](idd-template/ONBOARDING.md) に従い、
 optional companion としてインストールしてください。
 
-## なぜ idd-skill？
+## idd-skill で得られること
 
-- **並列エージェント協調** — Issue ボディに埋め込まれた HTML コメントマーカーによる
-  クレーム/ハートビートプロトコルにより、複数の AI エージェントが同じ Issue を
-  同時に拾うことを防ぎ、中央オーケストレーターなしで安全な並列開発を実現します。
-- **エンドツーエンドのフェーズカバレッジ** — インストラクションセットが
-  Issue 発見からマージまでのすべてのステップをエンコードします。CI 待機ループ、
-  レビュートリアージ、レビュー修正サイクルを含みます。ほとんどのツールは「PR を開く」
-  で止まります。
-- **インフラ不要** — SaaS アカウント、GitHub Actions ランナー、サーバーは不要です。
-  `idd-template/` のドキュメントとインストラクションファイルを任意のリポジトリに
-  コピーするだけでワークフローが使えます。
-- **エージェント非依存** — コアフェーズは GitHub Copilot、Claude Code、
-  OpenAI Codex CLI、Gemini CLI でインストラクションを書き直すことなく動作します。
-  (デフォルトテンプレートには後半フェーズに Copilot アドバイザリーレビューステップが
-  含まれます。詳細は [docs/positioning.md](docs/positioning.md) を参照。)
-- **完全監査可能** — すべてのルールはプレーン Markdown です。読んで、フォークして、
-  適応させてください。ブラックボックスはありません。
+- **安全な並列エージェント作業** — claim と heartbeat の marker が issue の
+  所有者を可視化するため、複数の AI エージェントが同じタスクを拾う事故を避けながら、
+  中央オーケストレーターなしで並行作業できます。
+- **handoff の抜け漏れ削減** — workflow は issue discovery から merge までを扱い、
+  CI wait、review triage、review-fix cycle も含みます。PR を開いた後も、
+  エージェントが次に何をするかを見失いにくくなります。
+- **追加インフラなしで運用開始** — `idd-template/` の docs と instruction files を
+  リポジトリへコピーすれば使えます。SaaS アカウント、GitHub Actions runner、
+  server は不要です。
+- **使うエージェントを選べる自由** — core phases は plain Markdown で、GitHub
+  Copilot、Claude Code、OpenAI Codex CLI、Gemini CLI で動作します。default
+  template には後半フェーズに Copilot advisory review step が含まれます。
+- **自分たちで制御できる監査可能な自動化** — すべての rule が repo 内の Markdown
+  として残るため、team は black box に頼らずに読み、fork し、調整できます。
 
-詳細な競合状況と戦略的ポジショニング分析については
-[docs/positioning.md](docs/positioning.md) を参照してください。
+より詳しい比較は [docs/positioning.md](docs/positioning.md) を参照してください。
 
 ## IDD の手動インポート
 
