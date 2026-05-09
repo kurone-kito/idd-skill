@@ -15,19 +15,17 @@
 IDD は、AI エージェントが GitHub Issues によって駆動される繰り返しパイプラインを
 通じて作業するマルチエージェント GitHub 自動化ワークフローです。
 
-| 番号   | 名前            | 概要                                                              |
-| ------ | --------------- | ----------------------------------------------------------------- |
-| A0-A4  | Discover        | 設定されたスコープから ready な issue を探して選びます。          |
-| A5     | Claim           | 機械可読な claim marker で issue を予約します。                   |
-| B      | Work            | branch/worktree を作り、計画、実装、自己レビューします。          |
-| D1-D3  | PR Submit       | branch を push し、issue に対応する pull request を開きます。     |
-| D4     | CI Wait         | review snapshot 前に必要な validation 完了を待ちます。            |
-| E1-E3  | Review Snapshot | review activity を記録し、critique を実行して List A を作ります。 |
-| E4-E8  | Review Triage   | List A の項目を分類し、accept/reject の判断を記録します。         |
-| E9-E15 | Review Fix      | accepted feedback を反映し、必要に応じて再レビューを依頼します。  |
-| F1-F2  | Pre-Merge       | review、CI、comments、mergeability の鮮度を確認します。           |
-| F3-F4  | Merge           | 検証済み HEAD を merge し、merge 後の cleanup を行います。        |
-| F5     | Loop            | discovery に戻り、次の issue を選びます。                         |
+| 番号   | 名前               | 概要                                                              |
+| ------ | ------------------ | ----------------------------------------------------------------- |
+| A0-A4  | Discover           | 設定されたスコープから ready な issue を探して選びます。          |
+| A5     | Claim              | 機械可読な claim marker で issue を予約します。                   |
+| B-C    | Work & Self-Review | branch/worktree を作り、計画、実装、自己レビューします。          |
+| D1-D4  | PR Submit          | branch を push して PR を開き、E1 前に validation を待ちます。    |
+| E1-E3  | Review Snapshot    | review activity を記録し、critique を実行して List A を作ります。 |
+| E4-E8  | Review Triage      | List A の項目を分類し、accept/reject の判断を記録します。         |
+| E9-E15 | Review Fix         | accepted feedback を反映し、必要に応じて再レビューを依頼します。  |
+| F1-F2  | Pre-Merge          | review、CI、comments、mergeability の鮮度を確認します。           |
+| F3-F5  | Merge              | 検証済み HEAD を merge し、cleanup 後に discovery へ戻ります。    |
 
 各フェーズは `.github/instructions/` ファイルとしてエンコードされており、
 GitHub Copilot、Claude Code、Codex CLI、Gemini CLI などの互換 AI エージェントが
