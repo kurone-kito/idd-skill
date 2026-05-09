@@ -105,6 +105,16 @@ gate. The active claim must still use your current `{claim-id}`.
      only after every actionable child review comment/thread under that
      parent has been accepted or rejected, replied to as required, and
      resolved.
+   - Known review-bot regular PR comments may be minimized only after
+     the PR is merged and the comment has a clear completed-review or
+     stale-notification signal, such as a CodeRabbit no-action summary
+     or a CodeRabbit summary / review-trigger acknowledgement with a
+     matching later IDD disposition. CodeRabbit summaries may also be
+     minimized when all CodeRabbit review threads are resolved and have
+     fresh IDD dispositions.
+   - Bot review parent bodies without associated review threads are
+     skipped by default, including Copilot error review bodies, unless a
+     future policy explicitly narrows a safe cleanup class for them.
    - IDD operational marker comments may be minimized as `OUTDATED`
      only after the PR is merged and the marker is no longer needed for
      resume, advisory wait, or review-currency checks.

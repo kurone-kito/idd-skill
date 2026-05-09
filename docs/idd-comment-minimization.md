@@ -82,6 +82,25 @@ when all of these are true:
 - the reviewer has no active `CHANGES_REQUESTED` state that still gates
   the PR
 
+Known review-bot regular PR comments may be minimized after merge only
+when they have a clear completed-review or stale-notification signal.
+Current safe classes are:
+
+- CodeRabbit summary / walkthrough comments that explicitly report no
+  actionable comments
+- CodeRabbit summary / walkthrough comments that have no unresolved
+  known-bot review threads and either a later IDD disposition that names
+  CodeRabbit or resolved CodeRabbit review threads with fresh IDD
+  dispositions
+- CodeRabbit review-trigger acknowledgements after a later IDD
+  disposition that names CodeRabbit confirms the requested review
+  completed
+
+Bot review parent bodies with no associated review threads are skipped
+by design, including Copilot error review bodies. They remain visible
+until a narrower policy proves that hiding them cannot obscure advisory
+review state or maintainer-relevant context.
+
 IDD operational marker comments may be minimized as `OUTDATED` only when
 the PR is merged and the marker is no longer needed for resume, advisory
 wait, or review-currency checks. Candidate prefixes are:
@@ -134,7 +153,9 @@ must include the skip reason.
 The helper also reports skipped cleanup-shaped nodes with reasons such
 as already minimized, no minimization permission, unresolved associated
 review threads, missing accept/reject dispositions, unsafe hold or
-decision context, or a non-merged PR.
+decision context, no completed-review signal on a known-bot regular
+comment, no associated review threads on a bot review parent, or a
+non-merged PR.
 
 ## Apply Shape
 
