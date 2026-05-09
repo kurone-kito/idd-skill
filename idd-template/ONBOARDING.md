@@ -121,6 +121,8 @@ the files are copied in.
 
 ### File list
 
+<!-- audit:generated id=idd-template-core-files -->
+
 ```text
 .github/instructions/idd-overview.instructions.md
 .github/instructions/idd-discover.instructions.md
@@ -140,7 +142,11 @@ docs/idd-helper-scripts.md
 docs/idd-comment-minimization.md
 ```
 
+<!-- /audit:generated -->
+
 Optional companion files:
+
+<!-- audit:generated id=issue-authoring-companion-files -->
 
 ```text
 skills/issue-authoring/SKILL.md
@@ -149,6 +155,8 @@ skills/issue-authoring/references/contract.md
 skills/issue-authoring/references/draft-patterns.md
 skills/issue-authoring/references/workflow-boundary.md
 ```
+
+<!-- /audit:generated -->
 
 Create the target directories if they do not exist.
 
@@ -160,6 +168,8 @@ endpoint. Replace `{DEST}` with the root of the target repository.
 Base URL: `https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/`
 
 Fetch all files with `gh api` (recommended — handles auth automatically):
+
+<!-- audit:shell-list id=idd-template-core-gh-api-loop -->
 
 ```sh
 DEST="."  # root of the target repository
@@ -193,6 +203,8 @@ done
 If the operator opts into the issue-authoring companion, fetch it
 separately:
 
+<!-- audit:shell-list id=issue-authoring-companion-gh-api-loop -->
+
 ```sh
 DEST="."  # root of the target repository
 
@@ -214,6 +226,8 @@ done
 
 Alternatively, use `curl` (no authentication required — idd-skill is a public
 repository):
+
+<!-- audit:shell-list id=idd-template-core-curl-loop -->
 
 ```sh
 BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template"
@@ -245,6 +259,8 @@ done
 
 If the operator opts into the issue-authoring companion with `curl`,
 fetch it separately:
+
+<!-- audit:shell-list id=issue-authoring-companion-curl-loop -->
 
 ```sh
 BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/skills/issue-authoring"
@@ -440,8 +456,8 @@ phase file manually when the current step changes.
 
 After completing the steps above, confirm each item:
 
-- [ ] All thirteen `idd-*.instructions.md` files are present in
-      `.github/instructions/`.
+- [ ] Every `idd-*.instructions.md` file listed in the generated core
+      file list is present in `.github/instructions/`.
 - [ ] `docs/idd-workflow.md`, `docs/idd-helper-scripts.md`, and
       `docs/idd-comment-minimization.md` are present.
 - [ ] If the operator opted into issue authoring,

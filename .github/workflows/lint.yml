@@ -15,6 +15,12 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Run documentation audit
+        env:
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+        run: node scripts/audit-docs.mjs --check
       - name: Run cspell
         uses: streetsidesoftware/cspell-action@v8
       - name: Run markdownlint
