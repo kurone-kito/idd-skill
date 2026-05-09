@@ -5,11 +5,11 @@ import { execFileSync } from "node:child_process";
 const OPERATIONAL_MARKERS = [
   {
     label: "<!-- review-watermark:",
-    pattern: /^<!--\s*review-watermark:\s+\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+\S+\s*-->/,
+    pattern: /^<!--\s*review-watermark:\s+\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+\S+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
   },
   {
     label: "<!-- review-baseline:",
-    pattern: /^<!--\s*review-baseline:\s+\S+\s+\S+\s+\S+\s*-->/,
+    pattern: /^<!--\s*review-baseline:\s+\S+\s+\S+\s+\S+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
   },
   {
     label: "advisory-wait:",
@@ -139,11 +139,11 @@ if (args.apply) {
 
 writeReport(report, args.format);
 
-async function buildReport(owner, repo, prNumber) {
-  const pr = fetchPullRequest(owner, repo, prNumber);
-  const comments = fetchIssueComments(owner, repo, prNumber);
-  const reviews = fetchReviews(owner, repo, prNumber);
-  const threads = fetchReviewThreads(owner, repo, prNumber);
+async function buildReport(owner, repo, prNumber, options = {}) {
+  const pr = fetchPullRequest(owner, repo, prNumber, options);
+  const comments = fetchIssueComments(owner, repo, prNumber, options);
+  const reviews = fetchReviews(owner, repo, prNumber, options);
+  const threads = fetchReviewThreads(owner, repo, prNumber, options);
   const threadIndex = indexThreadsByReview(threads);
   const latestGatingReviews = indexLatestGatingReviewsByAuthor(reviews);
 
@@ -164,7 +164,7 @@ async function buildReport(owner, repo, prNumber) {
   }
 
   for (const thread of threads) {
-    evaluateReviewComments(thread, pr, report);
+    evaluateReviewComments(thread, pr, latestGatingReviews, report);
   }
 
   for (const review of reviews) {
@@ -303,19 +303,20 @@ function evaluateReviewParent(review, pr, threadIndex, latestGatingReviews, repo
   });
 }
 
-function evaluateReviewComments(thread, pr, report) {
+function evaluateReviewComments(thread, pr, latestGatingReviews, report) {
   for (const comment of thread.comments?.nodes ?? []) {
-    evaluateReviewComment(comment, thread, pr, report);
+    evaluateReviewComment(comment, thread, pr, latestGatingReviews, report);
   }
 }
 
-function evaluateReviewComment(comment, thread, pr, report) {
+function evaluateReviewComment(comment, thread, pr, latestGatingReviews, report) {
   const author = comment.author?.login ?? "";
   if (!isKnownReviewBot(author) || isDispositionComment(comment)) {
     return;
   }
 
   const subject = subjectFromNode(comment, "PullRequestReviewComment", "RESOLVED");
+  const latestGatingReview = latestGatingReviews.get(author.toLowerCase());
 
   if (!pr.merged) {
     addSkipped(report, subject, "PR is not merged");
@@ -335,6 +336,11 @@ function evaluateReviewComment(comment, thread, pr, report) {
 
   if (!comment.viewerCanMinimize) {
     addSkipped(report, subject, "viewer cannot minimize this review comment");
+    return;
+  }
+
+  if (latestGatingReview?.state === "CHANGES_REQUESTED") {
+    addSkipped(report, subject, "review author still has an active changes-requested state");
     return;
   }
 
@@ -484,7 +490,7 @@ function isDispositionComment(comment) {
   return body.startsWith("**Accepted**") || body.startsWith("**Rejected**");
 }
 
-function fetchPullRequest(owner, repo, number) {
+function fetchPullRequest(owner, repo, number, options = {}) {
   const query = `query($owner:String!,$repo:String!,$number:Int!){
     repository(owner:$owner,name:$repo){
       pullRequest(number:$number){
@@ -494,15 +500,15 @@ function fetchPullRequest(owner, repo, number) {
       }
     }
   }`;
-  const result = ghGraphql(query, { owner, repo, number });
+  const result = ghGraphql(query, { owner, repo, number }, options);
   const pr = result.data?.repository?.pullRequest;
   if (!pr) {
-    fail(`PR #${number} was not found`);
+    handleGraphqlFailure(`PR #${number} was not found`, options);
   }
   return pr;
 }
 
-function fetchIssueComments(owner, repo, number) {
+function fetchIssueComments(owner, repo, number, options = {}) {
   const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
     repository(owner:$owner,name:$repo){
       pullRequest(number:$number){
@@ -524,10 +530,10 @@ function fetchIssueComments(owner, repo, number) {
   }`;
   return fetchConnection(query, { owner, repo, number }, (data) => {
     return data.repository.pullRequest.comments;
-  });
+  }, options);
 }
 
-function fetchReviews(owner, repo, number) {
+function fetchReviews(owner, repo, number, options = {}) {
   const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
     repository(owner:$owner,name:$repo){
       pullRequest(number:$number){
@@ -550,10 +556,10 @@ function fetchReviews(owner, repo, number) {
   }`;
   return fetchConnection(query, { owner, repo, number }, (data) => {
     return data.repository.pullRequest.reviews;
-  });
+  }, options);
 }
 
-function fetchReviewThreads(owner, repo, number) {
+function fetchReviewThreads(owner, repo, number, options = {}) {
   const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
     repository(owner:$owner,name:$repo){
       pullRequest(number:$number){
@@ -583,10 +589,10 @@ function fetchReviewThreads(owner, repo, number) {
   }`;
   return fetchConnection(query, { owner, repo, number }, (data) => {
     return data.repository.pullRequest.reviewThreads;
-  });
+  }, options);
 }
 
-function fetchConnection(query, baseVariables, pickConnection) {
+function fetchConnection(query, baseVariables, pickConnection, options = {}) {
   const nodes = [];
   let after = null;
 
@@ -595,21 +601,24 @@ function fetchConnection(query, baseVariables, pickConnection) {
     if (after) {
       variables.after = after;
     }
-    const result = ghGraphql(query, variables);
+    const result = ghGraphql(query, variables, options);
     if (result.errors?.length) {
-      fail(
+      handleGraphqlFailure(
         `GraphQL connection query failed: ${formatGraphqlErrors(result.errors)}; ${formatGraphqlContext(query, variables)}`,
+        options,
       );
     }
     if (!result.data) {
-      fail(
+      handleGraphqlFailure(
         `GraphQL connection query returned no data; ${formatGraphqlContext(query, variables)}`,
+        options,
       );
     }
     const connection = pickConnection(result.data);
     if (!connection) {
-      fail(
+      handleGraphqlFailure(
         `GraphQL connection query returned no connection; ${formatGraphqlContext(query, variables)}`,
+        options,
       );
     }
     nodes.push(...(connection.nodes ?? []));
@@ -658,7 +667,7 @@ function minimizeComment(subjectId, classifier) {
 }
 
 async function revalidateCandidate(owner, repo, prNumber, candidate, report) {
-  const freshReport = await buildReport(owner, repo, prNumber);
+  const freshReport = await buildReport(owner, repo, prNumber, { throwOnError: true });
   const freshCandidate = freshReport.candidates.find((current) => {
     return current.subjectId === candidate.subjectId && current.classifier === candidate.classifier;
   });
