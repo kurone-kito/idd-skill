@@ -51,6 +51,28 @@ default. If adopters do not want that PR policy, they can customize
 `.github/instructions/idd-review-fix.instructions.md` and
 `.github/instructions/idd-merge.instructions.md` after onboarding.
 
+## Runtime prerequisites
+
+The IDD loop needs a few local tools and a GitHub access backend before
+an agent can run it end to end:
+
+- `git` for branch, worktree, fetch, rebase, merge, status, and commit
+  operations.
+- GitHub issue, pull request, review, checks, comments, branch
+  protection/ruleset, and merge access through authenticated `gh` CLI or
+  an equivalent GH MCP integration. The documented shell snippets use
+  `gh`.
+- `jq` for the documented shell snippets that parse paginated GitHub
+  API responses.
+- Node.js/npm with `npx` for the validation commands currently used by
+  this repository: `dprint`, `markdownlint-cli2`, and `cspell`.
+- `curl` or an equivalent REST client when posting HTML-comment
+  operational markers needs a path more reliable than `gh issue
+  comment` for comment bodies that start with HTML comments.
+
+Optional helpers such as WorkTrunk, `git-wt`, and commit-signing aliases
+can make the loop smoother, but they are not baseline requirements.
+
 ## Using IDD
 
 After onboarding, open a session in your target repository and tell your
