@@ -68,15 +68,20 @@ ownership boundaries explicit:
   and usage. They should avoid duplicating long operational rules that
   belong in `.github/instructions/`.
 - **Native skill bundles**: `SKILL.md` bundles, when present, are
-  separate agent-native helpers such as `skills/issue-authoring/`. They
-  may reference the workflow docs and schemas, but they should not
-  duplicate or replace the exported IDD instruction template.
+  separate agent-native helpers such as `skills/issue-authoring/`. The
+  canonical source bundle in this repository stays under that path; when
+  adopters install it elsewhere, they should place the bundle in the
+  agent-specific skill directory their runtime reads. They may reference
+  the workflow docs and schemas, but they should not duplicate or
+  replace the exported IDD instruction template.
 
-Use `skills/issue-authoring/` when you need pre-IDD issue drafting or
-decomposition. Use `.github/instructions/*.instructions.md` after the
-issue set is approved and the normal Discover -> Claim -> Work loop
-should start. The canonical contract and schema for the native bundle
-live in `docs/issue-authoring-skill.md`.
+Use `skills/issue-authoring/` as the canonical source bundle when you
+need pre-IDD issue drafting or decomposition. Install copies of that
+bundle into the agent-specific skill directory your runtime reads, then
+use `.github/instructions/*.instructions.md` after the issue set is
+approved and the normal Discover -> Claim -> Work loop should start. The
+canonical contract and schema for the native bundle live in
+`docs/issue-authoring-skill.md`.
 
 The IDD workflow distributed from this repository is therefore an
 instruction template first. Native skills can sit beside it as helpers,

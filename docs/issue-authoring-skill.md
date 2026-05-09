@@ -9,6 +9,12 @@ behave. The schema explains what a ready orphan issue, roadmap issue,
 or sub-issue must contain so the later IDD discover phase can consume
 the result safely.
 
+The canonical bundle in this repository lives at
+`skills/issue-authoring/`. When adopters install it in another
+repository, they should copy it into the agent-specific skill directory
+their runtime reads, such as `.github/skills/`, `.claude/skills/`, or
+`.agents/skills/`.
+
 ## Purpose
 
 Use the issue authoring skill to turn a user request into a safe,
@@ -17,6 +23,10 @@ issue hygiene that IDD depends on.
 
 The skill exists to improve issue quality before execution, especially
 when work will span multiple tasks, dependencies, or agent sessions.
+
+It is a source bundle, not the execution loop itself: the bundle lives
+in `skills/issue-authoring/` here, while installed copies belong in the
+skill directory for the runtime that will load them.
 
 ## Trigger policy
 

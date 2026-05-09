@@ -115,9 +115,12 @@ You need the following core execution files in the target repository.
 Use whichever method applies to your situation.
 
 The issue-authoring skill is available as an optional companion artifact
-from `skills/issue-authoring/` in the source repository. Install it only
-when the operator explicitly wants pre-execution issue drafting or
-roadmap decomposition support.
+from `skills/issue-authoring/` in the source repository. That path is
+the canonical source bundle; when you install it in a target repository,
+place the copied bundle in the agent-specific skill directory your
+runtime reads, such as `.github/skills/`, `.claude/skills/`, or
+`.agents/skills/`. Install it only when the operator explicitly wants
+pre-execution issue drafting or roadmap decomposition support.
 
 Before importing, confirm whether the operator wants to keep the default
 Copilot advisory review policy described above. If not, note that they
@@ -209,7 +212,8 @@ done
 ```
 
 If the operator opts into the issue-authoring companion, fetch it
-separately:
+separately and then move or copy it into the runtime-specific skill
+directory the target agent expects:
 
 <!-- audit:shell-list id=issue-authoring-companion-gh-api-loop -->
 

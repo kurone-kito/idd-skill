@@ -8,6 +8,8 @@ description: Draft or refine IDD-ready GitHub issues, roadmap issues, and sub-is
 Use this skill to prepare issue-ready work before execution starts.
 Keep the skill concise and treat the repository docs as the canonical
 source for the full contract and schema.
+The canonical source bundle lives in this repository; install copies in
+the agent-specific skill directory your runtime reads.
 
 ## Stable Phases
 

@@ -12,7 +12,9 @@ multi-agent GitHub automation.
 4. Review `docs/permissions.md` before granting credentials to
    unattended or merge-capable agents.
 5. Optional: install the issue-authoring companion skill if the project
-   wants pre-execution issue drafting.
+   wants pre-execution issue drafting. The canonical source bundle in
+   this repository lives at `skills/issue-authoring/`; install copies
+   into the agent-specific skill directory your runtime reads.
 
 ## Quick start (AI agent)
 
@@ -26,11 +28,12 @@ This template exports the portable IDD instruction files, onboarding
 docs, and workflow docs that adopters copy into another repository for
 the execution loop.
 
-The issue-authoring skill is a public optional companion artifact at
-`skills/issue-authoring/` in the source repository. It is not required
-to run the IDD execution loop. Install it intentionally when a project
-wants an agent to draft or decompose IDD-ready issues before execution
-starts.
+The issue-authoring skill is a public optional companion artifact whose
+canonical source bundle lives at `skills/issue-authoring/` in the source
+repository. It is not required to run the IDD execution loop. Install
+it intentionally in the agent-specific skill directory your runtime
+reads when a project wants an agent to draft or decompose IDD-ready
+issues before execution starts.
 
 Keep the boundary clear: issue authoring prepares draft issues and
 roadmaps; `.github/instructions/*.instructions.md` execute approved

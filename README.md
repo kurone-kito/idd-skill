@@ -114,9 +114,13 @@ This repository also includes compatibility entry files such as
 `.github/copilot-instructions.md` so different agents know where to
 start here.
 
-Native `SKILL.md` bundles are optional companions. They can help with
-pre-execution tasks such as issue drafting, but they do not replace the
-portable instruction template.
+Native `SKILL.md` bundles are optional companions. The canonical source
+bundle in this repository lives at `skills/issue-authoring/`; when you
+install it in a target repository, place it in the agent-specific skill
+directory your runtime reads, such as `.github/skills/`,
+`.claude/skills/`, or `.agents/skills/`. They can help with pre-execution
+tasks such as issue drafting, but they do not replace the portable
+instruction template.
 
 ## For AI Agents
 

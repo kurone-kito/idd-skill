@@ -44,7 +44,9 @@ also serve as the source for a future GitHub Pages site.
 
 - [Issue authoring skill contract](issue-authoring-skill.md) describes
   the optional pre-execution helper for drafting IDD-ready roadmap and
-  sub-issues before the Discover -> Claim -> Work loop begins.
+  sub-issues before the Discover -> Claim -> Work loop begins, including
+  where the source bundle lives and how to install it for each agent
+  runtime.
 
 ### Project Strategy
 
