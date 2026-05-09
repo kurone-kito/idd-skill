@@ -15,17 +15,19 @@ GitHub project.
 IDD is a multi-agent GitHub automation workflow where AI agents work
 through a repeating pipeline driven entirely by GitHub Issues.
 
-| #      | Name          | Summary                                                        |
-| ------ | ------------- | -------------------------------------------------------------- |
-| A0-A4  | Discover      | Find ready issues from the configured scope and pick one task. |
-| A5     | Claim         | Reserve the issue with a machine-readable claim marker.        |
-| B      | Work          | Create a branch/worktree, plan, implement, and self-review.    |
-| D1-D3  | PR Submit     | Push the branch and open a pull request for the issue.         |
-| D4     | CI Wait       | Wait for required validation to finish before review triage.   |
-| E1-E8  | Review Triage | Snapshot review feedback and classify what needs action.       |
-| E9-E15 | Review Fix    | Apply accepted feedback and request fresh review when needed.  |
-| F1-F4  | Merge         | Re-check merge gates, merge safely, and clean up.              |
-| F5     | Loop          | Return to discovery and pick the next issue.                   |
+| #      | Name            | Summary                                                        |
+| ------ | --------------- | -------------------------------------------------------------- |
+| A0-A4  | Discover        | Find ready issues from the configured scope and pick one task. |
+| A5     | Claim           | Reserve the issue with a machine-readable claim marker.        |
+| B      | Work            | Create a branch/worktree, plan, implement, and self-review.    |
+| D1-D3  | PR Submit       | Push the branch and open a pull request for the issue.         |
+| D4     | CI Wait         | Wait for validation to pass before review snapshot.            |
+| E1-E3  | Review Snapshot | Capture review activity, run critique, and build List A.       |
+| E4-E8  | Review Triage   | Classify List A items and record accept/reject decisions.      |
+| E9-E15 | Review Fix      | Apply accepted feedback and request fresh review when needed.  |
+| F1-F2  | Pre-Merge       | Confirm reviews, CI, comments, and mergeability are fresh.     |
+| F3-F4  | Merge           | Merge using the validated HEAD and clean up after merge.       |
+| F5     | Loop            | Return to discovery and pick the next issue.                   |
 
 Each phase is encoded as a `.github/instructions/` file that any
 compatible AI agent can load — GitHub Copilot, Claude Code, Codex CLI,
