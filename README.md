@@ -12,8 +12,7 @@ other.
 IDD Skill gives a repository a portable Issue-Driven Development
 workflow: agents discover ready issues, claim ownership, implement in a
 branch, open a PR, handle review feedback, wait for CI, merge, and clean
-up. The whole loop is encoded as Markdown instruction files that live in
-your repo.
+up. The whole loop lives in your repo as Markdown instruction files.
 
 Use it when your team wants AI agents to keep going after the first PR
 instead of stopping at handoff time.
