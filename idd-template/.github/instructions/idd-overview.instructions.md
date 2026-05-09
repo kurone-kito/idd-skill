@@ -126,7 +126,9 @@ A1.5 roadmap completion audit side effects use the roadmap issue itself
 as the claim target. Even when the audit is GitHub-only and does not
 create a worktree, claim and re-validate the roadmap issue before
 commenting, editing, labeling, creating linked follow-up issues, or
-closing it.
+closing it. A1.5 coordination-only claims use a
+`roadmap-audit/<number>-<slug>` branch field so resume can distinguish
+them from normal implementation claims.
 
 ## Abort
 

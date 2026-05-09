@@ -116,10 +116,10 @@ roadmap issue itself:
   agent, do not mutate the roadmap; report the claim and continue to A2
   or stop according to the normal ready-to-start rules.
 - If the roadmap is unclaimed, stale, or held by the same agent, post
-  and verify a normal `claimed-by` comment for the roadmap issue using
-  the A5 branch naming convention. This is a roadmap-audit coordination
-  claim; it does not require creating a worktree unless the audit also
-  needs git changes.
+  and verify a normal `claimed-by` comment for the roadmap issue using a
+  `roadmap-audit/<number>-<slug>` branch field. This is a logical
+  coordination name, not a work branch, and it does not require creating
+  a branch or worktree unless the audit also needs git changes.
 - Re-validate that roadmap claim before every roadmap comment, follow-up
   issue creation, body edit, label change, or close action.
 - If the roadmap remains open and no PR branch will continue from the
@@ -150,8 +150,10 @@ Apply one outcome:
   next audit can link it before considering duplicates.
 - **Non-autonomous gaps found**: comment with the decision or human
   blocker, apply `status:needs-decision` or `status:blocked-by-human`
-  when those labels exist, and do not close the roadmap. Continue or
-  stop according to the normal Discover readiness rules.
+  when those labels exist, and do not close the roadmap. Stop before A2
+  after applying a roadmap-level blocker or needs-decision state, so the
+  same unattended run cannot select child work under the blocked
+  roadmap.
 
 ## A2 — Enumerate sub-issues
 
