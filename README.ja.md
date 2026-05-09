@@ -48,6 +48,27 @@ https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template/ONBOAR
 `.github/instructions/idd-review-fix.instructions.md` と
 `.github/instructions/idd-merge.instructions.md` をカスタマイズしてください。
 
+## 実行前提
+
+IDD ループをエンドツーエンドで実行するには、いくつかのローカルツールと
+GitHub アクセス手段が必要です:
+
+- branch、worktree、fetch、rebase、merge、status、commit 操作のための
+  `git`。
+- 認証済みの `gh` CLI、または同等の GH MCP integration による GitHub issue、
+  pull request、review、checks、comments、branch protection/ruleset、merge への
+  アクセス。ドキュメント内の shell snippet は `gh` を使います。
+- ページネーションされた GitHub API レスポンスを処理するドキュメント内の
+  shell snippet で使う `jq`。
+- このリポジトリの validation command が現在使っている `dprint`、
+  `markdownlint-cli2`、`cspell` を `npx` で実行するための Node.js/npm。
+- HTML コメントで始まる operational marker を投稿するときに、
+  `gh issue comment` より信頼できる経路が必要な場合に使う `curl` または同等の
+  REST client。
+
+WorkTrunk、`git-wt`、commit signing alias などの任意ヘルパーはループを
+スムーズにできますが、基本要件ではありません。
+
 ## IDD の使い方
 
 オンボーディングが終わったら、対象リポジトリで AI エージェントのセッションを開き、
