@@ -34,7 +34,8 @@ If at least one orphan issue is found: pass the collected set directly
 to **A4** (viability gate). Skip A1–A3 entirely.
 
 If no orphan issues are found: fall back to the roadmap path. Proceed
-to **A1** and continue with the normal A1 → A2 → A3 → A4 sequence.
+to **A1** and continue with the normal A1 → A1.5 → A2 → A3 → A4
+sequence.
 
 The A3 decision tree (abort / ask operator in unattended mode) is
 reached when the active discovery path(s) produce zero results: when
@@ -55,11 +56,61 @@ for `idd-skill-roadmap-id` to resolve `idd-skill-blocked-by`
 dependency markers; see A2 for details). Outside these three contexts,
 repo-wide and label-based queries are prohibited.
 
+## A1.5 — Audit completed roadmaps
+
+After A1 selects an open roadmap, inspect whether the roadmap appears
+complete before enumerating more work. This step belongs in Discover
+because Discover owns roadmap selection and global readiness. F4 remains
+scoped to the just-merged PR and local cleanup while holding only the
+child issue claim; it must not close a parent roadmap as a side effect.
+F5 still loops back here, so the next Discover pass can evaluate parent
+roadmap state after child PRs merge.
+
+Run the completion audit only when the selected roadmap has explicit
+child work such as task-list issue references or GitHub sub-issue
+relationships. If the roadmap has no explicit child work, report that
+it is childless or malformed and continue to A2; do not close it based
+on absence of candidates.
+
+Fetch the selected roadmap, its explicit child references, GitHub
+sub-issue children, and linked or closing PR evidence for those child
+issues. This step must not use repo-wide search to add unrelated work to
+the roadmap.
+
+- If any referenced child issue is open, inaccessible, or unresolved,
+  report the reason and continue to A2.
+- If any child or the roadmap itself has `status:blocked-by-human` or
+  `status:needs-decision`, report the blocker and continue to A2 or stop
+  according to the normal ready-to-start rules.
+- If all referenced child work is closed or otherwise complete, compare
+  the roadmap success criteria against the closed child issues, linked
+  merged PRs, task-list state, follow-up comments, and the current
+  repository state where feasible. Do not infer completion from checkbox
+  state alone.
+
+Immediately before posting any completion summary, creating follow-up
+issues, editing the roadmap body, changing labels, or closing the
+roadmap, re-fetch the roadmap and child state and confirm the audit
+input still matches the evidence.
+
+Apply one outcome:
+
+- **Audit passes**: post an `IDD roadmap completion audit` comment with
+  a concise evidence summary, then close the roadmap. No task issue is
+  claimed. Return to A1 and select the next open roadmap, if any.
+- **Autonomous gaps found**: create or link follow-up issues using the
+  repository's issue-authoring rules, update the roadmap task list with
+  those links, and continue to A2 so the new work can be discovered.
+- **Non-autonomous gaps found**: comment with the decision or human
+  blocker, apply `status:needs-decision` or `status:blocked-by-human`
+  when those labels exist, and do not close the roadmap. Continue or
+  stop according to the normal Discover readiness rules.
+
 ## A2 — Enumerate sub-issues
 
-Starting from the roadmap found in A1, recursively collect all issues it
-references. Include transitively referenced issues. Collect only
-**open** issues.
+Starting from the roadmap found in A1 and not closed by A1.5,
+recursively collect all issues it references. Include transitively
+referenced issues. Collect only **open** issues.
 
 **Allowed traversal sources** (outbound references only):
 

@@ -36,7 +36,7 @@ you are reading this guide first, start at step 1.
 | File                                                       | Role                                                                   |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `.github/instructions/idd-overview.instructions.md`        | Shared definitions, command sets, routing table, critique-pass mapping |
-| `.github/instructions/idd-discover.instructions.md`        | Find the next viable issue to start                                    |
+| `.github/instructions/idd-discover.instructions.md`        | Find the next viable issue and audit completed roadmaps                |
 | `.github/instructions/idd-claim.instructions.md`           | Run claim pre-checks and claim verification                            |
 | `.github/instructions/idd-work.instructions.md`            | Create the worktree, plan, implement, and self-review                  |
 | `.github/instructions/idd-pr-submit.instructions.md`       | Rebase, validate, push, open the PR, and wait for CI                   |
@@ -82,6 +82,20 @@ The IDD workflow distributed from this repository is therefore an
 instruction template first. Native skills can sit beside it as helpers,
 but the synchronization contract for the portable workflow remains
 between the live `.github/instructions/` files and `idd-template/`.
+
+## Roadmap completion audits
+
+Discover owns roadmap-level state. After it finds an open roadmap, it
+can audit whether all explicitly referenced child work is complete
+before selecting the next issue. Passing audits post a concise evidence
+summary and close the roadmap; failing audits either add/link
+autonomous follow-up issues or route human-dependent gaps to an explicit
+blocked or needs-decision state.
+
+This audit intentionally lives before A2 rather than in F4. F4 is
+limited to the PR that just merged and the local cleanup for that child
+issue. F5 then loops back to Discover, where roadmap completion can be
+checked with the broader parent context.
 
 ## Copilot review instruction scope
 
