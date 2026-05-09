@@ -131,7 +131,7 @@ async function buildReport(owner, repo, prNumber) {
   const reviews = fetchReviews(owner, repo, prNumber);
   const threads = fetchReviewThreads(owner, repo, prNumber);
   const threadIndex = indexThreadsByReview(threads);
-  const latestReviews = indexLatestReviewsByAuthor(reviews);
+  const latestGatingReviews = indexLatestGatingReviewsByAuthor(reviews);
 
   const report = {
     repository: `${owner}/${repo}`,
@@ -150,7 +150,7 @@ async function buildReport(owner, repo, prNumber) {
   }
 
   for (const review of reviews) {
-    evaluateReviewParent(review, pr, threadIndex, latestReviews, report);
+    evaluateReviewParent(review, pr, threadIndex, latestGatingReviews, report);
   }
 
   return report;
@@ -192,7 +192,7 @@ function evaluateOperationalComment(comment, pr, report) {
   });
 }
 
-function evaluateReviewParent(review, pr, threadIndex, latestReviews, report) {
+function evaluateReviewParent(review, pr, threadIndex, latestGatingReviews, report) {
   const author = review.author?.login ?? "";
   if (!isKnownReviewBot(author)) {
     return;
@@ -200,7 +200,7 @@ function evaluateReviewParent(review, pr, threadIndex, latestReviews, report) {
 
   const subject = subjectFromNode(review, "PullRequestReview", "RESOLVED");
   const associated = threadIndex.get(review.id) ?? { total: 0, unresolved: 0, threadIds: [] };
-  const latestReview = latestReviews.get(author.toLowerCase());
+  const latestGatingReview = latestGatingReviews.get(author.toLowerCase());
 
   if (!pr.merged) {
     addSkipped(report, subject, "PR is not merged");
@@ -223,7 +223,7 @@ function evaluateReviewParent(review, pr, threadIndex, latestReviews, report) {
     return;
   }
 
-  if (review.state === "CHANGES_REQUESTED" || latestReview?.state === "CHANGES_REQUESTED") {
+  if (review.state === "CHANGES_REQUESTED" || latestGatingReview?.state === "CHANGES_REQUESTED") {
     addSkipped(report, subject, "review author still has an active changes-requested state");
     return;
   }
@@ -322,9 +322,12 @@ function isKnownReviewBot(login) {
   return REVIEW_BOT_LOGINS.has(login.toLowerCase());
 }
 
-function indexLatestReviewsByAuthor(reviews) {
+function indexLatestGatingReviewsByAuthor(reviews) {
   const index = new Map();
   for (const review of reviews) {
+    if (review.state === "COMMENTED") {
+      continue;
+    }
     const author = review.author?.login?.toLowerCase();
     if (!author) {
       continue;
@@ -377,17 +380,22 @@ function indexThreadsByReview(threads) {
 function hasFreshDisposition(thread) {
   const comments = thread.comments?.nodes ?? [];
   const latestFeedbackAt = comments
-    .filter((comment) => !isDispositionComment(comment))
+    .filter((comment) => !isIddDispositionComment(comment))
     .map((comment) => comment.createdAt)
     .sort()
     .at(-1);
 
   return comments.some((comment) => {
-    if (!isDispositionComment(comment)) {
+    if (!isIddDispositionComment(comment)) {
       return false;
     }
     return !latestFeedbackAt || comment.createdAt > latestFeedbackAt;
   });
+}
+
+function isIddDispositionComment(comment) {
+  const author = comment.author?.login ?? "";
+  return isDispositionComment(comment) && !isKnownReviewBot(author);
 }
 
 function isDispositionComment(comment) {
@@ -595,12 +603,12 @@ function readActiveClaim(owner, repo, issueNumber) {
   });
 
   let active = null;
-  const supersededClaimIds = new Set();
+  const retiredClaimIds = new Set();
 
   for (const comment of comments) {
     const claim = parseClaim(comment.body, comment.createdAt);
     if (claim) {
-      if (supersededClaimIds.has(claim.claimId)) {
+      if (retiredClaimIds.has(claim.claimId)) {
         continue;
       }
 
@@ -623,7 +631,7 @@ function readActiveClaim(owner, repo, issueNumber) {
         && claim.supersedes === active.claimId
         && (claim.agentId === active.agentId || isStaleAt(active.createdAt, claim.createdAt))
       ) {
-        supersededClaimIds.add(active.claimId);
+        retiredClaimIds.add(active.claimId);
         active = claim;
       }
       continue;
@@ -636,6 +644,7 @@ function readActiveClaim(owner, repo, issueNumber) {
       && release.agentId === active.agentId
       && release.claimId === active.claimId
     ) {
+      retiredClaimIds.add(active.claimId);
       active = null;
     }
   }
