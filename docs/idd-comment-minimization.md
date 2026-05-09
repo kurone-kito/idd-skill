@@ -133,7 +133,8 @@ must include the skip reason.
 
 The helper also reports skipped cleanup-shaped nodes with reasons such
 as already minimized, no minimization permission, unresolved associated
-review threads, unsafe hold or decision context, or a non-merged PR.
+review threads, missing accept/reject dispositions, unsafe hold or
+decision context, or a non-merged PR.
 
 ## Apply Shape
 

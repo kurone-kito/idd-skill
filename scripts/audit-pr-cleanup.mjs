@@ -65,9 +65,10 @@ if (!owner || !repo) {
   fail(`invalid repository ${repository}`);
 }
 
-const prNumber = Number.parseInt(args.pr, 10);
-if (!Number.isInteger(prNumber) || prNumber < 1) {
-  fail(`invalid --pr value ${args.pr}`);
+const prNumber = parsePositiveInteger(args.pr, "--pr");
+
+if (args.claimIssue) {
+  args.claimIssue = String(parsePositiveInteger(args.claimIssue, "--claim-issue"));
 }
 
 const report = await buildReport(owner, repo, prNumber);
@@ -209,8 +210,23 @@ function evaluateReviewParent(review, pr, threadIndex, report) {
         ...subject,
         associatedThreads: associated.total,
         unresolvedThreads: associated.unresolved,
+        missingDispositionThreads: associated.missingDisposition,
       },
       "review has unresolved associated review threads",
+    );
+    return;
+  }
+
+  if (associated.missingDisposition > 0) {
+    addSkipped(
+      report,
+      {
+        ...subject,
+        associatedThreads: associated.total,
+        unresolvedThreads: 0,
+        missingDispositionThreads: associated.missingDisposition,
+      },
+      "associated review threads are missing IDD accept/reject dispositions",
     );
     return;
   }
@@ -220,6 +236,7 @@ function evaluateReviewParent(review, pr, threadIndex, report) {
     author,
     associatedThreads: associated.total,
     unresolvedThreads: 0,
+    missingDispositionThreads: 0,
     reason: "known bot review parent with all associated review threads resolved",
   });
 }
@@ -272,10 +289,18 @@ function indexThreadsByReview(threads) {
     );
 
     for (const reviewId of reviewIds) {
-      const current = index.get(reviewId) ?? { total: 0, unresolved: 0, threadIds: [] };
+      const current = index.get(reviewId) ?? {
+        total: 0,
+        unresolved: 0,
+        missingDisposition: 0,
+        threadIds: [],
+      };
       current.total += 1;
       if (!thread.isResolved) {
         current.unresolved += 1;
+      }
+      if (!hasDisposition(thread)) {
+        current.missingDisposition += 1;
       }
       current.threadIds.push(thread.id);
       index.set(reviewId, current);
@@ -283,6 +308,13 @@ function indexThreadsByReview(threads) {
   }
 
   return index;
+}
+
+function hasDisposition(thread) {
+  return (thread.comments?.nodes ?? []).some((comment) => {
+    const body = (comment.body ?? "").trimStart();
+    return body.startsWith("**Accepted**") || body.startsWith("**Rejected**");
+  });
 }
 
 function fetchPullRequest(owner, repo, number) {
@@ -484,8 +516,8 @@ function readActiveClaim(owner, repo, issueNumber) {
 }
 
 function parseClaim(body, createdAt) {
-  const match = body.match(
-    /<!--\s*claimed-by:\s+(\S+)\s+(\S+)\s+supersedes:\s+(\S+)\s+\S+\s+branch:\s+([^\s>]+)\s*-->/,
+  const match = body.trim().match(
+    /^<!--\s*claimed-by:\s+(\S+)\s+(\S+)\s+supersedes:\s+(\S+)\s+\S+\s+branch:\s+([^\s>]+)\s*-->$/,
   );
   if (!match) {
     return null;
@@ -500,7 +532,7 @@ function parseClaim(body, createdAt) {
 }
 
 function parseRelease(body) {
-  const match = body.match(/<!--\s*unclaimed-by:\s+(\S+)\s+(\S+)\s+\S+\s*-->/);
+  const match = body.trim().match(/^<!--\s*unclaimed-by:\s+(\S+)\s+(\S+)\s+\S+\s*-->$/);
   if (!match) {
     return null;
   }
@@ -645,6 +677,13 @@ function readValue(argv, index, flag) {
     fail(`${flag} requires a value`);
   }
   return value;
+}
+
+function parsePositiveInteger(value, flag) {
+  if (!/^[1-9]\d*$/.test(value)) {
+    fail(`${flag} must be a positive integer`);
+  }
+  return Number.parseInt(value, 10);
 }
 
 function printUsage() {

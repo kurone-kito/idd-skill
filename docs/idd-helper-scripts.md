@@ -6,14 +6,19 @@ directly instead of re-evaluating the same suggestion from scratch.
 
 ## Decision
 
-Adopt one narrow helper for post-merge comment cleanup auditing:
-`scripts/audit-pr-cleanup.mjs`.
+In this source repository, adopt one narrow helper for post-merge
+comment cleanup auditing: `scripts/audit-pr-cleanup.mjs`.
 
 The canonical workflow remains the portable shell / `gh` / `jq`
 instructions embedded in `.github/instructions/*.instructions.md`.
 Other helper candidates remain deferred because they would create a
 second implementation surface while the review, advisory-wait, and claim
 protocols are still changing through dogfooding.
+
+The exported template remains portable without a `scripts/` directory.
+Adopters can copy the helper separately when they want the same
+repository-local convenience, otherwise the documented GraphQL fallback
+remains the portable path.
 
 The cleanup helper is intentionally narrower than E/F gate helpers:
 
