@@ -45,9 +45,11 @@ Otherwise, determine claim state from the parsed active claim:
 
 - No active claim → **unclaimed**. Re-claim via
   `idd-claim.instructions.md`, then continue to Step 2.
-- Active claim whose `{claim-id}` is already known and verified by this
-  current session → **already owned**. Continue to Step 2 with that same
-  `{claim-id}`; do not post a new claim.
+- Active claim whose `{claim-id}` was already recorded by this current
+  session before this check and is now verified → **already owned**.
+  Continue to Step 2 with that same `{claim-id}`; do not post a new
+  claim. A token first learned by parsing the current issue comments is
+  not enough.
 - Any other active claim, latest valid `claimed-by` `created_at` < 24 h
   → **not inheritable**, stop. This includes matching `agent-id`; the
   agent ID alone does not prove that this is the same live session.

@@ -31,7 +31,10 @@ and `unclaimed-by` comments remain HTML-comment-only.
   Generate a fresh value on every fresh claim or stale takeover. Reuse
   the same `{claim-id}` only for heartbeats of that already-verified
   claim. A matching `{agent-id}` is never ownership proof by itself,
-  because separate live sessions can share the same agent ID.
+  because separate live sessions can share the same agent ID. Reading an
+  existing `{claim-id}` from issue comments during discovery or resume
+  does not by itself prove ownership; the current session must have
+  already recorded that token before the revalidation step.
 - `{prior-claim-id}` is `none` for a fresh claim on an unclaimed issue.
   For a stale-claim takeover, set it to the currently active claim's
   `{claim-id}`.
@@ -68,12 +71,12 @@ chronologically and apply these rules:
    active claim when one exists, is ignored as a stale or invalid event.
 
 Same-agent restarts never silently inherit or supersede an active
-non-stale claim. If the current session already knows and has verified
-the active `{claim-id}`, continue with that same token and use
-heartbeats; do not post a fresh takeover claim. If the session cannot
-prove ownership of the active `{claim-id}`, the active claim is treated
-as owned by another live session until it is released or stale, even
-when `{agent-id}` matches.
+non-stale claim. If the current session already recorded and verified
+the active `{claim-id}` before this check, continue with that same token
+and use heartbeats; do not post a fresh takeover claim. If the session
+cannot prove ownership of the active `{claim-id}`, the active claim is
+treated as owned by another live session until it is released or stale,
+even when `{agent-id}` matches.
 
 ## Legacy claim migration
 

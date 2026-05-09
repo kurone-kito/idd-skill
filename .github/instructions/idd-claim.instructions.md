@@ -16,9 +16,10 @@ set. If the project is in use, the project status must be "not started".
 using the shared claim-state rules:
 
 - No active claim → unclaimed, proceed.
-- Active claim already uses a `{claim-id}` that this current session has
-  verified and recorded → already claimed; do not post a new claim.
-  Continue with that same `{claim-id}`.
+- Active claim already uses a `{claim-id}` that this current session had
+  recorded before this check and has now verified → already claimed; do
+  not post a new claim. Continue with that same `{claim-id}`. A token
+  first learned by parsing the current issue comments is not enough.
 - Any other active claim whose latest valid `claimed-by` comment has
   GitHub `created_at` < 24 h → claimed by another live session, even
   when the `agent-id` matches. Go back to A3.
@@ -66,7 +67,7 @@ field in an inheritable claim comment as defined in (c) above.
 ## Claim execution
 
 Skip this section if pre-check (b) classified the issue as already
-claimed by this current session. Keep the recorded `{claim-id}` and
+claimed by this current session. Keep the previously recorded `{claim-id}` and
 branch, then proceed directly to Claim verification without posting a new
 claim.
 
