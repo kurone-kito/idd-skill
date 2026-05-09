@@ -52,9 +52,9 @@ coordination at the issue-tracking level.
 ## Strategic position
 
 idd-skill occupies a unique position as a _portable operating system
-for development teams_ — vendor-neutral, infrastructure-free, and a
-GitHub-native framework with explicit multi-agent coordination
-primitives built into the workflow rules themselves.
+for development teams_ — a GitHub-native framework that is
+vendor-neutral, infrastructure-free, and includes explicit multi-agent
+coordination primitives built into the workflow rules themselves.
 
 The key differentiator is the claim/heartbeat protocol. Other tools
 either assume single-agent execution or rely on external orchestration
