@@ -46,7 +46,8 @@
       "sourceGlobs": [
         "idd-template/.github/instructions/idd-*.instructions.md",
         "idd-template/docs/idd-*.md",
-        "idd-template/docs/permissions.md"
+        "idd-template/docs/permissions.md",
+        "idd-template/docs/getting-started.md"
       ],
       "paths": [
         "idd-template/.github/instructions/idd-overview.instructions.md",
@@ -66,7 +67,8 @@
         "idd-template/docs/idd-review-policy-profiles.md",
         "idd-template/docs/idd-helper-scripts.md",
         "idd-template/docs/idd-comment-minimization.md",
-        "idd-template/docs/permissions.md"
+        "idd-template/docs/permissions.md",
+        "idd-template/docs/getting-started.md"
       ]
     },
     {
@@ -222,6 +224,12 @@
       "id": "permissions-doc",
       "source": "idd-template/docs/permissions.md",
       "target": "docs/permissions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "getting-started-doc",
+      "source": "idd-template/docs/getting-started.md",
+      "target": "docs/getting-started.md",
       "mode": "exact"
     },
     {
