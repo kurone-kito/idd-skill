@@ -889,7 +889,7 @@ function readActiveClaim(owner, repo, issueNumber) {
       if (
         active
         && claim.supersedes === active.claimId
-        && (claim.agentId === active.agentId || isStaleAt(active.createdAt, claim.createdAt))
+        && isStaleAt(active.createdAt, claim.createdAt)
       ) {
         retiredClaimIds.add(active.claimId);
         active = claim;

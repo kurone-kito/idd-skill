@@ -26,12 +26,18 @@ include a short visible note after the HTML comment token (see
 `idd-review-snapshot.instructions.md` for the required format). `claimed-by`
 and `unclaimed-by` comments remain HTML-comment-only.
 
-- `{claim-id}` is an opaque unique token for one active claim lineage.
-  Generate a fresh value on every fresh claim or takeover. Reuse the
-  same `{claim-id}` only for heartbeats of that already-verified claim.
+- `{claim-id}` is an opaque unique token for one active claim lineage
+  and is the portable proof that the current session owns that claim.
+  Generate a fresh value on every fresh claim or stale takeover. Reuse
+  the same `{claim-id}` only for heartbeats of that already-verified
+  claim. A matching `{agent-id}` is never ownership proof by itself,
+  because separate live sessions can share the same agent ID. Reading an
+  existing `{claim-id}` from issue comments during discovery or resume
+  does not by itself prove ownership; the current session must have
+  already recorded that token before the revalidation step.
 - `{prior-claim-id}` is `none` for a fresh claim on an unclaimed issue.
-  For a takeover (same-agent restart, handoff, or stale-claim recovery),
-  set it to the currently active claim's `{claim-id}`.
+  For a stale-claim takeover, set it to the currently active claim's
+  `{claim-id}`.
 
 ## Unclaim format
 
@@ -54,11 +60,8 @@ chronologically and apply these rules:
    only if either:
    - there is no active claim AND its `supersedes:` value is `none`, or
    - its `supersedes:` value exactly matches the current active claim's
-     `{claim-id}`, and either:
-     - it uses the **same** agent ID as the current active claim
-       (explicit same-agent takeover), or
-     - the current active claim is already **stale** at the new
-       comment's GitHub `created_at` timestamp.
+     `{claim-id}`, and the current active claim is already **stale** at
+     the new comment's GitHub `created_at` timestamp.
 4. An `unclaimed-by` releases the claim only if its `{agent-id}` AND
    `{claim-id}` both match the current active claim. Otherwise ignore it
    as a stale release from a superseded session.
@@ -67,9 +70,13 @@ chronologically and apply these rules:
    superseded, or whose `supersedes:` value does not match the current
    active claim when one exists, is ignored as a stale or invalid event.
 
-Same-agent restarts never silently inherit an active claim. They must
-perform an explicit takeover with a fresh `{claim-id}` that
-`supersedes:` the currently active claim.
+Same-agent restarts never silently inherit or supersede an active
+non-stale claim. If the current session already recorded and verified
+the active `{claim-id}` before this check, continue with that same token
+and use heartbeats; do not post a fresh takeover claim. If the session
+cannot prove ownership of the active `{claim-id}`, the active claim is
+treated as owned by another live session until it is released or stale,
+even when `{agent-id}` matches.
 
 ## Legacy claim migration
 
@@ -92,8 +99,9 @@ Treat these legacy comments as **migration-only** inputs:
   legacy `unclaimed-by` comment from the same agent. If so, treat the
   issue as **unclaimed**; skip directly to posting a fresh new-format
   claim with `supersedes: none`.
-- Otherwise, use the latest legacy claim to decide branch reuse,
-  staleness, and whether a same-agent resume is occurring.
+- Otherwise, use the latest legacy claim to decide branch reuse and
+  staleness. A matching legacy agent ID is not enough to prove same
+  live-session ownership.
 - Then immediately post a new-format `claimed-by` comment with a fresh
   `{claim-id}` before any further side effects.
 - Use `supersedes: none` for that one-time migration claim, because the
@@ -104,9 +112,9 @@ Treat these legacy comments as **migration-only** inputs:
 ## Thresholds
 
 - **Stale**: an active claim whose latest **valid** `claimed-by`
-  comment's GitHub `created_at` is ≥ 24 h ago. Another agent may take it
-  over by posting a fresh `{claim-id}` whose `supersedes:` value is that
-  active claim's `{claim-id}`.
+  comment's GitHub `created_at` is ≥ 24 h ago. Another session may take
+  it over by posting a fresh `{claim-id}` whose `supersedes:` value is
+  that active claim's `{claim-id}`.
 - **Heartbeat**: after re-validating ownership, re-post the claim
   comment every 12 h while holding or when any phase is expected to
   exceed 12 h. The latest **valid** `claimed-by` comment for the same
