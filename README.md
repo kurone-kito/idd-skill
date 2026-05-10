@@ -57,12 +57,25 @@ After onboarding, start an agent in the target repository and say:
 The agent reads the workflow guide, discovers a ready issue, claims it,
 and follows the loop through work, PR review, CI, merge, and cleanup.
 
-Before an agent can run the loop end to end, it needs access to `git`,
-an authenticated `gh` CLI or equivalent GitHub MCP integration, `jq`,
-Node.js/npm with `npx`, and a REST client such as `curl` for reliable
-operational marker posting. See the workflow docs for the detailed
-command contract. Review [Permissions and threat model](docs/permissions.md)
-before granting credentials to unattended or merge-capable agents.
+## Reality Check
+
+IDD is Markdown-native, not dependency-free.
+
+To run the full loop, an agent needs:
+
+- `git`
+- An authenticated `gh` CLI or equivalent GitHub MCP integration
+- `jq`
+- A REST client such as `curl`
+- Node.js/npm with `npx`
+- Repository-scoped GitHub credentials appropriate for the chosen merge
+  policy
+- Branch protection and required review policy already configured when
+  those gates are part of the loop
+
+See the workflow docs for the detailed command contract. Review
+[Permissions and threat model](docs/permissions.md) before granting
+credentials to unattended or merge-capable agents.
 
 ## What IDD Automates
 
