@@ -49,8 +49,9 @@ test("extractMarkerPrefixes returns roadmap and blocked-by prefixes", () => {
 <!-- idd-skill-roadmap-id: value -->
 <!-- idd-skill-blocked-by: value -->
 <!-- my-team-roadmap-id: value -->
+<!-- MyTeam-blocked-by: value -->
 `)
 
   assert.deepEqual(markers.roadmap, ["idd-skill", "my-team"])
-  assert.deepEqual(markers.blockedBy, ["idd-skill"])
+  assert.deepEqual(markers.blockedBy, ["idd-skill", "MyTeam"])
 })

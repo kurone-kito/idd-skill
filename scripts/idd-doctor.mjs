@@ -66,10 +66,10 @@ export function parseProjectCommandRows(text) {
 }
 
 export function extractMarkerPrefixes(text) {
-  const roadmap = [...text.matchAll(/([a-z0-9]+(?:-[a-z0-9]+)*)-roadmap-id/g)].map(
+  const roadmap = [...text.matchAll(/([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)-roadmap-id/g)].map(
     (match) => match[1],
   )
-  const blockedBy = [...text.matchAll(/([a-z0-9]+(?:-[a-z0-9]+)*)-blocked-by/g)].map(
+  const blockedBy = [...text.matchAll(/([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)-blocked-by/g)].map(
     (match) => match[1],
   )
   return {
@@ -104,6 +104,7 @@ function checkRequiredFiles(files, report) {
     "docs/idd-helper-scripts.md",
     "docs/idd-comment-minimization.md",
     "docs/permissions.md",
+    "docs/policy-constants.md",
   ]
 
   const profileFiles = [
@@ -113,9 +114,8 @@ function checkRequiredFiles(files, report) {
     "profiles/external-bot/README.md",
   ]
 
-  const fileSet = new Set(files)
-  const missingRequired = required.filter((file) => !fileSet.has(file))
-  const missingProfiles = profileFiles.filter((file) => !fileSet.has(file))
+  const missingRequired = required.filter((file) => !exists(join(report.root, file)))
+  const missingProfiles = profileFiles.filter((file) => !exists(join(report.root, file)))
 
   if (missingRequired.length > 0) {
     report.errors.push(`missing required IDD files: ${missingRequired.join(", ")}`)
@@ -257,8 +257,9 @@ function checkPolicySignals(root, report) {
     "CLAUDE.md",
     "GEMINI.md",
     ".github/copilot-instructions.md",
-    "docs/customization.md",
-    "docs/idd-review-policy-profiles.md",
+    "docs/idd-policy.md",
+    ".github/idd/config.json",
+    "idd-policy.json",
   ]
   const existing = files.filter((file) => exists(join(root, file)))
   const corpus = existing.map((file) => readFileSync(join(root, file), "utf8")).join("\n")

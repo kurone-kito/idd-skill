@@ -61,8 +61,9 @@ policy, and cleanup.
 
 ### Validate onboarding with IDD doctor (optional)
 
-After importing IDD, run the doctor script once in the target repository
-to catch common setup drift:
+After importing IDD, run the doctor script once in a repository that has
+the helper installed (this source repository includes it by default) to
+catch common setup drift:
 
 ```sh
 node scripts/idd-doctor.mjs

@@ -61,8 +61,8 @@ IDD を導入したいリポジトリで AI エージェントのセッション
 
 ### IDD doctor で導入状態を検証する（任意）
 
-IDD 導入後、対象リポジトリで一度 doctor スクリプトを実行すると、
-設定ズレを早期に検出できます:
+IDD 導入後、helper を配置済みのリポジトリ（この source repository には
+同梱）で doctor スクリプトを一度実行すると、設定ズレを早期に検出できます:
 
 ```sh
 node scripts/idd-doctor.mjs
