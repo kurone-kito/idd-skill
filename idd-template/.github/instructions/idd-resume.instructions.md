@@ -4,6 +4,12 @@ Use this file when taking over a crashed or rate-limited session with no
 prior session context. Read `idd-overview.instructions.md` for shared
 definitions (claim format, stale threshold, abort, hold).
 
+Resume stale checks use the `claim-stale-age` policy default from
+`docs/policy-constants.md` (distributed default: `24 h`).
+
+When this file references 24 h stale checks, use the ownership timing
+policy default `claim-stale-age` from `docs/policy-constants.md`.
+
 ## Step 0 — Route stalled-session recovery
 
 Before Step 1, decide whether this is a stalled-session case:

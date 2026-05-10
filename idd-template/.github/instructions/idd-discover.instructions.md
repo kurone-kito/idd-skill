@@ -194,6 +194,14 @@ A1.5 can publish roadmap-level GitHub side effects before a child task
 issue is selected. Before any such side effect, coordinate on the
 roadmap issue itself:
 
+Treat `stale` and `non-stale` in this section using the
+`claim-stale-age` policy default from `docs/policy-constants.md`
+(distributed default: `24 h`).
+
+Use the ownership timing policy default `claim-stale-age` from
+`docs/policy-constants.md` when applying stale/non-stale roadmap-claim
+checks in this section.
+
 - Roadmap claim ownership gates roadmap-side mutations only. Do not
   treat a non-stale roadmap claim as a global lock over A2/A3 child
   discovery or child A5 checks.

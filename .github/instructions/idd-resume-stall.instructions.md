@@ -53,7 +53,8 @@ Quiet-window evidence does not permit takeover by itself.
 
 ### S3 — Stale-threshold gate (ownership transfer gate)
 
-Apply the shared stale rule from `idd-overview.instructions.md`:
+Apply the shared stale rule from `idd-overview.instructions.md` and
+`claim-stale-age` in `docs/policy-constants.md`:
 takeover is allowed only when the active non-owned claim is stale
 (`latest valid claimed-by created_at >= 24h`).
 
