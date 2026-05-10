@@ -30,18 +30,19 @@ Only the GitHub `created_at` of the latest **valid** `claimed-by`
 comment in the active claim counts toward the stale calculation.
 
 If the issue has no new-format `claimed-by` comments but has legacy
-claim comments, first check whether the latest legacy `claimed-by`
-comment is followed by a later legacy `unclaimed-by` comment from the
-same agent. If so, treat the issue as **unclaimed** — proceed as if no
-claim exists.
+claim comments from trusted marker actors, first check whether the
+latest trusted legacy `claimed-by` comment is followed by a later
+trusted legacy `unclaimed-by` comment from the same agent. If so, treat
+the issue as **unclaimed** — proceed as if no claim exists.
 
-Otherwise, use the latest legacy `claimed-by` comment as a
+Otherwise, use the latest trusted legacy `claimed-by` comment as a
 **migration-only** decision input:
 
-- Latest legacy claim has GitHub `created_at` < 24 h → claimed by
-  another live session, even when the `agent-id` matches. Go back to A3.
-- Latest legacy claim has GitHub `created_at` ≥ 24 h → stale, proceed
-  and replace it with a new-format claim.
+- Latest trusted legacy claim has GitHub `created_at` < 24 h → claimed
+  by another live session, even when the `agent-id` matches. Go back to
+  A3.
+- Latest trusted legacy claim has GitHub `created_at` ≥ 24 h → stale,
+  proceed and replace it with a new-format claim.
 
 The migration claim uses a fresh `{claim-id}` and `supersedes: none`.
 
@@ -53,8 +54,8 @@ comment. An inheritable claim comment is either:
 - the currently active stale claim you are taking over, or
 - the latest `claimed-by` comment that was later released by a matching
   `unclaimed-by` comment (the last voluntarily released branch), or
-- the latest legacy `claimed-by` comment when performing a legacy
-  migration (see the migration-only decision input above)
+- the latest trusted legacy `claimed-by` comment when performing a
+  legacy migration (see the migration-only decision input above)
 
 Check both linked issues and closing keywords in PR bodies.
 
@@ -75,8 +76,8 @@ Determine `{branch-name}`:
 
 - **Re-claim / takeover**: use the exact branch name from the
   inheritable claim comment (the `branch` field of the active stale
-  claim, the last-released `claimed-by`, or the legacy claim being
-  migrated). Do not compute a new name.
+  claim, the last-released `claimed-by`, or the trusted legacy claim
+  being migrated). Do not compute a new name.
 - **Fresh claim**: compute a new name using the IDD naming convention:
   `issue/<number>-<slug>` where `<slug>` is 2–5 lowercase hyphenated
   words describing the issue.

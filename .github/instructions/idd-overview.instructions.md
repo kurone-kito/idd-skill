@@ -131,15 +131,15 @@ and the matching legacy release format:
 <!-- unclaimed-by: {agent-id} {ISO8601-timestamp} -->
 ```
 
-Treat these legacy comments as **migration-only** inputs:
+Treat trusted legacy comments as **migration-only** inputs:
 
 - If an issue has no new-format `claimed-by` comments yet, first check
-  whether the latest legacy `claimed-by` comment is followed by a later
-  legacy `unclaimed-by` comment from the same agent. If so, treat the
-  issue as **unclaimed**; skip directly to posting a fresh new-format
-  claim with `supersedes: none`.
-- Otherwise, use the latest legacy claim to decide branch reuse and
-  staleness. A matching legacy agent ID is not enough to prove same
+  whether the latest trusted legacy `claimed-by` comment is followed by
+  a later trusted legacy `unclaimed-by` comment from the same agent. If
+  so, treat the issue as **unclaimed**; skip directly to posting a fresh
+  new-format claim with `supersedes: none`.
+- Otherwise, use the latest trusted legacy claim to decide branch reuse
+  and staleness. A matching legacy agent ID is not enough to prove same
   live-session ownership.
 - Then immediately post a new-format `claimed-by` comment with a fresh
   `{claim-id}` and visible note before any further side effects.
@@ -257,8 +257,8 @@ another agent may need.
 Operational restore markers (`review-watermark` and `review-baseline`)
 must include the current `{claim-id}` and must never be restored across
 a claim change. A takeover starts a new restore scope. These markers
-must also include a visible human-readable note (see
-`idd-review-snapshot.instructions.md`).
+must also be authored by a trusted marker actor and include a visible
+human-readable note (see `idd-review-snapshot.instructions.md`).
 
 ## Review item classes
 

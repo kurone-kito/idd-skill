@@ -16,9 +16,10 @@ gate. The active claim must still use your current `{claim-id}`.
 2. Immediately before executing the merge command, do one final live
    fetch using the **exact same activity-universe scope as E1 Step 1**
    (all review threads, review bodies, and regular PR comments,
-   excluding agent operational marker comments). Compare against the F2
-   snapshot carried forward from `idd-pre-merge.instructions.md`. Return
-   to E1 if **any** of the following is true:
+   excluding trusted agent operational marker comments only). Compare
+   against the F2 snapshot carried forward from
+   `idd-pre-merge.instructions.md`. Return to E1 if **any** of the
+   following is true:
 
    - The current PR HEAD SHA differs from `{f2-head-SHA}`.
    - `{f2-max-activity-updatedAt}` is `none` and the final fetch is
@@ -115,9 +116,9 @@ gate. The active claim must still use your current `{claim-id}`.
    - Bot review parent bodies without associated review threads are
      skipped by default, including Copilot error review bodies, unless a
      future policy explicitly narrows a safe cleanup class for them.
-   - IDD operational marker comments may be minimized as `OUTDATED`
-     only after the PR is merged and the marker is no longer needed for
-     resume, advisory wait, or review-currency checks.
+   - Trusted IDD operational marker comments may be minimized as
+     `OUTDATED` only after the PR is merged and the marker is no longer
+     needed for resume, advisory wait, or review-currency checks.
    - Candidate marker prefixes include `<!-- review-watermark:`,
      `<!-- review-baseline:`, `advisory-wait:`,
      `advisory-wait-recovery:`, and `<!-- advisory-wait:`.

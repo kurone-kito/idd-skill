@@ -7,6 +7,7 @@ const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD
 const TRUSTED_MARKER_PERMISSIONS = new Set(["admin", "maintain", "write"]);
 const trustedMarkerAuthorCache = new Map();
 let cachedConfiguredTrustedMarkerAuthors = null;
+let cachedCurrentViewerLogin = null;
 
 const OPERATIONAL_MARKERS = [
   {
@@ -883,10 +884,12 @@ function readActiveClaim(owner, repo, issueNumber) {
 
   for (const comment of comments) {
     const author = comment.author?.login ?? "";
-    const trustedMarkerAuthor = isTrustedMarkerAuthor(owner, repo, author);
 
-    const claim = trustedMarkerAuthor ? parseClaim(comment.body, comment.createdAt, author) : null;
+    const claim = parseClaim(comment.body, comment.createdAt, author);
     if (claim) {
+      if (!isTrustedMarkerAuthor(owner, repo, author)) {
+        continue;
+      }
       if (retiredClaimIds.has(claim.claimId)) {
         continue;
       }
@@ -916,9 +919,10 @@ function readActiveClaim(owner, repo, issueNumber) {
       continue;
     }
 
-    const release = trustedMarkerAuthor ? parseRelease(comment.body, author) : null;
+    const release = parseRelease(comment.body, author);
     if (
       release
+      && isTrustedMarkerAuthor(owner, repo, author)
       && active
       && release.agentId === active.agentId
       && release.claimId === active.claimId
@@ -974,8 +978,15 @@ function isTrustedMarkerAuthor(owner, repo, login) {
   }
 
   const normalized = login.toLowerCase();
+  if (normalized === currentViewerLogin()) {
+    return true;
+  }
   if (configuredTrustedMarkerAuthors().has(normalized)) {
     return true;
+  }
+
+  if (!trustCollaboratorMarkers()) {
+    return false;
   }
 
   const cacheKey = `${owner}/${repo}:${normalized}`;
@@ -1004,6 +1015,23 @@ function isTrustedMarkerAuthor(owner, repo, login) {
   return trusted;
 }
 
+function currentViewerLogin() {
+  if (cachedCurrentViewerLogin !== null) {
+    return cachedCurrentViewerLogin;
+  }
+
+  try {
+    cachedCurrentViewerLogin = execFileSync(
+      "gh",
+      ["api", "user", "--jq", ".login"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim().toLowerCase();
+  } catch {
+    cachedCurrentViewerLogin = "";
+  }
+  return cachedCurrentViewerLogin;
+}
+
 function configuredTrustedMarkerAuthors() {
   if (cachedConfiguredTrustedMarkerAuthors) {
     return cachedConfiguredTrustedMarkerAuthors;
@@ -1016,6 +1044,10 @@ function configuredTrustedMarkerAuthors() {
       .filter(Boolean),
   );
   return cachedConfiguredTrustedMarkerAuthors;
+}
+
+function trustCollaboratorMarkers() {
+  return /^(1|true|yes)$/i.test(process.env.IDD_TRUST_COLLABORATOR_MARKERS ?? "");
 }
 
 function isValidIsoTimestamp(value) {
@@ -1225,6 +1257,7 @@ Options:
 
 Environment:
   IDD_TRUSTED_MARKER_ACTORS         comma-separated trusted bot/app logins
+  IDD_TRUST_COLLABORATOR_MARKERS    set true to trust Write/Maintain/Admin collaborators
 `);
 }
 
