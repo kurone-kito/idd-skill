@@ -24,6 +24,37 @@ Before routing, collect all of the following:
    no upstream is configured, treat all local commits as unpushed.
 7. **Current HEAD SHA** — run `git rev-parse HEAD`.
 
+## Step 0 — Classify the resume route
+
+Before applying Step 1, classify the resume situation using only
+externally observable signals. Do not rely on the previous session
+posting a graceful shutdown, release, or hold comment.
+
+Use these signals together:
+
+- active claim ownership (`{claim-id}` and `created_at`)
+- issue/PR activity recency (comments, review threads, review bodies)
+- PR HEAD movement and CI state transitions
+- local worktree dirtiness and unpushed commits
+
+Route to one of the following classes:
+
+| Route class                                | Observable signal pattern                                                                                                                                                 | Action                                                                                                   |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Crash recovery**                         | Session appears interrupted (missing/released claim, or unfinished local/PR state with no contradictory fresh owner signal).                                              | Continue with Step 1 and the existing restore table in Step 2.                                           |
+| **Progress-stalled / rate-limit recovery** | Active claim is non-stale and not currently provable as owned by this session, PR HEAD/CI and review activity are quiet, and no external signal proves the owner resumed. | Do not take over yet. Post a hold comment with observed signals and the next retry condition, then stop. |
+| **Stale-claim takeover**                   | Active non-owned claim exists and latest valid `claimed-by` `created_at` is `>= 24 h`.                                                                                    | Execute stale takeover flow in Step 1 (`supersedes` required), then continue.                            |
+| **Ordinary clean continuation**            | Active claim is already owned by this session and current state is consistent with normal continuation.                                                                   | Continue with Step 1/Step 2 as a normal resume.                                                          |
+
+Classification thresholds:
+
+- **Stale takeover threshold**: 24 h from latest valid `claimed-by`
+  `created_at`.
+- **Stall quiet window**: require a sustained quiet period from external
+  signals (for example, no newer issue/PR/review/CI activity and no HEAD
+  movement) before declaring progress-stalled; when uncertain, hold
+  rather than take over.
+
 ## Step 1 — Identify the issue and claim state
 
 - If the issue is **closed** or the corresponding PR is **merged**:
@@ -103,7 +134,8 @@ Read the PR's current CI and review status:
 
 | Condition                                                                          | Action                                                         |
 | ---------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Required CI checks not yet generated                                               | Wait for generation, then apply D4 logic                       |
+| Required CI checks not yet generated, no reviews yet                               | Wait for generation, then apply D4 logic                       |
+| Required CI checks not yet generated, reviews exist                                | Wait for generation, then apply E15 logic                      |
 | CI `queued` or `in_progress`, no reviews yet (first push)                          | Apply D4 CI logic (`idd-ci.instructions.md`, on-success → E1)  |
 | CI `queued` or `in_progress`, reviews exist (post-fix push)                        | Apply E15 CI logic (`idd-ci.instructions.md`, on-success → E1) |
 | CI `failure` / `cancelled` / `timed_out`, no reviews yet                           | Apply D4 failure/cancelled branch                              |
