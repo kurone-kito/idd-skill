@@ -342,6 +342,10 @@ If **fix-validate** or **post-fix-validate** produces file changes
 (auto-fixes), stage and commit those changes before any push, rebase, or
 next step that requires no uncommitted changes.
 
+`install-deps` must be idempotent. Re-running it in fresh, reused, or
+recreated worktrees must not require manual cleanup and should not leave
+unexpected tracked changes.
+
 **Tool availability**: the commands above are required when the listed
 tools are present. In repositories without Node.js or a specific tool,
 replace that command with `true` — the same no-op convention used by

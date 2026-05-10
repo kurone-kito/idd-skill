@@ -150,13 +150,20 @@ contract agents follow. During onboarding, replace the template
 placeholders with the target repository's commands:
 
 - `fix-validate`: auto-fix and verify before each commit.
-- `pre-push-validate`: verify before pushing, without auto-fix.
+- `pre-push-validate`: verify before pushing, without auto-fix, and keep
+  it non-mutating for tracked files.
 - `post-fix-validate`: auto-fix and fully verify after review fixes.
-- `install-deps`: prepare dependencies in a fresh worktree.
+- `install-deps`: prepare dependencies in a fresh worktree. Keep this
+  command idempotent so retries, takeovers, and recreated worktrees can
+  rerun it safely without manual cleanup.
 
 Use `true` only when a command is intentionally a no-op for the target
 repository. If validation is expensive, prefer an explicit lightweight
 command over leaving the surface ambiguous.
+
+When WorkTrunk uses a pre-start install hook, that hook may satisfy
+`install-deps` automatically. The underlying command contract is the
+same: repeated runs must stay safe and predictable.
 
 ## Issue Scope
 

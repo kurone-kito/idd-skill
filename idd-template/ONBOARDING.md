@@ -103,10 +103,10 @@ request missing values.
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | `{{REPO_NAME}}`                  | The repository's short name. Used in worktree path examples.                                                                                                                                                   | `my-app`                                                            |
 | `{{PROJECT_MARKER_PREFIX}}`      | A short, URL-safe prefix unique to this project. Used in HTML comment markers embedded in issue bodies to track roadmap and blocked-by state. The same prefix must be used consistently throughout all issues. | `my-app`                                                            |
-| `{{FIX_VALIDATE_COMMANDS}}`      | Commands that auto-fix linting and verify the result. Run before every commit.                                                                                                                                 | `npm run lint:fix && npm run lint`                                  |
-| `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Commands that verify correctness before a push (no auto-fix — code must already be clean). Typically includes build and test.                                                                                  | `npm run lint && npm run build && npm run test`                     |
-| `{{POST_FIX_VALIDATE_COMMANDS}}` | Commands that auto-fix and fully verify after review fixes. Usually a superset of the other two.                                                                                                               | `npm run lint:fix && npm run lint && npm run build && npm run test` |
-| `{{INSTALL_DEPS_COMMAND}}`       | Command to install dependencies in a fresh worktree.                                                                                                                                                           | `npm install`                                                       |
+| `{{FIX_VALIDATE_COMMANDS}}`      | Commands that may auto-fix linting/formatting and verify the result. Run before every commit. If files change, stage and commit those changes before continuing.                                               | `npm run lint:fix && npm run lint`                                  |
+| `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Commands that verify correctness before a push and do not mutate tracked files. Typically includes lint, build, and test.                                                                                      | `npm run lint && npm run build && npm run test`                     |
+| `{{POST_FIX_VALIDATE_COMMANDS}}` | Commands that may auto-fix and fully verify after review fixes. Usually a superset of the other two. If files change, stage and commit those changes before push/rebase.                                       | `npm run lint:fix && npm run lint && npm run build && npm run test` |
+| `{{INSTALL_DEPS_COMMAND}}`       | Command to install dependencies in a fresh worktree. It must be idempotent and safe to rerun in fresh, reused, or recreated worktrees without manual cleanup.                                                  | `npm install`                                                       |
 
 > **No-op substitution**: any command that is not applicable to your
 > project can be set to `true`. For example, a repository without a
@@ -114,6 +114,9 @@ request missing values.
 > The same applies to validation commands in projects that do not use
 > the listed tools — set the relevant placeholder to `true` to skip
 > that step without breaking the workflow.
+>
+> `{{INSTALL_DEPS_COMMAND}}` must be safe to run repeatedly across
+> retries, takeovers, and recreated worktrees.
 
 ### Notes on `{{PROJECT_MARKER_PREFIX}}`
 
