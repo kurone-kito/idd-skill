@@ -147,8 +147,8 @@ cleanup.
 Agents deliberately avoid editing a PR digest between a valid E1 review
 watermark and a successful F3 merge path. A digest edit can be PR
 activity, so successful F2 passes carry their activity snapshot forward
-without touching the digest; blocker and hold paths may update the
-digest because they stop or return to E1 anyway.
+without touching the digest; blocked reroutes and hold paths may update
+the digest because they stop or leave merge intent anyway.
 
 ### Roadmap-claim contention playbook
 
