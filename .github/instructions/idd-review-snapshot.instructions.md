@@ -108,10 +108,12 @@ restart or takeover; if no trusted same-claim watermark exists, rerun E1
 from scratch.
 
 Do not create or edit the PR live status digest after posting this
-watermark unless the next route is to E1, to an F3 blocked reroute
-(F1/D4/F2), to a hold/stop, or to post-merge cleanup. A digest edit
-after the watermark is new PR activity for review-currency purposes and
-would require a fresh E1 snapshot before F2 can pass.
+watermark unless the next route is to E1, to an F3 blocked reroute that
+leaves the F2 restart path (F1/D4), to a hold/stop, or to post-merge
+cleanup. The F3 awaiting-reviewer restart-F2 path skips digest edits so
+that F2 can restart without self-invalidating review currency. A digest
+edit after the watermark is new PR activity for review-currency purposes
+and would require a fresh E1 snapshot before F2 can pass.
 
 **Step 3 — Filter into List A.** From the snapshot, select and combine
 into **List A**. Record the source URL for each item.

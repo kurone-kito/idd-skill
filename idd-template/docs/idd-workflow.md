@@ -148,7 +148,10 @@ Agents deliberately avoid editing a PR digest between a valid E1 review
 watermark and a successful F3 merge path. A digest edit can be PR
 activity, so successful F2 passes carry their activity snapshot forward
 without touching the digest; blocked reroutes and hold paths may update
-the digest because they stop or leave merge intent anyway.
+the digest because they stop or leave merge intent anyway. The F3
+awaiting-reviewer restart-F2 path is the exception: it skips digest
+updates so the restarted F2 pass does not self-invalidate review
+currency.
 
 ### Roadmap-claim contention playbook
 

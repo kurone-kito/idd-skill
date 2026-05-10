@@ -222,9 +222,11 @@ On pull requests, a digest edit is still PR activity unless a future
 repository helper explicitly classifies it otherwise. Therefore do not
 edit a PR digest between a valid E1 review watermark and an intended F3
 merge pass. Edit it only when the flow leaves merge intent (for example,
-returning to E1, routing from F3 to F1/D4/F2 as blocked, or posting a
-hold/stop), or after F3 has merged. This keeps digest text from
-satisfying or perturbing review-currency, advisory, CI, or merge gates.
+returning to E1, routing from F3 to F1/D4 as blocked, or posting a
+hold/stop), or after F3 has merged. The F3 awaiting-reviewer restart-F2
+path intentionally skips digest edits so that F2 can restart without
+self-invalidating review currency. This keeps digest text from satisfying
+or perturbing review-currency, advisory, CI, or merge gates.
 
 ## Abort
 

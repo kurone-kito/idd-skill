@@ -137,11 +137,18 @@ gate. The active claim must still use your current `{claim-id}`.
      `**Awaiting maintainer decision**` reply → post a hold comment and
      stop.
 
-   When a merge failure routes to F1, D4, E1, F2, or a hold, update the
+   When a merge failure routes to F1, D4, E1, or a hold, update the
    digest after recording the failure evidence. Set `Phase` to
    `F3 blocked`, summarize the GitHub merge error or unresolved thread
    class in `Open blockers`, and set `Next action` to the routed phase
    or maintainer action.
+
+   If the merge failure path resolves or acknowledges awaiting-reviewer
+   threads and restarts F2, do not update the digest before restarting
+   F2. That PR activity would invalidate the F2 restart and force an E1
+   snapshot even though E1 intentionally has no actionable
+   awaiting-reviewer item. Let the restarted F2 pass record blockers if
+   it finds one.
 
 ## F4 — Cleanup
 
