@@ -15,14 +15,27 @@ Before routing, collect all of the following:
    unclaimed. Also record the latest released branch, if any. The
    shared rules ignore marker-shaped comments from untrusted authors;
    record their URLs as suspicious context when they affect routing.
-2. **Open PR** — check for an open PR that closes/references this issue.
-3. **Local worktrees** — run `git worktree list`.
-4. **Local branch** — check whether the branch named in the claim
+2. **Open PR and current head** — check for an open PR that
+   closes/references this issue. Record the current PR HEAD SHA.
+3. **Issue/PR activity recency** — snapshot issue comments, review
+   threads, review bodies, and regular PR comments, then record the
+   latest `updatedAt` across that universe. When an open PR exists,
+   include PR `createdAt`/`updatedAt` as additional recency signals.
+4. **PR HEAD movement evidence** — define a baseline before comparison:
+   use the latest trusted same-claim `review-watermark`/`review-baseline`
+   marker SHA when available; otherwise use the current PR HEAD SHA
+   captured in step 2 as the baseline. Then confirm whether commits were
+   added after that baseline from PR timeline/activity.
+5. **CI transition state** — record current CI states for the PR HEAD,
+   the latest completed CI transition `completedAt` (any terminal
+   outcome), and the latest successful CI pass `completedAt` (or `none`).
+6. **Local worktrees** — run `git worktree list`.
+7. **Local branch** — check whether the branch named in the claim
    comment exists locally.
-5. **Dirty/clean** — run `git status` in the worktree (if it exists).
-6. **Unpushed commits** — run `git log @{u}..HEAD` in the worktree. If
+8. **Dirty/clean** — run `git status` in the worktree (if it exists).
+9. **Unpushed commits** — run `git log @{u}..HEAD` in the worktree. If
    no upstream is configured, treat all local commits as unpushed.
-7. **Current HEAD SHA** — run `git rev-parse HEAD`.
+10. **Current local HEAD SHA** — run `git rev-parse HEAD`.
 
 ## Step 0 — Classify the resume route
 
