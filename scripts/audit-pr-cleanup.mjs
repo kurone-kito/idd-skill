@@ -4,6 +4,10 @@ import { execFileSync } from "node:child_process";
 
 const ISO8601_UTC_WITH_OPTIONAL_FRACTION = String.raw`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z`;
 const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)`;
+const TRUSTED_MARKER_PERMISSIONS = new Set(["admin", "maintain", "write"]);
+const trustedMarkerAuthorCache = new Map();
+let cachedConfiguredTrustedMarkerAuthors = null;
+let cachedCurrentViewerLogin = null;
 
 const OPERATIONAL_MARKERS = [
   {
@@ -173,7 +177,7 @@ async function buildReport(owner, repo, prNumber, options = {}) {
   };
 
   for (const comment of comments) {
-    if (evaluateOperationalComment(comment, pr, report)) {
+    if (evaluateOperationalComment(comment, pr, report, owner, repo)) {
       continue;
     }
     evaluateRegularBotComment(comment, comments, threads, pr, report);
@@ -190,13 +194,19 @@ async function buildReport(owner, repo, prNumber, options = {}) {
   return report;
 }
 
-function evaluateOperationalComment(comment, pr, report) {
+function evaluateOperationalComment(comment, pr, report, owner, repo) {
   const prefix = operationalMarkerPrefix(comment.body);
   if (!prefix) {
     return false;
   }
 
   const subject = subjectFromNode(comment, "IssueComment", "OUTDATED");
+  const author = comment.author?.login ?? "";
+
+  if (!isTrustedMarkerAuthor(owner, repo, author)) {
+    addSkipped(report, subject, "operational marker author is not trusted");
+    return true;
+  }
 
   if (!pr.merged) {
     addSkipped(report, subject, "PR is not merged");
@@ -873,8 +883,13 @@ function readActiveClaim(owner, repo, issueNumber) {
   const retiredClaimIds = new Set();
 
   for (const comment of comments) {
-    const claim = parseClaim(comment.body, comment.createdAt);
+    const author = comment.author?.login ?? "";
+
+    const claim = parseClaim(comment.body, comment.createdAt, author);
     if (claim) {
+      if (!isTrustedMarkerAuthor(owner, repo, author)) {
+        continue;
+      }
       if (retiredClaimIds.has(claim.claimId)) {
         continue;
       }
@@ -904,9 +919,10 @@ function readActiveClaim(owner, repo, issueNumber) {
       continue;
     }
 
-    const release = parseRelease(comment.body);
+    const release = parseRelease(comment.body, author);
     if (
       release
+      && isTrustedMarkerAuthor(owner, repo, author)
       && active
       && release.agentId === active.agentId
       && release.claimId === active.claimId
@@ -919,7 +935,7 @@ function readActiveClaim(owner, repo, issueNumber) {
   return active;
 }
 
-function parseClaim(body, createdAt) {
+function parseClaim(body, createdAt, author) {
   const match = body.trimEnd().match(
     new RegExp(
       `^<!--\\s*claimed-by:\\s+(\\S+)\\s+(\\S+)\\s+supersedes:\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s+branch:\\s+([^\\s>]+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
@@ -935,10 +951,11 @@ function parseClaim(body, createdAt) {
     supersedes: match[3],
     branch: match[5],
     createdAt,
+    author,
   };
 }
 
-function parseRelease(body) {
+function parseRelease(body, author) {
   const match = body.trimEnd().match(
     new RegExp(
       `^<!--\\s*unclaimed-by:\\s+(\\S+)\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
@@ -951,7 +968,86 @@ function parseRelease(body) {
   return {
     agentId: match[1],
     claimId: match[2],
+    author,
   };
+}
+
+function isTrustedMarkerAuthor(owner, repo, login) {
+  if (!login) {
+    return false;
+  }
+
+  const normalized = login.toLowerCase();
+  if (normalized === currentViewerLogin()) {
+    return true;
+  }
+  if (configuredTrustedMarkerAuthors().has(normalized)) {
+    return true;
+  }
+
+  if (!trustCollaboratorMarkers()) {
+    return false;
+  }
+
+  const cacheKey = `${owner}/${repo}:${normalized}`;
+  if (trustedMarkerAuthorCache.has(cacheKey)) {
+    return trustedMarkerAuthorCache.get(cacheKey);
+  }
+
+  let trusted = false;
+  try {
+    const permission = execFileSync(
+      "gh",
+      [
+        "api",
+        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
+        "--jq",
+        ".permission",
+      ],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim().toLowerCase();
+    trusted = TRUSTED_MARKER_PERMISSIONS.has(permission);
+  } catch {
+    trusted = false;
+  }
+
+  trustedMarkerAuthorCache.set(cacheKey, trusted);
+  return trusted;
+}
+
+function currentViewerLogin() {
+  if (cachedCurrentViewerLogin !== null) {
+    return cachedCurrentViewerLogin;
+  }
+
+  try {
+    cachedCurrentViewerLogin = execFileSync(
+      "gh",
+      ["api", "user", "--jq", ".login"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim().toLowerCase();
+  } catch {
+    cachedCurrentViewerLogin = "";
+  }
+  return cachedCurrentViewerLogin;
+}
+
+function configuredTrustedMarkerAuthors() {
+  if (cachedConfiguredTrustedMarkerAuthors) {
+    return cachedConfiguredTrustedMarkerAuthors;
+  }
+
+  cachedConfiguredTrustedMarkerAuthors = new Set(
+    (process.env.IDD_TRUSTED_MARKER_ACTORS ?? "")
+      .split(",")
+      .map((login) => login.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  return cachedConfiguredTrustedMarkerAuthors;
+}
+
+function trustCollaboratorMarkers() {
+  return /^(1|true|yes)$/i.test(process.env.IDD_TRUST_COLLABORATOR_MARKERS ?? "");
 }
 
 function isValidIsoTimestamp(value) {
@@ -1158,6 +1254,10 @@ Options:
   --repo <owner/name>               repository override
   --format <json|table>             output format (default: json)
   --help                            show this help
+
+Environment:
+  IDD_TRUSTED_MARKER_ACTORS         comma-separated trusted bot/app logins
+  IDD_TRUST_COLLABORATOR_MARKERS    set true to trust Write/Maintain/Admin collaborators
 `);
 }
 

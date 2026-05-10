@@ -152,13 +152,15 @@ it. If multiple same-head markers exist, always use the one with the
 request, not the last.
 
 Take a fresh activity snapshot (same scope as E1 Step 1: all threads,
-review bodies, and regular comments, excluding agent operational
-markers). Record the highest `updatedAt` as the **temporary polling
-watermark** — do **not** post it as a `<!-- review-watermark -->` PR
-comment. If the snapshot is empty, use the `createdAt` of the latest
+review bodies, and regular comments, excluding trusted agent
+operational markers only). Record the highest `updatedAt` as the
+**temporary polling watermark** — do **not** post it as a
+`<!-- review-watermark -->` PR comment. If the snapshot is empty, use
+the `createdAt` of the latest
 `<!-- review-watermark: {agent-id} {claim-id} … -->` comment whose
-`{claim-id}` matches the current active claim. If no same-claim
-watermark exists, stop and return to E1 to create one.
+`{claim-id}` matches the current active claim and whose GitHub author is
+a trusted marker actor. If no trusted same-claim watermark exists, stop
+and return to E1 to create one.
 
 Poll every 2 minutes:
 
@@ -171,11 +173,12 @@ Poll every 2 minutes:
    If `CURRENT_HEAD != PR_HEAD_SHA` → HEAD changed; return to E1.
 
 2. Re-read review threads, review bodies, and regular PR comments,
-   **excluding any regular PR comment authored by any IDD agent** (covers
+   **excluding trusted agent operational marker comments only** (covers
    advisory-wait, advisory-wait-recovery, review-watermark,
-   review-baseline, claim, hold notes, and other operational comments).
-   If any item has `updatedAt` strictly newer than the polling watermark
-   → return to E1 immediately.
+   review-baseline, claim, hold notes, and other operational comments
+   from trusted marker actors). Marker-shaped comments from untrusted
+   authors remain activity. If any item has `updatedAt` strictly newer
+   than the polling watermark → return to E1 immediately.
 
 3. Run **AW1** and **AW2** (refresh `COPILOT_PENDING`, `LAST_COPILOT_COMMIT`,
    and `EARLIEST_SAME_HEAD_AT`). Apply **AW5** if `EARLIEST_SAME_HEAD_AT`
