@@ -71,8 +71,9 @@ sessions must hand off before F3.
 
 Adopters that want a stable config input for local tooling can add
 `.github/idd/config.json` and mirror their recorded policy decisions
-(merge policy, review policy, thread resolution policy, marker prefix,
-and command strings). This JSON is optional and does not replace
+(`iddVersion`, marker prefix, merge/review/thread policies,
+`trustedMarkerActors`, and command strings). This JSON is optional and
+does not replace
 `.github/instructions/*.instructions.md` as the execution authority.
 
 ## Placeholders

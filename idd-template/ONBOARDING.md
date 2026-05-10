@@ -851,7 +851,8 @@ After completing the steps above, confirm each item:
       `idd-discover.instructions.md` and `idd-overview.instructions.md`
       match the prefix chosen for this project.
 - [ ] If `.github/idd/config.json` is used, it matches the recorded
-      merge/review/thread policies, marker prefix, and command values.
+      `iddVersion`, marker prefix, merge/review/thread policies,
+      `trustedMarkerActors`, and command values.
 
 Once all items are checked, the IDD workflow is ready for use. Point the
 operator to `docs/idd-workflow.md` as the starting guide.
