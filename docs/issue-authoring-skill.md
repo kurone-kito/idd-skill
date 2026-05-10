@@ -158,6 +158,39 @@ Recommended routing rules:
 - if the work does not belong in this repository, route to
   `out-of-scope`
 
+## Alignment with A4.5 Suitability Gate
+
+The IDD discover phase uses an A4.5 pre-claim suitability gate that
+evaluates whether an already-published issue is suitable for autonomous
+execution. This gate applies the same readiness buckets as the issue
+authoring skill, **and adds new outcomes** for defects discovered at
+discover time.
+
+### Mapping authoring buckets to A4.5 outcomes
+
+| Authoring Bucket     | A4.5 Gate Checks | Pass/Fail              | A4.5 Outcome       |
+| -------------------- | ---------------- | ---------------------- | ------------------ |
+| **ready**            | All 7 checks     | All pass               | **(pass)** → claim |
+| **deferred**         | (not published)  | N/A during drafting    | Not yet evaluated  |
+| **needs-decision**   | Check 5 or 7     | Fail on decision block | `needs-decision`   |
+| **blocked-by-human** | Check 6          | Fail on autonomy block | `blocked-by-human` |
+| **out-of-scope**     | Check 1          | Fail on scope check    | `out-of-scope`     |
+
+### New A4.5 outcomes not in authoring buckets
+
+The A4.5 gate may discover new issues that should have been caught
+during drafting:
+
+| A4.5 Outcome  | A4.5 Check | Meaning                               | Drafting Prevention                     |
+| ------------- | ---------- | ------------------------------------- | --------------------------------------- |
+| **unclear**   | Check 2    | Issue body is malformed or incoherent | Run coherence validation before publish |
+| **invalid**   | Check 3    | Untrusted input or safety concern     | Screen for markers and code injection   |
+| **duplicate** | Check 4    | Duplicate of existing work            | Run reuse-first check before publish    |
+
+**Prevention during drafting**: Before publishing an issue, validate that
+it will not fail A4.5 for coherence, safety, or uniqueness. If it would,
+resolve the issue during drafting instead of publishing it.
+
 ## Reuse-first issue policy
 
 Before creating any new issue, the skill should check whether the work
