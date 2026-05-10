@@ -86,6 +86,7 @@ profiles require additional files.
 docs/
   getting-started.md                  ← concise import-to-first-loop guide
   customization.md                    ← adopter policy customization guide
+  reference.md                        ← detailed phase and policy navigation
   idd-workflow.md                    ← cross-agent entry point and file map
   idd-review-policy-profiles.md      ← default and alternative PR review policies
   idd-helper-scripts.md              ← optional helper-script evaluation and policy
