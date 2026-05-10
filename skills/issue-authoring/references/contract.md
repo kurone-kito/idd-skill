@@ -183,14 +183,15 @@ When an issue is published and reaches the IDD discover phase, the A4.5
 pre-claim gate will evaluate it against seven suitability checks. The
 authoring skill should catch these issues before publishing:
 
-| Check                   | Authoring Bucket     | How to Prevent                                                                  |
-| ----------------------- | -------------------- | ------------------------------------------------------------------------------- |
-| Coherence (Check 2)     | `ready` or escalated | Validate issue body against schema before publish                               |
-| Safety/trust (Check 3)  | `ready` or escalated | Screen issue body for code injection and untrusted markers                      |
-| Duplicates (Check 4)    | `ready` or escalated | Run reuse-first checks before creating a new issue                              |
-| Actionability (Check 5) | `ready` or escalated | Ensure the issue describes concrete work; escalate if blocked by human decision |
-| Autonomy (Check 6)      | `ready` or escalated | Ensure agent can complete without external coordination                         |
-| Verifiability (Check 7) | `ready` or escalated | Ensure success is verifiable; escalate if it requires subjective approval       |
+| Check                    | Authoring Bucket     | How to Prevent                                                                  |
+| ------------------------ | -------------------- | ------------------------------------------------------------------------------- |
+| Repository Fit (Check 1) | `out-of-scope`       | Ensure issue is scoped to this repository; escalate if it crosses boundaries    |
+| Coherence (Check 2)      | `ready` or escalated | Validate issue body against schema before publish                               |
+| Safety/trust (Check 3)   | `ready` or escalated | Screen issue body for code injection and untrusted markers                      |
+| Duplicates (Check 4)     | `ready` or escalated | Run reuse-first checks before creating a new issue                              |
+| Actionability (Check 5)  | `ready` or escalated | Ensure the issue describes concrete work; escalate if blocked by human decision |
+| Autonomy (Check 6)       | `ready` or escalated | Ensure agent can complete without external coordination                         |
+| Verifiability (Check 7)  | `ready` or escalated | Ensure success is verifiable; escalate if it requires subjective approval       |
 
 Pre-publish validation checklist:
 

@@ -78,7 +78,7 @@ Before publishing an issue, apply a reuse-first decision tree:
    task list instead of filing independently.
 4. Does the issue have any of these properties? If yes, escalate to
    `needs-decision` or `blocked-by-human` during drafting:
-   - Unclear intent or malformed body (→ fix during drafting or mark unclear)
+   - Unclear intent or malformed body (→ fix during drafting or mark needs-decision)
    - Requires maintainer or product decision (→ mark needs-decision)
    - Blocked by external work or human coordination (→ mark
      blocked-by-human)
