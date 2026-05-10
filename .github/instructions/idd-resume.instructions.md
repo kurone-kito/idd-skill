@@ -103,7 +103,8 @@ must follow A5 race-safe verification from
 `idd-claim.instructions.md`: wait 5–10 seconds after posting
 `claimed-by`, re-read and parse the full claim stream chronologically,
 apply the same-second lexicographic `{claim-id}` tie-breaker, and fail
-verification if a later trusted valid competing claim appears.
+verification if a later trusted competing `claimed-by` with a different
+`{claim-id}` appears.
 
 A branch left by a stale or released claim is inheritable. An open PR or
 remote branch may be reused when it matches the branch recorded in the

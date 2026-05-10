@@ -119,9 +119,10 @@ rules. Apply all race-safe checks below:
 1. Verify that the active claim now uses **your** `{claim-id}`.
 2. If two or more trusted, valid `claimed-by` contenders share the same
    `created_at` second, the winner is the lexicographically earlier
-   `{claim-id}` (case-sensitive ASCII compare).
-3. Verify no trusted, valid `claimed-by` with a different `{claim-id}`
-   appears later than your claim event.
+   `{claim-id}` (case-sensitive ASCII compare). This race-safe
+   tie-break extends the shared parsing rules for this verification step.
+3. Verify no later trusted `claimed-by` with a different `{claim-id}`
+   appears after your claim event.
 
 If any check fails, treat the claim as contested. Return to Discover
 using the same selection mode that produced this target and pick the

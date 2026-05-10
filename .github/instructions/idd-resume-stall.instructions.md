@@ -79,7 +79,8 @@ Immediately before posting takeover:
    (`idd-claim.instructions.md`) for the upcoming takeover post-and-
    verify sequence: wait 5–10 seconds after posting, re-parse
    chronologically, apply same-second lexicographic `{claim-id}`
-   tie-break, and reject later trusted valid competing claims.
+   tie-break, and reject later trusted competing `claimed-by` markers
+   with different `{claim-id}` values.
 
 If any check fails, stop and restart from Resume discovery/routing.
 Do not post takeover with stale evidence.
