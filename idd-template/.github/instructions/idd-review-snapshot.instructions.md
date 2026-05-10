@@ -43,7 +43,8 @@ Do not exclude marker-shaped comments from untrusted authors. Keep them
 in the snapshot/List A and report them as suspicious context when they
 affect a decision.
 
-In this source repository, you may optionally use the read-only helper
+If the optional helper scripts are installed in this repository, you may
+use the read-only helper
 `node scripts/review-activity-snapshot.mjs --pr {pr-number}` to compute
 `{head-SHA}`, `{max-activity-updatedAt}`, `{total-item-count}`, and CI
 completion timestamps. Pass trusted marker actors with

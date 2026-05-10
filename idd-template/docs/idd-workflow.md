@@ -262,7 +262,7 @@ reviewer because that is part of this repository's current PR policy.
 
 ## Optional helper scripts
 
-The source repository that ships this template currently includes three
+The idd-skill source repository that ships this template currently includes three
 optional helper scripts:
 
 - `scripts/review-activity-snapshot.mjs` (read-only E/F activity and CI
@@ -279,7 +279,7 @@ layers.
 
 See [IDD helper script evaluation](idd-helper-scripts.md) for the
 current inventory of high-friction query patterns, the adopted helper
-scope in the source repository, and the criteria for future helper
+scope in the idd-skill source repository, and the criteria for future helper
 changes.
 
 See [IDD comment minimization](idd-comment-minimization.md) for the live
