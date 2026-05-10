@@ -64,6 +64,11 @@ Treat `human_merge` as the safe default for public repositories;
 agent session merge authority. Record the selected policy in repository
 documentation that future IDD sessions read.
 
+If you keep the distributed advisory/CI defaults, record that choice
+alongside the merge policy and point operators to
+[IDD policy constants](docs/policy-constants.md) so the named values are
+easy to find later.
+
 ## Your task
 
 1. Read this entire document first.

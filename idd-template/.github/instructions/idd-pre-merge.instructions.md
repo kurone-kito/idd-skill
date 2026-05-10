@@ -8,6 +8,10 @@ This phase includes a repository-specific GitHub Copilot advisory review
 gate. Even when another local agent is driving the workflow, follow it
 because the dependency is on GitHub review state, not on the local CLI.
 
+The merge-gate timing defaults referenced by F2 are named in
+[IDD policy constants](../../docs/policy-constants.md). Use that inventory
+for the canonical values, not as a behavior override.
+
 Before any F-phase mutating action, apply the shared claim revalidation
 gate. The active claim must still use your current `{claim-id}`.
 

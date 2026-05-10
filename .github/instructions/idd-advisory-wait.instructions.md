@@ -10,6 +10,11 @@ advisory-wait check. It is referenced by:
 - **F3** (`idd-merge.instructions.md`): final revalidation immediately
   before executing the merge command
 
+The current policy values for request caps, advisory windows, and
+related defaults are listed in [IDD policy constants](../../docs/policy-constants.md).
+Use that inventory when you need the named value, not as a place to
+change behavior.
+
 Callers are responsible for fetching `PR_HEAD_SHA` before invoking these
 steps and for defining their own routing on each outcome.
 

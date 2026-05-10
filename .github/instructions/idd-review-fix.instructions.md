@@ -9,6 +9,10 @@ review step. Even when another local agent is driving the workflow,
 follow it because the dependency is on GitHub review state, not on the
 local CLI.
 
+The advisory-review timing defaults used by E14 are named in
+[IDD policy constants](../../docs/policy-constants.md). Refer there when
+you need the values, but keep the phase logic here unchanged.
+
 Apply the shared claim revalidation gate before E9, before the E12 push,
 and before each E13/E14 GitHub side effect (reply, resolve, reviewer
 request, or hold comment).

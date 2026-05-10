@@ -6,6 +6,11 @@ value here does not change runtime behavior, and this page does not
 promise a configuration mechanism that the instruction files have not
 implemented yet.
 
+The values below are the named policy defaults that onboarding and
+customization docs refer to. When a repository keeps the distributed
+default, the instruction files continue to enforce the same behavior; the
+names just make the defaults easier to record and change consistently.
+
 Use it during onboarding to identify which defaults a repository accepts
 as-is and which defaults need a follow-up workflow change.
 
