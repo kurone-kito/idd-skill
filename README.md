@@ -6,16 +6,13 @@
 
 🌐 Language: **English** | [日本語](./README.ja.md)
 
-Let multiple AI agents work from GitHub Issues without stepping on each
-other.
+Turn AI coding from one-off prompts into a GitHub-native delivery loop
+that keeps going until the issue is closed.
 
 IDD Skill gives a repository a portable Issue-Driven Development
 workflow: agents discover ready issues, claim ownership, implement in a
 branch, open a PR, handle review feedback, wait for CI, merge, and clean
 up. The whole loop lives in your repo as Markdown instruction files.
-
-Use it when your team wants AI agents to keep going after the first PR
-instead of stopping at handoff time.
 
 ## Why Teams Use IDD
 
