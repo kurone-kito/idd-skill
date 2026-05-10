@@ -98,6 +98,13 @@ Otherwise, determine claim state from the parsed active claim:
   `{claim-id}` whose `supersedes:` value is the current active claim's
   `{claim-id}`, then continue to Step 2.
 
+When Step 1 performs a re-claim or stale takeover, claim verification
+must follow A5 race-safe verification from
+`idd-claim.instructions.md`: wait 5–10 seconds after posting
+`claimed-by`, re-read and parse the full claim stream chronologically,
+apply the same-second lexicographic `{claim-id}` tie-breaker, and fail
+verification if a later trusted valid competing claim appears.
+
 A branch left by a stale or released claim is inheritable. An open PR or
 remote branch may be reused when it matches the branch recorded in the
 stale active claim you are taking over, or in the latest released claim.

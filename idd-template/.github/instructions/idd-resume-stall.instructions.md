@@ -75,6 +75,11 @@ Immediately before posting takeover:
 5. Re-check closed/merged guards. If the issue is now closed or the PR
    is now merged, stop and return to `idd-resume.instructions.md` Step 1
    cleanup behavior.
+6. If takeover is still eligible, use A5 race-safe claim verification
+   (`idd-claim.instructions.md`) for the upcoming takeover post-and-
+   verify sequence: wait 5–10 seconds after posting, re-parse
+   chronologically, apply same-second lexicographic `{claim-id}`
+   tie-break, and reject later trusted valid competing claims.
 
 If any check fails, stop and restart from Resume discovery/routing.
 Do not post takeover with stale evidence.
@@ -87,7 +92,8 @@ Perform takeover via `idd-claim.instructions.md` using:
 - `supersedes: <previous-active-claim-id>`
 
 Then re-read and verify the active claim now uses your fresh
-`{claim-id}`. If not, stop and return to discovery/routing.
+`{claim-id}` using the same A5 race-safe verification checks. If not,
+stop and return to discovery/routing.
 
 After successful verification, run `idd-resume.instructions.md` Step 1
 to preserve closed/merged cleanup and `roadmap-audit/*` special-case
