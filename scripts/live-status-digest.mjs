@@ -106,22 +106,7 @@ if (args.apply) {
     process.exit(1);
   }
 
-  if (!args.skipClaimCheck) {
-    try {
-      assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId);
-    } catch (error) {
-      fail(error.message);
-    }
-  }
-
   if (planned.action === "create") {
-    if (!args.skipClaimCheck) {
-      try {
-        assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId);
-      } catch (error) {
-        fail(error.message);
-      }
-    }
     const created = createIssueComment(owner, repo, targetNumber, planned.body);
     report.applied = true;
     report.commentId = created.id ?? null;
@@ -129,13 +114,6 @@ if (args.apply) {
   } else if (planned.action === "update") {
     if (!planned.commentId) {
       fail("cannot update digest because the current comment id is missing");
-    }
-    if (!args.skipClaimCheck) {
-      try {
-        assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId);
-      } catch (error) {
-        fail(error.message);
-      }
     }
     const updated = updateIssueComment(owner, repo, planned.commentId, planned.body);
     report.applied = true;
