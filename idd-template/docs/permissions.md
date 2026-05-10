@@ -29,6 +29,21 @@ to push a branch and update PR discussion, but it should not be able to
 change repository settings, read secrets, publish packages, or deploy to
 production.
 
+## Merge Policy Profiles
+
+Choose and record one merge policy in repository documentation before
+granting unattended agent credentials:
+
+| Merge policy             | Who may merge                                                            | Worker credential boundary                                                                 |
+| ------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `human_merge`            | A human maintainer performs the final merge and any post-merge cleanup.  | Worker sessions stop before merge and report the PR state for human review.                |
+| `separate_merge_agent`   | A trusted merge-capable session performs only the final merge phase.     | Worker sessions handle claim, work, PR, CI, and review fixes without merge-capable access. |
+| `fully_autonomous_merge` | One trusted agent session may complete the merge and cleanup phases too. | Worker and merge-capable authority are combined only by explicit repository opt-in.        |
+
+Use `human_merge` as the safe default for public or OSS repositories.
+Treat `fully_autonomous_merge` as an explicit credential decision, never
+as an automatic consequence of installing IDD.
+
 ## Phase Permissions
 
 Each IDD phase needs a different subset of access:
@@ -58,8 +73,8 @@ actually call.
   suspicious output, command history exposure, or an unexpected agent
   action.
 - Keep merge-capable credentials out of general worker sessions. Escalate
-  only for the merge phase and only after branch freshness, CI, review,
-  and unresolved-thread checks pass.
+  only according to the selected merge policy and only after branch
+  freshness, CI, review, and unresolved-thread checks pass.
 - Do not paste credentials into issues, PRs, prompts, logs, screenshots,
   or generated documentation.
 - Store credentials in the platform's secret store or an approved local
@@ -115,6 +130,9 @@ Before enabling IDD in a repository:
 - Decide whether the default Copilot advisory review policy applies, and
   document any replacement reviewer policy before agents reach later PR
   phases.
+- Record the selected merge policy (`human_merge`,
+  `separate_merge_agent`, or `fully_autonomous_merge`) in repository
+  documentation before granting unattended worker credentials.
 - Review any installed `SKILL.md` bundles or automation scripts before
   allowing them to run shell commands.
 - Make sure the agent can run validation locally without access to

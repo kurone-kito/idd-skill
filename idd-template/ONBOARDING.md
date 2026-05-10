@@ -48,6 +48,12 @@ additional files after import.
 Before granting credentials to unattended or merge-capable agents, read
 `docs/permissions.md` and choose the narrowest access profile that can
 complete the intended phase.
+Also choose a merge policy before the first unattended run:
+`human_merge`, `separate_merge_agent`, or `fully_autonomous_merge`.
+Treat `human_merge` as the safe default for public repositories;
+`fully_autonomous_merge` is the explicit opt-in that gives one trusted
+agent session merge authority. Record the selected policy in repository
+documentation that future IDD sessions read.
 
 ## Your task
 
@@ -56,11 +62,14 @@ complete the intended phase.
 3. Fetch or copy the template files into the target repository.
 4. Review `docs/permissions.md` with the operator before granting agent
    credentials.
-5. Ask whether the operator wants the optional issue-authoring
+5. Choose and record the operator's merge policy before allowing
+   unattended workers to approach the merge phase. The record must live
+   in repository documentation that future IDD sessions read.
+6. Ask whether the operator wants the optional issue-authoring
    companion skill for pre-execution issue drafting.
-6. Replace every placeholder (see table below) with the correct value.
-7. Add IDD references to the repository's agent entry files.
-8. Verify the result with the checklist at the bottom.
+7. Replace every placeholder (see table below) with the correct value.
+8. Add IDD references to the repository's agent entry files.
+9. Verify the result with the checklist at the bottom.
 
 ---
 
@@ -131,6 +140,14 @@ Copilot advisory review policy described above. If not, choose the
 closest profile in `docs/idd-review-policy-profiles.md` and note which
 phase files and profile-specific surfaces must be customized after the
 files are copied in.
+
+Also confirm the operator's merge policy:
+`human_merge`, `separate_merge_agent`, or `fully_autonomous_merge`.
+Record the selected policy in repository documentation, such as a local
+policy section in the imported docs or agent entry files. For
+`human_merge` and `separate_merge_agent`, do not grant merge-capable
+credentials to normal worker sessions; also add local guidance or
+phase-file customization so workers hand off before F3.
 
 ### File list
 
@@ -499,6 +516,8 @@ After completing the steps above, confirm each item:
       are present.
 - [ ] The operator's selected PR review policy profile is recorded, and
       any non-default profile has matching phase-file customizations.
+- [ ] The operator's selected merge policy is recorded in repository
+      documentation, and worker credentials match that boundary.
 - [ ] If the operator opted into issue authoring,
       `skills/issue-authoring/SKILL.md`,
       `skills/issue-authoring/agents/openai.yaml`, and the
