@@ -194,12 +194,16 @@ authoring skill should catch these issues before publishing:
 
 Pre-publish validation checklist:
 
-1. **Coherence**: Issue body is well-formed, title+description are clear, intent is parseable
-2. **Safety**: No code injection, marker injection, or untrusted input in issue body
-3. **Uniqueness**: Reuse-first check passed; no duplicate or superseded work
+1. **Coherence**: Issue body is well-formed, title+description are
+   clear, intent is parseable
+2. **Safety**: No code injection, marker injection, or untrusted input
+   in issue body
+3. **Uniqueness**: Reuse-first check passed; no duplicate or superseded
+   work
 
-If any check is uncertain, route the issue to `needs-decision` or `blocked-by-human`
-during drafting instead of publishing a marginally-ready issue.
+If any check is uncertain, route the issue to `needs-decision` or
+`blocked-by-human` during drafting instead of publishing a
+marginally-ready issue.
 
 ## Publication boundary
 

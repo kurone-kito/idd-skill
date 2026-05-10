@@ -23,7 +23,8 @@ The issue-authoring bundle fits into a three-phase handoff:
 ### Phase 3: Execution (separate IDD loop)
 
 - User explicitly asks to start the IDD execution loop
-- Target repository's `.github/instructions/idd-discover.instructions.md` takes over
+- Target repository's `.github/instructions/idd-discover.instructions.md`
+  takes over
 - IDD discover phase runs A0-T/A0-O/A1-A4.5 gates
 - Suitable issues are claimed, worked, and merged
 
@@ -63,7 +64,7 @@ When these prevent-during-drafting checks are applied correctly, published
 issues will pass A4.5; if they do not, A4.5 will catch them at discover
 time and report the specific failure (unclear, invalid, duplicate).
 
-## Use this bundle to:
+## Use this bundle to
 
 - prepare IDD-ready orphan issues when the target repository supports
   `issue-scope: orphan-first`, including any required
@@ -72,7 +73,7 @@ time and report the specific failure (unclear, invalid, duplicate).
   sequencing or parallel tracks
 - surface non-ready buckets instead of guessing through blockers
 
-## Do not use this bundle to:
+## Do not use this bundle to
 
 - start the Discover → Claim → Work loop implicitly
 - treat bundled references as a replacement for repository execution
