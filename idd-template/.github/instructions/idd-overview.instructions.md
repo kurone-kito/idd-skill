@@ -34,6 +34,17 @@ use the claim and release notes shown here. Hidden-only legacy
 `claimed-by` and `unclaimed-by` comments remain valid for parsing and
 migration, but do not create new hidden-only claim comments.
 
+- `{agent-id}` is a tool or agent identifier that may be shared by
+  multiple concurrent sessions of the same agent type. **Session-scoped
+  agent-id (recommended)**: To improve auditability in multi-session
+  deployments, append a short unique token to the agent-id
+  (e.g., `copilot-8122ca35`, where `8122ca35` is a unique session
+  identifier). This does not change ownership semantics — `{claim-id}`
+  remains the authoritative ownership token — but makes claim comments
+  traceable to specific sessions in audit logs and simplifies incident
+  investigation when multiple concurrent sessions use the same base
+  agent name. This practice is backward-compatible: claim-state parsing
+  already uses `{claim-id}` as the authoritative token, not `{agent-id}`.
 - `{claim-id}` is an opaque unique token for one active claim lineage
   and is the portable ownership token used with trusted actor and
   session-record checks. Generate a fresh value on every fresh claim or
