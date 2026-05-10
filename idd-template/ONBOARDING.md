@@ -223,14 +223,14 @@ You now have all the information needed to finalize placeholder values:
 If the operator provided no corrections in Step 1A, use the proposed values
 directly.
 
-| Placeholder                      | What it means                                                                                                                                                                                                  | Example / Derivation                                             |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- ------------------------------------------- |
-| `{{REPO_NAME}}`                  | The repository's short name. Used in worktree path examples. **Derived** in Step 1A from git remote.                                                                                                           | Auto-derived: `my-app`                          |
-| `{{PROJECT_MARKER_PREFIX}}`      | A short, URL-safe prefix unique to this project. Used in HTML comment markers in issue bodies. **Derived** in Step 1A; confirm with operator.                                                                 | Auto-derived from repo name: `my-app`          |
-| `{{FIX_VALIDATE_COMMANDS}}`      | Commands that may auto-fix linting/formatting and verify. **Derived** in Step 1A from build-tool evidence.                                                                                                   | Auto-derived: `npm run lint:fix && npm run lint` |
-| `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Verify commands (no mutations). **Derived** in Step 1A from build-tool evidence.                                                                                                                                | Auto-derived: `npm run lint && npm run test`    |
-| `{{POST_FIX_VALIDATE_COMMANDS}}` | Auto-fix + full verify (superset). **Derived** in Step 1A from build-tool evidence.                                                                                                                            | Auto-derived: `npm run lint:fix && npm test`   |
-| `{{INSTALL_DEPS_COMMAND}}`       | Dependency install command. **Derived** in Step 1A from package-manager evidence. Use `true` for projects with no standard dependency install.                                                               | Auto-derived: `npm install` or `pip install -r requirements.txt` |
+| Placeholder                      | What it means                                                                                                                                  | Example / Derivation                                             |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `{{REPO_NAME}}`                  | The repository's short name. Used in worktree path examples. **Derived** in Step 1A from git remote.                                           | Auto-derived: `my-app`                                           |
+| `{{PROJECT_MARKER_PREFIX}}`      | A short, URL-safe prefix unique to this project. Used in HTML comment markers in issue bodies. **Derived** in Step 1A; confirm with operator.  | Auto-derived from repo name: `my-app`                            |
+| `{{FIX_VALIDATE_COMMANDS}}`      | Commands that may auto-fix linting/formatting and verify. **Derived** in Step 1A from build-tool evidence.                                     | Auto-derived: `npm run lint:fix && npm run lint`                 |
+| `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Verify commands (no mutations). **Derived** in Step 1A from build-tool evidence.                                                               | Auto-derived: `npm run lint && npm run test`                     |
+| `{{POST_FIX_VALIDATE_COMMANDS}}` | Auto-fix + full verify (superset). **Derived** in Step 1A from build-tool evidence.                                                            | Auto-derived: `npm run lint:fix && npm test`                     |
+| `{{INSTALL_DEPS_COMMAND}}`       | Dependency install command. **Derived** in Step 1A from package-manager evidence. Use `true` for projects with no standard dependency install. | Auto-derived: `npm install` or `pip install -r requirements.txt` |
 
 > **No-op substitution**: any command that is not applicable to your
 > project can be set to `true`. For example, a repository without a
@@ -562,9 +562,9 @@ This repository uses the following IDD policies:
 **Policy**: `{fully_autonomous_merge | human_merge | separate_merge_agent}`
 
 {
-  "fully_autonomous_merge": "Merge-capable trusted agent sessions may execute the merge phase (F3). No human maintainer approval required before merge execution.",
-  "human_merge": "All work stops before the merge phase (F3). A human maintainer must review the PR and execute the merge manually.",
-  "separate_merge_agent": "A separately authorized merge-capable actor reviews and executes the merge. Worker agents stop before F3."
+"fully_autonomous_merge": "Merge-capable trusted agent sessions may execute the merge phase (F3). No human maintainer approval required before merge execution.",
+"human_merge": "All work stops before the merge phase (F3). A human maintainer must review the PR and execute the merge manually.",
+"separate_merge_agent": "A separately authorized merge-capable actor reviews and executes the merge. Worker agents stop before F3."
 }
 
 ### PR Review Policy
