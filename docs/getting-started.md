@@ -41,6 +41,17 @@ evidence before agents reach PR review and merge phases.
 Keep this decision explicit. Review policy changes are workflow changes,
 not just documentation preferences.
 
+### Merge policy
+
+Before unattended runs begin, choose and record a merge policy with
+`fully_autonomous_merge` preselected as the distributed default, and ask
+whether the operator wants an explicit opt-out to `human_merge` or
+prefers `separate_merge_agent` as a non-default split-authority profile.
+Keep the selected policy in repository documentation that future IDD
+sessions read. Missing policy defaults to `fully_autonomous_merge`;
+unknown recorded policy values must stop with a maintainer hold until
+corrected.
+
 ## 3. Prepare Issues
 
 IDD works from GitHub Issues. At least one issue should be ready before

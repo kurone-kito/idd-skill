@@ -58,11 +58,19 @@ Also choose a merge policy before the first unattended run:
 `human_merge`, `separate_merge_agent`, or `fully_autonomous_merge`.
 The distributed default is `fully_autonomous_merge`, which gives one
 trusted agent session merge authority to continue through merge execution
-in F3. `human_merge` and `separate_merge_agent` always stop before the
-merge phase by design, even if recorded. Public repositories or those
-requiring human validation should explicitly opt out to `human_merge`.
-Record the selected policy in repository documentation that future IDD
-sessions read.
+in F3. Ask whether the operator wants an explicit opt-out to
+`human_merge` before unattended runs begin, or prefers
+`separate_merge_agent` as a non-default split-authority handoff profile.
+For public/OSS repositories, or whenever human validation is required
+before merge, recommend an explicit opt-out to `human_merge` before
+granting unattended credentials. Normal worker sessions stop before
+merge under `human_merge` and `separate_merge_agent`; only the trusted
+merge-capable session configured for `separate_merge_agent` continues
+past the default F3 gate after the required customization. Record the
+selected policy in repository
+documentation that future IDD sessions read. Missing policy defaults to
+`fully_autonomous_merge`; unknown recorded policy values must stop with
+a maintainer hold until corrected.
 
 If you keep the distributed advisory/CI defaults, record that choice
 alongside the merge policy and point operators to
@@ -301,15 +309,20 @@ merge phase files listed in `docs/idd-review-policy-profiles.md`.
 
 Also confirm the operator's merge policy:
 `human_merge`, `separate_merge_agent`, or `fully_autonomous_merge`.
-Record the selected policy in repository documentation, such as a local
-policy section in the imported docs or agent entry files. The distributed
-default is `fully_autonomous_merge`. For `human_merge` (explicit opt-out
-from default) or `separate_merge_agent`, do not grant merge-capable
-credentials to normal worker sessions. Keep the default F3 stop gate for
-worker sessions, and record the human maintainer or separate
-merge-capable actor plus the resume condition. Customize the local F3
-gate only when a repository needs that separate merge-capable actor to
-continue through merge execution under repository-specific guidance.
+Preselect `fully_autonomous_merge` as the distributed default and ask
+whether the operator wants an explicit opt-out to `human_merge` before
+unattended runs begin, or prefers `separate_merge_agent` as a
+non-default split-authority profile. Record the selected policy in
+repository documentation, such as a local policy section in the imported
+docs or agent entry files. For `human_merge` and
+`separate_merge_agent`, do not grant merge-capable credentials to
+normal worker sessions. Keep the default F3 stop gate for worker
+sessions, and record the human maintainer or separate merge-capable
+actor plus the resume condition. Missing policy defaults to
+`fully_autonomous_merge`; unknown recorded policy values must stop with
+a maintainer hold until corrected. Customize the local F3 gate only when
+the repository needs that separate merge-capable actor to continue
+through merge execution under repository-specific guidance.
 
 Confirm claim timing policy defaults from `docs/policy-constants.md` as
 well: `claim-stale-age` (default `24 h`) and
