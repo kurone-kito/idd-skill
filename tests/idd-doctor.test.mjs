@@ -17,6 +17,16 @@ test("findPlaceholders returns template tokens", () => {
   assert.deepEqual(placeholders, ["{{REPO_NAME}}", "{{PROJECT_MARKER_PREFIX}}"])
 })
 
+test("findPlaceholders also captures lowercase and hyphenated tokens", () => {
+  const placeholders = findPlaceholders(`
+  keep {{repo_name}}
+  and {{marker-prefix}}
+  but ignore {NOT_A_PLACEHOLDER}
+  `)
+
+  assert.deepEqual(placeholders, ["{{repo_name}}", "{{marker-prefix}}"])
+})
+
 test("parseProjectCommandRows extracts command rows from the table", () => {
   const commands = parseProjectCommandRows(`
 | Name | Commands |

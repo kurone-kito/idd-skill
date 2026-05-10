@@ -50,7 +50,7 @@ export function runDoctor({ root, requireGithub }) {
 }
 
 export function findPlaceholders(text) {
-  return [...text.matchAll(/\{\{[A-Z0-9_]+\}\}/g)].map((match) => match[0])
+  return [...text.matchAll(/\{\{\s*[A-Za-z0-9_-]+\s*\}\}/g)].map((match) => match[0])
 }
 
 export function parseProjectCommandRows(text) {
@@ -379,7 +379,12 @@ function checkGithubReadiness(root, requireGithub, report) {
   try {
     protectionJson = JSON.parse(protection.stdout)
   } catch {
-    report.warnings.push("branch protection response is not valid JSON")
+    const message = "branch protection response is not valid JSON"
+    if (requireGithub) {
+      report.errors.push(message)
+    } else {
+      report.warnings.push(message)
+    }
     return
   }
 
