@@ -110,6 +110,24 @@ limited to the PR that just merged and the local cleanup for that child
 issue. F5 then loops back to Discover, where roadmap completion can be
 checked with the broader parent context.
 
+### Roadmap-claim contention playbook
+
+Use this playbook when multiple sessions are active:
+
+- **Do continue child execution** when a roadmap claim is present, unless
+  a normal readiness gate blocks the child issue. Claims are per issue.
+- **Do treat `roadmap-audit/*` as coordination-only** for roadmap
+  side-effects (comment/edit/label/follow-up/close), not as a global
+  execution lock.
+- **Do stop and defer on fresh non-owned claims**. If a claim is active,
+  non-stale, and not yours, treat it as not inheritable.
+- **Do take over only stale non-owned claims** according to shared stale
+  thresholds and `supersedes` rules; do not force ownership changes.
+- **Do heartbeat only for owned active claims**, and release
+  roadmap-audit claims promptly after roadmap-side effects finish.
+- **Do not bypass blocker labels, dependency checks, or claim
+  revalidation gates** while resolving contention.
+
 ## Copilot review instruction scope
 
 The heavy shared overview keeps `applyTo: "**"` so GitHub Copilot
