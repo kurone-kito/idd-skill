@@ -38,8 +38,9 @@ values separately from the review profile choice.
 ## Profile Artifacts
 
 The exported template includes profile artifacts under `profiles/`.
-When working in this repository, maintain those artifacts under
-`profiles/`. Each non-default artifact is a documented
+When working in the idd-skill source repository, maintain those artifacts
+under `idd-template/profiles/`. When adopting this template, maintain
+those artifacts under `profiles/`. Each non-default artifact is a documented
 patch surface that records adopter-owned values, files to edit, and
 verification evidence for the selected profile.
 
@@ -121,8 +122,9 @@ Apply these shared checks for every profile:
   future IDD sessions read.
 - Record the review-thread resolution profile separately; it is not
   implied by the PR review profile.
-- When adopting this template, keep copied docs and local onboarding
-  notes in sync.
+- When maintaining the idd-skill source repository, keep source docs and
+  exported template docs in sync; when adopting this template, keep
+  copied docs and local onboarding notes in sync.
 - Run the repository's documented validation commands after editing
   docs or phase instructions.
 
