@@ -210,20 +210,46 @@ preserve them, report the duplicate URLs, and do not choose one as
 authoritative during an unattended run. See
 `docs/idd-comment-minimization.md` for the full digest contract.
 
+Treat every digest create or edit as a GitHub side effect: re-validate
+the active claim first, write fields from the authoritative state just
+collected by the current phase, and set `Authoritative by` to the
+specific claim, review, CI, advisory, PR, or issue evidence used. If the
+claim was lost, do not repair or update the digest. Every digest update
+refreshes `Last checked` to the server-observed or current UTC time of
+that authoritative re-read.
+
+On pull requests, a digest edit is still PR activity unless a future
+repository helper explicitly classifies it otherwise. Therefore do not
+edit a PR digest between a valid E1 review watermark and an intended F3
+merge pass. Edit it only when the flow leaves merge intent (for example,
+returning to E1, routing from F3 to F1/D4 as blocked, or posting a
+hold/stop), or after F3 has merged. The F3 awaiting-reviewer restart-F2
+path intentionally skips digest edits so that F2 can restart without
+self-invalidating review currency. This keeps digest text from satisfying
+or perturbing review-currency, advisory, CI, or merge gates.
+
 ## Abort
 
 On abort, re-validate ownership first. If the active claim still uses
-your current `{claim-id}`, post an `unclaimed-by` comment with that same
+your current `{claim-id}`, update the digest before posting
+`unclaimed-by` so it shows `Phase: aborted/released`, the planned
+release in `Next action`, and the verified claim plus abort reason in
+`Authoritative by`; then post an `unclaimed-by` comment with that same
 `{claim-id}`. If the active claim no longer uses your `{claim-id}`, do
-not post a release comment because another session already took over.
-Open PR and remote branch left by a stale or unclaimed state are
-inheritable by the next agent (see `idd-resume.instructions.md`).
+not update the digest and do not post a release comment because another
+session already took over. Open PR and remote branch left by a stale or
+unclaimed state are inheritable by the next agent (see
+`idd-resume.instructions.md`).
 
 ## Hold / suspend
 
 Keep the claim. Post the hold reason and resume condition to the PR or
 issue comment. After re-validating ownership, re-post the claim comment
 with the same `{claim-id}` every 12 h as heartbeat.
+After posting the hold reason, upsert the digest with the hold phase, the
+blocking condition in `Open blockers`, and the resume condition in
+`Next action`. Long holds still need claim heartbeats; the digest does
+not reset the claim stale clock.
 
 ## Roadmap markers
 
