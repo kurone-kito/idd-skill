@@ -18,10 +18,16 @@ gate. The active claim must still use your current `{claim-id}`.
    or held by a different `{claim-id}` (even under the same agent ID),
    the claim was lost — report this and stop.
 2. Defensive route check: re-read the repository's recorded merge policy.
-   This file is autonomous-only. If the recorded policy is missing,
-   treat it as `fully_autonomous_merge` (distributed default). If the
-   policy is anything else, do **not** continue here — route to
-   `idd-merge-handoff.instructions.md` and stop.
+   If the recorded policy is missing, treat it as
+   `fully_autonomous_merge` (distributed default). Then apply:
+   - `fully_autonomous_merge`: continue.
+   - `separate_merge_agent`: continue only when repository documentation
+     explicitly records that the **current session** is the designated
+     merge-capable actor and the documented resume condition is
+     satisfied; otherwise route to
+     `idd-merge-handoff.instructions.md` and stop.
+   - `human_merge` or unknown policy: route to
+     `idd-merge-handoff.instructions.md` and stop.
 3. Immediately before executing the merge command, do one final live
    fetch using the **exact same activity-universe scope as E1 Step 1**
    (all review threads, review bodies, and regular PR comments,

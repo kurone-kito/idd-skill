@@ -20,10 +20,9 @@ revalidation gate. The active claim must still use your current
 3. If the recorded value is not one of `fully_autonomous_merge`,
    `human_merge`, or `separate_merge_agent`, treat it as an unknown merge
    policy: stop, post a hold comment, and request maintainer decision.
-4. If the recorded policy is `human_merge` or `separate_merge_agent`,
-   stop before the final freshness fetch and before `gh pr merge`. After
-   claim revalidation, report or post a concise handoff summary that
-   includes:
+4. If the recorded policy is `human_merge`, stop before the final
+   freshness fetch and before `gh pr merge`. After claim revalidation,
+   report or post a concise handoff summary that includes:
    - PR number and branch
    - current HEAD from F2 (`{f2-head-SHA}`)
    - the F2 readiness evidence
@@ -35,9 +34,14 @@ revalidation gate. The active claim must still use your current
    gh pr merge {pr-number} --merge --match-head-commit "{f2-head-SHA}"
    ```
 
-   For `human_merge`, hand off to the human maintainer. For
-   `separate_merge_agent`, hand off to the configured merge-capable
-   session; if that actor or resume condition is not recorded, hold for
-   maintainer direction.
-5. Only when the policy is `fully_autonomous_merge` may the same session
-   continue to `idd-merge.instructions.md`.
+   For `human_merge`, hand off to the human maintainer.
+5. If the recorded policy is `separate_merge_agent`, apply this split:
+   - If repository documentation explicitly records that the **current
+     session** is the designated merge-capable actor and the documented
+     resume condition is satisfied, proceed to
+     `idd-merge.instructions.md`.
+   - Otherwise, stop and hand off using the summary fields above to the
+     configured merge-capable session. If that actor or resume condition
+     is not recorded, hold for maintainer direction.
+6. When the policy is `fully_autonomous_merge`, proceed to
+   `idd-merge.instructions.md`.
