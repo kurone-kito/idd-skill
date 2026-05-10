@@ -111,6 +111,12 @@ gate. The active claim must still use your current `{claim-id}`.
    ```
 
    Do not use squash merge or rebase merge.
+   After the merge succeeds and claim ownership is re-validated, upsert
+   the PR live status digest with `Phase: F3 merged`,
+   `Open blockers: none`, `Next action: F4 cleanup then F5 discover`,
+   and `Authoritative by` pointing to the merge commit and matched head
+   SHA. This post-merge digest update is not a merge gate and must not
+   happen before the successful merge command.
 5. If merge fails:
    - Base branch updated or conflict → return to
      `idd-pre-merge.instructions.md` F1
@@ -131,9 +137,19 @@ gate. The active claim must still use your current `{claim-id}`.
      `**Awaiting maintainer decision**` reply → post a hold comment and
      stop.
 
+   When a merge failure routes to F1, D4, E1, F2, or a hold, update the
+   digest after recording the failure evidence. Set `Phase` to
+   `F3 blocked`, summarize the GitHub merge error or unresolved thread
+   class in `Open blockers`, and set `Next action` to the routed phase
+   or maintainer action.
+
 ## F4 — Cleanup
 
-1. Run best-effort merged-PR comment cleanup when credentials permit.
+1. Confirm the post-merge digest update above exists or repair it after
+   re-validating the claim. Do not minimize the digest as an
+   operational marker unless a future cleanup policy explicitly supports
+   digest retirement.
+2. Run best-effort merged-PR comment cleanup when credentials permit.
    This cleanup is never a merge gate and must not run before F3
    succeeds. If cleanup fails, record the failure only if it is useful
    for a later audit, then continue with local cleanup.
@@ -187,10 +203,10 @@ gate. The active claim must still use your current `{claim-id}`.
 
    See `docs/idd-comment-minimization.md` for the helper report shape,
    fallback GraphQL commands, and experiment notes.
-2. Delete the local worktree and local branch.
-3. Update the local `main` branch.
-4. If GitHub auto-delete is disabled: delete the remote branch too.
-   (Worktrunk may be used for steps 2–4.)
+3. Delete the local worktree and local branch.
+4. Update the local `main` branch.
+5. If GitHub auto-delete is disabled: delete the remote branch too.
+   (Worktrunk may be used for steps 3–5.)
 
 ## F5 — Loop
 

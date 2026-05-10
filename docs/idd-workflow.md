@@ -144,6 +144,19 @@ history and reported for repair; unattended agents must continue from
 the authoritative markers and GitHub state rather than picking a digest
 arbitrarily.
 
+Phase files now define digest update points rather than leaving them to
+agent judgment. Issue digests are refreshed after claim verification,
+planning, meaningful C-loop decisions, hold, abort, and resume route
+selection. PR digests are refreshed for review-fix progress, advisory
+wait or CI holds, pre-merge blockers, merge failures, and post-merge
+cleanup.
+
+Agents deliberately avoid editing a PR digest between a valid E1 review
+watermark and a successful F3 merge path. A digest edit can be PR
+activity, so successful F2 passes carry their activity snapshot forward
+without touching the digest; blocker and hold paths may update the
+digest because they stop or return to E1 anyway.
+
 ### Roadmap-claim contention playbook
 
 Use this playbook when multiple sessions are active:

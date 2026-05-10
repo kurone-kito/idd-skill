@@ -118,4 +118,14 @@ to Discover using the same selection mode that produced this target
 the A3-ready path).
 
 Once verified, record this `{claim-id}` as your current claim token for
-the rest of the workflow, then continue to `idd-work.instructions.md`.
+the rest of the workflow.
+
+After claim verification, upsert the issue live status digest when there
+is exactly one marked digest or none. Use the verified `claimed-by`
+comment as the authority: set `Phase` to `A5 claimed`, `Claim` to the
+current `{agent-id}` / `{claim-id}`, `Branch` to the verified branch,
+`Open blockers` to `none`, and `Next action` to `B1 create branch and
+worktree`. If multiple marked digests exist, report their URLs and
+continue from the verified claim without editing a digest.
+
+Then continue to `idd-work.instructions.md`.

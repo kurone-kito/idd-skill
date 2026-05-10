@@ -38,6 +38,9 @@ If `mergeable` is `CONFLICTING` or `mergeStateStatus` is `BEHIND` or
 4. Push (use `--force-with-lease` if you rebased).
 5. If the HEAD changed (new commits were added): return to
    `idd-review-snapshot.instructions.md` (E1) to re-evaluate reviews.
+   Before returning, update the PR live status digest with
+   `Phase: F1 rebased`, the new HEAD in `Authoritative by`, and
+   `Next action: E1 review snapshot`.
 
 ## F2 — Pre-merge condition check
 
@@ -194,6 +197,16 @@ must align with every F2 condition below.
   E1's regular-comment filter for non-advisory discussion. Copilot and
   CI advisory bot comments are handled earlier in the PATH B triage flow
   (E4-E7) and are excluded from this gate.
+
+When any F2 condition routes to a hold/stop or back to E1/E14, update
+the PR live status digest after the blocking evidence is recorded and
+before stopping or returning. Set `Phase` to the failing F2 check,
+`Open blockers` to the concrete unmet condition, `Next action` to the
+required reviewer, CI, advisory, maintainer, or agent action, and
+`Authoritative by` to the F2 evidence fetched in this pass. If every F2
+condition is satisfied, do **not** edit the digest before F3; carry the
+F2 snapshot forward unchanged so the final F3 freshness check can use
+the same activity universe.
 
 Note: `required_approvals` is fetched at runtime from the ruleset. The
 practical blockers are `CHANGES_REQUESTED` states and missing CODEOWNER

@@ -117,6 +117,13 @@ claim state, PR state, CI state, and review activity when doing so is
 safe under the claim revalidation gate. If multiple marked digests
 exist, preserve them, report their URLs, and continue routing from
 trusted markers and GitHub state rather than digest text.
+For a successful stale takeover or legacy migration, the digest belongs
+to the new verified `{claim-id}` only after that claim is active; include
+the superseded or migrated claim marker in `Authoritative by` and do not
+reuse prior-claim review-watermark or review-baseline comments. For
+non-owned, non-stale claims, do not edit the digest; stalled-session
+handling records evidence in session logs only unless the claim becomes
+yours.
 
 ## Step 2 — Locate or restore branch and worktree
 
@@ -140,6 +147,14 @@ configured).
 | No             | No             | Worktree dirty                        | Resume from B3                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | No             | No             | Worktree clean, unpushed              | Resume from D1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | No             | No             | Worktree clean, no unpushed           | Resume from B2                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+
+After Step 2 chooses a route, refresh the digest only when the route
+materially changes what a human should expect next. Examples:
+`Phase: resume -> B3` for dirty worktree recovery, `Phase: resume -> D1`
+for unpushed clean commits, or `Phase: resume -> F1` when CI and review
+state are already clear. The `Authoritative by` field should cite the
+claim marker, PR/branch evidence, CI status, and review snapshot used for
+the routing decision.
 
 ## Step 3 — Determine PR and CI/review state
 

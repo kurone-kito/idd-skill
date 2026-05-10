@@ -201,6 +201,17 @@ required by its path:
 If any check fails, do not continue. Return to E4-E6 as needed until the
 missing evidence is recorded.
 
+After E7 succeeds, update the PR live status digest only when doing so
+will not invalidate a merge-bound E1 snapshot. Safe update points are:
+when triage posts a hold and stops, when Accepted PATH A items remain
+and the next route is E9, or when the update is followed by a fresh E1
+snapshot before F2. Set `Phase` to `E triage`, summarize remaining
+Accepted PATH A work or `none` in `Open blockers`, set `Next action` to
+E9 or F2 as appropriate, and cite the disposition replies plus the
+trusted review-watermark in `Authoritative by`. If List A is empty and
+the next step is F2, defer the digest update unless you intentionally
+return to E1 afterward.
+
 ## E8 — Accepted PATH A count check
 
 If the Accepted PATH A count is zero → proceed to
