@@ -67,6 +67,14 @@ distributed default is `fully_autonomous_merge`; choose `human_merge` or
 `separate_merge_agent` as explicit opt-out profiles when normal worker
 sessions must hand off before F3.
 
+## Optional machine-readable config
+
+Adopters that want a stable config input for local tooling can add
+`.github/idd/config.json` and mirror their recorded policy decisions
+(merge policy, review policy, thread resolution policy, marker prefix,
+and command strings). This JSON is optional and does not replace
+`.github/instructions/*.instructions.md` as the execution authority.
+
 ## Placeholders
 
 | Placeholder                      | Description                                     |

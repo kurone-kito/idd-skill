@@ -614,6 +614,40 @@ Make this policy section discoverable and point to it from any entry files
 (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`)
 that mention IDD workflow.
 
+### Optional: add a machine-readable policy file
+
+For repositories that want stable automation input beyond Markdown,
+create `.github/idd/config.json` as a machine-readable mirror of the
+decisions above. Keep the human-readable policy section and this JSON in
+sync.
+
+Suggested shape:
+
+```json
+{
+  "iddVersion": "0.1.0",
+  "markerPrefix": "{{PROJECT_MARKER_PREFIX}}",
+  "mergePolicy": "fully_autonomous_merge",
+  "reviewPolicy": "copilot-advisory",
+  "threadResolutionPolicy": "fast-agent-resolve",
+  "trustedMarkerActors": ["<maintainer-or-bot-login>"],
+  "commands": {
+    "install": "{{INSTALL_DEPS_COMMAND}}",
+    "fixValidate": "{{FIX_VALIDATE_COMMANDS}}",
+    "prePushValidate": "{{PRE_PUSH_VALIDATE_COMMANDS}}",
+    "postFixValidate": "{{POST_FIX_VALIDATE_COMMANDS}}"
+  }
+}
+```
+
+Notes:
+
+- This file is optional by default and does not replace instruction files.
+- IDD behavior still comes from `.github/instructions/*.instructions.md`
+  unless the adopter explicitly builds tooling that consumes this config.
+- If the repository uses this file, treat drift between Markdown policy
+  notes and JSON as a configuration bug and update both in the same change.
+
 ---
 
 ## Step 4 — Replace placeholders
@@ -816,6 +850,8 @@ After completing the steps above, confirm each item:
       `{{PROJECT_MARKER_PREFIX}}-blocked-by` marker names in
       `idd-discover.instructions.md` and `idd-overview.instructions.md`
       match the prefix chosen for this project.
+- [ ] If `.github/idd/config.json` is used, it matches the recorded
+      merge/review/thread policies, marker prefix, and command values.
 
 Once all items are checked, the IDD workflow is ready for use. Point the
 operator to `docs/idd-workflow.md` as the starting guide.
