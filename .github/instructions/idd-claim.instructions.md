@@ -116,18 +116,19 @@ consistency settle. Then re-read the full issue comment stream and parse
 the active claim in chronological order using the shared claim-state
 rules. Apply all race-safe checks below:
 
-1. Build the same-second contender set from trusted `claimed-by` markers
-   that share your claim event's `created_at` second and have different
-   `{claim-id}` values.
+1. Build the same-second contender set from your own trusted
+   `claimed-by` marker plus every trusted `claimed-by` marker in that
+   exact `created_at` second.
 2. If that set has two or more contenders, the winner is the
    lexicographically earlier `{claim-id}` (case-sensitive ASCII compare).
    This race-safe tie-break extends the shared parsing rules for this
    verification step.
 3. Verify that the active claim now uses **your** `{claim-id}` after the
    same-second tie-break is applied.
-4. Verify no trusted competing `claimed-by` with a different
-   `{claim-id}` appears in a strictly later `created_at` second than
-   your claim event.
+4. Verify no later trusted competing `claimed-by` with a different
+   `{claim-id}` would be accepted as the active claim by the shared
+   claim-state rules (for example, a valid stale takeover) in a strictly
+   later `created_at` second than your claim event.
 
 If any check fails, treat the claim as contested. Return to Discover
 using the same selection mode that produced this target and pick the
