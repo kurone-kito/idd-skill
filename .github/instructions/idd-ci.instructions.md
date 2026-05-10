@@ -3,6 +3,10 @@
 Read this file when you need to wait for CI after a push. Callers must
 define their own **on-success** target before invoking this algorithm.
 
+The shared CI wait thresholds and retry defaults are listed in
+[IDD policy constants](../docs/policy-constants.md). Use that inventory
+to find the current named values; this helper still owns the behavior.
+
 ## Algorithm
 
 1. Identify the full set of required checks for the current PR head SHA

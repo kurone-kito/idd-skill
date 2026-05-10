@@ -183,6 +183,14 @@ own claim state, blockers, and dependencies. This does not relax
 roadmap-level blocker gates such as `status:blocked-by-human` or
 `status:needs-decision`, which still stop child selection in Discover.
 
+## Policy Constants
+
+The distributed claim, advisory, CI, and critique-loop defaults are
+named in `docs/policy-constants.md`. Read that page before changing any
+timing or loop constant, and record local deviations in onboarding or
+repository docs so future sessions can find the selected policy values
+without scanning every phase file.
+
 ## Abort
 
 On abort, re-validate ownership first. If the active claim still uses

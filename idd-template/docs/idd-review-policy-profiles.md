@@ -31,6 +31,10 @@ Use this profile when GitHub Copilot pull request review is available
 and the operator accepts it as an advisory signal rather than a required
 human approval.
 
+The advisory wait windows, request cap, and CI wait defaults are named in
+[IDD policy constants](policy-constants.md), so adopters can record those
+values separately from the review profile choice.
+
 ## Human-Required Profile
 
 Use `human-required` when a person, CODEOWNER, or required reviewer is

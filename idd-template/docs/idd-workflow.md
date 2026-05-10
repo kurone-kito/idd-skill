@@ -83,6 +83,11 @@ The distributed workflow remains an instruction template first. Native
 skills can sit beside it as optional helpers, but they do not replace
 these execution-layer files.
 
+If you need to understand or change distributed timing defaults, start
+with [IDD policy constants](policy-constants.md). It names the claim,
+advisory, CI, and critique-loop defaults and points to the instruction
+files that own each value.
+
 When an operator gives exactly one issue target, Discover can verify that
 target directly before Claim. The shortcut avoids broad roadmap
 enumeration, but it still applies targeted readiness checks and the A4
