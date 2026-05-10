@@ -11,7 +11,7 @@ Before Step 1, decide whether this is a stalled-session case:
 - If the issue is already closed, or the corresponding PR is already
   merged, skip stalled-session routing and continue to Step 1 cleanup
   behavior.
-- If a non-owned active claim exists and progress appears stalled, run
+- If a non-owned active claim exists, run
   `idd-resume-stall.instructions.md` first.
 - Use only externally observable evidence (trusted claim heartbeat
   timestamps, PR head movement, remote branch tip movement, review/

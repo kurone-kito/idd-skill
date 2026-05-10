@@ -18,8 +18,11 @@ Before deciding, gather:
 2. Current issue and PR activity timestamps (comments, review-thread
    updates, review submissions).
 3. PR head SHA and latest completed CI timestamp for that head (or
-   `none`), plus remote branch tip SHA and update time when no PR exists.
-4. Latest trusted review watermark and baseline marker timestamps for
+   `none`), plus current CI run/check states (`queued` /
+   `in_progress` / terminal) and their start/update timestamps.
+4. PR head update timestamp (when the current head entered the PR), or
+   remote branch tip SHA and update time when no PR exists.
+5. Latest trusted review watermark and baseline marker timestamps for
    the same active claim (if present).
 
 Use GitHub server timestamps only.
@@ -38,7 +41,8 @@ Use GitHub server timestamps only.
 Use a **30-minute quiet window** as the default evidence threshold.
 During that window, no externally observable progress should appear:
 no trusted heartbeat on the active claim, no PR head movement, no
-remote branch tip movement, and no new review/comment/CI completion
+remote branch tip movement, no running CI activity (`queued` or
+`in_progress` checks/runs), and no new review/comment/CI completion
 activity.
 
 - Quiet window not met or evidence is contradictory/incomplete:
@@ -67,6 +71,9 @@ Immediately before posting takeover:
 3. Confirm it is still stale at this moment.
 4. Re-check quiet-window evidence against the latest externally visible
    activity. If new progress appeared after S2, stop and restart.
+5. Re-check closed/merged guards. If the issue is now closed or the PR
+   is now merged, stop and return to `idd-resume.instructions.md` Step 1
+   cleanup behavior.
 
 If any check fails, stop and restart from Resume discovery/routing.
 Do not post takeover with stale evidence.
