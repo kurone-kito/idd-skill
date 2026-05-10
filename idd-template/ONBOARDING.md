@@ -631,8 +631,8 @@ Suggested shape:
   "reviewPolicy": "<operator-review-policy>",
   "threadResolutionPolicy": "<operator-thread-resolution-policy>",
   "claimTiming": {
-    "staleAge": "<operator-claim-stale-age>",
-    "heartbeatInterval": "<operator-claim-heartbeat-interval>"
+    "staleAge": "PT24H",
+    "heartbeatInterval": "PT12H"
   },
   "trustedMarkerActors": ["<trusted-login-1>", "<trusted-login-2>"],
   "commands": {
@@ -651,8 +651,13 @@ Notes:
   unless the adopter explicitly builds tooling that consumes this config.
 - If the repository uses this file, treat drift between Markdown policy
   notes and JSON as a configuration bug and update both in the same change.
+- If this file is created before Step 4, include it in the same
+  placeholder-replacement pass as the copied template files.
 - Keep command strings JSON-escaped. Do not paste raw shell directly if
   it contains quotes or backslashes.
+- Extend the schema only when the repository records extra policy
+  decisions (for example: critique-loop profile, merge handoff actor,
+  external advisory bot, `issue-scope`, or maintainer approval actors).
 
 ---
 
