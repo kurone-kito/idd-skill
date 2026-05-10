@@ -91,6 +91,13 @@ export function operationalMarkerPrefix(body) {
   return OPERATIONAL_MARKERS.find((marker) => marker.pattern.test(normalized))?.label ?? null;
 }
 
+export function operationalMarkerPrefixByStart(body) {
+  const normalized = body.trimStart();
+  return OPERATIONAL_MARKERS
+    .map((marker) => marker.label)
+    .find((prefix) => normalized.startsWith(prefix)) ?? null;
+}
+
 export function unsafeTextReason(body) {
   for (const rule of UNSAFE_TEXT_RULES) {
     if (rule.pattern.test(body)) {
@@ -289,14 +296,14 @@ export function buildActivitySnapshotSummary(
     if (!trustedMarkerLogins.has((comment.author?.login ?? "").toLowerCase())) {
       return true;
     }
-    return operationalMarkerPrefix(comment.body ?? "") === null;
+    return operationalMarkerPrefixByStart(comment.body ?? "") === null;
   });
 
   const commentActivities = filteredComments
     .map((comment) => comment.updatedAt ?? comment.createdAt)
     .filter(isValidIsoTimestamp);
   const reviewActivities = reviews
-    .map((review) => review.submittedAt ?? review.updatedAt ?? review.createdAt)
+    .map((review) => review.updatedAt ?? review.submittedAt ?? review.createdAt)
     .filter(isValidIsoTimestamp);
   const threadActivities = threads
     .map((thread) => threadActivityAt(thread))

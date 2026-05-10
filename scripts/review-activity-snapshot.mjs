@@ -11,21 +11,37 @@ if (!args.prNumber) {
 
 const owner = args.owner || ghText(["repo", "view", "--json", "owner", "--jq", ".owner.login"]);
 const repo = args.repo || ghText(["repo", "view", "--json", "name", "--jq", ".name"]);
+const repoRef = `${owner}/${repo}`;
 const trustedMarkerLogins = args.trustedMarkerLogins
   .split(",")
   .map((login) => login.trim())
   .filter(Boolean);
 
-const headSha = ghJson(["pr", "view", String(args.prNumber), "--json", "headRefOid", "--jq", ".headRefOid"]);
-const checks = ghJson([
+const headSha = ghText([
   "pr",
-  "checks",
+  "view",
   String(args.prNumber),
+  "-R",
+  repoRef,
   "--json",
-  "name,state,completedAt",
+  "headRefOid",
   "--jq",
-  ".",
+  ".headRefOid",
 ]);
+const checks = ghJson(
+  [
+    "pr",
+    "checks",
+    String(args.prNumber),
+    "-R",
+    repoRef,
+    "--json",
+    "name,state,completedAt",
+    "--jq",
+    ".",
+  ],
+  { allowStatuses: [8] },
+);
 const reviews = ghApiJson(
   `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
   true,
@@ -34,7 +50,7 @@ const comments = ghApiJson(
   `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
   true,
 );
-const threads = fetchReviewThreads(owner, repo, String(args.prNumber));
+const threads = fetchReviewThreads(owner, repo, args.prNumber);
 
 const summary = buildActivitySnapshotSummary(
   {
@@ -121,7 +137,7 @@ function normalizeReview(review) {
     state: review.state ?? "",
     submittedAt: review.submitted_at ?? "",
     createdAt: review.submitted_at ?? "",
-    updatedAt: review.submitted_at ?? "",
+    updatedAt: review.updated_at ?? review.submitted_at ?? "",
   };
 }
 
@@ -129,7 +145,7 @@ function normalizeThread(thread) {
   return {
     id: thread.id,
     isResolved: Boolean(thread.isResolved),
-    updatedAt: thread.updatedAt ?? "",
+    updatedAt: "",
     comments: {
       pageInfo: { hasNextPage: Boolean(thread.comments?.pageInfo?.hasNextPage) },
       nodes: (thread.comments?.nodes ?? []).map((comment) => ({
@@ -148,8 +164,8 @@ function fetchReviewThreads(owner, repo, prNumber) {
   let cursor = null;
 
   while (true) {
-    const payload = ghApiJson("graphql", false, {
-      query: `
+    const payload = ghGraphql(
+      `
         query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
           repository(owner: $owner, name: $repo) {
             pullRequest(number: $number) {
@@ -158,7 +174,6 @@ function fetchReviewThreads(owner, repo, prNumber) {
                 nodes {
                   id
                   isResolved
-                  updatedAt
                   comments(first: 100) {
                     pageInfo { hasNextPage endCursor }
                     nodes {
@@ -174,16 +189,25 @@ function fetchReviewThreads(owner, repo, prNumber) {
             }
           }
         }`,
-      variables: {
+      {
         owner,
         repo,
-        number: Number.parseInt(prNumber, 10),
+        number: Number.parseInt(String(prNumber), 10),
         cursor,
       },
-    });
+    );
 
     const reviewThreads = payload?.data?.repository?.pullRequest?.reviewThreads;
+    for (const thread of reviewThreads?.nodes ?? []) {
+      if (thread.comments?.pageInfo?.hasNextPage) {
+        thread.comments.nodes.push(
+          ...fetchThreadCommentPages(thread.id, thread.comments.pageInfo.endCursor),
+        );
+        thread.comments.pageInfo.hasNextPage = false;
+      }
+    }
     nodes.push(...(reviewThreads?.nodes ?? []));
+
     if (!reviewThreads?.pageInfo?.hasNextPage) {
       break;
     }
@@ -193,12 +217,61 @@ function fetchReviewThreads(owner, repo, prNumber) {
   return nodes;
 }
 
-function ghJson(args) {
-  return JSON.parse(execFileSync("gh", args, { encoding: "utf8" }));
+function fetchThreadCommentPages(threadId, afterCursor) {
+  const nodes = [];
+  let cursor = afterCursor;
+
+  while (cursor) {
+    const payload = ghGraphql(
+      `
+        query($id: ID!, $cursor: String) {
+          node(id: $id) {
+            ... on PullRequestReviewThread {
+              comments(first: 100, after: $cursor) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  body
+                  createdAt
+                  updatedAt
+                  author { login }
+                  pullRequestReview { id }
+                }
+              }
+            }
+          }
+        }`,
+      { id: threadId, cursor },
+    );
+
+    const comments = payload?.data?.node?.comments;
+    nodes.push(...(comments?.nodes ?? []));
+    cursor = comments?.pageInfo?.hasNextPage ? comments.pageInfo.endCursor : null;
+  }
+
+  return nodes;
+}
+
+function ghGraphql(query, variables) {
+  const args = ["api", "graphql", "-f", `query=${query}`];
+  for (const [key, value] of Object.entries(variables)) {
+    if (value === null || value === undefined) {
+      continue;
+    }
+    if (typeof value === "number") {
+      args.push("-F", `${key}=${value}`);
+      continue;
+    }
+    args.push("-f", `${key}=${value}`);
+  }
+  return JSON.parse(runGh(args).trim() || "{}");
+}
+
+function ghJson(args, options = {}) {
+  return JSON.parse(runGh(args, options).trim() || "[]");
 }
 
 function ghText(args) {
-  return execFileSync("gh", args, { encoding: "utf8" }).trim();
+  return runGh(args).trim();
 }
 
 function ghApiJson(path, paginate = false, fields = null) {
@@ -211,7 +284,7 @@ function ghApiJson(path, paginate = false, fields = null) {
       args.push("-f", `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`);
     }
   }
-  const raw = execFileSync("gh", args, { encoding: "utf8" }).trim();
+  const raw = runGh(args).trim();
   if (!raw) {
     return [];
   }
@@ -224,4 +297,16 @@ function ghApiJson(path, paginate = false, fields = null) {
     return chunks.flatMap((chunk) => (Array.isArray(chunk) ? chunk : [chunk]));
   }
   return JSON.parse(raw);
+}
+
+function runGh(args, options = {}) {
+  try {
+    return execFileSync("gh", args, { encoding: "utf8" });
+  } catch (error) {
+    const status = Number(error?.status ?? -1);
+    if ((options.allowStatuses ?? []).includes(status)) {
+      return String(error?.stdout ?? "");
+    }
+    throw error;
+  }
 }

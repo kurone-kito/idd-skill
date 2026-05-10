@@ -94,7 +94,7 @@ test("builds activity snapshot metrics with trusted marker filtering", () => {
       comments: [
         {
           author: { login: "idd-bot" },
-          body: "<!-- review-watermark: idd-bot claim sha none 0 none -->\n\n_idd-bot: review triage snapshot — IDD automation marker. Do not edit._",
+          body: "<!-- review-watermark: idd-bot claim sha none 0 none -->\n\n_idd-bot: localized marker note without strict format._",
           createdAt: "2026-05-10T10:00:00Z",
           updatedAt: "2026-05-10T10:00:00Z",
         },
@@ -116,6 +116,7 @@ test("builds activity snapshot metrics with trusted marker filtering", () => {
           author: { login: "reviewer" },
           state: "COMMENTED",
           submittedAt: "2026-05-10T10:15:00Z",
+          updatedAt: "2026-05-10T10:35:00Z",
         },
       ],
       threads: [
@@ -139,7 +140,7 @@ test("builds activity snapshot metrics with trusted marker filtering", () => {
 
   assert.equal(summary.totalItemCount, 4);
   assert.equal(summary.counts.comments, 2);
-  assert.equal(summary.maxActivityUpdatedAt, "2026-05-10T10:30:00Z");
+  assert.equal(summary.maxActivityUpdatedAt, "2026-05-10T10:35:00Z");
   assert.equal(summary.latestCiCompletedAt, "2026-05-10T10:25:00Z");
   assert.equal(summary.latestPassingCiCompletedAt, "2026-05-10T10:25:00Z");
 });
