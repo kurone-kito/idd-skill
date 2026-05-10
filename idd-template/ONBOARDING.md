@@ -45,6 +45,15 @@ minimum, non-default profiles touch
 `.github/instructions/idd-merge.instructions.md`; some profiles require
 additional files after import.
 
+Also choose a review-thread resolution policy before treating the import
+as complete. The distributed default is `fast-agent-resolve`, where an
+agent may resolve review threads after it has acted on accepted,
+rejected, or advisory feedback. Repositories that require reviewer
+acknowledgement should choose `hybrid-reviewer-ack` or
+`strict-reviewer-resolve` from `docs/idd-review-policy-profiles.md` and
+customize the listed phase files before running unattended PR review
+loops.
+
 Before granting credentials to unattended or merge-capable agents, read
 `docs/permissions.md` and choose the narrowest access profile that can
 complete the intended phase.
@@ -62,14 +71,15 @@ documentation that future IDD sessions read.
 3. Fetch or copy the template files into the target repository.
 4. Review `docs/permissions.md` with the operator before granting agent
    credentials.
-5. Choose and record the operator's merge policy before allowing
+5. Choose and record the operator's review-thread resolution policy.
+6. Choose and record the operator's merge policy before allowing
    unattended workers to approach the merge phase. The record must live
    in repository documentation that future IDD sessions read.
-6. Ask whether the operator wants the optional issue-authoring
+7. Ask whether the operator wants the optional issue-authoring
    companion skill for pre-execution issue drafting.
-7. Replace every placeholder (see table below) with the correct value.
-8. Add IDD references to the repository's agent entry files.
-9. Verify the result with the checklist at the bottom.
+8. Replace every placeholder (see table below) with the correct value.
+9. Add IDD references to the repository's agent entry files.
+10. Verify the result with the checklist at the bottom.
 
 ---
 
@@ -140,6 +150,14 @@ Copilot advisory review policy described above. If not, choose the
 closest profile in `docs/idd-review-policy-profiles.md` and note which
 phase files and profile-specific surfaces must be customized after the
 files are copied in.
+
+Confirm the review-thread resolution policy as well. Keep
+`fast-agent-resolve` for the distributed default, or choose
+`hybrid-reviewer-ack` / `strict-reviewer-resolve` when human review
+threads must stay open until reviewer or maintainer acknowledgement.
+Record the choice in repository documentation. For non-default profiles,
+customize the review snapshot, review triage, review fix, pre-merge, and
+merge phase files listed in `docs/idd-review-policy-profiles.md`.
 
 Also confirm the operator's merge policy:
 `human_merge`, `separate_merge_agent`, or `fully_autonomous_merge`.
@@ -516,6 +534,9 @@ After completing the steps above, confirm each item:
       are present.
 - [ ] The operator's selected PR review policy profile is recorded, and
       any non-default profile has matching phase-file customizations.
+- [ ] The operator's selected review-thread resolution policy is
+      recorded, and any non-default profile has matching phase-file
+      customizations.
 - [ ] The operator's selected merge policy is recorded in repository
       documentation, and worker credentials match that boundary.
 - [ ] If the operator opted into issue authoring,

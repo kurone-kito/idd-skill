@@ -8,7 +8,7 @@ before they treat the imported workflow as final.
 This page names the supported policy shapes and the instruction files
 that need customization when a repository does not use the default.
 
-## Profile Summary
+## PR Review Profile Summary
 
 | Profile            | Use when                                                                                      | Review signal                                                                          | Merge gate                                                                                            |
 | ------------------ | --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -90,6 +90,42 @@ If the external bot can produce blocking `CHANGES_REQUESTED` reviews or
 decision-relevant comments, classify those items as PATH A unless the
 operator explicitly narrows them.
 
+## Review Thread Resolution Profiles
+
+Review-thread resolution is a separate policy from who reviews the PR.
+The distributed default is `fast-agent-resolve`: after an agent accepts
+and fixes feedback, rejects it with a recorded rationale, or handles PATH
+B advisory feedback, the agent may resolve the associated thread. This
+means "the agent acted on the thread," not "the reviewer agreed."
+
+Repositories that use a different review culture can choose a stricter
+profile during onboarding:
+
+| Profile                   | Use when                                                                                  | Agent may resolve                                                                                      | Merge consequence                                                                                           |
+| ------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `fast-agent-resolve`      | The repository wants the distributed default and values a fast agent-managed review loop. | Human and bot threads after accepted fixes, rejected rationales, or PATH B advisory handling.          | F2/F3 may proceed once remaining unresolved threads are either resolved or classified as awaiting reviewer. |
+| `hybrid-reviewer-ack`     | Human reviewers expect to confirm human-thread fixes, but bot/advisory threads can close. | Bot/advisory threads; human threads only after reviewer or maintainer acknowledgement.                 | F2/F3 must hold human review threads open until acknowledgement appears and branch protection is satisfied. |
+| `strict-reviewer-resolve` | The team treats thread resolution as reviewer-owned.                                      | No human threads; optionally no bot threads unless the repository documents that exception separately. | F2/F3 must wait for reviewer or maintainer resolution before merge.                                         |
+
+Changing away from `fast-agent-resolve` is a workflow change. Update
+these files together with the recorded profile decision:
+
+- `.github/instructions/idd-review-triage.instructions.md`: adjust E6
+  thread-resolution behavior after PATH A and PATH B dispositions, and
+  E7 verification so stricter profiles do not require the fast default.
+- `.github/instructions/idd-review-snapshot.instructions.md`: adjust E1
+  awaiting-reviewer filtering when human threads must remain visible
+  until reviewer acknowledgement.
+- `.github/instructions/idd-review-fix.instructions.md`: adjust E13
+  resolution after accepted feedback fixes.
+- `.github/instructions/idd-pre-merge.instructions.md`: adjust F2
+  unresolved-thread handling and awaiting-reviewer exclusions.
+- `.github/instructions/idd-merge.instructions.md`: adjust F3
+  conversation-resolution fallback behavior.
+- Repository settings: confirm whether branch protection requires
+  conversation resolution, because that setting can make unresolved
+  acknowledged threads block regardless of the selected profile.
+
 ## Selection Checklist
 
 Before considering onboarding complete, record the selected profile in
@@ -102,6 +138,10 @@ the target repository's local documentation or onboarding notes.
   and branch protection as sufficient gates.
 - Choose `external-bot` only after proving the bot's reviewer identity,
   current-head coverage signal, and wait/timeout behavior.
+- Record the review-thread resolution profile separately. Keep
+  `fast-agent-resolve` for the distributed default, or customize the
+  phase files listed above before choosing `hybrid-reviewer-ack` or
+  `strict-reviewer-resolve`.
 
 Changing the profile is a workflow change, not only a documentation
 change. Update the phase files that enforce review and merge behavior in
