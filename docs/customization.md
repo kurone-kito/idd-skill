@@ -10,14 +10,14 @@ behavior change too.
 
 ## Customization Surfaces
 
-| Surface           | Default                                                                                      | Where to customize                                                                                                                                                                           |
-| ----------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Review policy     | GitHub Copilot advisory review                                                               | Choose a profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the listed phase files for any non-default profile.                                               |
-| Advisory reviewer | Copilot wait and recovery gates                                                              | For `human-required`, `no-advisory`, or `external-bot`, update the review-fix, pre-merge, merge, advisory-wait, snapshot, and triage files named by the selected profile.                    |
-| Review threads    | Agents may resolve handled review threads under the fast default                             | Choose a thread-resolution profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the triage, review-fix, pre-merge, and merge phase files for stricter profiles. |
-| Merge policy      | Merge gates after CI, review, freshness, and claim checks; safe OSS default is `human_merge` | Review [Permissions and threat model](permissions.md), record the selected policy in repository docs, and customize handoff before F3 for non-autonomous profiles.                           |
-| CI commands       | Project-specific command rows in the overview file                                           | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                                   |
-| Issue scope       | Roadmap-first discovery                                                                      | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues to be considered before roadmap traversal.  |
+| Surface           | Default                                                                                      | Where to customize                                                                                                                                                                                     |
+| ----------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Review policy     | GitHub Copilot advisory review                                                               | Choose a profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the listed phase files for any non-default profile.                                                         |
+| Advisory reviewer | Copilot wait and recovery gates                                                              | For `human-required`, `no-advisory`, or `external-bot`, update the review-fix, pre-merge, merge, advisory-wait, snapshot, and triage files named by the selected profile.                              |
+| Review threads    | Agents may resolve handled review threads under the fast default                             | Choose a thread-resolution profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the snapshot, triage, review-fix, pre-merge, and merge phase files for stricter profiles. |
+| Merge policy      | Merge gates after CI, review, freshness, and claim checks; safe OSS default is `human_merge` | Review [Permissions and threat model](permissions.md), record the selected policy in repository docs, and customize handoff before F3 for non-autonomous profiles.                                     |
+| CI commands       | Project-specific command rows in the overview file                                           | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                                             |
+| Issue scope       | Roadmap-first discovery                                                                      | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues to be considered before roadmap traversal.            |
 
 ## Review Policy
 
@@ -56,13 +56,16 @@ Choose a stricter profile when review culture requires it:
   the reviewer or maintainer owns conversation resolution.
 
 For either non-default profile, update
+`.github/instructions/idd-review-snapshot.instructions.md`,
 `.github/instructions/idd-review-triage.instructions.md`,
 `.github/instructions/idd-review-fix.instructions.md`,
 `.github/instructions/idd-pre-merge.instructions.md`, and
-`.github/instructions/idd-merge.instructions.md` so F2/F3 do not treat
-agent-handled human threads as merge-ready before the selected
-acknowledgement appears. Branch protection conversation-resolution
-requirements still override any local profile.
+`.github/instructions/idd-merge.instructions.md` so E1 does not hide
+human threads that need acknowledgement, E7 verifies the stricter
+resolution rule, and F2/F3 do not treat agent-handled human threads as
+merge-ready before the selected acknowledgement appears. Branch
+protection conversation-resolution requirements still override any local
+profile.
 
 ## Merge Policy and Credentials
 

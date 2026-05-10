@@ -111,7 +111,11 @@ Changing away from `fast-agent-resolve` is a workflow change. Update
 these files together with the recorded profile decision:
 
 - `.github/instructions/idd-review-triage.instructions.md`: adjust E6
-  thread-resolution behavior after PATH A and PATH B dispositions.
+  thread-resolution behavior after PATH A and PATH B dispositions, and
+  E7 verification so stricter profiles do not require the fast default.
+- `.github/instructions/idd-review-snapshot.instructions.md`: adjust E1
+  awaiting-reviewer filtering when human threads must remain visible
+  until reviewer acknowledgement.
 - `.github/instructions/idd-review-fix.instructions.md`: adjust E13
   resolution after accepted feedback fixes.
 - `.github/instructions/idd-pre-merge.instructions.md`: adjust F2

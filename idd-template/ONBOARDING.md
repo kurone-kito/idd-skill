@@ -156,8 +156,8 @@ Confirm the review-thread resolution policy as well. Keep
 `hybrid-reviewer-ack` / `strict-reviewer-resolve` when human review
 threads must stay open until reviewer or maintainer acknowledgement.
 Record the choice in repository documentation. For non-default profiles,
-customize the review triage, review fix, pre-merge, and merge phase
-files listed in `docs/idd-review-policy-profiles.md`.
+customize the review snapshot, review triage, review fix, pre-merge, and
+merge phase files listed in `docs/idd-review-policy-profiles.md`.
 
 Also confirm the operator's merge policy:
 `human_merge`, `separate_merge_agent`, or `fully_autonomous_merge`.
