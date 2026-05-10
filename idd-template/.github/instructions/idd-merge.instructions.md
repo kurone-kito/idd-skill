@@ -21,6 +21,13 @@ gate. The active claim must still use your current `{claim-id}`.
    `idd-pre-merge.instructions.md`. Return to E1 if **any** of the
    following is true:
 
+   In this source repository, you may optionally use the read-only
+   helper `node scripts/review-activity-snapshot.mjs --pr {pr-number}`
+   and pass trusted marker actors with
+   `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"` to
+   compute the same activity metrics; the written gate rules remain
+   canonical.
+
    - The current PR HEAD SHA differs from `{f2-head-SHA}`.
    - `{f2-max-activity-updatedAt}` is `none` and the final fetch is
      non-empty.

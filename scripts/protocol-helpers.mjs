@@ -2,6 +2,14 @@ const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
 
 const OPERATIONAL_MARKERS = [
   {
+    label: "<!-- claimed-by:",
+    pattern: /^<!--\s*claimed-by:\s+\S+\s+\S+\s+supersedes:\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s+branch:\s+[^\s>]+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+  },
+  {
+    label: "<!-- unclaimed-by:",
+    pattern: /^<!--\s*unclaimed-by:\s+\S+\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+  },
+  {
     label: "<!-- review-watermark:",
     pattern: /^<!--\s*review-watermark:\s+\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+\S+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
   },
@@ -81,6 +89,13 @@ export function parseReleaseComment(body) {
 export function operationalMarkerPrefix(body) {
   const normalized = body.trimEnd();
   return OPERATIONAL_MARKERS.find((marker) => marker.pattern.test(normalized))?.label ?? null;
+}
+
+export function operationalMarkerPrefixByStart(body) {
+  const normalized = body.trimStart();
+  return OPERATIONAL_MARKERS
+    .map((marker) => marker.label)
+    .find((prefix) => normalized.startsWith(prefix)) ?? null;
 }
 
 export function unsafeTextReason(body) {
@@ -262,6 +277,78 @@ export function classifyCiChecks(checks) {
   };
 }
 
+export function buildActivitySnapshotSummary(
+  {
+    comments = [],
+    reviews = [],
+    threads = [],
+    checks = [],
+  },
+  options = {},
+) {
+  const trustedMarkerLogins = new Set(
+    (options.trustedMarkerLogins ?? [])
+      .map((login) => String(login ?? "").trim().toLowerCase())
+      .filter(Boolean),
+  );
+
+  const filteredComments = comments.filter((comment) => {
+    if (!trustedMarkerLogins.has((comment.author?.login ?? "").toLowerCase())) {
+      return true;
+    }
+    return operationalMarkerPrefixByStart(comment.body ?? "") === null;
+  });
+
+  const commentActivities = filteredComments
+    .map((comment) => comment.updatedAt ?? comment.createdAt)
+    .filter(isValidIsoTimestamp);
+  const reviewActivities = reviews
+    .map((review) => review.updatedAt ?? review.submittedAt ?? review.createdAt)
+    .filter(isValidIsoTimestamp);
+  const threadActivities = threads
+    .map((thread) => threadActivityAt(thread))
+    .filter(isValidIsoTimestamp);
+
+  const latestCiCompletedAt = maxIsoTimestamp(
+    checks
+      .map((check) => check.completedAt)
+      .filter(isValidIsoTimestamp),
+  ) ?? "none";
+
+  const latestPassingCiCompletedAt = maxIsoTimestamp(
+    checks
+      .filter((check) => {
+        const state = String(check.state ?? "").toUpperCase();
+        return [
+          "SUCCESS",
+          "SKIPPED",
+          "NEUTRAL",
+          "NOT_APPLICABLE",
+        ].includes(state);
+      })
+      .map((check) => check.completedAt)
+      .filter(isValidIsoTimestamp),
+  ) ?? "none";
+
+  const maxActivityUpdatedAt = maxIsoTimestamp([
+    ...commentActivities,
+    ...reviewActivities,
+    ...threadActivities,
+  ]) ?? "none";
+
+  return {
+    totalItemCount: filteredComments.length + reviews.length + threads.length,
+    maxActivityUpdatedAt,
+    latestCiCompletedAt,
+    latestPassingCiCompletedAt,
+    counts: {
+      comments: filteredComments.length,
+      reviews: reviews.length,
+      threads: threads.length,
+    },
+  };
+}
+
 export function isStaleAt(activeCreatedAt, nextCreatedAt) {
   const staleMs = 24 * 60 * 60 * 1000;
   return new Date(nextCreatedAt).getTime() - new Date(activeCreatedAt).getTime() >= staleMs;
@@ -395,6 +482,26 @@ function hasExplicitDispositionAfter(targetComment, comments) {
       && Number.isFinite(dispositionTime)
       && dispositionTime > targetTime;
   });
+}
+
+function maxIsoTimestamp(values) {
+  const sorted = values
+    .map((value) => String(value))
+    .filter(isValidIsoTimestamp)
+    .sort();
+  return sorted.at(-1) ?? null;
+}
+
+function threadActivityAt(thread) {
+  if (isValidIsoTimestamp(thread.updatedAt ?? "")) {
+    return thread.updatedAt;
+  }
+
+  const commentTimes = (thread.comments?.nodes ?? [])
+    .flatMap((comment) => [comment.updatedAt, comment.createdAt])
+    .filter(isValidIsoTimestamp);
+
+  return maxIsoTimestamp(commentTimes);
 }
 
 function hasCompletedBotThreadDispositions(threads, loginPredicate) {
