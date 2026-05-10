@@ -40,6 +40,31 @@ If `mergeable` is `CONFLICTING` or `mergeStateStatus` is `BEHIND` or
 Verify **all** of the following. If any condition is not met, follow the
 bracketed action:
 
+Before running F3, record explicit F2 evidence for this pass. At
+minimum, capture:
+
+1. Activity-universe snapshot evidence:
+   `{head-SHA}`, `{max-activity-updatedAt|none}`,
+   `{total-item-count}`, `{latest-ci-completed-at|none}`.
+2. Unresolved-thread evidence: total unresolved thread count, the
+   non-awaiting-reviewer unresolved count used by the gate, and whether
+   any AMD (`**Awaiting maintainer decision**`) threads remain.
+3. Unreplied regular-comment evidence: the count of non-IDD-agent
+   comments that still lack a later IDD-agent reply.
+4. Reviewer-state evidence: latest `CHANGES_REQUESTED` status for human,
+   required, and CODEOWNER reviewers, plus required approval/CODEOWNER
+   satisfaction status.
+5. Advisory-wait evidence: current AW outcome (`SATISFIED`/`WAIT`/etc),
+   marker presence (`EARLIEST_SAME_HEAD_AT`), and whether the current
+   state satisfies the advisory gate for merge.
+6. CI evidence: required-check generation state and pass/fail status for
+   all required checks on the current PR HEAD.
+
+Do not treat "one bot says clean" as sufficient evidence. The checklist
+must cover the full activity universe (human reviewers plus advisory bot
+surfaces such as Copilot, CodeRabbit, Codex connectors, and CI bots) and
+must align with every F2 condition below.
+
 - **Review currency** (live re-fetch required, freshness gate): read the
   most recent `<!-- review-watermark: {agent-id} {claim-id} … -->`
   comment whose embedded `{claim-id}` matches the current active claim

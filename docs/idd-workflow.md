@@ -161,6 +161,33 @@ Some older project text may still use "skill files" as shorthand for
 instructions, but the native skill bundle and execution instructions are
 related rather than interchangeable surfaces.
 
+## F2 merge-readiness evidence checklist
+
+Before executing F3 merge, F2 must record concrete evidence for merge
+readiness rather than relying on a single reviewer signal.
+
+Required evidence fields:
+
+1. Activity-universe snapshot values:
+   `{head-SHA}`, `{max-activity-updatedAt|none}`,
+   `{total-item-count}`, `{latest-ci-completed-at|none}`.
+2. Unresolved-thread evidence: total unresolved threads, actionable
+   unresolved count (non-awaiting-reviewer), and AMD thread presence.
+3. Unreplied regular-comment evidence: count of non-IDD-agent comments
+   without a later IDD-agent reply.
+4. Reviewer-state evidence: latest `CHANGES_REQUESTED` states for human,
+   required, and CODEOWNER reviewers, plus required approval/CODEOWNER
+   satisfaction.
+5. Advisory-wait evidence: AW outcome for the current HEAD, marker
+   coverage (`EARLIEST_SAME_HEAD_AT`), and merge-gate satisfaction.
+6. CI evidence: required-check generation and pass status for all
+   required checks on the current HEAD.
+
+Mixed reviewer ecosystems are expected. The same checklist applies
+across human reviews and advisory bot surfaces (Copilot, CodeRabbit,
+Codex connectors, CI bots); "one bot says clean" is never sufficient by
+itself.
+
 ## Review Policy Profiles
 
 The execution loop is cross-agent, while PR review policy is a
