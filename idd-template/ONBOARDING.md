@@ -345,6 +345,7 @@ repository keeps these defaults before unattended runs.
 .github/instructions/idd-review-triage.instructions.md
 .github/instructions/idd-review-fix.instructions.md
 .github/instructions/idd-pre-merge.instructions.md
+.github/instructions/idd-merge-handoff.instructions.md
 .github/instructions/idd-merge.instructions.md
 .github/instructions/idd-resume.instructions.md
 .github/instructions/idd-resume-stall.instructions.md
@@ -410,6 +411,7 @@ for FILE in \
   ".github/instructions/idd-review-triage.instructions.md" \
   ".github/instructions/idd-review-fix.instructions.md" \
   ".github/instructions/idd-pre-merge.instructions.md" \
+  ".github/instructions/idd-merge-handoff.instructions.md" \
   ".github/instructions/idd-merge.instructions.md" \
   ".github/instructions/idd-resume.instructions.md" \
   ".github/instructions/idd-resume-stall.instructions.md" \
@@ -483,6 +485,7 @@ for FILE in \
   ".github/instructions/idd-review-triage.instructions.md" \
   ".github/instructions/idd-review-fix.instructions.md" \
   ".github/instructions/idd-pre-merge.instructions.md" \
+  ".github/instructions/idd-merge-handoff.instructions.md" \
   ".github/instructions/idd-merge.instructions.md" \
   ".github/instructions/idd-resume.instructions.md" \
   ".github/instructions/idd-resume-stall.instructions.md" \
