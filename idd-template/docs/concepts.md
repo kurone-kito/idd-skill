@@ -101,8 +101,8 @@ Cleanup is intentionally conservative. It should make active issues and
 PRs easier to read without deleting the evidence needed to understand
 what happened.
 
-See [comment minimization](idd-comment-minimization.md) for the cleanup
-policy and helper notes.
+See [comment minimization](idd-comment-minimization.md) for the live
+status digest contract, cleanup policy, and helper notes.
 
 ## Where to Read Next
 

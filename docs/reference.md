@@ -36,7 +36,7 @@ or [Core concepts](concepts.md) before using this reference.
 | Distributed policy defaults            | [IDD policy constants](policy-constants.md)                 |
 | Credential boundaries and threat model | [Permissions](permissions.md)                               |
 | Safe adopter customization surfaces    | [Customization](customization.md)                           |
-| Post-merge comment cleanup             | [IDD comment minimization](idd-comment-minimization.md)     |
+| Live digest and comment cleanup        | [IDD comment minimization](idd-comment-minimization.md)     |
 | Helper-script adoption policy          | [IDD helper script evaluation](idd-helper-scripts.md)       |
 
 ## Maintainer Note

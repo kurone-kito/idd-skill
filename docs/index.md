@@ -56,8 +56,8 @@ also serve as the source for a future GitHub Pages site.
   current workflow stays portable shell / `gh` / `jq` instructions
   instead of requiring helper scripts.
 - [IDD comment minimization](idd-comment-minimization.md) defines the
-  safe post-merge cleanup policy for stale operational markers and
-  completed feedback.
+  live status digest helper contract and safe post-merge cleanup policy
+  for stale operational markers and completed feedback.
 
 ### Native Companions
 

@@ -1,4 +1,7 @@
 const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
+const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)`;
+
+export const LIVE_STATUS_DIGEST_MARKER = "<!-- idd-live-status: current -->";
 
 const OPERATIONAL_MARKERS = [
   {
@@ -56,7 +59,8 @@ const UNSAFE_TEXT_RULES = [
 export function parseClaimComment(body, createdAt) {
   const match = body.trimEnd().match(
     new RegExp(
-      `^<!--\\s*claimed-by:\\s+(\\S+)\\s+(\\S+)\\s+supersedes:\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s+branch:\\s+([^\\s>]+)\\s*-->$`,
+      `^<!--\\s*claimed-by:\\s+(\\S+)\\s+(\\S+)\\s+supersedes:\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s+branch:\\s+([^\\s>]+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+      "i",
     ),
   );
   if (!match || !isValidIsoTimestamp(match[4])) {
@@ -74,7 +78,8 @@ export function parseClaimComment(body, createdAt) {
 export function parseReleaseComment(body) {
   const match = body.trimEnd().match(
     new RegExp(
-      `^<!--\\s*unclaimed-by:\\s+(\\S+)\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s*-->$`,
+      `^<!--\\s*unclaimed-by:\\s+(\\S+)\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+      "i",
     ),
   );
   if (!match || !isValidIsoTimestamp(match[3])) {
@@ -96,6 +101,82 @@ export function operationalMarkerPrefixByStart(body) {
   return OPERATIONAL_MARKERS
     .map((marker) => marker.label)
     .find((prefix) => normalized.startsWith(prefix)) ?? null;
+}
+
+export function findLiveStatusDigestComments(comments) {
+  return comments.filter((comment) => {
+    return firstLine(comment.body ?? "") === LIVE_STATUS_DIGEST_MARKER;
+  });
+}
+
+export function renderLiveStatusDigest(fields) {
+  const normalized = normalizeLiveStatusDigestFields(fields);
+  return `${LIVE_STATUS_DIGEST_MARKER}
+
+| Field | Value |
+| --- | --- |
+| Phase | ${escapeMarkdownTableCell(normalized.phase)} |
+| Claim | ${escapeMarkdownTableCell(normalized.claim)} |
+| Branch | ${escapeMarkdownTableCell(normalized.branch)} |
+| Last checked | ${escapeMarkdownTableCell(normalized.lastChecked)} |
+| Open blockers | ${escapeMarkdownTableCell(normalized.openBlockers)} |
+| Next action | ${escapeMarkdownTableCell(normalized.nextAction)} |
+| Authoritative by | ${escapeMarkdownTableCell(normalized.authoritativeBy)} |
+`;
+}
+
+export function planLiveStatusDigestUpsert(comments, fields) {
+  const matches = findLiveStatusDigestComments(comments);
+  const nextBody = renderLiveStatusDigest(fields);
+
+  if (matches.length > 1) {
+    return {
+      action: "duplicate",
+      canApply: false,
+      body: null,
+      duplicates: matches.map((comment) => ({
+        id: comment.id ?? null,
+        url: comment.html_url ?? comment.url ?? null,
+        createdAt: comment.created_at ?? comment.createdAt ?? null,
+        updatedAt: comment.updated_at ?? comment.updatedAt ?? null,
+      })),
+      repairPath: [
+        "Multiple current live status digest comments were found.",
+        "Do not delete or minimize any audit history during unattended execution.",
+        "Use trusted markers and GitHub state for workflow decisions until a maintainer selects one current digest and converts stale duplicate markers to non-current digest text.",
+      ].join(" "),
+    };
+  }
+
+  if (matches.length === 0) {
+    return {
+      action: "create",
+      canApply: true,
+      body: nextBody,
+      duplicates: [],
+    };
+  }
+
+  const [current] = matches;
+  if (sameDigestBody(current.body ?? "", nextBody)) {
+    return {
+      action: "noop",
+      canApply: true,
+      body: nextBody,
+      commentId: current.id ?? null,
+      url: current.html_url ?? current.url ?? null,
+      duplicates: [],
+    };
+  }
+
+  return {
+    action: "update",
+    canApply: true,
+    body: nextBody,
+    commentId: current.id ?? null,
+    url: current.html_url ?? current.url ?? null,
+    duplicates: [],
+  };
 }
 
 export function unsafeTextReason(body) {
@@ -349,6 +430,47 @@ export function buildActivitySnapshotSummary(
   };
 }
 
+function normalizeLiveStatusDigestFields(fields) {
+  const normalized = {
+    phase: normalizeDigestField(fields.phase, "Phase"),
+    claim: normalizeDigestField(fields.claim, "Claim"),
+    branch: normalizeDigestField(fields.branch, "Branch"),
+    lastChecked: normalizeDigestField(fields.lastChecked, "Last checked"),
+    openBlockers: normalizeDigestField(fields.openBlockers, "Open blockers"),
+    nextAction: normalizeDigestField(fields.nextAction, "Next action"),
+    authoritativeBy: normalizeDigestField(fields.authoritativeBy, "Authoritative by"),
+  };
+
+  if (!isValidIsoTimestamp(normalized.lastChecked)) {
+    throw new Error("Last checked must be an ISO 8601 UTC timestamp");
+  }
+
+  return normalized;
+}
+
+function normalizeDigestField(value, label) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) {
+    throw new Error(`${label} is required`);
+  }
+  return normalized;
+}
+
+function escapeMarkdownTableCell(value) {
+  return String(value)
+    .replaceAll("\\", "\\\\")
+    .replaceAll("|", "\\|")
+    .replace(/\r?\n/g, "<br>");
+}
+
+function firstLine(value) {
+  return String(value).replace(/^\uFEFF/, "").split(/\r?\n/, 1)[0].trimEnd();
+}
+
+function sameDigestBody(currentBody, nextBody) {
+  return currentBody.trimEnd() === nextBody.trimEnd();
+}
+
 export function isStaleAt(activeCreatedAt, nextCreatedAt) {
   const staleMs = 24 * 60 * 60 * 1000;
   return new Date(nextCreatedAt).getTime() - new Date(activeCreatedAt).getTime() >= staleMs;
@@ -534,5 +656,7 @@ function hasUnresolvedKnownBotThreads(threads) {
 
 function isValidIsoTimestamp(value) {
   const time = Date.parse(value);
-  return Number.isFinite(time) && new Date(time).toISOString().replace(".000Z", "Z") === value;
+  if (!Number.isFinite(time)) return false;
+  const normalize = (ts) => ts.replace(".000Z", "Z");
+  return normalize(new Date(time).toISOString()) === normalize(value);
 }

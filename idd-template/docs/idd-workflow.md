@@ -262,11 +262,13 @@ reviewer because that is part of this repository's current PR policy.
 
 ## Optional helper scripts
 
-The source repository that ships this template currently includes two
+The source repository that ships this template currently includes three
 optional helper scripts:
 
 - `scripts/review-activity-snapshot.mjs` (read-only E/F activity and CI
   snapshot metrics)
+- `scripts/live-status-digest.mjs` (issue or PR live status digest
+  dry-run and claim-checked upsert)
 - `scripts/audit-pr-cleanup.mjs` (post-merge cleanup audit and optional
   apply mode)
 
@@ -280,7 +282,7 @@ current inventory of high-friction query patterns, the adopted helper
 scope in the source repository, and the criteria for future helper
 changes.
 
-See [IDD comment minimization](idd-comment-minimization.md) for the
-post-merge cleanup helper, GraphQL fallback command shape, and merged-PR
-experiment for hiding completed feedback and stale operational markers
-without deleting the audit trail.
+See [IDD comment minimization](idd-comment-minimization.md) for the live
+status digest helper, post-merge cleanup helper, GraphQL fallback command
+shape, and merged-PR experiment for hiding completed feedback and stale
+operational markers without deleting the audit trail.
