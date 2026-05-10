@@ -627,15 +627,19 @@ Suggested shape:
 {
   "iddVersion": "0.1.0",
   "markerPrefix": "{{PROJECT_MARKER_PREFIX}}",
-  "mergePolicy": "fully_autonomous_merge",
-  "reviewPolicy": "copilot-advisory",
-  "threadResolutionPolicy": "fast-agent-resolve",
-  "trustedMarkerActors": ["<maintainer-or-bot-login>"],
+  "mergePolicy": "<operator-merge-policy>",
+  "reviewPolicy": "<operator-review-policy>",
+  "threadResolutionPolicy": "<operator-thread-resolution-policy>",
+  "claimTiming": {
+    "staleAge": "<operator-claim-stale-age>",
+    "heartbeatInterval": "<operator-claim-heartbeat-interval>"
+  },
+  "trustedMarkerActors": ["<trusted-login-1>", "<trusted-login-2>"],
   "commands": {
-    "install": "{{INSTALL_DEPS_COMMAND}}",
-    "fixValidate": "{{FIX_VALIDATE_COMMANDS}}",
-    "prePushValidate": "{{PRE_PUSH_VALIDATE_COMMANDS}}",
-    "postFixValidate": "{{POST_FIX_VALIDATE_COMMANDS}}"
+    "install": "<json-escaped install-deps command>",
+    "fixValidate": "<json-escaped fix-validate command>",
+    "prePushValidate": "<json-escaped pre-push-validate command>",
+    "postFixValidate": "<json-escaped post-fix-validate command>"
   }
 }
 ```
@@ -647,6 +651,8 @@ Notes:
   unless the adopter explicitly builds tooling that consumes this config.
 - If the repository uses this file, treat drift between Markdown policy
   notes and JSON as a configuration bug and update both in the same change.
+- Keep command strings JSON-escaped. Do not paste raw shell directly if
+  it contains quotes or backslashes.
 
 ---
 
@@ -852,7 +858,7 @@ After completing the steps above, confirm each item:
       match the prefix chosen for this project.
 - [ ] If `.github/idd/config.json` is used, it matches the recorded
       `iddVersion`, marker prefix, merge/review/thread policies,
-      `trustedMarkerActors`, and command values.
+      claim timing values, `trustedMarkerActors`, and command values.
 
 Once all items are checked, the IDD workflow is ready for use. Point the
 operator to `docs/idd-workflow.md` as the starting guide.
