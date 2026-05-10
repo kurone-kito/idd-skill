@@ -12,8 +12,8 @@
 IDD Skill は、リポジトリへ移植できる Issue-Driven Development
 ワークフローです。エージェントは着手できる issue を探し、担当を宣言し、
 ブランチを切って実装し、PR を開き、レビュー指摘を反映し、CI を待ち、
-マージして後片づけまで進めます。ループ全体は、リポジトリ内の Markdown
-で書かれた指示ファイルとして管理されます。
+選択したマージポリシーに従ってマージと後片づけまで進めます。ループ全体は、
+リポジトリ内の Markdown で書かれた指示ファイルとして管理されます。
 
 ## IDD が選ばれる理由
 
@@ -57,7 +57,7 @@ IDD を導入したいリポジトリで AI エージェントのセッション
 > このリポジトリで IDD ワークフローを開始してください。
 
 エージェントはワークフローガイドを読み、着手できる issue を探して担当を宣言し、
-実装、PR レビュー、CI、マージ、後片づけまでループを進めます。
+実装、PR レビュー、CI、選択したマージポリシー、後片づけまでループを進めます。
 
 ## リアリティチェック
 
@@ -76,21 +76,26 @@ IDD は Markdown ネイティブですが、依存関係なしではありませ
 必要なコマンドの詳細はワークフロードキュメントを参照してください。無人または
 マージ可能なエージェントへ認証情報を渡す前に、
 [Permissions and threat model](docs/permissions.md) も確認してください。
+リポジトリが merge-capable profile を明示的に選ばない限り、通常の worker
+credential はマージ手前で止める前提にしてください。merge policy は
+[Customizing IDD](docs/customization.md) で `human_merge`、
+`separate_merge_agent`、`fully_autonomous_merge` から選びます。
+`fully_autonomous_merge` は認証情報に関する明示 opt-in です。
 
 ## IDD が自動化すること
 
 IDD は、良い意味で退屈なワークフローです。各フェーズには名前付きの役割、
 再開できるマーカー、次の手順があります。
 
-| ステージ    | エージェントが行うこと                                                                 |
-| ----------- | -------------------------------------------------------------------------------------- |
-| Discover    | ロードマップまたは単独 issue から着手できる作業を探し、範囲を勝手に広げません。        |
-| Claim       | 機械可読な担当マーカーで 1 つの issue を予約します。                                   |
-| Work        | ブランチと worktree を作り、計画、実装、セルフレビューを行います。                     |
-| Submit PR   | push して PR を開き、レビューできる状態になるまで検証を待ちます。                      |
-| Review Loop | レビューの動きを記録し、指摘を採用または見送り、採用した指摘を直します。               |
-| Merge       | 最新状態、助言レビュー、CI、未解決スレッド、コメントをもう一度確認します。             |
-| Cleanup     | 検証済み HEAD をマージし、安全な場合は古いマーカーを隠して、次の Discover へ戻ります。 |
+| ステージ    | エージェントが行うこと                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------ |
+| Discover    | ロードマップまたは単独 issue から着手できる作業を探し、範囲を勝手に広げません。            |
+| Claim       | 機械可読な担当マーカーで 1 つの issue を予約します。                                       |
+| Work        | ブランチと worktree を作り、計画、実装、セルフレビューを行います。                         |
+| Submit PR   | push して PR を開き、レビューできる状態になるまで検証を待ちます。                          |
+| Review Loop | レビューの動きを記録し、指摘を採用または見送り、採用した指摘を直します。                   |
+| Merge       | 最新状態、助言レビュー、CI、未解決スレッド、コメント、選択したマージポリシーを確認します。 |
+| Cleanup     | マージ完了後、安全な場合は古いマーカーを隠して、次の Discover へ戻ります。                 |
 
 完全なフェーズ一覧は [docs/idd-workflow.md](docs/idd-workflow.md) と
 `.github/instructions/` にあります。
@@ -163,6 +168,8 @@ Discover -> Claim -> Work の開始には、引き続き明示的な承認が必
   エージェント間の導線。
 - [Review policy profiles](docs/idd-review-policy-profiles.md) — 標準の
   Copilot 助言レビューまたは別の PR ポリシーを選ぶための指針。
+- [Customization](docs/customization.md) — review、merge、CI、discovery の
+  policy surface を選ぶための指針。
 - [Positioning](docs/positioning.md) — 競合との違いと IDD の位置づけ。
 - [Permissions and threat model](docs/permissions.md) — アクセスプロファイル、
   禁止すべき認証情報、安全な運用ガイド。

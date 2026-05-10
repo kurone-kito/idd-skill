@@ -12,7 +12,8 @@ that keeps going until the issue is closed.
 IDD Skill gives a repository a portable Issue-Driven Development
 workflow: agents discover ready issues, claim ownership, implement in a
 branch, open a PR, handle review feedback, wait for CI, merge, and clean
-up. The whole loop lives in your repo as Markdown instruction files.
+up according to the repository's selected merge policy. The whole loop
+lives in your repo as Markdown instruction files.
 
 ## Why Teams Use IDD
 
@@ -55,7 +56,8 @@ After onboarding, start an agent in the target repository and say:
 > Start the IDD workflow in this repository.
 
 The agent reads the workflow guide, discovers a ready issue, claims it,
-and follows the loop through work, PR review, CI, merge, and cleanup.
+and follows the loop through work, PR review, CI, the selected merge
+policy, and cleanup.
 
 ## Reality Check
 
@@ -76,21 +78,26 @@ To run the full loop, an agent needs:
 See the workflow docs for the detailed command contract. Review
 [Permissions and threat model](docs/permissions.md) before granting
 credentials to unattended or merge-capable agents.
+Treat normal worker credentials as stopping before merge unless the
+repository explicitly opts into a merge-capable profile. Choose
+`human_merge`, `separate_merge_agent`, or `fully_autonomous_merge` in
+[Customizing IDD](docs/customization.md); `fully_autonomous_merge` is an
+explicit credential opt-in.
 
 ## What IDD Automates
 
 IDD is intentionally boring in the best way: every phase has a named
 job, a resumable marker, and a next step.
 
-| Stage       | What the agent does                                                              |
-| ----------- | -------------------------------------------------------------------------------- |
-| Discover    | Finds ready roadmap or orphan issues without silently widening scope.            |
-| Claim       | Reserves one issue with a machine-readable ownership marker.                     |
-| Work        | Creates a branch/worktree, plans, implements, and self-reviews.                  |
-| Submit PR   | Pushes, opens a PR, and waits for validation to become reviewable.               |
-| Review Loop | Captures review activity, accepts or rejects feedback, and fixes accepted items. |
-| Merge       | Rechecks freshness, advisory review state, CI, unresolved threads, and comments. |
-| Cleanup     | Merges the validated HEAD, hides stale markers when safe, and loops back.        |
+| Stage       | What the agent does                                                                                         |
+| ----------- | ----------------------------------------------------------------------------------------------------------- |
+| Discover    | Finds ready roadmap or orphan issues without silently widening scope.                                       |
+| Claim       | Reserves one issue with a machine-readable ownership marker.                                                |
+| Work        | Creates a branch/worktree, plans, implements, and self-reviews.                                             |
+| Submit PR   | Pushes, opens a PR, and waits for validation to become reviewable.                                          |
+| Review Loop | Captures review activity, accepts or rejects feedback, and fixes accepted items.                            |
+| Merge       | Rechecks freshness, advisory review state, CI, unresolved threads, comments, and the selected merge policy. |
+| Cleanup     | After a completed merge, hides stale markers when safe and loops back.                                      |
 
 The full phase map lives in
 [docs/idd-workflow.md](docs/idd-workflow.md) and the
@@ -168,6 +175,8 @@ approval.
   cross-agent routing.
 - [Review policy profiles](docs/idd-review-policy-profiles.md) — choose
   the default Copilot advisory PR policy or a documented alternative.
+- [Customization](docs/customization.md) — choose review, merge, CI, and
+  discovery policy surfaces.
 - [Positioning](docs/positioning.md) — competitive landscape and why
   IDD is different.
 - [Permissions and threat model](docs/permissions.md) — access profiles,
