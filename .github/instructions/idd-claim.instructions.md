@@ -76,6 +76,53 @@ hyphenated words describing the issue (e.g. `issue/<number>-<slug>`). No
 remote branch with that name may exist, unless it matches the `branch`
 field in an inheritable claim comment as defined in (c) above.
 
+Before posting a claim, also perform a **scoped issue-wide branch pattern
+check** to detect concurrent sessions working on the same issue with
+different slug variants. This is the fast-path collision detection that
+catches parallel-session concurrency before a new claim comment is posted.
+
+1. **Local worktree scan**: Check whether any local worktree matches the
+   pattern `issue/<number>-*`:
+   ```sh
+   git worktree list | grep "issue/<number>-"
+   ```
+
+2. **Remote branch scan** (scoped Refs API, not repo-wide):
+   Query the Refs API with the issue-number prefix only, to stay within
+   the scope invariant defined in idd-overview.instructions.md:
+   ```sh
+   gh api "repos/{owner}/{repo}/git/matching-refs/heads/issue/<number>-" \
+     --jq '.[].ref'
+   ```
+
+3. **Collision action tree**:
+
+   - **If no local worktree or remote branch matches `issue/<number>-*`**:
+     Proceed to claim posting (the safe, single-session path).
+
+   - **If a match is found and corresponds to an inheritable claim** (i.e.,
+     its `branch` field matches one of the branches in an inheritable claim
+     comment as defined in (c) above):
+     Proceed to claim posting. The branch is expected.
+
+   - **If a match is found, does NOT correspond to an inheritable claim,
+     AND an active non-stale claim on this issue references that branch**:
+     Treat as **claimed by a concurrent session** running in parallel. Do
+     not post a new claim. Instead, **return to Discover** using the same
+     selection mode that produced this target (orphan-first: continue the
+     A0-O capable path; roadmap mode: continue the A3-ready path), and
+     select the **next eligible issue**. This is the scale-out path that
+     allows multiple sessions to work on different issues when one issue
+     has concurrent claims.
+
+   - **If a match is found, does NOT correspond to an inheritable claim,
+     AND no active claim references that branch**:
+     Document the branch name and post a **hold note** to the issue: "_A5
+     pre-check (d) detected an unexpected branch `issue/<number>-*`
+     without an active claim. Possible orphaned branch from a crashed or
+     stale session. Stopping for operator review._" Stop and wait for
+     operator input. Do not post a claim or continue the workflow.
+
 ## Claim execution
 
 Skip this section if pre-check (b) classified the issue as already
