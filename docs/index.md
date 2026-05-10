@@ -13,6 +13,7 @@ also serve as the source for a future GitHub Pages site.
 | Need                      | Read first                                              | Why it helps                                                    |
 | ------------------------- | ------------------------------------------------------- | --------------------------------------------------------------- |
 | Start adopting IDD        | [Getting started](getting-started.md)                   | Gives the shortest safe path from import to first loop.         |
+| Learn IDD vocabulary      | [Core concepts](concepts.md)                            | Explains the loop's claims, review, merge, and cleanup terms.   |
 | Run the IDD loop          | [IDD workflow guide](idd-workflow.md)                   | Maps agent entry points, phase files, and Copilot advisory use. |
 | Import IDD into a repo    | [Template onboarding][template-onboarding]              | Explains the portable template copy and placeholder flow.       |
 | Grant agent credentials   | [Permissions](permissions.md)                           | Defines access profiles, forbidden scopes, and threat controls. |
@@ -26,6 +27,8 @@ also serve as the source for a future GitHub Pages site.
 
 - [Getting started](getting-started.md) is the concise first-run path
   from template import to the first IDD execution loop.
+- [Core IDD concepts](concepts.md) explains the key terms new adopters
+  should know before reading strict phase rules.
 - [Template onboarding][template-onboarding] is the canonical
   guide for importing the portable IDD template into another
   repository.

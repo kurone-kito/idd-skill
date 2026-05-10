@@ -47,7 +47,8 @@
         "idd-template/.github/instructions/idd-*.instructions.md",
         "idd-template/docs/idd-*.md",
         "idd-template/docs/permissions.md",
-        "idd-template/docs/getting-started.md"
+        "idd-template/docs/getting-started.md",
+        "idd-template/docs/concepts.md"
       ],
       "paths": [
         "idd-template/.github/instructions/idd-overview.instructions.md",
@@ -68,7 +69,8 @@
         "idd-template/docs/idd-helper-scripts.md",
         "idd-template/docs/idd-comment-minimization.md",
         "idd-template/docs/permissions.md",
-        "idd-template/docs/getting-started.md"
+        "idd-template/docs/getting-started.md",
+        "idd-template/docs/concepts.md"
       ]
     },
     {
@@ -230,6 +232,12 @@
       "id": "getting-started-doc",
       "source": "idd-template/docs/getting-started.md",
       "target": "docs/getting-started.md",
+      "mode": "exact"
+    },
+    {
+      "id": "concepts-doc",
+      "source": "idd-template/docs/concepts.md",
+      "target": "docs/concepts.md",
       "mode": "exact"
     },
     {
