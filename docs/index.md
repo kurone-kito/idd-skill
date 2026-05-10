@@ -16,6 +16,7 @@ also serve as the source for a future GitHub Pages site.
 | Learn IDD vocabulary      | [Core concepts](concepts.md)                            | Explains the loop's claims, review, merge, and cleanup terms.   |
 | Customize IDD safely      | [Customization](customization.md)                       | Names the adopter policy surfaces and workflow edit points.     |
 | Run the IDD loop          | [IDD workflow guide](idd-workflow.md)                   | Maps agent entry points, phase files, and Copilot advisory use. |
+| Find detailed references  | [Detailed reference](reference.md)                      | Lists phase files and policy pages without duplicating rules.   |
 | Import IDD into a repo    | [Template onboarding][template-onboarding]              | Explains the portable template copy and placeholder flow.       |
 | Grant agent credentials   | [Permissions](permissions.md)                           | Defines access profiles, forbidden scopes, and threat controls. |
 | Choose PR review policy   | [Review policy profiles](idd-review-policy-profiles.md) | Names the default Copilot advisory policy and alternatives.     |
@@ -35,8 +36,6 @@ also serve as the source for a future GitHub Pages site.
 - [Template onboarding][template-onboarding] is the canonical
   guide for importing the portable IDD template into another
   repository.
-- [IDD workflow guide](idd-workflow.md) explains where each supported
-  agent starts and which phase file to read next.
 - [Permissions and threat model](permissions.md) describes the minimum
   GitHub access profiles, forbidden credentials, and operating controls
   for unattended or merge-capable agents.
@@ -44,8 +43,12 @@ also serve as the source for a future GitHub Pages site.
   the default Copilot advisory PR policy and non-default customization
   surfaces.
 
-### Workflow Internals
+### Detailed Reference
 
+- [Detailed reference](reference.md) is the compact phase and policy map
+  for maintainers and agents who need an authoritative source link.
+- [IDD workflow guide](idd-workflow.md) explains where each supported
+  agent starts and which phase file to read next.
 - [IDD helper script evaluation](idd-helper-scripts.md) records why the
   current workflow stays portable shell / `gh` / `jq` instructions
   instead of requiring helper scripts.

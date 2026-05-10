@@ -158,6 +158,7 @@ docs/permissions.md
 docs/getting-started.md
 docs/concepts.md
 docs/customization.md
+docs/reference.md
 ```
 
 <!-- /audit:generated -->
@@ -215,7 +216,8 @@ for FILE in \
   "docs/permissions.md" \
   "docs/getting-started.md" \
   "docs/concepts.md" \
-  "docs/customization.md"
+  "docs/customization.md" \
+  "docs/reference.md"
 do
   gh api -H "Accept: application/vnd.github.raw+json" \
     "repos/kurone-kito/idd-skill/contents/idd-template/${FILE}" \
@@ -280,7 +282,8 @@ for FILE in \
   "docs/permissions.md" \
   "docs/getting-started.md" \
   "docs/concepts.md" \
-  "docs/customization.md"
+  "docs/customization.md" \
+  "docs/reference.md"
 do
   curl -fsSL "${BASE}/${FILE}" -o "${DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
 done
@@ -488,7 +491,8 @@ After completing the steps above, confirm each item:
 - [ ] Every `idd-*.instructions.md` file listed in the generated core
       file list is present in `.github/instructions/`.
 - [ ] `docs/getting-started.md`, `docs/concepts.md`,
-      `docs/customization.md`, `docs/idd-workflow.md`,
+      `docs/customization.md`, `docs/reference.md`,
+      `docs/idd-workflow.md`,
       `docs/idd-review-policy-profiles.md`,
       `docs/idd-helper-scripts.md`,
       `docs/idd-comment-minimization.md`, and `docs/permissions.md`
