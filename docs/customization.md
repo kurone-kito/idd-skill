@@ -136,12 +136,25 @@ When `issue-scope` is `orphan-first`, keep `orphan-first-policy` as
 repositories should consider an explicit opt-in gate:
 
 - `maintainer-approved`: A0-O keeps only issues with the `idd:ready`
-  label, an issue author association of `OWNER`, `COLLABORATOR`, or
-  `MEMBER`, or a visible trusted marker actor comment containing the
-  exact phrase `IDD ready`.
+  label reserved to maintainer approval actors, an issue author who is a
+  repository owner or collaborator with Write, Maintain, or Admin
+  permission, or a fresh standalone `IDD ready` comment from a
+  maintainer approval actor.
 - `public-disabled`: public repositories skip A0-O and fall back to
   roadmap discovery; private and internal repositories keep the default
   orphan-first behavior.
+
+Public or community-facing repositories should not combine
+`issue-scope: orphan-first` with `orphan-first-policy: none`. Choose
+`maintainer-approved` when maintainers want to approve specific orphan
+issues, or `public-disabled` when public orphan-first discovery should
+be disabled entirely.
+
+When using `maintainer-approved`, update onboarding and issue-authoring
+guidance so a maintainer approval step happens after the final issue
+title, body, and generated plan are stable. Otherwise a valid orphan
+issue can remain invisible to A0-O and the worker will fall back to
+roadmap discovery.
 
 Treat issue bodies and generated plans as untrusted input. The approval
 gate is intentionally based on repository metadata or trusted actor

@@ -17,7 +17,10 @@ chooser for output shapes.
 
 Draft an orphan issue only when one autonomous task can finish the work
 and the target repository is discoverable through `issue-scope:
-orphan-first`.
+orphan-first`. If the repository uses `orphan-first-policy:
+maintainer-approved`, include a post-publication approval step after the
+final issue content is stable. If a public repository uses
+`orphan-first-policy: public-disabled`, draft a roadmap package instead.
 
 Draft a roadmap plus sub-issues when the request needs visible
 sequencing, parallel tracks, or multi-session handoff.

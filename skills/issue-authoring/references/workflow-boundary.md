@@ -5,7 +5,8 @@ This bundle handles pre-approval issue drafting only.
 Use it to:
 
 - prepare IDD-ready orphan issues when the target repository supports
-  `issue-scope: orphan-first`
+  `issue-scope: orphan-first`, including any required
+  `orphan-first-policy` approval handoff
 - prepare roadmap packages and child issues when work needs visible
   sequencing or parallel tracks
 - surface non-ready buckets instead of guessing through blockers
