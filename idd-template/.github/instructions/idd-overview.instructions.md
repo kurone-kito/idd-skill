@@ -95,6 +95,87 @@ comes from the current session having recorded the claim token, the
 marker being authored by a trusted actor, and the GitHub server
 `created_at` timestamp satisfying the phase rules.
 
+## Repository-local IDD policy
+
+The trusted marker actors definition is abstract to support diverse repository
+models. Each repository using IDD should explicitly document its local
+configuration so that AI agents and maintainers can reason about which actors
+can authorize state transitions.
+
+Document repository-local settings in a dedicated policy block like this example:
+
+```md
+### IDD repository policy
+
+This repository uses the following IDD configuration:
+
+- **trusted-marker-logins**: `kurone-kito`, `renovate[bot]`, `github-actions[bot]`
+- **maintainer-approval-actors**: `owners-and-maintainers-only`
+- **collaborator-authored-markers**: `false`
+```
+
+**trusted-marker-logins**: Comma-separated GitHub user or bot logins that are
+trusted to post operational markers (`claimed-by`, `unclaimed-by`,
+`review-watermark`, `review-baseline`, `advisory-wait`) for IDD state transitions.
+Typically includes the primary agent or automation actor, plus any pinned
+dependency bots (e.g., `renovate[bot]` or `dependabot[bot]`) if configured for
+the workflow. Always include repository maintainers if `collaborator-authored-markers`
+is enabled.
+
+**maintainer-approval-actors**: Policy for who counts as a maintainer when
+approving pre-merge reviews. Possible values:
+
+- `owners-and-maintainers-only`: Only GitHub organization owners and repository
+  maintainers (Maintain, Admin roles) satisfy maintainer approval requirements.
+  Repository collaborators with Write permission do not count.
+- `all-write-permission-actors`: Any actor with Write, Maintain, or Admin
+  permission on the repository can provide maintainer approval.
+
+For public or OSS repositories, prefer `owners-and-maintainers-only` unless
+the repository explicitly trusts all collaborators for approval authority.
+
+**collaborator-authored-markers**: Boolean (true/false). Determines whether to
+trust operational markers authored by repository collaborators (Write, Maintain,
+or Admin permission) when parsing claim state and running state transitions.
+
+For public or large-team repositories, `false` is safer: only configured trusted
+bots and explicit actor logins can post operational markers. Set to `true` only
+if your repository explicitly approves all collaborators for IDD marker authority.
+This setting directly affects claim parsing rules and should not be changed without
+understanding the security implications.
+
+### Example configurations
+
+**Small team, high trust**:
+
+```yaml
+- trusted-marker-logins: `kurone-kito`, `chatgpt-codex-connector[bot]`
+- maintainer-approval-actors: `owners-and-maintainers-only`
+- collaborator-authored-markers: false
+```
+
+**OSS with external contributors**:
+
+```yaml
+- trusted-marker-logins: `github-actions[bot]`, `copilot-automation-bot`
+- maintainer-approval-actors: `owners-and-maintainers-only`
+- collaborator-authored-markers: false
+```
+
+**Team with trusted collaborators**:
+
+```yaml
+- trusted-marker-logins: `team-automation`, `renovate[bot]`
+- maintainer-approval-actors: `all-write-permission-actors`
+- collaborator-authored-markers: true
+```
+
+For further details, see:
+
+- [Claim-state parsing](#claim-state-parsing) for how `trusted-marker-logins`
+  and `collaborator-authored-markers` affect claim validation.
+- `docs/policy-constants.md` for distributed policy defaults.
+
 ## Claim-state parsing
 
 To determine the current active claim, read issue comments
