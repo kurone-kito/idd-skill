@@ -4,6 +4,20 @@ Use this file when taking over a crashed or rate-limited session with no
 prior session context. Read `idd-overview.instructions.md` for shared
 definitions (claim format, stale threshold, abort, hold).
 
+## Step 0 — Route stalled-session recovery
+
+Before Step 1, decide whether this is a stalled-session case:
+
+- If a non-owned active claim exists and progress appears stalled, run
+  `idd-resume-stall.instructions.md` first.
+- Use only externally observable evidence (trusted claim heartbeat
+  timestamps, PR head movement, review/comment activity, and CI
+  timestamps).
+- Quiet-window evidence does not bypass the shared stale threshold:
+  takeover remains disallowed until the non-owned active claim is stale.
+- If stalled-session routing returns hold/inconclusive, stop.
+- Otherwise continue with Step 1.
+
 ## Context to gather first
 
 Before routing, collect all of the following:
