@@ -23,6 +23,8 @@ jobs:
         run: node scripts/audit-docs.mjs --check
       - name: Run dprint
         run: npx dprint@0.54.0 check "**/*.md"
+      - name: Run protocol tests
+        run: node --test tests/*.mjs
       - name: Run cspell
         uses: streetsidesoftware/cspell-action@v8
       - name: Run markdownlint

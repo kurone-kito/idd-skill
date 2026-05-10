@@ -1,0 +1,49 @@
+{
+  "comments": [
+    {
+      "author": { "login": "coderabbitai" },
+      "body": "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\nNo actionable comments were generated in the recent review. 🎉",
+      "createdAt": "2026-05-09T18:02:13Z"
+    },
+    {
+      "author": { "login": "coderabbitai" },
+      "body": "<!-- This is an auto-generated reply by CodeRabbit -->\n`@kurone-kito` Sure! I'll review the latest fix now.\n\n<details>\n<summary>✅ Actions performed</summary>\n\nReview triggered.\n\n</details>",
+      "createdAt": "2026-05-09T18:10:45Z"
+    },
+    {
+      "author": { "login": "kurone-kito" },
+      "body": "**Accepted** — CodeRabbit completed the review with no actionable comments.",
+      "createdAt": "2026-05-09T18:13:57Z"
+    }
+  ],
+  "reviews": [
+    {
+      "author": { "login": "coderabbitai" },
+      "state": "COMMENTED",
+      "submittedAt": "2026-05-09T18:04:46Z"
+    }
+  ],
+  "threads": [
+    {
+      "id": "THREAD-1",
+      "isResolved": true,
+      "comments": {
+        "pageInfo": { "hasNextPage": false },
+        "nodes": [
+          {
+            "author": { "login": "coderabbitai" },
+            "body": "_⚠️ Potential issue_ | _🟡 Minor_ | _⚡ Quick win_\n\n**Fix parallelism in the list structure.**",
+            "createdAt": "2026-05-09T18:04:46Z",
+            "pullRequestReview": { "id": "REVIEW-1" }
+          },
+          {
+            "author": { "login": "kurone-kito" },
+            "body": "**Accepted** — fixed in 23c89cd: adjusted the sentence to a fully parallel form.",
+            "createdAt": "2026-05-09T18:13:57Z",
+            "pullRequestReview": { "id": "REVIEW-1" }
+          }
+        ]
+      }
+    }
+  ]
+}

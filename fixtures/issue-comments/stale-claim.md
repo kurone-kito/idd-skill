@@ -1,0 +1,1 @@
+<!-- claimed-by: codex-cli 22222222222222222222222222222222 supersedes: 11111111111111111111111111111111 2026-05-10T11:00:00Z branch: issue/118-protocol-test-fixtures -->
