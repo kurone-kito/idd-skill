@@ -113,8 +113,8 @@ values. The operator can confirm these proposed values or correct them.
   API. The remote name is the most reliable source.
 - **Marker prefix** (`{{PROJECT_MARKER_PREFIX}}`): Candidate is the
   repository name lowercased, hyphenated, and must match
-  `^[a-z][a-z0-9-]{1,31}$`. Ask the operator to confirm this candidate or
-  provide an alternative that matches the same pattern.
+  `^[a-z][a-z0-9-]{1,31}$` (2-32 chars). Ask the operator to confirm this
+  candidate or provide an alternative that matches the same pattern.
 - **Install command** (`{{INSTALL_DEPS_COMMAND}}`): Look for presence of
   `package.json` (candidate: `npm install`), `pyproject.toml` or
   `requirements.txt` (candidate: `pip install -r requirements.txt`),
@@ -232,14 +232,14 @@ You now have all the information needed to finalize placeholder values:
 If the operator provided no corrections in Step 1A, use the proposed values
 directly.
 
-| Placeholder                      | What it means                                                                                                                                  | Example / Derivation                                             |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `{{REPO_NAME}}`                  | The repository's short name. Used in worktree path examples. **Derived** in Step 1A from git remote.                                           | Auto-derived: `my-app`                                           |
-| `{{PROJECT_MARKER_PREFIX}}`      | Marker prefix for hidden issue-body HTML comments. Must match `^[a-z][a-z0-9-]{1,31}$`. **Derived** in Step 1A; confirm with operator.         | Auto-derived from repo name: `my-app`                            |
-| `{{FIX_VALIDATE_COMMANDS}}`      | Commands that may auto-fix linting/formatting and verify. **Derived** in Step 1A from build-tool evidence.                                     | Auto-derived: `npm run lint:fix && npm run lint`                 |
-| `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Verify commands (no mutations). **Derived** in Step 1A from build-tool evidence.                                                               | Auto-derived: `npm run lint && npm run test`                     |
-| `{{POST_FIX_VALIDATE_COMMANDS}}` | Auto-fix + full verify (superset). **Derived** in Step 1A from build-tool evidence.                                                            | Auto-derived: `npm run lint:fix && npm test`                     |
-| `{{INSTALL_DEPS_COMMAND}}`       | Dependency install command. **Derived** in Step 1A from package-manager evidence. Use `true` for projects with no standard dependency install. | Auto-derived: `npm install` or `pip install -r requirements.txt` |
+| Placeholder                      | What it means                                                                                                                                       | Example / Derivation                                             |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `{{REPO_NAME}}`                  | The repository's short name. Used in worktree path examples. **Derived** in Step 1A from git remote.                                                | Auto-derived: `my-app`                                           |
+| `{{PROJECT_MARKER_PREFIX}}`      | Marker prefix for hidden issue-body HTML comments. Must match `^[a-z][a-z0-9-]{1,31}$` (2-32 chars). **Derived** in Step 1A; confirm with operator. | Auto-derived from repo name: `my-app`                            |
+| `{{FIX_VALIDATE_COMMANDS}}`      | Commands that may auto-fix linting/formatting and verify. **Derived** in Step 1A from build-tool evidence.                                          | Auto-derived: `npm run lint:fix && npm run lint`                 |
+| `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Verify commands (no mutations). **Derived** in Step 1A from build-tool evidence.                                                                    | Auto-derived: `npm run lint && npm run test`                     |
+| `{{POST_FIX_VALIDATE_COMMANDS}}` | Auto-fix + full verify (superset). **Derived** in Step 1A from build-tool evidence.                                                                 | Auto-derived: `npm run lint:fix && npm test`                     |
+| `{{INSTALL_DEPS_COMMAND}}`       | Dependency install command. **Derived** in Step 1A from package-manager evidence. Use `true` for projects with no standard dependency install.      | Auto-derived: `npm install` or `pip install -r requirements.txt` |
 
 > **No-op substitution**: any command that is not applicable to your
 > project can be set to `true`. For example, a repository without a
@@ -266,7 +266,7 @@ shared or migrated. Choose a short, lowercase, hyphenated name matching
 the repo (e.g., the repo name itself), and validate it with:
 
 ```sh
-echo "<prefix>" | grep -Eq '^[a-z][a-z0-9-]{1,31}$'
+printf '%s\n' "<prefix>" | grep -Eq '^[a-z][a-z0-9-]{1,31}$'
 ```
 
 **Important — correct use of `blocked-by`**: the `blocked-by` marker
