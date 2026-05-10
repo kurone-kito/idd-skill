@@ -17,14 +17,18 @@ Before routing, collect all of the following:
    record their URLs as suspicious context when they affect routing.
 2. **Open PR and current head** — check for an open PR that
    closes/references this issue. Record the current PR HEAD SHA.
-3. **Issue/PR activity recency** — snapshot review threads, review
-   bodies, and regular PR comments, then record the latest `updatedAt`
-   across that universe (or `none` when empty).
-4. **PR HEAD movement evidence** — from PR timeline/activity, confirm
-   whether new commits were added after the latest known activity
-   baseline.
-5. **CI transition state** — record current CI states for the PR HEAD
-   and the latest CI pass `completedAt` (or `none`).
+3. **Issue/PR activity recency** — snapshot issue comments, review
+   threads, review bodies, and regular PR comments, then record the
+   latest `updatedAt` across that universe. When an open PR exists,
+   include PR `createdAt`/`updatedAt` as additional recency signals.
+4. **PR HEAD movement evidence** — define a baseline before comparison:
+   use the latest trusted same-claim `review-watermark`/`review-baseline`
+   marker SHA when available; otherwise use the current PR HEAD SHA
+   captured in step 2 as the baseline. Then confirm whether commits were
+   added after that baseline from PR timeline/activity.
+5. **CI transition state** — record current CI states for the PR HEAD,
+   the latest completed CI transition `completedAt` (any terminal
+   outcome), and the latest successful CI pass `completedAt` (or `none`).
 6. **Local worktrees** — run `git worktree list`.
 7. **Local branch** — check whether the branch named in the claim
    comment exists locally.
