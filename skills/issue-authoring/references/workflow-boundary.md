@@ -75,7 +75,7 @@ time and report the specific failure (unclear, invalid, duplicate).
 
 ## Do not use this bundle to
 
-- start the Discover → Claim → Work loop implicitly
+- start the Discover -> Claim -> Work loop implicitly
 - treat bundled references as a replacement for repository execution
   instructions
 - publish issues unless the user explicitly asked for publishing
