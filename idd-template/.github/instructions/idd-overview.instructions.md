@@ -124,6 +124,7 @@ is enabled.
 
 **maintainer-approval-actors**: Policy for who counts as a maintainer when
 approving pre-merge reviews. Possible values:
+
 - `owners-and-maintainers-only`: Only GitHub organization owners and repository
   maintainers (Maintain, Admin roles) satisfy maintainer approval requirements.
   Repository collaborators with Write permission do not count.
@@ -146,27 +147,31 @@ understanding the security implications.
 ### Example configurations
 
 **Small team, high trust**:
-```
+
+```yaml
 - trusted-marker-logins: `kurone-kito`, `chatgpt-codex-connector[bot]`
 - maintainer-approval-actors: `owners-and-maintainers-only`
 - collaborator-authored-markers: false
 ```
 
 **OSS with external contributors**:
-```
+
+```yaml
 - trusted-marker-logins: `github-actions[bot]`, `copilot-automation-bot`
 - maintainer-approval-actors: `owners-and-maintainers-only`
 - collaborator-authored-markers: false
 ```
 
 **Team with trusted collaborators**:
-```
+
+```yaml
 - trusted-marker-logins: `team-automation`, `renovate[bot]`
 - maintainer-approval-actors: `all-write-permission-actors`
 - collaborator-authored-markers: true
 ```
 
 For further details, see:
+
 - [Claim-state parsing](#claim-state-parsing) for how `trusted-marker-logins`
   and `collaborator-authored-markers` affect claim validation.
 - `docs/policy-constants.md` for distributed policy defaults.
