@@ -152,7 +152,7 @@ claims.
 If the roadmap claim remains open after the roadmap-side effect is done,
 or if it appears to serialize child execution, treat that as a misuse
 signal: revalidate ownership and stale timing before continuing, then
-heartbeat or release rather than holding the claim open.
+heartbeat, release, or take over rather than holding the claim open.
 
 The docs audit keeps this guidance synchronized with the exported
 template so unattended runs can spot drift.
