@@ -304,6 +304,7 @@ export function classifyResumeRoutingCase(input, options = {}) {
   const staleHours = options.staleHours ?? 24;
   const stallMinutes = options.stallMinutes ?? 30;
   const pendingCiStates = new Set(options.pendingCiStates ?? ["queued", "in_progress", "waiting"]);
+  const terminalSafeCiStates = new Set(options.terminalSafeCiStates ?? ["success", "none"]);
 
   if (!input.hasActiveClaim) {
     return {
@@ -351,6 +352,12 @@ export function classifyResumeRoutingCase(input, options = {}) {
     return {
       route: "hold-for-evidence",
       reason: "CI is still pending for the active non-owned claim",
+    };
+  }
+  if (!terminalSafeCiStates.has(ciState)) {
+    return {
+      route: "hold-for-evidence",
+      reason: "CI is not in a terminal-safe state for stalled-claim recovery",
     };
   }
 
