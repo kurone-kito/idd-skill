@@ -1,0 +1,17 @@
+{
+  "name": "missing active claim requires reclaim",
+  "input": {
+    "hasActiveClaim": false,
+    "claimOwnedBySession": false,
+    "claimAgeHours": null,
+    "latestActivityAgeMinutes": null,
+    "ciState": "none",
+    "worktreeDirty": false,
+    "hasUnpushedCommits": false,
+    "rebaseInProgress": false
+  },
+  "expected": {
+    "route": "unclaimed-reclaim-required",
+    "reasonContains": "fresh claim"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "owned dirty claim routes to crash recovery",
+  "input": {
+    "hasActiveClaim": true,
+    "claimOwnedBySession": true,
+    "claimAgeHours": 2,
+    "latestActivityAgeMinutes": 5,
+    "ciState": "success",
+    "worktreeDirty": true,
+    "hasUnpushedCommits": false,
+    "rebaseInProgress": false
+  },
+  "expected": {
+    "route": "crash-recovery",
+    "reasonContains": "interrupted local state"
+  }
+}

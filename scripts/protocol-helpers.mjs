@@ -300,6 +300,73 @@ export function applyClaimEvent(activeClaim, event, isTrustedAuthor = () => true
   return activeClaim;
 }
 
+export function classifyResumeRoutingCase(input, options = {}) {
+  const staleHours = options.staleHours ?? 24;
+  const stallMinutes = options.stallMinutes ?? 30;
+  const pendingCiStates = new Set(options.pendingCiStates ?? ["queued", "in_progress", "waiting"]);
+
+  if (!input.hasActiveClaim) {
+    return {
+      route: "unclaimed-reclaim-required",
+      reason: "resume requires a fresh claim before continuation",
+    };
+  }
+
+  if (input.claimOwnedBySession) {
+    if (input.rebaseInProgress || input.worktreeDirty || input.hasUnpushedCommits) {
+      return {
+        route: "crash-recovery",
+        reason: "owned claim with interrupted local state",
+      };
+    }
+    return {
+      route: "ordinary-continuation",
+      reason: "owned claim with clean local state",
+    };
+  }
+
+  if (typeof input.claimAgeHours !== "number") {
+    return {
+      route: "hold-for-evidence",
+      reason: "claim age is missing for a non-owned claim",
+    };
+  }
+
+  if (input.claimAgeHours >= staleHours) {
+    return {
+      route: "stale-claim-takeover",
+      reason: `non-owned claim is stale at >= ${staleHours}h`,
+    };
+  }
+
+  if (typeof input.latestActivityAgeMinutes !== "number") {
+    return {
+      route: "hold-for-evidence",
+      reason: "activity age is missing for a non-owned active claim",
+    };
+  }
+
+  const ciState = String(input.ciState ?? "none").toLowerCase();
+  if (pendingCiStates.has(ciState)) {
+    return {
+      route: "hold-for-evidence",
+      reason: "CI is still pending for the active non-owned claim",
+    };
+  }
+
+  if (input.latestActivityAgeMinutes >= stallMinutes) {
+    return {
+      route: "progress-stalled-recovery",
+      reason: `non-owned claim is fresh but idle for >= ${stallMinutes}m`,
+    };
+  }
+
+  return {
+    route: "hold-for-evidence",
+    reason: "non-owned claim is still within active freshness windows",
+  };
+}
+
 function hasExplicitDispositionAfter(targetComment, comments) {
   const targetTime = Date.parse(targetComment.createdAt ?? "");
   return comments.some((comment) => {

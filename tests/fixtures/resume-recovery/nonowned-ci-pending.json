@@ -1,0 +1,17 @@
+{
+  "name": "non-owned claim with pending CI holds even when activity is old",
+  "input": {
+    "hasActiveClaim": true,
+    "claimOwnedBySession": false,
+    "claimAgeHours": 6,
+    "latestActivityAgeMinutes": 80,
+    "ciState": "in_progress",
+    "worktreeDirty": false,
+    "hasUnpushedCommits": false,
+    "rebaseInProgress": false
+  },
+  "expected": {
+    "route": "hold-for-evidence",
+    "reasonContains": "CI is still pending"
+  }
+}

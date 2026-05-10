@@ -1,0 +1,17 @@
+{
+  "name": "same agent id without verified ownership is still treated as non-owned",
+  "input": {
+    "hasActiveClaim": true,
+    "claimOwnedBySession": false,
+    "claimAgeHours": 1,
+    "latestActivityAgeMinutes": 20,
+    "ciState": "success",
+    "worktreeDirty": false,
+    "hasUnpushedCommits": false,
+    "rebaseInProgress": false
+  },
+  "expected": {
+    "route": "hold-for-evidence",
+    "reasonContains": "freshness windows"
+  }
+}
