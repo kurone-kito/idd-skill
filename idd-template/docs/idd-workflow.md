@@ -220,9 +220,9 @@ phases.
   review policy profile and follow
   the PR review profile edit-surface checklist in
   [IDD review policy profiles](idd-review-policy-profiles.md).
-- At minimum, update `idd-review-fix.instructions.md`,
-  `idd-pre-merge.instructions.md`, and `idd-merge.instructions.md`;
-  some profiles, such as `external-bot`, require additional files.
+- Expect non-default profile changes to cover review-fix, advisory-wait,
+  pre-merge, merge, review-snapshot, and review-triage surfaces; the
+  exact edits vary by profile.
 
 Non-Copilot agents can still drive the workflow end to end, but they
 should expect those later phases to interact with Copilot as a GitHub
