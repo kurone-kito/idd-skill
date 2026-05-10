@@ -1,8 +1,8 @@
 # IDD — Merge Execution Phase (F3–F5)
 
-Read this file after `idd-pre-merge.instructions.md` (F2) satisfies all
-pre-merge conditions. It covers executing the merge (F3), cleanup (F4),
-and looping back to discover (F5).
+Read this file only after `idd-merge-handoff.instructions.md` routes the
+current claim to the autonomous merge path. It covers executing the
+merge (F3), cleanup (F4), and looping back to discover (F5).
 
 The final merge-gate timing defaults are named in
 [IDD policy constants](../../docs/policy-constants.md). Use that inventory
@@ -17,32 +17,11 @@ gate. The active claim must still use your current `{claim-id}`.
    your current `{claim-id}`. If the active claim is missing, released,
    or held by a different `{claim-id}` (even under the same agent ID),
    the claim was lost — report this and stop.
-2. Read the repository's recorded merge policy from repository
-   documentation that future IDD sessions read. If no policy is
-   recorded, treat it as `fully_autonomous_merge` (distributed
-   default). If the recorded value is not one of
-   `fully_autonomous_merge`, `human_merge`, or
-   `separate_merge_agent`, treat it as an unknown merge policy:
-   stop, post a hold comment, and request maintainer decision.
-   Do not execute the final freshness fetch, `gh pr merge`, or F4
-   cleanup when the policy is unknown.
-
-   If the recorded policy is `human_merge` or
-   `separate_merge_agent`, stop before the final freshness fetch and
-   before `gh pr merge`. After the claim revalidation above, report or
-   post a concise handoff summary with the PR number, branch, current
-   HEAD from F2, the F2 readiness evidence, and the actor expected to
-   merge. For `human_merge`, hand off to the human maintainer. For
-   `separate_merge_agent`, hand off to the configured merge-capable
-   session; if that actor or resume condition is not recorded, hold for
-   maintainer direction. Do not run the F3 merge command or F4 cleanup
-   in the same worker session.
-
-   Only the `fully_autonomous_merge` policy path lets the same agent
-   session continue through the remaining F3 gates (recorded explicitly
-   or defaulted when policy is missing). This policy gate does not
-   relax claim, freshness, unresolved-thread, advisory, CI, or review
-   requirements.
+2. Defensive route check: re-read the repository's recorded merge policy.
+   This file is autonomous-only. If the recorded policy is missing,
+   treat it as `fully_autonomous_merge` (distributed default). If the
+   policy is anything else, do **not** continue here — route to
+   `idd-merge-handoff.instructions.md` and stop.
 3. Immediately before executing the merge command, do one final live
    fetch using the **exact same activity-universe scope as E1 Step 1**
    (all review threads, review bodies, and regular PR comments,

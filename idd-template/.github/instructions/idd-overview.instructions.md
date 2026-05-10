@@ -507,7 +507,8 @@ file that matches your current situation.
 | Snapshot done, List A non-empty               | `idd-review-triage.instructions.md` (E4–E8)                           |
 | Review feedback accepted, pushing fixes       | `idd-review-fix.instructions.md`                                      |
 | Ready for pre-merge gate check                | `idd-pre-merge.instructions.md`                                       |
-| All pre-merge conditions satisfied            | `idd-merge.instructions.md`                                           |
+| All pre-merge conditions satisfied            | `idd-merge-handoff.instructions.md`                                   |
+| Autonomous merge path confirmed               | `idd-merge.instructions.md`                                           |
 
 CI polling logic shared by D and E phases lives in
 `idd-ci.instructions.md`; callers declare their own on-success target.

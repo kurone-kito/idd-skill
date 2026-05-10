@@ -22,6 +22,7 @@ or [Core concepts](concepts.md) before using this reference.
 | Triage review items               | E4-E8  | [Review triage](../.github/instructions/idd-review-triage.instructions.md)                  |
 | Fix accepted review feedback      | E9-E15 | [Review fix](../.github/instructions/idd-review-fix.instructions.md)                        |
 | Check pre-merge gates             | F1-F2  | [Pre-merge conditions](../.github/instructions/idd-pre-merge.instructions.md)               |
+| Resolve merge-policy handoff      | F2.5   | [Merge policy handoff](../.github/instructions/idd-merge-handoff.instructions.md)           |
 | Merge, clean up, and loop         | F3-F5  | [Merge execution](../.github/instructions/idd-merge.instructions.md)                        |
 | Resume after a crash or handoff   | Resume | [Resume](../.github/instructions/idd-resume.instructions.md)                                |
 | Recover from a stalled session    | Resume | [Resume stalled-session recovery](../.github/instructions/idd-resume-stall.instructions.md) |
