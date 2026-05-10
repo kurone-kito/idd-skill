@@ -300,6 +300,80 @@ export function applyClaimEvent(activeClaim, event, isTrustedAuthor = () => true
   return activeClaim;
 }
 
+export function classifyResumeRoutingCase(input, options = {}) {
+  const staleHours = Number.isFinite(options.staleHours) ? options.staleHours : 24;
+  const stallMinutes = Number.isFinite(options.stallMinutes) ? options.stallMinutes : 30;
+  const pendingCiStates = new Set(options.pendingCiStates ?? ["queued", "in_progress", "waiting", "pending"]);
+  const terminalSafeCiStates = new Set(options.terminalSafeCiStates ?? ["success", "none"]);
+
+  if (!input.hasActiveClaim) {
+    return {
+      route: "unclaimed-reclaim-required",
+      reason: "resume requires a fresh claim before continuation",
+    };
+  }
+
+  if (input.claimOwnedBySession) {
+    if (input.rebaseInProgress || input.worktreeDirty) {
+      return {
+        route: "crash-recovery",
+        reason: "owned claim with interrupted local state",
+      };
+    }
+    return {
+      route: "ordinary-continuation",
+      reason: "owned claim with clean local state",
+    };
+  }
+
+  if (!Number.isFinite(input.claimAgeHours)) {
+    return {
+      route: "hold-for-evidence",
+      reason: "claim age is missing for a non-owned claim",
+    };
+  }
+
+  if (input.claimAgeHours >= staleHours) {
+    return {
+      route: "stale-claim-takeover",
+      reason: `non-owned claim is stale at >= ${staleHours}h`,
+    };
+  }
+
+  if (!Number.isFinite(input.latestActivityAgeMinutes)) {
+    return {
+      route: "hold-for-evidence",
+      reason: "activity age is missing for a non-owned active claim",
+    };
+  }
+
+  const ciState = String(input.ciState ?? "none").toLowerCase();
+  if (pendingCiStates.has(ciState)) {
+    return {
+      route: "hold-for-evidence",
+      reason: "CI is still pending for the active non-owned claim",
+    };
+  }
+  if (!terminalSafeCiStates.has(ciState)) {
+    return {
+      route: "hold-for-evidence",
+      reason: "CI is not in a terminal-safe state for stalled-claim recovery",
+    };
+  }
+
+  if (input.latestActivityAgeMinutes >= stallMinutes) {
+    return {
+      route: "hold-for-evidence",
+      reason: `non-owned claim is fresh and idle for >= ${stallMinutes}m, but still non-inheritable`,
+    };
+  }
+
+  return {
+    route: "hold-for-evidence",
+    reason: "non-owned claim remains non-inheritable until stale",
+  };
+}
+
 function hasExplicitDispositionAfter(targetComment, comments) {
   const targetTime = Date.parse(targetComment.createdAt ?? "");
   return comments.some((comment) => {
