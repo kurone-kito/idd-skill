@@ -16,7 +16,7 @@ behavior change too.
 | Advisory reviewer     | Copilot wait and recovery gates                                                              | For `human-required`, `no-advisory`, or `external-bot`, update the review-fix, pre-merge, merge, advisory-wait, snapshot, and triage files named by the selected profile.                                                                    |
 | Review threads        | Agents may resolve handled review threads under the fast default                             | Choose a thread-resolution profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the snapshot, triage, review-fix, pre-merge, and merge phase files for stricter profiles.                                       |
 | Policy constants      | Distributed timing, wait, and loop defaults                                                  | Review [IDD policy constants](policy-constants.md) before changing claim ownership timing, advisory waits, CI waits, or critique-loop guardrails. Record the selected critique-loop profile in onboarding notes before unattended operation. |
-| Merge policy          | Merge gates after CI, review, freshness, and claim checks; safe OSS default is `human_merge` | Review [Permissions and threat model](permissions.md), record the selected policy in repository docs, and customize handoff before F3 for non-autonomous profiles.                                                                           |
+| Merge policy          | Merge gates after CI, review, freshness, and claim checks; safe OSS default is `human_merge` | Review [Permissions and threat model](permissions.md), record the selected policy in repository docs, and keep or customize the F3 handoff gate for non-autonomous profiles.                                                                 |
 | Stall recovery safety | 30-minute quiet-window evidence plus 24-hour stale-threshold ownership gate                  | Keep `idd-resume-stall.instructions.md` aligned with `idd-overview` claim rules, and customize both files together if local policy changes quiet-window or takeover timing.                                                                  |
 | CI commands           | Project-specific command rows in the overview file                                           | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                                                                                   |
 | Issue scope           | Roadmap-first discovery                                                                      | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues to be considered before roadmap traversal.                                                  |
@@ -119,12 +119,18 @@ the current PR state once CI, review, freshness, and claim evidence are
 ready for the merge-capable actor.
 
 Record the selected merge policy in repository documentation that
-future IDD sessions read, not only in local onboarding notes. For
-`human_merge` and `separate_merge_agent`, also add repository-specific
-agent guidance or phase-file customization so normal workers stop before
-F3 and hand off to the human maintainer or separate merge-capable
-session. Documentation alone will not stop F3 if the same worker session
-still has merge-capable credentials.
+future IDD sessions read, not only in local onboarding notes. The
+distributed merge phase treats a missing or unknown policy as
+`human_merge` and stops in F3 unless the recorded policy is exactly
+`fully_autonomous_merge`.
+
+For `human_merge`, keep the default F3 stop gate and hand off to the
+human maintainer. For `separate_merge_agent`, keep the worker stop gate
+and record the merge-capable actor plus the resume condition, or
+customize the local F3 gate so only that separate merge-capable session
+can proceed. `fully_autonomous_merge` is the only profile that lets the
+same agent session continue through F3 after the normal freshness, CI,
+review, advisory, unresolved-thread, and claim gates pass.
 
 The distributed workflow expects merge commits. Changing the merge
 method, required review policy, or branch protection behavior is a
