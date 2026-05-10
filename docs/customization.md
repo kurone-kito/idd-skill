@@ -195,6 +195,21 @@ If your repository needs stricter behavior, customize the relevant
 instruction files and mirror those changes to the template export in the
 same pull request.
 
+## Roadmap Claim Guardrails
+
+Roadmap-audit claims are coordination-only. Use them only while editing
+the roadmap issue itself, then release them once the roadmap-side effect
+is complete. They are not an execution lock for child issues.
+
+If a roadmap claim stays open long after the roadmap mutation is done,
+or if it appears to block child work, treat that as a misuse signal:
+re-read the roadmap state, confirm the active claim, and either
+heartbeat, take over, or release it according to the shared
+claim-staleness rules before continuing.
+
+Keep this guidance under the docs audit so unattended runs can detect
+drift between the live docs and the exported template.
+
 ## Documentation-Only vs Workflow Changes
 
 Documentation-only changes are safe when they record how the repository
