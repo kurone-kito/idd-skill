@@ -64,6 +64,23 @@ operational marker posting. See the workflow docs for the detailed
 command contract. Review [Permissions and threat model](docs/permissions.md)
 before granting credentials to unattended or merge-capable agents.
 
+### 5-Minute Reading Path
+
+Use the focused docs in this order when you are evaluating or adopting
+IDD:
+
+1. [Getting started](docs/getting-started.md) — import the template and
+   run the first loop.
+2. [Core concepts](docs/concepts.md) — learn the claim, review, merge,
+   and cleanup vocabulary.
+3. [Customization](docs/customization.md) — choose policy surfaces
+   without forking the whole workflow.
+4. [Permissions and threat model](docs/permissions.md) — decide which
+   credentials each agent profile should receive.
+5. [Reference manual](docs/index.md) and
+   [detailed reference](docs/reference.md) — jump from the landing page
+   into phase files, policies, and maintenance notes.
+
 ## What IDD Automates
 
 IDD is intentionally boring in the best way: every phase has a named
@@ -149,8 +166,16 @@ approval.
 
 ## Deeper Reference
 
+- [Getting started](docs/getting-started.md) — the shortest safe path
+  from import to the first IDD loop.
+- [Core concepts](docs/concepts.md) — the vocabulary behind claims,
+  review snapshots, merge gates, and cleanup.
+- [Customization](docs/customization.md) — adopter-controlled policy
+  surfaces and workflow edit points.
 - [Reference manual](docs/index.md) — a task-oriented entry point for
   the deeper documentation set.
+- [Detailed reference](docs/reference.md) — phase files, policy docs,
+  and template-maintenance links without duplicating rules.
 - [Workflow guide](docs/idd-workflow.md) — entry points, file map, and
   cross-agent routing.
 - [Review policy profiles](docs/idd-review-policy-profiles.md) — choose
