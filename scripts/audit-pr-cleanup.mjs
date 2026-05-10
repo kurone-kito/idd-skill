@@ -1,68 +1,22 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import {
+  classifyRegularBotComment,
+  hasFreshDisposition,
+  indexLatestGatingReviewsByAuthor,
+  indexThreadsByReview,
+  isDispositionComment,
+  isKnownReviewBot,
+  operationalMarkerPrefix,
+  unsafeTextReason,
+} from "./protocol-helpers.mjs";
 
-const ISO8601_UTC_WITH_OPTIONAL_FRACTION = String.raw`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z`;
 const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)`;
 const TRUSTED_MARKER_PERMISSIONS = new Set(["admin", "maintain", "write"]);
 const trustedMarkerAuthorCache = new Map();
 let cachedConfiguredTrustedMarkerAuthors = null;
 let cachedCurrentViewerLogin = null;
-
-const OPERATIONAL_MARKERS = [
-  {
-    label: "<!-- review-watermark:",
-    pattern: new RegExp(
-      `^<!--\\s*review-watermark:\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\d+\\s+\\S+\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
-      "i",
-    ),
-  },
-  {
-    label: "<!-- review-baseline:",
-    pattern: new RegExp(
-      `^<!--\\s*review-baseline:\\s+\\S+\\s+\\S+\\s+\\S+\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
-      "i",
-    ),
-  },
-  {
-    label: "advisory-wait:",
-    pattern: new RegExp(
-      `^advisory-wait:\\s+\\S+\\s+[0-9a-f]{40}\\s+${ISO8601_UTC_WITH_OPTIONAL_FRACTION}\\s*$`,
-    ),
-  },
-  {
-    label: "advisory-wait-recovery:",
-    pattern: new RegExp(
-      `^advisory-wait-recovery:\\s+\\S+\\s+[0-9a-f]{40}\\s+${ISO8601_UTC_WITH_OPTIONAL_FRACTION}\\s*$`,
-    ),
-  },
-  {
-    label: "<!-- advisory-wait:",
-    pattern: /^<!--\s*advisory-wait:\s+\S+\s+[0-9a-f]{40}\s+\S+\s*-->\s*$/,
-  },
-];
-
-const REVIEW_BOT_LOGINS = new Set([
-  "coderabbitai",
-  "coderabbitai[bot]",
-  "chatgpt-codex-connector",
-  "chatgpt-codex-connector[bot]",
-]);
-
-const UNSAFE_TEXT_RULES = [
-  {
-    pattern: /\*\*Awaiting maintainer decision\*\*/i,
-    reason: "contains an awaiting-maintainer-decision marker",
-  },
-  {
-    pattern: /\bactive hold\b/i,
-    reason: "contains active hold context",
-  },
-  {
-    pattern: /\bfailed[- ]ci\b|\bfailing ci\b|\bci failure\b|\bci failed\b|\bfailed checks?\b/i,
-    reason: "contains failed-CI context",
-  },
-];
 
 const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
 
@@ -457,200 +411,6 @@ function addSkipped(report, subject, reason) {
     ...subject,
     skipReason: reason,
   });
-}
-
-function operationalMarkerPrefix(body) {
-  const normalized = body.trimEnd();
-  return OPERATIONAL_MARKERS.find((marker) => marker.pattern.test(normalized))?.label ?? null;
-}
-
-function unsafeTextReason(body) {
-  for (const rule of UNSAFE_TEXT_RULES) {
-    if (rule.pattern.test(body)) {
-      return rule.reason;
-    }
-  }
-  return null;
-}
-
-function isKnownReviewBot(login) {
-  const normalized = login.toLowerCase();
-  return REVIEW_BOT_LOGINS.has(normalized) || normalized.startsWith("copilot-pull-request-reviewer");
-}
-
-function classifyRegularBotComment(comment, comments, threads) {
-  const author = comment.author?.login ?? "";
-  if (!isCodeRabbitLogin(author)) {
-    return null;
-  }
-
-  if (hasUnresolvedKnownBotThreads(threads)) {
-    return null;
-  }
-
-  const body = (comment.body ?? "").trimStart();
-
-  if (body.startsWith("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->")) {
-    if (/No actionable comments were generated/i.test(body)) {
-      return {
-        classifier: "RESOLVED",
-        reason: "CodeRabbit completed summary reported no actionable comments",
-      };
-    }
-    if (
-      hasExplicitDispositionAfter(comment, comments)
-      || hasCompletedBotThreadDispositions(threads, isCodeRabbitLogin)
-    ) {
-      return {
-        classifier: "RESOLVED",
-        reason: "CodeRabbit completed summary has matched IDD disposition evidence",
-      };
-    }
-    return null;
-  }
-
-  if (body.startsWith("<!-- This is an auto-generated reply by CodeRabbit -->")) {
-    if (/\b(Review triggered|Sure! I'll review|I'll review)\b/i.test(body)
-      && hasExplicitDispositionAfter(comment, comments)) {
-      return {
-        classifier: "OUTDATED",
-        reason: "stale CodeRabbit review-trigger acknowledgement after completed review",
-      };
-    }
-  }
-
-  return null;
-}
-
-function isCodeRabbitLogin(login) {
-  const normalized = login.toLowerCase();
-  return normalized === "coderabbitai" || normalized === "coderabbitai[bot]";
-}
-
-function hasExplicitDispositionAfter(targetComment, comments) {
-  const targetTime = Date.parse(targetComment.createdAt ?? "");
-  return comments.some((comment) => {
-    const author = comment.author?.login ?? "";
-    if (isKnownReviewBot(author) || !isDispositionComment(comment)) {
-      return false;
-    }
-    if (!/\bCodeRabbit\b/i.test(comment.body ?? "")) {
-      return false;
-    }
-    const dispositionTime = Date.parse(comment.createdAt ?? "");
-    return Number.isFinite(targetTime)
-      && Number.isFinite(dispositionTime)
-      && dispositionTime > targetTime;
-  });
-}
-
-function hasCompletedBotThreadDispositions(threads, loginPredicate) {
-  const botThreads = threads.filter((thread) => {
-    return (thread.comments?.nodes ?? []).some((comment) => {
-      return loginPredicate(comment.author?.login ?? "") && !isDispositionComment(comment);
-    });
-  });
-
-  return botThreads.length > 0 && botThreads.every((thread) => {
-    return thread.isResolved
-      && !thread.comments?.pageInfo?.hasNextPage
-      && hasFreshDisposition(thread);
-  });
-}
-
-function hasUnresolvedKnownBotThreads(threads) {
-  return threads.some((thread) => {
-    if (thread.isResolved) {
-      return false;
-    }
-    if (thread.comments?.pageInfo?.hasNextPage) {
-      return true;
-    }
-    return (thread.comments?.nodes ?? []).some((comment) => {
-      return isKnownReviewBot(comment.author?.login ?? "");
-    });
-  });
-}
-
-function indexLatestGatingReviewsByAuthor(reviews) {
-  const index = new Map();
-  for (const review of reviews) {
-    if (review.state === "COMMENTED") {
-      continue;
-    }
-    const author = review.author?.login?.toLowerCase();
-    if (!author) {
-      continue;
-    }
-    const current = index.get(author);
-    const submittedAt = review.submittedAt ?? "";
-    if (!current || submittedAt > (current.submittedAt ?? "")) {
-      index.set(author, review);
-    }
-  }
-  return index;
-}
-
-function indexThreadsByReview(threads) {
-  const index = new Map();
-
-  for (const thread of threads) {
-    const reviewIds = new Set(
-      (thread.comments?.nodes ?? [])
-        .map((comment) => comment.pullRequestReview?.id)
-        .filter(Boolean),
-    );
-
-    for (const reviewId of reviewIds) {
-      const current = index.get(reviewId) ?? {
-        total: 0,
-        unresolved: 0,
-        missingDisposition: 0,
-        incomplete: false,
-        threadIds: [],
-      };
-      current.total += 1;
-      if (!thread.isResolved) {
-        current.unresolved += 1;
-      }
-      if (!hasFreshDisposition(thread)) {
-        current.missingDisposition += 1;
-      }
-      if (thread.comments?.pageInfo?.hasNextPage) {
-        current.incomplete = true;
-      }
-      current.threadIds.push(thread.id);
-      index.set(reviewId, current);
-    }
-  }
-
-  return index;
-}
-
-function hasFreshDisposition(thread) {
-  const comments = thread.comments?.nodes ?? [];
-  const latestFeedbackAt = comments
-    .filter((comment) => !isIddDispositionComment(comment))
-    .map((comment) => comment.createdAt)
-    .sort()
-    .at(-1);
-
-  return comments.some((comment) => {
-    if (!isIddDispositionComment(comment)) {
-      return false;
-    }
-    return !latestFeedbackAt || comment.createdAt > latestFeedbackAt;
-  });
-}
-
-function isIddDispositionComment(comment) {
-  const author = comment.author?.login ?? "";
-  return isDispositionComment(comment) && !isKnownReviewBot(author);
-}
-
-function isDispositionComment(comment) {
-  const body = (comment.body ?? "").trimEnd();
-  return body.startsWith("**Accepted**") || body.startsWith("**Rejected**");
 }
 
 function fetchPullRequest(owner, repo, number, options = {}) {
