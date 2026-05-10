@@ -167,6 +167,10 @@ Required evidence fields:
 4. Reviewer-state evidence: latest `CHANGES_REQUESTED` states for human,
    required, and CODEOWNER reviewers, plus required approval/CODEOWNER
    satisfaction.
+5. Advisory-wait evidence: AW outcome for the current HEAD, marker
+   coverage (`EARLIEST_SAME_HEAD_AT`), and merge-gate satisfaction.
+6. CI evidence: required-check generation and pass status for all
+   required checks on the current HEAD.
 
 Mixed reviewer ecosystems are expected. The same checklist applies
 across human reviews and advisory bot surfaces (Copilot, CodeRabbit,

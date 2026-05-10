@@ -54,6 +54,11 @@ minimum, capture:
 4. Reviewer-state evidence: latest `CHANGES_REQUESTED` status for human,
    required, and CODEOWNER reviewers, plus required approval/CODEOWNER
    satisfaction status.
+5. Advisory-wait evidence: current AW outcome (`SATISFIED`/`WAIT`/etc),
+   marker presence (`EARLIEST_SAME_HEAD_AT`), and whether the current
+   state satisfies the advisory gate for merge.
+6. CI evidence: required-check generation state and pass/fail status for
+   all required checks on the current PR HEAD.
 
 Do not treat "one bot says clean" as sufficient evidence. The checklist
 must cover the full activity universe (human reviewers plus advisory bot
