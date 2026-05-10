@@ -158,6 +158,19 @@ During a run:
 - If a command asks for a credential, deployment approval, or unexpected
   privileged operation, stop and ask the operator.
 
+## Approval Labels vs Trusted Marker Actors
+
+Keep approval labels and operational marker trust as separate controls:
+
+- `idd:ready` (or local equivalent) is an issue-selection approval signal
+  for orphan-first policy and should be restricted to maintainer approval
+  actors.
+- Trusted marker actors govern operational marker authority
+  (`claimed-by`, `unclaimed-by`, `review-watermark`,
+  `review-baseline`, `advisory-wait`) and may include different actors.
+- A label alone never grants marker authority, and marker authority does
+  not imply permission to approve arbitrary orphan issues.
+
 ## References
 
 - [GitHub REST API permissions for fine-grained personal access tokens](https://docs.github.com/en/rest/overview/permissions-required-for-fine-grained-personal-access-tokens)

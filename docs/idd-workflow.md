@@ -101,6 +101,21 @@ enumeration, but it still applies targeted readiness checks, the A4
 viability gate, and the A4.5 suitability gate before the normal A5 claim
 safety checks.
 
+## Suitability policy handoff
+
+A4.5 outcomes should map to explicit repository policy, not ad hoc
+session choices. Keep the mapping in [Customizing IDD](customization.md)
+for labels, comment-and-stop defaults, and close boundaries:
+
+- uncertain outcomes (`unclear`, `needs-decision`, `blocked-by-human`)
+  stay open by default with a concise routing comment, then A4.5 keeps
+  scanning remaining candidates in the same run;
+- high-confidence `duplicate`, `invalid`, and `out-of-scope` outcomes
+  are read-only by default and require explicit A4.5 mutation-policy
+  customization before close/label side effects;
+- `idd:ready` approval ownership is separate from trusted marker actor
+  authority for operational claim/review markers.
+
 ## Roadmap completion audits
 
 Discover owns roadmap-level state. After it finds an open roadmap, it
