@@ -551,6 +551,8 @@ After completing the steps above, confirm each item:
 - [ ] The operator's selected review-thread resolution policy is
       recorded, and any non-default profile has matching phase-file
       customizations.
+- [ ] The operator's selected critique-loop policy is recorded, and any
+      non-default profile has matching phase-file customizations.
 - [ ] The operator's selected merge policy is recorded in repository
       documentation, and worker credentials match that boundary.
 - [ ] Ownership timing policy values `claim-stale-age` and

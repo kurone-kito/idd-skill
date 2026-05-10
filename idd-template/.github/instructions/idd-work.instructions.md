@@ -113,7 +113,8 @@ Run a critique pass on this branch's diff. Ask it to check whether the
 implementation is correct, whether the issue's requirements are
 satisfied, whether adequate test coverage exists, and whether any other
 problems exist. See `idd-overview.instructions.md` for per-agent
-implementation.
+implementation. The distributed defaults for the C-phase skip and loop
+guards are listed in `docs/policy-constants.md`.
 
 ### C2 — Check for issues
 

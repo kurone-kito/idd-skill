@@ -23,7 +23,9 @@ Commit fixes atomically — one logical change per commit.
 
 Run a critique pass to verify that the fixes in E9 address the root
 causes and are correct (see `idd-overview.instructions.md` for per-agent
-implementation). Keep an E10 pass count for the current E9 fix batch.
+implementation). The distributed defaults for the E10 guardrails are
+listed in `docs/policy-constants.md`. Keep an E10 pass count for the
+current E9 fix batch.
 
 If the critique pass finds additional issues, fix them, commit
 atomically, and run E10 again while the findings are converging.
