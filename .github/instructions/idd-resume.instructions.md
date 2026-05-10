@@ -54,37 +54,6 @@ Before routing, collect all of the following:
    no upstream is configured, treat all local commits as unpushed.
 10. **Current local HEAD SHA** — run `git rev-parse HEAD`.
 
-## Step 0 — Classify the resume route
-
-Before applying Step 1, classify the resume situation using only
-externally observable signals. Do not rely on the previous session
-posting a graceful shutdown, release, or hold comment.
-
-Use these signals together:
-
-- active claim ownership (`{claim-id}` and `created_at`)
-- issue/PR activity recency (comments, review threads, review bodies)
-- PR HEAD movement and CI state transitions
-- local worktree dirtiness and unpushed commits
-
-Route to one of the following classes:
-
-| Route class                                | Observable signal pattern                                                                                                                                                 | Action                                                                                                                                                                                                                                                     |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Crash recovery**                         | Session appears interrupted (missing/released claim, or unfinished local/PR state with no contradictory fresh owner signal).                                              | Continue with Step 1 and the existing restore table in Step 2.                                                                                                                                                                                             |
-| **Progress-stalled / rate-limit recovery** | Active claim is non-stale and not currently provable as owned by this session, PR HEAD/CI and review activity are quiet, and no external signal proves the owner resumed. | Do not take over yet. Stop without posting issue/PR comments; record the observed signals and next retry condition only in out-of-repo session-state artifacts or external run logs. Do not write files in the repository/worktree on this non-owner path. |
-| **Stale-claim takeover**                   | Active non-owned claim exists and latest valid `claimed-by` `created_at` is `>= 24 h`.                                                                                    | Execute stale takeover flow in Step 1 (`supersedes` required), then continue.                                                                                                                                                                              |
-| **Ordinary clean continuation**            | Active claim is already owned by this session and current state is consistent with normal continuation.                                                                   | Continue with Step 1/Step 2 as a normal resume.                                                                                                                                                                                                            |
-
-Classification thresholds:
-
-- **Stale takeover threshold**: 24 h from latest valid `claimed-by`
-  `created_at`.
-- **Stall quiet window**: require a sustained quiet period from external
-  signals of `>= 30 min` (no newer issue/PR/review/CI activity and no
-  HEAD movement) before declaring progress-stalled; when uncertain, stop
-  and retry later rather than taking over.
-
 ## Step 1 — Identify the issue and claim state
 
 - If the issue is **closed** or the corresponding PR is **merged**:

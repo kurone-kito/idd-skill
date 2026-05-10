@@ -330,7 +330,6 @@ file that matches your current situation.
 | Starting fresh (no active claim)              | `idd-discover.instructions.md`, then `idd-claim.instructions.md`      |
 | Starting fresh with one explicit issue target | `idd-discover.instructions.md` A0-T, then `idd-claim.instructions.md` |
 | Resuming after crash / rate-limit / handoff   | `idd-resume.instructions.md`                                          |
-| Resuming a stalled/rate-limited non-owned run | `idd-resume-stall.instructions.md`                                    |
 | Claimed, branch exists, no PR yet             | `idd-work.instructions.md`                                            |
 | PR open, CI running, no reviews yet           | `idd-pr-submit.instructions.md`                                       |
 | PR open, CI running, reviews exist            | `idd-review-snapshot.instructions.md` (E1–E3)                         |
