@@ -112,8 +112,9 @@ values. The operator can confirm these proposed values or correct them.
 - **Repository name** (`{{REPO_NAME}}`): Read from `git config` or GitHub
   API. The remote name is the most reliable source.
 - **Marker prefix** (`{{PROJECT_MARKER_PREFIX}}`): Candidate is the
-  repository name lowercased, hyphenated. Ask the operator to confirm this
-  candidate or provide an alternative.
+  repository name lowercased, hyphenated, and must match
+  `^[a-z][a-z0-9-]{1,31}$`. Ask the operator to confirm this candidate or
+  provide an alternative that matches the same pattern.
 - **Install command** (`{{INSTALL_DEPS_COMMAND}}`): Look for presence of
   `package.json` (candidate: `npm install`), `pyproject.toml` or
   `requirements.txt` (candidate: `pip install -r requirements.txt`),
@@ -234,7 +235,7 @@ directly.
 | Placeholder                      | What it means                                                                                                                                  | Example / Derivation                                             |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | `{{REPO_NAME}}`                  | The repository's short name. Used in worktree path examples. **Derived** in Step 1A from git remote.                                           | Auto-derived: `my-app`                                           |
-| `{{PROJECT_MARKER_PREFIX}}`      | A short, URL-safe prefix unique to this project. Used in HTML comment markers in issue bodies. **Derived** in Step 1A; confirm with operator.  | Auto-derived from repo name: `my-app`                            |
+| `{{PROJECT_MARKER_PREFIX}}`      | Marker prefix for hidden issue-body HTML comments. Must match `^[a-z][a-z0-9-]{1,31}$`. **Derived** in Step 1A; confirm with operator.         | Auto-derived from repo name: `my-app`                            |
 | `{{FIX_VALIDATE_COMMANDS}}`      | Commands that may auto-fix linting/formatting and verify. **Derived** in Step 1A from build-tool evidence.                                     | Auto-derived: `npm run lint:fix && npm run lint`                 |
 | `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Verify commands (no mutations). **Derived** in Step 1A from build-tool evidence.                                                               | Auto-derived: `npm run lint && npm run test`                     |
 | `{{POST_FIX_VALIDATE_COMMANDS}}` | Auto-fix + full verify (superset). **Derived** in Step 1A from build-tool evidence.                                                            | Auto-derived: `npm run lint:fix && npm test`                     |
@@ -262,7 +263,11 @@ comments:
 
 The prefix makes these markers unique across projects when issues are
 shared or migrated. Choose a short, lowercase, hyphenated name matching
-the repo (e.g., the repo name itself).
+the repo (e.g., the repo name itself), and validate it with:
+
+```sh
+echo "<prefix>" | grep -Eq '^[a-z][a-z0-9-]{1,31}$'
+```
 
 **Important — correct use of `blocked-by`**: the `blocked-by` marker
 expresses a hard sequential dependency. Place it in an issue only when
