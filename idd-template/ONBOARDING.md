@@ -57,10 +57,10 @@ complete the intended phase.
 Also choose a merge policy before the first unattended run:
 `human_merge`, `separate_merge_agent`, or `fully_autonomous_merge`.
 The distributed default is `fully_autonomous_merge`, which gives one
-trusted agent session merge authority. Public repositories or those
+trusted agent session merge authority to continue through merge execution
+in F3. `human_merge` and `separate_merge_agent` always stop before the
+merge phase by design, even if recorded. Public repositories or those
 requiring human validation should explicitly opt out to `human_merge`.
-The merge phase stops in F3 unless the policy is explicitly recorded, so
-`human_merge` and `separate_merge_agent` stop before merge by default.
 Record the selected policy in repository documentation that future IDD
 sessions read.
 
