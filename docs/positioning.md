@@ -39,29 +39,39 @@ coordination at the issue-tracking level.
 
 ## Comparison matrix
 
-| Criterion                    | idd-skill                          | GitHub Agentic Workflows | Awesome-Copilot skills | Kiro / Factory.ai | OpenHands            |
-| ---------------------------- | ---------------------------------- | ------------------------ | ---------------------- | ----------------- | -------------------- |
-| Parallel agent coordination  | ✓ (claim/heartbeat)                | ✗                        | ✗                      | Varies            | ✗                    |
-| End-to-end phase coverage    | ✓ (full discovery-to-merge set)    | Partial                  | ✗                      | ✓ (proprietary)   | Partial              |
-| Zero infrastructure          | ✓ (Markdown files only)            | ✗ (GitHub servers)       | ✓                      | ✗ (SaaS account)  | ✗ (runtime required) |
-| Agent-agnostic               | ✓ (Copilot, Claude, Codex, Gemini) | ✗ (GitHub Copilot only)  | ✓                      | ✗ (proprietary)   | ✗ (own runtime)      |
-| Fully auditable rules        | ✓ (plain Markdown)                 | ✗                        | ✓                      | ✗                 | ✓ (open source)      |
-| GitHub-hosted CI integration | ✓ (CI wait loop)                   | ✓                        | ✗                      | ✓                 | Varies               |
-| No vendor account required   | ✓                                  | ✗ (GitHub account)       | ✓                      | ✗                 | ✓                    |
+| Criterion                         | idd-skill                          | GitHub Agentic Workflows        | Awesome-Copilot skills | Kiro / Factory.ai | OpenHands            |
+| --------------------------------- | ---------------------------------- | ------------------------------- | ---------------------- | ----------------- | -------------------- |
+| Parallel agent coordination       | ✓ (claim/heartbeat)                | ✗                               | ✗                      | Varies            | ✗                    |
+| End-to-end phase coverage         | ✓ (full discovery-to-merge set)    | Partial                         | ✗                      | ✓ (proprietary)   | Partial              |
+| Zero infrastructure               | ✓ (Markdown files only)            | ✗ (GitHub servers)              | ✓                      | ✗ (SaaS account)  | ✗ (runtime required) |
+| Execution-agent neutral           | ✓ (Copilot, Claude, Codex, Gemini) | ✗ (GitHub Copilot only)         | ✓                      | ✗ (proprietary)   | ✗ (own runtime)      |
+| Fully auditable rules             | ✓ (plain Markdown)                 | ✗                               | ✓                      | ✗                 | ✓ (open source)      |
+| GitHub-hosted CI integration      | ✓ (CI wait loop)                   | ✓                               | ✗                      | ✓                 | Varies               |
+| No separate orchestration service | ✓                                  | ✗ (GitHub-hosted agent service) | ✓                      | ✗                 | ✓                    |
+
+The final row means idd-skill does not add its own IDD-specific SaaS
+account, orchestration account, scheduler, or server. Running the full
+loop still requires normal GitHub repository access, repository-scoped
+credentials, and the GitHub API or `gh` CLI access described in the
+README.
 
 ## Strategic position
 
 idd-skill occupies a unique position as a _portable operating system
 for development teams_ — a GitHub-native framework that is
-vendor-neutral, infrastructure-free, and includes explicit multi-agent
-coordination primitives built into the workflow rules themselves.
+execution-agent neutral, does not add an IDD-specific orchestration
+service, and includes explicit multi-agent coordination primitives built
+into the workflow rules themselves.
 
 The key differentiator is the claim/heartbeat protocol. Other tools
 either assume single-agent execution or rely on external orchestration
 services to prevent task duplication. idd-skill encodes the
 coordination rules directly in the instruction files that agents read,
-making parallel execution safe across heterogeneous agent runtimes with
-no additional infrastructure.
+making parallel execution safe across heterogeneous agent runtimes
+without adding a separate IDD service. Under the distributed default PR
+policy, that agent-neutral execution model still coexists with a
+GitHub Copilot advisory review step; adopters can replace that gate by
+choosing another review policy profile.
 
 ## Relationship to adjacent tools
 
