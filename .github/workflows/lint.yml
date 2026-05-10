@@ -21,6 +21,8 @@ jobs:
         env:
           GITHUB_EVENT_BEFORE: ${{ github.event.before }}
         run: node scripts/audit-docs.mjs --check
+      - name: Run dprint
+        run: npx dprint check "**/*.md"
       - name: Run cspell
         uses: streetsidesoftware/cspell-action@v8
       - name: Run markdownlint
