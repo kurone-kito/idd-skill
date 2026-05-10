@@ -232,8 +232,9 @@ phases.
 - This dependency is on GitHub's review integration, not on every local
   agent using Copilot as its CLI.
 - Adopters who do not want that default PR policy should choose another
-  review policy profile, apply the matching `profiles/<profile>/`
-  artifact, and follow the PR review profile edit-surface checklist in
+  review policy profile, apply the matching
+  `profiles/<profile>/README.md` artifact, and follow the PR review
+  profile edit-surface checklist in
   [IDD review policy profiles](idd-review-policy-profiles.md).
 - Expect non-default profile changes to cover review-fix, advisory-wait,
   pre-merge, merge, review-snapshot, and review-triage surfaces; the
