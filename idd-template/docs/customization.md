@@ -161,6 +161,26 @@ gate is intentionally based on repository metadata or trusted actor
 comments, not on text that an arbitrary issue author can place in the
 issue body.
 
+## Roadmap-Claim Contention Policy
+
+If multiple sessions or agents run concurrently, document a
+roadmap-claim contention policy during onboarding:
+
+- Roadmap claims (`roadmap-audit/*`) are coordination claims for
+  roadmap-side effects only.
+- Child issue claims remain independent execution ownership per issue.
+- Roadmap claim presence alone must not block child issue execution.
+- Stale takeover timing and `supersedes` behavior follow shared claim
+  rules; local policy should not weaken them.
+- If a claim is fresh and owned by another live session, treat it as not
+  inheritable and stop or defer under the shared claim-state rules.
+- Operators should release roadmap-audit claims promptly after roadmap
+  mutations complete.
+
+If your repository needs stricter behavior, customize the relevant
+instruction files and mirror those changes to the template export in the
+same pull request.
+
 ## Documentation-Only vs Workflow Changes
 
 Documentation-only changes are safe when they record how the repository

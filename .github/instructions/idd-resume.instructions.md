@@ -71,6 +71,8 @@ This coordination claim does not lock unrelated child-issue execution.
 After the re-claim or takeover is verified, do not create a branch or
 worktree and do not use the Step 2 worktree table. Re-run A1.5 for that
 roadmap issue, then follow A1.5's close, release, or stop behavior.
+Treat child issue claims independently; roadmap-audit claim presence
+alone must not block child issue execution.
 
 ## Step 2 — Locate or restore branch and worktree
 
