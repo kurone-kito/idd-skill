@@ -154,8 +154,8 @@ The helper also reports skipped cleanup-shaped nodes with reasons such
 as already minimized, no minimization permission, unresolved associated
 review threads, missing accept/reject dispositions, unsafe hold or
 decision context, no completed-review signal on a known-bot regular
-comment, no associated review threads on a bot review parent, or a
-non-merged PR.
+comment, no associated review threads on a bot review parent, untrusted
+operational marker author, or a non-merged PR.
 
 ## Apply Shape
 
@@ -170,6 +170,17 @@ During an IDD F4 cleanup, pass the active issue and claim id. The helper
 re-reads the issue and verifies the active claim before every
 `minimizeComment` mutation. Maintainer-led audits outside an active IDD
 claim may use `--skip-claim-check`, but ordinary IDD agents should not.
+
+During claim verification, the helper ignores `claimed-by` and
+`unclaimed-by` markers whose GitHub author is not trusted. By default,
+trusted marker authors are repository collaborators with Write, Maintain,
+or Admin permission. Set `IDD_TRUSTED_MARKER_ACTORS` to a comma-separated
+list of trusted bot or GitHub App logins when automation posts markers
+from an identity that is not a collaborator.
+
+The same trust check applies before minimizing operational marker-shaped
+comments. Untrusted marker-shaped comments remain visible as suspicious
+context instead of being hidden as stale automation noise.
 
 The helper applies only safe candidates and reports applied, skipped,
 and failed rows. A helper failure is still cleanup-only context; it does
