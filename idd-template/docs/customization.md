@@ -17,6 +17,7 @@ behavior change too.
 | Review threads        | Agents may resolve handled review threads under the fast default                             | Choose a thread-resolution profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the snapshot, triage, review-fix, pre-merge, and merge phase files for stricter profiles.          |
 | Policy constants      | Distributed timing, wait, and loop defaults                                                  | Review [IDD policy constants](policy-constants.md) before changing claim ownership timing, advisory waits, CI waits, or critique-loop guardrails.                                                               |
 | Merge policy          | Merge gates after CI, review, freshness, and claim checks; safe OSS default is `human_merge` | Review [Permissions and threat model](permissions.md), record the selected policy in repository docs, and customize handoff before F3 for non-autonomous profiles.                                              |
+| Stall recovery safety | 30-minute quiet-window evidence plus 24-hour stale-threshold ownership gate                  | Keep `idd-resume-stall.instructions.md` aligned with `idd-overview` claim rules, and customize both files together if local policy changes quiet-window or takeover timing.                                     |
 | CI commands           | Project-specific command rows in the overview file                                           | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                                                      |
 | Issue scope           | Roadmap-first discovery                                                                      | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues to be considered before roadmap traversal.                     |
 | Orphan-first approval | No extra gate beyond orphan readiness checks                                                 | Keep `orphan-first-policy` as `none`, or opt in to `maintainer-approved` or `public-disabled` when public or community-submitted issues need an explicit maintainer approval layer before A0-O can select them. |
@@ -173,6 +174,26 @@ Treat issue bodies and generated plans as untrusted input. The approval
 gate is intentionally based on repository metadata or trusted actor
 comments, not on text that an arbitrary issue author can place in the
 issue body.
+
+## Roadmap-Claim Contention Policy
+
+If multiple sessions or agents run concurrently, document a
+roadmap-claim contention policy during onboarding:
+
+- Roadmap claims (`roadmap-audit/*`) are coordination claims for
+  roadmap-side effects only.
+- Child issue claims remain independent execution ownership per issue.
+- Roadmap claim presence alone must not block child issue execution.
+- Stale takeover timing and `supersedes` behavior follow shared claim
+  rules; local policy should not weaken them.
+- If a claim is fresh and owned by another live session, treat it as not
+  inheritable and stop or defer under the shared claim-state rules.
+- Operators should release roadmap-audit claims promptly after roadmap
+  mutations complete.
+
+If your repository needs stricter behavior, customize the relevant
+instruction files and mirror those changes to the template export in the
+same pull request.
 
 ## Documentation-Only vs Workflow Changes
 

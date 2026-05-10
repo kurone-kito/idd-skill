@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  buildActivitySnapshotSummary,
   classifyRegularBotComment,
   indexLatestGatingReviewsByAuthor,
   indexThreadsByReview,
@@ -85,6 +86,63 @@ test("classifies bot comments against review state and later activity", () => {
     ),
     null,
   );
+});
+
+test("builds activity snapshot metrics with trusted marker filtering", () => {
+  const summary = buildActivitySnapshotSummary(
+    {
+      comments: [
+        {
+          author: { login: "idd-bot" },
+          body: "<!-- review-watermark: idd-bot claim sha none 0 none -->\n\n_idd-bot: localized marker note without strict format._",
+          createdAt: "2026-05-10T10:00:00Z",
+          updatedAt: "2026-05-10T10:00:00Z",
+        },
+        {
+          author: { login: "external-user" },
+          body: "<!-- review-watermark: external claim sha none 0 none -->",
+          createdAt: "2026-05-10T10:10:00Z",
+          updatedAt: "2026-05-10T10:10:00Z",
+        },
+        {
+          author: { login: "reviewer" },
+          body: "Needs one more fix.",
+          createdAt: "2026-05-10T10:20:00Z",
+          updatedAt: "2026-05-10T10:20:00Z",
+        },
+      ],
+      reviews: [
+        {
+          author: { login: "reviewer" },
+          state: "COMMENTED",
+          submittedAt: "2026-05-10T10:15:00Z",
+          updatedAt: "2026-05-10T10:35:00Z",
+        },
+      ],
+      threads: [
+        {
+          id: "THREAD-3",
+          isResolved: false,
+          updatedAt: "2026-05-10T10:30:00Z",
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [],
+          },
+        },
+      ],
+      checks: [
+        { name: "lint", state: "SUCCESS", completedAt: "2026-05-10T10:25:00Z" },
+        { name: "test", state: "IN_PROGRESS", completedAt: null },
+      ],
+    },
+    { trustedMarkerLogins: ["idd-bot"] },
+  );
+
+  assert.equal(summary.totalItemCount, 4);
+  assert.equal(summary.counts.comments, 2);
+  assert.equal(summary.maxActivityUpdatedAt, "2026-05-10T10:35:00Z");
+  assert.equal(summary.latestCiCompletedAt, "2026-05-10T10:25:00Z");
+  assert.equal(summary.latestPassingCiCompletedAt, "2026-05-10T10:25:00Z");
 });
 
 function readJson(relativePath) {

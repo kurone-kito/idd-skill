@@ -10,21 +10,22 @@ or [Core concepts](concepts.md) before using this reference.
 
 ## Phase Map
 
-| Need                              | Phase  | Authoritative source                                                           |
-| --------------------------------- | ------ | ------------------------------------------------------------------------------ |
-| Shared definitions and commands   | All    | [IDD overview](../.github/instructions/idd-overview.instructions.md)           |
-| Select the next issue             | A0-A4  | [Discover](../.github/instructions/idd-discover.instructions.md)               |
-| Claim an issue safely             | A5     | [Claim](../.github/instructions/idd-claim.instructions.md)                     |
-| Create a worktree and self-review | B-C    | [Work and self-review](../.github/instructions/idd-work.instructions.md)       |
-| Open or update the pull request   | D      | [PR submit](../.github/instructions/idd-pr-submit.instructions.md)             |
-| Interpret CI while waiting        | D/E/F  | [CI polling](../.github/instructions/idd-ci.instructions.md)                   |
-| Snapshot review activity          | E1-E3  | [Review snapshot](../.github/instructions/idd-review-snapshot.instructions.md) |
-| Triage review items               | E4-E8  | [Review triage](../.github/instructions/idd-review-triage.instructions.md)     |
-| Fix accepted review feedback      | E9-E15 | [Review fix](../.github/instructions/idd-review-fix.instructions.md)           |
-| Check pre-merge gates             | F1-F2  | [Pre-merge conditions](../.github/instructions/idd-pre-merge.instructions.md)  |
-| Merge, clean up, and loop         | F3-F5  | [Merge execution](../.github/instructions/idd-merge.instructions.md)           |
-| Resume after a crash or handoff   | Resume | [Resume](../.github/instructions/idd-resume.instructions.md)                   |
-| Wait for Copilot advisory state   | E/F    | [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md)     |
+| Need                              | Phase  | Authoritative source                                                                        |
+| --------------------------------- | ------ | ------------------------------------------------------------------------------------------- |
+| Shared definitions and commands   | All    | [IDD overview](../.github/instructions/idd-overview.instructions.md)                        |
+| Select the next issue             | A0-A4  | [Discover](../.github/instructions/idd-discover.instructions.md)                            |
+| Claim an issue safely             | A5     | [Claim](../.github/instructions/idd-claim.instructions.md)                                  |
+| Create a worktree and self-review | B-C    | [Work and self-review](../.github/instructions/idd-work.instructions.md)                    |
+| Open or update the pull request   | D      | [PR submit](../.github/instructions/idd-pr-submit.instructions.md)                          |
+| Interpret CI while waiting        | D/E/F  | [CI polling](../.github/instructions/idd-ci.instructions.md)                                |
+| Snapshot review activity          | E1-E3  | [Review snapshot](../.github/instructions/idd-review-snapshot.instructions.md)              |
+| Triage review items               | E4-E8  | [Review triage](../.github/instructions/idd-review-triage.instructions.md)                  |
+| Fix accepted review feedback      | E9-E15 | [Review fix](../.github/instructions/idd-review-fix.instructions.md)                        |
+| Check pre-merge gates             | F1-F2  | [Pre-merge conditions](../.github/instructions/idd-pre-merge.instructions.md)               |
+| Merge, clean up, and loop         | F3-F5  | [Merge execution](../.github/instructions/idd-merge.instructions.md)                        |
+| Resume after a crash or handoff   | Resume | [Resume](../.github/instructions/idd-resume.instructions.md)                                |
+| Recover from a stalled session    | Resume | [Resume stalled-session recovery](../.github/instructions/idd-resume-stall.instructions.md) |
+| Wait for Copilot advisory state   | E/F    | [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md)                  |
 
 ## Policy and Support Pages
 

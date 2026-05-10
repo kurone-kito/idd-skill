@@ -1,0 +1,17 @@
+{
+  "name": "owned rebase in progress routes to crash recovery",
+  "input": {
+    "hasActiveClaim": true,
+    "claimOwnedBySession": true,
+    "claimAgeHours": 2,
+    "latestActivityAgeMinutes": 5,
+    "ciState": "success",
+    "worktreeDirty": false,
+    "hasUnpushedCommits": false,
+    "rebaseInProgress": true
+  },
+  "expected": {
+    "route": "crash-recovery",
+    "reasonContains": "interrupted local state"
+  }
+}

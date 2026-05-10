@@ -1,0 +1,17 @@
+{
+  "name": "non-owned claim below stale threshold does not takeover",
+  "input": {
+    "hasActiveClaim": true,
+    "claimOwnedBySession": false,
+    "claimAgeHours": 23.99,
+    "latestActivityAgeMinutes": 15,
+    "ciState": "success",
+    "worktreeDirty": false,
+    "hasUnpushedCommits": false,
+    "rebaseInProgress": false
+  },
+  "expected": {
+    "route": "hold-for-evidence",
+    "reasonContains": "non-inheritable"
+  }
+}

@@ -21,6 +21,13 @@ gate. The active claim must still use your current `{claim-id}`.
    `idd-pre-merge.instructions.md`. Return to E1 if **any** of the
    following is true:
 
+   In this source repository, you may optionally use the read-only
+   helper `node scripts/review-activity-snapshot.mjs --pr {pr-number}`
+   and pass trusted marker actors with
+   `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"` to
+   compute the same activity metrics; the written gate rules remain
+   canonical.
+
    - The current PR HEAD SHA differs from `{f2-head-SHA}`.
    - `{f2-max-activity-updatedAt}` is `none` and the final fetch is
      non-empty.
@@ -28,6 +35,14 @@ gate. The active claim must still use your current `{claim-id}`.
      `updatedAt` is strictly newer than `{f2-max-activity-updatedAt}`.
    - The total item count of the final fetch exceeds
      `{f2-total-item-count}`.
+
+   From that same final fetch, compute `F3_UNRESOLVED_ACTIONABLE_COUNT`
+   using the exact F2 unresolved-thread rule and exceptions
+   (non-awaiting-reviewer unresolved threads only; awaiting-reviewer
+   classification must follow F2 verbatim, including AMD exclusion and
+   conversation-resolution exception handling). If
+   `F3_UNRESOLVED_ACTIONABLE_COUNT > 0`, stop and return to E1. Do not
+   execute `gh pr merge` in this pass.
 
    Execute the merge immediately after this final fetch **and the claim
    re-validation and advisory state revalidation below**, with no other

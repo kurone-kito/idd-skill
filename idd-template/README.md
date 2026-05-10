@@ -94,6 +94,7 @@ in repository documentation that future IDD sessions read. Treat
   idd-pre-merge.instructions.md      ← F1–F2: conflict resolution and pre-merge conditions
   idd-merge.instructions.md          ← F3–F5: merge execution, cleanup, and loop
   idd-resume.instructions.md         ← resume after crash / handoff
+  idd-resume-stall.instructions.md   ← stalled-session recovery gate
 docs/
   getting-started.md                  ← concise import-to-first-loop guide
   customization.md                    ← adopter policy customization guide

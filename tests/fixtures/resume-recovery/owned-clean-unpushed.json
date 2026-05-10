@@ -1,0 +1,17 @@
+{
+  "name": "owned clean branch with unpushed commits keeps ordinary continuation",
+  "input": {
+    "hasActiveClaim": true,
+    "claimOwnedBySession": true,
+    "claimAgeHours": 2,
+    "latestActivityAgeMinutes": 5,
+    "ciState": "success",
+    "worktreeDirty": false,
+    "hasUnpushedCommits": true,
+    "rebaseInProgress": false
+  },
+  "expected": {
+    "route": "ordinary-continuation",
+    "reasonContains": "clean local state"
+  }
+}

@@ -185,6 +185,7 @@ phase-file customization so workers hand off before F3.
 .github/instructions/idd-pre-merge.instructions.md
 .github/instructions/idd-merge.instructions.md
 .github/instructions/idd-resume.instructions.md
+.github/instructions/idd-resume-stall.instructions.md
 docs/idd-workflow.md
 docs/idd-review-policy-profiles.md
 docs/idd-helper-scripts.md
@@ -245,6 +246,7 @@ for FILE in \
   ".github/instructions/idd-pre-merge.instructions.md" \
   ".github/instructions/idd-merge.instructions.md" \
   ".github/instructions/idd-resume.instructions.md" \
+  ".github/instructions/idd-resume-stall.instructions.md" \
   "docs/idd-workflow.md" \
   "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \
@@ -312,6 +314,7 @@ for FILE in \
   ".github/instructions/idd-pre-merge.instructions.md" \
   ".github/instructions/idd-merge.instructions.md" \
   ".github/instructions/idd-resume.instructions.md" \
+  ".github/instructions/idd-resume-stall.instructions.md" \
   "docs/idd-workflow.md" \
   "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \
