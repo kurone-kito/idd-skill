@@ -111,11 +111,30 @@ _{agent-id}: issue claim — IDD automation marker. Do not edit._
 
 ## Claim verification
 
-Re-read the issue immediately and parse the active claim. Verify that
-the active claim now uses **your** `{claim-id}`. If it does not, return
-to Discover using the same selection mode that produced this target
-(orphan-first: continue the A0-O capable path; roadmap mode: continue
-the A3-ready path).
+After posting `claimed-by`, wait 5–10 seconds to let GitHub eventual
+consistency settle. Then re-read the full issue comment stream and parse
+the active claim in chronological order using the shared claim-state
+rules. Apply all race-safe checks below:
+
+1. Build the same-second contender set from trusted `claimed-by` markers
+   that share your claim event's `created_at` second and have different
+   `{claim-id}` values.
+2. If that set has two or more contenders, the winner is the
+   lexicographically earlier `{claim-id}` (case-sensitive ASCII compare).
+   This race-safe tie-break extends the shared parsing rules for this
+   verification step.
+3. Verify that the active claim now uses **your** `{claim-id}` after the
+   same-second tie-break is applied.
+4. Verify no trusted competing `claimed-by` with a different
+   `{claim-id}` appears in a strictly later `created_at` second than
+   your claim event.
+
+If any check fails, treat the claim as contested. Return to Discover
+using the same selection mode that produced this target and pick the
+next eligible issue (orphan-first: continue the A0-O capable path;
+roadmap mode: continue the A3-ready path). Do not retry the same issue.
+For explicit-target A0-T runs, report the contested claim and stop
+unless the operator has explicitly switched to normal discovery.
 
 Once verified, record this `{claim-id}` as your current claim token for
 the rest of the workflow.
