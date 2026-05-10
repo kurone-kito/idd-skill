@@ -210,18 +210,19 @@ issue body.
 Use this mapping when A4.5 rejects a candidate. The goal is to preserve
 non-ready work as explicit outcomes, not to silently drop it.
 
-| A4.5 outcome       | Recommended labels                                 | Default action                                                                                                        |
-| ------------------ | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `ready`            | none                                               | Continue to A5 claim checks.                                                                                          |
-| `unclear`          | `question` (or local equivalent)                   | Keep the issue open, post a concise clarification request, and stop.                                                  |
-| `needs-decision`   | `status:needs-decision` (if available), `question` | Keep the issue open, request maintainer decision, and stop.                                                           |
-| `blocked-by-human` | `status:blocked-by-human` (if available)           | Keep the issue open with a hold comment; resume only after human unblock.                                             |
-| `duplicate`        | `duplicate`                                        | Link the owning issue/PR. Close only for high-confidence duplicates allowed by local policy; otherwise keep open.     |
-| `out-of-scope`     | `wontfix` or local out-of-scope label              | Prefer comment-and-stop. Close only when repository policy explicitly allows high-confidence out-of-scope auto-close. |
-| `invalid`          | `invalid`                                          | Prefer comment-and-stop. Close only for high-confidence invalid/spam cases explicitly allowed by local policy.        |
+| A4.5 outcome       | Recommended labels                                 | Default action                                                                                                                                |
+| ------------------ | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ready`            | none                                               | Continue to A5 claim checks.                                                                                                                  |
+| `unclear`          | `status:needs-decision` (preferred), `question`    | Keep the issue open, post a clarification request, remove it from the current A4.5 candidate set, and continue scanning remaining candidates. |
+| `needs-decision`   | `status:needs-decision` (if available), `question` | Keep the issue open, request maintainer decision, remove it from the current candidate set, and continue scanning.                            |
+| `blocked-by-human` | `status:blocked-by-human` (if available)           | Keep the issue open with a hold comment, remove it from the current candidate set, and continue scanning.                                     |
+| `duplicate`        | `duplicate`, optional `triage:duplicate`           | Default is read-only triage (comment/link and continue). Only allow close/extra labels after the repository customizes A4.5 mutation policy.  |
+| `out-of-scope`     | optional `triage:out-of-scope`                     | Default is read-only triage (comment-and-stop for that issue). Close/label mutations require explicit A4.5 mutation-policy customization.     |
+| `invalid`          | optional `triage:invalid`                          | Default is read-only triage and immediate stop for `invalid` outcomes. Close/label mutations require explicit A4.5 mutation-policy updates.   |
 
 When confidence is low, keep the issue open and route via a concise
-comment. "Uncertain means open" is the safe default.
+comment. "Uncertain means open" is the safe default, and selection
+continues with the next candidate unless the outcome is `invalid`.
 
 `idd:ready` (or its local equivalent) is an approval label, not an
 operational marker. Restrict who may apply it to maintainers or trusted

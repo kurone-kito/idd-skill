@@ -101,9 +101,11 @@ session choices. Keep the mapping in [Customizing IDD](customization.md)
 for labels, comment-and-stop defaults, and close boundaries:
 
 - uncertain outcomes (`unclear`, `needs-decision`, `blocked-by-human`)
-  stay open by default with a concise routing comment;
+  stay open by default with a concise routing comment, then A4.5 keeps
+  scanning remaining candidates in the same run;
 - high-confidence `duplicate`, `invalid`, and `out-of-scope` outcomes
-  may close only when local policy explicitly permits it;
+  are read-only by default and require explicit A4.5 mutation-policy
+  customization before close/label side effects;
 - `idd:ready` approval ownership is separate from trusted marker actor
   authority for operational claim/review markers.
 
