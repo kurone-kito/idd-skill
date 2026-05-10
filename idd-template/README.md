@@ -62,9 +62,10 @@ IDD can run an end-to-end loop, but normal worker credentials should not
 imply merge authority. Before granting unattended credentials, choose
 `human_merge`, `separate_merge_agent`, or `fully_autonomous_merge` in
 `docs/customization.md` and `docs/permissions.md`, and record the choice
-in repository documentation that future IDD sessions read. Treat
-`fully_autonomous_merge` as the explicit opt-in; `human_merge` and
-`separate_merge_agent` require a handoff before F3.
+in repository documentation that future IDD sessions read. The
+distributed default is `fully_autonomous_merge`; choose `human_merge` or
+`separate_merge_agent` as explicit opt-out profiles when normal worker
+sessions must hand off before F3.
 
 ## Placeholders
 
