@@ -70,6 +70,18 @@ through a pull request.
   unreasonably large commit, keep the fix commit separate or
   re-split the history so each commit remains reviewable.
 
+## Local merge policy
+
+This source repository records `fully_autonomous_merge` as its local IDD
+dogfooding policy. The setting applies only to `kurone-kito/idd-skill`
+and does not change the exported template default for adopter
+repositories.
+
+An IDD session may continue through F3 merge execution only after the
+normal claim, freshness, CI, advisory, review, and unresolved-thread
+gates pass. Repositories without a recorded `fully_autonomous_merge`
+policy still stop at the F3 handoff gate.
+
 ## Commit rules
 
 This project follows
