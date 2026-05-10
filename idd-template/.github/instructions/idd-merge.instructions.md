@@ -51,13 +51,12 @@ gate. The active claim must still use your current `{claim-id}`.
    `idd-pre-merge.instructions.md`. Return to E1 if **any** of the
    following is true:
 
-   In the idd-skill source repository, the read-only helper
-   `node scripts/review-activity-snapshot.mjs --pr {pr-number}` is
-   available; pass trusted marker actors with
+   If `scripts/review-activity-snapshot.mjs` exists in this repository,
+   you may optionally use it as a read-only helper; pass trusted marker
+   actors with
    `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"` to
    compute the same activity metrics; the written gate rules remain
-   canonical. In adopter repositories, use the portable gh/jq/API
-   procedure unless the helper scripts were explicitly installed.
+   canonical.
 
    - The current PR HEAD SHA differs from `{f2-head-SHA}`.
    - `{f2-max-activity-updatedAt}` is `none` and the final fetch is

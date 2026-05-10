@@ -51,9 +51,9 @@ gate. The active claim must still use your current `{claim-id}`.
    `idd-pre-merge.instructions.md`. Return to E1 if **any** of the
    following is true:
 
-   In this source repository, if `scripts/review-activity-snapshot.mjs`
-   exists, you may optionally use it as a read-only helper; pass trusted
-   marker actors with
+   If `scripts/review-activity-snapshot.mjs` exists in this repository,
+   you may optionally use it as a read-only helper; pass trusted marker
+   actors with
    `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"` to
    compute the same activity metrics; the written gate rules remain
    canonical.
