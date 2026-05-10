@@ -11,9 +11,11 @@ multi-agent GitHub automation.
    etc.) as described in `ONBOARDING.md`.
 4. Read `docs/getting-started.md` for the shortest safe path from
    import to the first IDD loop.
-5. Review `docs/permissions.md` before granting credentials to
+5. Read `docs/customization.md` before changing review, merge, CI, or
+   discovery policy.
+6. Review `docs/permissions.md` before granting credentials to
    unattended or merge-capable agents.
-6. Optional: install the issue-authoring companion skill if the project
+7. Optional: install the issue-authoring companion skill if the project
    wants pre-execution issue drafting. The canonical source bundle in
    this repository lives at `skills/issue-authoring/`; install copies
    into the agent-specific skill directory your runtime reads.
@@ -83,6 +85,7 @@ profiles require additional files.
   idd-resume.instructions.md         ← resume after crash / handoff
 docs/
   getting-started.md                  ← concise import-to-first-loop guide
+  customization.md                    ← adopter policy customization guide
   idd-workflow.md                    ← cross-agent entry point and file map
   idd-review-policy-profiles.md      ← default and alternative PR review policies
   idd-helper-scripts.md              ← optional helper-script evaluation and policy
