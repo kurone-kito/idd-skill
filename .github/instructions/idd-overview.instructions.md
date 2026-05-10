@@ -95,7 +95,7 @@ chronologically and apply these rules:
 3. A `claimed-by` whose `{agent-id}` AND `{claim-id}` both match the
    current active claim is a candidate **heartbeat**. Before recognizing
    it as a heartbeat, apply rule 3.5.
-3.5. **Heartbeat branch invariant**: A heartbeat candidate is recognized
+   3.5. **Heartbeat branch invariant**: A heartbeat candidate is recognized
    only when the `{branch}` field exactly matches the `{branch}` field of
    the currently active claim. If `{branch}` differs, treat the comment as
    **anomalous** — do not refresh the stale clock. The comment does not
