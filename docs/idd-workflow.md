@@ -142,6 +142,21 @@ Use this playbook when multiple sessions are active:
 - **Do not bypass blocker labels, dependency checks, or claim
   revalidation gates** while resolving contention.
 
+## Roadmap Claim Guardrails
+
+Roadmap-audit claims are coordination-only. Use them only while the
+roadmap issue itself is being mutated, then release them once that
+roadmap-side effect is complete. They are not a proxy lock for child
+claims.
+
+If the roadmap claim remains open after the roadmap-side effect is done,
+or if it appears to serialize child execution, treat that as a misuse
+signal: revalidate ownership and stale timing before continuing, then
+heartbeat, release, or take over rather than holding the claim open.
+
+The docs audit keeps this guidance synchronized with the exported
+template so unattended runs can spot drift.
+
 ## Copilot review instruction scope
 
 The heavy shared overview keeps `applyTo: "**"` so GitHub Copilot

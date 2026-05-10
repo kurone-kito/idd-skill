@@ -266,6 +266,28 @@
       "mode": "exact"
     },
     {
+      "id": "roadmap-claim-guardrails-customization",
+      "reference": "docs/customization.md",
+      "target": "idd-template/docs/customization.md",
+      "mode": "contains",
+      "requiredText": [
+        "## Roadmap Claim Guardrails",
+        "Roadmap-audit claims are coordination-only.",
+        "claim-staleness rules before continuing."
+      ]
+    },
+    {
+      "id": "roadmap-claim-guardrails-workflow",
+      "reference": "docs/idd-workflow.md",
+      "target": "idd-template/docs/idd-workflow.md",
+      "mode": "contains",
+      "requiredText": [
+        "## Roadmap Claim Guardrails",
+        "Roadmap-audit claims are coordination-only.",
+        "heartbeat, release, or take over rather than holding the claim open."
+      ]
+    },
+    {
       "id": "reference-doc",
       "source": "idd-template/docs/reference.md",
       "target": "docs/reference.md",
