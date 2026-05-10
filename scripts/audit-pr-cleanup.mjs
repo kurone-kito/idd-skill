@@ -6,6 +6,7 @@ const ISO8601_UTC_WITH_OPTIONAL_FRACTION = String.raw`\d{4}-\d{2}-\d{2}T\d{2}:\d
 const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)`;
 const TRUSTED_MARKER_PERMISSIONS = new Set(["admin", "maintain", "write"]);
 const trustedMarkerAuthorCache = new Map();
+let cachedConfiguredTrustedMarkerAuthors = null;
 
 const OPERATIONAL_MARKERS = [
   {
@@ -1004,12 +1005,17 @@ function isTrustedMarkerAuthor(owner, repo, login) {
 }
 
 function configuredTrustedMarkerAuthors() {
-  return new Set(
+  if (cachedConfiguredTrustedMarkerAuthors) {
+    return cachedConfiguredTrustedMarkerAuthors;
+  }
+
+  cachedConfiguredTrustedMarkerAuthors = new Set(
     (process.env.IDD_TRUSTED_MARKER_ACTORS ?? "")
       .split(",")
       .map((login) => login.trim().toLowerCase())
       .filter(Boolean),
   );
+  return cachedConfiguredTrustedMarkerAuthors;
 }
 
 function isValidIsoTimestamp(value) {
