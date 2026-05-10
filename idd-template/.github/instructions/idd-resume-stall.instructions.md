@@ -18,7 +18,7 @@ Before deciding, gather:
 2. Current issue and PR activity timestamps (comments, review-thread
    updates, review submissions).
 3. PR head SHA and latest completed CI timestamp for that head (or
-   `none`).
+   `none`), plus remote branch tip SHA and update time when no PR exists.
 4. Latest trusted review watermark and baseline marker timestamps for
    the same active claim (if present).
 
@@ -37,8 +37,9 @@ Use GitHub server timestamps only.
 
 Use a **30-minute quiet window** as the default evidence threshold.
 During that window, no externally observable progress should appear:
-no trusted heartbeat on the active claim, no PR head movement, and no
-new review/comment/CI completion activity.
+no trusted heartbeat on the active claim, no PR head movement, no
+remote branch tip movement, and no new review/comment/CI completion
+activity.
 
 - Quiet window not met or evidence is contradictory/incomplete:
   **hold and stop**. Do not claim, push, or mutate review state.
@@ -64,6 +65,8 @@ Immediately before posting takeover:
 2. Confirm the active claim still uses the same non-owned `{claim-id}`
    observed in S1-S3.
 3. Confirm it is still stale at this moment.
+4. Re-check quiet-window evidence against the latest externally visible
+   activity. If new progress appeared after S2, stop and restart.
 
 If any check fails, stop and restart from Resume discovery/routing.
 Do not post takeover with stale evidence.
@@ -78,17 +81,16 @@ Perform takeover via `idd-claim.instructions.md` using:
 Then re-read and verify the active claim now uses your fresh
 `{claim-id}`. If not, stop and return to discovery/routing.
 
-After successful verification, resume normal
-`idd-resume.instructions.md` Step 2/Step 3 routing.
+After successful verification, run `idd-resume.instructions.md` Step 1
+to preserve closed/merged cleanup and `roadmap-audit/*` special-case
+routing before continuing to Step 2/Step 3.
 
 ## Hold behavior (when S2/S3 is not satisfied)
 
-Post a concise hold note on the issue or PR with:
-
-- what evidence was observed,
-- why takeover is not yet safe, and
-- the exact resume condition (quiet window completion and/or stale
-  threshold reached).
+In this non-owned-claim path, do not post hold notes on the issue/PR.
+Record evidence in session logs only and stop. Posting hold notes here
+would violate the shared claim revalidation gate and can reset
+quiet-window evidence.
 
 Keep claim safety strict: no early takeover before the shared stale
 threshold.
