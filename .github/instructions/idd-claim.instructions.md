@@ -8,6 +8,9 @@ verification.
 ## Pre-checks (all four must pass)
 
 Re-fetch the issue immediately before running these checks.
+All A5 checks are target-issue local: claims on related roadmap or
+child issues do not block this check unless they appear on the selected
+issue itself.
 
 **(a) Assignee and project status** — The issue must have no assignee
 set. If the project is in use, the project status must be "not started".

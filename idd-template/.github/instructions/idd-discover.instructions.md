@@ -157,6 +157,9 @@ A1.5 can publish roadmap-level GitHub side effects before a child task
 issue is selected. Before any such side effect, coordinate on the
 roadmap issue itself:
 
+- Roadmap claim ownership gates roadmap-side mutations only. Do not
+  treat a non-stale roadmap claim as a global lock over A2/A3 child
+  discovery or child A5 checks.
 - Run the A5 claim-state, open-PR, and branch-collision checks against
   the roadmap issue. Do not apply A5's assignee or project
   `not started` readiness gate to roadmap-audit claims; roadmap
@@ -181,6 +184,9 @@ roadmap issue itself:
 - If the roadmap remains open and no PR branch will continue from the
   audit, release the roadmap-audit claim before returning to A2 or
   stopping.
+- Example: when another agent holds a non-stale roadmap claim, do not
+  mutate that roadmap in A1.5, but continue to A2/A3 and allow child
+  issues that pass readiness and A5 to proceed.
 
 Immediately before posting any completion summary, creating follow-up
 issues, editing the roadmap body, changing labels, or closing the
