@@ -50,6 +50,7 @@
         "idd-template/docs/getting-started.md",
         "idd-template/docs/concepts.md",
         "idd-template/docs/customization.md",
+        "idd-template/docs/policy-constants.md",
         "idd-template/docs/reference.md"
       ],
       "paths": [
@@ -75,6 +76,7 @@
         "idd-template/docs/getting-started.md",
         "idd-template/docs/concepts.md",
         "idd-template/docs/customization.md",
+        "idd-template/docs/policy-constants.md",
         "idd-template/docs/reference.md"
       ]
     },
@@ -255,6 +257,12 @@
       "id": "customization-doc",
       "source": "idd-template/docs/customization.md",
       "target": "docs/customization.md",
+      "mode": "exact"
+    },
+    {
+      "id": "policy-constants-doc",
+      "source": "idd-template/docs/policy-constants.md",
+      "target": "docs/policy-constants.md",
       "mode": "exact"
     },
     {

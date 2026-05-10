@@ -194,6 +194,7 @@ docs/permissions.md
 docs/getting-started.md
 docs/concepts.md
 docs/customization.md
+docs/policy-constants.md
 docs/reference.md
 ```
 
@@ -254,6 +255,7 @@ for FILE in \
   "docs/getting-started.md" \
   "docs/concepts.md" \
   "docs/customization.md" \
+  "docs/policy-constants.md" \
   "docs/reference.md"
 do
   gh api -H "Accept: application/vnd.github.raw+json" \
@@ -321,6 +323,7 @@ for FILE in \
   "docs/getting-started.md" \
   "docs/concepts.md" \
   "docs/customization.md" \
+  "docs/policy-constants.md" \
   "docs/reference.md"
 do
   curl -fsSL "${BASE}/${FILE}" -o "${DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }

@@ -15,6 +15,7 @@ behavior change too.
 | Review policy         | GitHub Copilot advisory review                                                               | Choose a profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the listed phase files for any non-default profile.                                                                  |
 | Advisory reviewer     | Copilot wait and recovery gates                                                              | For `human-required`, `no-advisory`, or `external-bot`, update the review-fix, pre-merge, merge, advisory-wait, snapshot, and triage files named by the selected profile.                                       |
 | Review threads        | Agents may resolve handled review threads under the fast default                             | Choose a thread-resolution profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the snapshot, triage, review-fix, pre-merge, and merge phase files for stricter profiles.          |
+| Policy constants      | Distributed timing, wait, and loop defaults                                                  | Review [IDD policy constants](policy-constants.md) before changing claim ownership timing, advisory waits, CI waits, or critique-loop guardrails.                                                               |
 | Merge policy          | Merge gates after CI, review, freshness, and claim checks; safe OSS default is `human_merge` | Review [Permissions and threat model](permissions.md), record the selected policy in repository docs, and customize handoff before F3 for non-autonomous profiles.                                              |
 | Stall recovery safety | 30-minute quiet-window evidence plus 24-hour stale-threshold ownership gate                  | Keep `idd-resume-stall.instructions.md` aligned with `idd-overview` claim rules, and customize both files together if local policy changes quiet-window or takeover timing.                                     |
 | CI commands           | Project-specific command rows in the overview file                                           | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                                                      |
@@ -68,6 +69,18 @@ resolution rule, and F2/F3 do not treat agent-handled human threads as
 merge-ready before the selected acknowledgement appears. Branch
 protection conversation-resolution requirements still override any local
 profile.
+
+## Policy Constants
+
+Start with [IDD policy constants](policy-constants.md) when a
+repository wants to change claim timing, advisory wait windows, CI wait
+thresholds, or critique-loop guardrails. That page is an inventory of
+the distributed defaults; it does not centralize or configure those
+values by itself.
+
+Changing a default is a workflow behavior change. Update every owning
+instruction file listed on the policy constants page, then record the
+repository's local decision in onboarding notes or project docs.
 
 ## Merge Policy and Credentials
 

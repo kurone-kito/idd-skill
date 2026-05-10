@@ -98,6 +98,7 @@ in repository documentation that future IDD sessions read. Treat
 docs/
   getting-started.md                  ← concise import-to-first-loop guide
   customization.md                    ← adopter policy customization guide
+  policy-constants.md                 ← distributed timing, wait, and loop defaults
   reference.md                        ← detailed phase and policy navigation
   idd-workflow.md                    ← cross-agent entry point and file map
   idd-review-policy-profiles.md      ← default and alternative PR review policies
