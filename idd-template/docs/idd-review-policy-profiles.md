@@ -38,9 +38,9 @@ values separately from the review profile choice.
 ## Profile Artifacts
 
 The exported template includes profile artifacts under `profiles/`.
-When working in the idd-skill source repository, maintain those artifacts
-under `idd-template/profiles/`. When adopting this template, maintain
-those artifacts under `profiles/`. Each non-default artifact is a documented
+In the idd-skill source repository, find those artifacts at
+`idd-template/profiles/`; in adopter repositories, they live at
+`profiles/`. Each non-default artifact is a documented
 patch surface that records adopter-owned values, files to edit, and
 verification evidence for the selected profile.
 

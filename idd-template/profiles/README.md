@@ -45,5 +45,5 @@ Every profile artifact must record:
 - A completion note format that can be copied into local repository
   documentation.
 
-When maintaining this repository, keep these artifacts aligned
-with `docs/idd-review-policy-profiles.md` and `ONBOARDING.md`.
+When maintaining a repository that adopts this template, keep these artifacts
+aligned with `docs/idd-review-policy-profiles.md` and `../ONBOARDING.md`.
