@@ -25,7 +25,9 @@ using the shared claim-state rules:
   first learned by parsing the current issue comments is not enough.
 - Any other active claim whose latest valid `claimed-by` comment has
   GitHub `created_at` < 24 h → claimed by another live session, even
-  when the `agent-id` matches. Go back to A3.
+  when the `agent-id` matches. Return to Discover using the same
+  selection mode that produced this target (orphan-first: continue the
+  A0-O capable path; roadmap mode: continue the A3-ready path).
 - Any other active claim whose latest valid `claimed-by` comment has
   GitHub `created_at` ≥ 24 h → stale, proceed with takeover.
 
@@ -42,8 +44,10 @@ Otherwise, use the latest trusted legacy `claimed-by` comment as a
 **migration-only** decision input:
 
 - Latest trusted legacy claim has GitHub `created_at` < 24 h → claimed
-  by another live session, even when the `agent-id` matches. Go back to
-  A3.
+  by another live session, even when the `agent-id` matches. Return to
+  Discover using the same selection mode that produced this target
+  (orphan-first: continue the A0-O capable path; roadmap mode: continue
+  the A3-ready path).
 - Latest trusted legacy claim has GitHub `created_at` ≥ 24 h → stale,
   proceed and replace it with a new-format claim.
 
@@ -105,8 +109,10 @@ _{agent-id}: issue claim — IDD automation marker. Do not edit._
 ## Claim verification
 
 Re-read the issue immediately and parse the active claim. Verify that
-the active claim now uses **your** `{claim-id}`. If it does not, go back
-to A3.
+the active claim now uses **your** `{claim-id}`. If it does not, return
+to Discover using the same selection mode that produced this target
+(orphan-first: continue the A0-O capable path; roadmap mode: continue
+the A3-ready path).
 
 Once verified, record this `{claim-id}` as your current claim token for
 the rest of the workflow, then continue to `idd-work.instructions.md`.
