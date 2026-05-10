@@ -97,6 +97,10 @@ autonomous follow-up issues or route human-dependent gaps to an explicit
 blocked or needs-decision state. Roadmap-level side effects still use a
 temporary claim on the roadmap issue itself, so concurrent agents do not
 close or edit the same roadmap at the same time.
+This roadmap claim is a coordination lock only: child issue claims stay
+independent execution locks and can proceed in parallel unless blocked
+by their own readiness or dependency rules. Roadmap-level blocker labels
+still gate selection as described in Discover.
 
 This audit intentionally lives before A2 rather than in F4. F4 is
 limited to the PR that just merged and the local cleanup for that child
