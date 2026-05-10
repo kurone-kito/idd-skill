@@ -42,7 +42,7 @@ entry file should be an explicit operator choice, not the default.
 | File                                                       | Role                                                                    |
 | ---------------------------------------------------------- | ----------------------------------------------------------------------- |
 | `.github/instructions/idd-overview.instructions.md`        | Shared definitions, command sets, routing table, critique-pass mapping  |
-| `.github/instructions/idd-discover.instructions.md`        | Find the next viable issue and audit completed roadmaps                 |
+| `.github/instructions/idd-discover.instructions.md`        | Find the next viable issue, audit suitability, and start work           |
 | `.github/instructions/idd-claim.instructions.md`           | Run claim pre-checks and claim verification                             |
 | `.github/instructions/idd-work.instructions.md`            | Create the worktree, plan, implement, and self-review                   |
 | `.github/instructions/idd-pr-submit.instructions.md`       | Rebase, validate, push, open the PR, and wait for CI                    |
@@ -90,8 +90,9 @@ files that own each value.
 
 When an operator gives exactly one issue target, Discover can verify that
 target directly before Claim. The shortcut avoids broad roadmap
-enumeration, but it still applies targeted readiness checks and the A4
-viability gate before the normal A5 claim safety checks.
+enumeration, but it still applies targeted readiness checks, the A4
+viability gate, and the A4.5 suitability gate before the normal A5 claim
+safety checks.
 
 ## Roadmap completion audits
 
