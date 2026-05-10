@@ -58,6 +58,62 @@ authoritative during an unattended run; preserve the audit history,
 report the duplicate URLs, and use trusted markers and GitHub state for
 all workflow decisions until a repair path selects one current digest.
 
+## Live Status Digest Helper
+
+When the repository-local helper is available, use dry-run first:
+
+```sh
+node scripts/live-status-digest.mjs --issue <issue-number> --dry-run \
+  --phase "<phase>" \
+  --claim "<agent-id> / <claim-id>" \
+  --branch "<branch-name>" \
+  --open-blockers "<blocker-summary>" \
+  --next-action "<next-action>" \
+  --authoritative-by "<trusted-evidence>"
+```
+
+Use `--pr <pr-number>` for pull request digests. If `--last-checked`
+is omitted, the helper writes the current UTC time. The helper emits
+stable JSON by default; add `--format table` for terminal inspection or
+`--include-body` when reviewing the rendered Markdown.
+
+Apply mode is explicit and claim-checked:
+
+```sh
+node scripts/live-status-digest.mjs --issue <issue-number> --apply \
+  --claim-issue <issue-number> --claim-id <claim-id> \
+  --phase "<phase>" \
+  --claim "<agent-id> / <claim-id>" \
+  --branch "<branch-name>" \
+  --open-blockers "<blocker-summary>" \
+  --next-action "<next-action>" \
+  --authoritative-by "<trusted-evidence>"
+```
+
+During ordinary IDD execution, pass the active issue and claim id so the
+helper re-reads the claim before mutating. Maintainer-led repairs outside
+an active claim may use `--skip-claim-check`, but routine agents should
+not. The helper creates a digest when none exists, updates the single
+current digest when one exists, and reports `noop` when the current
+digest already matches the requested fields.
+
+If multiple marked digests exist, the helper exits non-zero and reports
+their URLs plus a repair path. It does not choose between duplicates,
+delete comments, minimize comments, or edit immutable operational
+markers.
+
+The JSON report includes these fields:
+
+| Field        | Purpose                                                      |
+| ------------ | ------------------------------------------------------------ |
+| `mode`       | `dry-run` or `apply`                                         |
+| `action`     | `create`, `update`, `noop`, or `duplicate`                   |
+| `canApply`   | Whether apply mode may mutate without duplicate repair       |
+| `commentId`  | Current or newly written digest comment ID, when known       |
+| `url`        | Direct link to the digest comment, when known                |
+| `duplicates` | Duplicate marked digest comments that block unattended edits |
+| `repairPath` | Human repair guidance for duplicate marked digests           |
+
 ## Timing
 
 Run minimization only after one of these is true:
