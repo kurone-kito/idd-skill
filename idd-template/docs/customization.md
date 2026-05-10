@@ -123,9 +123,8 @@ the current PR state once CI, review, freshness, and claim evidence are
 ready for the merge-capable actor.
 
 Record the selected merge policy in repository documentation that
-future IDD sessions read, not only in local onboarding notes. Only an
-explicitly recorded `fully_autonomous_merge` enables autonomous merge;
-missing or unknown policy values must stop with a maintainer hold.
+future IDD sessions read, not only in local onboarding notes. When no
+policy is recorded, the distributed default is `fully_autonomous_merge`.
 Unknown recorded policy values must stop until the policy is corrected.
 
 For `human_merge`, keep the default F3 stop gate and hand off to the
