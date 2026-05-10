@@ -6,7 +6,7 @@ target. After selecting or verifying a target, read
 `idd-claim.instructions.md` to claim it.
 
 **Abort conditions**: A0-T, A1, A3 (default; see decision tree).
-**Early stop condition**: A0-T, A4.5, or A4 (no claim made — see below).
+**Early stop condition**: A0-T, A4, or A4.5 (no claim made — see below).
 
 ## A0-T — Explicit issue target shortcut
 
@@ -469,13 +469,15 @@ trust or safety risk?
 
 #### Check 4: Duplicate or Superseded Work
 
-Is this work a duplicate of an existing open issue, closed issue, or
-merged PR?
+Is this work a duplicate of an existing open issue, closed issue,
+merged PR, or draft PR? Is it superseded by paused work marked with
+`status:blocked-by-human` or `status:needs-decision`?
 
 - **Pass**: No duplicate or superseded work detected; this issue
   represents novel work
 - **Fail**: Issue duplicates an existing open or closed issue, is
-  superseded by newer work, or the work was already completed
+  superseded by newer work, or the work was already completed or is in
+  progress (including draft PRs)
 - **Outcome on fail**: `duplicate`
 
 #### Check 5: Actionability
@@ -549,6 +551,20 @@ readiness but does NOT automatically apply labels or post claims.
 - Label is intended as a diagnostic aid for humans reviewing rejected
   candidates
 - Labeled approach still stops at A4.5; A5 is never reached
+
+**Permitted and prohibited mutations**:
+
+- **Permitted**: Agents may post a single diagnostic comment explaining
+  the A4.5 rejection outcome, prefixed with **"A4.5 suitability gate
+  rejection"** to distinguish from claim or work-in-progress markers.
+- **Prohibited**: Agents must NOT post implementation claim comments,
+  create branches or worktrees, close issues unilaterally, or modify
+  roadmap structures or relationships. Do NOT apply other labels except
+  the optional `triage:{outcome}` label in the labeled approach above.
+- **Linking**: Issues may be linked as related context (e.g., "Related
+  to #NNN which addresses similar work") in diagnostic comments, but
+  must NOT be treated as duplicates without explicit human confirmation
+  first.
 
 ### Coordination Rule
 
