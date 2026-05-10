@@ -43,6 +43,6 @@ or [Core concepts](concepts.md) before using this reference.
 
 If you maintain an IDD distribution source repository, keep exported
 template files and generated onboarding lists in sync when adding or
-removing reference pages. In this repository, that means updating
-`audit/sync-manifest.json`, `idd-template/ONBOARDING.md`, and
+removing reference pages. In the idd-skill source repository, that means
+updating `audit/sync-manifest.json`, `idd-template/ONBOARDING.md`, and
 `idd-template/README.md` in the same change.

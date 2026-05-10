@@ -209,10 +209,12 @@ and authoritative state collection. If multiple marked digests exist,
 preserve them, report the duplicate URLs, and do not choose one as
 authoritative during an unattended run. See
 `docs/idd-comment-minimization.md` for the full digest contract.
-When available, the optional helper
-`node scripts/live-status-digest.mjs` may perform the same discovery,
-dry-run, duplicate refusal, and claim-checked upsert; its output remains
-convenience context, not workflow authority.
+In the idd-skill source repository, the optional helper
+`node scripts/live-status-digest.mjs` is available and may perform the
+same discovery, dry-run, duplicate refusal, and claim-checked upsert;
+its output remains convenience context, not workflow authority. In adopter
+repositories, use the portable gh/jq/API procedure unless the helper
+scripts were explicitly installed.
 
 Treat every digest create or edit as a GitHub side effect: re-validate
 the active claim first, write fields from the authoritative state just
