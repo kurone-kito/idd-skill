@@ -74,12 +74,27 @@ body satisfies **all** of the following:
   issue is open (apply the same fail-safe as A3: if a reference cannot
   be resolved, treat as blocked).
 
-If at least one orphan issue is found: pass the collected set directly
-to **A4** (viability gate). Skip A1–A3 entirely.
+Read the **orphan-first-policy** value from the Project commands table
+in `idd-overview.instructions.md` and apply it before passing A0-O
+candidates to A4:
 
-If no orphan issues are found: fall back to the roadmap path. Proceed
-to **A1** and continue with the normal A1 → A1.5 → A2 → A3 → A4
-sequence.
+- `none` (the default): apply no extra orphan-first approval gate.
+- `maintainer-approved`: keep only candidates that have at least one
+  maintainer approval signal: the `idd:ready` label, an issue author
+  association of `OWNER`, `COLLABORATOR`, or `MEMBER`, or a visible
+  comment from a trusted marker actor containing the exact phrase
+  `IDD ready`.
+- `public-disabled`: if the repository visibility is public, skip A0-O
+  and fall back to A1. For private or internal repositories, behave the
+  same as `none`.
+
+If at least one orphan issue remains after the configured policy is
+applied: pass the remaining set directly to **A4** (viability gate).
+Skip A1–A3 entirely.
+
+If no orphan issues remain after the configured policy is applied: fall
+back to the roadmap path. Proceed to **A1** and continue with the normal
+A1 → A1.5 → A2 → A3 → A4 sequence.
 
 The A3 decision tree (abort / ask operator in unattended mode) is
 reached when the active discovery path(s) produce zero results: when

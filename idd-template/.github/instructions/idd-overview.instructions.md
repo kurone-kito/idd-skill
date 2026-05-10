@@ -289,13 +289,18 @@ When a phase refers to a named command set, run the corresponding
 commands. **Adapt this section when applying this workflow to a
 different project.**
 
-| Name                  | Commands                         |
-| --------------------- | -------------------------------- |
-| **fix-validate**      | `{{FIX_VALIDATE_COMMANDS}}`      |
-| **pre-push-validate** | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
-| **post-fix-validate** | `{{POST_FIX_VALIDATE_COMMANDS}}` |
-| **install-deps**      | `{{INSTALL_DEPS_COMMAND}}`       |
-| **issue-scope**       | `roadmap`                        |
+| Name                    | Commands                         |
+| ----------------------- | -------------------------------- |
+| **fix-validate**        | `{{FIX_VALIDATE_COMMANDS}}`      |
+| **pre-push-validate**   | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
+| **post-fix-validate**   | `{{POST_FIX_VALIDATE_COMMANDS}}` |
+| **install-deps**        | `{{INSTALL_DEPS_COMMAND}}`       |
+| **issue-scope**         | `roadmap`                        |
+| **orphan-first-policy** | `none`                           |
+
+Rows whose values are not shell syntax, such as **issue-scope** and
+**orphan-first-policy**, are workflow settings. Read them literally
+instead of executing them.
 
 `pre-push-validate` intentionally omits auto-fix — all code should
 already pass lint at the push step. If lint fails, run **fix-validate**

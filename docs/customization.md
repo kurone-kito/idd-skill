@@ -10,14 +10,15 @@ behavior change too.
 
 ## Customization Surfaces
 
-| Surface           | Default                                                                                      | Where to customize                                                                                                                                                                                     |
-| ----------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Review policy     | GitHub Copilot advisory review                                                               | Choose a profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the listed phase files for any non-default profile.                                                         |
-| Advisory reviewer | Copilot wait and recovery gates                                                              | For `human-required`, `no-advisory`, or `external-bot`, update the review-fix, pre-merge, merge, advisory-wait, snapshot, and triage files named by the selected profile.                              |
-| Review threads    | Agents may resolve handled review threads under the fast default                             | Choose a thread-resolution profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the snapshot, triage, review-fix, pre-merge, and merge phase files for stricter profiles. |
-| Merge policy      | Merge gates after CI, review, freshness, and claim checks; safe OSS default is `human_merge` | Review [Permissions and threat model](permissions.md), record the selected policy in repository docs, and customize handoff before F3 for non-autonomous profiles.                                     |
-| CI commands       | Project-specific command rows in the overview file                                           | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                                             |
-| Issue scope       | Roadmap-first discovery                                                                      | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues to be considered before roadmap traversal.            |
+| Surface               | Default                                                                                      | Where to customize                                                                                                                                                                                              |
+| --------------------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Review policy         | GitHub Copilot advisory review                                                               | Choose a profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the listed phase files for any non-default profile.                                                                  |
+| Advisory reviewer     | Copilot wait and recovery gates                                                              | For `human-required`, `no-advisory`, or `external-bot`, update the review-fix, pre-merge, merge, advisory-wait, snapshot, and triage files named by the selected profile.                                       |
+| Review threads        | Agents may resolve handled review threads under the fast default                             | Choose a thread-resolution profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the snapshot, triage, review-fix, pre-merge, and merge phase files for stricter profiles.          |
+| Merge policy          | Merge gates after CI, review, freshness, and claim checks; safe OSS default is `human_merge` | Review [Permissions and threat model](permissions.md), record the selected policy in repository docs, and customize handoff before F3 for non-autonomous profiles.                                              |
+| CI commands           | Project-specific command rows in the overview file                                           | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                                                      |
+| Issue scope           | Roadmap-first discovery                                                                      | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues to be considered before roadmap traversal.                     |
+| Orphan-first approval | No extra gate beyond orphan readiness checks                                                 | Keep `orphan-first-policy` as `none`, or opt in to `maintainer-approved` or `public-disabled` when public or community-submitted issues need an explicit maintainer approval layer before A0-O can select them. |
 
 ## Review Policy
 
@@ -129,6 +130,23 @@ intentionally wants small standalone issues to take priority over
 roadmap work. It is a workflow behavior change, so update the overview
 file and record the decision in local onboarding notes or repository
 documentation.
+
+When `issue-scope` is `orphan-first`, keep `orphan-first-policy` as
+`none` to preserve the distributed default. Public or community-facing
+repositories should consider an explicit opt-in gate:
+
+- `maintainer-approved`: A0-O keeps only issues with the `idd:ready`
+  label, an issue author association of `OWNER`, `COLLABORATOR`, or
+  `MEMBER`, or a visible trusted marker actor comment containing the
+  exact phrase `IDD ready`.
+- `public-disabled`: public repositories skip A0-O and fall back to
+  roadmap discovery; private and internal repositories keep the default
+  orphan-first behavior.
+
+Treat issue bodies and generated plans as untrusted input. The approval
+gate is intentionally based on repository metadata or trusted actor
+comments, not on text that an arbitrary issue author can place in the
+issue body.
 
 ## Documentation-Only vs Workflow Changes
 
