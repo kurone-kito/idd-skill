@@ -72,43 +72,165 @@ easy to find later.
 ## Your task
 
 1. Read this entire document first.
-2. Ask the operator for any placeholder values that are missing.
-3. Fetch or copy the template files into the target repository.
-4. Review `docs/permissions.md` with the operator before granting agent
-   credentials.
-5. Choose and record the operator's PR review policy profile. If it is
-   non-default, apply the matching profile artifact from `profiles/`.
-6. Choose and record the operator's review-thread resolution policy.
-7. Choose and record the operator's merge policy before allowing
-   unattended workers to approach the merge phase. Accept the distributed
-   default (`fully_autonomous_merge`) unless the operator explicitly opts
-   out. The record must live in repository documentation that future IDD
-   sessions read.
-8. Confirm and record ownership timing policy values:
-   `claim-stale-age` (default 24 h) and
-   `claim-heartbeat-interval` (default 12 h).
-9. Ask whether the operator wants the optional issue-authoring
-   companion skill for pre-execution issue drafting.
-10. Replace every placeholder (see table below) with the correct value.
-11. Add IDD references to the repository's agent entry files.
-12. Verify the result with the checklist at the bottom.
+2. **Auto-derive candidate values** from the target repository's evidence
+   (build tooling, package managers, git remote). Propose derived values
+   to the operator for confirmation or correction (Step 1A below).
+3. **Confirm policy decisions** with the operator (merge policy, review
+   policy, issue-authoring companion, credentials) — these cannot be
+   safely inferred and require explicit confirmation (Step 1B below).
+4. Fetch or copy the template files into the target repository.
+5. Replace every placeholder with the correct values (confirmed by the
+   operator in Steps 1A-1B).
+6. Review `docs/permissions.md` with the operator before granting agent
+   credentials, matching the merge policy confirmed in Step 1B.
+7. If the selected PR review policy profile is non-default, apply the
+   matching profile artifact from `profiles/`.
+8. Record all policy decisions in repository documentation that future IDD
+   sessions read: merge policy, review policy profile, thread-resolution
+   policy, and timing defaults.
+9. Add IDD references to the repository's agent entry files.
+10. Verify the result with the checklist at the bottom.
 
 ---
 
-## Step 1 — Collect placeholder values
+## Step 1A — Auto-derive candidate values
 
-Before touching any file, ask the operator to supply values for every
-placeholder that is not already known. Present the full table below and
-request missing values.
+Before asking the operator to enter values, inspect the target repository's
+evidence to propose reasonable defaults for five of the six placeholder
+values. The operator can confirm these proposed values or correct them.
 
-| Placeholder                      | What it means                                                                                                                                                                                                  | Example                                                             |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `{{REPO_NAME}}`                  | The repository's short name. Used in worktree path examples.                                                                                                                                                   | `my-app`                                                            |
-| `{{PROJECT_MARKER_PREFIX}}`      | A short, URL-safe prefix unique to this project. Used in HTML comment markers embedded in issue bodies to track roadmap and blocked-by state. The same prefix must be used consistently throughout all issues. | `my-app`                                                            |
-| `{{FIX_VALIDATE_COMMANDS}}`      | Commands that may auto-fix linting/formatting and verify the result. Run before every commit. If files change, stage and commit those changes before continuing.                                               | `npm run lint:fix && npm run lint`                                  |
-| `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Commands that verify correctness before a push and do not mutate tracked files. Typically includes lint, build, and test.                                                                                      | `npm run lint && npm run build && npm run test`                     |
-| `{{POST_FIX_VALIDATE_COMMANDS}}` | Commands that may auto-fix and fully verify after review fixes. Usually a superset of the other two. If files change, stage and commit those changes before push/rebase.                                       | `npm run lint:fix && npm run lint && npm run build && npm run test` |
-| `{{INSTALL_DEPS_COMMAND}}`       | Command to install dependencies in a fresh worktree. It must be idempotent and safe to rerun in fresh, reused, or recreated worktrees without manual cleanup.                                                  | `npm install`                                                       |
+**Derived evidence to collect:**
+
+- **Repository name** (`{{REPO_NAME}}`): Read from `git config` or GitHub
+  API. The remote name is the most reliable source.
+- **Marker prefix** (`{{PROJECT_MARKER_PREFIX}}`): Candidate is the
+  repository name lowercased, hyphenated. Ask the operator to confirm this
+  candidate or provide an alternative.
+- **Install command** (`{{INSTALL_DEPS_COMMAND}}`): Look for presence of
+  `package.json` (candidate: `npm install`), `pyproject.toml` or
+  `requirements.txt` (candidate: `pip install -r requirements.txt`),
+  `go.mod` (candidate: `go mod download`), `Gemfile`
+  (candidate: `bundle install`), or other evidence. If no standard tooling
+  is detected, propose `true` (no-op). If multiple tools are present, ask
+  the operator to clarify.
+- **Fix-validate commands** (`{{FIX_VALIDATE_COMMANDS}}`): Propose
+  auto-fix + validate sequence inferred from tooling present in the
+  repository (e.g., `dprint fmt` + linter, `black` + `isort`, `cargo fmt`,
+  `go fmt`, `prettier --write`). Common patterns:
+  - Node.js: `npm run lint:fix && npm run lint`
+  - Python: `black . && isort .` or equivalent
+  - Go: `go fmt ./...`
+  - Rust: `cargo fmt`
+  - If no standard auto-fix tooling, propose `true` as fallback.
+- **Pre-push-validate commands** (`{{PRE_PUSH_VALIDATE_COMMANDS}}`):
+  Propose a lint + build + test sequence (no mutations). Common patterns:
+  - Node.js: `npm run lint && npm run build && npm run test`
+  - Python: `pylint . && python -m pytest`
+  - Go: `go vet ./... && go test ./...`
+  - Rust: `cargo check && cargo test`
+  - If no CI commands are available, propose `true`.
+- **Post-fix-validate commands** (`{{POST_FIX_VALIDATE_COMMANDS}}`):
+  Usually a superset combining fix-validate and pre-push-validate.
+
+**Present proposed values to the operator.** Format:
+
+> Based on the target repository's structure, I've derived these candidate
+> values. Please confirm or correct them:
+>
+> - Repository name: `{proposed-repo-name}`
+> - Marker prefix: `{proposed-prefix}`
+> - Install command: `{proposed-install}`
+> - Fix-validate: `{proposed-fix-validate}`
+> - Pre-push-validate: `{proposed-pre-push}`
+> - Post-fix-validate: `{proposed-post-fix}`
+>
+> If any of these needs to change, provide the corrected value.
+
+Record the operator's confirmations or corrections for Step 3 (placeholder
+replacement).
+
+---
+
+## Step 1B — Confirm policy decisions
+
+The following choices **cannot be safely inferred** from repository
+evidence and require explicit operator confirmation:
+
+1. **Merge policy**: Must the repository require human approval before
+   agent merge execution (F3 phase)?
+   - `fully_autonomous_merge` (distributed default): one trusted agent
+     session may execute the merge. Recommended for private repositories or
+     when agent credentials are well-controlled. ✓ **proposed default**
+   - `human_merge`: agent stops and hands off to a human maintainer before
+     merge. Recommended for public repositories or strict code-review
+     policies.
+   - `separate_merge_agent`: agent stops and hands off to a separately
+     authorized merge-capable actor. Recommended for split responsibilities
+     (e.g., worker agent writes code, merge agent reviews and merges).
+
+   **Confirm with operator**: "Accept the distributed default
+   (`fully_autonomous_merge`), or opt out to `human_merge` or
+   `separate_merge_agent`?"
+
+2. **PR review policy profile**: Should the agent request advisory review
+   from GitHub Copilot during the review phase?
+   - `copilot-advisory` (distributed default): agent requests Copilot
+     review and waits for advisory feedback. ✓ **proposed default**
+   - `no-advisory`: agent skips advisory review. Faster but loses
+     machine-assisted feedback.
+   - Other profiles: see `docs/idd-review-policy-profiles.md`.
+
+   **Confirm with operator**: "Accept the distributed default (Copilot
+   advisory review), or choose a non-default profile?"
+
+3. **Review-thread resolution policy**: May an agent resolve review threads
+   after it has acted on feedback?
+   - `fast-agent-resolve` (distributed default): agent may resolve review
+     threads immediately after responding to feedback. ✓ **proposed
+     default**
+   - `hybrid-reviewer-ack`: threads may be resolved only if the reviewer
+     acknowledges the fix (e.g., approves the follow-up commit).
+   - `strict-reviewer-resolve`: only reviewers may resolve threads.
+
+   **Confirm with operator**: "Accept the distributed default
+   (agent-resolved threads), or choose a stricter policy?"
+
+4. **Issue-authoring companion**: Does the operator want the optional
+   issue-authoring skill for pre-execution issue drafting and roadmap
+   decomposition?
+   - Yes: skill will be installed at `skills/issue-authoring/` in the
+     target repository.
+   - No: skill is not needed; continue without it.
+
+   **Confirm with operator**: "Install the optional issue-authoring
+   companion skill? (yes/no)"
+
+**Record all policy decisions** in repository documentation (see Step 8
+below). Future IDD sessions will read these decisions to understand the
+repository's configured behavior.
+
+---
+
+## Step 1C — Collect placeholder values
+
+You now have all the information needed to finalize placeholder values:
+
+- **{{REPO_NAME}}**, **{{PROJECT_MARKER_PREFIX}}**,
+  **{{FIX_VALIDATE_COMMANDS}}**, **{{PRE_PUSH_VALIDATE_COMMANDS}}**,
+  **{{POST_FIX_VALIDATE_COMMANDS}}**, **{{INSTALL_DEPS_COMMAND}}**: Use
+  the operator-confirmed values from Step 1A.
+
+If the operator provided no corrections in Step 1A, use the proposed values
+directly.
+
+| Placeholder                      | What it means                                                                                                                                                                                                  | Example / Derivation                                             |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- ------------------------------------------- |
+| `{{REPO_NAME}}`                  | The repository's short name. Used in worktree path examples. **Derived** in Step 1A from git remote.                                                                                                           | Auto-derived: `my-app`                          |
+| `{{PROJECT_MARKER_PREFIX}}`      | A short, URL-safe prefix unique to this project. Used in HTML comment markers in issue bodies. **Derived** in Step 1A; confirm with operator.                                                                 | Auto-derived from repo name: `my-app`          |
+| `{{FIX_VALIDATE_COMMANDS}}`      | Commands that may auto-fix linting/formatting and verify. **Derived** in Step 1A from build-tool evidence.                                                                                                   | Auto-derived: `npm run lint:fix && npm run lint` |
+| `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Verify commands (no mutations). **Derived** in Step 1A from build-tool evidence.                                                                                                                                | Auto-derived: `npm run lint && npm run test`    |
+| `{{POST_FIX_VALIDATE_COMMANDS}}` | Auto-fix + full verify (superset). **Derived** in Step 1A from build-tool evidence.                                                                                                                            | Auto-derived: `npm run lint:fix && npm test`   |
+| `{{INSTALL_DEPS_COMMAND}}`       | Dependency install command. **Derived** in Step 1A from package-manager evidence. Use `true` for projects with no standard dependency install.                                                               | Auto-derived: `npm install` or `pip install -r requirements.txt` |
 
 > **No-op substitution**: any command that is not applicable to your
 > project can be set to `true`. For example, a repository without a
@@ -423,7 +545,57 @@ Keep the companion separate from the execution instructions:
 
 ---
 
-## Step 3 — Replace placeholders
+## Step 3 — Record policy decisions
+
+Create a local policy section in the target repository's documentation
+(such as a new section in `.github/copilot-instructions.md`, `AGENTS.md`,
+or a dedicated `docs/idd-policy.md`) and record the following decisions
+made in Step 1B:
+
+```markdown
+## IDD Policy Configuration
+
+This repository uses the following IDD policies:
+
+### Merge Policy
+
+**Policy**: `{fully_autonomous_merge | human_merge | separate_merge_agent}`
+
+{
+  "fully_autonomous_merge": "Merge-capable trusted agent sessions may execute the merge phase (F3). No human maintainer approval required before merge execution.",
+  "human_merge": "All work stops before the merge phase (F3). A human maintainer must review the PR and execute the merge manually.",
+  "separate_merge_agent": "A separately authorized merge-capable actor reviews and executes the merge. Worker agents stop before F3."
+}
+
+### PR Review Policy
+
+**Profile**: `{copilot-advisory | no-advisory | other}` (default: copilot-advisory)
+
+{description of impact on review phases}
+
+### Review-Thread Resolution Policy
+
+**Policy**: `{fast-agent-resolve | hybrid-reviewer-ack | strict-reviewer-resolve}` (default: fast-agent-resolve)
+
+{description of when threads may be resolved}
+
+### Claim Timing
+
+- **claim-stale-age**: 24 h (default, changeable in docs/policy-constants.md)
+- **claim-heartbeat-interval**: 12 h (default, changeable in docs/policy-constants.md)
+
+### Issue-Authoring Companion
+
+**Status**: {installed | not installed}
+```
+
+Make this policy section discoverable and point to it from any entry files
+(`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`)
+that mention IDD workflow.
+
+---
+
+## Step 4 — Replace placeholders
 
 In the copied files, perform a global search-and-replace for each
 placeholder:
@@ -442,7 +614,7 @@ any of the copied files.
 
 ---
 
-## Step 4 — Update agent entry files
+## Step 5 — Update agent entry files
 
 By default, leave the repository with root entry files for every
 manually-routed non-Copilot agent named in `docs/idd-workflow.md`:
@@ -566,7 +738,7 @@ phase file manually when the current step changes.
 
 ---
 
-## Step 5 — Verification checklist
+## Step 6 — Verification checklist
 
 After completing the steps above, confirm each item:
 
