@@ -72,35 +72,42 @@ ADVISORY_COMMENTS_JSON=$(
   gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/comments" --paginate \
     | jq -s 'add // []'
 )
-CURRENT_MARKER_ACTOR=$(gh api user --jq '.login')
+CURRENT_MARKER_ACTOR=$(gh api user --jq '.login' 2>/dev/null || true)
 TRUSTED_MARKER_ACTORS="${IDD_TRUSTED_MARKER_ACTORS:-}"
 TRUST_COLLABORATOR_MARKERS="${IDD_TRUST_COLLABORATOR_MARKERS:-}"
+TRUSTED_MARKER_LOGIN_JSON=$(
+  {
+    if [ -n "$CURRENT_MARKER_ACTOR" ]; then
+      printf '%s\n' "$CURRENT_MARKER_ACTOR"
+    fi
+    printf '%s\n' "$TRUSTED_MARKER_ACTORS" | tr ',' '\n'
+    if printf '%s\n' "$TRUST_COLLABORATOR_MARKERS" | grep -Eiq '^(1|true|yes)$'; then
+      printf '%s\n' "$ADVISORY_COMMENTS_JSON" \
+        | jq -r '.[] | select((.body // "") | test("^advisory-wait:|^advisory-wait-recovery:|^<!-- advisory-wait:")) | .user.login // empty' \
+        | sort -fu \
+        | while IFS= read -r login; do
+          permission=$(
+            gh api "repos/${OWNER}/${REPO}/collaborators/${login}/permission" \
+              --jq '.permission' 2>/dev/null || true
+          )
+          case "$permission" in
+            admin | maintain | write) printf '%s\n' "$login" ;;
+          esac
+        done
+    fi
+  } | jq -R -s 'split("\n") | map(ascii_downcase | select(length > 0)) | unique'
+)
 
 EARLIEST_SAME_HEAD_AT=$(
   printf '%s\n' "$ADVISORY_COMMENTS_JSON" \
     | jq -r \
       --arg sha "$PR_HEAD_SHA" \
-      --arg current_actor "$CURRENT_MARKER_ACTOR" \
-      --arg trusted_actors "$TRUSTED_MARKER_ACTORS" \
-      --arg trust_collaborators "$TRUST_COLLABORATOR_MARKERS" '
+      --argjson trusted_marker_logins "$TRUSTED_MARKER_LOGIN_JSON" '
         def marker_login: (.user.login // "" | ascii_downcase);
-        def configured_logins:
-          $trusted_actors
-          | ascii_downcase
-          | split(",")
-          | map(select(length > 0));
-        def collaborator_markers_enabled:
-          $trust_collaborators | test("^(1|true|yes)$"; "i");
-        def collaborator_author:
-          (.author_association // "") as $association
-          | (["OWNER", "MEMBER", "COLLABORATOR"] | index($association)) != null;
         def trusted_marker_actor:
-          (marker_login | length > 0)
-          and (
-            (marker_login == ($current_actor | ascii_downcase))
-            or ((configured_logins | index(marker_login)) != null)
-            or (collaborator_markers_enabled and collaborator_author)
-          );
+          marker_login as $login
+          | ($login | length > 0)
+          and (($trusted_marker_logins | index($login)) != null);
         [.[] | select(
           trusted_marker_actor
           and (
@@ -119,27 +126,12 @@ EARLIEST_SAME_HEAD_AT=$(
 REQUEST_MARKER_COUNT=$(
   printf '%s\n' "$ADVISORY_COMMENTS_JSON" \
     | jq -r \
-      --arg current_actor "$CURRENT_MARKER_ACTOR" \
-      --arg trusted_actors "$TRUSTED_MARKER_ACTORS" \
-      --arg trust_collaborators "$TRUST_COLLABORATOR_MARKERS" '
+      --argjson trusted_marker_logins "$TRUSTED_MARKER_LOGIN_JSON" '
         def marker_login: (.user.login // "" | ascii_downcase);
-        def configured_logins:
-          $trusted_actors
-          | ascii_downcase
-          | split(",")
-          | map(select(length > 0));
-        def collaborator_markers_enabled:
-          $trust_collaborators | test("^(1|true|yes)$"; "i");
-        def collaborator_author:
-          (.author_association // "") as $association
-          | (["OWNER", "MEMBER", "COLLABORATOR"] | index($association)) != null;
         def trusted_marker_actor:
-          (marker_login | length > 0)
-          and (
-            (marker_login == ($current_actor | ascii_downcase))
-            or ((configured_logins | index(marker_login)) != null)
-            or (collaborator_markers_enabled and collaborator_author)
-          );
+          marker_login as $login
+          | ($login | length > 0)
+          and (($trusted_marker_logins | index($login)) != null);
         [.[] | select(
           trusted_marker_actor
           and ((.body // "") | test("^advisory-wait:|^<!-- advisory-wait:"))
@@ -157,8 +149,9 @@ do not start or extend the advisory clock and do not count toward the
 30-per-PR request cap; report them as suspicious context when they
 affect the decision.
 
-Refresh `EARLIEST_SAME_HEAD_AT` at the start of each polling iteration —
-its value can change if a parallel session posted a new marker.
+Re-run the full AW2 block at the start of each polling iteration,
+including `ADVISORY_COMMENTS_JSON` and `TRUSTED_MARKER_LOGIN_JSON` —
+these values can change if a parallel session posts a new marker.
 
 Elapsed time = current UTC time − `EARLIEST_SAME_HEAD_AT` as returned by
 the GitHub API. Never use the timestamp inside the marker body.

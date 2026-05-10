@@ -29,7 +29,7 @@ using the shared claim-state rules:
 Only the GitHub `created_at` of the latest **valid** `claimed-by`
 comment in the active claim counts toward the stale calculation.
 
-If the issue has no new-format `claimed-by` comments but has legacy
+If the issue has no trusted new-format `claimed-by` comments but has legacy
 claim comments from trusted marker actors, first check whether the
 latest trusted legacy `claimed-by` comment is followed by a later
 trusted legacy `unclaimed-by` comment from the same agent. If so, treat
@@ -52,8 +52,9 @@ comment. An inheritable claim comment is either:
 
 - the already verified active claim for this current session, or
 - the currently active stale claim you are taking over, or
-- the latest `claimed-by` comment that was later released by a matching
-  `unclaimed-by` comment (the last voluntarily released branch), or
+- the latest trusted `claimed-by` comment that was later released by a
+  matching trusted `unclaimed-by` comment (the last voluntarily released
+  branch), or
 - the latest trusted legacy `claimed-by` comment when performing a
   legacy migration (see the migration-only decision input above)
 
@@ -76,8 +77,8 @@ Determine `{branch-name}`:
 
 - **Re-claim / takeover**: use the exact branch name from the
   inheritable claim comment (the `branch` field of the active stale
-  claim, the last-released `claimed-by`, or the trusted legacy claim
-  being migrated). Do not compute a new name.
+  claim, the last-released trusted `claimed-by`, or the trusted legacy
+  claim being migrated). Do not compute a new name.
 - **Fresh claim**: compute a new name using the IDD naming convention:
   `issue/<number>-<slug>` where `<slug>` is 2–5 lowercase hyphenated
   words describing the issue.

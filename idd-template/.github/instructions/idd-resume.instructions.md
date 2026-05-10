@@ -29,7 +29,7 @@ Before routing, collect all of the following:
 - If the issue is **closed** or the corresponding PR is **merged**:
   clean up any remaining local worktree and branch, then stop.
 
-If the issue has no new-format `claimed-by` comments but has legacy
+If the issue has no trusted new-format `claimed-by` comments but has legacy
 claim comments from trusted marker actors, treat the latest trusted
 legacy `claimed-by` comment as a migration-only input. First check
 whether that latest trusted legacy `claimed-by` comment is followed by a

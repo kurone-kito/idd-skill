@@ -133,11 +133,11 @@ and the matching legacy release format:
 
 Treat trusted legacy comments as **migration-only** inputs:
 
-- If an issue has no new-format `claimed-by` comments yet, first check
-  whether the latest trusted legacy `claimed-by` comment is followed by
-  a later trusted legacy `unclaimed-by` comment from the same agent. If
-  so, treat the issue as **unclaimed**; skip directly to posting a fresh
-  new-format claim with `supersedes: none`.
+- If an issue has no trusted new-format `claimed-by` comments yet, first
+  check whether the latest trusted legacy `claimed-by` comment is
+  followed by a later trusted legacy `unclaimed-by` comment from the
+  same agent. If so, treat the issue as **unclaimed**; skip directly to
+  posting a fresh new-format claim with `supersedes: none`.
 - Otherwise, use the latest trusted legacy claim to decide branch reuse
   and staleness. A matching legacy agent ID is not enough to prove same
   live-session ownership.
