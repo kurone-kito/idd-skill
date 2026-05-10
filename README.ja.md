@@ -59,11 +59,22 @@ IDD を導入したいリポジトリで AI エージェントのセッション
 エージェントはワークフローガイドを読み、着手できる issue を探して担当を宣言し、
 実装、PR レビュー、CI、マージ、後片づけまでループを進めます。
 
-ループを最後まで実行するには、エージェントが `git`、認証済みの `gh` CLI
-または同等の GitHub MCP 連携、`jq`、`npx` を使える Node.js/npm、
-そして運用マーカーを確実に投稿するための `curl` などの REST クライアントに
-アクセスできる必要があります。必要なコマンドの詳細はワークフロードキュメントを
-参照してください。無人またはマージ可能なエージェントへ認証情報を渡す前に、
+## リアリティチェック
+
+IDD は Markdown ネイティブですが、依存関係なしではありません。
+
+ループを最後まで実行するには、エージェントに次が必要です:
+
+- `git`
+- 認証済みの `gh` CLI または同等の GitHub MCP 連携
+- `jq`
+- `curl` などの REST クライアント
+- `npx` を使える Node.js/npm
+- 選択した merge policy に合う repository-scoped GitHub credentials
+- ループで使う場合は、設定済みの branch protection / required review policy
+
+必要なコマンドの詳細はワークフロードキュメントを参照してください。無人または
+マージ可能なエージェントへ認証情報を渡す前に、
 [Permissions and threat model](docs/permissions.md) も確認してください。
 
 ## IDD が自動化すること
