@@ -6,21 +6,29 @@ directly instead of re-evaluating the same suggestion from scratch.
 
 ## Decision
 
-In this source repository, adopt one narrow helper for post-merge
-comment cleanup auditing: `scripts/audit-pr-cleanup.mjs`.
+In this source repository, adopt two optional helpers:
+
+- `scripts/review-activity-snapshot.mjs` for read-only E/F review
+  activity and CI snapshot metrics
+- `scripts/audit-pr-cleanup.mjs` for post-merge comment cleanup auditing
 
 The canonical workflow remains the portable shell / `gh` / `jq`
-instructions embedded in `.github/instructions/*.instructions.md`.
-Other helper candidates remain deferred because they would create a
-second implementation surface while the review, advisory-wait, and claim
-protocols are still changing through dogfooding.
+instructions embedded in `.github/instructions/*.instructions.md`. The
+helpers are convenience layers only; written decision tables and phase
+rules remain authoritative when outputs diverge.
 
 The exported template remains portable without a `scripts/` directory.
 Adopters can copy the helper separately when they want the same
 repository-local convenience, otherwise the documented GraphQL fallback
 remains the portable path.
 
-The cleanup helper is intentionally narrower than E/F gate helpers:
+The adopted helper boundaries are intentionally narrow:
+
+- `review-activity-snapshot.mjs` is read-only, emits machine-readable
+  metrics, and does not evaluate accept/reject dispositions or merge
+  decisions
+- it does not replace the E/F gate decision tables; it only reduces
+  command-copy variance when collecting canonical snapshot fields
 
 - dry-run is the default and prints stable JSON unless `--format table`
   is requested
@@ -60,8 +68,9 @@ rule must be maintained twice: once in the instructions that agents read,
 and once in code that agents run.
 
 For now, the safer balance is to keep pre-merge instructions canonical
-and use only a narrow post-merge cleanup helper where mistakes are
-recoverable and do not affect merge safety.
+while allowing one read-only E/F snapshot helper and one post-merge
+cleanup helper. Merge safety still depends on the written checks, not on
+helper output alone.
 
 ## Future Adoption Criteria
 
