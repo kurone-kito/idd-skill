@@ -9,6 +9,55 @@ Minimization is UI cleanup. It preserves the audit trail and must never
 replace review triage, conversation resolution, CI, advisory wait, or
 merge gates.
 
+## Live Status Digest Contract
+
+A live status digest is an editable, human-facing issue or pull request
+comment that summarizes the current IDD run. It is UI state only. It
+must never replace trusted operational markers, review state, CI state,
+branch protection, or GitHub issue and pull request state as workflow
+evidence.
+
+The first line of every current digest comment is this stable marker:
+
+```html
+<!-- idd-live-status: current -->
+```
+
+At most one current digest may exist per issue or pull request. Agents
+find the digest by searching comments on that issue or PR for the marker
+above. The marker is an identifier, not authority: a digest posted by an
+untrusted actor or a digest whose text disagrees with trusted markers is
+ignored for workflow decisions and repaired only after the authoritative
+state has been re-read.
+
+Each digest should contain these fields in a compact, editable form:
+
+| Field              | Meaning                                                             |
+| ------------------ | ------------------------------------------------------------------- |
+| `Phase`            | The current IDD phase or resume route                               |
+| `Claim`            | Active claim owner and claim age, or `none`                         |
+| `Branch`           | Current work branch or `none`                                       |
+| `Last checked`     | ISO 8601 time when the digest was last refreshed from trusted state |
+| `Open blockers`    | Human decision, CI, review, dependency, or claim blocker summary    |
+| `Next action`      | The next expected agent, maintainer, CI, or reviewer action         |
+| `Authoritative by` | The marker, CI, review, issue, or PR evidence the summary came from |
+
+Only the current claim owner should update the digest during normal IDD
+execution, and only after the claim revalidation gate passes. Maintainers
+may repair a digest outside an active claim, but that repair does not
+claim workflow ownership. Roadmap-audit digests follow the same rule:
+the roadmap-audit claim gates edits to the roadmap issue digest only,
+not child issue execution.
+
+If the digest is missing during resume, recreate it from the parsed
+claim state, PR state, CI state, and review activity after the resume
+route is known. If the digest is stale, update the existing marked
+comment from that same authoritative state. If multiple marked digest
+comments exist, do not delete, minimize, or guess which one is
+authoritative during an unattended run; preserve the audit history,
+report the duplicate URLs, and use trusted markers and GitHub state for
+all workflow decisions until a repair path selects one current digest.
+
 ## Timing
 
 Run minimization only after one of these is true:

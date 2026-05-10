@@ -195,6 +195,21 @@ timing or loop constant, and record local deviations in onboarding or
 repository docs so future sessions can find the selected policy values
 without scanning every phase file.
 
+## Live status digest
+
+The optional live status digest is a human-facing issue or pull request
+comment whose first line is `<!-- idd-live-status: current -->`. It may
+summarize phase, claim, branch, last checked time, blockers, and next
+action, but it is never an authority for IDD state transitions.
+
+Agents must continue to make claim, review, advisory, CI, merge, and
+roadmap decisions from trusted operational markers and GitHub state. If
+the digest is missing or stale, repair it only after claim revalidation
+and authoritative state collection. If multiple marked digests exist,
+preserve them, report the duplicate URLs, and do not choose one as
+authoritative during an unattended run. See
+`docs/idd-comment-minimization.md` for the full digest contract.
+
 ## Abort
 
 On abort, re-validate ownership first. If the active claim still uses
