@@ -82,6 +82,9 @@ are installed:
 - **Manual `git worktree add` or WorkTrunk without a hook**: `cd` into
   the newly created worktree, then run **install-deps**.
 
+`install-deps` must remain safe to rerun during retries, takeovers, and
+recreated worktrees without manual cleanup.
+
 ## B2 — Create and refine plan
 
 Draft an implementation plan and post it as an issue comment. Then run a
