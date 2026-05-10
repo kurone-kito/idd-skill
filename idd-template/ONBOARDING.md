@@ -61,8 +61,13 @@ trusted agent session merge authority to continue through merge execution
 in F3. Ask whether the operator wants an explicit opt-out to
 `human_merge` before unattended runs begin, or prefers
 `separate_merge_agent` as a non-default split-authority handoff profile.
-`human_merge` and `separate_merge_agent` always stop before merge by
-design, even if recorded. Record the selected policy in repository
+For public/OSS repositories, or whenever human validation is required
+before merge, recommend an explicit opt-out to `human_merge` before
+granting unattended credentials. Normal worker sessions stop before
+merge under `human_merge` and `separate_merge_agent`; only the trusted
+merge-capable session configured for `separate_merge_agent` continues
+past the default F3 gate after the required customization. Record the
+selected policy in repository
 documentation that future IDD sessions read. Missing policy defaults to
 `fully_autonomous_merge`; unknown recorded policy values must stop with
 a maintainer hold until corrected.
