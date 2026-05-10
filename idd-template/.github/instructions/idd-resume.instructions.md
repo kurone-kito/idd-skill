@@ -56,6 +56,10 @@ Before routing, collect all of the following:
 9. **Unpushed commits** — run `git log @{u}..HEAD` in the worktree. If
    no upstream is configured, treat all local commits as unpushed.
 10. **Current local HEAD SHA** — run `git rev-parse HEAD`.
+11. **Live status digest state** — record whether the issue or PR has
+    zero, one, or multiple comments whose first line is
+    `<!-- idd-live-status: current -->`. Do not use digest text to route
+    resume; it is repairable UI state only.
 
 ## Step 1 — Identify the issue and claim state
 
@@ -106,6 +110,13 @@ worktree and do not use the Step 2 worktree table. Re-run A1.5 for that
 roadmap issue, then follow A1.5's close, release, or stop behavior.
 Treat child issue claims independently; roadmap-audit claim presence
 alone must not block child issue execution.
+
+After Step 1 establishes the route and verifies any current-session
+claim, repair a missing or stale live status digest from the parsed
+claim state, PR state, CI state, and review activity when doing so is
+safe under the claim revalidation gate. If multiple marked digests
+exist, preserve them, report their URLs, and continue routing from
+trusted markers and GitHub state rather than digest text.
 
 ## Step 2 — Locate or restore branch and worktree
 

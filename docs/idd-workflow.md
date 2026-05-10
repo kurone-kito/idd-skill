@@ -50,7 +50,7 @@ you are reading this guide first, start at step 1.
 | `.github/instructions/idd-resume.instructions.md`          | Route resume into crash, stalled, stale-takeover, or clean continuation |
 | `.github/instructions/idd-resume-stall.instructions.md`    | Handle stalled-session recovery with a dedicated safety gate            |
 | `docs/idd-review-policy-profiles.md`                       | PR review policy profiles and customization surfaces                    |
-| `docs/idd-comment-minimization.md`                         | Post-merge comment minimization policy, commands, and experiment notes  |
+| `docs/idd-comment-minimization.md`                         | Live status digest contract and post-merge comment minimization policy  |
 
 ## Artifact taxonomy and ownership
 
@@ -128,6 +128,21 @@ paths: crash recovery, progress-stalled or rate-limit recovery,
 stale-claim takeover, or ordinary clean continuation. This keeps crash
 and stall handling separate without requiring the stalled session to
 publish a final self-report.
+
+## Live Status Digests
+
+Use the live status digest contract in
+[IDD comment minimization](idd-comment-minimization.md) when an active
+run needs one human-facing current-status comment. Digest text is never
+workflow evidence by itself: claim parsing, review currency, advisory
+waits, CI, merge readiness, and roadmap audits still read trusted
+operational markers and GitHub state.
+
+During resume, repair a missing or stale digest only after the route and
+claim state are known. Duplicate marked digests are preserved as audit
+history and reported for repair; unattended agents must continue from
+the authoritative markers and GitHub state rather than picking a digest
+arbitrarily.
 
 ### Roadmap-claim contention playbook
 
