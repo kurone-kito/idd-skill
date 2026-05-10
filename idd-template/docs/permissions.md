@@ -42,8 +42,10 @@ granting unattended agent credentials:
 
 The distributed default is `fully_autonomous_merge` when merge policy is
 missing from repository docs. Public or OSS repositories that do not
-want unattended merges should explicitly opt out to `human_merge` (or
-`separate_merge_agent`) before granting worker credentials. If a
+want unattended merges should explicitly opt out to `human_merge` before
+granting worker credentials. `separate_merge_agent` remains a distinct
+non-default split-authority profile for repositories that want a
+dedicated merge-capable session. If a
 recorded merge policy value is unknown, the merge phase must stop with a
 maintainer hold until the policy is corrected.
 
