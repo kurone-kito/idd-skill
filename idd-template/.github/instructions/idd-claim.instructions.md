@@ -83,6 +83,7 @@ catches parallel-session concurrency before a new claim comment is posted.
 
 1. **Local worktree scan**: Check whether any local worktree matches the
    pattern `issue/<number>-*`:
+
    ```sh
    git worktree list | grep "issue/<number>-"
    ```
@@ -90,6 +91,7 @@ catches parallel-session concurrency before a new claim comment is posted.
 2. **Remote branch scan** (scoped Refs API, not repo-wide):
    Query the Refs API with the issue-number prefix only, to stay within
    the scope invariant defined in idd-overview.instructions.md:
+
    ```sh
    gh api "repos/{owner}/{repo}/git/matching-refs/heads/issue/<number>-" \
      --jq '.[].ref'
