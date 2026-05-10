@@ -59,6 +59,20 @@ The agent reads the workflow guide, discovers a ready issue, claims it,
 and follows the loop through work, PR review, CI, the selected merge
 policy, and cleanup.
 
+### Validate onboarding with IDD doctor (optional)
+
+After importing IDD, run the doctor script once in a repository that has
+the helper installed (this source repository includes it by default) to
+catch common setup drift:
+
+```sh
+node scripts/idd-doctor.mjs
+```
+
+The report checks core IDD file presence, unresolved placeholders,
+marker-prefix consistency, command-table sanity, and (when `gh` access
+is available) branch-protection and required-check signals.
+
 ## Reality Check
 
 IDD is Markdown-native, not dependency-free.
