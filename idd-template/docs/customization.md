@@ -10,13 +10,13 @@ behavior change too.
 
 ## Customization Surfaces
 
-| Surface           | Default                                                         | Where to customize                                                                                                                                                                    |
-| ----------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Review policy     | GitHub Copilot advisory review                                  | Choose a profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the listed phase files for any non-default profile.                                        |
-| Advisory reviewer | Copilot wait and recovery gates                                 | For `human-required`, `no-advisory`, or `external-bot`, update the review-fix, pre-merge, merge, advisory-wait, snapshot, and triage files named by the selected profile.             |
-| Merge policy      | Merge commits after CI, review, freshness, and claim gates pass | Review [Permissions and threat model](permissions.md), then decide whether merges are human-run, run by a separate merge-capable agent, or fully autonomous by explicit opt-in.       |
-| CI commands       | Project-specific command rows in the overview file              | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                            |
-| Issue scope       | Roadmap-first discovery                                         | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues considered before roadmap traversal. |
+| Surface           | Default                                                         | Where to customize                                                                                                                                                                          |
+| ----------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Review policy     | GitHub Copilot advisory review                                  | Choose a profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the listed phase files for any non-default profile.                                              |
+| Advisory reviewer | Copilot wait and recovery gates                                 | For `human-required`, `no-advisory`, or `external-bot`, update the review-fix, pre-merge, merge, advisory-wait, snapshot, and triage files named by the selected profile.                   |
+| Merge policy      | Merge commits after CI, review, freshness, and claim gates pass | Review [Permissions and threat model](permissions.md), then decide whether merges are human-run, run by a separate merge-capable agent, or fully autonomous by explicit opt-in.             |
+| CI commands       | Project-specific command rows in the overview file              | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                                  |
+| Issue scope       | Roadmap-first discovery                                         | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues to be considered before roadmap traversal. |
 
 ## Review Policy
 
