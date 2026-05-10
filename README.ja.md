@@ -77,6 +77,22 @@ IDD は Markdown ネイティブですが、依存関係なしではありませ
 マージ可能なエージェントへ認証情報を渡す前に、
 [Permissions and threat model](docs/permissions.md) も確認してください。
 
+### 5 分で読む導線
+
+IDD を評価または導入するときは、focused docs を次の順に読んでください:
+
+1. [Getting started](docs/getting-started.md) — テンプレートを取り込み、
+   最初のループを実行する。
+2. [Core concepts](docs/concepts.md) — claim、review、merge、cleanup の
+   語彙を把握する。
+3. [Customization](docs/customization.md) — ワークフロー全体を fork せずに
+   policy surface を選ぶ。
+4. [Permissions and threat model](docs/permissions.md) — agent profile ごとに
+   渡す認証情報を決める。
+5. [リファレンスマニュアル](docs/index.md) と
+   [detailed reference](docs/reference.md) — landing page から phase file、
+   policy、maintenance note へ進む。
+
 ## IDD が自動化すること
 
 IDD は、良い意味で退屈なワークフローです。各フェーズには名前付きの役割、
@@ -158,7 +174,15 @@ Discover -> Claim -> Work の開始には、引き続き明示的な承認が必
 
 ## 詳細リファレンス
 
+- [Getting started](docs/getting-started.md) — import から最初の IDD loop までの
+  最短で安全な導線。
+- [Core concepts](docs/concepts.md) — claim、review snapshot、merge gate、
+  cleanup の背景にある語彙。
+- [Customization](docs/customization.md) — adopter が管理する policy surface と
+  workflow edit point。
 - [リファレンスマニュアル](docs/index.md) — 詳細ドキュメント群への目的別の入口。
+- [Detailed reference](docs/reference.md) — phase file、policy docs、
+  template-maintenance link を、ルールの重複なしで辿るための一覧。
 - [Workflow guide](docs/idd-workflow.md) — 入口ファイル、ファイル構成、
   エージェント間の導線。
 - [Review policy profiles](docs/idd-review-policy-profiles.md) — 標準の
