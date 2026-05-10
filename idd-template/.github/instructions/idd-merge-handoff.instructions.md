@@ -22,9 +22,10 @@ revalidation gate. The active claim must still use your current
    policy: stop, post a hold comment, and request maintainer decision.
 4. If the recorded policy is `human_merge`, stop before the final
    freshness fetch and before `gh pr merge`. After claim revalidation,
-   report or post a concise handoff summary that includes:
+   post a concise handoff summary comment that includes:
    - PR number and branch
-   - current HEAD from F2 (`{f2-head-SHA}`)
+   - full F2 snapshot (`{f2-head-SHA}`, `{f2-max-activity-updatedAt}`,
+     `{f2-total-item-count}`, `{latest-ci-completed-at}`)
    - the F2 readiness evidence
    - unresolved-thread count, advisory state, and CI state
    - active `{claim-id}`
@@ -38,7 +39,9 @@ revalidation gate. The active claim must still use your current
 5. If the recorded policy is `separate_merge_agent`, apply this split:
    - If repository documentation explicitly records that the **current
      session** is the designated merge-capable actor and the documented
-     resume condition is satisfied, proceed to
+     resume condition is satisfied, first resume on the same issue via
+     `idd-resume.instructions.md` so the merge-capable session holds a
+     verified active `{claim-id}` of its own, then proceed to
      `idd-merge.instructions.md`.
    - Otherwise, stop and hand off using the summary fields above to the
      configured merge-capable session. If that actor or resume condition
