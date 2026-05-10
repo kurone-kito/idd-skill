@@ -69,14 +69,14 @@ sessions must hand off before F3.
 
 ## Placeholders
 
-| Placeholder                      | Description                               |
-| -------------------------------- | ----------------------------------------- |
-| `{{REPO_NAME}}`                  | Repository short name                     |
-| `{{PROJECT_MARKER_PREFIX}}`      | Unique prefix for issue body HTML markers |
-| `{{FIX_VALIDATE_COMMANDS}}`      | Lint-fix + lint commands                  |
-| `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Lint + build + test (no auto-fix)         |
-| `{{POST_FIX_VALIDATE_COMMANDS}}` | Lint-fix + lint + build + test            |
-| `{{INSTALL_DEPS_COMMAND}}`       | Install dependencies                      |
+| Placeholder                      | Description                                     |
+| -------------------------------- | ----------------------------------------------- |
+| `{{REPO_NAME}}`                  | Repository short name                           |
+| `{{PROJECT_MARKER_PREFIX}}`      | Marker prefix matching `^[a-z][a-z0-9-]{1,31}$` |
+| `{{FIX_VALIDATE_COMMANDS}}`      | Lint-fix + lint commands                        |
+| `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Lint + build + test (no auto-fix)               |
+| `{{POST_FIX_VALIDATE_COMMANDS}}` | Lint-fix + lint + build + test                  |
+| `{{INSTALL_DEPS_COMMAND}}`       | Install dependencies                            |
 
 ## Files
 
