@@ -5,7 +5,7 @@ pre-merge conditions. It covers executing the merge (F3), cleanup (F4),
 and looping back to discover (F5).
 
 The final merge-gate timing defaults are named in
-[IDD policy constants](../docs/policy-constants.md). Use that inventory
+[IDD policy constants](../../docs/policy-constants.md). Use that inventory
 when you need the canonical values; the merge logic itself stays here.
 
 Before any mutating action in F3, apply the shared claim revalidation

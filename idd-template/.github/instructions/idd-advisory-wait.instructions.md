@@ -11,7 +11,7 @@ advisory-wait check. It is referenced by:
   before executing the merge command
 
 The current policy values for request caps, advisory windows, and
-related defaults are listed in [IDD policy constants](../docs/policy-constants.md).
+related defaults are listed in [IDD policy constants](../../docs/policy-constants.md).
 Use that inventory when you need the named value, not as a place to
 change behavior.
 
