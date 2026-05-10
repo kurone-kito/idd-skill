@@ -61,8 +61,11 @@ Also choose a merge policy before the first unattended run:
 `human_merge`, `separate_merge_agent`, or `fully_autonomous_merge`.
 Treat `human_merge` as the safe default for public repositories;
 `fully_autonomous_merge` is the explicit opt-in that gives one trusted
-agent session merge authority. Record the selected policy in repository
-documentation that future IDD sessions read.
+agent session merge authority. The distributed merge phase stops in F3
+unless that exact policy is recorded, so `human_merge` and
+`separate_merge_agent` runs hand off before merge by default. Record the
+selected policy in repository documentation that future IDD sessions
+read.
 
 If you keep the distributed advisory/CI defaults, record that choice
 alongside the merge policy and point operators to
@@ -172,8 +175,11 @@ Also confirm the operator's merge policy:
 Record the selected policy in repository documentation, such as a local
 policy section in the imported docs or agent entry files. For
 `human_merge` and `separate_merge_agent`, do not grant merge-capable
-credentials to normal worker sessions; also add local guidance or
-phase-file customization so workers hand off before F3.
+credentials to normal worker sessions. Keep the default F3 stop gate for
+worker sessions, and record the human maintainer or separate
+merge-capable actor plus the resume condition. Customize the local F3
+gate only when a repository needs that separate merge-capable actor to
+continue through merge execution under repository-specific guidance.
 
 Confirm claim timing policy defaults from `docs/policy-constants.md` as
 well: `claim-stale-age` (default `24 h`) and
@@ -559,7 +565,8 @@ After completing the steps above, confirm each item:
 - [ ] The operator's selected critique-loop policy is recorded, and any
       non-default profile has matching phase-file customizations.
 - [ ] The operator's selected merge policy is recorded in repository
-      documentation, and worker credentials match that boundary.
+      documentation, the F3 handoff behavior matches that policy, and
+      worker credentials match that boundary.
 - [ ] Ownership timing policy values `claim-stale-age` and
       `claim-heartbeat-interval` are explicitly recorded for the target
       repository.

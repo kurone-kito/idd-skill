@@ -34,15 +34,18 @@ production.
 Choose and record one merge policy in repository documentation before
 granting unattended agent credentials:
 
-| Merge policy             | Who may merge                                                            | Worker credential boundary                                                                 |
-| ------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
-| `human_merge`            | A human maintainer performs the final merge and any post-merge cleanup.  | Worker sessions stop before merge and report the PR state for human review.                |
-| `separate_merge_agent`   | A trusted merge-capable session performs only the final merge phase.     | Worker sessions handle claim, work, PR, CI, and review fixes without merge-capable access. |
-| `fully_autonomous_merge` | One trusted agent session may complete the merge and cleanup phases too. | Worker and merge-capable authority are combined only by explicit repository opt-in.        |
+| Merge policy             | Who may merge                                                            | Worker credential boundary                                                                                           |
+| ------------------------ | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `human_merge`            | A human maintainer performs the final merge and any post-merge cleanup.  | The default F3 gate stops worker sessions before merge and reports the PR state for human review.                    |
+| `separate_merge_agent`   | A trusted merge-capable session performs only the final merge phase.     | Worker sessions stop at the default F3 gate; repository guidance names the merge-capable actor and resume condition. |
+| `fully_autonomous_merge` | One trusted agent session may complete the merge and cleanup phases too. | Worker and merge-capable authority are combined only by explicit repository opt-in.                                  |
 
 Use `human_merge` as the safe default for public or OSS repositories.
 Treat `fully_autonomous_merge` as an explicit credential decision, never
-as an automatic consequence of installing IDD.
+as an automatic consequence of installing IDD. The merge phase treats a
+missing or unknown merge policy as `human_merge`, and only a recorded
+`fully_autonomous_merge` policy lets the same agent session continue
+through F3 merge execution.
 
 ## Phase Permissions
 
