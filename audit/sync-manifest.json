@@ -66,6 +66,7 @@
         "idd-template/.github/instructions/idd-review-triage.instructions.md",
         "idd-template/.github/instructions/idd-review-fix.instructions.md",
         "idd-template/.github/instructions/idd-pre-merge.instructions.md",
+        "idd-template/.github/instructions/idd-merge-handoff.instructions.md",
         "idd-template/.github/instructions/idd-merge.instructions.md",
         "idd-template/.github/instructions/idd-resume.instructions.md",
         "idd-template/.github/instructions/idd-resume-stall.instructions.md",
@@ -154,6 +155,12 @@
       "id": "idd-merge-instructions",
       "source": "idd-template/.github/instructions/idd-merge.instructions.md",
       "target": ".github/instructions/idd-merge.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-merge-handoff-instructions",
+      "source": "idd-template/.github/instructions/idd-merge-handoff.instructions.md",
+      "target": ".github/instructions/idd-merge-handoff.instructions.md",
       "mode": "exact"
     },
     {
