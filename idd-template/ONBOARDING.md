@@ -157,7 +157,10 @@ Before importing, confirm whether the operator wants to keep the default
 Copilot advisory review policy described above. If not, choose the
 closest profile in `docs/idd-review-policy-profiles.md` and note which
 phase files and profile-specific surfaces must be customized after the
-files are copied in.
+files are copied in. Use the PR review profile edit-surface checklist in
+that document before marking onboarding complete; the selected profile
+is not complete until the repository records the decision, updates the
+matching phase behavior, and captures verification evidence.
 
 Confirm the review-thread resolution policy as well. Keep
 `fast-agent-resolve` for the distributed default, or choose
@@ -552,7 +555,8 @@ After completing the steps above, confirm each item:
       `docs/idd-comment-minimization.md`, and `docs/permissions.md`
       are present.
 - [ ] The operator's selected PR review policy profile is recorded, and
-      any non-default profile has matching phase-file customizations.
+      the matching edit-surface checklist in
+      `docs/idd-review-policy-profiles.md` is complete.
 - [ ] The operator's selected review-thread resolution policy is
       recorded, and any non-default profile has matching phase-file
       customizations.

@@ -40,7 +40,11 @@ authority:
   and a current-head completion signal.
 
 Changing the profile is a workflow change. Update the phase files named
-by the profile in the same pull request as the local policy note.
+by the profile in the same pull request as the local policy note. Use
+the PR review profile edit-surface checklist in
+[IDD review policy profiles](idd-review-policy-profiles.md) before
+marking onboarding complete, because non-default profiles need matching
+phase-file behavior and verification evidence.
 
 ## Review Thread Resolution Policy
 
