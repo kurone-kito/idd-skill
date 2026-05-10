@@ -412,10 +412,66 @@ If **no issue** survives the gate: report the full list of discarded
 issues with the criterion or criteria each failed, then **stop** — do
 not post `unclaimed-by` because no claim was made. This is not an abort.
 
+### Step 1.5 — Active-claim pre-scan
+
+**Purpose**: Reduce thundering-herd collisions in scale-out deployments by
+identifying and skipping issues that are already claimed by other sessions.
+
+Before selecting from the surviving viable issues, perform an
+**active-claim pre-scan** to eliminate candidates with concurrent claims:
+
+1. **Identify scan scope**: From the viable survivors (ordered by ascending
+   issue number), define the scan set as the **top 10 candidates** (or fewer
+   if fewer than 10 viable candidates exist).
+
+2. **Scan each candidate for active claims**: For each issue in the scan set,
+   in ascending issue number order:
+
+   - **Fetch the issue** and parse its comments using the shared claim-state
+     rules (defined in `idd-claim.instructions.md`).
+   - **Detect active non-stale claims**: Use the `claim-stale-age` policy
+     default from `docs/policy-constants.md` (distributed default: `24 h`).
+     An issue has an **active non-stale claim** if:
+     - A trusted `claimed-by` comment exists, and
+     - That comment's GitHub `created_at` timestamp is **less than** the
+       `claim-stale-age` threshold (e.g., created less than 24 hours ago), and
+     - The comment matches the `claimed-by` format defined in
+       `idd-claim.instructions.md`.
+
+   - **Remove claimed candidates**: If an active non-stale claim is detected,
+     **mark this candidate as ineligible** and proceed to the next issue in
+     the scan set.
+
+   - **Skip stale or unclaimed candidates**: If the latest `claimed-by`
+     comment is stale (≥ 24 h old) or no claim exists, this candidate
+     **remains eligible**.
+
+3. **Determine selection candidate**: After scanning the top 10:
+
+   - **If at least one eligible (unclaimed) candidate remains** in the scan
+     set: proceed to **Step 2** and select the lowest-numbered eligible
+     candidate.
+
+   - **If all top 10 are claimed**: the scan set is fully saturated with
+     concurrent work. Proceed to **Step 2** with the **next batch**: scan
+     candidates 11–20, then 21–30, and so on, until an unclaimed candidate
+     is found or the viable candidate set is exhausted.
+
+   - **If the entire viable candidate set is exhausted** (all issues up to the
+     highest viable candidate are claimed): report that all viable issues are
+     currently claimed by other sessions, then stop. Do not post
+     `unclaimed-by` because no claim was made. This is not an abort; the
+     session may retry Discover later if new viable candidates appear or
+     claims become stale.
+
+**Rationale**: Active-claim pre-scans eliminate known collisions
+deterministically and reduce wasted claim-post-recheck cycles, improving
+scale-out efficiency when multiple sessions start simultaneously.
+
 ### Step 2 — Select
 
-Among the surviving viable issues, pick the one with the **lowest issue
-number**.
+Among the surviving viable and unclaimed issues (after Step 1.5), pick the
+one with the **lowest issue number**.
 
 After picking, proceed to **A4.5**.
 
