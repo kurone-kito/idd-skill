@@ -94,6 +94,126 @@ If the external bot can produce blocking `CHANGES_REQUESTED` reviews or
 decision-relevant comments, classify those items as PATH A unless the
 operator explicitly narrows them.
 
+## PR Review Profile Edit Surfaces
+
+Use this checklist when a repository records a PR review profile during
+onboarding or changes it later. The checklist is the review-policy
+contract: the selected profile is not complete until the repository has
+recorded the decision, updated the matching phase behavior, and captured
+verification evidence.
+
+Apply these shared checks for every profile:
+
+- Record the selected PR review profile in repository documentation that
+  future IDD sessions read.
+- Record the review-thread resolution profile separately; it is not
+  implied by the PR review profile.
+- When maintaining this source repository, keep source docs and exported
+  template docs in sync; when adopting the template, keep copied docs and
+  local onboarding notes in sync.
+- Run the repository's documented validation commands after editing
+  docs or phase instructions.
+
+### `copilot-advisory` Edit Surface
+
+Use the distributed template behavior when Copilot advisory review is
+available and desired.
+
+- Documentation: record that the repository keeps `copilot-advisory`.
+- Phase instructions: keep
+  `.github/instructions/idd-advisory-wait.instructions.md`,
+  `.github/instructions/idd-review-fix.instructions.md`,
+  `.github/instructions/idd-pre-merge.instructions.md`,
+  `.github/instructions/idd-merge.instructions.md`,
+  `.github/instructions/idd-review-snapshot.instructions.md`, and
+  `.github/instructions/idd-review-triage.instructions.md` aligned with
+  the imported default.
+- Policy values: record whether the repository keeps or customizes the
+  advisory wait and request-cap defaults listed in
+  [IDD policy constants](policy-constants.md).
+- Verification evidence: confirm that Copilot can be requested or
+  observed on a PR and that the E14/F2/F3 advisory wait paths still name
+  Copilot intentionally.
+
+### `human-required` Edit Surface
+
+Use this profile when a maintainer, CODEOWNER, or required reviewer is
+the authoritative review gate.
+
+- Documentation: record the human review authority, required reviewer
+  source, and branch protection or CODEOWNERS rule that enforces it.
+- `.github/instructions/idd-review-fix.instructions.md`: remove the E14
+  Copilot re-review request and wait path, or replace it with a
+  human-review handoff that cannot be mistaken for an advisory bot wait.
+- `.github/instructions/idd-advisory-wait.instructions.md`: mark the
+  Copilot advisory wait helper unused by this profile, or remove local
+  references to it from the customized phase flow.
+- `.github/instructions/idd-pre-merge.instructions.md`: make required
+  human approval, branch protection, unresolved conversations, CI,
+  freshness, and claim evidence the F2 gate.
+- `.github/instructions/idd-merge.instructions.md`: remove final
+  Copilot advisory rechecks while keeping CI, claim, freshness, required
+  review, and unresolved-thread checks.
+- `.github/instructions/idd-review-snapshot.instructions.md` and
+  `.github/instructions/idd-review-triage.instructions.md`: keep human
+  comments in the review universe and remove assumptions that Copilot
+  advisory PATH B items must appear.
+- Repository settings: configure CODEOWNERS, required reviews, or branch
+  protection outside IDD.
+- Verification evidence: capture a dry-run or PR-state example showing
+  that a PR without required human approval cannot proceed to merge.
+
+### `no-advisory` Edit Surface
+
+Use this profile only when the repository intentionally relies on CI,
+branch protection, and any human review rules configured outside IDD.
+
+- Documentation: record that no advisory reviewer is requested or waited
+  on, and confirm that this does not weaken an existing required-review
+  policy.
+- `.github/instructions/idd-review-fix.instructions.md`: remove the E14
+  advisory request and wait path.
+- `.github/instructions/idd-advisory-wait.instructions.md`: mark the
+  advisory wait helper unused by this profile, or remove local
+  references to it from the customized phase flow.
+- `.github/instructions/idd-pre-merge.instructions.md`: gate on CI,
+  branch protection, unresolved conversations, freshness, and claim
+  evidence without requiring an advisory reviewer.
+- `.github/instructions/idd-merge.instructions.md`: remove final
+  advisory rechecks while keeping the other F3 safety gates.
+- `.github/instructions/idd-review-snapshot.instructions.md` and
+  `.github/instructions/idd-review-triage.instructions.md`: keep human
+  comments in scope and remove advisory-only PATH B requirements.
+- Verification evidence: capture a PR-state example showing that the
+  workflow no longer requests or waits for an advisory reviewer, while
+  CI and branch protection remain merge gates.
+
+### `external-bot` Edit Surface
+
+Use this profile when a named non-Copilot bot supplies the advisory
+signal.
+
+- Documentation: record the bot actor, how the bot is requested, the
+  current-head coverage signal, completion or skipped state, timeout
+  policy, and unavailable-state recovery path.
+- `.github/instructions/idd-advisory-wait.instructions.md`: replace
+  Copilot-specific fetch, request, pending, recovery, and wait logic with
+  the external bot's equivalent signals.
+- `.github/instructions/idd-review-fix.instructions.md`: request the
+  external bot after review-fix pushes, or document why an outside
+  system requests it.
+- `.github/instructions/idd-pre-merge.instructions.md`: replace Copilot
+  advisory checks with the external bot gate for the current PR head.
+- `.github/instructions/idd-merge.instructions.md`: repeat the external
+  bot freshness gate immediately before merge.
+- `.github/instructions/idd-review-snapshot.instructions.md` and
+  `.github/instructions/idd-review-triage.instructions.md`: define which
+  bot comments are PATH A, which are PATH B, and how blocked or
+  unavailable bot states are surfaced.
+- Verification evidence: capture a PR-state example showing the bot
+  reviewed the current head and that stale, missing, or unavailable bot
+  state blocks or holds according to the recorded policy.
+
 ## Review Thread Resolution Profiles
 
 Review-thread resolution is a separate policy from who reviews the PR.
@@ -146,6 +266,10 @@ the target repository's local documentation or onboarding notes.
   `fast-agent-resolve` for the distributed default, or customize the
   phase files listed above before choosing `hybrid-reviewer-ack` or
   `strict-reviewer-resolve`.
+- Complete the matching PR review profile edit-surface checklist before
+  marking onboarding done. Documentation-only recording is sufficient
+  only for `copilot-advisory` when the imported default remains
+  unchanged.
 
 Changing the profile is a workflow change, not only a documentation
 change. Update the phase files that enforce review and merge behavior in

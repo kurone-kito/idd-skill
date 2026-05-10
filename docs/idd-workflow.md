@@ -229,8 +229,8 @@ in later PR phases.
   agent using Copilot as its CLI.
 - Adopters who do not want that default PR policy should choose another
   review policy profile and follow
-  [IDD review policy profiles](idd-review-policy-profiles.md) for the
-  complete edit surface.
+  the PR review profile edit-surface checklist in
+  [IDD review policy profiles](idd-review-policy-profiles.md).
 - At minimum, update `idd-review-fix.instructions.md`,
   `idd-pre-merge.instructions.md`, and `idd-merge.instructions.md`;
   some profiles, such as `external-bot`, require additional files.
