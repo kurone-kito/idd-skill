@@ -124,9 +124,8 @@ ready for the merge-capable actor.
 
 Record the selected merge policy in repository documentation that
 future IDD sessions read, not only in local onboarding notes. Missing
-or unknown policy is treated as `fully_autonomous_merge`; only an
-explicitly recorded `human_merge` or `separate_merge_agent` policy
-stops in F3.
+policy is treated as `fully_autonomous_merge`; unknown recorded policy
+values must stop with a maintainer hold until the policy is corrected.
 
 For `human_merge`, keep the default F3 stop gate and hand off to the
 human maintainer. For `separate_merge_agent`, keep the worker stop gate
