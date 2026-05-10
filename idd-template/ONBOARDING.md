@@ -66,8 +66,8 @@ before merge, recommend an explicit opt-out to `human_merge` before
 granting unattended credentials. Normal worker sessions stop before
 merge under `human_merge` and `separate_merge_agent`; only the trusted
 merge-capable session configured for `separate_merge_agent` continues
-past the default F3 gate after the required customization. Record the
-selected policy in repository
+past the default F2.5/F3 gates after the required customization. Record
+the selected policy in repository
 documentation that future IDD sessions read. Missing policy defaults to
 `fully_autonomous_merge`; unknown recorded policy values must stop with
 a maintainer hold until corrected.
@@ -316,12 +316,13 @@ non-default split-authority profile. Record the selected policy in
 repository documentation, such as a local policy section in the imported
 docs or agent entry files. For `human_merge` and
 `separate_merge_agent`, do not grant merge-capable credentials to
-normal worker sessions. Keep the default F3 stop gate for worker
+normal worker sessions. Keep the default F2.5/F3 stop gates for worker
 sessions, and record the human maintainer or separate merge-capable
 actor plus the resume condition. Missing policy defaults to
 `fully_autonomous_merge`; unknown recorded policy values must stop with
-a maintainer hold until corrected. Customize the local F3 gate only when
-the repository needs that separate merge-capable actor to continue
+a maintainer hold until corrected. Customize the local F2.5/F3 gates
+only when the repository needs that separate merge-capable actor to
+continue
 through merge execution under repository-specific guidance.
 
 Confirm claim timing policy defaults from `docs/policy-constants.md` as
@@ -579,8 +580,8 @@ This repository uses the following IDD policies:
 
 {
 "fully_autonomous_merge": "Merge-capable trusted agent sessions may execute the merge phase (F3). No human maintainer approval required before merge execution.",
-"human_merge": "All work stops before the merge phase (F3). A human maintainer must review the PR and execute the merge manually.",
-"separate_merge_agent": "A separately authorized merge-capable actor reviews and executes the merge. Worker agents stop before F3."
+"human_merge": "All work stops at the merge-policy handoff gate (F2.5) before merge execution (F3). A human maintainer must review the PR and execute the merge manually.",
+"separate_merge_agent": "A separately authorized merge-capable actor reviews and executes the merge. Worker agents stop at the default F2.5/F3 handoff gates unless repository policy customizes them for that merge-capable actor."
 }
 
 ### PR Review Policy
