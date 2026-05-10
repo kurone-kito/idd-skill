@@ -109,15 +109,13 @@ credential should be able to merge. Use
 [Permissions and threat model](permissions.md) to record exactly one
 merge policy profile:
 
-- `fully_autonomous_merge`: the distributed default. One agent session
-  can complete the final merge too, but only after the repository
-  accepts the credential risk and grants the right credentials.
-- `human_merge`: a conservative opt-out profile for public or OSS
-  repositories. The worker stops before merge and a maintainer runs the
-  final merge after reviewing the PR state.
+- `human_merge`: explicitly opt-out. Use this for public or OSS
+  repositories where a human maintainer must perform merge and cleanup.
 - `separate_merge_agent`: a worker handles claim, implementation, PR,
   and review fixes; a trusted merge-capable session runs only the final
   merge phase.
+- `fully_autonomous_merge`: the distributed default. One agent session
+  can complete merge. Standard for production repositories.
 
 For `human_merge` and `separate_merge_agent`, keep merge-capable
 credentials out of normal worker sessions. The worker should hand off
@@ -125,10 +123,10 @@ the current PR state once CI, review, freshness, and claim evidence are
 ready for the merge-capable actor.
 
 Record the selected merge policy in repository documentation that
-future IDD sessions read, not only in local onboarding notes. The
-distributed merge phase treats a missing policy as
-`fully_autonomous_merge` and stops with a maintainer hold when the
-recorded value is unknown.
+future IDD sessions read, not only in local onboarding notes. Missing
+or unknown policy is treated as `fully_autonomous_merge`; only an
+explicitly recorded `human_merge` or `separate_merge_agent` policy
+stops in F3.
 
 For `human_merge`, keep the default F3 stop gate and hand off to the
 human maintainer. For `separate_merge_agent`, keep the worker stop gate

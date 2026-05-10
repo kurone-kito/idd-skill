@@ -26,14 +26,6 @@ Record the selected values for `claim-stale-age` and
 `claim-heartbeat-interval` in repository onboarding notes before running
 unattended sessions.
 
-## Merge Policy Defaults
-
-| Policy default                      | Distributed value                                                                 | Owning surface                                                                                | Onboarding expectation                                                                     |
-| ----------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Merge policy when missing           | `fully_autonomous_merge`                                                          | [Merge](../.github/instructions/idd-merge.instructions.md)                                    | Keep unless the repository explicitly opts out to `human_merge` or `separate_merge_agent`. |
-| Unknown merge policy handling       | Hold and require maintainer decision before F3 freshness fetch, merge, or cleanup | [Merge](../.github/instructions/idd-merge.instructions.md)                                    | Treat as a safety gate; unknown values must not silently route to another policy.          |
-| Non-autonomous merge-policy handoff | `human_merge` and `separate_merge_agent` stop before merge and hand off           | [Merge](../.github/instructions/idd-merge.instructions.md), [Customization](customization.md) | Keep unless the repository intentionally customizes F3 handoff behavior.                   |
-
 ## Advisory Review Defaults
 
 The distributed PR policy is `copilot-advisory`. These values apply to
@@ -61,6 +53,14 @@ files are edited.
 | Review-fix CI infra recovery           | Rerun once; hold if the infra-flaky or pre-existing failure persists          | [Review fix](../.github/instructions/idd-review-fix.instructions.md), [CI polling](../.github/instructions/idd-ci.instructions.md) | Keep unless E15 should use a different review-fix failure escalation path.                  |
 | Required check generation wait         | 10 min                                                                        | [CI polling](../.github/instructions/idd-ci.instructions.md)                                                                       | Keep unless branch protection or workflow dispatch latency is known to need another window. |
 | Missing workflow after generation wait | Hold and escalate to a maintainer                                             | [CI polling](../.github/instructions/idd-ci.instructions.md)                                                                       | Treat as a safety default; replacing it should be an explicit workflow change.              |
+
+## Merge Policy Defaults
+
+| Policy default               | Distributed value                                                           | Owning surface                                                                                                               | Onboarding expectation                                                                                                                              |
+| ---------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Merge policy when unrecorded | `fully_autonomous_merge` (distributed default for production repositories)  | [Merge](../.github/instructions/idd-merge.instructions.md), [Customization](customization.md), [Permissions](permissions.md) | Keep for production repositories; opt out to `human_merge` for public/OSS repositories, or customize to `separate_merge_agent` for split authority. |
+| Merge method                 | Merge commits (squash and rebase merge are disabled in repository settings) | [Merge](../.github/instructions/idd-merge.instructions.md), [GitHub Flow rules](./../.github/copilot-instructions.md)        | Keep unless the repository has a different merge strategy; customize only with branch protection changes.                                           |
+| Post-merge comment cleanup   | Minimize operational markers and resolved feedback after merge succeeds     | [Merge](../.github/instructions/idd-merge.instructions.md), audit scripts, and helper tooling                                | Keep as best-effort; safe cleanup candidates are enumerated in [comment minimization](idd-comment-minimization.md).                                 |
 
 ## Critique And Review Loop Defaults
 

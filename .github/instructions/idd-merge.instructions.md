@@ -19,16 +19,10 @@ gate. The active claim must still use your current `{claim-id}`.
    the claim was lost — report this and stop.
 2. Read the repository's recorded merge policy from repository
    documentation that future IDD sessions read. If no policy is
-   recorded, treat it as `fully_autonomous_merge` (distributed
-   default). If the recorded value is not one of
-   `fully_autonomous_merge`, `human_merge`, or
-   `separate_merge_agent`, treat it as an unknown merge policy:
-   stop, post a hold comment, and request maintainer decision.
-   Do not execute the final freshness fetch, `gh pr merge`, or F4
-   cleanup when the policy is unknown.
+   recorded, treat it as `fully_autonomous_merge`.
 
-   If the recorded policy is `human_merge` or
-   `separate_merge_agent`, stop before the final freshness fetch and
+   If the recorded policy is anything other than
+   `fully_autonomous_merge`, stop before the final freshness fetch and
    before `gh pr merge`. After the claim revalidation above, report or
    post a concise handoff summary with the PR number, branch, current
    HEAD from F2, the F2 readiness evidence, and the actor expected to
@@ -38,10 +32,9 @@ gate. The active claim must still use your current `{claim-id}`.
    maintainer direction. Do not run the F3 merge command or F4 cleanup
    in the same worker session.
 
-   Only a recorded `fully_autonomous_merge` policy lets the same agent
-   session continue through the remaining F3 gates. This policy gate
-   does not relax claim, freshness, unresolved-thread, advisory, CI, or
-   review requirements.
+   Only a recorded non-`fully_autonomous_merge` policy stops the merge.
+   This policy gate does not relax claim, freshness, unresolved-thread,
+   advisory, CI, or review requirements.
 3. Immediately before executing the merge command, do one final live
    fetch using the **exact same activity-universe scope as E1 Step 1**
    (all review threads, review bodies, and regular PR comments,
