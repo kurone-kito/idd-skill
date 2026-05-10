@@ -308,6 +308,11 @@ touch issues outside the roadmap traversal graph:
   `{{PROJECT_MARKER_PREFIX}}-blocked-by` dependency markers (see A3
   below). The result is used solely to determine blocked status and is
   not added to the A2 candidate set.
+- **A4.5 only**: a narrow duplicate/reuse search for the candidate
+  selected in A4 Step 2 (title match, body-content, or fuzzy match to
+  detect known open or closed issues that supersede or duplicate it).
+  The result is used solely to determine duplicate status for the
+  selected candidate and is not added to any candidate set.
 
 **Prohibited in all other contexts** — the following must not be used in
 any phase except as listed above, or when A3 step 4 explicit opt-in
@@ -518,16 +523,20 @@ Can success be verified independently by the agent?
 ### Failure Outcomes
 
 When an issue fails any suitability check, classify it into one of six
-stable outcomes:
+stable outcomes. Then remove the failing candidate from the A4 survivor
+set and return to A4 Step 2 to try the next-lowest-numbered candidate.
+Report each failure before continuing. Stop when the survivor set is
+empty (no suitable issue found this run) or when an `invalid` outcome
+occurs (trust/safety concerns require human review before continuing):
 
-| Outcome            | Meaning                        | Next Steps      |
-| ------------------ | ------------------------------ | --------------- |
-| `unclear`          | Issue needs clarification      | Report and stop |
-| `needs-decision`   | Requires maintainer decision   | Report and stop |
-| `blocked-by-human` | Requires human coordination    | Report and stop |
-| `duplicate`        | Duplicate or superseded work   | Report and stop |
-| `out-of-scope`     | Outside repository scope       | Report and stop |
-| `invalid`          | Trust/safety concern or defect | Report and stop |
+| Outcome            | Meaning                        | Next Steps                     |
+| ------------------ | ------------------------------ | ------------------------------ |
+| `unclear`          | Issue needs clarification      | Report, try next candidate     |
+| `needs-decision`   | Requires maintainer decision   | Report, try next candidate     |
+| `blocked-by-human` | Requires human coordination    | Report, try next candidate     |
+| `duplicate`        | Duplicate or superseded work   | Report, try next candidate     |
+| `out-of-scope`     | Outside repository scope       | Report, try next candidate     |
+| `invalid`          | Trust/safety concern or defect | Report and stop (do not retry) |
 
 ### Mutation Policy
 
@@ -583,28 +592,30 @@ implementation work:
 ### Decision Flow
 
 ```text
-Issue picked in A4 Step 2
+Candidates = A4 survivor set (sorted by ascending issue number)
+Loop: Pick lowest-numbered candidate from Candidates
   → Run Check 1 (Repository Fit)
     → PASS → Run Check 2
-    → FAIL → Classify as out-of-scope → Report and STOP (no claim)
+    → FAIL → Classify as out-of-scope → Report, remove from Candidates, loop
   → Run Check 2 (Coherence)
     → PASS → Run Check 3
-    → FAIL → Classify as unclear → Report and STOP
+    → FAIL → Classify as unclear → Report, remove from Candidates, loop
   → Run Check 3 (Trust/Safety)
     → PASS → Run Check 4
-    → FAIL → Classify as invalid → Report and STOP
+    → FAIL → Classify as invalid → Report and STOP (do not retry)
   → Run Check 4 (Duplicates)
     → PASS → Run Check 5
-    → FAIL → Classify as duplicate → Report and STOP
+    → FAIL → Classify as duplicate → Report, remove from Candidates, loop
   → Run Check 5 (Actionability)
     → PASS → Run Check 6
-    → FAIL → Classify as needs-decision → Report and STOP
+    → FAIL → Classify as needs-decision → Report, remove from Candidates, loop
   → Run Check 6 (Autonomy)
     → PASS → Run Check 7
-    → FAIL → Classify as blocked-by-human → Report and STOP
+    → FAIL → Classify as blocked-by-human → Report, remove from Candidates, loop
   → Run Check 7 (Verifiability)
     → PASS → Proceed to A5 (claim)
-    → FAIL → Classify as needs-decision → Report and STOP (no claim)
+    → FAIL → Classify as needs-decision → Report, remove from Candidates, loop
+Candidates empty → STOP (no suitable issue found this run)
 ```
 
 ### Edge Cases
@@ -622,3 +633,5 @@ exact match is not found, PASS the check and continue.
 (work for Copilot, Claude, Codex, Gemini). If an agent cannot reliably
 perform a check, document that limitation and treat as a PASS so work is
 not blocked by agent capability limits.
+
+After A4.5, proceed to `idd-claim.instructions.md`.
