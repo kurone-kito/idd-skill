@@ -48,6 +48,7 @@ you are reading this guide first, start at step 1.
 | `.github/instructions/idd-pre-merge.instructions.md`       | F1–F2: resolve conflicts and verify all pre-merge conditions            |
 | `.github/instructions/idd-merge.instructions.md`           | F3–F5: execute the merge, clean up, and loop back to discover           |
 | `.github/instructions/idd-resume.instructions.md`          | Route resume into crash, stalled, stale-takeover, or clean continuation |
+| `.github/instructions/idd-resume-stall.instructions.md`    | Handle stalled-session recovery with a dedicated safety gate            |
 | `docs/idd-review-policy-profiles.md`                       | PR review policy profiles and customization surfaces                    |
 | `docs/idd-comment-minimization.md`                         | Post-merge comment minimization policy, commands, and experiment notes  |
 

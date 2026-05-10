@@ -4,6 +4,23 @@ Use this file when taking over a crashed or rate-limited session with no
 prior session context. Read `idd-overview.instructions.md` for shared
 definitions (claim format, stale threshold, abort, hold).
 
+## Step 0 — Route stalled-session recovery
+
+Before Step 1, decide whether this is a stalled-session case:
+
+- If the issue is already closed, or the corresponding PR is already
+  merged, skip stalled-session routing and continue to Step 1 cleanup
+  behavior.
+- If a non-owned active claim exists, run
+  `idd-resume-stall.instructions.md` first.
+- Use only externally observable evidence (trusted claim heartbeat
+  timestamps, PR head movement, remote branch tip movement, review/
+  comment activity, and CI timestamps).
+- Quiet-window evidence does not bypass the shared stale threshold:
+  takeover remains disallowed until the non-owned active claim is stale.
+- If stalled-session routing returns hold/inconclusive, stop.
+- Otherwise continue with Step 1.
+
 ## Context to gather first
 
 Before routing, collect all of the following:
@@ -36,37 +53,6 @@ Before routing, collect all of the following:
 9. **Unpushed commits** — run `git log @{u}..HEAD` in the worktree. If
    no upstream is configured, treat all local commits as unpushed.
 10. **Current local HEAD SHA** — run `git rev-parse HEAD`.
-
-## Step 0 — Classify the resume route
-
-Before applying Step 1, classify the resume situation using only
-externally observable signals. Do not rely on the previous session
-posting a graceful shutdown, release, or hold comment.
-
-Use these signals together:
-
-- active claim ownership (`{claim-id}` and `created_at`)
-- issue/PR activity recency (comments, review threads, review bodies)
-- PR HEAD movement and CI state transitions
-- local worktree dirtiness and unpushed commits
-
-Route to one of the following classes:
-
-| Route class                                | Observable signal pattern                                                                                                                                                 | Action                                                                                                                                                                                                                                                     |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Crash recovery**                         | Session appears interrupted (missing/released claim, or unfinished local/PR state with no contradictory fresh owner signal).                                              | Continue with Step 1 and the existing restore table in Step 2.                                                                                                                                                                                             |
-| **Progress-stalled / rate-limit recovery** | Active claim is non-stale and not currently provable as owned by this session, PR HEAD/CI and review activity are quiet, and no external signal proves the owner resumed. | Do not take over yet. Stop without posting issue/PR comments; record the observed signals and next retry condition only in out-of-repo session-state artifacts or external run logs. Do not write files in the repository/worktree on this non-owner path. |
-| **Stale-claim takeover**                   | Active non-owned claim exists and latest valid `claimed-by` `created_at` is `>= 24 h`.                                                                                    | Execute stale takeover flow in Step 1 (`supersedes` required), then continue.                                                                                                                                                                              |
-| **Ordinary clean continuation**            | Active claim is already owned by this session and current state is consistent with normal continuation.                                                                   | Continue with Step 1/Step 2 as a normal resume.                                                                                                                                                                                                            |
-
-Classification thresholds:
-
-- **Stale takeover threshold**: 24 h from latest valid `claimed-by`
-  `created_at`.
-- **Stall quiet window**: require a sustained quiet period from external
-  signals of `>= 30 min` (no newer issue/PR/review/CI activity and no
-  HEAD movement) before declaring progress-stalled; when uncertain, stop
-  and retry later rather than taking over.
 
 ## Step 1 — Identify the issue and claim state
 

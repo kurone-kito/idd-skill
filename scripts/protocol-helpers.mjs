@@ -333,13 +333,6 @@ export function classifyResumeRoutingCase(input, options = {}) {
     };
   }
 
-  if (input.claimAgeHours >= staleHours) {
-    return {
-      route: "stale-claim-takeover",
-      reason: `non-owned claim is stale at >= ${staleHours}h`,
-    };
-  }
-
   if (!Number.isFinite(input.latestActivityAgeMinutes)) {
     return {
       route: "hold-for-evidence",
@@ -361,16 +354,29 @@ export function classifyResumeRoutingCase(input, options = {}) {
     };
   }
 
-  if (input.latestActivityAgeMinutes >= stallMinutes) {
+  if (input.claimAgeHours < staleHours) {
+    if (input.latestActivityAgeMinutes >= stallMinutes) {
+      return {
+        route: "hold-for-evidence",
+        reason: `non-owned claim is fresh and idle for >= ${stallMinutes}m, but still non-inheritable`,
+      };
+    }
     return {
       route: "hold-for-evidence",
-      reason: `non-owned claim is fresh and idle for >= ${stallMinutes}m, but still non-inheritable`,
+      reason: "non-owned claim remains non-inheritable until stale",
+    };
+  }
+
+  if (input.latestActivityAgeMinutes < stallMinutes) {
+    return {
+      route: "hold-for-evidence",
+      reason: `non-owned claim is stale but quiet-window evidence is < ${stallMinutes}m`,
     };
   }
 
   return {
-    route: "hold-for-evidence",
-    reason: "non-owned claim remains non-inheritable until stale",
+    route: "stale-claim-takeover",
+    reason: `non-owned claim is stale at >= ${staleHours}h with quiet-window evidence >= ${stallMinutes}m`,
   };
 }
 
