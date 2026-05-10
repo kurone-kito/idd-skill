@@ -14,7 +14,7 @@ behavior change too.
 | ----------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Review policy     | GitHub Copilot advisory review                                                               | Choose a profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the listed phase files for any non-default profile.                                              |
 | Advisory reviewer | Copilot wait and recovery gates                                                              | For `human-required`, `no-advisory`, or `external-bot`, update the review-fix, pre-merge, merge, advisory-wait, snapshot, and triage files named by the selected profile.                   |
-| Merge policy      | Merge gates after CI, review, freshness, and claim checks; safe OSS default is `human_merge` | Review [Permissions and threat model](permissions.md), then choose `human_merge`, `separate_merge_agent`, or explicit opt-in `fully_autonomous_merge`.                                      |
+| Merge policy      | Merge gates after CI, review, freshness, and claim checks; safe OSS default is `human_merge` | Review [Permissions and threat model](permissions.md), record the selected policy in repository docs, and customize handoff before F3 for non-autonomous profiles.                          |
 | CI commands       | Project-specific command rows in the overview file                                           | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                                  |
 | Issue scope       | Roadmap-first discovery                                                                      | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues to be considered before roadmap traversal. |
 
@@ -59,6 +59,14 @@ For `human_merge` and `separate_merge_agent`, keep merge-capable
 credentials out of normal worker sessions. The worker should hand off
 the current PR state once CI, review, freshness, and claim evidence are
 ready for the merge-capable actor.
+
+Record the selected merge policy in repository documentation that
+future IDD sessions read, not only in local onboarding notes. For
+`human_merge` and `separate_merge_agent`, also add repository-specific
+agent guidance or phase-file customization so normal workers stop before
+F3 and hand off to the human maintainer or separate merge-capable
+session. Documentation alone will not stop F3 if the same worker session
+still has merge-capable credentials.
 
 The distributed workflow expects merge commits. Changing the merge
 method, required review policy, or branch protection behavior is a

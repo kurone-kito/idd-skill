@@ -31,8 +31,8 @@ production.
 
 ## Merge Policy Profiles
 
-Choose and record one merge policy before granting unattended agent
-credentials:
+Choose and record one merge policy in repository documentation before
+granting unattended agent credentials:
 
 | Merge policy             | Who may merge                                                            | Worker credential boundary                                                                 |
 | ------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
@@ -131,8 +131,8 @@ Before enabling IDD in a repository:
   document any replacement reviewer policy before agents reach later PR
   phases.
 - Record the selected merge policy (`human_merge`,
-  `separate_merge_agent`, or `fully_autonomous_merge`) before granting
-  unattended worker credentials.
+  `separate_merge_agent`, or `fully_autonomous_merge`) in repository
+  documentation before granting unattended worker credentials.
 - Review any installed `SKILL.md` bundles or automation scripts before
   allowing them to run shell commands.
 - Make sure the agent can run validation locally without access to

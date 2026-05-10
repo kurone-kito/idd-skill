@@ -79,10 +79,10 @@ See the workflow docs for the detailed command contract. Review
 [Permissions and threat model](docs/permissions.md) before granting
 credentials to unattended or merge-capable agents.
 Treat normal worker credentials as stopping before merge unless the
-repository explicitly opts into a merge-capable profile. Choose
-`human_merge`, `separate_merge_agent`, or `fully_autonomous_merge` in
-[Customizing IDD](docs/customization.md); `fully_autonomous_merge` is an
-explicit credential opt-in.
+repository explicitly opts into `fully_autonomous_merge`.
+`human_merge` and `separate_merge_agent` keep merge authority outside
+the worker session. Choose and record one profile in
+[Customizing IDD](docs/customization.md).
 
 ## What IDD Automates
 

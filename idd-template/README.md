@@ -13,8 +13,8 @@ multi-agent GitHub automation.
    import to the first IDD loop.
 5. Read `docs/customization.md` before changing review, merge, CI, or
    discovery policy.
-6. Choose and record a merge policy while reviewing
-   `docs/permissions.md` before granting credentials to
+6. Choose and record a merge policy in repository documentation while
+   reviewing `docs/permissions.md` before granting credentials to
    unattended or merge-capable agents.
 7. Optional: install the issue-authoring companion skill if the project
    wants pre-execution issue drafting. The canonical source bundle in
@@ -61,8 +61,10 @@ profiles require additional files.
 IDD can run an end-to-end loop, but normal worker credentials should not
 imply merge authority. Before granting unattended credentials, choose
 `human_merge`, `separate_merge_agent`, or `fully_autonomous_merge` in
-`docs/customization.md` and `docs/permissions.md`. Treat
-`fully_autonomous_merge` as an explicit opt-in.
+`docs/customization.md` and `docs/permissions.md`, and record the choice
+in repository documentation that future IDD sessions read. Treat
+`fully_autonomous_merge` as the explicit opt-in; `human_merge` and
+`separate_merge_agent` require a handoff before F3.
 
 ## Placeholders
 

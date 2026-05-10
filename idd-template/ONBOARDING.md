@@ -51,8 +51,9 @@ complete the intended phase.
 Also choose a merge policy before the first unattended run:
 `human_merge`, `separate_merge_agent`, or `fully_autonomous_merge`.
 Treat `human_merge` as the safe default for public repositories;
-`fully_autonomous_merge` is an explicit opt-in that gives one trusted
-agent session merge authority.
+`fully_autonomous_merge` is the explicit opt-in that gives one trusted
+agent session merge authority. Record the selected policy in repository
+documentation that future IDD sessions read.
 
 ## Your task
 
@@ -62,7 +63,8 @@ agent session merge authority.
 4. Review `docs/permissions.md` with the operator before granting agent
    credentials.
 5. Choose and record the operator's merge policy before allowing
-   unattended workers to approach the merge phase.
+   unattended workers to approach the merge phase. The record must live
+   in repository documentation that future IDD sessions read.
 6. Ask whether the operator wants the optional issue-authoring
    companion skill for pre-execution issue drafting.
 7. Replace every placeholder (see table below) with the correct value.
@@ -141,9 +143,11 @@ files are copied in.
 
 Also confirm the operator's merge policy:
 `human_merge`, `separate_merge_agent`, or `fully_autonomous_merge`.
-Record the selected policy in local onboarding notes or repository
-documentation. For `human_merge` and `separate_merge_agent`, do not grant
-merge-capable credentials to normal worker sessions.
+Record the selected policy in repository documentation, such as a local
+policy section in the imported docs or agent entry files. For
+`human_merge` and `separate_merge_agent`, do not grant merge-capable
+credentials to normal worker sessions; also add local guidance or
+phase-file customization so workers hand off before F3.
 
 ### File list
 
@@ -512,8 +516,8 @@ After completing the steps above, confirm each item:
       are present.
 - [ ] The operator's selected PR review policy profile is recorded, and
       any non-default profile has matching phase-file customizations.
-- [ ] The operator's selected merge policy is recorded, and worker
-      credentials match that boundary.
+- [ ] The operator's selected merge policy is recorded in repository
+      documentation, and worker credentials match that boundary.
 - [ ] If the operator opted into issue authoring,
       `skills/issue-authoring/SKILL.md`,
       `skills/issue-authoring/agents/openai.yaml`, and the
