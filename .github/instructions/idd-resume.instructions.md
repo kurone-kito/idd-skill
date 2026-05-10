@@ -51,8 +51,8 @@ Classification thresholds:
 - **Stale takeover threshold**: 24 h from latest valid `claimed-by`
   `created_at`.
 - **Stall quiet window**: require a sustained quiet period from external
-  signals (for example, no newer issue/PR/review/CI activity and no HEAD
-  movement) before declaring progress-stalled; when uncertain, hold
+  signals of `>= 30 min` (no newer issue/PR/review/CI activity and no
+  HEAD movement) before declaring progress-stalled; when uncertain, hold
   rather than take over.
 
 ## Step 1 — Identify the issue and claim state
