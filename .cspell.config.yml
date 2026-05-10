@@ -23,10 +23,14 @@ useGitignore: true
 version: '0.2'
 words:
   - idd
+  - isort
   - kito
   - Kiro
   - kuron
   - kurone
   - kuroné
+  - pylint
+  - pytest
+  - pyproject
   - unpushed
   - unreplied
