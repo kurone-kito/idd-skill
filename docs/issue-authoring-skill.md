@@ -193,8 +193,10 @@ to package them.
 - no roadmap-level dependency or parallel track is needed
 - the work is unlikely to require multiple agent sessions
 - the target repository already discovers orphan issues through
-  `issue-scope: orphan-first`, or the draft explicitly tells the
-  operator to switch to that mode before starting the execution loop
+  `issue-scope: orphan-first`, and any configured
+  `orphan-first-policy` approval step can happen after drafting; or the
+  draft explicitly tells the operator to switch to that mode before
+  starting the execution loop
 
 ### Create a roadmap when any are true
 
@@ -307,6 +309,9 @@ Validation expectations:
 - the draft preserves discoverability by using a repository configured
   for `issue-scope: orphan-first`, or by surfacing that configuration
   change before the operator starts the Discover -> Claim loop
+- when the repository uses `orphan-first-policy: maintainer-approved`,
+  the draft includes a post-publication maintainer approval step after
+  the final title, body, and generated plan are stable
 
 ### Roadmap issue schema
 

@@ -556,6 +556,10 @@ After completing the steps above, confirm each item:
       it now includes the IDD workflow reference as well.
 - [ ] The `Project commands` table in `idd-overview.instructions.md`
       contains the correct commands for this project.
+- [ ] If the project chooses `issue-scope: orphan-first`, the
+      `orphan-first-policy` value is recorded as `none`,
+      `maintainer-approved`, or `public-disabled`. Public repositories
+      use either `maintainer-approved` or `public-disabled`, not `none`.
 - [ ] The `{{PROJECT_MARKER_PREFIX}}-roadmap-id` and
       `{{PROJECT_MARKER_PREFIX}}-blocked-by` marker names in
       `idd-discover.instructions.md` and `idd-overview.instructions.md`

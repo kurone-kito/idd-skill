@@ -59,6 +59,17 @@ Read the **issue-scope** value from the Project commands table in
 
 ## A0-O — Discover orphan issues
 
+Read the **orphan-first-policy** value from the Project commands table
+in `idd-overview.instructions.md` before any repo-wide orphan issue
+search.
+
+- If `orphan-first-policy` is `public-disabled`, first determine the
+  repository visibility. If the repository is public, skip A0-O without
+  searching open issues and proceed to A1. If visibility cannot be
+  determined, treat it as public and fail safely to A1. For private or
+  internal repositories, continue with A0-O.
+- For `none` and `maintainer-approved`, continue with A0-O.
+
 Search all open issues in the repository. Collect every issue whose
 body satisfies **all** of the following:
 
@@ -71,12 +82,38 @@ body satisfies **all** of the following:
   issue is open (apply the same fail-safe as A3: if a reference cannot
   be resolved, treat as blocked).
 
-If at least one orphan issue is found: pass the collected set directly
-to **A4** (viability gate). Skip A1–A3 entirely.
+Apply the configured policy before passing A0-O candidates to A4:
 
-If no orphan issues are found: fall back to the roadmap path. Proceed
-to **A1** and continue with the normal A1 → A1.5 → A2 → A3 → A4
-sequence.
+- `none` (the default): apply no extra orphan-first approval gate.
+- `maintainer-approved`: keep only candidates that have at least one
+  current maintainer approval signal:
+  - the `idd:ready` label, only when repository policy reserves that
+    label to maintainer approval actors;
+  - an issue author who is a repository owner or collaborator with
+    Write, Maintain, or Admin permission, verified with the collaborator
+    permission API; do not treat organization `MEMBER` association alone
+    as approval;
+  - a visible comment from a maintainer approval actor whose trimmed
+    body is exactly `IDD ready` or contains `IDD ready` as a standalone
+    line. The approval comment must be newer than the latest issue
+    title/body edit and any generated-plan update; if freshness cannot
+    be determined, require a fresh approval comment or a reserved label.
+- `public-disabled`: for private or internal repositories, behave the
+  same as `none`.
+
+A maintainer approval actor is a human repository owner or collaborator
+with Write, Maintain, or Admin permission. Do not reuse the trusted
+marker actor set for this approval gate, and do not count automation or
+the current agent unless repository policy explicitly grants that actor
+maintainer approval authority.
+
+If at least one orphan issue remains after the configured policy is
+applied: pass the remaining set directly to **A4** (viability gate).
+Skip A1–A3 entirely.
+
+If no orphan issues remain after the configured policy is applied: fall
+back to the roadmap path. Proceed to **A1** and continue with the normal
+A1 → A1.5 → A2 → A3 → A4 sequence.
 
 The A3 decision tree (abort / ask operator in unattended mode) is
 reached when the active discovery path(s) produce zero results: when

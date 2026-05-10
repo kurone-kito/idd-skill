@@ -34,7 +34,9 @@ needs-decision, blocked-by-human, and out-of-scope.
 2. Reuse or extend an existing issue before creating a new one.
 3. Choose the smallest safe output shape:
    - orphan issue for one ready autonomous task only when the target
-     repository is discoverable through `issue-scope: orphan-first`
+     repository is discoverable through `issue-scope: orphan-first` and
+     any configured `orphan-first-policy` approval step can be completed
+     after drafting
    - roadmap plus sub-issues for multi-task or multi-session work
    - stable non-ready buckets for deferred, needs-decision,
      blocked-by-human, or out-of-scope work
