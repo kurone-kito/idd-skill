@@ -1,0 +1,16 @@
+{
+  "comments": [],
+  "reviews": [
+    {
+      "author": { "login": "coderabbitai" },
+      "state": "CHANGES_REQUESTED",
+      "submittedAt": "2026-05-09T18:01:00Z"
+    },
+    {
+      "author": { "login": "coderabbitai" },
+      "state": "APPROVED",
+      "submittedAt": "2026-05-09T18:02:00Z"
+    }
+  ],
+  "threads": []
+}

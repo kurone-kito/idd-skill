@@ -1,0 +1,33 @@
+{
+  "comments": [
+    {
+      "author": { "login": "coderabbitai" },
+      "body": "Please adjust the wording.",
+      "createdAt": "2026-05-09T18:05:00Z"
+    }
+  ],
+  "reviews": [
+    {
+      "author": { "login": "coderabbitai" },
+      "state": "CHANGES_REQUESTED",
+      "submittedAt": "2026-05-09T18:04:46Z"
+    }
+  ],
+  "threads": [
+    {
+      "id": "THREAD-2",
+      "isResolved": false,
+      "comments": {
+        "pageInfo": { "hasNextPage": false },
+        "nodes": [
+          {
+            "author": { "login": "coderabbitai" },
+            "body": "Please adjust the wording.",
+            "createdAt": "2026-05-09T18:05:00Z",
+            "pullRequestReview": { "id": "REVIEW-2" }
+          }
+        ]
+      }
+    }
+  ]
+}
