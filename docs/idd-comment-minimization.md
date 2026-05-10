@@ -60,7 +60,9 @@ all workflow decisions until a repair path selects one current digest.
 
 ## Live Status Digest Helper
 
-When the repository-local helper is available, use dry-run first:
+In the idd-skill source repository, the helper is available; use dry-run
+first. In adopter repositories, see the [Fallback GraphQL](#fallback-graphql)
+section unless the helper scripts were explicitly installed.
 
 ```sh
 node scripts/live-status-digest.mjs --issue <issue-number> --dry-run \
@@ -229,8 +231,10 @@ Always skip candidates when any of these are true:
 
 ## Dry Run Shape
 
-When the repository-local helper is available, start with a dry-run
-report:
+In the idd-skill source repository, the helper is available; start with
+a dry-run. In adopter repositories, see the
+[Fallback GraphQL](#fallback-graphql) section unless the helper scripts
+were explicitly installed.
 
 ```sh
 node scripts/audit-pr-cleanup.mjs --pr <pr-number> --dry-run --format table

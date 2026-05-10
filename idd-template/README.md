@@ -128,7 +128,7 @@ execution and PR review policy, and
 `docs/idd-review-policy-profiles.md` for the default Copilot-backed
 policy plus alternatives.
 
-When maintaining the source repository, keep `skills/issue-authoring/`
+When maintaining the idd-skill source repository, keep `skills/issue-authoring/`
 and its bundled references aligned with `docs/issue-authoring-skill.md`.
 Adopter copies are helper artifacts and should not replace the execution
 instructions.

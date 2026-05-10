@@ -283,7 +283,7 @@ You need the following core execution and profile artifact files in the
 target repository. Use whichever method applies to your situation.
 
 The issue-authoring skill is available as an optional companion artifact
-from `skills/issue-authoring/` in the source repository. That path is
+from `skills/issue-authoring/` in the idd-skill source repository. That path is
 the canonical source bundle; when you install it in a target repository,
 place the copied bundle in the agent-specific skill directory your
 runtime reads, such as `.github/skills/`, `.claude/skills/`, or
@@ -536,7 +536,7 @@ the files from `idd-template/` into the target repository preserving
 their relative paths.
 
 If the operator opts into the issue-authoring companion, also copy
-`skills/issue-authoring/` from the source repository to
+`skills/issue-authoring/` from the idd-skill source repository to
 `skills/issue-authoring/` in the target repository.
 
 ### Optional companion boundary
