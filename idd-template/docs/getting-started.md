@@ -34,8 +34,9 @@ project-specific command values, and updates agent entry files such as
 
 Before the first full loop, decide whether the default Copilot advisory
 review policy applies. If it does not, choose another profile from
-`docs/idd-review-policy-profiles.md` and apply the listed instruction
-file changes before agents reach PR review and merge phases.
+`docs/idd-review-policy-profiles.md`, apply the matching
+`profiles/<profile>/README.md` artifact, and capture its verification
+evidence before agents reach PR review and merge phases.
 
 Keep this decision explicit. Review policy changes are workflow changes,
 not just documentation preferences.

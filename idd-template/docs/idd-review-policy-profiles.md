@@ -35,6 +35,19 @@ The advisory wait windows, request cap, and CI wait defaults are named in
 [IDD policy constants](policy-constants.md), so adopters can record those
 values separately from the review profile choice.
 
+## Profile Artifacts
+
+The exported template includes profile artifacts under `profiles/`.
+When working in this source repository, maintain those artifacts under
+`idd-template/profiles/`. Each non-default artifact is a documented
+patch surface that records adopter-owned values, files to edit, and
+verification evidence for the selected profile.
+
+Use the artifact when choosing `human-required`, `no-advisory`, or
+`external-bot` instead of reconstructing the edit surface from memory.
+The checklist below remains the policy contract; the artifact packages
+that checklist into a reusable onboarding unit.
+
 ## Human-Required Profile
 
 Use `human-required` when a person, CODEOWNER, or required reviewer is
@@ -262,6 +275,8 @@ the target repository's local documentation or onboarding notes.
   and branch protection as sufficient gates.
 - Choose `external-bot` only after proving the bot's reviewer identity,
   current-head coverage signal, and wait/timeout behavior.
+- For any non-default PR review profile, apply the matching artifact
+  from `profiles/` and record its verification evidence.
 - Record the review-thread resolution profile separately. Keep
   `fast-agent-resolve` for the distributed default, or customize the
   phase files listed above before choosing `hybrid-reviewer-ack` or
