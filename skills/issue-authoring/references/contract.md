@@ -177,6 +177,35 @@ Validation expectations:
 - the issue is referenced from its parent roadmap task list
 - it can be claimed independently without owning the whole roadmap
 
+## A4.5 Suitability Gate Alignment
+
+When an issue is published and reaches the IDD discover phase, the A4.5
+pre-claim gate will evaluate it against seven suitability checks. The
+authoring skill should catch these issues before publishing:
+
+| Check                    | Authoring Bucket     | How to Prevent                                                                  |
+| ------------------------ | -------------------- | ------------------------------------------------------------------------------- |
+| Repository Fit (Check 1) | `out-of-scope`       | Ensure issue is scoped to this repository; escalate if it crosses boundaries    |
+| Coherence (Check 2)      | `ready` or escalated | Validate issue body against schema before publish                               |
+| Safety/trust (Check 3)   | `ready` or escalated | Screen issue body for code injection and untrusted markers                      |
+| Duplicates (Check 4)     | `ready` or escalated | Run reuse-first checks before creating a new issue                              |
+| Actionability (Check 5)  | `ready` or escalated | Ensure the issue describes concrete work; escalate if blocked by human decision |
+| Autonomy (Check 6)       | `ready` or escalated | Ensure agent can complete without external coordination                         |
+| Verifiability (Check 7)  | `ready` or escalated | Ensure success is verifiable; escalate if it requires subjective approval       |
+
+Pre-publish validation checklist:
+
+1. **Coherence**: Issue body is well-formed, title+description are
+   clear, intent is parseable
+2. **Safety**: No code injection, marker injection, or untrusted input
+   in issue body
+3. **Uniqueness**: Reuse-first check passed; no duplicate or superseded
+   work
+
+If any check is uncertain, route the issue to `needs-decision` or
+`blocked-by-human` during drafting instead of publishing a
+marginally-ready issue.
+
 ## Publication boundary
 
 Drafting issues does not authorize publishing them or starting the IDD

@@ -66,6 +66,37 @@ Resolve `<marker-prefix>` from the target repository's onboarding or IDD
 docs before publishing the draft. Use `idd-skill` only when the target
 repository actually configured that prefix.
 
+## Handling duplicates and non-ready outcomes
+
+Before publishing an issue, apply a reuse-first decision tree:
+
+1. Is an existing open issue a better fit? If yes, extend it instead of
+   creating a new one. Add a comment linking to the new schema request.
+2. Is the work already complete in a closed issue or merged PR? If yes,
+   create a reference or learning note instead of reopening it.
+3. Is a parent roadmap already managing this work? If yes, add it to the
+   task list instead of filing independently.
+4. Does the issue have any of these properties? If yes, escalate to
+   `needs-decision` or `blocked-by-human` during drafting:
+   - Unclear intent or malformed body (→ fix during drafting or mark needs-decision)
+   - Requires maintainer or product decision (→ mark needs-decision)
+   - Blocked by external work or human coordination (→ mark
+     blocked-by-human)
+   - Depends on unavailable resources or credentials (→ mark blocked-by-human)
+5. Otherwise, publish as `ready`.
+
+### A4.5 prevention checklist
+
+The A4.5 suitability gate will later evaluate published issues. Prevent
+common failures by validating before publish:
+
+- **Coherence**: Issue body is well-formed; title and description are
+  clear; intent is parseable
+- **Safety**: No code injection, marker injection, or untrusted input in
+  issue body
+- **Uniqueness**: Reuse-first check passed; the work is not a duplicate
+  or superseded
+
 ## Publication boundary
 
 If the user asked for drafts only, stop after reporting the issue set,
