@@ -140,6 +140,14 @@ When any row below requires creating a worktree, follow the B1
 **install-deps** (depends on whether WorkTrunk's pre-start hook is
 configured).
 
+**Important**: The `{branch}` field in the table below refers to the branch
+name from the current active claim (or inheritable claim in recovery scenarios).
+This branch value must be used verbatim when creating or restoring worktrees.
+The heartbeat branch invariant (rule 3.5 in `idd-overview.instructions.md`)
+requires that heartbeat comments preserve the original branch field exactly. If
+you encounter anomalous heartbeats with a different branch field, ignore that
+branch value and use the currently active claim's branch instead.
+
 | PR exists?     | Remote branch? | Local state                           | Action                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | -------------- | -------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Yes (1 match)  | —              | worktree missing                      | Run `git fetch origin`. If a local branch named `{branch}` exists, check for unpushed commits: `git log origin/{branch}..{branch} --oneline`. If any commits appear, create the worktree from the existing local branch; if reviews exist on the PR → resume from E11; if no reviews → route to D1. If no local commits, reset: `git branch -f {branch} origin/{branch}`, then create worktree. If no local branch named `{branch}` exists, create it from remote: `git branch {branch} origin/{branch}`, then create worktree. |

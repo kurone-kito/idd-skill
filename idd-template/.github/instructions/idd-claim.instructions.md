@@ -109,6 +109,16 @@ of the body, followed by the visible note:
 _{agent-id}: issue claim — IDD automation marker. Do not edit._
 ```
 
+### Heartbeat posting
+
+When posting a heartbeat (i.e., when the issue is already claimed by this current
+session and you are extending the active claim's stale clock), copy the
+`{branch}` field **verbatim** from the original `claimed-by` comment. Do not
+recompute or derive a new branch name. The heartbeat's `{claim-id}` and
+`{agent-id}` must match the original claim exactly. The branch field must also
+match exactly to satisfy the heartbeat branch invariant (rule 3.5 in
+`idd-overview.instructions.md`).
+
 ## Claim verification
 
 After posting `claimed-by`, wait 5–10 seconds to let GitHub eventual
