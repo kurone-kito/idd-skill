@@ -59,6 +59,19 @@ IDD を導入したいリポジトリで AI エージェントのセッション
 エージェントはワークフローガイドを読み、着手できる issue を探して担当を宣言し、
 実装、PR レビュー、CI、選択したマージポリシー、後片づけまでループを進めます。
 
+### IDD doctor で導入状態を検証する（任意）
+
+IDD 導入後、対象リポジトリで一度 doctor スクリプトを実行すると、
+設定ズレを早期に検出できます:
+
+```sh
+node scripts/idd-doctor.mjs
+```
+
+レポートでは、IDD の主要ファイル有無、未解決 placeholder、
+marker prefix の整合性、Project commands の妥当性、さらに `gh`
+アクセス可能な場合は branch protection / required checks のシグナルを確認します。
+
 ## リアリティチェック
 
 IDD は Markdown ネイティブですが、依存関係なしではありません。
