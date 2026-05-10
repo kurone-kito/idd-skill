@@ -38,12 +38,9 @@ Important: the distributed default workflow is cross-agent for
 execution, but its later PR phases still include a GitHub Copilot
 advisory review step by default. If the operator does not want that PR
 policy, choose another profile in `docs/idd-review-policy-profiles.md`
-and plan to customize the complete edit surface described there. At
-minimum, non-default profiles touch
-`.github/instructions/idd-review-fix.instructions.md`,
-`.github/instructions/idd-pre-merge.instructions.md`, and
-`.github/instructions/idd-merge.instructions.md`; some profiles require
-additional files after import.
+and apply the matching artifact from `profiles/`. The artifact records
+the complete edit surface, adopter-owned values, and verification
+evidence for the selected non-default profile.
 
 Also choose a review-thread resolution policy before treating the import
 as complete. The distributed default is `fast-agent-resolve`, where an
@@ -79,18 +76,20 @@ easy to find later.
 3. Fetch or copy the template files into the target repository.
 4. Review `docs/permissions.md` with the operator before granting agent
    credentials.
-5. Choose and record the operator's review-thread resolution policy.
-6. Choose and record the operator's merge policy before allowing
+5. Choose and record the operator's PR review policy profile. If it is
+   non-default, apply the matching profile artifact from `profiles/`.
+6. Choose and record the operator's review-thread resolution policy.
+7. Choose and record the operator's merge policy before allowing
    unattended workers to approach the merge phase. The record must live
    in repository documentation that future IDD sessions read.
-7. Confirm and record ownership timing policy values:
+8. Confirm and record ownership timing policy values:
    `claim-stale-age` (default 24 h) and
    `claim-heartbeat-interval` (default 12 h).
-8. Ask whether the operator wants the optional issue-authoring
+9. Ask whether the operator wants the optional issue-authoring
    companion skill for pre-execution issue drafting.
-9. Replace every placeholder (see table below) with the correct value.
-10. Add IDD references to the repository's agent entry files.
-11. Verify the result with the checklist at the bottom.
+10. Replace every placeholder (see table below) with the correct value.
+11. Add IDD references to the repository's agent entry files.
+12. Verify the result with the checklist at the bottom.
 
 ---
 
@@ -145,8 +144,8 @@ entire lifetime of the roadmap.
 
 ## Step 2 — Fetch or copy template files
 
-You need the following core execution files in the target repository.
-Use whichever method applies to your situation.
+You need the following core execution and profile artifact files in the
+target repository. Use whichever method applies to your situation.
 
 The issue-authoring skill is available as an optional companion artifact
 from `skills/issue-authoring/` in the source repository. That path is
@@ -158,11 +157,11 @@ pre-execution issue drafting or roadmap decomposition support.
 
 Before importing, confirm whether the operator wants to keep the default
 Copilot advisory review policy described above. If not, choose the
-closest profile in `docs/idd-review-policy-profiles.md` and note which
-phase files and profile-specific surfaces must be customized after the
-files are copied in. Use the PR review profile edit-surface checklist in
-that document before marking onboarding complete; the selected profile
-is not complete until the repository records the decision, updates the
+closest profile in `docs/idd-review-policy-profiles.md`, then open the
+matching artifact in `profiles/<profile>/README.md` after the files are
+copied in. Use the artifact and the PR review profile edit-surface
+checklist before marking onboarding complete; the selected profile is
+not complete until the repository records the decision, updates every
 matching phase behavior, and captures verification evidence.
 
 Confirm the review-thread resolution policy as well. Keep
@@ -218,6 +217,10 @@ docs/concepts.md
 docs/customization.md
 docs/policy-constants.md
 docs/reference.md
+profiles/README.md
+profiles/human-required/README.md
+profiles/no-advisory/README.md
+profiles/external-bot/README.md
 ```
 
 <!-- /audit:generated -->
@@ -278,8 +281,13 @@ for FILE in \
   "docs/concepts.md" \
   "docs/customization.md" \
   "docs/policy-constants.md" \
-  "docs/reference.md"
+  "docs/reference.md" \
+  "profiles/README.md" \
+  "profiles/human-required/README.md" \
+  "profiles/no-advisory/README.md" \
+  "profiles/external-bot/README.md"
 do
+  mkdir -p "$(dirname "${DEST}/${FILE}")"
   gh api -H "Accept: application/vnd.github.raw+json" \
     "repos/kurone-kito/idd-skill/contents/idd-template/${FILE}" \
     > "${DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
@@ -346,8 +354,13 @@ for FILE in \
   "docs/concepts.md" \
   "docs/customization.md" \
   "docs/policy-constants.md" \
-  "docs/reference.md"
+  "docs/reference.md" \
+  "profiles/README.md" \
+  "profiles/human-required/README.md" \
+  "profiles/no-advisory/README.md" \
+  "profiles/external-bot/README.md"
 do
+  mkdir -p "$(dirname "${DEST}/${FILE}")"
   curl -fsSL "${BASE}/${FILE}" -o "${DEST}/${FILE}" || { echo "Failed: ${FILE}" >&2; exit 1; }
 done
 ```
@@ -560,9 +573,14 @@ After completing the steps above, confirm each item:
       `docs/idd-helper-scripts.md`,
       `docs/idd-comment-minimization.md`, and `docs/permissions.md`
       are present.
+- [ ] `profiles/README.md` and the non-default profile artifacts under
+      `profiles/` are present.
 - [ ] The operator's selected PR review policy profile is recorded, and
       the matching edit-surface checklist in
       `docs/idd-review-policy-profiles.md` is complete.
+- [ ] If the selected PR review policy profile is non-default, the
+      matching `profiles/<profile>/README.md` artifact was applied and
+      its verification evidence is recorded.
 - [ ] The operator's selected review-thread resolution policy is
       recorded, and any non-default profile has matching phase-file
       customizations.

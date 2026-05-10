@@ -13,10 +13,12 @@ multi-agent GitHub automation.
    import to the first IDD loop.
 5. Read `docs/customization.md` before changing review, merge, CI, or
    discovery policy.
-6. Choose and record a merge policy in repository documentation while
+6. Choose a PR review policy profile. If it is non-default, apply the
+   matching profile artifact from `profiles/`.
+7. Choose and record a merge policy in repository documentation while
    reviewing `docs/permissions.md` before granting credentials to
    unattended or merge-capable agents.
-7. Optional: install the issue-authoring companion skill if the project
+8. Optional: install the issue-authoring companion skill if the project
    wants pre-execution issue drafting. The canonical source bundle in
    this repository lives at `skills/issue-authoring/`; install copies
    into the agent-specific skill directory your runtime reads.
@@ -49,12 +51,10 @@ issues through the normal IDD loop.
 The distributed template is cross-agent for execution, but its later PR
 phases include a GitHub Copilot advisory review step by default. If an
 adopter does not want that PR policy, they should choose a profile in
-`docs/idd-review-policy-profiles.md` and apply the complete edit surface
-described there. At minimum, non-default profiles touch
-`.github/instructions/idd-review-fix.instructions.md`,
-`.github/instructions/idd-pre-merge.instructions.md`, and
-`.github/instructions/idd-merge.instructions.md` after import; some
-profiles require additional files.
+`docs/idd-review-policy-profiles.md` and apply the matching artifact
+from `profiles/`. The artifact records the complete edit surface,
+adopter-owned values, and verification evidence for the selected
+non-default profile.
 
 ## Merge credential policy note
 
@@ -105,6 +105,11 @@ docs/
   idd-helper-scripts.md              ← optional helper-script evaluation and policy
   idd-comment-minimization.md        ← post-merge comment cleanup policy and experiment
   permissions.md                     ← permission profiles and threat model
+profiles/
+  README.md                          ← profile artifact index
+  human-required/README.md           ← required human review artifact
+  no-advisory/README.md              ← no advisory reviewer artifact
+  external-bot/README.md             ← external advisory bot artifact
 ONBOARDING.md                        ← AI agent import guide (start here)
 README.md                            ← this file
 

@@ -39,6 +39,12 @@ authority:
 - `external-bot` when a non-Copilot reviewer has a stable actor identity
   and a current-head completion signal.
 
+When importing the template, keep the `profiles/` directory with the
+copied docs. For any non-default PR review profile, use the matching
+`profiles/<profile>/README.md` artifact as the reusable patch surface.
+The artifact records adopter-owned values, the files to edit, and the
+verification evidence to capture after applying the profile.
+
 Changing the profile is a workflow change. Update the phase files named
 by the profile in the same pull request as the local policy note. Use
 the PR review profile edit-surface checklist in
