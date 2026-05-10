@@ -78,10 +78,10 @@ To run the full loop, an agent needs:
 See the workflow docs for the detailed command contract. Review
 [Permissions and threat model](docs/permissions.md) before granting
 credentials to unattended or merge-capable agents.
-Treat normal worker credentials as stopping before merge unless the
-repository explicitly opts into `fully_autonomous_merge`.
-`human_merge` and `separate_merge_agent` keep merge authority outside
-the worker session. Choose and record one profile in
+The distributed merge default is `fully_autonomous_merge`; repositories
+that want workers to stop before merge should explicitly opt out to
+`human_merge` or `separate_merge_agent`.
+Choose and record one profile in
 [Customizing IDD](docs/customization.md).
 
 ### 5-Minute Reading Path

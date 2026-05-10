@@ -76,11 +76,10 @@ IDD は Markdown ネイティブですが、依存関係なしではありませ
 必要なコマンドの詳細はワークフロードキュメントを参照してください。無人または
 マージ可能なエージェントへ認証情報を渡す前に、
 [Permissions and threat model](docs/permissions.md) も確認してください。
-リポジトリが `fully_autonomous_merge` へ明示 opt-in しない限り、通常の
-worker credential はマージ手前で止める前提にしてください。
-`human_merge` と `separate_merge_agent` では、マージ権限を worker session
-の外に置きます。merge policy は [Customizing IDD](docs/customization.md) で
-1 つ選んで記録します。
+配布時の merge policy 既定は `fully_autonomous_merge` です。worker
+credential をマージ手前で止めたい場合は、`human_merge` または
+`separate_merge_agent` へ明示的に opt-out してください。merge policy は
+[Customizing IDD](docs/customization.md) で 1 つ選んで記録します。
 
 ### 5 分で読む導線
 

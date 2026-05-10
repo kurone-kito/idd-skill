@@ -10,17 +10,17 @@ behavior change too.
 
 ## Customization Surfaces
 
-| Surface               | Default                                                                                      | Where to customize                                                                                                                                                                                                                           |
-| --------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Review policy         | GitHub Copilot advisory review                                                               | Choose a profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the listed phase files for any non-default profile.                                                                                               |
-| Advisory reviewer     | Copilot wait and recovery gates                                                              | For `human-required`, `no-advisory`, or `external-bot`, update the review-fix, pre-merge, merge, advisory-wait, snapshot, and triage files named by the selected profile.                                                                    |
-| Review threads        | Agents may resolve handled review threads under the fast default                             | Choose a thread-resolution profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the snapshot, triage, review-fix, pre-merge, and merge phase files for stricter profiles.                                       |
-| Policy constants      | Distributed timing, wait, and loop defaults                                                  | Review [IDD policy constants](policy-constants.md) before changing claim ownership timing, advisory waits, CI waits, or critique-loop guardrails. Record the selected critique-loop profile in onboarding notes before unattended operation. |
-| Merge policy          | Merge gates after CI, review, freshness, and claim checks; safe OSS default is `human_merge` | Review [Permissions and threat model](permissions.md), record the selected policy in repository docs, and keep or customize the F3 handoff gate for non-autonomous profiles.                                                                 |
-| Stall recovery safety | 30-minute quiet-window evidence plus 24-hour stale-threshold ownership gate                  | Keep `idd-resume-stall.instructions.md` aligned with `idd-overview` claim rules, and customize both files together if local policy changes quiet-window or takeover timing.                                                                  |
-| CI commands           | Project-specific command rows in the overview file                                           | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                                                                                   |
-| Issue scope           | Roadmap-first discovery                                                                      | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues to be considered before roadmap traversal.                                                  |
-| Orphan-first approval | No extra gate beyond orphan readiness checks                                                 | Keep `orphan-first-policy` as `none`, or opt in to `maintainer-approved` or `public-disabled` when public or community-submitted issues need an explicit maintainer approval layer before A0-O can select them.                              |
+| Surface               | Default                                                                                                    | Where to customize                                                                                                                                                                                                                           |
+| --------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Review policy         | GitHub Copilot advisory review                                                                             | Choose a profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the listed phase files for any non-default profile.                                                                                               |
+| Advisory reviewer     | Copilot wait and recovery gates                                                                            | For `human-required`, `no-advisory`, or `external-bot`, update the review-fix, pre-merge, merge, advisory-wait, snapshot, and triage files named by the selected profile.                                                                    |
+| Review threads        | Agents may resolve handled review threads under the fast default                                           | Choose a thread-resolution profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the snapshot, triage, review-fix, pre-merge, and merge phase files for stricter profiles.                                       |
+| Policy constants      | Distributed timing, wait, and loop defaults                                                                | Review [IDD policy constants](policy-constants.md) before changing claim ownership timing, advisory waits, CI waits, or critique-loop guardrails. Record the selected critique-loop profile in onboarding notes before unattended operation. |
+| Merge policy          | Merge gates after CI, review, freshness, and claim checks; distributed default is `fully_autonomous_merge` | Review [Permissions and threat model](permissions.md), record the selected policy in repository docs, and keep or customize the F3 handoff gate for non-autonomous profiles.                                                                 |
+| Stall recovery safety | 30-minute quiet-window evidence plus 24-hour stale-threshold ownership gate                                | Keep `idd-resume-stall.instructions.md` aligned with `idd-overview` claim rules, and customize both files together if local policy changes quiet-window or takeover timing.                                                                  |
+| CI commands           | Project-specific command rows in the overview file                                                         | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                                                                                   |
+| Issue scope           | Roadmap-first discovery                                                                                    | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues to be considered before roadmap traversal.                                                  |
+| Orphan-first approval | No extra gate beyond orphan readiness checks                                                               | Keep `orphan-first-policy` as `none`, or opt in to `maintainer-approved` or `public-disabled` when public or community-submitted issues need an explicit maintainer approval layer before A0-O can select them.                              |
 
 ## Review Policy
 
@@ -109,15 +109,15 @@ credential should be able to merge. Use
 [Permissions and threat model](permissions.md) to record exactly one
 merge policy profile:
 
-- `human_merge`: the safe default for public or OSS repositories. The
-  worker stops before merge and a maintainer runs the final merge after
-  reviewing the PR state.
+- `fully_autonomous_merge`: the distributed default. One agent session
+  can complete the final merge too, but only after the repository
+  accepts the credential risk and grants the right credentials.
+- `human_merge`: a conservative opt-out profile for public or OSS
+  repositories. The worker stops before merge and a maintainer runs the
+  final merge after reviewing the PR state.
 - `separate_merge_agent`: a worker handles claim, implementation, PR,
   and review fixes; a trusted merge-capable session runs only the final
   merge phase.
-- `fully_autonomous_merge`: one agent session can complete the final
-  merge too. Use this only as an explicit opt-in after the repository
-  accepts the credential risk.
 
 For `human_merge` and `separate_merge_agent`, keep merge-capable
 credentials out of normal worker sessions. The worker should hand off
@@ -126,9 +126,9 @@ ready for the merge-capable actor.
 
 Record the selected merge policy in repository documentation that
 future IDD sessions read, not only in local onboarding notes. The
-distributed merge phase treats a missing or unknown policy as
-`human_merge` and stops in F3 unless the recorded policy is exactly
-`fully_autonomous_merge`.
+distributed merge phase treats a missing policy as
+`fully_autonomous_merge` and stops with a maintainer hold when the
+recorded value is unknown.
 
 For `human_merge`, keep the default F3 stop gate and hand off to the
 human maintainer. For `separate_merge_agent`, keep the worker stop gate

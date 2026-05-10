@@ -26,6 +26,14 @@ Record the selected values for `claim-stale-age` and
 `claim-heartbeat-interval` in repository onboarding notes before running
 unattended sessions.
 
+## Merge Policy Defaults
+
+| Policy default                      | Distributed value                                                                 | Owning surface                                                                                | Onboarding expectation                                                                     |
+| ----------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Merge policy when missing           | `fully_autonomous_merge`                                                          | [Merge](../.github/instructions/idd-merge.instructions.md)                                    | Keep unless the repository explicitly opts out to `human_merge` or `separate_merge_agent`. |
+| Unknown merge policy handling       | Hold and require maintainer decision before F3 freshness fetch, merge, or cleanup | [Merge](../.github/instructions/idd-merge.instructions.md)                                    | Treat as a safety gate; unknown values must not silently route to another policy.          |
+| Non-autonomous merge-policy handoff | `human_merge` and `separate_merge_agent` stop before merge and hand off           | [Merge](../.github/instructions/idd-merge.instructions.md), [Customization](customization.md) | Keep unless the repository intentionally customizes F3 handoff behavior.                   |
+
 ## Advisory Review Defaults
 
 The distributed PR policy is `copilot-advisory`. These values apply to
