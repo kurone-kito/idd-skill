@@ -32,6 +32,7 @@ or [Core concepts](concepts.md) before using this reference.
 | -------------------------------------- | ----------------------------------------------------------- |
 | Cross-agent entry path                 | [IDD workflow guide](idd-workflow.md)                       |
 | Review policy choices                  | [IDD review policy profiles](idd-review-policy-profiles.md) |
+| Distributed policy defaults            | [IDD policy constants](policy-constants.md)                 |
 | Credential boundaries and threat model | [Permissions](permissions.md)                               |
 | Safe adopter customization surfaces    | [Customization](customization.md)                           |
 | Post-merge comment cleanup             | [IDD comment minimization](idd-comment-minimization.md)     |

@@ -15,6 +15,7 @@ also serve as the source for a future GitHub Pages site.
 | Start adopting IDD        | [Getting started](getting-started.md)                   | Gives the shortest safe path from import to first loop.         |
 | Learn IDD vocabulary      | [Core concepts](concepts.md)                            | Explains the loop's claims, review, merge, and cleanup terms.   |
 | Customize IDD safely      | [Customization](customization.md)                       | Names the adopter policy surfaces and workflow edit points.     |
+| Inspect policy defaults   | [Policy constants](policy-constants.md)                 | Inventories distributed timing, wait, and loop defaults.        |
 | Run the IDD loop          | [IDD workflow guide](idd-workflow.md)                   | Maps agent entry points, phase files, and Copilot advisory use. |
 | Find detailed references  | [Detailed reference](reference.md)                      | Lists phase files and policy pages without duplicating rules.   |
 | Import IDD into a repo    | [Template onboarding][template-onboarding]              | Explains the portable template copy and placeholder flow.       |
@@ -33,6 +34,8 @@ also serve as the source for a future GitHub Pages site.
   should know before reading strict phase rules.
 - [Customizing IDD](customization.md) names the safe adopter policy
   surfaces for review, advisory, merge, CI, and discovery behavior.
+- [Policy constants](policy-constants.md) inventories the distributed
+  timing, wait, and loop defaults without changing workflow behavior.
 - [Template onboarding][template-onboarding] is the canonical
   guide for importing the portable IDD template into another
   repository.
