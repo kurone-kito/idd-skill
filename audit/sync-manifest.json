@@ -48,7 +48,8 @@
         "idd-template/docs/idd-*.md",
         "idd-template/docs/permissions.md",
         "idd-template/docs/getting-started.md",
-        "idd-template/docs/concepts.md"
+        "idd-template/docs/concepts.md",
+        "idd-template/docs/customization.md"
       ],
       "paths": [
         "idd-template/.github/instructions/idd-overview.instructions.md",
@@ -70,7 +71,8 @@
         "idd-template/docs/idd-comment-minimization.md",
         "idd-template/docs/permissions.md",
         "idd-template/docs/getting-started.md",
-        "idd-template/docs/concepts.md"
+        "idd-template/docs/concepts.md",
+        "idd-template/docs/customization.md"
       ]
     },
     {
@@ -238,6 +240,12 @@
       "id": "concepts-doc",
       "source": "idd-template/docs/concepts.md",
       "target": "docs/concepts.md",
+      "mode": "exact"
+    },
+    {
+      "id": "customization-doc",
+      "source": "idd-template/docs/customization.md",
+      "target": "docs/customization.md",
       "mode": "exact"
     },
     {
