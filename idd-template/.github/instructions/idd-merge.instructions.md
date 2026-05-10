@@ -29,6 +29,14 @@ gate. The active claim must still use your current `{claim-id}`.
    - The total item count of the final fetch exceeds
      `{f2-total-item-count}`.
 
+   From that same final fetch, compute `F3_UNRESOLVED_ACTIONABLE_COUNT`
+   using the exact F2 unresolved-thread rule and exceptions
+   (non-awaiting-reviewer unresolved threads only; awaiting-reviewer
+   classification must follow F2 verbatim, including AMD exclusion and
+   conversation-resolution exception handling). If
+   `F3_UNRESOLVED_ACTIONABLE_COUNT > 0`, stop and return to E1. Do not
+   execute `gh pr merge` in this pass.
+
    Execute the merge immediately after this final fetch **and the claim
    re-validation and advisory state revalidation below**, with no other
    actions in between. Re-validate claim: re-read the issue and confirm
