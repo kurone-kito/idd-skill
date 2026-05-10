@@ -301,9 +301,9 @@ export function applyClaimEvent(activeClaim, event, isTrustedAuthor = () => true
 }
 
 export function classifyResumeRoutingCase(input, options = {}) {
-  const staleHours = options.staleHours ?? 24;
-  const stallMinutes = options.stallMinutes ?? 30;
-  const pendingCiStates = new Set(options.pendingCiStates ?? ["queued", "in_progress", "waiting"]);
+  const staleHours = Number.isFinite(options.staleHours) ? options.staleHours : 24;
+  const stallMinutes = Number.isFinite(options.stallMinutes) ? options.stallMinutes : 30;
+  const pendingCiStates = new Set(options.pendingCiStates ?? ["queued", "in_progress", "waiting", "pending"]);
   const terminalSafeCiStates = new Set(options.terminalSafeCiStates ?? ["success", "none"]);
 
   if (!input.hasActiveClaim) {
@@ -314,7 +314,7 @@ export function classifyResumeRoutingCase(input, options = {}) {
   }
 
   if (input.claimOwnedBySession) {
-    if (input.rebaseInProgress || input.worktreeDirty || input.hasUnpushedCommits) {
+    if (input.rebaseInProgress || input.worktreeDirty) {
       return {
         route: "crash-recovery",
         reason: "owned claim with interrupted local state",
@@ -326,7 +326,7 @@ export function classifyResumeRoutingCase(input, options = {}) {
     };
   }
 
-  if (typeof input.claimAgeHours !== "number") {
+  if (!Number.isFinite(input.claimAgeHours)) {
     return {
       route: "hold-for-evidence",
       reason: "claim age is missing for a non-owned claim",
@@ -340,7 +340,7 @@ export function classifyResumeRoutingCase(input, options = {}) {
     };
   }
 
-  if (typeof input.latestActivityAgeMinutes !== "number") {
+  if (!Number.isFinite(input.latestActivityAgeMinutes)) {
     return {
       route: "hold-for-evidence",
       reason: "activity age is missing for a non-owned active claim",
@@ -363,14 +363,14 @@ export function classifyResumeRoutingCase(input, options = {}) {
 
   if (input.latestActivityAgeMinutes >= stallMinutes) {
     return {
-      route: "progress-stalled-recovery",
-      reason: `non-owned claim is fresh but idle for >= ${stallMinutes}m`,
+      route: "hold-for-evidence",
+      reason: `non-owned claim is fresh and idle for >= ${stallMinutes}m, but still non-inheritable`,
     };
   }
 
   return {
     route: "hold-for-evidence",
-    reason: "non-owned claim is still within active freshness windows",
+    reason: "non-owned claim remains non-inheritable until stale",
   };
 }
 

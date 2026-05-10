@@ -1,5 +1,5 @@
 {
-  "name": "non-owned fresh claim with stale activity routes to stalled recovery",
+  "name": "non-owned fresh claim with stale activity still holds ownership",
   "input": {
     "hasActiveClaim": true,
     "claimOwnedBySession": false,
@@ -11,7 +11,7 @@
     "rebaseInProgress": false
   },
   "expected": {
-    "route": "progress-stalled-recovery",
+    "route": "hold-for-evidence",
     "reasonContains": ">= 30m"
   }
 }

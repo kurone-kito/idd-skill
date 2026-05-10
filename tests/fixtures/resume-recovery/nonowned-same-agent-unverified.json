@@ -12,6 +12,6 @@
   },
   "expected": {
     "route": "hold-for-evidence",
-    "reasonContains": "freshness windows"
+    "reasonContains": "non-inheritable"
   }
 }

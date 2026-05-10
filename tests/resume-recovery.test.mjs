@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -10,11 +11,11 @@ const fixtures = loadFixtures(FIXTURE_DIR);
 
 for (const fixture of fixtures) {
   test(`resume routing: ${fixture.name}`, () => {
-    const result = classifyResumeRoutingCase(fixture.input, {
-      staleHours: 24,
-      stallMinutes: 30,
-      pendingCiStates: ["queued", "in_progress", "waiting"],
-    });
+      const result = classifyResumeRoutingCase(fixture.input, {
+        staleHours: 24,
+        stallMinutes: 30,
+        pendingCiStates: ["queued", "in_progress", "waiting", "pending"],
+      });
 
     assert.equal(result.route, fixture.expected.route);
     assert.match(result.reason, new RegExp(fixture.expected.reasonContains, "i"));
@@ -22,7 +23,7 @@ for (const fixture of fixtures) {
 }
 
 function loadFixtures(url) {
-  const directory = url.pathname;
+  const directory = fileURLToPath(url);
   return readdirSync(directory)
     .filter((fileName) => fileName.endsWith(".json"))
     .sort()
