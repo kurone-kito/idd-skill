@@ -18,6 +18,9 @@ set. If the project is in use, the project status must be "not started".
 **(b) Claim state** — Re-read the issue and parse the **active claim**
 using the shared claim-state rules:
 
+Use the `claim-stale-age` policy default from `docs/policy-constants.md`
+for these stale checks (distributed default: `24 h`).
+
 - No active claim → unclaimed, proceed.
 - Active claim already uses a `{claim-id}` that this current session had
   recorded before this check and has now verified → already claimed; do

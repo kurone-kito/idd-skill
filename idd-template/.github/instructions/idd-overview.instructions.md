@@ -150,6 +150,10 @@ Treat trusted legacy comments as **migration-only** inputs:
 
 ## Thresholds
 
+Ownership timing in this workflow uses the policy defaults
+`claim-stale-age` and `claim-heartbeat-interval` listed in
+`docs/policy-constants.md`.
+
 - **Stale**: an active claim whose latest **valid** `claimed-by`
   comment's GitHub `created_at` is ≥ 24 h ago. Another session may take
   it over by posting a fresh `{claim-id}` whose `supersedes:` value is

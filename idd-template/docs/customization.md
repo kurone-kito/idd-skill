@@ -78,9 +78,19 @@ thresholds, or critique-loop guardrails. That page is an inventory of
 the distributed defaults; it does not centralize or configure those
 values by itself.
 
+For claim ownership timing, treat `claim-stale-age` and
+`claim-heartbeat-interval` as a coupled policy pair. Customize overview,
+discover, claim, resume, and resume-stall instruction files together so
+stale checks and heartbeat guidance stay consistent.
+
 Changing a default is a workflow behavior change. Update every owning
 instruction file listed on the policy constants page, then record the
 repository's local decision in onboarding notes or project docs.
+
+For ownership timing, explicitly record whether the repository keeps or
+changes `claim-stale-age` (24 h default) and
+`claim-heartbeat-interval` (12 h default) before enabling unattended
+workers.
 
 ## Merge Policy and Credentials
 

@@ -75,11 +75,14 @@ documentation that future IDD sessions read.
 6. Choose and record the operator's merge policy before allowing
    unattended workers to approach the merge phase. The record must live
    in repository documentation that future IDD sessions read.
-7. Ask whether the operator wants the optional issue-authoring
+7. Confirm and record ownership timing policy values:
+   `claim-stale-age` (default 24 h) and
+   `claim-heartbeat-interval` (default 12 h).
+8. Ask whether the operator wants the optional issue-authoring
    companion skill for pre-execution issue drafting.
-8. Replace every placeholder (see table below) with the correct value.
-9. Add IDD references to the repository's agent entry files.
-10. Verify the result with the checklist at the bottom.
+9. Replace every placeholder (see table below) with the correct value.
+10. Add IDD references to the repository's agent entry files.
+11. Verify the result with the checklist at the bottom.
 
 ---
 
@@ -166,6 +169,11 @@ policy section in the imported docs or agent entry files. For
 `human_merge` and `separate_merge_agent`, do not grant merge-capable
 credentials to normal worker sessions; also add local guidance or
 phase-file customization so workers hand off before F3.
+
+Confirm claim timing policy defaults from `docs/policy-constants.md` as
+well: `claim-stale-age` (default `24 h`) and
+`claim-heartbeat-interval` (default `12 h`). Record whether the
+repository keeps these defaults before unattended runs.
 
 ### File list
 
@@ -545,6 +553,9 @@ After completing the steps above, confirm each item:
       customizations.
 - [ ] The operator's selected merge policy is recorded in repository
       documentation, and worker credentials match that boundary.
+- [ ] Ownership timing policy values `claim-stale-age` and
+      `claim-heartbeat-interval` are explicitly recorded for the target
+      repository.
 - [ ] If the operator opted into issue authoring,
       `skills/issue-authoring/SKILL.md`,
       `skills/issue-authoring/agents/openai.yaml`, and the
