@@ -10,10 +10,12 @@ revalidation gate. The active claim must still use your current
 
 ## F2.5 — Resolve merge policy route
 
-1. Confirm the claim is still yours: the **active claim** must still use
-   your current `{claim-id}`. If the active claim is missing, released,
-   or held by a different `{claim-id}` (even under the same agent ID),
-   the claim was lost — report this and stop.
+1. Confirm claim ownership context:
+   - If an **active claim** exists, it must still use your current
+     `{claim-id}`. If it is held by a different `{claim-id}` (even under
+     the same agent ID), the claim was lost — report this and stop.
+   - If no active claim exists, continue only for the designated
+     `separate_merge_agent` actor path in step 5. Other paths must stop.
 2. Read the repository's recorded merge policy from repository
    documentation that future IDD sessions read. If no policy is
    recorded, treat it as `fully_autonomous_merge` (distributed default).
@@ -40,17 +42,22 @@ revalidation gate. The active claim must still use your current
    - If repository documentation explicitly records that the **current
      session** is the designated merge-capable actor and the documented
      resume condition is satisfied:
-     1. Ensure this session already holds a verified active `{claim-id}`.
-        If not, establish ownership through the normal claim path
-        (`idd-claim.instructions.md` A5) before continuing.
-     2. Do not reuse the worker's F2 snapshot after handoff comments.
-        Return to `idd-pre-merge.instructions.md` and run F2 again to
-        record a fresh snapshot for this merge-capable session.
-     3. Re-enter this handoff phase and continue to
-        `idd-merge.instructions.md`.
-   - Otherwise, post the handoff summary comment, then release the
-     worker claim with `unclaimed-by` using the current `{claim-id}` and
-     stop. This allows the designated merge-capable session to claim and
-     resume safely. If the claim was already lost, do not post release.
+     1. If this session does not yet hold a verified active `{claim-id}`,
+        establish ownership through `idd-claim.instructions.md` A5 and
+        then return to this handoff phase.
+     2. If this session has not yet recorded F2 evidence for the current
+        `{claim-id}`, do not reuse worker-side handoff context. Return
+        to `idd-pre-merge.instructions.md` and run F2 once to record a
+        fresh snapshot for this merge-capable session, then return here.
+     3. If this session already has fresh F2 evidence for the current
+        `{claim-id}`, continue directly to `idd-merge.instructions.md`.
+   - Otherwise:
+     - If the merge-capable actor or resume condition is not recorded,
+       post a hold comment and stop (do not release the worker claim).
+     - If a different merge-capable actor is recorded, post a handoff
+       summary comment using the same required fields listed in step 4,
+       then release the worker claim with `unclaimed-by` using the
+       current `{claim-id}` and stop. If the claim was already lost, do
+       not post release.
 6. When the policy is `fully_autonomous_merge`, continue directly to
    `idd-merge.instructions.md`.
