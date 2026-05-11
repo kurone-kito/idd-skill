@@ -1,0 +1,62 @@
+name: Pnpm boundary guard
+on:
+  pull_request:
+  push:
+    branches:
+      - "**"
+      - "!main"
+  workflow_call:
+    inputs:
+      runner:
+        default: ubuntu-slim
+        required: false
+        type: string
+      node-version:
+        default: 24.x
+        required: false
+        type: string
+      install-command:
+        default: pnpm install --frozen-lockfile --prefer-offline
+        required: false
+        type: string
+      lint-command:
+        default: pnpm run lint:minimum
+        required: false
+        type: string
+      boundary-command:
+        default: node scripts/check-pnpm-boundary.mjs
+        required: false
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+jobs:
+  pnpm-boundary:
+    # Imported from kurone-kito/pnpm-project-template push workflow shape
+    # and adapted as a reusable workflow with repository-specific guards.
+    runs-on: ${{ inputs.runner || 'ubuntu-slim' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          check-latest: true
+          cache: pnpm
+          node-version: ${{ inputs.node-version || '24.x' }}
+      - name: Install dependencies
+        env:
+          HUSKY: 0
+        run: ${{ inputs.install-command || 'pnpm install --frozen-lockfile --prefer-offline' }}
+      - name: Run lint minimum
+        run: ${{ inputs.lint-command || 'pnpm run lint:minimum' }}
+      - name: Check distributable pnpm boundary
+        run: ${{ inputs.boundary-command || 'node scripts/check-pnpm-boundary.mjs' }}
