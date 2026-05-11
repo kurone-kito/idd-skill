@@ -77,12 +77,15 @@ from the issue title so parallel sessions converge on the same branch
 name:
 
 1. Convert the issue title to lowercase.
-2. Replace punctuation and every non-alphanumeric character with `-`.
-3. Remove common English stop words such as `a`, `an`, `the`, `and`,
-   `or`, `in`, `for`, `to`, `with`, and `from`.
-4. Collapse consecutive `-` characters to one, then strip leading and
-   trailing `-`.
-5. Truncate to 40 characters at a word boundary when possible.
+2. Replace every character outside ASCII `a-z` and `0-9` with `-`.
+3. Split on `-`, drop empty tokens, then remove only whole-token matches
+   from this fixed stop-word set: `a`, `an`, `the`, `and`, `or`, `in`,
+   `for`, `to`, `with`, `from`.
+4. Rejoin the remaining tokens with single `-`.
+5. If the slug is longer than 40 characters, cut it to the first
+   40 characters. If that cut ends mid-token and there is a `-` before
+   character 40, trim back to the last such `-`; if there is no `-`,
+   keep the hard 40-character cut. Then strip any trailing `-`.
 6. If the result is empty, use `task`.
 
 No remote branch with that name may exist, unless it matches the
