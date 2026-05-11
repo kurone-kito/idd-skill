@@ -1,5 +1,35 @@
 [
   {
+    "name": "resolved thread is ignored by gate counts",
+    "threads": [
+      {
+        "id": "THREAD-resolved",
+        "isResolved": true,
+        "comments": {
+          "nodes": [
+            {
+              "author": { "login": "reviewer" },
+              "body": "Please adjust this branch.",
+              "createdAt": "2026-05-11T08:00:00Z"
+            }
+          ]
+        }
+      }
+    ],
+    "options": {
+      "iddAgentLogins": ["idd-bot"],
+      "prAuthorLogin": "author"
+    },
+    "expected": {
+      "actionableCount": 0,
+      "awaitingReviewerCount": 0,
+      "amdBlockingCount": 0,
+      "conversationResolveAgentCount": 0,
+      "conversationResolveAuthorCount": 0,
+      "classifications": []
+    }
+  },
+  {
     "name": "awaiting-reviewer thread is excluded from blocking count",
     "threads": [
       {
