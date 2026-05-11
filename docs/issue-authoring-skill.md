@@ -119,6 +119,31 @@ These three axes align directly with the IDD viability gate in
 `idd-discover.instructions.md`. A task is not draft-ready for execution
 until all three pass.
 
+### Specificity target range
+
+Each execution-ready issue should land in a target specificity range:
+
+- **Under-specified**: the issue is so abstract that a high-range
+  reasoning model would need to infer hidden implementation direction,
+  missing dependencies, or the verification shape. Tighten the issue by
+  naming the affected surface, intended outcome, and acceptance
+  criteria, or split it into smaller tasks.
+- **Target range**: a mid-range cloud model (for example, Claude Haiku
+  4.5 or GPT-5.4 mini class) can keep a stable implementation direction
+  from the issue alone, while still choosing the exact files, helpers,
+  and edit order during execution.
+- **Over-specified**: the issue reads like a fixed implementation script
+  that a lightweight model could follow step by step. Prefer outcome,
+  constraints, and verification over prescribing exact edit sequences
+  unless a narrow migration or compatibility hazard truly requires them.
+
+Model classes here are practical heuristics, not hard execution gates.
+The goal is to calibrate drafting effort, not to require a specific
+runtime. If extra detail is needed only because limited scope, clear
+verification, or autonomous completion is still failing, fix that issue
+by splitting, clarifying, or re-bucketing the work instead of turning
+one issue into an oversized procedure.
+
 ### Supporting drafting axes
 
 - **Dependency clarity**: dependencies are explicit, resolvable, and

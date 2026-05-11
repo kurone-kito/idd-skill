@@ -82,6 +82,27 @@ candidate task into one stable bucket:
   system
 - **out-of-scope**: does not belong in the repository or skill scope
 
+## Specificity target range
+
+Draft ready issues into a practical middle range:
+
+- **Under-specified**: a high-range reasoning model would have to infer
+  hidden implementation direction, missing dependencies, or verification
+  details. Add the affected surface, intended outcome, or explicit
+  acceptance criteria, or split the work.
+- **Target range**: a mid-range cloud model (for example, Claude Haiku
+  4.5 or GPT-5.4 mini class) can hold a stable implementation direction
+  from the issue alone without the issue becoming a step-by-step script.
+- **Over-specified**: the issue prescribes an exact edit order that a
+  lightweight model could follow mechanically. Prefer outcome,
+  constraints, and verification unless a narrow compatibility hazard
+  truly requires fixed steps.
+
+Treat model classes as heuristics for drafting quality, not execution
+requirements. If more detail is needed only because limited scope, clear
+verification, or autonomous completion is still failing, split or
+re-bucket the work instead of turning one issue into a procedure.
+
 ## Reuse-first issue policy
 
 Before creating any new issue, check whether the work already has a
