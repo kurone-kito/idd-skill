@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
   "nodes": [
-    { "id": "lowercase-id", "next": [] }
+    { "id": "A", "next": ["NONEXISTENT"] }
   ]
 }

@@ -170,6 +170,26 @@ test("policy schema rejects bare 'PT' as heartbeatInterval", () => {
   assert.ok(errors.length > 0, "Expected 'PT' to fail duration pattern");
 });
 
+test("policy schema rejects 'P1DT' (T with no time unit) as staleAge", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const invalid = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+  );
+  invalid.claimTiming.staleAge = "P1DT";
+  const errors = validate(invalid, schema);
+  assert.ok(errors.length > 0, "Expected 'P1DT' to fail duration pattern");
+});
+
+test("policy schema rejects 'P1DT' (T with no time unit) as heartbeatInterval", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const invalid = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+  );
+  invalid.claimTiming.heartbeatInterval = "P1DT";
+  const errors = validate(invalid, schema);
+  assert.ok(errors.length > 0, "Expected 'P1DT' to fail duration pattern");
+});
+
 test("policy schema accepts valid durations like PT24H, PT12H, P1D", () => {
   const schema = loadJson("schemas/policy.schema.json");
   for (const dur of ["PT24H", "PT12H", "P1D", "P1DT30M", "PT30M"]) {
@@ -251,4 +271,36 @@ test("validatePhaseGraph reports duplicate node ids", () => {
 test("phase-graph.json has no dangling references", () => {
   const graph = loadJson("schemas/phase-graph.json");
   assert.deepEqual(validatePhaseGraph(graph), []);
+});
+
+// ---------------------------------------------------------------------------
+// lastChecked — optional milliseconds in ISO 8601 timestamp
+// ---------------------------------------------------------------------------
+
+test("live-status-digest schema accepts lastChecked without milliseconds", () => {
+  const schema = loadJson("schemas/live-status-digest.schema.json");
+  const base = loadJson("fixtures/schemas/live-status-digest.valid.json");
+  const errors = validate(base, schema);
+  assert.deepEqual(errors, [], `Expected no-ms timestamp to pass: ${errors}`);
+});
+
+test("live-status-digest schema accepts lastChecked with milliseconds", () => {
+  const schema = loadJson("schemas/live-status-digest.schema.json");
+  const base = loadJson("fixtures/schemas/live-status-digest.valid.json");
+  const instance = { ...base, lastChecked: "2026-01-01T00:00:00.123Z" };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, [], `Expected ms timestamp to pass: ${errors}`);
+});
+
+// ---------------------------------------------------------------------------
+// phase-graph invalid fixture — graph-invalid (dangling ref) is caught
+// ---------------------------------------------------------------------------
+
+test("phase-graph invalid fixture fails via graph validation (dangling ref)", () => {
+  const { ok } = validateFixture(
+    "schemas/phase-graph.schema.json",
+    "fixtures/schemas/phase-graph.invalid.json",
+    false,
+  );
+  assert.ok(ok, "Expected graph-invalid fixture to be caught by validateFixture");
 });

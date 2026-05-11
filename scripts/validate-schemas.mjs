@@ -209,14 +209,15 @@ export function validateFixture(schemaPath, fixturePath, expectValid) {
     };
   }
   const errs = validate(fixture, schema);
-  const isValid = errs.length === 0;
-  if (expectValid && !isValid) return { ok: false, errors: errs };
+  let graphErrors = [];
+  if (schemaPath.endsWith("phase-graph.schema.json") && errs.length === 0) {
+    graphErrors = validatePhaseGraph(fixture);
+  }
+  const allErrors = [...errs, ...graphErrors];
+  const isValid = allErrors.length === 0;
+  if (expectValid && !isValid) return { ok: false, errors: allErrors };
   if (!expectValid && isValid) {
     return { ok: false, errors: ["Expected validation failure but fixture passed"] };
-  }
-  if (expectValid && schemaPath.endsWith("phase-graph.schema.json")) {
-    const graphErrors = validatePhaseGraph(fixture);
-    if (graphErrors.length > 0) return { ok: false, errors: graphErrors };
   }
   return { ok: true, errors: [] };
 }

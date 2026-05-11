@@ -29,11 +29,20 @@
     },
     "reviewPolicy": {
       "type": "string",
-      "minLength": 1
+      "enum": [
+        "copilot-advisory",
+        "human-required",
+        "no-advisory",
+        "external-bot"
+      ]
     },
     "threadResolutionPolicy": {
       "type": "string",
-      "minLength": 1
+      "enum": [
+        "fast-agent-resolve",
+        "hybrid-reviewer-ack",
+        "strict-reviewer-resolve"
+      ]
     },
     "claimTiming": {
       "type": "object",
@@ -42,11 +51,11 @@
       "properties": {
         "staleAge": {
           "type": "string",
-          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
         },
         "heartbeatInterval": {
           "type": "string",
-          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
         }
       }
     },
@@ -61,21 +70,21 @@
     "commands": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["install", "fixValidate", "prePushValidate", "postFixValidate"],
+      "required": ["install-deps", "fix-validate", "pre-push-validate", "post-fix-validate"],
       "properties": {
-        "install": {
+        "install-deps": {
           "type": "string",
           "minLength": 1
         },
-        "fixValidate": {
+        "fix-validate": {
           "type": "string",
           "minLength": 1
         },
-        "prePushValidate": {
+        "pre-push-validate": {
           "type": "string",
           "minLength": 1
         },
-        "postFixValidate": {
+        "post-fix-validate": {
           "type": "string",
           "minLength": 1
         }
