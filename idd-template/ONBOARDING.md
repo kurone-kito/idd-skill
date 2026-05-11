@@ -141,6 +141,12 @@ values. The operator can confirm these proposed values or correct them.
 - **Post-fix-validate commands** (`{{POST_FIX_VALIDATE_COMMANDS}}`):
   Usually a superset combining fix-validate and pre-push-validate.
 
+> **Tooling boundary**: IDD does not require Node.js or pnpm. Use the
+> target project's existing tooling for all command rows. Set a row to
+> `true` (no-op) when no relevant tool is present. For the full policy
+> matrix and fallback order, see
+> [Tooling boundary](docs/customization.md#tooling-boundary).
+
 **Present proposed values to the operator.** Format:
 
 > Based on the target repository's structure, I've derived these candidate
