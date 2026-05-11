@@ -1,0 +1,39 @@
+{
+  "input": {
+    "prHeadSha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "reviews": [],
+    "requestedReviewers": [],
+    "timelineEvents": [],
+    "comments": [
+      {
+        "author": {
+          "login": "idd-bot"
+        },
+        "body": "advisory-wait: idd-bot eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee 2026-05-11T17:05:00Z",
+        "createdAt": "2026-05-11T17:05:00Z"
+      }
+    ],
+    "trustedMarkerLogins": [
+      "idd-bot"
+    ],
+    "viewerLogin": "idd-bot",
+    "configuredTrustedActors": [],
+    "collaboratorTrustEnabled": false,
+    "now": "2026-05-11T17:09:00Z"
+  },
+  "expected": {
+    "outcome": "WAIT",
+    "lastCopilotCommit": "",
+    "copilotPending": false,
+    "copilotPendingCoversHead": false,
+    "sameHeadMarkerPresent": true,
+    "sameHeadMarkerCount": 1,
+    "requestMarkerCount": 1,
+    "earliestSameHeadAt": "2026-05-11T17:05:00Z",
+    "elapsedMinutes": 4,
+    "trustedSameHeadMarkerCount": 1,
+    "untrustedSameHeadMarkerCount": 0,
+    "trustedRequestMarkerCount": 1,
+    "untrustedRequestMarkerCount": 0
+  }
+}

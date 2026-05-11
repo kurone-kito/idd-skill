@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/advisory-wait-state.schema.json",
+  "title": "Advisory Wait State",
+  "description": "Read-only advisory-wait evidence snapshot for a PR head.",
+  "type": "object",
+  "required": [
+    "protocolVersion",
+    "prHeadSha",
+    "lastCopilotCommit",
+    "copilotPending",
+    "copilotPendingCoversHead",
+    "outcome",
+    "now",
+    "requestCap",
+    "pendingWindowMinutes",
+    "settledWindowMinutes",
+    "elapsedMinutes",
+    "sameHeadMarkerPresent",
+    "earliestSameHeadAt",
+    "sameHeadMarkerCount",
+    "requestMarkerCount",
+    "trustedMarkerSummary"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "pattern": "^1$"
+    },
+    "prHeadSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "lastCopilotCommit": {
+      "type": "string",
+      "pattern": "^$|^[0-9a-f]{40}$"
+    },
+    "copilotPending": {
+      "type": "boolean"
+    },
+    "copilotPendingCoversHead": {
+      "type": "boolean"
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "SATISFIED",
+        "REQUEST_NEEDED",
+        "RECOVERY_NEEDED",
+        "CAP_EXHAUSTED",
+        "WAIT"
+      ]
+    },
+    "now": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+    },
+    "requestCap": {
+      "type": "number"
+    },
+    "pendingWindowMinutes": {
+      "type": "number"
+    },
+    "settledWindowMinutes": {
+      "type": "number"
+    },
+    "elapsedMinutes": {
+      "type": "number"
+    },
+    "sameHeadMarkerPresent": {
+      "type": "boolean"
+    },
+    "earliestSameHeadAt": {
+      "type": "string",
+      "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+    },
+    "sameHeadMarkerCount": {
+      "type": "number"
+    },
+    "requestMarkerCount": {
+      "type": "number"
+    },
+    "trustedMarkerSummary": {
+      "type": "object",
+      "required": [
+        "viewerLogin",
+        "configuredTrustedActors",
+        "collaboratorTrustEnabled",
+        "trustedMarkerLogins",
+        "trustedSameHeadMarkerCount",
+        "untrustedSameHeadMarkerCount",
+        "trustedRequestMarkerCount",
+        "untrustedRequestMarkerCount"
+      ],
+      "properties": {
+        "viewerLogin": {
+          "type": "string"
+        },
+        "configuredTrustedActors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "collaboratorTrustEnabled": {
+          "type": "boolean"
+        },
+        "trustedMarkerLogins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "trustedSameHeadMarkerCount": {
+          "type": "number"
+        },
+        "untrustedSameHeadMarkerCount": {
+          "type": "number"
+        },
+        "trustedRequestMarkerCount": {
+          "type": "number"
+        },
+        "untrustedRequestMarkerCount": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

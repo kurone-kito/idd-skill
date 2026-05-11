@@ -229,6 +229,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     ["schemas/claim-marker.schema.json", "fixtures/schemas/claim-marker.invalid.json", false],
     ["schemas/live-status-digest.schema.json", "fixtures/schemas/live-status-digest.valid.json", true],
     ["schemas/live-status-digest.schema.json", "fixtures/schemas/live-status-digest.invalid.json", false],
+    ["schemas/advisory-wait-state.schema.json", "fixtures/schemas/advisory-wait-state.valid.json", true],
+    ["schemas/advisory-wait-state.schema.json", "fixtures/schemas/advisory-wait-state.invalid.json", false],
     ["schemas/policy.schema.json", "fixtures/schemas/policy.valid.json", true],
     ["schemas/policy.schema.json", "fixtures/schemas/policy.invalid.json", false],
     ["schemas/phase-graph.schema.json", "fixtures/schemas/phase-graph.valid.json", true],
