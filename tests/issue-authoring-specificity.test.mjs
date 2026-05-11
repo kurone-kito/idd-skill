@@ -47,24 +47,15 @@ function readText(relativePath) {
 
 function extractSpecificitySection(text, fileLabel) {
   const startMarker = "## Specificity target";
-  const endMarkers = [
-    "\n## Stable readiness buckets",
-    "\n## Reuse-first issue policy",
-  ];
+  const nextSectionMarker = "\n## ";
 
   const start = text.indexOf(startMarker);
   assert.notEqual(start, -1, `${fileLabel} is missing section marker: ${startMarker}`);
 
-  const end = endMarkers
-    .map((marker) => text.indexOf(marker, start))
-    .filter((index) => index !== -1)
-    .sort((left, right) => left - right)[0];
-
-  assert.notEqual(
-    end,
-    undefined,
-    `${fileLabel} is missing an end marker for the specificity section; expected one of: ${endMarkers.join(", ")}`,
-  );
+  // If the section is last in the file, compare through EOF instead of
+  // coupling the test to a specific following heading.
+  const nextSectionStart = text.indexOf(nextSectionMarker, start + startMarker.length);
+  const end = nextSectionStart === -1 ? text.length : nextSectionStart;
 
   return text.slice(start, end).trim();
 }
