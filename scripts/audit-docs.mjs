@@ -295,7 +295,13 @@ function checkConfigInstructionDrift() {
   ];
 
   for (const pair of pairs) {
-    if (!repoFiles.includes(pair.configPath) || !repoFiles.includes(pair.overviewPath)) {
+    const hasConfig = repoFiles.includes(pair.configPath);
+    const hasOverview = repoFiles.includes(pair.overviewPath);
+    if (!hasConfig && !hasOverview) {
+      continue;
+    }
+    if (!hasConfig || !hasOverview) {
+      errors.push(`missing config/overview pair: expected both ${pair.configPath} and ${pair.overviewPath}`);
       continue;
     }
 
