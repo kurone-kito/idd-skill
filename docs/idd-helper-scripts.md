@@ -92,17 +92,55 @@ The adopted helper boundaries are intentionally narrow:
 
 ## Friction Inventory
 
-The repeated query patterns most likely to benefit from helpers are:
+The workflow areas most likely to benefit from optional helpers are:
 
-| Pattern                         | Current friction                                                                                                        | Helper risk                                                                                                   |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Claim-state parsing             | HTML marker parsing is stateful and easy to simplify incorrectly.                                                       | A script would become another parser that must stay exactly aligned with the instruction rules.               |
-| Review activity snapshots       | E1/F2/F3 need the same activity universe and marker exclusions.                                                         | Any mismatch between script output and written gates could make merge freshness checks unsound.               |
-| Live status digest edits        | Each phase repeats marker discovery, create/update/no-op handling, duplicate refusal, and claim revalidation.           | A mutating helper could make digest text look authoritative unless docs keep it as UI-only state.             |
-| Advisory-wait marker parsing    | AW1/AW2 combine review API state, requested reviewers, marker comments, and elapsed-time rules.                         | A helper could hide important decision-table semantics that agents must still understand during holds.        |
-| Final pre-merge freshness check | The merge path repeats review, comment, thread, CI, claim, and advisory checks immediately before F3.                   | A mutating helper would be risky; even a read-only helper needs strict output contracts.                      |
-| Post-merge cleanup candidates   | F4 cleanup requires repeat GraphQL checks for marker comments, review parents, permissions, and resolved child threads. | Adopted narrowly as `scripts/audit-pr-cleanup.mjs`; dry-run first, apply only after F3, and never gate merge. |
-| Branch protection/ruleset reads | Required review and check discovery can be verbose across GitHub APIs.                                                  | Ruleset coverage varies by repository, so a helper could create false confidence in unsupported cases.        |
+| Candidate                       | Status             | Helper level                       | Mutation risk | Canonical fallback path                                                | Drift risk                                                                               | Estimated payoff / byte reduction                                       |
+| ------------------------------- | ------------------ | ---------------------------------- | ------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Claim-state parsing             | Reserve candidate  | Read-only parser                   | Low           | Claim rules in `.github/instructions/idd-overview.instructions.md`     | High — claim parsing is subtle and any divergence would create false ownership decisions | Medium — roughly 200 to 400 bytes of repeated marker-parsing prose      |
+| Review activity snapshots       | Adopted helper     | Read-only evidence collector       | Low           | E1/F2/F3 activity-universe fetches via `gh` / GitHub API               | Medium — helper output must keep matching the review-currency rules exactly              | High — roughly 600 to 900 bytes of repeated multi-surface fetch prose   |
+| Live status digest edits        | Adopted helper     | Dry-run by default, explicit apply | Medium        | Phase-specific digest discovery and update flow                        | Medium — digest text must remain UI-only and never look authoritative                    | Medium — roughly 300 to 500 bytes of repeated digest-upsert prose       |
+| Advisory-wait state             | Selected now       | Read-only evidence collector       | Low           | `.github/instructions/idd-advisory-wait.instructions.md`               | Medium — helper must expose evidence without hiding the canonical decision table         | Very high — roughly 900 to 1400 bytes of repeated AW command prose      |
+| Pre-merge readiness             | Selected now       | Read-only evidence collector       | Low           | `.github/instructions/idd-pre-merge.instructions.md` and F3 live fetch | Medium — helper must stay evidence-only and preserve the written merge gates             | Very high — roughly 1200 to 1800 bytes of repeated merge-evidence prose |
+| Post-merge cleanup candidates   | Adopted helper     | Dry-run by default, explicit apply | High          | GraphQL minimize-comment fallback flow                                 | Medium — minimization safety still depends on exact review/marker rules                  | Medium — roughly 400 to 700 bytes of repeated GraphQL audit prose       |
+| Branch protection/ruleset reads | Deferred candidate | Read-only API adapter              | Low           | Direct ruleset / branch-protection API reads                           | Medium — repository support varies and incomplete coverage could create false confidence | Low to medium — roughly 150 to 300 bytes of repeated ruleset prose      |
+
+### Ranked roadmap candidate list for the source roadmap
+
+The ranking distinguishes immediate roadmap picks from documented
+reserve candidates:
+
+1. **Advisory-wait state** — **select now**. The AW protocol has the
+   highest command-copy burden, a stable read-only evidence shape, and a
+   clear non-goal boundary. This maps directly to the source follow-up
+   issue [kurone-kito/idd-skill#308](https://github.com/kurone-kito/idd-skill/issues/308).
+2. **Pre-merge readiness** — **select now**. F2/F3 collect the largest
+   evidence set in the workflow and already compose existing pure
+   protocol logic, making a read-only helper valuable without moving
+   merge authority out of the instructions. This maps directly to the
+   source follow-up issue
+   [kurone-kito/idd-skill#309](https://github.com/kurone-kito/idd-skill/issues/309).
+3. **Claim-state parsing** — **reserve, defer for now**. The payoff is
+   real, but claim ownership drift would be more dangerous than
+   shell-copy variance, so this should wait until helper runtime
+   profiles and the higher-payoff read-only gates are settled.
+
+### Explicit deferrals
+
+- **Branch protection/ruleset reads** stay deferred for this roadmap.
+  They are useful support data, but repository variance and narrower
+  byte savings make them a worse first investment than AW/F2 helpers.
+- **Live status digest** and **post-merge cleanup** are already adopted
+  in narrow forms, so they are inventory baselines rather than new
+  roadmap targets.
+
+### Inventory Non-goals
+
+- Do not turn this inventory into a commitment to helperize every phase.
+- Do not rank mutating merge or review actions ahead of read-only
+  evidence collectors.
+- Do not let helper candidates replace the written decision tables.
+- Do not use this inventory to justify a separate npm package before the
+  local/template profile path is proven.
 
 ## Trade-off
 
@@ -152,6 +190,6 @@ the following:
 - They are introduced only after the corresponding instruction protocol
   has stabilized enough that drift risk is lower than command-copy risk.
 
-Good future candidates would be read-only snapshot commands for
-advisory-wait state or claim-state inspection. They should not replace
-the written decision tables.
+Good future candidates remain read-only evidence collectors for
+advisory-wait state, pre-merge readiness, or later claim-state
+inspection. They should not replace the written decision tables.
