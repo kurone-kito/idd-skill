@@ -130,6 +130,59 @@ test("phase-graph.json data validates against phase-graph schema", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Unsupported format values
+// ---------------------------------------------------------------------------
+
+test("checkSchemaKeywords reports unsupported format values", () => {
+  const badSchema = { type: "string", format: "email" };
+  const errors = checkSchemaKeywords(badSchema);
+  assert.ok(errors.length > 0, "Expected at least one error");
+  assert.ok(errors.some((e) => e.includes("email")), `Expected 'email' in errors: ${errors}`);
+});
+
+test("checkSchemaKeywords accepts supported format: date-time", () => {
+  const goodSchema = { type: "string", format: "date-time" };
+  assert.deepEqual(checkSchemaKeywords(goodSchema), []);
+});
+
+// ---------------------------------------------------------------------------
+// Duration regex — must reject "P" and "PT" (no numeric component)
+// ---------------------------------------------------------------------------
+
+test("policy schema rejects bare 'P' as staleAge", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const invalid = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+  );
+  invalid.claimTiming.staleAge = "P";
+  const errors = validate(invalid, schema);
+  assert.ok(errors.length > 0, "Expected 'P' to fail duration pattern");
+});
+
+test("policy schema rejects bare 'PT' as heartbeatInterval", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const invalid = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+  );
+  invalid.claimTiming.heartbeatInterval = "PT";
+  const errors = validate(invalid, schema);
+  assert.ok(errors.length > 0, "Expected 'PT' to fail duration pattern");
+});
+
+test("policy schema accepts valid durations like PT24H, PT12H, P1D", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  for (const dur of ["PT24H", "PT12H", "P1D", "P1DT30M", "PT30M"]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+    );
+    instance.claimTiming.staleAge = dur;
+    instance.claimTiming.heartbeatInterval = dur;
+    const errors = validate(instance, schema);
+    assert.deepEqual(errors, [], `Expected "${dur}" to pass but got: ${errors}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Runtime / schema drift prevention
 // ---------------------------------------------------------------------------
 

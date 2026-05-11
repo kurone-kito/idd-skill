@@ -38,6 +38,9 @@ const ENFORCED_KEYWORDS = new Set([
 
 const ALLOWED_KEYWORDS = new Set([...ANNOTATION_KEYWORDS, ...ENFORCED_KEYWORDS]);
 
+/** Format values this validator actively enforces. */
+const SUPPORTED_FORMATS = new Set(["date-time"]);
+
 /**
  * Check that a schema object only uses allowed keywords, recursively.
  * @param {object} schema
@@ -51,6 +54,9 @@ export function checkSchemaKeywords(schema, path = "$") {
     if (!ALLOWED_KEYWORDS.has(key)) {
       errors.push(`${path}: unsupported keyword "${key}"`);
     }
+  }
+  if (schema.format !== undefined && !SUPPORTED_FORMATS.has(schema.format)) {
+    errors.push(`${path}: unsupported format value "${schema.format}"`);
   }
   for (const [prop, propSchema] of Object.entries(schema.properties ?? {})) {
     errors.push(...checkSchemaKeywords(propSchema, `${path}.properties.${prop}`));
