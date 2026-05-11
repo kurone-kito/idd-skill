@@ -4,6 +4,8 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { collectPolicyConfigDrift } from "./consistency-helpers.mjs";
+
 const root = process.cwd();
 const manifestPath = "audit/sync-manifest.json";
 const args = new Set(process.argv.slice(2));
@@ -26,6 +28,7 @@ checkShellFileLists(manifest.shellFileLists ?? [], manifest.generatedBlocks ?? [
 checkSyncPairs(manifest.syncPairs ?? []);
 checkInstructionSizeBudgets(manifest.instructionSizeBudgets ?? null);
 checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
+checkConfigInstructionDrift();
 
 if (errors.length > 0) {
   console.error("documentation audit failed:");
@@ -276,6 +279,55 @@ function checkForbiddenPatterns(patterns) {
         errors.push(`${pattern.id}: ${file}: ${pattern.message}`);
       }
     }
+  }
+}
+
+function checkConfigInstructionDrift() {
+  const pairs = [
+    {
+      configPath: ".github/idd/config.json",
+      overviewPath: ".github/instructions/idd-overview.instructions.md",
+    },
+    {
+      configPath: "idd-template/.github/idd/config.json",
+      overviewPath: "idd-template/.github/instructions/idd-overview.instructions.md",
+    },
+  ];
+
+  for (const pair of pairs) {
+    const hasConfig = repoFiles.includes(pair.configPath);
+    const hasOverview = repoFiles.includes(pair.overviewPath);
+    if (!hasConfig && !hasOverview) {
+      continue;
+    }
+    if (!hasConfig || !hasOverview) {
+      errors.push(`missing config/overview pair: expected both ${pair.configPath} and ${pair.overviewPath}`);
+      continue;
+    }
+
+    let config;
+    try {
+      config = JSON.parse(readText(pair.configPath));
+    } catch {
+      errors.push(`${pair.configPath} is not valid JSON`);
+      continue;
+    }
+
+    const drifts = collectPolicyConfigDrift(config, readText(pair.overviewPath));
+    if (drifts.length > 0) {
+      const summary = drifts
+        .map((drift) => {
+          if (drift.reason) {
+            return `${drift.path} ${drift.reason}`;
+          }
+          return `${drift.path} expected ${JSON.stringify(drift.expected)} got ${JSON.stringify(drift.actual)}`;
+        })
+        .join("; ");
+      errors.push(`${pair.configPath} drifts from ${pair.overviewPath}: ${summary}`);
+      continue;
+    }
+
+    notices.push(`${pair.configPath} matches ${pair.overviewPath} command and scope defaults`);
   }
 }
 

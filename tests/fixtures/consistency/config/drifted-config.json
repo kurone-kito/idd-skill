@@ -1,0 +1,10 @@
+{
+  "commands": {
+    "install-deps": "npm ci",
+    "fix-validate": "npm run fix && npm test",
+    "pre-push-validate": "npm run lint && npm test",
+    "post-fix-validate": "npm run check"
+  },
+  "issueScope": "orphan-first",
+  "orphanFirstPolicy": "none"
+}
