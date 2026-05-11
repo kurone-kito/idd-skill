@@ -91,8 +91,14 @@ must align with every F2 condition below.
   repository, you may optionally use the read-only helper
   `node scripts/review-activity-snapshot.mjs --pr {pr-number}` and pass
   trusted marker actors with
-  `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`; the
-  instruction rules remain canonical. Return to E1 if **any** of the
+  `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`.
+  You may also optionally use
+  `node scripts/pre-merge-readiness.mjs --pr {pr-number}
+  --claim-issue {issue-number} --expected-claim-id {claim-id}`
+  to collect the wider F2 evidence set (review currency, unresolved
+  threads, unreplied comments, reviewer states, advisory state, CI, and
+  claim validation) in one read-only JSON report; the instruction rules
+  remain canonical. Return to E1 if **any** of the
   following is true:
   - The current PR HEAD SHA differs from the stored `{head-SHA}` (a new
     push occurred after E1's snapshot, even if the watermark comment was

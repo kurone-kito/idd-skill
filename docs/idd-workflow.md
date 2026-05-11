@@ -291,12 +291,14 @@ reviewer because that is part of this repository's current PR policy.
 
 ## Optional helper scripts
 
-This source repository currently ships four optional helper scripts:
+This source repository currently ships five optional helper scripts:
 
 - `scripts/review-activity-snapshot.mjs` (read-only E/F activity and CI
   snapshot metrics)
 - `scripts/advisory-wait-state.mjs` (read-only advisory-wait evidence
   and AW outcome reporting)
+- `scripts/pre-merge-readiness.mjs` (read-only F2/F3 readiness evidence
+  collection)
 - `scripts/live-status-digest.mjs` (issue or PR live status digest
   dry-run and claim-checked upsert)
 - `scripts/audit-pr-cleanup.mjs` (post-merge cleanup audit and optional

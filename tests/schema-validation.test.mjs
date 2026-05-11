@@ -30,6 +30,11 @@ test("advisory-wait-state schema uses only allowed keywords", () => {
   assert.deepEqual(checkSchemaKeywords(schema), []);
 });
 
+test("pre-merge-readiness schema uses only allowed keywords", () => {
+  const schema = loadJson("schemas/pre-merge-readiness.schema.json");
+  assert.deepEqual(checkSchemaKeywords(schema), []);
+});
+
 test("policy schema uses only allowed keywords", () => {
   const schema = loadJson("schemas/policy.schema.json");
   assert.deepEqual(checkSchemaKeywords(schema), []);
@@ -103,6 +108,24 @@ test("advisory-wait-state invalid fixture fails validation", () => {
   const { ok } = validateFixture(
     "schemas/advisory-wait-state.schema.json",
     "fixtures/schemas/advisory-wait-state.invalid.json",
+    false,
+  );
+  assert.ok(ok, "Expected invalid fixture to fail schema validation");
+});
+
+test("pre-merge-readiness valid fixture passes validation", () => {
+  const { ok, errors } = validateFixture(
+    "schemas/pre-merge-readiness.schema.json",
+    "fixtures/schemas/pre-merge-readiness.valid.json",
+    true,
+  );
+  assert.ok(ok, errors.join("\n"));
+});
+
+test("pre-merge-readiness invalid fixture fails validation", () => {
+  const { ok } = validateFixture(
+    "schemas/pre-merge-readiness.schema.json",
+    "fixtures/schemas/pre-merge-readiness.invalid.json",
     false,
   );
   assert.ok(ok, "Expected invalid fixture to fail schema validation");

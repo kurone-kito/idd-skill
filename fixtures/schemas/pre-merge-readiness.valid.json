@@ -1,0 +1,128 @@
+{
+  "protocolVersion": "1",
+  "decisionAuthority": "instructions",
+  "prHeadSha": "1111111111111111111111111111111111111111",
+  "now": "2026-05-12T00:00:00Z",
+  "reviewCurrency": {
+    "watermarkPresent": true,
+    "watermark": {
+      "agentId": "github-copilot-cli",
+      "claimId": "claim-123",
+      "headSha": "1111111111111111111111111111111111111111",
+      "maxActivityUpdatedAt": "2026-05-11T23:56:00Z",
+      "totalItemCount": 3,
+      "latestCiCompletedAt": "2026-05-11T23:57:00Z",
+      "createdAt": "2026-05-11T23:58:00Z"
+    },
+    "live": {
+      "totalItemCount": 3,
+      "maxActivityUpdatedAt": "2026-05-11T23:56:00Z",
+      "latestCiCompletedAt": "2026-05-11T23:57:00Z",
+      "latestPassingCiCompletedAt": "2026-05-11T23:57:00Z",
+      "counts": {
+        "comments": 0,
+        "reviews": 2,
+        "threads": 1
+      }
+    },
+    "comparisonRoute": "proceed",
+    "comparisonReason": "snapshot-current"
+  },
+  "threads": {
+    "unresolvedCount": 1,
+    "actionableCount": 0,
+    "awaitingReviewerCount": 1,
+    "amdBlockingCount": 0,
+    "conversationResolveAgentCount": 0,
+    "conversationResolveAuthorCount": 0,
+    "classifications": [
+      {
+        "id": "thread-awaiting",
+        "classification": "awaiting-reviewer"
+      }
+    ]
+  },
+  "unrepliedComments": {
+    "count": 0,
+    "items": []
+  },
+  "reviewerStates": {
+    "reviewDecision": "APPROVED",
+    "requiredApprovingReviewCount": 0,
+    "requireCodeOwnerReview": true,
+    "requiresConversationResolution": false,
+    "requiredReviewerLogins": [],
+    "requiredReviewerTeams": [],
+    "codeownerUserLogins": ["owner-reviewer"],
+    "codeownerTeamSlugs": [],
+    "unmatchedCodeownerFiles": [],
+    "latestByAuthor": [
+      {
+        "login": "copilot-pull-request-reviewer[bot]",
+        "state": "APPROVED",
+        "submittedAt": "2026-05-11T23:54:00Z",
+        "isHuman": false,
+        "isAdvisoryBot": true,
+        "isCodeowner": false,
+        "isRequiredReviewer": false
+      },
+      {
+        "login": "owner-reviewer",
+        "state": "APPROVED",
+        "submittedAt": "2026-05-11T23:55:00Z",
+        "isHuman": true,
+        "isAdvisoryBot": false,
+        "isCodeowner": true,
+        "isRequiredReviewer": false
+      }
+    ],
+    "humanApprovedCount": 1,
+    "requiredApprovalsSatisfied": true,
+    "codeownerApprovalSatisfied": true,
+    "humanChangesRequestedCount": 0,
+    "blockingChangesRequestedLogins": []
+  },
+  "advisoryWait": {
+    "outcome": "SATISFIED",
+    "lastCopilotCommit": "1111111111111111111111111111111111111111",
+    "copilotPending": false,
+    "copilotPendingCoversHead": false,
+    "sameHeadMarkerPresent": false,
+    "earliestSameHeadAt": "",
+    "sameHeadMarkerCount": 0,
+    "requestMarkerCount": 0,
+    "elapsedMinutes": 0
+  },
+  "ci": {
+    "status": "success",
+    "requiredCheckCount": 1,
+    "generatedRequiredCheckCount": 1,
+    "requiredChecksGenerated": true,
+    "requiredChecksPassing": true,
+    "requiredCheckNames": ["lint"],
+    "missingRequiredCheckNames": [],
+    "checks": [
+      {
+        "name": "lint",
+        "state": "SUCCESS",
+        "completedAt": "2026-05-11T23:57:00Z",
+        "required": true
+      }
+    ]
+  },
+  "claim": {
+    "expectedClaimId": "claim-123",
+    "expectedAgentId": "github-copilot-cli",
+    "activeClaimPresent": true,
+    "activeClaim": {
+      "agentId": "github-copilot-cli",
+      "claimId": "claim-123",
+      "supersedes": "none",
+      "branch": "issue/309-pre-merge-readiness",
+      "createdAt": "2026-05-11T23:20:00Z"
+    },
+    "matchesExpectedClaim": true,
+    "claimLost": false,
+    "reason": "match"
+  }
+}

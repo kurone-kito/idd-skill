@@ -1,0 +1,204 @@
+{
+  "input": {
+    "prHeadSha": "1111111111111111111111111111111111111111",
+    "comments": [
+      {
+        "id": "watermark-changes",
+        "author": { "login": "kurone-kito" },
+        "body": "<!-- review-watermark: github-copilot-cli claim-123 1111111111111111111111111111111111111111 2026-05-11T23:55:00Z 2 2026-05-11T23:57:00Z -->\n\n_github-copilot-cli: review triage snapshot — IDD automation marker. Do not edit._",
+        "createdAt": "2026-05-11T23:58:00Z",
+        "updatedAt": "2026-05-11T23:58:00Z"
+      }
+    ],
+    "reviews": [
+      {
+        "author": { "login": "copilot-pull-request-reviewer[bot]" },
+        "state": "APPROVED",
+        "commitId": "1111111111111111111111111111111111111111",
+        "submittedAt": "2026-05-11T23:54:00Z",
+        "createdAt": "2026-05-11T23:54:00Z",
+        "updatedAt": "2026-05-11T23:54:00Z"
+      },
+      {
+        "author": { "login": "owner-reviewer" },
+        "state": "CHANGES_REQUESTED",
+        "commitId": "",
+        "submittedAt": "2026-05-11T23:55:00Z",
+        "createdAt": "2026-05-11T23:55:00Z",
+        "updatedAt": "2026-05-11T23:55:00Z"
+      }
+    ],
+    "threads": [],
+    "checks": [
+      {
+        "name": "lint",
+        "state": "SUCCESS",
+        "completedAt": "2026-05-11T23:57:00Z"
+      }
+    ],
+    "branchRules": [
+      {
+        "type": "pull_request",
+        "parameters": {
+          "required_approving_review_count": 0,
+          "required_reviewers": [],
+          "require_code_owner_review": true,
+          "required_review_thread_resolution": false
+        }
+      },
+      {
+        "type": "required_status_checks",
+        "parameters": {
+          "required_status_checks": [{ "context": "lint" }]
+        }
+      }
+    ],
+    "requestedReviewers": [],
+    "timelineEvents": [],
+    "claimEvents": [
+      {
+        "body": "<!-- claimed-by: github-copilot-cli claim-123 supersedes: none 2026-05-11T23:20:00Z branch: issue/309-pre-merge-readiness -->\n\n_github-copilot-cli: issue claim — IDD automation marker. Do not edit._",
+        "createdAt": "2026-05-11T23:20:00Z",
+        "author": { "login": "kurone-kito" }
+      }
+    ],
+    "changedFiles": ["README.md"],
+    "codeownersText": "* @owner-reviewer\n",
+    "reviewDecision": "CHANGES_REQUESTED"
+  },
+  "options": {
+    "now": "2026-05-12T00:00:00Z",
+    "trustedMarkerLogins": ["kurone-kito"],
+    "iddAgentLogins": ["kurone-kito"],
+    "advisoryBotLogins": [],
+    "prAuthorLogin": "contributor",
+    "expectedClaimId": "claim-123",
+    "expectedAgentId": "github-copilot-cli",
+    "viewerLogin": "kurone-kito",
+    "configuredTrustedActors": [],
+    "collaboratorTrustEnabled": false
+  },
+  "expected": {
+    "protocolVersion": "1",
+    "decisionAuthority": "instructions",
+    "prHeadSha": "1111111111111111111111111111111111111111",
+    "now": "2026-05-12T00:00:00Z",
+    "reviewCurrency": {
+      "watermarkPresent": true,
+      "watermark": {
+        "agentId": "github-copilot-cli",
+        "claimId": "claim-123",
+        "headSha": "1111111111111111111111111111111111111111",
+        "maxActivityUpdatedAt": "2026-05-11T23:55:00Z",
+        "totalItemCount": 2,
+        "latestCiCompletedAt": "2026-05-11T23:57:00Z",
+        "createdAt": "2026-05-11T23:58:00Z"
+      },
+      "live": {
+        "totalItemCount": 2,
+        "maxActivityUpdatedAt": "2026-05-11T23:55:00Z",
+        "latestCiCompletedAt": "2026-05-11T23:57:00Z",
+        "latestPassingCiCompletedAt": "2026-05-11T23:57:00Z",
+        "counts": {
+          "comments": 0,
+          "reviews": 2,
+          "threads": 0
+        }
+      },
+      "comparisonRoute": "proceed",
+      "comparisonReason": "snapshot-current"
+    },
+    "threads": {
+      "unresolvedCount": 0,
+      "actionableCount": 0,
+      "awaitingReviewerCount": 0,
+      "amdBlockingCount": 0,
+      "conversationResolveAgentCount": 0,
+      "conversationResolveAuthorCount": 0,
+      "classifications": []
+    },
+    "unrepliedComments": {
+      "count": 0,
+      "items": []
+    },
+    "reviewerStates": {
+      "reviewDecision": "CHANGES_REQUESTED",
+      "requiredApprovingReviewCount": 0,
+      "requireCodeOwnerReview": true,
+      "requiresConversationResolution": false,
+      "requiredReviewerLogins": [],
+      "requiredReviewerTeams": [],
+      "codeownerUserLogins": ["owner-reviewer"],
+      "codeownerTeamSlugs": [],
+      "unmatchedCodeownerFiles": [],
+      "latestByAuthor": [
+        {
+          "login": "copilot-pull-request-reviewer[bot]",
+          "state": "APPROVED",
+          "submittedAt": "2026-05-11T23:54:00Z",
+          "isHuman": false,
+          "isAdvisoryBot": true,
+          "isCodeowner": false,
+          "isRequiredReviewer": false
+        },
+        {
+          "login": "owner-reviewer",
+          "state": "CHANGES_REQUESTED",
+          "submittedAt": "2026-05-11T23:55:00Z",
+          "isHuman": true,
+          "isAdvisoryBot": false,
+          "isCodeowner": true,
+          "isRequiredReviewer": false
+        }
+      ],
+      "humanApprovedCount": 0,
+      "requiredApprovalsSatisfied": true,
+      "codeownerApprovalSatisfied": false,
+      "humanChangesRequestedCount": 1,
+      "blockingChangesRequestedLogins": ["owner-reviewer"]
+    },
+    "advisoryWait": {
+      "outcome": "SATISFIED",
+      "lastCopilotCommit": "1111111111111111111111111111111111111111",
+      "copilotPending": false,
+      "copilotPendingCoversHead": false,
+      "sameHeadMarkerPresent": false,
+      "earliestSameHeadAt": "",
+      "sameHeadMarkerCount": 0,
+      "requestMarkerCount": 0,
+      "elapsedMinutes": 0
+    },
+    "ci": {
+      "status": "success",
+      "requiredCheckCount": 1,
+      "generatedRequiredCheckCount": 1,
+      "requiredChecksGenerated": true,
+      "requiredChecksPassing": true,
+      "requiredCheckNames": ["lint"],
+      "missingRequiredCheckNames": [],
+      "checks": [
+        {
+          "name": "lint",
+          "state": "SUCCESS",
+          "completedAt": "2026-05-11T23:57:00Z",
+          "required": true
+        }
+      ]
+    },
+    "claim": {
+      "expectedClaimId": "claim-123",
+      "expectedAgentId": "github-copilot-cli",
+      "activeClaimPresent": true,
+      "activeClaim": {
+        "agentId": "github-copilot-cli",
+        "claimId": "claim-123",
+        "supersedes": "none",
+        "branch": "issue/309-pre-merge-readiness",
+        "createdAt": "2026-05-11T23:20:00Z"
+      },
+      "matchesExpectedClaim": true,
+      "claimLost": false,
+      "reason": "match"
+    }
+  }
+}
