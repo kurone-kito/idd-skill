@@ -2,7 +2,10 @@
 
 import { execFileSync } from "node:child_process";
 
-import { buildAdvisoryWaitSummary, normalizeTrustedMarkerLogins } from "./protocol-helpers.mjs";
+import {
+  buildAdvisoryWaitSummary,
+  normalizeTrustedMarkerLogins,
+} from "./protocol-helpers.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.prNumber) {
@@ -162,7 +165,7 @@ function resolveTrustedCollaboratorMarkerLogins(owner, repo, comments) {
 }
 
 function advisoryMarkerComment(body) {
-  const normalized = String(body ?? "").trimStart();
+  const normalized = String(body ?? "");
   return normalized.startsWith("advisory-wait:")
     || normalized.startsWith("advisory-wait-recovery:")
     || normalized.startsWith("<!-- advisory-wait:");

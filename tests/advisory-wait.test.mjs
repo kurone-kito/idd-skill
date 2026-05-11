@@ -38,6 +38,10 @@ test("detects operational marker prefixes", () => {
     operationalMarkerPrefix("advisory-wait: agent 0123456789abcdef0123456789abcdef01234567 2026-05-09T00:00:00Z"),
     "advisory-wait:",
   );
+  assert.equal(
+    operationalMarkerPrefix("  advisory-wait: agent 0123456789abcdef0123456789abcdef01234567 2026-05-09T00:00:00Z"),
+    null,
+  );
 });
 
 test("flags unsafe text reasons for failed states", () => {
