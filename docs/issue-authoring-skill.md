@@ -140,15 +140,14 @@ infer and step-by-step runbooks that cost too much to author.
 
 ### Three specificity bands
 
-| Band                | Practical signal                                                                                                                                  | Drafting response                                                                    |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| **Under-specified** | Stable execution likely depends on a frontier cloud model class such as a Claude Opus/Sonnet-class model or a flagship GPT-class                  | Add missing constraints, split scope, or make acceptance criteria more explicit      |
-| **Target**          | A middle-tier cloud model class such as a Claude Haiku-class model or a comparable mid-tier coding model can implement the issue without drifting | Treat this as the preferred drafting target when the execution axes already pass     |
-| **Over-specified**  | Even a lightweight local or compact cloud model class could follow the issue mechanically because it has become a runbook                         | Remove procedural micromanagement while keeping invariants, file anchors, and checks |
+| Band                | Practical signal                                                                                                          | Drafting response                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| **Under-specified** | Stable execution likely depends on a frontier cloud model class                                                           | Add missing constraints, split scope, or make acceptance criteria more explicit      |
+| **Target**          | A middle-tier cloud model class can implement the issue without drifting                                                  | Treat this as the preferred drafting target when the execution axes already pass     |
+| **Over-specified**  | Even a lightweight local or compact cloud model class could follow the issue mechanically because it has become a runbook | Remove procedural micromanagement while keeping invariants, file anchors, and checks |
 
-The named models above are examples only. They are shorthand for
-relative capability bands, not a fixed compatibility matrix or runtime
-requirement.
+The capability tiers above are practical heuristics, not a fixed
+compatibility matrix or runtime requirement.
 
 ### How the specificity target interacts with readiness
 
