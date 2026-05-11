@@ -111,14 +111,14 @@ continuing. Stop when the survivor set is empty (no suitable issue found
 this run) or when an `invalid` outcome occurs (trust/safety concerns
 require human review before continuing):
 
-| Outcome            | Meaning                        | Next Steps                     |
-| ------------------ | ------------------------------ | ------------------------------ |
-| `unclear`          | Issue needs clarification      | Report, try next candidate     |
-| `needs-decision`   | Requires maintainer decision   | Report, try next candidate     |
-| `blocked-by-human` | Requires human coordination    | Report, try next candidate     |
-| `duplicate`        | Duplicate or superseded work   | Report, try next candidate     |
-| `out-of-scope`     | Outside repository scope       | Report, try next candidate     |
-| `invalid`          | Trust/safety concern or defect | Report and stop (do not retry) |
+| Outcome            | Meaning                        | Next Steps (A4: try next; A0-T: stop) |
+| ------------------ | ------------------------------ | ------------------------------------- |
+| `unclear`          | Issue needs clarification      | Report, try next candidate            |
+| `needs-decision`   | Requires maintainer decision   | Report, try next candidate            |
+| `blocked-by-human` | Requires human coordination    | Report, try next candidate            |
+| `duplicate`        | Duplicate or superseded work   | Report, try next candidate            |
+| `out-of-scope`     | Outside repository scope       | Report, try next candidate            |
+| `invalid`          | Trust/safety concern or defect | Report and stop (do not retry)        |
 
 ## Mutation Policy
 
@@ -179,6 +179,7 @@ implementation work:
 ```text
 Candidates = A4 survivor set (sorted by ascending issue number)
   (for A0-T: the single verified explicit target; failure = STOP, no fallback)
+  (for A0-T: every "remove from Candidates, loop" branch below means: report and STOP)
 Loop: Pick lowest-numbered candidate from Candidates
   → Run Check 1 (Repository Fit)
     → PASS → Run Check 2
