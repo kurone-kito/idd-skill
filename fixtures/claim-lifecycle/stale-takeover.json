@@ -1,0 +1,33 @@
+{
+  "name": "stale takeover ignores stale owner release",
+  "events": [
+    {
+      "createdAt": "2026-05-09T10:00:00Z",
+      "author": {
+        "login": "codex-cli"
+      },
+      "body": "<!-- claimed-by: codex-cli 11111111111111111111111111111111 supersedes: none 2026-05-09T10:00:00Z branch: issue/118-protocol-test-fixtures -->\n\n_codex-cli: issue claim - IDD automation marker. Do not edit._\n"
+    },
+    {
+      "createdAt": "2026-05-10T11:00:00Z",
+      "author": {
+        "login": "copilot-cli"
+      },
+      "body": "<!-- claimed-by: copilot-cli 22222222222222222222222222222222 supersedes: 11111111111111111111111111111111 2026-05-10T11:00:00Z branch: issue/118-protocol-test-fixtures -->\n\n_copilot-cli: issue claim - IDD automation marker. Do not edit._\n"
+    },
+    {
+      "createdAt": "2026-05-10T11:05:00Z",
+      "author": {
+        "login": "codex-cli"
+      },
+      "body": "<!-- unclaimed-by: codex-cli 11111111111111111111111111111111 2026-05-10T11:05:00Z -->\n\n_codex-cli: issue claim released - IDD automation marker. Do not edit._\n"
+    }
+  ],
+  "expectedActiveClaim": {
+    "agentId": "copilot-cli",
+    "claimId": "22222222222222222222222222222222",
+    "supersedes": "11111111111111111111111111111111",
+    "branch": "issue/118-protocol-test-fixtures",
+    "createdAt": "2026-05-10T11:00:00Z"
+  }
+}

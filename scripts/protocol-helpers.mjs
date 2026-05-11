@@ -476,6 +476,74 @@ export function isStaleAt(activeCreatedAt, nextCreatedAt) {
   return new Date(nextCreatedAt).getTime() - new Date(activeCreatedAt).getTime() >= staleMs;
 }
 
+function compareClaimIds(left, right) {
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
+}
+
+function createdAtToTime(createdAt) {
+  const time = new Date(createdAt ?? "").getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+function createdAtToSecond(createdAt) {
+  const time = createdAtToTime(createdAt);
+  if (time === null) {
+    return null;
+  }
+  return Math.floor(time / 1000);
+}
+
+export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
+  const orderedEvents = events
+    .map((event, index) => {
+      const claim = parseClaimComment(event.body ?? "", event.createdAt ?? "");
+      return {
+        event,
+        index,
+        claimId: claim?.claimId ?? null,
+        time: createdAtToTime(event.createdAt),
+        second: createdAtToSecond(event.createdAt),
+      };
+    })
+    .sort((left, right) => {
+      if (left.second !== null && right.second !== null && left.second !== right.second) {
+        return left.second - right.second;
+      }
+      if (left.second !== null && right.second === null) {
+        return -1;
+      }
+      if (left.second === null && right.second !== null) {
+        return 1;
+      }
+
+      if (
+        left.second !== null &&
+        right.second !== null &&
+        left.claimId &&
+        right.claimId &&
+        left.claimId !== right.claimId
+      ) {
+        return compareClaimIds(left.claimId, right.claimId);
+      }
+
+      if (left.time !== null && right.time !== null && left.time !== right.time) {
+        return left.time - right.time;
+      }
+
+      return left.index - right.index;
+    })
+    .map(({ event }) => event);
+
+  let active = null;
+  for (const event of orderedEvents) {
+    active = applyClaimEvent(active, event, isTrustedAuthor);
+  }
+  return active;
+}
+
 export function applyClaimEvent(activeClaim, event, isTrustedAuthor = () => true) {
   if (!isTrustedAuthor(event.author?.login ?? "")) {
     return activeClaim;
