@@ -46,10 +46,11 @@ issue unless the operator explicitly asks for normal discovery in the
 same run.
 
 If all checks pass, the target is selected. Continue to
-`idd-discover.instructions.md` **A4.5** for suitability triage. A4.5
-follows the same standards as roadmap paths. If A4.5 passes, proceed to
-`idd-claim.instructions.md` A5. A5 claim-state, open-PR, takeover,
-branch-collision, and claim-verification rules remain unchanged.
+[`idd-suitability.instructions.md`](idd-suitability.instructions.md)
+for suitability triage. A4.5 follows the same standards as roadmap
+paths. If A4.5 passes, proceed to `idd-claim.instructions.md` A5.
+A5 claim-state, open-PR, takeover, branch-collision, and
+claim-verification rules remain unchanged.
 
 ## A0 — Check issue-scope setting
 
