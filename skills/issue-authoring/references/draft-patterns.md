@@ -28,6 +28,41 @@ sequencing, parallel tracks, or multi-session handoff.
 Draft only stable non-ready buckets when the work still depends on a
 human decision, missing asset, or unclear verification.
 
+## Specificity target
+
+Execution-ready issue drafts should land in a middle band:
+
+- **Under-specified**: a high-range model still has to infer the real
+  implementation shape because the issue names only a vague goal,
+  omits the likely surface to edit, or leaves verification too loose.
+- **Target range**: a solid mid-tier cloud model can hold a stable plan
+  without extra clarification. The issue points at the relevant
+  document, schema, or code surface, explains the constraint, and keeps
+  acceptance criteria verifiable without dictating every edit.
+- **Over-specified**: even a lightweight model could follow the issue as
+  a script because the body prescribes exact edit order, wording, or
+  implementation steps that reviewers do not need.
+
+If a draft feels like it needs a high-range model just to guess the intended
+change, it is still too vague. If it reads like line-by-line assembly
+instructions, it is too detailed.
+
+## Specificity checklist before publishing
+
+Before you publish a ready issue, confirm:
+
+- the title and background name the concrete artifact or surface that
+  should change
+- a mid-tier cloud model could choose a stable implementation direction
+  without hidden repository archaeology or a follow-up clarification loop
+- the acceptance criteria verify the outcome, not a step-by-step
+  implementation recipe
+- candidate files, examples, and notes act as cues rather than an
+  exhaustive script
+- removing one concrete detail would make the issue feel high-range-only,
+  while adding more detail would start turning it into a lightweight
+  model script
+
 ## Example orphan issue
 
 - `## Background` or `## Goal`
@@ -96,6 +131,63 @@ common failures by validating before publish:
   issue body
 - **Uniqueness**: Reuse-first check passed; the work is not a duplicate
   or superseded
+
+## Specificity examples
+
+### Under-specified draft
+
+**Title**: `docs: improve issue authoring guidance`
+
+Background: issue authoring should be clearer for agents.
+
+Acceptance criteria:
+
+- issue authoring is more consistent
+- examples are improved
+
+This is too vague because the draft does not tell the next agent which
+authoring surface to edit, what kind of guidance is missing, or how a
+reviewer would verify success. A high-range model would need to infer
+the real task from surrounding repository context.
+
+### Target range draft
+
+**Title**: `docs: add specificity checklist to issue authoring draft patterns`
+
+Background:
+`skills/issue-authoring/references/draft-patterns.md` explains output
+shapes, but it does not yet show how to judge whether an issue body is
+too vague or too scripted for execution.
+
+Acceptance criteria:
+
+- `draft-patterns.md` includes a pre-publication specificity checklist
+- the guidance distinguishes under-specified, target range, and
+  over-specified issue drafts
+- the examples focus on issue body wording and acceptance criteria
+  granularity instead of prescribing implementation order
+
+This is the target range because the next agent knows where to work, why
+the change matters, and how to verify it, while still retaining freedom
+to decide the exact wording and structure.
+
+### Over-specified draft
+
+**Title**: `docs: add specificity checklist to issue authoring draft patterns`
+
+Proposed change:
+
+1. Insert a new `## Specificity target` heading after `## Output chooser`.
+2. Add exactly three bullets named `Under-specified`, `Target range`,
+   and `Over-specified`.
+3. Add a five-item checklist using the exact sentence order shown in the
+   draft.
+4. Copy the same example phrasing across every example block without
+   changing any wording.
+
+This is too detailed for authoring because it turns the issue into an
+implementation script. Reviewers usually need the target outcome and the
+verification shape, not a rigid edit order.
 
 ## Publication boundary
 
