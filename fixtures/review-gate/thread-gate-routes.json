@@ -35,6 +35,7 @@
       {
         "id": "THREAD-awaiting",
         "isResolved": false,
+        "updatedAt": "2026-05-11T08:05:00Z",
         "comments": {
           "nodes": [
             {
@@ -70,12 +71,54 @@
     }
   },
   {
+    "name": "reopen before the latest IDD reply stays awaiting-reviewer",
+    "threads": [
+      {
+        "id": "THREAD-reopen-before-reply",
+        "isResolved": false,
+        "reviewerReopenedAt": "2026-05-11T08:03:00Z",
+        "updatedAt": "2026-05-11T08:05:00Z",
+        "comments": {
+          "nodes": [
+            {
+              "author": { "login": "reviewer" },
+              "body": "Please adjust this branch.",
+              "createdAt": "2026-05-11T08:00:00Z"
+            },
+            {
+              "author": { "login": "idd-bot" },
+              "body": "**Accepted** — fixed in abc123: adjusted the branch wording.",
+              "createdAt": "2026-05-11T08:05:00Z"
+            }
+          ]
+        }
+      }
+    ],
+    "options": {
+      "iddAgentLogins": ["idd-bot"],
+      "prAuthorLogin": "author"
+    },
+    "expected": {
+      "actionableCount": 0,
+      "awaitingReviewerCount": 1,
+      "amdBlockingCount": 0,
+      "conversationResolveAgentCount": 0,
+      "conversationResolveAuthorCount": 0,
+      "classifications": [
+        {
+          "id": "THREAD-reopen-before-reply",
+          "classification": "awaiting-reviewer"
+        }
+      ]
+    }
+  },
+  {
     "name": "reviewer reopen without text makes the thread actionable again",
     "threads": [
       {
         "id": "THREAD-reopened",
         "isResolved": false,
-        "reviewerReopenedAt": "2026-05-11T08:06:00Z",
+        "updatedAt": "2026-05-11T08:06:00Z",
         "comments": {
           "nodes": [
             {
@@ -156,16 +199,53 @@
     }
   },
   {
+    "name": "non-agent AMD marker text stays actionable",
+    "threads": [
+      {
+        "id": "THREAD-non-agent-amd",
+        "isResolved": false,
+        "updatedAt": "2026-05-11T08:05:00Z",
+        "comments": {
+          "nodes": [
+            {
+              "author": { "login": "reviewer" },
+              "body": "**Awaiting maintainer decision** — I think this still needs work.",
+              "createdAt": "2026-05-11T08:05:00Z"
+            }
+          ]
+        }
+      }
+    ],
+    "options": {
+      "iddAgentLogins": ["idd-bot"],
+      "prAuthorLogin": "author"
+    },
+    "expected": {
+      "actionableCount": 1,
+      "awaitingReviewerCount": 0,
+      "amdBlockingCount": 0,
+      "conversationResolveAgentCount": 0,
+      "conversationResolveAuthorCount": 0,
+      "classifications": [
+        {
+          "id": "THREAD-non-agent-amd",
+          "classification": "actionable-blocking"
+        }
+      ]
+    }
+  },
+  {
     "name": "AMD thread remains blocking",
     "threads": [
       {
         "id": "THREAD-amd",
         "isResolved": false,
+        "updatedAt": "2026-05-11T08:05:00Z",
         "comments": {
           "nodes": [
             {
               "author": { "login": "idd-bot" },
-              "body": "**Awaiting maintainer decision** — rejecting this review item needs maintainer confirmation.",
+              "body": "**awaiting maintainer decision** — rejecting this review item needs maintainer confirmation.",
               "createdAt": "2026-05-11T08:05:00Z"
             }
           ]
@@ -186,6 +266,43 @@
         {
           "id": "THREAD-amd",
           "classification": "amd-blocking"
+        }
+      ]
+    }
+  },
+  {
+    "name": "truncated unresolved thread blocks until fully fetched",
+    "threads": [
+      {
+        "id": "THREAD-truncated",
+        "isResolved": false,
+        "updatedAt": "2026-05-11T08:05:00Z",
+        "comments": {
+          "pageInfo": { "hasNextPage": true },
+          "nodes": [
+            {
+              "author": { "login": "idd-bot" },
+              "body": "**Accepted** — fixed in abc123: adjusted the branch wording.",
+              "createdAt": "2026-05-11T08:05:00Z"
+            }
+          ]
+        }
+      }
+    ],
+    "options": {
+      "iddAgentLogins": ["idd-bot"],
+      "prAuthorLogin": "author"
+    },
+    "expected": {
+      "actionableCount": 1,
+      "awaitingReviewerCount": 0,
+      "amdBlockingCount": 0,
+      "conversationResolveAgentCount": 0,
+      "conversationResolveAuthorCount": 0,
+      "classifications": [
+        {
+          "id": "THREAD-truncated",
+          "classification": "actionable-blocking"
         }
       ]
     }
@@ -218,7 +335,7 @@
       "requiresConversationResolution": true
     },
     "expected": {
-      "actionableCount": 0,
+      "actionableCount": 1,
       "awaitingReviewerCount": 0,
       "amdBlockingCount": 0,
       "conversationResolveAgentCount": 1,
@@ -259,7 +376,7 @@
       "requiresConversationResolution": true
     },
     "expected": {
-      "actionableCount": 0,
+      "actionableCount": 1,
       "awaitingReviewerCount": 0,
       "amdBlockingCount": 0,
       "conversationResolveAgentCount": 0,

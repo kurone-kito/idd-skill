@@ -369,15 +369,19 @@ export function diffReviewSnapshot(snapshot, live) {
   if (snapshotMax === "none" && liveCount > 0) {
     return { route: "return-to-e1", reason: "snapshot-was-empty-now-nonempty" };
   }
-  if (snapshotMax !== "none" && liveMax > snapshotMax) {
+  if (snapshotMax !== "none" && liveMax !== "none" && liveMax > snapshotMax) {
     return { route: "return-to-e1", reason: "newer-activity" };
   }
   if (liveCount > snapshotCount) {
     return { route: "return-to-e1", reason: "same-timestamp-count-growth" };
   }
 
-  const snapshotCi = String(snapshot.latestCiCompletedAt ?? "none");
-  const liveCi = String(live.latestCiCompletedAt ?? "none");
+  const snapshotCi = String(
+    snapshot.latestPassingCiCompletedAt ?? snapshot.latestCiCompletedAt ?? "none",
+  );
+  const liveCi = String(
+    live.latestPassingCiCompletedAt ?? live.latestCiCompletedAt ?? "none",
+  );
   if (snapshotCi !== liveCi) {
     return { route: "return-to-e1", reason: "ci-pass-drift" };
   }
@@ -389,9 +393,13 @@ export function classifyReviewThreadForGate(thread, options = {}) {
   if (thread.isResolved) {
     return { classification: "resolved" };
   }
+  if (thread.comments?.pageInfo?.hasNextPage) {
+    return { classification: "actionable-blocking" };
+  }
 
   const comments = thread.comments?.nodes ?? [];
   const latestComment = comments.at(-1) ?? null;
+  const latestCommentAt = String(latestComment?.updatedAt ?? latestComment?.createdAt ?? "");
   const latestAuthor = String(latestComment?.author?.login ?? "").toLowerCase();
   const iddAgentLogins = new Set(
     (options.iddAgentLogins ?? [])
@@ -402,7 +410,9 @@ export function classifyReviewThreadForGate(thread, options = {}) {
   const latestIsIddAgent = iddAgentLogins.has(latestAuthor);
   const latestIsPrAuthor = Boolean(prAuthorLogin) && latestAuthor === prAuthorLogin;
   const hasAmd = comments.some((comment) => {
-    return String(comment.body ?? "").trimStart().startsWith("**Awaiting maintainer decision**");
+    const authorLogin = String(comment.author?.login ?? "").toLowerCase();
+    return iddAgentLogins.has(authorLogin)
+      && UNSAFE_TEXT_RULES[0].pattern.test(String(comment.body ?? "").trimStart());
   });
 
   if (hasAmd) {
@@ -413,7 +423,11 @@ export function classifyReviewThreadForGate(thread, options = {}) {
     return { classification: "actionable-blocking" };
   }
 
-  if (thread.reviewerReopenedAt) {
+  const reviewerReopenedAt = inferReviewerReopenedAt(thread, latestCommentAt);
+  if (!latestCommentAt && reviewerReopenedAt) {
+    return { classification: "actionable-blocking" };
+  }
+  if (reviewerReopenedAt && reviewerReopenedAt > latestCommentAt) {
     return { classification: "actionable-blocking" };
   }
 
@@ -462,15 +476,34 @@ export function summarizeReviewThreadsForGate(threads, options = {}) {
       continue;
     }
     if (result.classification === "conversation-resolve-agent") {
+      summary.actionableCount += 1;
       summary.conversationResolveAgentCount += 1;
       continue;
     }
     if (result.classification === "conversation-resolve-author") {
+      summary.actionableCount += 1;
       summary.conversationResolveAuthorCount += 1;
     }
   }
 
   return summary;
+}
+
+function inferReviewerReopenedAt(thread, latestCommentAt) {
+  const explicit = String(thread.reviewerReopenedAt ?? "");
+  if (isValidIsoTimestamp(explicit)) {
+    return explicit;
+  }
+
+  const threadUpdatedAt = String(thread.updatedAt ?? "");
+  if (!isValidIsoTimestamp(threadUpdatedAt)) {
+    return "";
+  }
+  if (!latestCommentAt || !isValidIsoTimestamp(latestCommentAt)) {
+    return threadUpdatedAt;
+  }
+
+  return threadUpdatedAt > latestCommentAt ? threadUpdatedAt : "";
 }
 
 export function hasFreshDisposition(thread) {
