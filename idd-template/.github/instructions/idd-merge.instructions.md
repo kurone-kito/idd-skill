@@ -50,6 +50,10 @@ gate. The active claim must still use your current `{claim-id}`.
      `updatedAt` is strictly newer than `{f2-max-activity-updatedAt}`.
    - The total item count of the final fetch exceeds
      `{f2-total-item-count}`.
+   - The current latest CI pass `completedAt` for the current PR HEAD
+     differs from `{f2-latest-ci-completed-at}` (a new CI run completed
+     after F2's snapshot; if `{f2-latest-ci-completed-at}` is `none`,
+     any current CI pass triggers re-evaluation).
 
    From that same final fetch, compute `F3_UNRESOLVED_ACTIONABLE_COUNT`
    using the exact F2 unresolved-thread rule and exceptions

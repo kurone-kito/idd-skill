@@ -515,7 +515,7 @@ CI polling logic shared by D and E phases lives in
 
 The Copilot advisory-wait protocol (commands, decision table, hold
 comment templates) is defined once in `idd-advisory-wait.instructions.md`
-and referenced by E14 (review-fix) and F2/F2.5/F3 (merge). Do not duplicate
+and referenced by E14 (review-fix) and F2/F3 (merge). Do not duplicate
 these commands in caller files.
 
 ## Critique pass
