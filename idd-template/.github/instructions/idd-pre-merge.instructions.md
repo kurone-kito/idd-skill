@@ -15,7 +15,8 @@ for the canonical values, not as a behavior override.
 Before any F-phase mutating action, apply the shared claim revalidation
 gate. The active claim must still use your current `{claim-id}`.
 
-When all F2 conditions are satisfied, proceed to `idd-merge.instructions.md`.
+When all F2 conditions are satisfied, proceed to
+`idd-merge-handoff.instructions.md`.
 
 ## F1 — Final conflict resolution
 
@@ -214,5 +215,7 @@ approvals only. When all conditions above are satisfied, record the
 live-fetch result as the **F2 snapshot**: the current PR HEAD SHA
 (`{f2-head-SHA}`), the highest `updatedAt` across all fetched items
 (`{f2-max-activity-updatedAt}`, written as `none` if the snapshot is
-empty), and the total item count (`{f2-total-item-count}`). Carry all
-three values into F3. Then proceed to `idd-merge.instructions.md`.
+empty), the total item count (`{f2-total-item-count}`), and the latest
+CI pass `completedAt` for HEAD (`{f2-latest-ci-completed-at|none}`).
+Carry all four values into the handoff phase. Then proceed to
+`idd-merge-handoff.instructions.md`.

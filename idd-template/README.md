@@ -102,6 +102,7 @@ strings). This JSON is optional and does not replace
   idd-review-triage.instructions.md  ← E4–E8: classify, score, and record dispositions
   idd-review-fix.instructions.md     ← E9–E15: fix, push, reply, CI wait
   idd-pre-merge.instructions.md      ← F1–F2: conflict resolution and pre-merge conditions
+  idd-merge-handoff.instructions.md  ← F2.5: merge-policy handoff routing
   idd-merge.instructions.md          ← F3–F5: merge execution, cleanup, and loop
   idd-resume.instructions.md         ← resume after crash / handoff
   idd-resume-stall.instructions.md   ← stalled-session recovery gate

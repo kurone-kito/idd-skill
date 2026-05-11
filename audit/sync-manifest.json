@@ -152,6 +152,12 @@
       "mode": "structure"
     },
     {
+      "id": "idd-merge-handoff-instructions",
+      "source": "idd-template/.github/instructions/idd-merge-handoff.instructions.md",
+      "target": ".github/instructions/idd-merge-handoff.instructions.md",
+      "mode": "exact"
+    },
+    {
       "id": "idd-merge-instructions",
       "source": "idd-template/.github/instructions/idd-merge.instructions.md",
       "target": ".github/instructions/idd-merge.instructions.md",
