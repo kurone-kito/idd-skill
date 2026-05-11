@@ -358,6 +358,7 @@ repository keeps these defaults before unattended runs.
 .github/idd/config.json
 .github/instructions/idd-overview.instructions.md
 .github/instructions/idd-discover.instructions.md
+.github/instructions/idd-suitability.instructions.md
 .github/instructions/idd-claim.instructions.md
 .github/instructions/idd-work.instructions.md
 .github/instructions/idd-pr-submit.instructions.md
@@ -425,6 +426,7 @@ for FILE in \
   ".github/idd/config.json" \
   ".github/instructions/idd-overview.instructions.md" \
   ".github/instructions/idd-discover.instructions.md" \
+  ".github/instructions/idd-suitability.instructions.md" \
   ".github/instructions/idd-claim.instructions.md" \
   ".github/instructions/idd-work.instructions.md" \
   ".github/instructions/idd-pr-submit.instructions.md" \
@@ -500,6 +502,7 @@ for FILE in \
   ".github/idd/config.json" \
   ".github/instructions/idd-overview.instructions.md" \
   ".github/instructions/idd-discover.instructions.md" \
+  ".github/instructions/idd-suitability.instructions.md" \
   ".github/instructions/idd-claim.instructions.md" \
   ".github/instructions/idd-work.instructions.md" \
   ".github/instructions/idd-pr-submit.instructions.md" \
