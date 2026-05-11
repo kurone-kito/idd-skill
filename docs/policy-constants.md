@@ -14,6 +14,40 @@ names just make the defaults easier to record and change consistently.
 Use it during onboarding to identify which defaults a repository accepts
 as-is and which defaults need a follow-up workflow change.
 
+## Configuration Authority Hierarchy
+
+IDD uses four configuration surfaces. When a setting appears in multiple
+places, the table below identifies which file to update.
+
+| Surface                                                                      | Role                                                                                                                                                                               |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.github/idd/config.json`                                                    | Machine-readable policy record consumed by helper scripts and external tooling. The primary file to update when changing any setting listed below.                                 |
+| `.github/instructions/idd-overview.instructions.md` — Project commands table | Agent-readable runtime policy loaded at every IDD turn. Authoritative for commands and discovery settings that agents execute directly. Must stay synchronized with `config.json`. |
+| `docs/policy-constants.md` (this page)                                       | Reference inventory only. Naming the distributed defaults does not change runtime behavior; update the owning instruction files for actual behavior changes.                       |
+| `idd-template/ONBOARDING.md`                                                 | One-time setup wizard for initial template import. Authoritative for placeholder replacement during onboarding.                                                                    |
+
+**To answer "which file do I update for X?":**
+
+| Setting                                                                                     | Edit this file                                                                                                            | `config.json` field                                |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Marker prefix                                                                               | `.github/idd/config.json`, `idd-overview.instructions.md` marker-prefix references, and template onboarding notes         | `markerPrefix`                                     |
+| IDD config version                                                                          | `.github/idd/config.json` during distribution upgrades                                                                    | `iddVersion`                                       |
+| Issue scope                                                                                 | `.github/idd/config.json` **and** `idd-overview.instructions.md` Project commands row (`issue-scope`)                     | `issueScope` (optional; defaults to `roadmap`)     |
+| Orphan-first policy                                                                         | `.github/idd/config.json` **and** `idd-overview.instructions.md` Project commands row (`orphan-first-policy`)             | `orphanFirstPolicy` (optional; defaults to `none`) |
+| Merge policy                                                                                | `.github/idd/config.json`, `idd-merge.instructions.md`, **and** `idd-merge-handoff.instructions.md`                       | `mergePolicy`                                      |
+| Project commands (`fix-validate`, `pre-push-validate`, `post-fix-validate`, `install-deps`) | `.github/instructions/idd-overview.instructions.md` Project commands table **and** `config.json` `commands.*`             | `commands.*`                                       |
+| Claim timing (stale age, heartbeat interval)                                                | `.github/idd/config.json` **and** every owning instruction file listed in [Ownership Defaults](#ownership-defaults) below | `claimTiming.*`                                    |
+| Trusted marker actors                                                                       | `.github/idd/config.json`                                                                                                 | `trustedMarkerActors`                              |
+| Review policy                                                                               | `.github/idd/config.json` **and** phase instruction files (see [Customization](customization.md))                         | `reviewPolicy`                                     |
+| Thread resolution policy                                                                    | `.github/idd/config.json` **and** phase instruction files (see [Customization](customization.md))                         | `threadResolutionPolicy`                           |
+
+When `config.json` and Markdown instruction files diverge, treat the
+repository as misconfigured and update both in the same pull request.
+For `commands.*`, a valid `config.json` entry overrides the Project
+commands table where helper tooling supports it. For behavior encoded
+only in phase instructions, the instruction file governs until the
+instruction is updated too.
+
 ## Ownership Defaults
 
 | Policy key                 | Policy default            | Distributed value                                                                                                                             | Owning surface                                                                                                                                                                                                                                                                                                                             | Onboarding expectation                                                                    |
