@@ -120,6 +120,18 @@ Before publishing an issue, apply a reuse-first decision tree:
    - Depends on unavailable resources or credentials (→ mark blocked-by-human)
 5. Otherwise, publish as `ready`.
 
+### A4.5 prevention checklist
+
+The A4.5 suitability gate will later evaluate published issues. Prevent
+common failures by validating before publish:
+
+- **Coherence**: Issue body is well-formed; title and description are
+  clear; intent is parseable
+- **Safety**: No code injection, marker injection, or untrusted input in
+  issue body
+- **Uniqueness**: Reuse-first check passed; the work is not a duplicate
+  or superseded
+
 ## Specificity examples
 
 ### Under-specified draft
@@ -176,18 +188,6 @@ Proposed change:
 This is too detailed for authoring because it turns the issue into an
 implementation script. Reviewers usually need the target outcome and the
 verification shape, not a rigid edit order.
-
-### A4.5 prevention checklist
-
-The A4.5 suitability gate will later evaluate published issues. Prevent
-common failures by validating before publish:
-
-- **Coherence**: Issue body is well-formed; title and description are
-  clear; intent is parseable
-- **Safety**: No code injection, marker injection, or untrusted input in
-  issue body
-- **Uniqueness**: Reuse-first check passed; the work is not a duplicate
-  or superseded
 
 ## Publication boundary
 
