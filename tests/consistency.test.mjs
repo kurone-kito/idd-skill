@@ -70,14 +70,20 @@ test("helper runtime inspection accepts absent and supported profiles, rejects u
     status: "ok",
     profile: "instructions-only",
   });
-  assert.deepEqual(inspectHelperRuntimeConfig({
-    helperRuntime: {
-      profile: "package-manager",
-    },
-  }), {
-    status: "ok",
-    profile: "package-manager",
-  });
+  for (const profile of [
+    "package-manager",
+    "vendored-node",
+    "ephemeral-npx",
+  ]) {
+    assert.deepEqual(inspectHelperRuntimeConfig({
+      helperRuntime: {
+        profile,
+      },
+    }), {
+      status: "ok",
+      profile,
+    });
+  }
   assert.deepEqual(inspectHelperRuntimeConfig({
     helperRuntime: {
       profile: "bun",

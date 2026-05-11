@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url"
 
 import { inspectHelperRuntimeConfig, parseProjectCommandRows } from "./policy-helpers.mjs"
 
-export { parseProjectCommandRows } from "./policy-helpers.mjs"
+export { parseProjectCommandRows }
 
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2))
