@@ -39,12 +39,18 @@ revalidation gate. The active claim must still use your current
 5. If the recorded policy is `separate_merge_agent`, apply this split:
    - If repository documentation explicitly records that the **current
      session** is the designated merge-capable actor and the documented
-     resume condition is satisfied, first resume on the same issue via
-     `idd-resume.instructions.md` so the merge-capable session holds a
-     verified active `{claim-id}` of its own, then proceed to
-     `idd-merge.instructions.md`.
-   - Otherwise, stop and hand off using the summary fields above to the
-     configured merge-capable session. If that actor or resume condition
-     is not recorded, hold for maintainer direction.
-6. When the policy is `fully_autonomous_merge`, proceed to
+     resume condition is satisfied:
+     1. Ensure this session already holds a verified active `{claim-id}`.
+        If not, establish ownership through the normal claim path
+        (`idd-claim.instructions.md` A5) before continuing.
+     2. Do not reuse the worker's F2 snapshot after handoff comments.
+        Return to `idd-pre-merge.instructions.md` and run F2 again to
+        record a fresh snapshot for this merge-capable session.
+     3. Re-enter this handoff phase and continue to
+        `idd-merge.instructions.md`.
+   - Otherwise, post the handoff summary comment, then release the
+     worker claim with `unclaimed-by` using the current `{claim-id}` and
+     stop. This allows the designated merge-capable session to claim and
+     resume safely. If the claim was already lost, do not post release.
+6. When the policy is `fully_autonomous_merge`, continue directly to
    `idd-merge.instructions.md`.
