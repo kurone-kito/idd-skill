@@ -43,7 +43,7 @@ Execution-ready issue drafts should land in a middle band:
   a script because the body prescribes exact edit order, wording, or
   implementation steps that reviewers do not need.
 
-If a draft feels like it needs a premium model just to guess the intended
+If a draft feels like it needs a high-range model just to guess the intended
 change, it is still too vague. If it reads like line-by-line assembly
 instructions, it is too detailed.
 
@@ -150,7 +150,7 @@ authoring surface to edit, what kind of guidance is missing, or how a
 reviewer would verify success. A high-range model would need to infer
 the real task from surrounding repository context.
 
-### Target-range draft
+### Target range draft
 
 **Title**: `docs: add specificity checklist to issue authoring draft patterns`
 
@@ -162,9 +162,9 @@ too vague or too scripted for execution.
 Acceptance criteria:
 
 - `draft-patterns.md` includes a pre-publication specificity checklist
-- the guidance distinguishes under-specified, target-range, and
+- the guidance distinguishes under-specified, target range, and
   over-specified issue drafts
-- the examples focus on issue body wording and acceptance-criteria
+- the examples focus on issue body wording and acceptance criteria
   granularity instead of prescribing implementation order
 
 This is the target range because the next agent knows where to work, why
