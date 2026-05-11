@@ -72,10 +72,24 @@ comment. An inheritable claim comment is either:
 Check both linked issues and closing keywords in PR bodies.
 
 **(d) Branch collision** — Compute the branch name using the IDD naming
-convention: `issue/<number>-<slug>` where `<slug>` is 2–5 lowercase
-hyphenated words describing the issue (e.g. `issue/<number>-<slug>`). No
-remote branch with that name may exist, unless it matches the `branch`
-field in an inheritable claim comment as defined in (c) above.
+convention: `issue/<number>-<slug>`. Generate `<slug>` deterministically
+from the issue title so parallel sessions converge on the same branch
+name:
+
+1. Convert the issue title to lowercase.
+2. Replace every character outside ASCII `a-z` and `0-9` with `-`.
+3. Split on `-`, drop empty tokens, then remove only whole-token matches
+   from this fixed stop-word set: `a`, `an`, `the`, `and`, `or`, `in`,
+   `for`, `to`, `with`, `from`.
+4. Rejoin the remaining tokens with single `-`.
+5. If the slug is longer than 40 characters, cut it to the first
+   40 characters. If that cut ends mid-token and there is a `-` before
+   character 40, trim back to the last such `-`; if there is no `-`,
+   keep the hard 40-character cut. Then strip any trailing `-`.
+6. If the result is empty, use `task`.
+
+No remote branch with that name may exist, unless it matches the
+`branch` field in an inheritable claim comment as defined in (c) above.
 
 Before posting a claim, also perform a **scoped issue-wide branch pattern
 check** to detect concurrent sessions working on the same issue with
@@ -140,8 +154,8 @@ Determine `{branch-name}`:
   claim, the last-released trusted `claimed-by`, or the trusted legacy
   claim being migrated). Do not compute a new name.
 - **Fresh claim**: compute a new name using the IDD naming convention:
-  `issue/<number>-<slug>` where `<slug>` is 2–5 lowercase hyphenated
-  words describing the issue.
+  `issue/<number>-<slug>` where `<slug>` follows the deterministic title
+  normalization algorithm from pre-check (d).
 
 Generate a fresh `{claim-id}`. Determine `{prior-claim-id}`:
 
