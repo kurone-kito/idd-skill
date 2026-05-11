@@ -95,6 +95,21 @@ IDD は Markdown ネイティブですが、依存関係なしではありませ
 の外に置き、明示的な opt-in により選択します。merge policy は
 [Customizing IDD](docs/customization.md) で 1 つ選んで記録します。
 
+## ローカル pnpm ツール基盤
+
+このリポジトリには project-local の pnpm 基盤と Husky hook を追加し、
+コミット前に最小 lint ゲートをローカルでも強制できるようにしました。
+
+```sh
+corepack enable
+pnpm install
+pnpm run lint
+pnpm run test
+```
+
+pre-commit hook は `pnpm run lint:minimum` を実行し、commit-msg hook は
+commitlint により Conventional Commits を検証します。
+
 ### 5 分で読む導線
 
 IDD を評価または導入するときは、focused docs を次の順に読んでください:

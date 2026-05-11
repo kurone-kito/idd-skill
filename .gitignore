@@ -118,6 +118,11 @@ $RECYCLE.BIN/
 
 ### THE PROJECT SPECIFIES #################################################
 
+### Node.js / pnpm ###
+node_modules/
+.pnpm-store/
+.pnpm-debug.log*
+
 ### AI Agents ###
 # Claude Code local config
 .claude/

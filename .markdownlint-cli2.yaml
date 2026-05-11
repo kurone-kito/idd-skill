@@ -1,3 +1,5 @@
 ignores:
   - .github/CODE_OF_CONDUCT*
   - fixtures/issue-comments/*.md
+  - node_modules/**/*.md
+  - .pnpm-config/**/*.md
