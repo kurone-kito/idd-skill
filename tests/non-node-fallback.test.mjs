@@ -11,10 +11,9 @@ test("customization docs keep npx fallback wording aligned", () => {
       ),
       `${file} must keep the fallback matrix aligned with npx-availability wording`,
     );
-    assert.ok(
-      text.includes(
-        "(2) use bare `npx <tool>` when\n  `npx` is available; (3) replace with `true` when `npx` is unavailable",
-      ),
+    assert.match(
+      normalizeWhitespace(text),
+      /\(2\) use bare `npx <tool>` when `npx` is available; \(3\) replace with `true` when `npx` is unavailable or the check is not relevant to the project\./,
       `${file} must keep detailed fallback guidance aligned with matrix wording`,
     );
     assert.ok(
@@ -30,21 +29,36 @@ test("customization docs keep npx fallback wording aligned", () => {
 
 test("onboarding keeps non-node fallback scoped to no relevant tooling", () => {
   const text = readText("idd-template/ONBOARDING.md");
+  const fixValidateSection = extractSection(
+    text,
+    "- **Fix-validate commands**",
+    "- **Pre-push-validate commands**",
+  );
+  assert.match(
+    fixValidateSection,
+    /Node\.js \(no relevant project script, `npx` available\):/,
+    "ONBOARDING fix-validate section must gate npx fallback on `npx` availability",
+  );
+  assert.match(
+    fixValidateSection,
+    /No Node\.js and no other relevant tooling: `true` \(no-op\)/,
+    "ONBOARDING fix-validate section must scope no-op fallback to no-relevant-tooling cases",
+  );
 
-  const npxScopedMatches = text.match(
-    /Node\.js \(no relevant project script, `npx` available\):/g,
+  const prePushSection = extractSection(
+    text,
+    "- **Pre-push-validate commands**",
+    "- **Post-fix-validate commands**",
   );
-  assert.ok(
-    (npxScopedMatches?.length ?? 0) >= 2,
-    "ONBOARDING must gate npx fallback on `npx` availability in both command sections",
+  assert.match(
+    prePushSection,
+    /Node\.js \(no relevant project script, `npx` available\):/,
+    "ONBOARDING pre-push section must gate npx fallback on `npx` availability",
   );
-
-  const noOpScopedMatches = text.match(
-    /No Node\.js and no other relevant tooling: `true` \(no-op\)/g,
-  );
-  assert.ok(
-    (noOpScopedMatches?.length ?? 0) >= 2,
-    "ONBOARDING must scope no-op fallback to cases with no relevant tooling path",
+  assert.match(
+    prePushSection,
+    /No Node\.js and no other relevant tooling: `true` \(no-op\)/,
+    "ONBOARDING pre-push section must scope no-op fallback to no-relevant-tooling cases",
   );
 });
 
@@ -64,4 +78,16 @@ test("overview instructions document the npx-availability gate", () => {
 
 function readText(relativePath) {
   return readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8");
+}
+
+function normalizeWhitespace(text) {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function extractSection(text, startMarker, endMarker) {
+  const start = text.indexOf(startMarker);
+  assert.notEqual(start, -1, `Missing section marker: ${startMarker}`);
+  const end = text.indexOf(endMarker, start);
+  assert.notEqual(end, -1, `Missing section marker: ${endMarker}`);
+  return text.slice(start, end);
 }
