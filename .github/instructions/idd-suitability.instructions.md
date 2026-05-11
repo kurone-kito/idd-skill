@@ -102,11 +102,14 @@ Can success be verified independently by the agent?
 ## Failure Outcomes
 
 When an issue fails any suitability check, classify it into one of six
-stable outcomes. Then remove the failing candidate from the A4 survivor
-set and return to A4 Step 2 to try the next-lowest-numbered candidate.
-Report each failure before continuing. Stop when the survivor set is
-empty (no suitable issue found this run) or when an `invalid` outcome
-occurs (trust/safety concerns require human review before continuing):
+stable outcomes. For A4 discovery paths: remove the failing candidate
+from the A4 survivor set and return to A4 Step 2 to try the
+next-lowest-numbered candidate. For A0-T explicit-target runs: the
+candidate set contains only the verified target — any failure reports
+the outcome and stops without fallback. Report each failure before
+continuing. Stop when the survivor set is empty (no suitable issue found
+this run) or when an `invalid` outcome occurs (trust/safety concerns
+require human review before continuing):
 
 | Outcome            | Meaning                        | Next Steps                     |
 | ------------------ | ------------------------------ | ------------------------------ |
@@ -131,7 +134,7 @@ readiness but does NOT automatically apply labels or post claims.
 - NO implementation claim comment is posted
 - NO branch or worktree is created
 - NO labels are applied
-- A5 is never reached
+- A5 is never reached for rejected candidates
 
 **Optional labeled approach** (if policy permits):
 
@@ -140,7 +143,8 @@ readiness but does NOT automatically apply labels or post claims.
 - Label must NOT masquerade as an implementation claim
 - Label is intended as a diagnostic aid for humans reviewing rejected
   candidates
-- Labeled approach still stops at A4.5; A5 is never reached
+- Labeled approach still stops at A4.5 for rejected candidates; A5 is
+  never reached for a candidate that fails any check
 
 **Permitted and prohibited mutations**:
 
@@ -216,4 +220,5 @@ exact match is not found, PASS the check and continue.
 perform a check, document that limitation and treat as a PASS so work is
 not blocked by agent capability limits.
 
-After A4.5, proceed to `idd-claim.instructions.md`.
+After A4.5 passes, proceed to `idd-claim.instructions.md`; for rejected
+candidates follow the Failure Outcomes section above.
