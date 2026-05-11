@@ -184,6 +184,7 @@ repositories:
 | Context                                  | Requirement         | Fallback order                                                                       |
 | ---------------------------------------- | ------------------- | ------------------------------------------------------------------------------------ |
 | `git`, `gh`, `jq`, `curl`                | **Required**        | No fallback; IDD cannot run without these                                            |
+| `install-deps` command                   | Project-dependent   | Use project's native package manager; `true` as no-op when no install step is needed |
 | Validate commands (`fix-validate`, etc.) | Project-dependent   | Use project tooling; `true` as no-op                                                 |
 | Node.js / `npx`                          | Optional            | 1. Existing project Node.js tooling; 2. `npx` if Node.js is present; 3. `true` no-op |
 | pnpm                                     | Not required by IDD | Only needed when the adopter's project itself uses pnpm                              |
@@ -198,6 +199,10 @@ Decision points for implementation issues:
   Node.js project's script runner; (2) use bare `npx <tool>` if
   Node.js is available; (3) replace with `true` if the tool is absent
   and its check is not relevant to the project.
+- **CI guard (#265)**: the distributed `idd-template/` must not contain
+  commands that assume pnpm is available. A CI check scoped to
+  `idd-template/` should verify that `Project commands` placeholder
+  values do not reference `pnpm` directly.
 
 ## Issue Scope
 
