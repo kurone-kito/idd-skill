@@ -55,6 +55,7 @@ const UNSAFE_TEXT_RULES = [
     reason: "contains failed-CI context",
   },
 ];
+const AMD_MARKER_PATTERN = /^\*\*Awaiting maintainer decision\*\*/i;
 
 export function parseClaimComment(body, createdAt) {
   const match = body.trimEnd().match(
@@ -295,6 +296,240 @@ export function indexThreadsByReview(threads) {
   }
 
   return index;
+}
+
+export function routeRejectedChangesRequestedReview(input) {
+  const reviewState = String(input.reviewState ?? "");
+  if (reviewState !== "CHANGES_REQUESTED") {
+    return { route: "proceed", reason: "changes-requested state already cleared" };
+  }
+
+  const reviewerDisposition = String(input.reviewerDisposition ?? "none");
+  if (reviewerDisposition === "disagreed") {
+    return {
+      route: "return-to-e1",
+      reason: "reviewer disagreed with the rejection and the feedback must return to triage",
+    };
+  }
+  if (reviewerDisposition === "agreed-state-cleared") {
+    return {
+      route: "hold-await-state-clear",
+      reason: "reviewer agreement alone does not clear a changes-requested state",
+    };
+  }
+  if (reviewerDisposition === "agreed-state-unchanged") {
+    return {
+      route: "hold-await-state-clear",
+      reason: "reviewer agreement alone does not clear a changes-requested state",
+    };
+  }
+
+  const maintainerDisposition = String(input.maintainerDisposition ?? "none");
+  if (maintainerDisposition === "agreed-state-unchanged") {
+    return {
+      route: "hold-await-state-clear",
+      reason: "maintainer agreement does not clear the original changes-requested state",
+    };
+  }
+
+  const elapsedMs = Date.parse(input.now ?? "") - Date.parse(input.rejectionCommentCreatedAt ?? "");
+  if (!Number.isFinite(elapsedMs)) {
+    return {
+      route: "hold-for-evidence",
+      reason: "elapsed time cannot be computed for the rejected changes-requested review",
+    };
+  }
+
+  if (elapsedMs < 24 * 60 * 60 * 1000) {
+    return {
+      route: "hold-before-escalation",
+      reason: "still within the first 24 hours after the rejection reply",
+    };
+  }
+  if (elapsedMs < 48 * 60 * 60 * 1000) {
+    return {
+      route: "escalate-maintainer",
+      reason: "the changes-requested review is still blocking after 24 hours with no reviewer response",
+    };
+  }
+  const escalationElapsedMs = Date.parse(input.now ?? "") - Date.parse(input.escalationCommentCreatedAt ?? "");
+  if (!Number.isFinite(escalationElapsedMs)) {
+    return {
+      route: "escalate-maintainer",
+      reason: "the changes-requested review still needs maintainer escalation evidence before release",
+    };
+  }
+  if (escalationElapsedMs < 24 * 60 * 60 * 1000) {
+    return {
+      route: "hold-after-escalation",
+      reason: "still within 24 hours of the maintainer escalation comment",
+    };
+  }
+  return {
+    route: "label-and-release",
+    reason: "the changes-requested review is still blocking after 48 hours with no escalation response",
+  };
+}
+
+export function diffReviewSnapshot(snapshot, live) {
+  if (String(live.headSha ?? "") !== String(snapshot.headSha ?? "")) {
+    return { route: "return-to-e1", reason: "head-changed" };
+  }
+
+  const snapshotMax = normalizeComparableTimestamp(snapshot.maxActivityUpdatedAt);
+  const liveMax = normalizeComparableTimestamp(live.maxActivityUpdatedAt);
+  const snapshotCount = Number(snapshot.totalItemCount ?? 0);
+  const liveCount = Number(live.totalItemCount ?? 0);
+  if (snapshotMax === "none" && liveCount > 0) {
+    return { route: "return-to-e1", reason: "snapshot-was-empty-now-nonempty" };
+  }
+  if (
+    typeof snapshotMax === "number"
+    && liveCount > 0
+    && (liveMax === null || liveMax === "none")
+  ) {
+    return { route: "return-to-e1", reason: "missing-live-activity-evidence" };
+  }
+  if (typeof snapshotMax === "number" && typeof liveMax === "number" && liveMax > snapshotMax) {
+    return { route: "return-to-e1", reason: "newer-activity" };
+  }
+  if (liveCount > snapshotCount) {
+    return { route: "return-to-e1", reason: "same-timestamp-count-growth" };
+  }
+
+  const snapshotCi = normalizeComparableTimestamp(
+    snapshot.latestPassingCiCompletedAt ?? snapshot.latestCiCompletedAt,
+  );
+  const liveCi = normalizeComparableTimestamp(
+    live.latestPassingCiCompletedAt ?? live.latestCiCompletedAt,
+  );
+  if (snapshotCi === null || liveCi === null) {
+    return { route: "return-to-e1", reason: "missing-ci-evidence" };
+  }
+  if (snapshotCi !== liveCi) {
+    return { route: "return-to-e1", reason: "ci-pass-drift" };
+  }
+
+  return { route: "proceed", reason: "snapshot-current" };
+}
+
+export function classifyReviewThreadForGate(thread, options = {}) {
+  if (thread.isResolved) {
+    return { classification: "resolved" };
+  }
+  if (thread.comments?.pageInfo?.hasNextPage) {
+    return { classification: "actionable-blocking" };
+  }
+
+  const comments = thread.comments?.nodes ?? [];
+  const latestComment = comments.at(-1) ?? null;
+  const latestCommentAt = normalizeComparableTimestamp(latestComment?.createdAt);
+  const latestAuthor = String(latestComment?.author?.login ?? "").toLowerCase();
+  const iddAgentLogins = new Set(
+    (options.iddAgentLogins ?? [])
+      .map((login) => String(login ?? "").toLowerCase())
+      .filter(Boolean),
+  );
+  const prAuthorLogin = String(options.prAuthorLogin ?? "").toLowerCase();
+  const latestIsIddAgent = iddAgentLogins.has(latestAuthor);
+  const latestIsPrAuthor = Boolean(prAuthorLogin) && latestAuthor === prAuthorLogin;
+  let latestAmdIndex = -1;
+  for (let index = 0; index < comments.length; index += 1) {
+    const comment = comments[index];
+    const authorLogin = String(comment.author?.login ?? "").toLowerCase();
+    if (
+      iddAgentLogins.has(authorLogin)
+      && AMD_MARKER_PATTERN.test(String(comment.body ?? "").trimStart())
+    ) {
+      latestAmdIndex = index;
+    }
+  }
+  const reviewerReopenedAt = normalizeComparableTimestamp(inferReviewerReopenedAt(thread));
+  const reopenedAfterLatestComment = typeof reviewerReopenedAt === "number"
+    && (typeof latestCommentAt !== "number" || reviewerReopenedAt > latestCommentAt);
+  const amdAwaitsMaintainer = latestAmdIndex >= 0
+    && !reopenedAfterLatestComment
+    && !comments.slice(latestAmdIndex + 1).some((comment) => {
+      const authorLogin = String(comment.author?.login ?? "").toLowerCase();
+      return !iddAgentLogins.has(authorLogin) && authorLogin !== prAuthorLogin;
+    });
+
+  if (amdAwaitsMaintainer) {
+    return { classification: "amd-blocking" };
+  }
+
+  if (!(latestIsIddAgent || latestIsPrAuthor)) {
+    return { classification: "actionable-blocking" };
+  }
+
+  if (reopenedAfterLatestComment) {
+    return { classification: "actionable-blocking" };
+  }
+
+  if (options.requiresConversationResolution) {
+    if (latestIsIddAgent) {
+      return { classification: "conversation-resolve-agent" };
+    }
+    return { classification: "conversation-resolve-author" };
+  }
+
+  return { classification: "awaiting-reviewer" };
+}
+
+export function summarizeReviewThreadsForGate(threads, options = {}) {
+  const summary = {
+    actionableCount: 0,
+    awaitingReviewerCount: 0,
+    amdBlockingCount: 0,
+    conversationResolveAgentCount: 0,
+    conversationResolveAuthorCount: 0,
+    classifications: [],
+  };
+
+  for (const thread of threads) {
+    const result = classifyReviewThreadForGate(thread, options);
+    if (result.classification === "resolved") {
+      continue;
+    }
+
+    summary.classifications.push({
+      id: thread.id,
+      classification: result.classification,
+    });
+
+    if (result.classification === "actionable-blocking") {
+      summary.actionableCount += 1;
+      continue;
+    }
+    if (result.classification === "amd-blocking") {
+      summary.amdBlockingCount += 1;
+      summary.actionableCount += 1;
+      continue;
+    }
+    if (result.classification === "awaiting-reviewer") {
+      summary.awaitingReviewerCount += 1;
+      continue;
+    }
+    if (result.classification === "conversation-resolve-agent") {
+      summary.actionableCount += 1;
+      summary.conversationResolveAgentCount += 1;
+      continue;
+    }
+    if (result.classification === "conversation-resolve-author") {
+      summary.actionableCount += 1;
+      summary.conversationResolveAuthorCount += 1;
+    }
+  }
+
+  return summary;
+}
+
+function inferReviewerReopenedAt(thread) {
+  const explicit = String(thread.reviewerReopenedAt ?? "");
+  if (isValidIsoTimestamp(explicit)) {
+    return explicit;
+  }
+  return "";
 }
 
 export function hasFreshDisposition(thread) {
@@ -727,4 +962,15 @@ function isValidIsoTimestamp(value) {
   if (!Number.isFinite(time)) return false;
   const normalize = (ts) => ts.replace(".000Z", "Z");
   return normalize(new Date(time).toISOString()) === normalize(value);
+}
+
+function normalizeComparableTimestamp(value) {
+  const normalized = String(value ?? "none");
+  if (normalized === "none") {
+    return "none";
+  }
+  if (!isValidIsoTimestamp(normalized)) {
+    return null;
+  }
+  return Date.parse(normalized);
 }
