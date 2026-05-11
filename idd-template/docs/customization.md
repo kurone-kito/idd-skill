@@ -193,8 +193,7 @@ Decision points:
 
 ## Reusable pnpm boundary guard workflow
 
-The source repository publishes `.github/workflows/pnpm-boundary.yml` as
-both:
+This repository exposes `.github/workflows/pnpm-boundary.yml` as both:
 
 - a normal CI workflow (`push` and `pull_request`)
 - a reusable workflow (`workflow_call`) for downstream repositories
