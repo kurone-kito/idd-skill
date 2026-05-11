@@ -293,10 +293,10 @@ next step that requires no uncommitted changes.
 recreated worktrees must not require manual cleanup and should not leave
 unexpected tracked changes.
 
-**Tool availability**: the commands above are required when the listed
-tools are present. In repositories without Node.js or a specific tool,
-replace that command with `true` — the same no-op convention used by
-**install-deps** in this project.
+**Tool availability**: run commands only when tools exist. For Node.js:
+prefer project scripts; use `npx <tool>` only when `npx` is available
+and no relevant script exists; else use `true`. For other tools, use
+`true` when absent.
 
 ## Phase routing table
 

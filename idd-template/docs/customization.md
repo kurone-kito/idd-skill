@@ -172,13 +172,13 @@ the `Project commands` table in
 The following policy matrix defines the tooling requirements and
 fallback order for repositories adopting IDD:
 
-| Context                                  | Requirement         | Fallback order                                                                       |
-| ---------------------------------------- | ------------------- | ------------------------------------------------------------------------------------ |
-| `git`, `gh`, `jq`, `curl`                | **Required**        | No fallback; IDD cannot run without these                                            |
-| `install-deps` command                   | Project-dependent   | Use project's native package manager; `true` as no-op when no install step is needed |
-| Validate commands (`fix-validate`, etc.) | Project-dependent   | Use project tooling; `true` as no-op                                                 |
-| Node.js / `npx`                          | Optional            | 1. Existing project Node.js tooling; 2. `npx` if Node.js is present; 3. `true` no-op |
-| pnpm                                     | Not required by IDD | Only needed when the adopter's project itself uses pnpm                              |
+| Context                                  | Requirement         | Fallback order                                                                                           |
+| ---------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------- |
+| `git`, `gh`, `jq`, `curl`                | **Required**        | No fallback; IDD cannot run without these                                                                |
+| `install-deps` command                   | Project-dependent   | Use project's native package manager; `true` as no-op when no install step is needed                     |
+| Validate commands (`fix-validate`, etc.) | Project-dependent   | Use project tooling; `true` as no-op                                                                     |
+| Node.js / `npx`                          | Optional            | 1. Existing project Node.js tooling; 2. `npx` when available; 3. `true` when unavailable or not relevant |
+| pnpm                                     | Not required by IDD | Only needed when the adopter's project itself uses pnpm                                                  |
 
 Decision points:
 
@@ -187,9 +187,9 @@ Decision points:
 - **Out of scope for IDD**: package manager choice, build tooling,
   language runtime. Adopt whatever the target project already uses.
 - **Fallback order for npx-using templates**: (1) use an existing
-  Node.js project's script runner; (2) use bare `npx <tool>` if
-  Node.js is available; (3) replace with `true` if the tool is absent
-  and its check is not relevant to the project.
+  Node.js project's script runner; (2) use bare `npx <tool>` when
+  `npx` is available; (3) replace with `true` when `npx` is unavailable
+  or the check is not relevant to the project.
 
 ## Reusable pnpm boundary guard workflow
 
