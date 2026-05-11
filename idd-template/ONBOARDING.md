@@ -136,7 +136,7 @@ values. The operator can confirm these proposed values or correct them.
   repository (e.g., `dprint fmt` + linter, `black` + `isort`, `cargo fmt`,
   `go fmt`, `prettier --write`). Common patterns:
   - Node.js (relevant project script exists):
-    `<package-manager> run lint:fix && <package-manager> run lint`
+    `<pm> run lint:fix && <pm> run lint`
   - Node.js (no project scripts, Node.js present):
     `npx <linter> --fix && npx <linter>`
   - No Node.js: `true` (no-op)
