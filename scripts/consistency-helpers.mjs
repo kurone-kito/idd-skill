@@ -1,4 +1,4 @@
-import { inspectHelperRuntimeConfig, parseProjectCommandRows } from "./policy-helpers.mjs";
+import { parseProjectCommandRows } from "./policy-helpers.mjs";
 
 export { inspectHelperRuntimeConfig } from "./policy-helpers.mjs";
 
