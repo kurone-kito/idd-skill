@@ -623,18 +623,22 @@ that mention IDD workflow.
 `.github/idd/config.json` is a machine-readable record of the decisions
 above. When present and valid, its `commands` object and policy fields
 override the command table values in `idd-overview.instructions.md`. It is
-included in the core file list and copied as part of Step 2. Keep the
-human-readable policy section in sync with this JSON file.
+included in the core file list and copied as part of Step 2. The file is
+optional; IDD operates from the Markdown instruction files when the JSON is
+absent or invalid. When you do use it, keep the human-readable policy
+section in sync with this JSON file.
 
 After copying, the file contains placeholders. Fill them in along with the
 rest of the placeholder-replacement pass in Step 4. Also replace the
 `<trusted-login>` string in `trustedMarkerActors` with the GitHub login of
 each person or bot allowed to post trusted IDD operational markers. The
-file validates against `schemas/policy.schema.json` in the idd-skill
-repository and may be checked locally:
+file validates against the canonical schema at
+<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>.
+To validate locally, run the following from a checkout of the idd-skill
+repository:
 
 ```sh
-node scripts/validate-schemas.mjs  # if the script is present in the repo
+node scripts/validate-schemas.mjs
 ```
 
 Notes:
