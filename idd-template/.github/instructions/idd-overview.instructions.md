@@ -306,9 +306,10 @@ unexpected tracked changes.
 
 **Tool availability**: the commands above are required when the listed
 tools are present. For Node.js tooling, apply the three-level fallback
-in order: (1) run the project script if one exists (`npm run <script>`);
-(2) use bare `npx <tool>` if Node.js is present but no project script
-exists; (3) replace with `true` (no-op) if Node.js is absent. For other
+in order: (1) run the project's package-manager script if one exists
+(e.g., `npm run <script>`, `pnpm run <script>`); (2) use bare
+`npx <tool>` if Node.js is present but no project script exists;
+(3) replace with `true` (no-op) if Node.js is absent. For other
 tools, replace the command with `true` when the tool is absent. Set
 `{{INSTALL_DEPS_COMMAND}}` to `true` if the project has no install step.
 See [Tooling boundary](docs/customization.md#tooling-boundary) for the

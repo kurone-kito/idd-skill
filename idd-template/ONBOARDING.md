@@ -148,7 +148,7 @@ values. The operator can confirm these proposed values or correct them.
   - Node.js (project scripts present):
     `npm run lint && npm run build && npm run test`
   - Node.js (no project scripts, Node.js present):
-    `npx <linter> && npx <test-runner>`
+    `npx <linter> && npx <builder> && npx <test-runner>`
   - No Node.js: `true` (no-op)
   - Python: `pylint . && python -m pytest`
   - Go: `go vet ./... && go test ./...`
