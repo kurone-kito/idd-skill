@@ -137,9 +137,9 @@ values. The operator can confirm these proposed values or correct them.
   `go fmt`, `prettier --write`). Common patterns:
   - Node.js (relevant project script exists):
     `<pm> run lint:fix && <pm> run lint`
-  - Node.js (no project scripts, Node.js present):
+  - Node.js (no relevant project script, `npx` available):
     `npx <linter> --fix && npx <linter>`
-  - No Node.js: `true` (no-op)
+  - No Node.js and no other relevant tooling: `true` (no-op)
   - Python: `black . && isort .` or equivalent
   - Go: `go fmt ./...`
   - Rust: `cargo fmt`
