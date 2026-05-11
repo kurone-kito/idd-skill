@@ -7,6 +7,7 @@ import {
   loadJson,
   validate,
   validateFixture,
+  validatePhaseGraph,
 } from "../scripts/validate-schemas.mjs";
 import { parseClaimComment } from "../scripts/protocol-helpers.mjs";
 
@@ -41,7 +42,7 @@ test("checkSchemaKeywords reports unsupported keywords", () => {
   };
   const errors = checkSchemaKeywords(badSchema);
   assert.ok(errors.length > 0, "Expected at least one error");
-  assert.ok(errors[0].includes("anyOf"), `Expected 'anyOf' in error: ${errors[0]}`);
+  assert.ok(errors.some((e) => e.includes("anyOf")), `Expected 'anyOf' in errors: ${errors}`);
 });
 
 // ---------------------------------------------------------------------------
@@ -197,4 +198,57 @@ test("protocol-helpers parseClaimComment output matches claim-marker schema", ()
   const schema = loadJson("schemas/claim-marker.schema.json");
   const errors = validate(parsed, schema);
   assert.deepEqual(errors, [], `Schema/runtime drift detected:\n${errors.join("\n")}`);
+});
+
+// ---------------------------------------------------------------------------
+// Claim ID pattern — accepts opaque tokens including hyphens
+// ---------------------------------------------------------------------------
+
+test("claim-marker schema accepts hyphenated claim IDs", () => {
+  const schema = loadJson("schemas/claim-marker.schema.json");
+  const base = loadJson("fixtures/schemas/claim-marker.valid.json");
+  for (const id of ["abc-123", "claim-1", "4018f4c673f8", "x-y-z"]) {
+    const instance = { ...base, claimId: id };
+    const errors = validate(instance, schema);
+    assert.deepEqual(errors, [], `Expected "${id}" to be valid but got: ${errors}`);
+  }
+});
+
+test("claim-marker schema rejects claim IDs containing whitespace", () => {
+  const schema = loadJson("schemas/claim-marker.schema.json");
+  const base = loadJson("fixtures/schemas/claim-marker.valid.json");
+  for (const id of ["invalid id", "has space", "tab\there"]) {
+    const instance = { ...base, claimId: id };
+    const errors = validate(instance, schema);
+    assert.ok(errors.length > 0, `Expected "${id}" to fail pattern but passed`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Phase-graph referential integrity
+// ---------------------------------------------------------------------------
+
+test("validatePhaseGraph accepts a valid graph", () => {
+  const graph = { nodes: [{ id: "A", next: ["B"] }, { id: "B", next: [] }] };
+  assert.deepEqual(validatePhaseGraph(graph), []);
+});
+
+test("validatePhaseGraph reports dangling next reference", () => {
+  const graph = { nodes: [{ id: "A", next: ["missing"] }] };
+  const errors = validatePhaseGraph(graph);
+  assert.ok(errors.length > 0, "Expected error for dangling reference");
+  assert.ok(errors.some((e) => e.includes("missing")), `Expected 'missing' in errors: ${errors}`);
+});
+
+test("validatePhaseGraph reports duplicate node ids", () => {
+  const graph = {
+    nodes: [{ id: "A", next: [] }, { id: "A", next: [] }],
+  };
+  const errors = validatePhaseGraph(graph);
+  assert.ok(errors.some((e) => e.includes("Duplicate")), `Expected duplicate error: ${errors}`);
+});
+
+test("phase-graph.json has no dangling references", () => {
+  const graph = loadJson("schemas/phase-graph.json");
+  assert.deepEqual(validatePhaseGraph(graph), []);
 });

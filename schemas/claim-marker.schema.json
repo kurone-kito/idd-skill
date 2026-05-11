@@ -5,7 +5,13 @@
   "description": "Structured claim-marker payload parsed from claimed-by comments.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["agentId", "claimId", "supersedes", "branch", "createdAt"],
+  "required": [
+    "agentId",
+    "claimId",
+    "supersedes",
+    "branch",
+    "createdAt"
+  ],
   "properties": {
     "agentId": {
       "type": "string",
@@ -15,7 +21,7 @@
     "claimId": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^[a-z0-9]+$"
+      "pattern": "^\\S+$"
     },
     "supersedes": {
       "type": "string",

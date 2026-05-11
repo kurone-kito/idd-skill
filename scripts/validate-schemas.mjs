@@ -158,6 +158,40 @@ export function loadJson(relPath) {
 }
 
 /**
+ * Check referential integrity of a phase-graph data object.
+ *
+ * Verifies that every node referenced in a `next` array exists as a node
+ * id within the same graph, and that no node id is duplicated.
+ *
+ * @param {object} data  parsed phase-graph JSON
+ * @returns {string[]} error messages — empty array means valid
+ */
+export function validatePhaseGraph(data) {
+  const errors = [];
+  if (typeof data !== "object" || data === null || !Array.isArray(data.nodes)) {
+    return errors;
+  }
+  const nodeIds = new Set();
+  const duplicates = new Set();
+  for (const node of data.nodes) {
+    if (typeof node.id !== "string") continue;
+    if (nodeIds.has(node.id)) duplicates.add(node.id);
+    nodeIds.add(node.id);
+  }
+  for (const id of duplicates) {
+    errors.push(`Duplicate node id: "${id}"`);
+  }
+  for (const node of data.nodes) {
+    for (const target of node.next ?? []) {
+      if (!nodeIds.has(target)) {
+        errors.push(`Node "${node.id}": next target "${target}" does not exist`);
+      }
+    }
+  }
+  return errors;
+}
+
+/**
  * Validate a fixture against its schema.
  * @param {string} schemaPath  path relative to repo root
  * @param {string} fixturePath path relative to repo root
@@ -179,6 +213,10 @@ export function validateFixture(schemaPath, fixturePath, expectValid) {
   if (expectValid && !isValid) return { ok: false, errors: errs };
   if (!expectValid && isValid) {
     return { ok: false, errors: ["Expected validation failure but fixture passed"] };
+  }
+  if (expectValid && schemaPath.endsWith("phase-graph.schema.json")) {
+    const graphErrors = validatePhaseGraph(fixture);
+    if (graphErrors.length > 0) return { ok: false, errors: graphErrors };
   }
   return { ok: true, errors: [] };
 }
