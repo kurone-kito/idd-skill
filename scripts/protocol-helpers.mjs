@@ -313,8 +313,8 @@ export function routeRejectedChangesRequestedReview(input) {
   }
   if (reviewerDisposition === "agreed-state-cleared") {
     return {
-      route: "proceed",
-      reason: "reviewer agreed with the rejection and cleared the changes-requested state",
+      route: "hold-await-state-clear",
+      reason: "reviewer agreement alone does not clear a changes-requested state",
     };
   }
   if (reviewerDisposition === "agreed-state-unchanged") {
@@ -352,6 +352,19 @@ export function routeRejectedChangesRequestedReview(input) {
       reason: "the changes-requested review is still blocking after 24 hours with no reviewer response",
     };
   }
+  const escalationElapsedMs = Date.parse(input.now ?? "") - Date.parse(input.escalationCommentCreatedAt ?? "");
+  if (!Number.isFinite(escalationElapsedMs)) {
+    return {
+      route: "escalate-maintainer",
+      reason: "the changes-requested review still needs maintainer escalation evidence before release",
+    };
+  }
+  if (escalationElapsedMs < 24 * 60 * 60 * 1000) {
+    return {
+      route: "hold-after-escalation",
+      reason: "still within 24 hours of the maintainer escalation comment",
+    };
+  }
   return {
     route: "label-and-release",
     reason: "the changes-requested review is still blocking after 48 hours with no escalation response",
@@ -370,7 +383,14 @@ export function diffReviewSnapshot(snapshot, live) {
   if (snapshotMax === "none" && liveCount > 0) {
     return { route: "return-to-e1", reason: "snapshot-was-empty-now-nonempty" };
   }
-  if (snapshotMax && liveMax && snapshotMax !== "none" && liveMax !== "none" && liveMax > snapshotMax) {
+  if (
+    typeof snapshotMax === "number"
+    && liveCount > 0
+    && (liveMax === null || liveMax === "none")
+  ) {
+    return { route: "return-to-e1", reason: "missing-live-activity-evidence" };
+  }
+  if (typeof snapshotMax === "number" && typeof liveMax === "number" && liveMax > snapshotMax) {
     return { route: "return-to-e1", reason: "newer-activity" };
   }
   if (liveCount > snapshotCount) {
@@ -383,6 +403,9 @@ export function diffReviewSnapshot(snapshot, live) {
   const liveCi = normalizeComparableTimestamp(
     live.latestPassingCiCompletedAt ?? live.latestCiCompletedAt,
   );
+  if (snapshotCi === null || liveCi === null) {
+    return { route: "return-to-e1", reason: "missing-ci-evidence" };
+  }
   if (snapshotCi !== liveCi) {
     return { route: "return-to-e1", reason: "ci-pass-drift" };
   }
@@ -400,7 +423,7 @@ export function classifyReviewThreadForGate(thread, options = {}) {
 
   const comments = thread.comments?.nodes ?? [];
   const latestComment = comments.at(-1) ?? null;
-  const latestCommentAt = String(latestComment?.createdAt ?? "");
+  const latestCommentAt = normalizeComparableTimestamp(latestComment?.createdAt);
   const latestAuthor = String(latestComment?.author?.login ?? "").toLowerCase();
   const iddAgentLogins = new Set(
     (options.iddAgentLogins ?? [])
@@ -421,7 +444,11 @@ export function classifyReviewThreadForGate(thread, options = {}) {
       latestAmdIndex = index;
     }
   }
+  const reviewerReopenedAt = normalizeComparableTimestamp(inferReviewerReopenedAt(thread));
+  const reopenedAfterLatestComment = typeof reviewerReopenedAt === "number"
+    && (typeof latestCommentAt !== "number" || reviewerReopenedAt > latestCommentAt);
   const amdAwaitsMaintainer = latestAmdIndex >= 0
+    && !reopenedAfterLatestComment
     && !comments.slice(latestAmdIndex + 1).some((comment) => {
       const authorLogin = String(comment.author?.login ?? "").toLowerCase();
       return !iddAgentLogins.has(authorLogin) && authorLogin !== prAuthorLogin;
@@ -435,11 +462,7 @@ export function classifyReviewThreadForGate(thread, options = {}) {
     return { classification: "actionable-blocking" };
   }
 
-  const reviewerReopenedAt = inferReviewerReopenedAt(thread);
-  if (!latestCommentAt && reviewerReopenedAt) {
-    return { classification: "actionable-blocking" };
-  }
-  if (reviewerReopenedAt && reviewerReopenedAt > latestCommentAt) {
+  if (reopenedAfterLatestComment) {
     return { classification: "actionable-blocking" };
   }
 
@@ -947,7 +970,7 @@ function normalizeComparableTimestamp(value) {
     return "none";
   }
   if (!isValidIsoTimestamp(normalized)) {
-    return "";
+    return null;
   }
-  return new Date(Date.parse(normalized)).toISOString().replace(".000Z", "Z");
+  return Date.parse(normalized);
 }

@@ -128,8 +128,27 @@
       "latestPassingCiCompletedAt": "2026-05-11T08:05:00Z"
     },
     "expected": {
-      "route": "proceed",
-      "reason": "snapshot-current"
+      "route": "return-to-e1",
+      "reason": "missing-live-activity-evidence"
+    }
+  },
+  {
+    "name": "return to E1 when CI evidence is invalid",
+    "snapshot": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestPassingCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "live": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestPassingCiCompletedAt": "invalid"
+    },
+    "expected": {
+      "route": "return-to-e1",
+      "reason": "missing-ci-evidence"
     }
   },
   {
@@ -149,6 +168,25 @@
     "expected": {
       "route": "proceed",
       "reason": "snapshot-current"
+    }
+  },
+  {
+    "name": "return to E1 when live activity is newer within the same second",
+    "snapshot": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestPassingCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "live": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00.100Z",
+      "totalItemCount": 5,
+      "latestPassingCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "expected": {
+      "route": "return-to-e1",
+      "reason": "newer-activity"
     }
   }
 ]

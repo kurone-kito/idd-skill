@@ -36,7 +36,7 @@
     }
   },
   {
-    "name": "reviewer agreement with cleared state proceeds",
+    "name": "reviewer agreement still waits for state to clear",
     "input": {
       "reviewState": "CHANGES_REQUESTED",
       "rejectionCommentCreatedAt": "2026-05-10T00:00:00Z",
@@ -44,8 +44,8 @@
       "reviewerDisposition": "agreed-state-cleared"
     },
     "expected": {
-      "route": "proceed",
-      "reason": "reviewer agreed with the rejection and cleared the changes-requested state"
+      "route": "hold-await-state-clear",
+      "reason": "reviewer agreement alone does not clear a changes-requested state"
     }
   },
   {
@@ -88,10 +88,36 @@
     }
   },
   {
-    "name": "label and release after 48h without escalation response",
+    "name": "48h age still escalates if no escalation evidence exists",
     "input": {
       "reviewState": "CHANGES_REQUESTED",
       "rejectionCommentCreatedAt": "2026-05-09T00:00:00Z",
+      "now": "2026-05-11T01:00:00Z"
+    },
+    "expected": {
+      "route": "escalate-maintainer",
+      "reason": "the changes-requested review still needs maintainer escalation evidence before release"
+    }
+  },
+  {
+    "name": "hold after escalation until a full day has passed",
+    "input": {
+      "reviewState": "CHANGES_REQUESTED",
+      "rejectionCommentCreatedAt": "2026-05-09T00:00:00Z",
+      "escalationCommentCreatedAt": "2026-05-10T18:00:00Z",
+      "now": "2026-05-11T01:00:00Z"
+    },
+    "expected": {
+      "route": "hold-after-escalation",
+      "reason": "still within 24 hours of the maintainer escalation comment"
+    }
+  },
+  {
+    "name": "label and release after 48h with no escalation response",
+    "input": {
+      "reviewState": "CHANGES_REQUESTED",
+      "rejectionCommentCreatedAt": "2026-05-09T00:00:00Z",
+      "escalationCommentCreatedAt": "2026-05-10T00:30:00Z",
       "now": "2026-05-11T01:00:00Z"
     },
     "expected": {
