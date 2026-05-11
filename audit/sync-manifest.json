@@ -128,6 +128,13 @@
       "stripPrefix": "skills/issue-authoring/"
     }
   ],
+  "instructionSizeBudgets": {
+    "id": "instruction-size-budgets",
+    "glob": ".github/instructions/idd-*.instructions.md",
+    "alwaysLoadedPattern": "applyTo:\\s*\"\\*\\*\"",
+    "alwaysLoadedLimitBytes": 20000,
+    "phaseLimitBytes": 30000
+  },
   "syncPairs": [
     {
       "id": "idd-advisory-wait-instructions",
