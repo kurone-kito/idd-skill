@@ -118,7 +118,7 @@
       {
         "id": "THREAD-reopened",
         "isResolved": false,
-        "updatedAt": "2026-05-11T08:06:00Z",
+        "reviewerReopenedAt": "2026-05-11T08:06:00Z",
         "comments": {
           "nodes": [
             {
@@ -148,6 +148,48 @@
       "classifications": [
         {
           "id": "THREAD-reopened",
+          "classification": "actionable-blocking"
+        }
+      ]
+    }
+  },
+  {
+    "name": "edited IDD reply does not hide a later reopen",
+    "threads": [
+      {
+        "id": "THREAD-reopen-after-reply",
+        "isResolved": false,
+        "reviewerReopenedAt": "2026-05-11T08:06:00Z",
+        "comments": {
+          "nodes": [
+            {
+              "author": { "login": "reviewer" },
+              "body": "Please adjust this branch.",
+              "createdAt": "2026-05-11T08:00:00Z"
+            },
+            {
+              "author": { "login": "idd-bot" },
+              "body": "**Accepted** — fixed in abc123: adjusted the branch wording.",
+              "createdAt": "2026-05-11T08:05:00Z",
+              "updatedAt": "2026-05-11T08:07:00Z"
+            }
+          ]
+        }
+      }
+    ],
+    "options": {
+      "iddAgentLogins": ["idd-bot"],
+      "prAuthorLogin": "author"
+    },
+    "expected": {
+      "actionableCount": 1,
+      "awaitingReviewerCount": 0,
+      "amdBlockingCount": 0,
+      "conversationResolveAgentCount": 0,
+      "conversationResolveAuthorCount": 0,
+      "classifications": [
+        {
+          "id": "THREAD-reopen-after-reply",
           "classification": "actionable-blocking"
         }
       ]
@@ -230,6 +272,41 @@
         {
           "id": "THREAD-non-agent-amd",
           "classification": "actionable-blocking"
+        }
+      ]
+    }
+  },
+  {
+    "name": "quoted AMD marker after other text stays actionable",
+    "threads": [
+      {
+        "id": "THREAD-quoted-amd",
+        "isResolved": false,
+        "comments": {
+          "nodes": [
+            {
+              "author": { "login": "idd-bot" },
+              "body": "Follow-up note: `**Awaiting maintainer decision**` is only quoted here.",
+              "createdAt": "2026-05-11T08:05:00Z"
+            }
+          ]
+        }
+      }
+    ],
+    "options": {
+      "iddAgentLogins": ["idd-bot"],
+      "prAuthorLogin": "author"
+    },
+    "expected": {
+      "actionableCount": 0,
+      "awaitingReviewerCount": 1,
+      "amdBlockingCount": 0,
+      "conversationResolveAgentCount": 0,
+      "conversationResolveAuthorCount": 0,
+      "classifications": [
+        {
+          "id": "THREAD-quoted-amd",
+          "classification": "awaiting-reviewer"
         }
       ]
     }

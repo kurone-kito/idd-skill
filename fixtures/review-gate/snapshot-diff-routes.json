@@ -131,5 +131,24 @@
       "route": "proceed",
       "reason": "snapshot-current"
     }
+  },
+  {
+    "name": "proceed when equivalent ISO forms only differ by milliseconds",
+    "snapshot": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestPassingCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "live": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00.000Z",
+      "totalItemCount": 5,
+      "latestPassingCiCompletedAt": "2026-05-11T08:05:00.000Z"
+    },
+    "expected": {
+      "route": "proceed",
+      "reason": "snapshot-current"
+    }
   }
 ]

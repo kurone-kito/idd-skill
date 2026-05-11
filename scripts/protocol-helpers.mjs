@@ -55,6 +55,7 @@ const UNSAFE_TEXT_RULES = [
     reason: "contains failed-CI context",
   },
 ];
+const AMD_MARKER_PATTERN = /^\*\*Awaiting maintainer decision\*\*/i;
 
 export function parseClaimComment(body, createdAt) {
   const match = body.trimEnd().match(
@@ -362,25 +363,25 @@ export function diffReviewSnapshot(snapshot, live) {
     return { route: "return-to-e1", reason: "head-changed" };
   }
 
-  const snapshotMax = String(snapshot.maxActivityUpdatedAt ?? "none");
-  const liveMax = String(live.maxActivityUpdatedAt ?? "none");
+  const snapshotMax = normalizeComparableTimestamp(snapshot.maxActivityUpdatedAt);
+  const liveMax = normalizeComparableTimestamp(live.maxActivityUpdatedAt);
   const snapshotCount = Number(snapshot.totalItemCount ?? 0);
   const liveCount = Number(live.totalItemCount ?? 0);
   if (snapshotMax === "none" && liveCount > 0) {
     return { route: "return-to-e1", reason: "snapshot-was-empty-now-nonempty" };
   }
-  if (snapshotMax !== "none" && liveMax !== "none" && liveMax > snapshotMax) {
+  if (snapshotMax && liveMax && snapshotMax !== "none" && liveMax !== "none" && liveMax > snapshotMax) {
     return { route: "return-to-e1", reason: "newer-activity" };
   }
   if (liveCount > snapshotCount) {
     return { route: "return-to-e1", reason: "same-timestamp-count-growth" };
   }
 
-  const snapshotCi = String(
-    snapshot.latestPassingCiCompletedAt ?? snapshot.latestCiCompletedAt ?? "none",
+  const snapshotCi = normalizeComparableTimestamp(
+    snapshot.latestPassingCiCompletedAt ?? snapshot.latestCiCompletedAt,
   );
-  const liveCi = String(
-    live.latestPassingCiCompletedAt ?? live.latestCiCompletedAt ?? "none",
+  const liveCi = normalizeComparableTimestamp(
+    live.latestPassingCiCompletedAt ?? live.latestCiCompletedAt,
   );
   if (snapshotCi !== liveCi) {
     return { route: "return-to-e1", reason: "ci-pass-drift" };
@@ -399,7 +400,7 @@ export function classifyReviewThreadForGate(thread, options = {}) {
 
   const comments = thread.comments?.nodes ?? [];
   const latestComment = comments.at(-1) ?? null;
-  const latestCommentAt = String(latestComment?.updatedAt ?? latestComment?.createdAt ?? "");
+  const latestCommentAt = String(latestComment?.createdAt ?? "");
   const latestAuthor = String(latestComment?.author?.login ?? "").toLowerCase();
   const iddAgentLogins = new Set(
     (options.iddAgentLogins ?? [])
@@ -412,7 +413,7 @@ export function classifyReviewThreadForGate(thread, options = {}) {
   const hasAmd = comments.some((comment) => {
     const authorLogin = String(comment.author?.login ?? "").toLowerCase();
     return iddAgentLogins.has(authorLogin)
-      && UNSAFE_TEXT_RULES[0].pattern.test(String(comment.body ?? "").trimStart());
+      && AMD_MARKER_PATTERN.test(String(comment.body ?? "").trimStart());
   });
 
   if (hasAmd) {
@@ -423,7 +424,7 @@ export function classifyReviewThreadForGate(thread, options = {}) {
     return { classification: "actionable-blocking" };
   }
 
-  const reviewerReopenedAt = inferReviewerReopenedAt(thread, latestCommentAt);
+  const reviewerReopenedAt = inferReviewerReopenedAt(thread);
   if (!latestCommentAt && reviewerReopenedAt) {
     return { classification: "actionable-blocking" };
   }
@@ -489,21 +490,12 @@ export function summarizeReviewThreadsForGate(threads, options = {}) {
   return summary;
 }
 
-function inferReviewerReopenedAt(thread, latestCommentAt) {
+function inferReviewerReopenedAt(thread) {
   const explicit = String(thread.reviewerReopenedAt ?? "");
   if (isValidIsoTimestamp(explicit)) {
     return explicit;
   }
-
-  const threadUpdatedAt = String(thread.updatedAt ?? "");
-  if (!isValidIsoTimestamp(threadUpdatedAt)) {
-    return "";
-  }
-  if (!latestCommentAt || !isValidIsoTimestamp(latestCommentAt)) {
-    return threadUpdatedAt;
-  }
-
-  return threadUpdatedAt > latestCommentAt ? threadUpdatedAt : "";
+  return "";
 }
 
 export function hasFreshDisposition(thread) {
@@ -936,4 +928,15 @@ function isValidIsoTimestamp(value) {
   if (!Number.isFinite(time)) return false;
   const normalize = (ts) => ts.replace(".000Z", "Z");
   return normalize(new Date(time).toISOString()) === normalize(value);
+}
+
+function normalizeComparableTimestamp(value) {
+  const normalized = String(value ?? "none");
+  if (normalized === "none") {
+    return "none";
+  }
+  if (!isValidIsoTimestamp(normalized)) {
+    return "";
+  }
+  return new Date(Date.parse(normalized)).toISOString().replace(".000Z", "Z");
 }

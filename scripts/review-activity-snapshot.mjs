@@ -145,7 +145,7 @@ function normalizeThread(thread) {
   return {
     id: thread.id,
     isResolved: Boolean(thread.isResolved),
-    updatedAt: thread.updatedAt ?? "",
+    updatedAt: "",
     comments: {
       pageInfo: { hasNextPage: Boolean(thread.comments?.pageInfo?.hasNextPage) },
       nodes: (thread.comments?.nodes ?? []).map((comment) => ({
@@ -174,7 +174,6 @@ function fetchReviewThreads(owner, repo, prNumber) {
                 nodes {
                   id
                   isResolved
-                  updatedAt
                   comments(first: 100) {
                     pageInfo { hasNextPage endCursor }
                     nodes {

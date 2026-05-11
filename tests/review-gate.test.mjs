@@ -41,13 +41,15 @@ test("classifies unresolved threads for awaiting-reviewer and conversation-resol
       fixture.name,
     );
 
-    const expectedClassification =
-      fixture.expected.classifications[0]?.classification ?? "resolved";
-    assert.equal(
-      classifyReviewThreadForGate(fixture.threads[0], fixture.options).classification,
-      expectedClassification,
-      `${fixture.name} single-thread classification`,
-    );
+    if (fixture.threads.length === 1) {
+      const expectedClassification =
+        fixture.expected.classifications[0]?.classification ?? "resolved";
+      assert.equal(
+        classifyReviewThreadForGate(fixture.threads[0], fixture.options).classification,
+        expectedClassification,
+        `${fixture.name} single-thread classification`,
+      );
+    }
   }
 });
 
