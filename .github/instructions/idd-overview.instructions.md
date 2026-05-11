@@ -319,6 +319,10 @@ file that matches your current situation.
 | All pre-merge conditions satisfied            | `idd-merge-handoff.instructions.md` (F2.5)                            |
 | Autonomous merge path confirmed               | `idd-merge.instructions.md` (F3–F5)                                   |
 
+**Note**: after A4 candidate selection (or A0-T target verification),
+always open `idd-suitability.instructions.md` (A4.5) before
+`idd-claim.instructions.md`.
+
 CI polling logic shared by D and E phases lives in
 `idd-ci.instructions.md`; callers declare their own on-success target.
 

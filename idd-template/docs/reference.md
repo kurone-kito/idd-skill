@@ -14,6 +14,7 @@ or [Core concepts](concepts.md) before using this reference.
 | --------------------------------- | ------ | ------------------------------------------------------------------------------------------- |
 | Shared definitions and commands   | All    | [IDD overview](../.github/instructions/idd-overview.instructions.md)                        |
 | Select the next issue             | A0-A4  | [Discover](../.github/instructions/idd-discover.instructions.md)                            |
+| Evaluate issue suitability        | A4.5   | [Suitability triage](../.github/instructions/idd-suitability.instructions.md)               |
 | Claim an issue safely             | A5     | [Claim](../.github/instructions/idd-claim.instructions.md)                                  |
 | Create a worktree and self-review | B-C    | [Work and self-review](../.github/instructions/idd-work.instructions.md)                    |
 | Open or update the pull request   | D      | [PR submit](../.github/instructions/idd-pr-submit.instructions.md)                          |

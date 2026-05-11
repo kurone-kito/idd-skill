@@ -12,7 +12,7 @@
       "languageLinks": [
         {
           "file": "README.md",
-          "text": "[\u65e5\u672c\u8a9e](./README.ja.md)"
+          "text": "[日本語](./README.ja.md)"
         },
         {
           "file": "README.ja.md",
@@ -59,6 +59,7 @@
         "idd-template/.github/idd/config.json",
         "idd-template/.github/instructions/idd-overview.instructions.md",
         "idd-template/.github/instructions/idd-discover.instructions.md",
+        "idd-template/.github/instructions/idd-suitability.instructions.md",
         "idd-template/.github/instructions/idd-claim.instructions.md",
         "idd-template/.github/instructions/idd-work.instructions.md",
         "idd-template/.github/instructions/idd-pr-submit.instructions.md",
@@ -159,6 +160,12 @@
       "source": "idd-template/.github/instructions/idd-discover.instructions.md",
       "target": ".github/instructions/idd-discover.instructions.md",
       "mode": "structure"
+    },
+    {
+      "id": "idd-suitability-instructions",
+      "source": "idd-template/.github/instructions/idd-suitability.instructions.md",
+      "target": ".github/instructions/idd-suitability.instructions.md",
+      "mode": "exact"
     },
     {
       "id": "idd-merge-handoff-instructions",
