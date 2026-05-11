@@ -114,8 +114,9 @@ If the active or inherited branch field starts with `roadmap-audit/`,
 the claim is an A1.5 roadmap-audit coordination claim, not a work branch.
 This coordination claim does not lock unrelated child-issue execution.
 After the re-claim or takeover is verified, do not create a branch or
-worktree and do not use the Step 2 worktree table. Re-run A1.5 for that
-roadmap issue, then follow A1.5's close, release, or stop behavior.
+worktree and do not use the Step 2 worktree table. Re-run A1.5 via
+`idd-roadmap-audit.instructions.md` for that roadmap issue, then follow
+that file's close, release, or stop behavior.
 Treat child issue claims independently; roadmap-audit claim presence
 alone must not block child issue execution.
 
