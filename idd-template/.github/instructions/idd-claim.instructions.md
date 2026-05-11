@@ -207,3 +207,67 @@ worktree`. If multiple marked digests exist, report their URLs and
 continue from the verified claim without editing a digest.
 
 Then continue to `idd-work.instructions.md`.
+
+## Claim-state parsing
+
+To determine the current active claim, read issue comments
+chronologically and apply these rules:
+
+1. Start with **no active claim**.
+2. Ignore any `claimed-by` or `unclaimed-by` marker whose GitHub comment
+   author is not a trusted marker actor.
+3. A `claimed-by` whose `{agent-id}` AND `{claim-id}` both match the
+   current active claim is a **heartbeat**. Refresh the active claim's
+   GitHub `created_at`.
+4. A `claimed-by` with a **new** `{claim-id}` becomes the active claim
+   only if either:
+   - there is no active claim AND its `supersedes:` value is `none`, or
+   - its `supersedes:` value exactly matches the current active claim's
+     `{claim-id}`, and the current active claim is already **stale** at
+     the new comment's GitHub `created_at` timestamp.
+5. An `unclaimed-by` releases the claim only if its `{agent-id}` AND
+   `{claim-id}` both match the current active claim. Otherwise ignore it
+   as a stale release from a superseded session.
+6. Any `claimed-by` whose `{claim-id}` matches the active claim but
+   whose `{agent-id}` differs, or whose `{claim-id}` was already
+   superseded, or whose `supersedes:` value does not match the current
+   active claim when one exists, is ignored as a stale or invalid event.
+
+Same-agent restarts never silently inherit or supersede an active
+non-stale claim. If the current session already recorded and verified
+the active `{claim-id}` before this check, continue with that same token
+and use heartbeats; do not post a fresh takeover claim. If the session
+cannot prove ownership of the active `{claim-id}`, the active claim is
+treated as owned by another live session until it is released or stale,
+even when `{agent-id}` matches.
+
+## Legacy claim migration
+
+Older issues may still contain the legacy claim format:
+
+```html
+<!-- claimed-by: {agent-id} {ISO8601-timestamp} branch: {branch-name} -->
+```
+
+and the matching legacy release format:
+
+```html
+<!-- unclaimed-by: {agent-id} {ISO8601-timestamp} -->
+```
+
+Treat trusted legacy comments as **migration-only** inputs:
+
+- If an issue has no trusted new-format `claimed-by` comments yet, first
+  check whether the latest trusted legacy `claimed-by` comment is
+  followed by a later trusted legacy `unclaimed-by` comment from the
+  same agent. If so, treat the issue as **unclaimed**; skip directly to
+  posting a fresh new-format claim with `supersedes: none`.
+- Otherwise, use the latest trusted legacy claim to decide branch reuse
+  and staleness. A matching legacy agent ID is not enough to prove same
+  live-session ownership.
+- Then immediately post a new-format `claimed-by` comment with a fresh
+  `{claim-id}` and visible note before any further side effects.
+- Use `supersedes: none` for that one-time migration claim, because the
+  legacy format has no `{claim-id}` to reference.
+- After a new-format claim exists, ignore all legacy claim and unclaim
+  comments for active-claim parsing and revalidation.

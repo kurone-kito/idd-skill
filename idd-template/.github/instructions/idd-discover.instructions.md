@@ -691,3 +691,53 @@ perform a check, document that limitation and treat as a PASS so work is
 not blocked by agent capability limits.
 
 After A4.5, proceed to `idd-claim.instructions.md`.
+
+## Roadmap markers
+
+Two hidden HTML comment markers are used in issue bodies to support the
+discover phase:
+
+- **Roadmap identity** (`{{PROJECT_MARKER_PREFIX}}-roadmap-id`): placed
+  in the roadmap issue body. A3 uses this marker to resolve `blocked-by`
+  dependency lookups. A1 identifies the roadmap by its `roadmap` label
+  or umbrella structure — not by this marker.
+- **Sequential dependency** (`{{PROJECT_MARKER_PREFIX}}-blocked-by`):
+  placed in an issue body to express a hard dependency — this issue
+  **cannot start until** the roadmap with the matching `roadmap-id` is
+  closed.
+
+**Do not use `{{PROJECT_MARKER_PREFIX}}-blocked-by` to group sub-tasks
+under an active roadmap.** Sub-tasks that should be worked on while the
+roadmap is open belong in the roadmap's task list as `- [ ] #NNN`
+entries. The `blocked-by` marker is reserved for issues that must wait
+for a separate, prior roadmap to close before they can start (cross-
+phase sequential dependency). Using it for grouping causes A3 to block
+every sub-task for the entire lifetime of the roadmap.
+
+## Scope invariant (detailed query allowlist)
+
+Agents must not widen issue-selection scope beyond what the roadmap
+explicitly references (directly or transitively) without explicit
+operator instruction. Specifically:
+
+- A single explicit issue target provided by the operator in the current
+  run is explicit operator instruction for that one issue only. Use the
+  A0-T path; do not use the target as permission to search for alternate
+  issues.
+- Repo-wide searches (`gh issue list`, `gh search`, label-based queries)
+  are permitted only in **A1** (to locate the roadmap itself), in
+  **A0-T** for the scoped body-content lookup needed to resolve the
+  explicit target's `{{PROJECT_MARKER_PREFIX}}-blocked-by` markers, in
+  **A0-O** when `issue-scope` is `orphan-first` (body-content filter to
+  find issues lacking `{{PROJECT_MARKER_PREFIX}}-roadmap-id` and
+  `{{PROJECT_MARKER_PREFIX}}-blocked-by` markers), and for the scoped
+  `{{PROJECT_MARKER_PREFIX}}-roadmap-id` body-content lookup required by
+  A3's dependency-marker check. A1.5 may also run a narrow repo-wide
+  duplicate/reuse check for a specific autonomous gap before creating a
+  follow-up issue; the result may only prevent a duplicate or link an
+  existing issue back to the selected roadmap, not expand the candidate
+  set.
+- After a zero-result report at A3, an operator may grant a one-time
+  opt-in for the current run, specifying an alternate scope.
+- Opt-in must be granted interactively during the current run. Prior or
+  standing instructions do not count as opt-in.
