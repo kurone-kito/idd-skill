@@ -24,6 +24,44 @@ Adopters can copy the helper separately when they want the same
 repository-local convenience, otherwise the documented GraphQL fallback
 remains the portable path.
 
+Absent helper runtime configuration means `instructions-only`. Repositories
+that do not opt into helper support should still be able to copy the
+Markdown instructions, run the portable shell / `gh` / `jq` procedures,
+and complete the workflow without a Node.js dependency.
+
+## Helper Runtime Profiles
+
+When a repository imports the IDD template, helper support should be
+selected from one of these profiles:
+
+| Profile             | Intended use                                                                                                                | Dependency model                                                               | Portability expectation                                                                                                                 |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `package-manager`   | The adopter already uses pnpm, npm, or yarn for the repository.                                                             | Reuse the repository's existing package manager and pre-resolved dependencies. | Preferred when a package manager project already exists; do not fall back to ad hoc `npx` in this mode.                                 |
+| `vendored-node`     | The adopter has Node.js available but does not want helper execution to depend on registry resolution at runtime.           | Copy a local helper bundle into the repository during import.                  | Keeps helper execution repository-local while remaining optional.                                                                       |
+| `ephemeral-npx`     | The adopter has Node.js available, does not vend helper files, and can resolve a runnable helper command at execution time. | Resolve helper execution through one-shot `npx` commands.                      | Reserved for cases where a published or otherwise resolvable helper command already exists; otherwise fall back to `instructions-only`. |
+| `instructions-only` | The adopter does not want or cannot use helper scripts.                                                                     | No helper runtime. Agents follow the Markdown instructions directly.           | First-class supported fallback; no helper config is required.                                                                           |
+
+## Import-Time Selection Order
+
+Helper runtime choice is an import-time policy decision. Apply this order
+only after a maintainer or import flow has explicitly opted into helper
+support. If helper support was not requested, keep `instructions-only`.
+
+1. If helper support has not been requested, use `instructions-only`.
+2. Otherwise, if the repository already has a supported package manager
+   project, select `package-manager`.
+3. Otherwise, if Node.js is available and the import flow is allowed to
+   copy helper files, select `vendored-node`.
+4. Otherwise, if Node.js is available and a published or otherwise
+   resolvable helper command exists for one-shot execution, select
+   `ephemeral-npx`.
+5. Otherwise, use `instructions-only`.
+
+This selection order exists to keep helper support optional without
+turning every adopter into a Node.js-first repository. The written
+decision tables remain the canonical protocol regardless of which helper
+profile is selected.
+
 The adopted helper boundaries are intentionally narrow:
 
 - `review-activity-snapshot.mjs` is read-only, emits machine-readable
@@ -84,6 +122,18 @@ For now, the safer balance is to keep pre-merge instructions canonical
 while allowing one read-only E/F snapshot helper, one live digest upsert
 helper, and one post-merge cleanup helper. Merge safety still depends on
 the written checks, not on helper output alone.
+
+## Non-goals
+
+This helper policy does **not** imply the following:
+
+- Node.js becomes mandatory for repositories that only copy the Markdown
+  instructions
+- helper output becomes authoritative over the written decision tables
+- helpers perform mutating review or merge actions by default; mutation
+  must remain explicit in the written instructions
+- the project is committed to publishing a separate npm package before
+  the local and templated helper profiles are proven
 
 ## Future Adoption Criteria
 
