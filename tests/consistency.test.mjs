@@ -77,7 +77,8 @@ function collectPlaceholderHits(url) {
     if (placeholders.length === 0) {
       return;
     }
-    hits.push(`${relative(root, fullPath)}: ${placeholders.join(", ")}`);
+    const relativePath = relative(root, fullPath).replaceAll("\\", "/");
+    hits.push(`${relativePath}: ${placeholders.join(", ")}`);
   });
 
   return hits.sort();
