@@ -218,3 +218,25 @@ If the Accepted PATH A count is zero → proceed to
 `idd-pre-merge.instructions.md`.
 
 Otherwise continue to `idd-review-fix.instructions.md`.
+
+## Review item classes
+
+During E-phase review triage, classify each List A item into one of two
+paths before deciding what to do with it:
+
+- **PATH A — actionable feedback**: human reviewer comments,
+  `CHANGES_REQUESTED` review bodies, and critique-pass findings that
+  require a code change or a maintainer decision. Score severity, choose
+  Accept or Reject, and send only Accepted PATH A items to the
+  review-fix phase.
+- **PATH B — advisory feedback**: Copilot and CI advisory bot comments
+  that E1 intentionally includes for traceability, even when they do not
+  require a code change. Record an explicit `**Accepted**` or
+  `**Rejected**` marker during triage, then verify that marker before
+  merge.
+- If a source is ambiguous, treat it as PATH A until a maintainer
+  narrows it. PATH B is reserved for explicitly advisory bot feedback
+  already included by E1.
+
+PATH B items are fully handled inside review triage. They never enter
+the review-fix phase.
