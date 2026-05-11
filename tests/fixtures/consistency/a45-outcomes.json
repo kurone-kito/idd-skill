@@ -1,0 +1,37 @@
+[
+  {
+    "id": "repository-fit",
+    "failedCheck": "Repository Fit",
+    "expectedOutcome": "out-of-scope"
+  },
+  {
+    "id": "issue-coherence",
+    "failedCheck": "Issue Coherence",
+    "expectedOutcome": "unclear"
+  },
+  {
+    "id": "trust-safety",
+    "failedCheck": "Trust/Safety",
+    "expectedOutcome": "invalid"
+  },
+  {
+    "id": "duplicate-or-superseded",
+    "failedCheck": "Duplicate or Superseded Work",
+    "expectedOutcome": "duplicate"
+  },
+  {
+    "id": "actionability",
+    "failedCheck": "Actionability",
+    "expectedOutcome": "needs-decision"
+  },
+  {
+    "id": "autonomy",
+    "failedCheck": "Autonomy (Suitability Perspective)",
+    "expectedOutcome": "blocked-by-human"
+  },
+  {
+    "id": "verifiability",
+    "failedCheck": "Verifiability (Suitability Perspective)",
+    "expectedOutcome": "needs-decision"
+  }
+]

@@ -4,6 +4,8 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { collectPolicyConfigDrift } from "./consistency-helpers.mjs";
+
 const root = process.cwd();
 const manifestPath = "audit/sync-manifest.json";
 const args = new Set(process.argv.slice(2));
@@ -26,6 +28,7 @@ checkShellFileLists(manifest.shellFileLists ?? [], manifest.generatedBlocks ?? [
 checkSyncPairs(manifest.syncPairs ?? []);
 checkInstructionSizeBudgets(manifest.instructionSizeBudgets ?? null);
 checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
+checkConfigInstructionDrift();
 
 if (errors.length > 0) {
   console.error("documentation audit failed:");
@@ -277,6 +280,34 @@ function checkForbiddenPatterns(patterns) {
       }
     }
   }
+}
+
+function checkConfigInstructionDrift() {
+  const configPath = ".github/idd/config.json";
+  const overviewPath = ".github/instructions/idd-overview.instructions.md";
+
+  if (!repoFiles.includes(configPath) || !repoFiles.includes(overviewPath)) {
+    return;
+  }
+
+  let config;
+  try {
+    config = JSON.parse(readText(configPath));
+  } catch {
+    errors.push(`${configPath} is not valid JSON`);
+    return;
+  }
+
+  const drifts = collectPolicyConfigDrift(config, readText(overviewPath));
+  if (drifts.length > 0) {
+    const summary = drifts
+      .map((drift) => `${drift.path} expected ${JSON.stringify(drift.expected)} got ${JSON.stringify(drift.actual)}`)
+      .join("; ");
+    errors.push(`${configPath} drifts from ${overviewPath}: ${summary}`);
+    return;
+  }
+
+  notices.push(`${configPath} matches ${overviewPath} command and scope defaults`);
 }
 
 function checkInstructionSizeBudgets(config) {
