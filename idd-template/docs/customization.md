@@ -19,8 +19,30 @@ behavior change too.
 | Merge policy          | Merge gates after CI, review, freshness, and claim checks; distributed default is `fully_autonomous_merge` | Review [Permissions and threat model](permissions.md), record the selected policy in repository docs, and keep or customize the F2.5/F3 handoff gates for non-autonomous profiles.                                                                                                                                                                                                                                                |
 | Stall recovery safety | 30-minute quiet-window evidence plus 24-hour stale-threshold ownership gate                                | Keep `idd-resume-stall.instructions.md` aligned with `idd-overview` claim rules, and customize both files together if local policy changes quiet-window or takeover timing.                                                                                                                                                                                                                                                       |
 | CI commands           | Project-specific command rows in the overview file                                                         | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                                                                                                                                                                                                                                                                        |
+| Helper runtime        | `instructions-only` unless helper support is explicitly requested during onboarding                        | Use `idd-template/ONBOARDING.md` Step 1B together with [IDD helper script evaluation](idd-helper-scripts.md#import-time-selection-order). Prefer existing pnpm/npm/yarn dependencies for `package-manager`, use `vendored-node` before `ephemeral-npx`, and keep `instructions-only` for repositories without Node.js.                                                                                                            |
 | Issue scope           | Roadmap-first discovery                                                                                    | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues to be considered before roadmap traversal.                                                                                                                                                                                                                                       |
 | Orphan-first approval | No extra gate beyond orphan readiness checks                                                               | Keep `orphan-first-policy` as `none`, or opt in to `maintainer-approved` or `public-disabled` when public or community-submitted issues need an explicit maintainer approval layer before A0-O can select them.                                                                                                                                                                                                                   |
+
+## Helper Runtime Profile
+
+Keep helper support optional. During onboarding, start from
+`instructions-only` unless the operator explicitly wants helper script
+support.
+
+When helper support is requested, follow the import-time order from
+[IDD helper script evaluation](idd-helper-scripts.md#import-time-selection-order):
+
+1. `package-manager` when the repository already uses pnpm, npm, or
+   yarn, reusing those existing dependencies instead of ad hoc `npx`
+2. `vendored-node` when Node.js is available and helper files may be
+   copied into the repository
+3. `ephemeral-npx` only when a resolvable one-shot helper command
+   already exists
+4. `instructions-only` fallback when none of the above applies
+
+This choice is separate from the project command placeholders. A
+repository without Node.js can still import and run IDD with the written
+instructions alone.
 
 ## Review Policy
 

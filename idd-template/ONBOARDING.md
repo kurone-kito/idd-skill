@@ -271,6 +271,27 @@ evidence and require explicit operator confirmation:
    **Confirm with operator**: "Install the optional issue-authoring
    companion skill? (yes/no)"
 
+5. **Helper runtime profile**: Should the repository opt into optional
+   helper script execution during import, or stay on the written
+   instructions only?
+   - `instructions-only` (default): no helper runtime. Use this whenever
+     helper support was not explicitly requested, or when the repository
+     does not want a Node.js-dependent helper path.
+   - If helper support is requested, derive the profile in this order:
+     1. `package-manager` when the repository already uses pnpm, npm, or
+        yarn. Reuse the existing package-manager dependencies instead of
+        ad hoc `npx`.
+     2. `vendored-node` when Node.js is available and the import may copy
+        helper files into the repository.
+     3. `ephemeral-npx` only when Node.js is available and a published or
+        otherwise resolvable one-shot helper command already exists.
+     4. `instructions-only` fallback when none of the above applies.
+   - Repositories without Node.js remain fully supported through the
+     `instructions-only` fallback.
+
+   **Confirm with operator**: "Keep `instructions-only`, or opt into
+   helper support and record the derived helper runtime profile?"
+
 **Record all policy decisions** in repository documentation (see Step 8
 below). Future IDD sessions will read these decisions to understand the
 repository's configured behavior.
@@ -391,6 +412,14 @@ Confirm claim timing policy defaults from `docs/policy-constants.md` as
 well: `claim-stale-age` (default `24 h`) and
 `claim-heartbeat-interval` (default `12 h`). Record whether the
 repository keeps these defaults before unattended runs.
+
+Confirm helper runtime handling as well. Keep `instructions-only`
+unless helper support was explicitly requested. When helper support is
+requested, prefer an existing pnpm/npm/yarn project as
+`package-manager`, otherwise use `vendored-node`, then
+`ephemeral-npx` only when a resolvable one-shot command already exists,
+and finally fall back to `instructions-only`. This helper-runtime choice
+is separate from the project command placeholders in Step 1A.
 
 ### File list
 
@@ -672,6 +701,20 @@ This repository uses the following IDD policies:
 - **claim-stale-age**: 24 h (default, changeable in docs/policy-constants.md)
 - **claim-heartbeat-interval**: 12 h (default, changeable in docs/policy-constants.md)
 
+### Helper Runtime Profile
+
+**Profile**: `{instructions-only | package-manager | vendored-node | ephemeral-npx}`
+
+- Keep `instructions-only` unless helper support was explicitly
+  requested during onboarding.
+- If helper support is requested, select in this order:
+  `package-manager`, `vendored-node`, `ephemeral-npx`, then back to
+  `instructions-only`.
+- Existing pnpm/npm/yarn repositories should reuse their package-manager
+  dependencies instead of ad hoc `npx`.
+- Repositories without Node.js stay supported through
+  `instructions-only`.
+
 ### Issue-Authoring Companion
 
 **Status**: {installed | not installed}
@@ -715,6 +758,9 @@ Notes:
   notes and JSON as a configuration bug and update both in the same change.
 - Keep command strings JSON-escaped. Do not paste raw shell directly if
   it contains quotes or backslashes.
+- Helper runtime selection is currently recorded in the human-readable
+  policy section. Do not add a `helperRuntime` JSON field unless the
+  schema is extended first.
 - Extend the schema only when the repository records extra policy
   decisions (for example: critique-loop profile, merge handoff actor,
   external advisory bot, or maintainer approval actors).
@@ -896,6 +942,9 @@ After completing the steps above, confirm each item:
 - [ ] Ownership timing policy values `claim-stale-age` and
       `claim-heartbeat-interval` are explicitly recorded for the target
       repository.
+- [ ] The selected helper runtime profile is recorded, including whether
+      the repository stays on `instructions-only` or opted into
+      `package-manager`, `vendored-node`, or `ephemeral-npx`.
 - [ ] If the operator opted into issue authoring,
       `skills/issue-authoring/SKILL.md`,
       `skills/issue-authoring/agents/openai.yaml`, and the
