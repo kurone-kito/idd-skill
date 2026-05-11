@@ -1,0 +1,116 @@
+[
+  {
+    "name": "proceed when snapshot still matches live state",
+    "snapshot": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "live": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "expected": {
+      "route": "proceed",
+      "reason": "snapshot-current"
+    }
+  },
+  {
+    "name": "return to E1 on newer activity",
+    "snapshot": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "live": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:01Z",
+      "totalItemCount": 5,
+      "latestCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "expected": {
+      "route": "return-to-e1",
+      "reason": "newer-activity"
+    }
+  },
+  {
+    "name": "return to E1 when head SHA changes",
+    "snapshot": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "live": {
+      "headSha": "def456",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "expected": {
+      "route": "return-to-e1",
+      "reason": "head-changed"
+    }
+  },
+  {
+    "name": "return to E1 on same-timestamp item count growth",
+    "snapshot": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "live": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 6,
+      "latestCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "expected": {
+      "route": "return-to-e1",
+      "reason": "same-timestamp-count-growth"
+    }
+  },
+  {
+    "name": "return to E1 on CI pass drift",
+    "snapshot": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "live": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestCiCompletedAt": "2026-05-11T08:06:00Z"
+    },
+    "expected": {
+      "route": "return-to-e1",
+      "reason": "ci-pass-drift"
+    }
+  },
+  {
+    "name": "return to E1 when empty snapshot becomes non-empty",
+    "snapshot": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "none",
+      "totalItemCount": 0,
+      "latestCiCompletedAt": "none"
+    },
+    "live": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 1,
+      "latestCiCompletedAt": "none"
+    },
+    "expected": {
+      "route": "return-to-e1",
+      "reason": "snapshot-was-empty-now-nonempty"
+    }
+  }
+]

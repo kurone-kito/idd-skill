@@ -1,0 +1,64 @@
+[
+  {
+    "name": "hold before 24h escalation window",
+    "input": {
+      "reviewState": "CHANGES_REQUESTED",
+      "rejectionCommentCreatedAt": "2026-05-11T00:00:00Z",
+      "now": "2026-05-11T12:00:00Z"
+    },
+    "expected": {
+      "route": "hold-before-escalation",
+      "reason": "still within the first 24 hours after the rejection reply"
+    }
+  },
+  {
+    "name": "escalate after 24h without reviewer response",
+    "input": {
+      "reviewState": "CHANGES_REQUESTED",
+      "rejectionCommentCreatedAt": "2026-05-10T00:00:00Z",
+      "now": "2026-05-11T01:00:00Z"
+    },
+    "expected": {
+      "route": "escalate-maintainer",
+      "reason": "the changes-requested review is still blocking after 24 hours with no reviewer response"
+    }
+  },
+  {
+    "name": "maintainer agreement still blocks until state clears",
+    "input": {
+      "reviewState": "CHANGES_REQUESTED",
+      "rejectionCommentCreatedAt": "2026-05-10T00:00:00Z",
+      "now": "2026-05-11T12:00:00Z",
+      "maintainerDisposition": "agreed-state-unchanged"
+    },
+    "expected": {
+      "route": "hold-await-state-clear",
+      "reason": "maintainer agreement does not clear the original changes-requested state"
+    }
+  },
+  {
+    "name": "reviewer disagreement returns to E1",
+    "input": {
+      "reviewState": "CHANGES_REQUESTED",
+      "rejectionCommentCreatedAt": "2026-05-10T00:00:00Z",
+      "now": "2026-05-11T12:00:00Z",
+      "reviewerDisposition": "disagreed"
+    },
+    "expected": {
+      "route": "return-to-e1",
+      "reason": "reviewer disagreed with the rejection and the feedback must return to triage"
+    }
+  },
+  {
+    "name": "label and release after 48h without escalation response",
+    "input": {
+      "reviewState": "CHANGES_REQUESTED",
+      "rejectionCommentCreatedAt": "2026-05-09T00:00:00Z",
+      "now": "2026-05-11T01:00:00Z"
+    },
+    "expected": {
+      "route": "label-and-release",
+      "reason": "the changes-requested review is still blocking after 48 hours with no escalation response"
+    }
+  }
+]

@@ -1,0 +1,245 @@
+[
+  {
+    "name": "awaiting-reviewer thread is excluded from blocking count",
+    "threads": [
+      {
+        "id": "THREAD-awaiting",
+        "isResolved": false,
+        "comments": {
+          "nodes": [
+            {
+              "author": { "login": "reviewer" },
+              "body": "Please adjust this branch.",
+              "createdAt": "2026-05-11T08:00:00Z"
+            },
+            {
+              "author": { "login": "idd-bot" },
+              "body": "**Accepted** — fixed in abc123: adjusted the branch wording.",
+              "createdAt": "2026-05-11T08:05:00Z"
+            }
+          ]
+        }
+      }
+    ],
+    "options": {
+      "iddAgentLogins": ["idd-bot"],
+      "prAuthorLogin": "author"
+    },
+    "expected": {
+      "actionableCount": 0,
+      "awaitingReviewerCount": 1,
+      "amdBlockingCount": 0,
+      "conversationResolveAgentCount": 0,
+      "conversationResolveAuthorCount": 0,
+      "classifications": [
+        {
+          "id": "THREAD-awaiting",
+          "classification": "awaiting-reviewer"
+        }
+      ]
+    }
+  },
+  {
+    "name": "reviewer reopen without text makes the thread actionable again",
+    "threads": [
+      {
+        "id": "THREAD-reopened",
+        "isResolved": false,
+        "reviewerReopenedAt": "2026-05-11T08:06:00Z",
+        "comments": {
+          "nodes": [
+            {
+              "author": { "login": "reviewer" },
+              "body": "Please adjust this branch.",
+              "createdAt": "2026-05-11T08:00:00Z"
+            },
+            {
+              "author": { "login": "idd-bot" },
+              "body": "**Accepted** — fixed in abc123: adjusted the branch wording.",
+              "createdAt": "2026-05-11T08:05:00Z"
+            }
+          ]
+        }
+      }
+    ],
+    "options": {
+      "iddAgentLogins": ["idd-bot"],
+      "prAuthorLogin": "author"
+    },
+    "expected": {
+      "actionableCount": 1,
+      "awaitingReviewerCount": 0,
+      "amdBlockingCount": 0,
+      "conversationResolveAgentCount": 0,
+      "conversationResolveAuthorCount": 0,
+      "classifications": [
+        {
+          "id": "THREAD-reopened",
+          "classification": "actionable-blocking"
+        }
+      ]
+    }
+  },
+  {
+    "name": "reviewer comment after an IDD reply is actionable again",
+    "threads": [
+      {
+        "id": "THREAD-reviewer-latest",
+        "isResolved": false,
+        "comments": {
+          "nodes": [
+            {
+              "author": { "login": "reviewer" },
+              "body": "Please adjust this branch.",
+              "createdAt": "2026-05-11T08:00:00Z"
+            },
+            {
+              "author": { "login": "idd-bot" },
+              "body": "**Accepted** — fixed in abc123: adjusted the branch wording.",
+              "createdAt": "2026-05-11T08:05:00Z"
+            },
+            {
+              "author": { "login": "reviewer" },
+              "body": "Not quite right yet.",
+              "createdAt": "2026-05-11T08:06:00Z"
+            }
+          ]
+        }
+      }
+    ],
+    "options": {
+      "iddAgentLogins": ["idd-bot"],
+      "prAuthorLogin": "author"
+    },
+    "expected": {
+      "actionableCount": 1,
+      "awaitingReviewerCount": 0,
+      "amdBlockingCount": 0,
+      "conversationResolveAgentCount": 0,
+      "conversationResolveAuthorCount": 0,
+      "classifications": [
+        {
+          "id": "THREAD-reviewer-latest",
+          "classification": "actionable-blocking"
+        }
+      ]
+    }
+  },
+  {
+    "name": "AMD thread remains blocking",
+    "threads": [
+      {
+        "id": "THREAD-amd",
+        "isResolved": false,
+        "comments": {
+          "nodes": [
+            {
+              "author": { "login": "idd-bot" },
+              "body": "**Awaiting maintainer decision** — rejecting this review item needs maintainer confirmation.",
+              "createdAt": "2026-05-11T08:05:00Z"
+            }
+          ]
+        }
+      }
+    ],
+    "options": {
+      "iddAgentLogins": ["idd-bot"],
+      "prAuthorLogin": "author"
+    },
+    "expected": {
+      "actionableCount": 1,
+      "awaitingReviewerCount": 0,
+      "amdBlockingCount": 1,
+      "conversationResolveAgentCount": 0,
+      "conversationResolveAuthorCount": 0,
+      "classifications": [
+        {
+          "id": "THREAD-amd",
+          "classification": "amd-blocking"
+        }
+      ]
+    }
+  },
+  {
+    "name": "conversation resolution required lets an IDD agent resolve directly",
+    "threads": [
+      {
+        "id": "THREAD-conv-agent",
+        "isResolved": false,
+        "comments": {
+          "nodes": [
+            {
+              "author": { "login": "reviewer" },
+              "body": "Please adjust this branch.",
+              "createdAt": "2026-05-11T08:00:00Z"
+            },
+            {
+              "author": { "login": "idd-bot" },
+              "body": "**Accepted** — fixed in abc123: adjusted the branch wording.",
+              "createdAt": "2026-05-11T08:05:00Z"
+            }
+          ]
+        }
+      }
+    ],
+    "options": {
+      "iddAgentLogins": ["idd-bot"],
+      "prAuthorLogin": "author",
+      "requiresConversationResolution": true
+    },
+    "expected": {
+      "actionableCount": 0,
+      "awaitingReviewerCount": 0,
+      "amdBlockingCount": 0,
+      "conversationResolveAgentCount": 1,
+      "conversationResolveAuthorCount": 0,
+      "classifications": [
+        {
+          "id": "THREAD-conv-agent",
+          "classification": "conversation-resolve-agent"
+        }
+      ]
+    }
+  },
+  {
+    "name": "conversation resolution required asks for author acknowledgement",
+    "threads": [
+      {
+        "id": "THREAD-conv-author",
+        "isResolved": false,
+        "comments": {
+          "nodes": [
+            {
+              "author": { "login": "reviewer" },
+              "body": "Please adjust this branch.",
+              "createdAt": "2026-05-11T08:00:00Z"
+            },
+            {
+              "author": { "login": "author" },
+              "body": "Applied in the latest push.",
+              "createdAt": "2026-05-11T08:05:00Z"
+            }
+          ]
+        }
+      }
+    ],
+    "options": {
+      "iddAgentLogins": ["idd-bot"],
+      "prAuthorLogin": "author",
+      "requiresConversationResolution": true
+    },
+    "expected": {
+      "actionableCount": 0,
+      "awaitingReviewerCount": 0,
+      "amdBlockingCount": 0,
+      "conversationResolveAgentCount": 0,
+      "conversationResolveAuthorCount": 1,
+      "classifications": [
+        {
+          "id": "THREAD-conv-author",
+          "classification": "conversation-resolve-author"
+        }
+      ]
+    }
+  }
+]
