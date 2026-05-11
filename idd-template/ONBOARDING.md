@@ -340,6 +340,7 @@ repository keeps these defaults before unattended runs.
 <!-- audit:generated id=idd-template-core-files -->
 
 ```text
+.github/idd/config.json
 .github/instructions/idd-overview.instructions.md
 .github/instructions/idd-discover.instructions.md
 .github/instructions/idd-claim.instructions.md
@@ -403,9 +404,10 @@ Fetch all files with `gh api` (recommended — handles auth automatically):
 ```sh
 DEST="."  # root of the target repository
 
-mkdir -p "${DEST}/.github/instructions" "${DEST}/docs"
+mkdir -p "${DEST}/.github/idd" "${DEST}/.github/instructions" "${DEST}/docs"
 
 for FILE in \
+  ".github/idd/config.json" \
   ".github/instructions/idd-overview.instructions.md" \
   ".github/instructions/idd-discover.instructions.md" \
   ".github/instructions/idd-claim.instructions.md" \
@@ -477,9 +479,10 @@ repository):
 BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template"
 DEST="."  # root of the target repository
 
-mkdir -p "${DEST}/.github/instructions" "${DEST}/docs"
+mkdir -p "${DEST}/.github/idd" "${DEST}/.github/instructions" "${DEST}/docs"
 
 for FILE in \
+  ".github/idd/config.json" \
   ".github/instructions/idd-overview.instructions.md" \
   ".github/instructions/idd-discover.instructions.md" \
   ".github/instructions/idd-claim.instructions.md" \
@@ -615,50 +618,43 @@ Make this policy section discoverable and point to it from any entry files
 (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`)
 that mention IDD workflow.
 
-### Optional: add a machine-readable policy file
+### Machine-readable policy file
 
-For repositories that want stable automation input beyond Markdown,
-create `.github/idd/config.json` as a machine-readable mirror of the
-decisions above. Keep the human-readable policy section and this JSON in
-sync.
+`.github/idd/config.json` is a machine-readable record of the decisions
+above. When present and valid, its `commands` object and policy fields
+override the command table values in `idd-overview.instructions.md`. It is
+included in the core file list and copied as part of Step 2. The file is
+optional; IDD operates from the Markdown instruction files when the JSON is
+absent or invalid. When you do use it, keep the human-readable policy
+section in sync with this JSON file.
 
-Suggested shape:
+After copying, the file contains placeholders. Fill them in along with the
+rest of the placeholder-replacement pass in Step 4. Also replace the
+`<trusted-login>` string in `trustedMarkerActors` with the GitHub login of
+each person or bot allowed to post trusted IDD operational markers. The
+file validates against the canonical schema at
+<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>.
+To validate locally, run the following from a checkout of the idd-skill
+repository:
 
-```json
-{
-  "iddVersion": "0.1.0",
-  "markerPrefix": "{{PROJECT_MARKER_PREFIX}}",
-  "mergePolicy": "<operator-merge-policy>",
-  "reviewPolicy": "<operator-review-policy>",
-  "threadResolutionPolicy": "<operator-thread-resolution-policy>",
-  "claimTiming": {
-    "staleAge": "PT24H",
-    "heartbeatInterval": "PT12H"
-  },
-  "trustedMarkerActors": ["<trusted-login-1>", "<trusted-login-2>"],
-  "commands": {
-    "install": "<json-escaped install-deps command>",
-    "fixValidate": "<json-escaped fix-validate command>",
-    "prePushValidate": "<json-escaped pre-push-validate command>",
-    "postFixValidate": "<json-escaped post-fix-validate command>"
-  }
-}
+```sh
+node scripts/validate-schemas.mjs
 ```
 
 Notes:
 
-- This file is optional by default and does not replace instruction files.
-- IDD behavior still comes from `.github/instructions/*.instructions.md`
-  unless the adopter explicitly builds tooling that consumes this config.
+- IDD phase behavior comes from `.github/instructions/*.instructions.md`.
+  When `.github/idd/config.json` exists and is valid, its `commands` object
+  and policy fields override the command table in `idd-overview.instructions.md`.
+  Tooling (such as `scripts/idd-doctor.mjs`) and agents use the JSON as the
+  authoritative source for commands and policy when present.
 - If the repository uses this file, treat drift between Markdown policy
   notes and JSON as a configuration bug and update both in the same change.
-- If this file is created before Step 4, include it in the same
-  placeholder-replacement pass as the copied template files.
 - Keep command strings JSON-escaped. Do not paste raw shell directly if
   it contains quotes or backslashes.
 - Extend the schema only when the repository records extra policy
   decisions (for example: critique-loop profile, merge handoff actor,
-  external advisory bot, `issue-scope`, or maintainer approval actors).
+  external advisory bot, or maintainer approval actors).
 
 ---
 

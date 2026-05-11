@@ -130,6 +130,15 @@ test("phase-graph.json data validates against phase-graph schema", () => {
   assert.ok(ok, errors.join("\n"));
 });
 
+test(".github/idd/config.json validates against policy schema", () => {
+  const { ok, errors } = validateFixture(
+    "schemas/policy.schema.json",
+    ".github/idd/config.json",
+    true,
+  );
+  assert.ok(ok, errors.join("\n"));
+});
+
 // ---------------------------------------------------------------------------
 // Unsupported format values
 // ---------------------------------------------------------------------------

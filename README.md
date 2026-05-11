@@ -171,8 +171,11 @@ For deeper positioning, see
 ## What This Repository Ships
 
 The primary package is [`idd-template/`](idd-template/): a portable set
-of `.github/instructions/` files, onboarding docs, and workflow docs
-that adopters copy into their own repositories.
+of `.github/instructions/` files, onboarding docs, workflow docs, and a
+machine-readable policy file (`.github/idd/config.json`) that adopters
+copy into their own repositories. The policy file lets agents and tools
+read repository settings (merge policy, command strings, marker prefix)
+without parsing Markdown.
 
 This repository also includes compatibility entry files such as
 `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and

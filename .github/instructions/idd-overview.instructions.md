@@ -455,6 +455,13 @@ When a phase refers to a named command set, run the corresponding
 commands. **Adapt this section when applying this workflow to a
 different project.**
 
+If `.github/idd/config.json` exists and is valid per the canonical schema at
+<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>, its `commands`
+object provides the authoritative command values and overrides the table
+values below. Its policy fields (`mergePolicy`, `reviewPolicy`, etc.) are
+the machine-readable equivalent of the repository's recorded policy
+decisions.
+
 | Name                    | Commands                                                                                                                                     |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | **fix-validate**        | `npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"`                                       |
