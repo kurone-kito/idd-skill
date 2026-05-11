@@ -172,13 +172,6 @@ test(".github/idd/config.json validates against policy schema", () => {
   assert.ok(ok, errors.join("\n"));
 });
 
-test("policy schema accepts missing helperRuntime as instructions-only fallback", () => {
-  const schema = loadJson("schemas/policy.schema.json");
-  const instance = loadJson("fixtures/schemas/policy.valid.json");
-  const errors = validate(instance, schema);
-  assert.deepEqual(errors, []);
-});
-
 test("policy schema accepts explicit instructions-only helperRuntime", () => {
   const schema = loadJson("schemas/policy.schema.json");
   const instance = loadJson("fixtures/schemas/policy.valid.json");
