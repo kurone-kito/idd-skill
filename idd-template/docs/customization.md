@@ -166,7 +166,8 @@ same: repeated runs must stay safe and predictable.
 ## Tooling Boundary
 
 IDD workflow files are tooling-agnostic. The only tooling contract is
-the `Project commands` table in `idd-overview.instructions.md`.
+the `Project commands` table in
+`.github/instructions/idd-overview.instructions.md`.
 
 The following policy matrix defines the tooling requirements and
 fallback order for repositories adopting IDD:
