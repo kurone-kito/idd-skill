@@ -182,8 +182,8 @@ Proposed change:
    and `Over-specified`.
 3. Add a five-item checklist using the exact sentence order shown in the
    draft.
-4. Copy the same example phrasing into both the canonical and bundled
-   docs without changing any wording.
+4. Copy the same example phrasing across every example block without
+   changing any wording.
 
 This is too detailed for authoring because it turns the issue into an
 implementation script. Reviewers usually need the target outcome and the
