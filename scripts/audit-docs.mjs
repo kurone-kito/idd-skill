@@ -24,6 +24,7 @@ checkFileSets(manifest.fileSets ?? [], manifest.syncPairs ?? []);
 checkGeneratedBlocks(manifest.generatedBlocks ?? []);
 checkShellFileLists(manifest.shellFileLists ?? [], manifest.generatedBlocks ?? []);
 checkSyncPairs(manifest.syncPairs ?? []);
+checkInstructionSizeBudgets(manifest.instructionSizeBudgets ?? null);
 checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
 
 if (errors.length > 0) {
@@ -274,6 +275,36 @@ function checkForbiddenPatterns(patterns) {
       if (regex.test(stripGeneratedBlocks(text))) {
         errors.push(`${pattern.id}: ${file}: ${pattern.message}`);
       }
+    }
+  }
+}
+
+function checkInstructionSizeBudgets(config) {
+  if (!config) {
+    return;
+  }
+
+  const id = config.id ?? "instruction-size-budgets";
+  const files = globFiles(config.glob ?? ".github/instructions/idd-*.instructions.md");
+  const alwaysLoadedPattern = config.alwaysLoadedPattern ?? 'applyTo:\\s*"\\*\\*"';
+  const alwaysLoadedRegex = new RegExp(alwaysLoadedPattern, "m");
+  const alwaysLoadedLimitBytes = config.alwaysLoadedLimitBytes ?? 20_000;
+  const phaseLimitBytes = config.phaseLimitBytes ?? 30_000;
+  const candidates = changedFiles === null
+    ? files
+    : files.filter((file) => changedFiles.has(file));
+
+  for (const file of candidates) {
+    const text = readText(file);
+    const bytes = Buffer.byteLength(text, "utf8");
+    const alwaysLoaded = alwaysLoadedRegex.test(text);
+    const limit = alwaysLoaded ? alwaysLoadedLimitBytes : phaseLimitBytes;
+    if (bytes > limit) {
+      errors.push(
+        `${id}: ${file} is ${bytes} bytes (limit ${limit}; ${
+          alwaysLoaded ? "always-loaded" : "phase"
+        })`,
+      );
     }
   }
 }
