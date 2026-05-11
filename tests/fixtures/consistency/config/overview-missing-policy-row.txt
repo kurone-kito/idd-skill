@@ -1,0 +1,7 @@
+| Name                  | Commands                   |
+| --------------------- | -------------------------- |
+| **install-deps**      | `npm ci`                   |
+| **fix-validate**      | `npm run fix`              |
+| **pre-push-validate** | `npm run lint && npm test` |
+| **post-fix-validate** | `npm run check`            |
+| **issue-scope**       | `roadmap`                  |

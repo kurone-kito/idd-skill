@@ -283,31 +283,46 @@ function checkForbiddenPatterns(patterns) {
 }
 
 function checkConfigInstructionDrift() {
-  const configPath = ".github/idd/config.json";
-  const overviewPath = ".github/instructions/idd-overview.instructions.md";
+  const pairs = [
+    {
+      configPath: ".github/idd/config.json",
+      overviewPath: ".github/instructions/idd-overview.instructions.md",
+    },
+    {
+      configPath: "idd-template/.github/idd/config.json",
+      overviewPath: "idd-template/.github/instructions/idd-overview.instructions.md",
+    },
+  ];
 
-  if (!repoFiles.includes(configPath) || !repoFiles.includes(overviewPath)) {
-    return;
+  for (const pair of pairs) {
+    if (!repoFiles.includes(pair.configPath) || !repoFiles.includes(pair.overviewPath)) {
+      continue;
+    }
+
+    let config;
+    try {
+      config = JSON.parse(readText(pair.configPath));
+    } catch {
+      errors.push(`${pair.configPath} is not valid JSON`);
+      continue;
+    }
+
+    const drifts = collectPolicyConfigDrift(config, readText(pair.overviewPath));
+    if (drifts.length > 0) {
+      const summary = drifts
+        .map((drift) => {
+          if (drift.reason) {
+            return `${drift.path} ${drift.reason}`;
+          }
+          return `${drift.path} expected ${JSON.stringify(drift.expected)} got ${JSON.stringify(drift.actual)}`;
+        })
+        .join("; ");
+      errors.push(`${pair.configPath} drifts from ${pair.overviewPath}: ${summary}`);
+      continue;
+    }
+
+    notices.push(`${pair.configPath} matches ${pair.overviewPath} command and scope defaults`);
   }
-
-  let config;
-  try {
-    config = JSON.parse(readText(configPath));
-  } catch {
-    errors.push(`${configPath} is not valid JSON`);
-    return;
-  }
-
-  const drifts = collectPolicyConfigDrift(config, readText(overviewPath));
-  if (drifts.length > 0) {
-    const summary = drifts
-      .map((drift) => `${drift.path} expected ${JSON.stringify(drift.expected)} got ${JSON.stringify(drift.actual)}`)
-      .join("; ");
-    errors.push(`${configPath} drifts from ${overviewPath}: ${summary}`);
-    return;
-  }
-
-  notices.push(`${configPath} matches ${overviewPath} command and scope defaults`);
 }
 
 function checkInstructionSizeBudgets(config) {

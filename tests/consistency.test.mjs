@@ -23,6 +23,7 @@ test("placeholder scenarios detect clean and dirty post-onboarding fixtures", ()
 
 test("config drift scenarios detect mismatches between config and overview defaults", () => {
   const overview = readText("consistency/config/overview.txt");
+  const missingRowOverview = readText("consistency/config/overview-missing-policy-row.txt");
   const aligned = readJson("consistency/config/aligned-config.json");
   const drifted = readJson("consistency/config/drifted-config.json");
 
@@ -37,6 +38,14 @@ test("config drift scenarios detect mismatches between config and overview defau
       path: "issueScope",
       expected: "roadmap",
       actual: "orphan-first",
+    },
+  ]);
+  assert.deepEqual(collectPolicyConfigDrift(aligned, missingRowOverview), [
+    {
+      path: "orphanFirstPolicy",
+      expected: null,
+      actual: null,
+      reason: "missing instruction row orphan-first-policy",
     },
   ]);
 });
