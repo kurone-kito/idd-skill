@@ -93,6 +93,7 @@ strings). This JSON is optional and does not replace
 .github/instructions/
   idd-overview.instructions.md       ← shared definitions; auto-loaded by Copilot execution surfaces (applyTo: "**", excludeAgent: "code-review"); see docs/idd-workflow.md for per-agent loading
   idd-discover.instructions.md       ← A0–A4: find and select next issue
+  idd-suitability.instructions.md    ← A4.5: pre-claim suitability triage
   idd-claim.instructions.md          ← A5: claim pre-checks and execution
   idd-work.instructions.md           ← B+C: branch, plan, implement, self-review
   idd-pr-submit.instructions.md      ← D: rebase, validate, push, open PR, CI wait

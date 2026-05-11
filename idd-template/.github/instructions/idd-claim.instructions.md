@@ -1,9 +1,9 @@
 # IDD — Claim Phase (A5)
 
-Read this file after picking an issue (A4), after verifying an explicit
-issue target (A0-T), or after a successful re-claim decision in the
-resume phase. It covers the four pre-checks, claim execution, and claim
-verification.
+Read this file after `idd-suitability.instructions.md` (A4.5) passes for
+a picked issue, after verifying an explicit issue target (A0-T), or
+after a successful re-claim decision in the resume phase. It covers the
+four pre-checks, claim execution, and claim verification.
 
 ## Pre-checks (all four must pass)
 
