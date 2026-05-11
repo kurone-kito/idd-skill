@@ -135,7 +135,8 @@ values. The operator can confirm these proposed values or correct them.
   auto-fix + validate sequence inferred from tooling present in the
   repository (e.g., `dprint fmt` + linter, `black` + `isort`, `cargo fmt`,
   `go fmt`, `prettier --write`). Common patterns:
-  - Node.js (project scripts present): `npm run lint:fix && npm run lint`
+  - Node.js (relevant project script exists):
+    `<package-manager> run lint:fix && <package-manager> run lint`
   - Node.js (no project scripts, Node.js present):
     `npx <linter> --fix && npx <linter>`
   - No Node.js: `true` (no-op)
@@ -145,8 +146,8 @@ values. The operator can confirm these proposed values or correct them.
   - If no standard auto-fix tooling, propose `true` as fallback.
 - **Pre-push-validate commands** (`{{PRE_PUSH_VALIDATE_COMMANDS}}`):
   Propose a lint + build + test sequence (no mutations). Common patterns:
-  - Node.js (project scripts present):
-    `npm run lint && npm run build && npm run test`
+  - Node.js (relevant project script exists):
+    `<pm> run lint && <pm> run build && <pm> run test`
   - Node.js (no project scripts, Node.js present):
     `npx <linter> && npx <builder> && npx <test-runner>`
   - No Node.js: `true` (no-op)
