@@ -271,9 +271,8 @@ evidence and require explicit operator confirmation:
    **Confirm with operator**: "Install the optional issue-authoring
    companion skill? (yes/no)"
 
-5. **Helper runtime profile**: Should the repository opt into optional
-   helper script execution during import, or stay on the written
-   instructions only?
+5. **Helper runtime profile**: Should the repository opt into helper
+   support during onboarding, or stay on the written instructions only?
    - `instructions-only` (default): no helper runtime. Use this whenever
      helper support was not explicitly requested, or when the repository
      does not want a Node.js-dependent helper path.
@@ -418,8 +417,8 @@ unless helper support was explicitly requested. When helper support is
 requested, prefer an existing pnpm/npm/yarn project as
 `package-manager`, otherwise use `vendored-node`, then
 `ephemeral-npx` only when a resolvable one-shot command already exists,
-and finally fall back to `instructions-only`. This helper-runtime choice
-is separate from the project command placeholders in Step 1A.
+and finally fall back to `instructions-only`. This helper-runtime
+decision is separate from the project command placeholders in Step 1A.
 
 ### File list
 
@@ -732,7 +731,8 @@ override the command table values in `idd-overview.instructions.md`. It is
 included in the core file list and copied as part of Step 2. The file is
 optional; IDD operates from the Markdown instruction files when the JSON is
 absent or invalid. When you do use it, keep the human-readable policy
-section in sync with this JSON file.
+section in sync with this JSON file, except for helper runtime which stays
+human-readable only until the schema is extended.
 
 After copying, the file contains placeholders. Fill them in along with the
 rest of the placeholder-replacement pass in Step 4. Also replace the
