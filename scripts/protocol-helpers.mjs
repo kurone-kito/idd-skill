@@ -410,13 +410,24 @@ export function classifyReviewThreadForGate(thread, options = {}) {
   const prAuthorLogin = String(options.prAuthorLogin ?? "").toLowerCase();
   const latestIsIddAgent = iddAgentLogins.has(latestAuthor);
   const latestIsPrAuthor = Boolean(prAuthorLogin) && latestAuthor === prAuthorLogin;
-  const hasAmd = comments.some((comment) => {
+  let latestAmdIndex = -1;
+  for (let index = 0; index < comments.length; index += 1) {
+    const comment = comments[index];
     const authorLogin = String(comment.author?.login ?? "").toLowerCase();
-    return iddAgentLogins.has(authorLogin)
-      && AMD_MARKER_PATTERN.test(String(comment.body ?? "").trimStart());
-  });
+    if (
+      iddAgentLogins.has(authorLogin)
+      && AMD_MARKER_PATTERN.test(String(comment.body ?? "").trimStart())
+    ) {
+      latestAmdIndex = index;
+    }
+  }
+  const amdAwaitsMaintainer = latestAmdIndex >= 0
+    && !comments.slice(latestAmdIndex + 1).some((comment) => {
+      const authorLogin = String(comment.author?.login ?? "").toLowerCase();
+      return !iddAgentLogins.has(authorLogin) && authorLogin !== prAuthorLogin;
+    });
 
-  if (hasAmd) {
+  if (amdAwaitsMaintainer) {
     return { classification: "amd-blocking" };
   }
 
