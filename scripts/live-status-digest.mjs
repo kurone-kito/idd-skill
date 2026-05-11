@@ -3,8 +3,8 @@
 import { execFileSync } from "node:child_process";
 
 import {
-  applyClaimEvent,
   planLiveStatusDigestUpsert,
+  resolveActiveClaim,
 } from "./protocol-helpers.mjs";
 
 const TRUSTED_MARKER_PERMISSIONS = new Set(["admin", "maintain", "write"]);
@@ -185,23 +185,15 @@ function assertActiveClaim(owner, repo, issueNumber, agentId, claimId) {
 }
 
 function readActiveClaim(owner, repo, issueNumber) {
-  const comments = fetchIssueComments(owner, repo, issueNumber).sort((left, right) => {
-    return new Date(left.created_at) - new Date(right.created_at);
+  const comments = fetchIssueComments(owner, repo, issueNumber).map((comment) => {
+    return {
+      body: comment.body,
+      createdAt: comment.created_at,
+      author: { login: comment.author?.login ?? "" },
+    };
   });
 
-  let active = null;
-  for (const comment of comments) {
-    active = applyClaimEvent(
-      active,
-      {
-        body: comment.body,
-        createdAt: comment.created_at,
-        author: { login: comment.author?.login ?? "" },
-      },
-      (login) => isTrustedMarkerAuthor(owner, repo, login),
-    );
-  }
-  return active;
+  return resolveActiveClaim(comments, (login) => isTrustedMarkerAuthor(owner, repo, login));
 }
 
 function isTrustedMarkerAuthor(owner, repo, login) {

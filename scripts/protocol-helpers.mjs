@@ -476,6 +476,47 @@ export function isStaleAt(activeCreatedAt, nextCreatedAt) {
   return new Date(nextCreatedAt).getTime() - new Date(activeCreatedAt).getTime() >= staleMs;
 }
 
+function compareClaimIds(left, right) {
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
+}
+
+function createdAtToSecond(createdAt) {
+  return Math.floor(new Date(createdAt ?? "").getTime() / 1000);
+}
+
+export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
+  const orderedEvents = [...events].sort((left, right) => {
+    const leftTime = new Date(left.createdAt ?? "").getTime();
+    const rightTime = new Date(right.createdAt ?? "").getTime();
+    const leftSecond = createdAtToSecond(left.createdAt);
+    const rightSecond = createdAtToSecond(right.createdAt);
+    if (leftSecond !== rightSecond) {
+      return leftSecond - rightSecond;
+    }
+
+    const leftClaim = parseClaimComment(left.body ?? "", left.createdAt ?? "");
+    const rightClaim = parseClaimComment(right.body ?? "", right.createdAt ?? "");
+    if (leftClaim && rightClaim && leftClaim.claimId !== rightClaim.claimId) {
+      return compareClaimIds(leftClaim.claimId, rightClaim.claimId);
+    }
+
+    if (leftTime !== rightTime) {
+      return leftTime - rightTime;
+    }
+
+    return 0;
+  });
+
+  let active = null;
+  for (const event of orderedEvents) {
+    active = applyClaimEvent(active, event, isTrustedAuthor);
+  }
+  return active;
+}
+
 export function applyClaimEvent(activeClaim, event, isTrustedAuthor = () => true) {
   if (!isTrustedAuthor(event.author?.login ?? "")) {
     return activeClaim;
