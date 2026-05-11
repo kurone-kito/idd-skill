@@ -109,6 +109,15 @@ test("advisory-wait-state invalid fixture fails validation", () => {
 });
 
 test("policy valid fixture passes validation", () => {
+  const { ok, errors } = validateFixture(
+    "schemas/policy.schema.json",
+    "fixtures/schemas/policy.valid.json",
+    true,
+  );
+  assert.ok(ok, errors.join("\n"));
+});
+
+test("policy schema accepts missing helperRuntime as instructions-only fallback", () => {
   const schema = loadJson("schemas/policy.schema.json");
   const instance = JSON.parse(
     JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
