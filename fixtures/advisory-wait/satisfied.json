@@ -1,0 +1,39 @@
+{
+  "input": {
+    "prHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reviews": [
+      {
+        "user": {
+          "login": "copilot-pull-request-reviewer[bot]"
+        },
+        "submitted_at": "2026-05-11T17:01:00Z",
+        "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "requestedReviewers": [],
+    "timelineEvents": [],
+    "comments": [],
+    "trustedMarkerLogins": [
+      "idd-bot"
+    ],
+    "viewerLogin": "idd-bot",
+    "configuredTrustedActors": [],
+    "collaboratorTrustEnabled": false,
+    "now": "2026-05-11T17:05:00Z"
+  },
+  "expected": {
+    "outcome": "SATISFIED",
+    "lastCopilotCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "copilotPending": false,
+    "copilotPendingCoversHead": false,
+    "sameHeadMarkerPresent": false,
+    "sameHeadMarkerCount": 0,
+    "requestMarkerCount": 0,
+    "earliestSameHeadAt": "",
+    "elapsedMinutes": 0,
+    "trustedSameHeadMarkerCount": 0,
+    "untrustedSameHeadMarkerCount": 0,
+    "trustedRequestMarkerCount": 0,
+    "untrustedRequestMarkerCount": 0
+  }
+}

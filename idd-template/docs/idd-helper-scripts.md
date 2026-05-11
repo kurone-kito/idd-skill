@@ -6,10 +6,12 @@ directly instead of re-evaluating the same suggestion from scratch.
 
 ## Decision
 
-In the idd-skill source repository, three optional helpers were adopted:
+In the idd-skill source repository, four optional helpers were adopted:
 
 - `scripts/review-activity-snapshot.mjs` for read-only E/F review
   activity and CI snapshot metrics
+- `scripts/advisory-wait-state.mjs` for read-only advisory-wait evidence
+  collection and AW outcome reporting
 - `scripts/live-status-digest.mjs` for issue or PR live status digest
   discovery, rendering, dry-run, and claim-checked upsert
 - `scripts/audit-pr-cleanup.mjs` for post-merge comment cleanup auditing
@@ -70,6 +72,12 @@ The adopted helper boundaries are intentionally narrow:
 - it does not replace the E/F gate decision tables; it only reduces
   command-copy variance when collecting canonical snapshot fields
 
+- `advisory-wait-state.mjs` is read-only, emits machine-readable AW1-AW3
+  evidence plus the computed AW outcome, and never requests reviewers,
+  posts markers, or mutates PR state
+- it does not replace the advisory-wait decision table; it only reduces
+  command-copy variance when collecting canonical AW evidence
+
 - `live-status-digest.mjs` defaults to dry-run, supports issue and PR
   targets, and mutates only with explicit `--apply`
 - apply mode re-validates an active claim unless a maintainer explicitly
@@ -99,7 +107,7 @@ The workflow areas most likely to benefit from optional helpers are:
 | Claim-state parsing             | Reserve candidate  | Read-only parser                   | Low           | Claim rules in `.github/instructions/idd-overview.instructions.md`     | High — claim parsing is subtle and any divergence would create false ownership decisions | Medium — roughly 200 to 400 bytes of repeated marker-parsing prose      |
 | Review activity snapshots       | Adopted helper     | Read-only evidence collector       | Low           | E1/F2/F3 activity-universe fetches via `gh` / GitHub API               | Medium — helper output must keep matching the review-currency rules exactly              | High — roughly 600 to 900 bytes of repeated multi-surface fetch prose   |
 | Live status digest edits        | Adopted helper     | Dry-run by default, explicit apply | Medium        | Phase-specific digest discovery and update flow                        | Medium — digest text must remain UI-only and never look authoritative                    | Medium — roughly 300 to 500 bytes of repeated digest-upsert prose       |
-| Advisory-wait state             | Selected now       | Read-only evidence collector       | Low           | `.github/instructions/idd-advisory-wait.instructions.md`               | Medium — helper must expose evidence without hiding the canonical decision table         | Very high — roughly 900 to 1400 bytes of repeated AW command prose      |
+| Advisory-wait state             | Adopted helper     | Read-only evidence collector       | Low           | `.github/instructions/idd-advisory-wait.instructions.md`               | Medium — helper must expose evidence without hiding the canonical decision table         | Very high — roughly 900 to 1400 bytes of repeated AW command prose      |
 | Pre-merge readiness             | Selected now       | Read-only evidence collector       | Low           | `.github/instructions/idd-pre-merge.instructions.md` and F3 live fetch | Medium — helper must stay evidence-only and preserve the written merge gates             | Very high — roughly 1200 to 1800 bytes of repeated merge-evidence prose |
 | Post-merge cleanup candidates   | Adopted helper     | Dry-run by default, explicit apply | High          | GraphQL minimize-comment fallback flow                                 | Medium — minimization safety still depends on exact review/marker rules                  | Medium — roughly 400 to 700 bytes of repeated GraphQL audit prose       |
 | Branch protection/ruleset reads | Deferred candidate | Read-only API adapter              | Low           | Direct ruleset / branch-protection API reads                           | Medium — repository support varies and incomplete coverage could create false confidence | Low to medium — roughly 150 to 300 bytes of repeated ruleset prose      |
@@ -109,10 +117,11 @@ The workflow areas most likely to benefit from optional helpers are:
 The ranking distinguishes immediate roadmap picks from documented
 reserve candidates:
 
-1. **Advisory-wait state** — **select now**. The AW protocol has the
-   highest command-copy burden, a stable read-only evidence shape, and a
-   clear non-goal boundary. This maps directly to the source follow-up
-   issue [kurone-kito/idd-skill#308](https://github.com/kurone-kito/idd-skill/issues/308).
+1. **Advisory-wait state** — **implemented now**. The AW protocol had
+   the highest command-copy burden, a stable read-only evidence shape,
+   and a clear non-goal boundary, so the source roadmap landed it first
+   as
+   [kurone-kito/idd-skill#308](https://github.com/kurone-kito/idd-skill/issues/308).
 2. **Pre-merge readiness** — **select now**. F2/F3 collect the largest
    evidence set in the workflow and already compose existing pure
    protocol logic, making a read-only helper valuable without moving
@@ -156,10 +165,10 @@ directory. If helper scripts are introduced too early, every operational
 rule must be maintained twice: once in the instructions that agents read,
 and once in code that agents run.
 
-For now, the safer balance is to keep pre-merge instructions canonical
-while allowing one read-only E/F snapshot helper, one live digest upsert
-helper, and one post-merge cleanup helper. Merge safety still depends on
-the written checks, not on helper output alone.
+For now, the safer balance is to keep pre-merge and advisory
+instructions canonical while allowing two read-only evidence helpers,
+one live digest upsert helper, and one post-merge cleanup helper. Merge
+safety still depends on the written checks, not on helper output alone.
 
 ## Non-goals
 
@@ -191,5 +200,5 @@ the following:
   has stabilized enough that drift risk is lower than command-copy risk.
 
 Good future candidates remain read-only evidence collectors for
-advisory-wait state, pre-merge readiness, or later claim-state
-inspection. They should not replace the written decision tables.
+pre-merge readiness or later claim-state inspection. They should not
+replace the written decision tables.

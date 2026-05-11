@@ -593,6 +593,218 @@ export function classifyCiChecks(checks) {
   };
 }
 
+export function isCopilotReviewerLogin(login) {
+  const normalized = String(login ?? "").trim().toLowerCase();
+  return normalized === "copilot" || normalized.startsWith("copilot-pull-request-reviewer");
+}
+
+export function findLastCopilotReviewCommit(reviews) {
+  const latest = reviews
+    .filter((review) => isCopilotReviewerLogin(review.user?.login ?? review.author?.login ?? ""))
+    .map((review) => ({
+      submittedAt: review.submitted_at ?? review.submittedAt ?? "",
+      commitId: review.commit_id ?? review.commitId ?? "",
+    }))
+    .sort((left, right) => left.submittedAt.localeCompare(right.submittedAt))
+    .at(-1);
+
+  return latest?.commitId ?? "";
+}
+
+export function isCopilotPending(requestedReviewers) {
+  return requestedReviewers.some((reviewer) => {
+    if (typeof reviewer === "string") {
+      return isCopilotReviewerLogin(reviewer);
+    }
+    return isCopilotReviewerLogin(reviewer?.login ?? reviewer?.user?.login ?? "");
+  });
+}
+
+export function computeCopilotPendingCoversHead(timelineEvents, prHeadSha) {
+  let headIndex = -1;
+  let requestIndex = -1;
+
+  timelineEvents.forEach((event, index) => {
+    const eventName = String(event?.event ?? "");
+    if (eventName === "committed") {
+      const sha = String(event?.sha ?? event?.commit_id ?? "");
+      if (sha === prHeadSha) {
+        headIndex = index;
+      }
+      return;
+    }
+
+    if (eventName === "review_requested") {
+      const reviewerLogin = event?.requested_reviewer?.login ?? "";
+      if (isCopilotReviewerLogin(reviewerLogin)) {
+        requestIndex = index;
+      }
+    }
+  });
+
+  return headIndex !== -1 && requestIndex !== -1 && requestIndex > headIndex;
+}
+
+export function normalizeTrustedMarkerLogins(logins) {
+  return [...new Set(
+    (logins ?? [])
+      .map((login) => String(login ?? "").trim().toLowerCase())
+      .filter(Boolean),
+  )].sort();
+}
+
+export function summarizeAdvisoryWaitMarkers(comments, prHeadSha, trustedMarkerLogins) {
+  const trustedLogins = new Set(normalizeTrustedMarkerLogins(trustedMarkerLogins));
+  let earliestSameHeadAt = "";
+  let trustedSameHeadMarkerCount = 0;
+  let trustedRequestMarkerCount = 0;
+  let untrustedSameHeadMarkerCount = 0;
+  let untrustedRequestMarkerCount = 0;
+
+  for (const comment of comments) {
+    const body = String(comment?.body ?? "").trimEnd();
+    const login = String(comment?.author?.login ?? comment?.user?.login ?? "").trim().toLowerCase();
+    const trusted = trustedLogins.has(login);
+    const isSameHeadMarker = advisoryWaitMarkerMatchesHead(body, prHeadSha);
+    const isRequestMarker = advisoryWaitRequestMarker(body);
+
+    if (isSameHeadMarker) {
+      if (trusted) {
+        trustedSameHeadMarkerCount += 1;
+        const createdAt = String(comment?.createdAt ?? comment?.created_at ?? "");
+        if (isValidIsoTimestamp(createdAt) && (!earliestSameHeadAt || createdAt < earliestSameHeadAt)) {
+          earliestSameHeadAt = createdAt;
+        }
+      } else {
+        untrustedSameHeadMarkerCount += 1;
+      }
+    }
+
+    if (isRequestMarker) {
+      if (trusted) {
+        trustedRequestMarkerCount += 1;
+      } else {
+        untrustedRequestMarkerCount += 1;
+      }
+    }
+  }
+
+  return {
+    sameHeadMarkerPresent: trustedSameHeadMarkerCount > 0,
+    earliestSameHeadAt,
+    sameHeadMarkerCount: trustedSameHeadMarkerCount,
+    requestMarkerCount: trustedRequestMarkerCount,
+    trustedSameHeadMarkerCount,
+    untrustedSameHeadMarkerCount,
+    trustedRequestMarkerCount,
+    untrustedRequestMarkerCount,
+  };
+}
+
+export function evaluateAdvisoryWaitOutcome(input) {
+  const requestCap = Number.isFinite(input.requestCap) ? input.requestCap : 30;
+  const pendingWindowMinutes = Number.isFinite(input.pendingWindowMinutes)
+    ? input.pendingWindowMinutes
+    : 30;
+  const settledWindowMinutes = Number.isFinite(input.settledWindowMinutes)
+    ? input.settledWindowMinutes
+    : 10;
+
+  if (input.lastCopilotCommit === input.prHeadSha) {
+    return "SATISFIED";
+  }
+
+  if (input.copilotPending) {
+    if (!input.sameHeadMarkerPresent) {
+      return input.copilotPendingCoversHead
+        ? "RECOVERY_NEEDED"
+        : (input.requestMarkerCount >= requestCap ? "CAP_EXHAUSTED" : "REQUEST_NEEDED");
+    }
+    return input.elapsedMinutes >= pendingWindowMinutes ? "SATISFIED" : "WAIT";
+  }
+
+  if (!input.sameHeadMarkerPresent) {
+    return input.requestMarkerCount >= requestCap ? "CAP_EXHAUSTED" : "REQUEST_NEEDED";
+  }
+
+  return input.elapsedMinutes >= settledWindowMinutes ? "SATISFIED" : "WAIT";
+}
+
+export function buildAdvisoryWaitSummary(
+  {
+    prHeadSha,
+    reviews = [],
+    requestedReviewers = [],
+    timelineEvents = [],
+    comments = [],
+  },
+  options = {},
+) {
+  const now = String(options.now ?? "");
+  if (!isValidIsoTimestamp(now)) {
+    throw new Error("now must be an ISO 8601 UTC timestamp");
+  }
+  if (!/^[0-9a-f]{40}$/.test(String(prHeadSha ?? ""))) {
+    throw new Error("prHeadSha must be a 40-character lowercase commit SHA");
+  }
+
+  const trustedMarkerLogins = normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []);
+  const configuredTrustedActors = normalizeTrustedMarkerLogins(options.configuredTrustedActors ?? []);
+  const markerSummary = summarizeAdvisoryWaitMarkers(comments, prHeadSha, trustedMarkerLogins);
+  const elapsedMinutes = markerSummary.sameHeadMarkerPresent
+    ? minutesBetweenIso(markerSummary.earliestSameHeadAt, now)
+    : 0;
+  const lastCopilotCommit = findLastCopilotReviewCommit(reviews);
+  const copilotPending = isCopilotPending(requestedReviewers);
+  const copilotPendingCoversHead = computeCopilotPendingCoversHead(timelineEvents, prHeadSha);
+  const requestCap = Number.isFinite(options.requestCap) ? options.requestCap : 30;
+  const pendingWindowMinutes = Number.isFinite(options.pendingWindowMinutes)
+    ? options.pendingWindowMinutes
+    : 30;
+  const settledWindowMinutes = Number.isFinite(options.settledWindowMinutes)
+    ? options.settledWindowMinutes
+    : 10;
+
+  return {
+    protocolVersion: "1",
+    prHeadSha,
+    lastCopilotCommit,
+    copilotPending,
+    copilotPendingCoversHead,
+    outcome: evaluateAdvisoryWaitOutcome({
+      lastCopilotCommit,
+      prHeadSha,
+      copilotPending,
+      copilotPendingCoversHead,
+      sameHeadMarkerPresent: markerSummary.sameHeadMarkerPresent,
+      requestMarkerCount: markerSummary.requestMarkerCount,
+      elapsedMinutes,
+      requestCap,
+      pendingWindowMinutes,
+      settledWindowMinutes,
+    }),
+    now,
+    requestCap,
+    pendingWindowMinutes,
+    settledWindowMinutes,
+    elapsedMinutes,
+    sameHeadMarkerPresent: markerSummary.sameHeadMarkerPresent,
+    earliestSameHeadAt: markerSummary.earliestSameHeadAt,
+    sameHeadMarkerCount: markerSummary.sameHeadMarkerCount,
+    requestMarkerCount: markerSummary.requestMarkerCount,
+    trustedMarkerSummary: {
+      viewerLogin: String(options.viewerLogin ?? "").trim().toLowerCase(),
+      configuredTrustedActors,
+      collaboratorTrustEnabled: Boolean(options.collaboratorTrustEnabled),
+      trustedMarkerLogins,
+      trustedSameHeadMarkerCount: markerSummary.trustedSameHeadMarkerCount,
+      untrustedSameHeadMarkerCount: markerSummary.untrustedSameHeadMarkerCount,
+      trustedRequestMarkerCount: markerSummary.trustedRequestMarkerCount,
+      untrustedRequestMarkerCount: markerSummary.untrustedRequestMarkerCount,
+    },
+  };
+}
+
 export function buildActivitySnapshotSummary(
   {
     comments = [],
@@ -915,6 +1127,29 @@ function maxIsoTimestamp(values) {
     .filter(isValidIsoTimestamp)
     .sort();
   return sorted.at(-1) ?? null;
+}
+
+function advisoryWaitMarkerMatchesHead(body, prHeadSha) {
+  return new RegExp(`^advisory-wait: [^ ]+ ${escapeRegExp(prHeadSha)}(?: |$)`).test(body)
+    || new RegExp(`^advisory-wait-recovery: [^ ]+ ${escapeRegExp(prHeadSha)}(?: |$)`).test(body)
+    || new RegExp(`^<!-- advisory-wait: [^ ]+ ${escapeRegExp(prHeadSha)} [^ ]+ -->$`).test(body);
+}
+
+function advisoryWaitRequestMarker(body) {
+  return /^advisory-wait:/.test(body) || /^<!-- advisory-wait:/.test(body);
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function minutesBetweenIso(start, end) {
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+    return 0;
+  }
+  return Math.floor((endMs - startMs) / 60000);
 }
 
 function threadActivityAt(thread) {

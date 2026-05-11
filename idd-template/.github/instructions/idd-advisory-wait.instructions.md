@@ -18,6 +18,20 @@ change behavior.
 Callers are responsible for fetching `PR_HEAD_SHA` before invoking these
 steps and for defining their own routing on each outcome.
 
+## Optional evidence helper
+
+When helper support is available, agents may collect the AW state with:
+
+```sh
+node scripts/advisory-wait-state.mjs --pr {pr-number}
+```
+
+The helper is read-only and emits AW evidence plus the computed AW
+outcome as JSON. It does **not** request reviewers, post markers, post
+holds, or replace the canonical shell / `gh` / `jq` fallbacks below. If
+the helper is unavailable, or if its output disagrees with the written
+protocol, follow the written AW1-AW5 steps in this file.
+
 ## AW1 — Fetch Copilot review state
 
 ```sh

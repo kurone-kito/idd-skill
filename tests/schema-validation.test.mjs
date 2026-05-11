@@ -25,6 +25,11 @@ test("live-status-digest schema uses only allowed keywords", () => {
   assert.deepEqual(checkSchemaKeywords(schema), []);
 });
 
+test("advisory-wait-state schema uses only allowed keywords", () => {
+  const schema = loadJson("schemas/advisory-wait-state.schema.json");
+  assert.deepEqual(checkSchemaKeywords(schema), []);
+});
+
 test("policy schema uses only allowed keywords", () => {
   const schema = loadJson("schemas/policy.schema.json");
   assert.deepEqual(checkSchemaKeywords(schema), []);
@@ -80,6 +85,24 @@ test("live-status-digest invalid fixture fails validation", () => {
   const { ok } = validateFixture(
     "schemas/live-status-digest.schema.json",
     "fixtures/schemas/live-status-digest.invalid.json",
+    false,
+  );
+  assert.ok(ok, "Expected invalid fixture to fail schema validation");
+});
+
+test("advisory-wait-state valid fixture passes validation", () => {
+  const { ok, errors } = validateFixture(
+    "schemas/advisory-wait-state.schema.json",
+    "fixtures/schemas/advisory-wait-state.valid.json",
+    true,
+  );
+  assert.ok(ok, errors.join("\n"));
+});
+
+test("advisory-wait-state invalid fixture fails validation", () => {
+  const { ok } = validateFixture(
+    "schemas/advisory-wait-state.schema.json",
+    "fixtures/schemas/advisory-wait-state.invalid.json",
     false,
   );
   assert.ok(ok, "Expected invalid fixture to fail schema validation");

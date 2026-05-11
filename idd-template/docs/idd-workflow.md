@@ -280,11 +280,13 @@ reviewer because that is part of this repository's current PR policy.
 
 ## Optional helper scripts
 
-The idd-skill source repository that ships this template currently includes three
+The idd-skill source repository that ships this template currently includes four
 optional helper scripts:
 
 - `scripts/review-activity-snapshot.mjs` (read-only E/F activity and CI
   snapshot metrics)
+- `scripts/advisory-wait-state.mjs` (read-only advisory-wait evidence
+  and AW outcome reporting)
 - `scripts/live-status-digest.mjs` (issue or PR live status digest
   dry-run and claim-checked upsert)
 - `scripts/audit-pr-cleanup.mjs` (post-merge cleanup audit and optional

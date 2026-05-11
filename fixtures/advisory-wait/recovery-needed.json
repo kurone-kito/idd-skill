@@ -1,0 +1,46 @@
+{
+  "input": {
+    "prHeadSha": "cccccccccccccccccccccccccccccccccccccccc",
+    "reviews": [],
+    "requestedReviewers": [
+      {
+        "login": "Copilot"
+      }
+    ],
+    "timelineEvents": [
+      {
+        "event": "committed",
+        "sha": "cccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "event": "review_requested",
+        "requested_reviewer": {
+          "login": "Copilot"
+        }
+      }
+    ],
+    "comments": [],
+    "trustedMarkerLogins": [
+      "idd-bot"
+    ],
+    "viewerLogin": "idd-bot",
+    "configuredTrustedActors": [],
+    "collaboratorTrustEnabled": false,
+    "now": "2026-05-11T17:05:00Z"
+  },
+  "expected": {
+    "outcome": "RECOVERY_NEEDED",
+    "lastCopilotCommit": "",
+    "copilotPending": true,
+    "copilotPendingCoversHead": true,
+    "sameHeadMarkerPresent": false,
+    "sameHeadMarkerCount": 0,
+    "requestMarkerCount": 0,
+    "earliestSameHeadAt": "",
+    "elapsedMinutes": 0,
+    "trustedSameHeadMarkerCount": 0,
+    "untrustedSameHeadMarkerCount": 0,
+    "trustedRequestMarkerCount": 0,
+    "untrustedRequestMarkerCount": 0
+  }
+}
