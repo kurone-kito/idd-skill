@@ -228,8 +228,7 @@ not reset the claim stale clock.
 ## Roadmap markers
 
 For roadmap markers and their usage rules, see
-`idd-discover.instructions.md` and
-`idd-roadmap-audit.instructions.md`.
+`idd-discover.instructions.md`.
 
 ## Scope invariant
 
