@@ -2,14 +2,14 @@
   "name": "same-second competing claims use lexicographically earlier claim id",
   "events": [
     {
-      "createdAt": "2026-05-11T07:08:33.900Z",
+      "createdAt": "2026-05-11T07:08:33.100Z",
       "author": {
         "login": "agent-b"
       },
       "body": "<!-- claimed-by: agent-b claim-zzzzzzzz supersedes: none 2026-05-11T07:08:31Z branch: issue/269-discover-suitability-split -->\n\n_agent-b: issue claim - IDD automation marker. Do not edit._\n"
     },
     {
-      "createdAt": "2026-05-11T07:08:33.100Z",
+      "createdAt": "2026-05-11T07:08:33.900Z",
       "author": {
         "login": "agent-a"
       },
@@ -21,6 +21,6 @@
     "claimId": "claim-aaaaaaaa",
     "supersedes": "none",
     "branch": "issue/269-discover-suitability-split",
-    "createdAt": "2026-05-11T07:08:33.100Z"
+    "createdAt": "2026-05-11T07:08:33.900Z"
   }
 }
