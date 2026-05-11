@@ -5,6 +5,8 @@ import { readFileSync, readdirSync, statSync } from "node:fs"
 import { join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
+import { inspectHelperRuntimeConfig } from "./consistency-helpers.mjs"
+
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2))
 
@@ -42,6 +44,7 @@ export function runDoctor({ root, requireGithub }) {
   checkMarkerPrefixes(root, report)
   checkProjectCommands(root, report)
   checkPolicySignals(root, report)
+  checkHelperRuntimeConfig(root, report)
   checkAgentEntryFiles(root, report)
   checkTemplateVersionSignal(root, report)
   checkGithubReadiness(root, requireGithub, report)
@@ -283,6 +286,39 @@ function checkPolicySignals(root, report) {
     report.warnings.push("review policy signal not found in docs or entry files")
   } else {
     report.passes.push("review policy signal found")
+  }
+}
+
+function checkHelperRuntimeConfig(root, report) {
+  const candidates = [
+    ".github/idd/config.json",
+    "idd-policy.json",
+  ]
+
+  for (const file of candidates) {
+    const absolutePath = join(root, file)
+    if (!exists(absolutePath)) {
+      continue
+    }
+
+    let config
+    try {
+      config = JSON.parse(readFileSync(absolutePath, "utf8"))
+    } catch {
+      report.errors.push(`${file} is not valid JSON`)
+      continue
+    }
+
+    const helperRuntime = inspectHelperRuntimeConfig(config)
+    if (helperRuntime.status === "absent") {
+      report.passes.push(`${file} leaves helperRuntime unset (instructions-only fallback)`)
+      continue
+    }
+    if (helperRuntime.status === "invalid") {
+      report.errors.push(`${file}: ${helperRuntime.reason}`)
+      continue
+    }
+    report.passes.push(`${file} declares helper runtime profile "${helperRuntime.profile}"`)
   }
 }
 

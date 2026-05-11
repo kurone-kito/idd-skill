@@ -162,6 +162,37 @@ test(".github/idd/config.json validates against policy schema", () => {
   assert.ok(ok, errors.join("\n"));
 });
 
+test("policy schema accepts missing helperRuntime as instructions-only fallback", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts explicit instructions-only helperRuntime", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.helperRuntime = { profile: "instructions-only" };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts explicit package-manager helperRuntime", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.helperRuntime = { profile: "package-manager" };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects unsupported helperRuntime profiles", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.helperRuntime = { profile: "bun" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((error) => error.includes("$.helperRuntime.profile")));
+});
+
 // ---------------------------------------------------------------------------
 // Unsupported format values
 // ---------------------------------------------------------------------------

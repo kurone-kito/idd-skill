@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { collectPolicyConfigDrift } from "../scripts/consistency-helpers.mjs";
+import { collectPolicyConfigDrift, inspectHelperRuntimeConfig } from "../scripts/consistency-helpers.mjs";
 import { findPlaceholders } from "../scripts/idd-doctor.mjs";
 
 const FIXTURE_ROOT = new URL("./fixtures/", import.meta.url);
@@ -48,6 +48,36 @@ test("config drift scenarios detect mismatches between config and overview defau
       reason: "missing instruction row orphan-first-policy",
     },
   ]);
+});
+
+test("helper runtime inspection accepts absent and supported profiles, rejects unsupported values", () => {
+  assert.deepEqual(inspectHelperRuntimeConfig({}), {
+    status: "absent",
+  });
+  assert.deepEqual(inspectHelperRuntimeConfig({
+    helperRuntime: {
+      profile: "instructions-only",
+    },
+  }), {
+    status: "ok",
+    profile: "instructions-only",
+  });
+  assert.deepEqual(inspectHelperRuntimeConfig({
+    helperRuntime: {
+      profile: "package-manager",
+    },
+  }), {
+    status: "ok",
+    profile: "package-manager",
+  });
+  assert.deepEqual(inspectHelperRuntimeConfig({
+    helperRuntime: {
+      profile: "bun",
+    },
+  }), {
+    status: "invalid",
+    reason: 'unsupported helperRuntime.profile "bun"',
+  });
 });
 
 test("A4.5 outcome fixtures match the documented check-to-outcome mapping", () => {
