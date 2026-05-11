@@ -620,9 +620,11 @@ that mention IDD workflow.
 
 ### Machine-readable policy file
 
-`.github/idd/config.json` is a machine-readable mirror of the decisions
-above. It is included in the core file list and copied as part of Step 2.
-Keep the human-readable policy section in sync with this JSON file.
+`.github/idd/config.json` is a machine-readable record of the decisions
+above. When present and valid, its `commands` object and policy fields
+override the command table values in `idd-overview.instructions.md`. It is
+included in the core file list and copied as part of Step 2. Keep the
+human-readable policy section in sync with this JSON file.
 
 After copying, the file contains placeholders. Fill them in along with the
 rest of the placeholder-replacement pass in Step 4. Also replace the
@@ -637,9 +639,11 @@ node scripts/validate-schemas.mjs  # if the script is present in the repo
 
 Notes:
 
-- IDD behavior still comes from `.github/instructions/*.instructions.md`.
-  The config file provides a machine-readable mirror that tooling (such as
-  `scripts/idd-doctor.mjs`) and agents can read for stable input.
+- IDD phase behavior comes from `.github/instructions/*.instructions.md`.
+  When `.github/idd/config.json` exists and is valid, its `commands` object
+  and policy fields override the command table in `idd-overview.instructions.md`.
+  Tooling (such as `scripts/idd-doctor.mjs`) and agents use the JSON as the
+  authoritative source for commands and policy when present.
 - If the repository uses this file, treat drift between Markdown policy
   notes and JSON as a configuration bug and update both in the same change.
 - Keep command strings JSON-escaped. Do not paste raw shell directly if
