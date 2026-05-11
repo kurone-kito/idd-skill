@@ -163,6 +163,32 @@ When WorkTrunk uses a pre-start install hook, that hook may satisfy
 `install-deps` automatically. The underlying command contract is the
 same: repeated runs must stay safe and predictable.
 
+## Tooling Boundary
+
+IDD workflow files are tooling-agnostic. The only tooling contract is
+the `Project commands` table in `idd-overview.instructions.md`.
+
+The following policy matrix defines the tooling requirements and
+fallback order for repositories adopting IDD:
+
+| Context                                  | Requirement         | Fallback order                                                                       |
+| ---------------------------------------- | ------------------- | ------------------------------------------------------------------------------------ |
+| `git`, `gh`, `jq`, `curl`                | **Required**        | No fallback; IDD cannot run without these                                            |
+| Validate commands (`fix-validate`, etc.) | Project-dependent   | Use project tooling; `true` as no-op                                                 |
+| Node.js / `npx`                          | Optional            | 1. Existing project Node.js tooling; 2. `npx` if Node.js is present; 3. `true` no-op |
+| pnpm                                     | Not required by IDD | Only needed when the adopter's project itself uses pnpm                              |
+
+Decision points:
+
+- **In scope for IDD**: validate command rows and `install-deps` in the
+  `Project commands` table. These are the only tooling integration points.
+- **Out of scope for IDD**: package manager choice, build tooling,
+  language runtime. Adopt whatever the target project already uses.
+- **Fallback order for npx-using templates**: (1) use an existing
+  Node.js project's script runner; (2) use bare `npx <tool>` if
+  Node.js is available; (3) replace with `true` if the tool is absent
+  and its check is not relevant to the project.
+
 ## Issue Scope
 
 The default `issue-scope` is `roadmap`, which keeps discovery inside the

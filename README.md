@@ -83,7 +83,8 @@ To run the full loop, an agent needs:
 - An authenticated `gh` CLI or equivalent GitHub MCP integration
 - `jq`
 - A REST client such as `curl`
-- Node.js/npm with `npx`
+- Node.js/npm with `npx` (optional for non-Node.js projects — see
+  [Tooling boundary](docs/customization.md#tooling-boundary))
 - Repository-scoped GitHub credentials appropriate for the chosen merge
   policy
 - Branch protection and required review policy already configured when
@@ -98,11 +99,15 @@ The distributed default allows worker sessions to continue through merge
 the worker session by explicit opt-in. Choose and record one profile in
 [Customizing IDD](docs/customization.md).
 
-## Local pnpm tooling baseline
+## Local pnpm tooling baseline (contributors to this repository only)
 
-This repository now includes a project-local pnpm baseline and Husky
-hooks so contributors and autopilot runs can enforce the minimum lint
-gate before commit.
+This repository uses a project-local pnpm baseline and Husky hooks so
+contributors and autopilot runs can enforce the minimum lint gate before
+commit. **This section is specific to dogfooding work in this source
+repository.** Template adopters do not need pnpm — use your project's
+existing tooling and configure the validate commands accordingly. See
+[Tooling boundary](docs/customization.md#tooling-boundary) for
+adopter-facing guidance.
 
 ```sh
 corepack enable

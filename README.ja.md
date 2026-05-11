@@ -82,7 +82,8 @@ IDD は Markdown ネイティブですが、依存関係なしではありませ
 - 認証済みの `gh` CLI または同等の GitHub MCP 連携
 - `jq`
 - `curl` などの REST クライアント
-- `npx` を使える Node.js/npm
+- `npx` を使える Node.js/npm（非 Node.js プロジェクトでは任意 — 詳細は
+  [Tooling boundary](docs/customization.md#tooling-boundary) を参照）
 - 選択した merge policy に合う repository-scoped GitHub credentials
 - ループで使う場合は、設定済みの branch protection / required review policy
 
@@ -95,10 +96,14 @@ IDD は Markdown ネイティブですが、依存関係なしではありませ
 の外に置き、明示的な opt-in により選択します。merge policy は
 [Customizing IDD](docs/customization.md) で 1 つ選んで記録します。
 
-## ローカル pnpm ツール基盤
+## ローカル pnpm ツール基盤（このリポジトリのコントリビューター専用）
 
 このリポジトリには project-local の pnpm 基盤と Husky hook を追加し、
 コミット前に最小 lint ゲートをローカルでも強制できるようにしました。
+**このセクションは、このソースリポジトリで dogfooding する場合専用です。**
+テンプレートの採用者は pnpm を必要としません — プロジェクト既存のツールを使い、
+validate コマンドを適切に設定してください。採用者向けのガイダンスは
+[Tooling boundary](docs/customization.md#tooling-boundary) を参照してください。
 
 ```sh
 corepack enable
