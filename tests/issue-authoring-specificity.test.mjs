@@ -11,7 +11,7 @@ test("specificity guidance stays synced between canonical and bundled contract",
   assert.equal(
     extractSpecificitySection(canonical, canonicalFile),
     extractSpecificitySection(bundled, bundledFile),
-    "canonical and bundled issue-authoring specificity guidance must stay in sync",
+    `canonical and bundled issue-authoring specificity guidance must stay in sync (${canonicalFile} vs ${bundledFile})`,
   );
 });
 
