@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/claim-marker.schema.json",
+  "title": "IDD Claim Marker Payload",
+  "description": "Structured claim-marker payload parsed from claimed-by comments.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agentId", "claimId", "supersedes", "branch", "createdAt"],
+  "properties": {
+    "agentId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S+$"
+    },
+    "claimId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9]+$"
+    },
+    "supersedes": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S+$"
+    },
+    "branch": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S+$"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+    }
+  }
+}

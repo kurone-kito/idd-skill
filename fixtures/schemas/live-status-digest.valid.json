@@ -1,0 +1,9 @@
+{
+  "phase": "F2 pre-merge checks",
+  "claim": "copilot-cli-7603f22a / 4018f4c673f8",
+  "branch": "issue/253-marker-protocol-schema",
+  "lastChecked": "2026-05-11T00:35:00Z",
+  "openBlockers": "none",
+  "nextAction": "F3 merge",
+  "authoritativeBy": "review-watermark + latest CI pass"
+}

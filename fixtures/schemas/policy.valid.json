@@ -1,0 +1,18 @@
+{
+  "iddVersion": "1.0.0",
+  "markerPrefix": "idd-skill",
+  "mergePolicy": "fully_autonomous_merge",
+  "reviewPolicy": "standard",
+  "threadResolutionPolicy": "standard",
+  "claimTiming": {
+    "staleAge": "PT24H",
+    "heartbeatInterval": "PT12H"
+  },
+  "trustedMarkerActors": ["copilot-cli"],
+  "commands": {
+    "install": "true",
+    "fixValidate": "npx dprint fmt",
+    "prePushValidate": "npx dprint check",
+    "postFixValidate": "npx dprint fmt && npx markdownlint-cli2"
+  }
+}

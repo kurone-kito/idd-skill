@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json",
+  "title": "IDD Policy Config",
+  "description": "Machine-readable policy baseline for adopter-side IDD configuration.",
+  "type": "object",
+  "required": [
+    "iddVersion",
+    "markerPrefix",
+    "mergePolicy",
+    "reviewPolicy",
+    "threadResolutionPolicy",
+    "claimTiming",
+    "trustedMarkerActors",
+    "commands"
+  ],
+  "properties": {
+    "iddVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "markerPrefix": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,31}$"
+    },
+    "mergePolicy": {
+      "type": "string",
+      "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"]
+    },
+    "reviewPolicy": {
+      "type": "string",
+      "minLength": 1
+    },
+    "threadResolutionPolicy": {
+      "type": "string",
+      "minLength": 1
+    },
+    "claimTiming": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["staleAge", "heartbeatInterval"],
+      "properties": {
+        "staleAge": {
+          "type": "string",
+          "pattern": "^P(?:\\d+D)?(?:T(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+        },
+        "heartbeatInterval": {
+          "type": "string",
+          "pattern": "^P(?:\\d+D)?(?:T(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+        }
+      }
+    },
+    "trustedMarkerActors": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "commands": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["install", "fixValidate", "prePushValidate", "postFixValidate"],
+      "properties": {
+        "install": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fixValidate": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prePushValidate": {
+          "type": "string",
+          "minLength": 1
+        },
+        "postFixValidate": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "issueScope": {
+      "type": "string",
+      "enum": ["roadmap", "orphan-first"]
+    },
+    "orphanFirstPolicy": {
+      "type": "string",
+      "enum": ["none", "maintainer-approved", "public-disabled"]
+    },
+    "critiqueLoopProfile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mergeHandoffActor": {
+      "type": "string",
+      "minLength": 1
+    },
+    "externalAdvisoryBot": {
+      "type": "string",
+      "minLength": 1
+    },
+    "maintainerApprovalActors": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "additionalProperties": true
+}
