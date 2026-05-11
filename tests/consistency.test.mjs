@@ -54,6 +54,14 @@ test("helper runtime inspection accepts absent and supported profiles, rejects u
   assert.deepEqual(inspectHelperRuntimeConfig({}), {
     status: "absent",
   });
+  assert.deepEqual(inspectHelperRuntimeConfig("invalid"), {
+    status: "invalid",
+    reason: "config must be a non-null object",
+  });
+  assert.deepEqual(inspectHelperRuntimeConfig([]), {
+    status: "invalid",
+    reason: "config must be a non-null object",
+  });
   assert.deepEqual(inspectHelperRuntimeConfig({
     helperRuntime: {
       profile: "instructions-only",

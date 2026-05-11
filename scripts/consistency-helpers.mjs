@@ -1,4 +1,6 @@
-import { parseProjectCommandRows } from "./idd-doctor.mjs";
+import { inspectHelperRuntimeConfig, parseProjectCommandRows } from "./policy-helpers.mjs";
+
+export { inspectHelperRuntimeConfig } from "./policy-helpers.mjs";
 
 const COMMAND_KEYS = [
   "install-deps",
@@ -6,13 +8,6 @@ const COMMAND_KEYS = [
   "pre-push-validate",
   "post-fix-validate",
 ];
-
-const HELPER_RUNTIME_PROFILES = new Set([
-  "package-manager",
-  "vendored-node",
-  "ephemeral-npx",
-  "instructions-only",
-]);
 
 const POLICY_FIELD_ROWS = new Map([
   ["issueScope", "issue-scope"],
@@ -66,31 +61,6 @@ export function collectPolicyConfigDrift(config, overviewText) {
   }
 
   return drifts;
-}
-
-export function inspectHelperRuntimeConfig(config) {
-  if (!hasOwn(config, "helperRuntime")) {
-    return { status: "absent" };
-  }
-
-  const helperRuntime = config?.helperRuntime;
-  if (typeof helperRuntime !== "object" || helperRuntime === null || Array.isArray(helperRuntime)) {
-    return { status: "invalid", reason: "helperRuntime must be an object when present" };
-  }
-
-  const profile = helperRuntime.profile;
-  if (typeof profile !== "string" || profile.length === 0) {
-    return { status: "invalid", reason: "helperRuntime.profile must be a non-empty string" };
-  }
-
-  if (!HELPER_RUNTIME_PROFILES.has(profile)) {
-    return {
-      status: "invalid",
-      reason: `unsupported helperRuntime.profile "${profile}"`,
-    };
-  }
-
-  return { status: "ok", profile };
 }
 
 function hasOwn(value, key) {

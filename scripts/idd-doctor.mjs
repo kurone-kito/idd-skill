@@ -5,7 +5,9 @@ import { readFileSync, readdirSync, statSync } from "node:fs"
 import { join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { inspectHelperRuntimeConfig } from "./consistency-helpers.mjs"
+import { inspectHelperRuntimeConfig, parseProjectCommandRows } from "./policy-helpers.mjs"
+
+export { parseProjectCommandRows } from "./policy-helpers.mjs"
 
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2))
@@ -54,18 +56,6 @@ export function runDoctor({ root, requireGithub }) {
 
 export function findPlaceholders(text) {
   return [...text.matchAll(/\{\{\s*[A-Za-z0-9_-]+\s*\}\}/g)].map((match) => match[0])
-}
-
-export function parseProjectCommandRows(text) {
-  const commands = new Map()
-  for (const line of text.split(/\r?\n/)) {
-    const match = /^\|\s*\*\*([^*]+)\*\*\s*\|\s*`([^`]+)`\s*\|/.exec(line)
-    if (!match) {
-      continue
-    }
-    commands.set(match[1].trim(), match[2].trim())
-  }
-  return commands
 }
 
 export function extractMarkerPrefixes(text) {
