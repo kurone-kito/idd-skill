@@ -1,8 +1,9 @@
 # IDD — Pre-Claim Suitability Triage (A4.5)
 
-Read this file after picking a candidate in A4 Step 2 and before
-`idd-claim.instructions.md`. It covers the suitability gate that
-determines whether an issue is suitable for autonomous execution.
+Read this file after A4 picks a candidate (A4 Step 2), or after A0-T
+verifies an explicit issue target, and before `idd-claim.instructions.md`.
+It covers the suitability gate that determines whether an issue is
+suitable for autonomous execution.
 
 **Position**: After A4 (viability), before A5 (claim)\
 **Scope**: Applies to explicit-target, roadmap, and orphan-first candidates\
@@ -14,8 +15,9 @@ we do this NOW?", A4.5 asks "SHOULD we do this at all?"
 
 ## Seven Suitability Checks
 
-For the candidate picked in A4 Step 2, evaluate the following checks in
-order. Stop and fail on the first check that is not satisfied.
+For the candidate picked in A4 Step 2 (or the explicit target verified
+by A0-T), evaluate the following checks in order. Stop and fail on the
+first check that is not satisfied.
 
 ### Check 1: Repository Fit
 
@@ -123,7 +125,9 @@ readiness but does NOT automatically apply labels or post claims.
 **Read-only approach** (recommended):
 
 - Agent evaluates all seven checks
-- If any check fails, agent reports the failure outcome and stops
+- If any check fails, agent reports the failure outcome and does not
+  proceed to A5 for this candidate; the Decision Flow below governs
+  whether to try the next candidate or stop entirely
 - NO implementation claim comment is posted
 - NO branch or worktree is created
 - NO labels are applied
@@ -170,6 +174,7 @@ implementation work:
 
 ```text
 Candidates = A4 survivor set (sorted by ascending issue number)
+  (for A0-T: the single verified explicit target; failure = STOP, no fallback)
 Loop: Pick lowest-numbered candidate from Candidates
   → Run Check 1 (Repository Fit)
     → PASS → Run Check 2

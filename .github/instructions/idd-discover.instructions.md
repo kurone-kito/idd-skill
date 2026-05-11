@@ -3,8 +3,8 @@
 Read this file when starting a new task. It covers finding and selecting
 the next issue to work on, including an operator-provided exact issue
 target, pre-claim suitability filtering, and claim handoff. After
-selecting a suitable candidate, read `idd-claim.instructions.md` to
-claim it.
+selecting a suitable candidate, read `idd-suitability.instructions.md`
+(A4.5) first, then `idd-claim.instructions.md` to claim it.
 
 **Abort conditions**: A0-T, A1, A3 (default; see decision tree).
 **Early stop condition**: A0-T, A4, or A4.5 (no claim made — see below).
