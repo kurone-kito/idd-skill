@@ -189,10 +189,6 @@ Decision points:
   Node.js project's script runner; (2) use bare `npx <tool>` if
   Node.js is available; (3) replace with `true` if the tool is absent
   and its check is not relevant to the project.
-- **CI guard**: the distributed `idd-template/` must not contain
-  commands that assume pnpm is available. A CI check scoped to
-  `idd-template/` should verify that `Project commands` placeholder
-  values do not reference `pnpm` directly.
 
 ## Issue Scope
 
