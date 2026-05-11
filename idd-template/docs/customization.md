@@ -191,6 +191,42 @@ Decision points:
   Node.js is available; (3) replace with `true` if the tool is absent
   and its check is not relevant to the project.
 
+## Reusable pnpm boundary guard workflow
+
+The source repository publishes `.github/workflows/pnpm-boundary.yml` as
+both:
+
+- a normal CI workflow (`push` and `pull_request`)
+- a reusable workflow (`workflow_call`) for downstream repositories
+
+The job shape is imported from
+`kurone-kito/pnpm-project-template/.github/workflows/push.yml` and then
+adapted for IDD boundary checks.
+
+Reusable inputs:
+
+| Input              | Default                                           | Purpose                                                  |
+| ------------------ | ------------------------------------------------- | -------------------------------------------------------- |
+| `runner`           | `ubuntu-slim`                                     | Runner label for the boundary job                        |
+| `node-version`     | `24.x`                                            | Node.js version used by `setup-node`                     |
+| `install-command`  | `pnpm install --frozen-lockfile --prefer-offline` | Dependency install step                                  |
+| `lint-command`     | `pnpm run lint:minimum`                           | Project lint/test command                                |
+| `boundary-command` | `node scripts/check-pnpm-boundary.mjs`            | Check that distributable command rows do not leak `pnpm` |
+
+Example downstream usage:
+
+```yaml
+jobs:
+  pnpm-boundary:
+    uses: owner/repo/.github/workflows/pnpm-boundary.yml@main
+    with:
+      node-version: "24.x"
+      boundary-command: node scripts/check-pnpm-boundary.mjs
+```
+
+If a downstream repository is non-Node.js, either skip this workflow or
+override commands with project-appropriate checks.
+
 ## Issue Scope
 
 The default `issue-scope` is `roadmap`, which keeps discovery inside the
