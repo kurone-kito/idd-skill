@@ -130,7 +130,8 @@ This helper policy does **not** imply the following:
 - Node.js becomes mandatory for repositories that only copy the Markdown
   instructions
 - helper output becomes authoritative over the written decision tables
-- new helper work may perform mutating review or merge actions by default
+- helpers perform mutating review or merge actions by default; mutation
+  must remain explicit in the written instructions
 - the project is committed to publishing a separate npm package before
   the local and templated helper profiles are proven
 
