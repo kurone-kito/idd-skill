@@ -483,32 +483,59 @@ function compareClaimIds(left, right) {
   return left < right ? -1 : 1;
 }
 
+function createdAtToTime(createdAt) {
+  const time = new Date(createdAt ?? "").getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
 function createdAtToSecond(createdAt) {
-  return Math.floor(new Date(createdAt ?? "").getTime() / 1000);
+  const time = createdAtToTime(createdAt);
+  if (time === null) {
+    return null;
+  }
+  return Math.floor(time / 1000);
 }
 
 export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
-  const orderedEvents = [...events].sort((left, right) => {
-    const leftTime = new Date(left.createdAt ?? "").getTime();
-    const rightTime = new Date(right.createdAt ?? "").getTime();
-    const leftSecond = createdAtToSecond(left.createdAt);
-    const rightSecond = createdAtToSecond(right.createdAt);
-    if (leftSecond !== rightSecond) {
-      return leftSecond - rightSecond;
-    }
+  const orderedEvents = events
+    .map((event, index) => {
+      const claim = parseClaimComment(event.body ?? "", event.createdAt ?? "");
+      return {
+        event,
+        index,
+        claimId: claim?.claimId ?? null,
+        time: createdAtToTime(event.createdAt),
+        second: createdAtToSecond(event.createdAt),
+      };
+    })
+    .sort((left, right) => {
+      if (left.second !== null && right.second !== null && left.second !== right.second) {
+        return left.second - right.second;
+      }
+      if (left.second !== null && right.second === null) {
+        return -1;
+      }
+      if (left.second === null && right.second !== null) {
+        return 1;
+      }
 
-    const leftClaim = parseClaimComment(left.body ?? "", left.createdAt ?? "");
-    const rightClaim = parseClaimComment(right.body ?? "", right.createdAt ?? "");
-    if (leftClaim && rightClaim && leftClaim.claimId !== rightClaim.claimId) {
-      return compareClaimIds(leftClaim.claimId, rightClaim.claimId);
-    }
+      if (
+        left.second !== null &&
+        right.second !== null &&
+        left.claimId &&
+        right.claimId &&
+        left.claimId !== right.claimId
+      ) {
+        return compareClaimIds(left.claimId, right.claimId);
+      }
 
-    if (leftTime !== rightTime) {
-      return leftTime - rightTime;
-    }
+      if (left.time !== null && right.time !== null && left.time !== right.time) {
+        return left.time - right.time;
+      }
 
-    return 0;
-  });
+      return left.index - right.index;
+    })
+    .map(({ event }) => event);
 
   let active = null;
   for (const event of orderedEvents) {
