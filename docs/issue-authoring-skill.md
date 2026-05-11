@@ -130,6 +130,42 @@ until all three pass.
 These supporting axes determine whether a ready task becomes an orphan
 issue, a roadmap plus sub-issues, or a non-ready bucket.
 
+## Specificity target
+
+Issue drafting should aim for a level of specificity where a
+middle-tier cloud model can implement the task without drifting. This
+is a practical drafting heuristic, not a hard model requirement. The
+goal is to avoid both hidden assumptions that only a top-tier model can
+infer and step-by-step runbooks that cost too much to author.
+
+### Three specificity bands
+
+| Band                | Practical signal                                                                                                          | Drafting response                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| **Under-specified** | Stable execution likely depends on a frontier cloud model class                                                           | Add missing constraints, split scope, or make acceptance criteria more explicit      |
+| **Target**          | A middle-tier cloud model class can implement the issue without drifting                                                  | Treat this as the preferred drafting target when the execution axes already pass     |
+| **Over-specified**  | Even a lightweight local or compact cloud model class could follow the issue mechanically because it has become a runbook | Remove procedural micromanagement while keeping invariants, file anchors, and checks |
+
+The capability tiers above are practical heuristics, not a fixed
+compatibility matrix or runtime requirement.
+
+### How the specificity target interacts with readiness
+
+This heuristic does not replace the IDD execution axes:
+
+- **Limited scope** still decides whether the work fits one issue or
+  needs a roadmap.
+- **Clear verification** still decides whether success is objectively
+  checkable.
+- **Autonomous completion** still decides whether the task can finish
+  without outside coordination.
+
+An issue can be specific yet still fail A4 or A4.5 because it is too
+broad, not verifiable, or blocked on a human decision. Conversely, an
+issue that passes those gates can still be under-specified if it leaves
+too much implementation shape implicit. The drafting target is therefore
+"ready and stable for a middle-tier model," not "maximally detailed."
+
 ## Stable readiness buckets
 
 Low-confidence or low-readiness work must not be silently deleted. The
