@@ -2,6 +2,11 @@
 
 Analysis date: 2026-05-07
 
+> **Positioning snapshot — as of 2026-05-07.**
+> This comparison is a positioning snapshot, not a permanent claim.
+> Revalidate tool capabilities before using this document for external
+> marketing or publication.
+
 ## Overview
 
 This document summarises the competitive landscape for idd-skill as of
