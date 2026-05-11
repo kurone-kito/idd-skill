@@ -98,6 +98,22 @@ The distributed default allows worker sessions to continue through merge
 the worker session by explicit opt-in. Choose and record one profile in
 [Customizing IDD](docs/customization.md).
 
+## Local pnpm tooling baseline
+
+This repository now includes a project-local pnpm baseline and Husky
+hooks so contributors and autopilot runs can enforce the minimum lint
+gate before commit.
+
+```sh
+corepack enable
+pnpm install
+pnpm run lint
+pnpm run test
+```
+
+The pre-commit hook runs `pnpm run lint:minimum`, and the commit message
+hook enforces Conventional Commits through commitlint.
+
 ### 5-Minute Reading Path
 
 Use the focused docs in this order when you are evaluating or adopting

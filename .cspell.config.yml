@@ -18,6 +18,7 @@ ignorePaths:
   - .git
   - .github/CODE_OF_CONDUCT.*
   - .vscode/extensions.json
+  - pnpm-lock.yaml
 language: en,ja
 useGitignore: true
 version: '0.2'
