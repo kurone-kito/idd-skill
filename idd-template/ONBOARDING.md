@@ -110,6 +110,40 @@ reasoning depth, not for routine IDD loop execution.
 
 ---
 
+## Dry-run — Readiness assessment
+
+Before making any file changes, you may run a read-only readiness pass
+for the target repository.
+
+Use this prompt:
+
+```md
+Assess this repository for IDD readiness. Do not modify any files.
+Produce a readiness report with the following fields.
+```
+
+Return the report in this format:
+
+```md
+## IDD readiness report
+
+- Detected package manager:
+- Detected test commands:
+- Suggested marker prefix:
+- Suggested merge policy:
+- Branch protection visible:
+- Required checks visible:
+- CODEOWNERS present:
+- Missing prerequisites:
+- Files that would be created:
+- Files that would be modified:
+```
+
+This dry-run is for evaluators who want a quick import readiness summary
+before starting Step 1A.
+
+---
+
 ## Step 1A — Auto-derive candidate values
 
 Before asking the operator to enter values, inspect the target repository's
