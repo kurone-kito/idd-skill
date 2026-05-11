@@ -187,9 +187,9 @@ Decision points:
 - **Out of scope for IDD**: package manager choice, build tooling,
   language runtime. Adopt whatever the target project already uses.
 - **Fallback order for npx-using templates**: (1) use an existing
-  Node.js project's script runner; (2) use bare `npx <tool>` if
-  Node.js is available; (3) replace with `true` if the tool is absent
-  and its check is not relevant to the project.
+  Node.js project's script runner; (2) use bare `npx <tool>` when
+  `npx` is available; (3) replace with `true` when `npx` is unavailable
+  or the check is not relevant to the project.
 
 ## Reusable pnpm boundary guard workflow
 

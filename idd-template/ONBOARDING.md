@@ -148,9 +148,9 @@ values. The operator can confirm these proposed values or correct them.
   Propose a lint + build + test sequence (no mutations). Common patterns:
   - Node.js (relevant project script exists):
     `<pm> run lint && <pm> run build && <pm> run test`
-  - Node.js (no project scripts, Node.js present):
+  - Node.js (no relevant project script, `npx` available):
     `npx <linter> && npx <builder> && npx <test-runner>`
-  - No Node.js: `true` (no-op)
+  - No Node.js and no other relevant tooling: `true` (no-op)
   - Python: `pylint . && python -m pytest`
   - Go: `go vet ./... && go test ./...`
   - Rust: `cargo check && cargo test`
