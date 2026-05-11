@@ -114,7 +114,7 @@
     }
   },
   {
-    "name": "proceed when live max activity is missing",
+    "name": "return to E1 when live max activity evidence is missing",
     "snapshot": {
       "headSha": "abc123",
       "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
