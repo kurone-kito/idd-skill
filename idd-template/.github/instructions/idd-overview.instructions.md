@@ -507,15 +507,15 @@ file that matches your current situation.
 | Snapshot done, List A non-empty               | `idd-review-triage.instructions.md` (E4–E8)                           |
 | Review feedback accepted, pushing fixes       | `idd-review-fix.instructions.md`                                      |
 | Ready for pre-merge gate check                | `idd-pre-merge.instructions.md`                                       |
-| All pre-merge conditions satisfied            | `idd-merge-handoff.instructions.md`                                   |
-| Autonomous merge path confirmed               | `idd-merge.instructions.md`                                           |
+| All pre-merge conditions satisfied            | `idd-merge-handoff.instructions.md` (F2.5)                            |
+| Autonomous merge path confirmed               | `idd-merge.instructions.md` (F3–F5)                                   |
 
 CI polling logic shared by D and E phases lives in
 `idd-ci.instructions.md`; callers declare their own on-success target.
 
 The Copilot advisory-wait protocol (commands, decision table, hold
 comment templates) is defined once in `idd-advisory-wait.instructions.md`
-and referenced by E14 (review-fix) and F2/F3 (merge). Do not duplicate
+and referenced by E14 (review-fix) and F2/F2.5/F3 (merge). Do not duplicate
 these commands in caller files.
 
 ## Critique pass

@@ -27,7 +27,7 @@ revalidation gate. The active claim must still use your current
    post a concise handoff summary comment that includes:
    - PR number and branch
    - full F2 snapshot (`{f2-head-SHA}`, `{f2-max-activity-updatedAt}`,
-     `{f2-total-item-count}`, `{latest-ci-completed-at}`)
+     `{f2-total-item-count}`, `{f2-latest-ci-completed-at|none}`)
    - the F2 readiness evidence
    - unresolved-thread count, advisory state, and CI state
    - active `{claim-id}`

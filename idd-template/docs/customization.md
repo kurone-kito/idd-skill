@@ -130,7 +130,7 @@ values must stop with a maintainer hold until the policy is corrected.
 For `human_merge`, keep the default F2.5 stop gate and hand off to the
 human maintainer. For `separate_merge_agent`, keep the worker stop gate,
 record the merge-capable actor plus the resume condition, and customize
-the local F2.5/F3 gates only as needed so that designated
+the local F2.5/F3 gates only as needed so that the designated
 merge-capable session can proceed. `fully_autonomous_merge` is the only
 profile that lets the same agent session continue through F3 after the
 normal freshness, CI, review, advisory, unresolved-thread, and claim
