@@ -166,7 +166,7 @@ session and you are extending the active claim's stale clock), copy the
 recompute or derive a new branch name. The heartbeat's `{claim-id}` and
 `{agent-id}` must match the original claim exactly. The branch field must also
 match exactly to satisfy the heartbeat branch invariant (rule 3.5 in
-`idd-overview.instructions.md`).
+this file's Claim-state parsing section).
 
 ## Claim verification
 
@@ -217,8 +217,16 @@ chronologically and apply these rules:
 2. Ignore any `claimed-by` or `unclaimed-by` marker whose GitHub comment
    author is not a trusted marker actor.
 3. A `claimed-by` whose `{agent-id}` AND `{claim-id}` both match the
-   current active claim is a **heartbeat**. Refresh the active claim's
-   GitHub `created_at`.
+   current active claim is a candidate **heartbeat**. Before recognizing
+   it as a heartbeat, apply rule 3.5.
+   3.5. **Heartbeat branch invariant**: A heartbeat candidate is recognized
+   only when the `{branch}` field exactly matches the `{branch}` field of
+   the currently active claim. If `{branch}` differs, treat the comment as
+   **anomalous** — do not refresh the stale clock. The comment does not
+   update any claim state. When an anomalous heartbeat affects a routing
+   decision (e.g., in resume or worktree selection), surface it as a
+   warning. The **detecting session** continues with its own verified claim
+   unchanged; no corrective comment is required.
 4. A `claimed-by` with a **new** `{claim-id}` becomes the active claim
    only if either:
    - there is no active claim AND its `supersedes:` value is `none`, or
