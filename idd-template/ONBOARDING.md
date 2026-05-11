@@ -77,6 +77,15 @@ alongside the merge policy and point operators to
 [IDD policy constants](docs/policy-constants.md) so the named values are
 easy to find later.
 
+Also consider the AI model used for the IDD execution session. Large and
+premium reasoning models are more likely to trigger frequent context
+compaction when the full instruction file set is loaded, which can
+interrupt unattended IDD loops. For day-to-day execution, standard models
+(for example, models in the Sonnet class) handle the instruction overhead
+more efficiently and are the recommended choice. Reserve large or premium
+reasoning models for tasks that genuinely benefit from their extended
+reasoning depth, not for routine IDD loop execution.
+
 ## Your task
 
 1. Read this entire document first.
