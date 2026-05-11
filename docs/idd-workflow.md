@@ -41,7 +41,7 @@ you are reading this guide first, start at step 1.
 | `.github/instructions/idd-work.instructions.md`            | Create the worktree, plan, implement, and self-review                   |
 | `.github/instructions/idd-pr-submit.instructions.md`       | Rebase, validate, push, open the PR, and wait for CI                    |
 | `.github/instructions/idd-ci.instructions.md`              | Shared CI polling helper used by later phases                           |
-| `.github/instructions/idd-advisory-wait.instructions.md`   | Shared Copilot advisory-wait protocol (E14, F2, F2.5, F3)               |
+| `.github/instructions/idd-advisory-wait.instructions.md`   | Shared Copilot advisory-wait protocol (E14, F2, F3)                     |
 | `.github/instructions/idd-review-snapshot.instructions.md` | E1–E3: fetch activity snapshot, run critique, check if List A is empty  |
 | `.github/instructions/idd-review-triage.instructions.md`   | E4–E8: classify items, score, record dispositions                       |
 | `.github/instructions/idd-review-fix.instructions.md`      | Fix accepted review items and push follow-up commits                    |
@@ -271,8 +271,7 @@ in later PR phases.
 
 - `idd-review-fix.instructions.md` can request a GitHub Copilot
   re-review for the current PR head.
-- `idd-merge-handoff.instructions.md` and
-  `idd-merge.instructions.md` can wait or hold based on that GitHub
+- `idd-merge.instructions.md` can wait or hold based on that GitHub
   review state.
 - This dependency is on GitHub's review integration, not on every local
   agent using Copilot as its CLI.

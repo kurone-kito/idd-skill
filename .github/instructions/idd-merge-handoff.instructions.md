@@ -4,9 +4,11 @@ Read this file after `idd-pre-merge.instructions.md` (F2) satisfies all
 pre-merge conditions. It decides whether the current session can proceed
 to merge execution or must stop and hand off.
 
-Before any mutating action in this phase, apply the shared claim
-revalidation gate. The active claim must still use your current
-`{claim-id}`.
+Before any mutating action in this phase, apply the claim revalidation
+gate. If an active claim exists, it must still use your current
+`{claim-id}`. If no active claim exists, continue only for the
+designated `separate_merge_agent` actor path (see Step 1); all other
+paths must stop and report.
 
 ## F2.5 — Resolve merge policy route
 
