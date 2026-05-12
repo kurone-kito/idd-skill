@@ -18,6 +18,12 @@ test("resolves canonical IDs without mutation", () => {
   assert.equal(result.matchedBy, "canonical");
 });
 
+test("includes A0 as a canonical phase ID", () => {
+  const result = resolvePhaseId("A0");
+  assert.equal(result.canonicalPhaseId, "A0");
+  assert.equal(result.matchedBy, "canonical");
+});
+
 test("resolves dotted and hyphen aliases to canonical IDs", () => {
   assert.equal(resolvePhaseId("A4.5").canonicalPhaseId, "A4_5");
   assert.equal(resolvePhaseId("A4-5").canonicalPhaseId, "A4_5");

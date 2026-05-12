@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const DEFAULT_CANONICAL_PHASE_IDS = [
+  "A0",
   "A0_O",
   "A0_T",
   "A1",
