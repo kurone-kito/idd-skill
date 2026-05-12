@@ -27,38 +27,64 @@ test("customization docs keep npx fallback wording aligned", () => {
   }
 });
 
-test("onboarding keeps non-node fallback scoped to no relevant tooling", () => {
-  const text = readText("idd-template/ONBOARDING.md");
+test("onboarding links extracted placeholder guidance and keeps fallback wording there", () => {
+  const onboarding = readText("idd-template/ONBOARDING.md");
+  assert.ok(
+    onboarding.includes("docs/onboarding/placeholders.md"),
+    "ONBOARDING must link to the extracted placeholder reference",
+  );
+
+  const text = readText("idd-template/docs/onboarding/placeholders.md");
   const fixValidateSection = extractSection(
     text,
-    "- **Fix-validate commands**",
-    "- **Pre-push-validate commands**",
+    "### `{{FIX_VALIDATE_COMMANDS}}`",
+    "### `{{PRE_PUSH_VALIDATE_COMMANDS}}`",
   );
   assert.match(
     fixValidateSection,
-    /Node\.js \(no relevant project script, `npx` available\):/,
-    "ONBOARDING fix-validate section must gate npx fallback on `npx` availability",
+    /Node\.js without a relevant script but with `npx` available:/,
+    "placeholder reference must gate fix-validate npx fallback on `npx` availability",
   );
   assert.match(
     fixValidateSection,
-    /No Node\.js and no other relevant tooling: `true` \(no-op\)/,
-    "ONBOARDING fix-validate section must scope no-op fallback to no-relevant-tooling cases",
+    /no relevant auto-fix tooling: `true`/,
+    "placeholder reference must scope fix-validate no-op fallback to no-relevant-tooling cases",
   );
 
   const prePushSection = extractSection(
     text,
-    "- **Pre-push-validate commands**",
-    "- **Post-fix-validate commands**",
+    "### `{{PRE_PUSH_VALIDATE_COMMANDS}}`",
+    "### `{{POST_FIX_VALIDATE_COMMANDS}}`",
   );
   assert.match(
     prePushSection,
-    /Node\.js \(no relevant project script, `npx` available\):/,
-    "ONBOARDING pre-push section must gate npx fallback on `npx` availability",
+    /Node\.js without a relevant script but with `npx` available:/,
+    "placeholder reference must gate pre-push npx fallback on `npx` availability",
   );
   assert.match(
     prePushSection,
-    /No Node\.js and no other relevant tooling: `true` \(no-op\)/,
-    "ONBOARDING pre-push section must scope no-op fallback to no-relevant-tooling cases",
+    /no relevant verification command: `true`/,
+    "placeholder reference must scope pre-push no-op fallback to no-relevant-tooling cases",
+  );
+});
+
+test("onboarding links extracted policy guidance including credential scope", () => {
+  const onboarding = readText("idd-template/ONBOARDING.md");
+  assert.ok(
+    onboarding.includes("docs/onboarding/policy-decisions.md"),
+    "ONBOARDING must link to the extracted policy reference",
+  );
+
+  const policyText = readText("idd-template/docs/onboarding/policy-decisions.md");
+  assert.match(
+    policyText,
+    /### Credential scope/,
+    "policy reference must keep credential-scope guidance outside ONBOARDING",
+  );
+  assert.match(
+    policyText,
+    /Review `docs\/permissions\.md` with the operator/,
+    "policy reference must point credential decisions at docs/permissions.md",
   );
 });
 
