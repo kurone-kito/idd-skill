@@ -187,6 +187,9 @@ test("forced handoff helper replays prior handoffs when resolving the active cla
       },
     ],
     trustedLogins,
+    {
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === "kurone-kito",
+    },
   );
 
   assert.deepEqual(active, {
@@ -362,6 +365,21 @@ test("forced handoff rejects marker-breaking token values", () => {
     }),
     /invalid forced handoff payload/,
   );
+});
+
+test("forced handoff rejects multiline reason values", () => {
+  const body = [
+    "<!-- forced-handoff: {\"old-agent-id\":\"github-copilot-cli-old\",\"old-claim-id\":\"claim-20260512T090000Z-337-old\",\"new-agent-id\":\"github-copilot-cli-new\",\"new-claim-id\":\"claim-20260512T110000Z-337-new\",\"branch\":\"issue/337-feat-protocol-add-auditable-forced\",\"linked-pr\":\"341\",\"forced-by\":\"kurone-kito\",\"reason\":\"line1\\nline2\",\"timestamp\":\"2026-05-12T11:00:00Z\",\"context-scope\":\"issue-plus-pr\"} -->",
+    "",
+    "Forced handoff approved by kurone-kito. I verified that the current",
+    "owning session or agent is unavailable. This transfers ownership away",
+    "from claim `claim-20260512T090000Z-337-old` on branch `issue/337-feat-protocol-add-auditable-forced` for PR #341.",
+    "If the prior session resumes, it must stop immediately and must not",
+    "push, comment, resolve review state, or merge until a maintainer",
+    "reassigns ownership.",
+  ].join("\n");
+
+  assert.equal(parseForcedHandoffComment(body, "2026-05-12T11:00:05Z"), null);
 });
 
 test("forced handoff rejects invalid linked PR tokens", () => {

@@ -1,9 +1,16 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import { renderForcedHandoffComment, resolveActiveClaim } from "./protocol-helpers.mjs";
+
+const MAINTAINER_APPROVAL_POLICIES = new Set([
+  "owners-and-maintainers-only",
+  "all-write-permission-actors",
+]);
+const MAINTAINER_APPROVAL_POLICY_DEFAULT = "owners-and-maintainers-only";
 
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
@@ -34,7 +41,18 @@ export function main(argv = process.argv.slice(2)) {
   const issueComments = ghJson(["api", "--paginate", `repos/${owner}/${name}/issues/${args.issueNumber}/comments`], true).flat();
   const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
   const trustedMarkerLogins = buildTrustedMarkerLogins(owner, name, viewerLogin, args.trustedMarkerLogins, issueComments);
-  const activeClaim = resolveHelperActiveClaim(issueComments, trustedMarkerLogins);
+  const maintainerApprovalActorPolicy = readMaintainerApprovalActorPolicy();
+  const permissionCache = new Map();
+  const activeClaim = resolveHelperActiveClaim(issueComments, trustedMarkerLogins, {
+    isAuthorizedForcedHandoff:
+      (forcedBy) => isAuthorizedForcedHandoffActor(
+        owner,
+        name,
+        forcedBy,
+        maintainerApprovalActorPolicy,
+        permissionCache,
+      ),
+  });
 
   if (!activeClaim) {
     throw new Error(`issue #${args.issueNumber} has no active trusted claim`);
@@ -95,7 +113,7 @@ export function main(argv = process.argv.slice(2)) {
   }
 }
 
-export function resolveHelperActiveClaim(issueComments, trustedMarkerLogins) {
+export function resolveHelperActiveClaim(issueComments, trustedMarkerLogins, options = {}) {
   const trustedSources = Array.isArray(trustedMarkerLogins)
     ? trustedMarkerLogins
     : trustedMarkerLogins instanceof Set
@@ -111,7 +129,10 @@ export function resolveHelperActiveClaim(issueComments, trustedMarkerLogins) {
     {
       isTrustedAuthor: (login) => trustedLogins.has(String(login ?? "").trim().toLowerCase()),
       isForcedHandoffEnabled: () => true,
-      isAuthorizedForcedHandoff: (forcedBy) => trustedLogins.has(String(forcedBy ?? "").trim().toLowerCase()),
+      isAuthorizedForcedHandoff:
+        typeof options.isAuthorizedForcedHandoff === "function"
+          ? options.isAuthorizedForcedHandoff
+          : () => false,
     },
   );
 }
@@ -270,6 +291,45 @@ function safeGhText(args) {
   } catch {
     return "";
   }
+}
+
+function readMaintainerApprovalActorPolicy() {
+  try {
+    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    const policy = String(config?.maintainerApprovalActorPolicy ?? "").trim();
+    if (MAINTAINER_APPROVAL_POLICIES.has(policy)) {
+      return policy;
+    }
+  } catch {
+    // Default policy remains owners-and-maintainers-only.
+  }
+  return MAINTAINER_APPROVAL_POLICY_DEFAULT;
+}
+
+function collaboratorPermission(owner, repo, login, cache) {
+  if (cache.has(login)) {
+    return cache.get(login);
+  }
+  const permission = safeGhText([
+    "api",
+    `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
+    "--jq",
+    ".permission",
+  ]).toLowerCase();
+  cache.set(login, permission);
+  return permission;
+}
+
+function isAuthorizedForcedHandoffActor(owner, repo, login, policy, cache) {
+  const normalized = String(login ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const permission = collaboratorPermission(owner, repo, normalized, cache);
+  if (policy === "all-write-permission-actors") {
+    return permission === "admin" || permission === "maintain" || permission === "write";
+  }
+  return permission === "admin" || permission === "maintain";
 }
 
 export function currentIsoTimestamp() {

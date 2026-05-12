@@ -2008,7 +2008,7 @@ function normalizeForcedHandoffReason(value) {
     return "";
   }
   const trimmed = value.trim();
-  if (!trimmed || trimmed.includes("-->")) {
+  if (!trimmed || /[\r\n]/.test(trimmed) || trimmed.includes("-->")) {
     return "";
   }
   return trimmed;
