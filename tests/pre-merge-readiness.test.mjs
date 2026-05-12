@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  buildAdvisoryWaitSummary,
   buildActivitySnapshotSummary,
   buildPreMergeReadinessSummary,
   findLastCopilotReviewCommit,
@@ -79,6 +80,28 @@ test("classic branch protection check metadata keeps source-pinned checks conser
 
   assert.equal(summary.status, "unknown");
   assert.deepEqual(summary.requiredCheckNames, ["lint"]);
+});
+
+test("classic branch protection app_id -1 does not force source-pinned status", () => {
+  const summary = summarizeRequiredChecks(
+    [{ name: "lint", state: "SUCCESS", completedAt: "2026-05-12T00:32:10Z" }],
+    [],
+    { required_status_checks: { checks: [{ context: "lint", app_id: -1 }] } },
+  );
+
+  assert.equal(summary.status, "success");
+  assert.deepEqual(summary.requiredCheckNames, ["lint"]);
+});
+
+test("required workflow rules keep CI conservative even when named checks pass", () => {
+  const summary = summarizeRequiredChecks(
+    [{ name: "lint", state: "SUCCESS", completedAt: "2026-05-12T00:32:10Z" }],
+    [{ type: "workflows", parameters: { workflows: [{ repository_id: 1, path: ".github/workflows/ci.yml" }] } }],
+    { required_status_checks: { contexts: ["lint"] } },
+  );
+
+  assert.equal(summary.status, "unknown");
+  assert.equal(summary.requiredChecksPassing, false);
 });
 
 test("CODEOWNERS patterns with slashes stay root anchored", () => {
@@ -159,13 +182,26 @@ test("CODEOWNERS dot-prefixed directory patterns match descendants", () => {
   );
 });
 
-test("CODEOWNERS file patterns do not match descendant paths", () => {
+test("CODEOWNERS dotted literal patterns match descendant paths", () => {
   assert.deepEqual(
-    resolveCodeownersForFiles("README.md @org/docs\n", ["README.md", "docs/README.md/child.md"]),
+    resolveCodeownersForFiles("proto.v1 @org/api\n", ["proto.v1/service.proto", "src/proto.v1/service.proto"]),
     {
       ruleCount: 1,
       changedFileCount: 2,
-      unmatchedFiles: ["docs/README.md/child.md"],
+      unmatchedFiles: [],
+      codeownerUserLogins: [],
+      codeownerTeamSlugs: ["org/api"],
+    },
+  );
+});
+
+test("CODEOWNERS patterns preserve escaped spaces", () => {
+  assert.deepEqual(
+    resolveCodeownersForFiles("docs/My\\ File.md @org/docs\n", ["docs/My File.md"]),
+    {
+      ruleCount: 1,
+      changedFileCount: 1,
+      unmatchedFiles: [],
       codeownerUserLogins: [],
       codeownerTeamSlugs: ["org/docs"],
     },
@@ -437,7 +473,8 @@ test("regular comment gate drops comments earlier in the same second as the late
     { iddAgentLogins: ["idd-bot"] },
   );
 
-  assert.equal(summary.count, 0);
+  assert.equal(summary.count, 1);
+  assert.deepEqual(summary.items.map((item) => item.id), ["1"]);
 });
 
 test("regular comment gate keeps comments later in the same second as the latest IDD reply", () => {
@@ -467,6 +504,30 @@ test("regular comment gate keeps advisory bot comments after the latest IDD repl
   assert.deepEqual(summary.items.map((item) => item.id), ["3"]);
 });
 
+test("regular comment gate reopens comments edited after the latest IDD reply", () => {
+  const summary = summarizeRegularCommentsForGate(
+    [
+      {
+        id: 1,
+        createdAt: "2026-05-12T00:00:00Z",
+        updatedAt: "2026-05-12T00:00:03Z",
+        body: "clarified feedback",
+        author: { login: "reviewer-a" },
+      },
+      {
+        id: 2,
+        createdAt: "2026-05-12T00:00:01Z",
+        body: "**Accepted** — reply",
+        author: { login: "idd-bot" },
+      },
+    ],
+    { iddAgentLogins: ["idd-bot"] },
+  );
+
+  assert.equal(summary.count, 1);
+  assert.deepEqual(summary.items.map((item) => item.id), ["1"]);
+});
+
 test("regular comment gate skips resolved CodeRabbit summary comments", () => {
   const summary = summarizeRegularCommentsForGate(
     [
@@ -481,6 +542,31 @@ test("regular comment gate skips resolved CodeRabbit summary comments", () => {
   );
 
   assert.equal(summary.count, 0);
+});
+
+test("advisory wait summary keeps F2 and F3 outcomes distinct when Copilot is no longer pending", () => {
+  const summary = buildAdvisoryWaitSummary(
+    {
+      prHeadSha: "a".repeat(40),
+      reviews: [
+        {
+          author: { login: "copilot-pull-request-reviewer" },
+          submittedAt: "2026-05-12T00:00:00Z",
+          commitId: "b".repeat(40),
+        },
+      ],
+      requestedReviewers: [],
+      timelineEvents: [],
+      comments: [],
+    },
+    {
+      now: "2026-05-12T00:10:00Z",
+      trustedMarkerLogins: ["idd-bot"],
+    },
+  );
+
+  assert.equal(summary.outcome, "REQUEST_NEEDED");
+  assert.equal(summary.f3Outcome, "SATISFIED");
 });
 
 function readJson(relativePath) {

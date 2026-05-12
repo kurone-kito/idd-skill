@@ -299,6 +299,7 @@
       "type": "object",
       "required": [
         "outcome",
+        "f3Outcome",
         "lastCopilotCommit",
         "copilotPending",
         "copilotPendingCoversHead",
@@ -311,6 +312,17 @@
       "additionalProperties": false,
       "properties": {
         "outcome": {
+          "type": "string",
+          "enum": [
+            "SATISFIED",
+            "HOLD",
+            "WAIT",
+            "REQUEST_NEEDED",
+            "RECOVERY_NEEDED",
+            "CAP_EXHAUSTED"
+          ]
+        },
+        "f3Outcome": {
           "type": "string",
           "enum": [
             "SATISFIED",

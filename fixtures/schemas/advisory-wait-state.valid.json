@@ -5,6 +5,7 @@
   "copilotPending": false,
   "copilotPendingCoversHead": false,
   "outcome": "REQUEST_NEEDED",
+  "f3Outcome": "SATISFIED",
   "now": "2026-05-11T17:00:00Z",
   "requestCap": 30,
   "pendingWindowMinutes": 30,

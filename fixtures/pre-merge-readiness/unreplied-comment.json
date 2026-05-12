@@ -173,6 +173,7 @@
     },
     "advisoryWait": {
       "outcome": "SATISFIED",
+      "f3Outcome": "SATISFIED",
       "lastCopilotCommit": "1111111111111111111111111111111111111111",
       "copilotPending": false,
       "copilotPendingCoversHead": false,

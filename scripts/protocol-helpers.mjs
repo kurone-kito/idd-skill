@@ -781,6 +781,13 @@ export function evaluateAdvisoryWaitOutcome(input) {
   return input.elapsedMinutes >= settledWindowMinutes ? "SATISFIED" : "WAIT";
 }
 
+export function evaluateAdvisoryWaitF3Outcome(input) {
+  if (input.lastCopilotCommit === input.prHeadSha || !input.copilotPending) {
+    return "SATISFIED";
+  }
+  return evaluateAdvisoryWaitOutcome(input);
+}
+
 export function buildAdvisoryWaitSummary(
   {
     prHeadSha,
@@ -823,6 +830,18 @@ export function buildAdvisoryWaitSummary(
     copilotPending,
     copilotPendingCoversHead,
     outcome: evaluateAdvisoryWaitOutcome({
+      lastCopilotCommit,
+      prHeadSha,
+      copilotPending,
+      copilotPendingCoversHead,
+      sameHeadMarkerPresent: markerSummary.sameHeadMarkerPresent,
+      requestMarkerCount: markerSummary.requestMarkerCount,
+      elapsedMinutes,
+      requestCap,
+      pendingWindowMinutes,
+      settledWindowMinutes,
+    }),
+    f3Outcome: evaluateAdvisoryWaitF3Outcome({
       lastCopilotCommit,
       prHeadSha,
       copilotPending,
@@ -972,12 +991,17 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
       authorLogin: String(comment.author?.login ?? comment.user?.login ?? "").trim().toLowerCase(),
       body: String(comment.body ?? ""),
       createdAt: String(comment.createdAt ?? comment.created_at ?? ""),
+      updatedAt: String(comment.updatedAt ?? comment.updated_at ?? ""),
       inputIndex,
     }))
     .filter((comment) => isValidIsoTimestamp(comment.createdAt))
+    .map((comment) => ({
+      ...comment,
+      activityAt: effectiveRegularCommentActivityAt(comment),
+    }))
     .sort((left, right) => {
-      const leftTime = Date.parse(left.createdAt);
-      const rightTime = Date.parse(right.createdAt);
+      const leftTime = Date.parse(left.activityAt);
+      const rightTime = Date.parse(right.activityAt);
       if (leftTime !== rightTime) {
         return leftTime - rightTime;
       }
@@ -985,12 +1009,15 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
     })
     .map((comment, sortedIndex) => ({ ...comment, sortedIndex }));
 
-  const lastIddReplyIndex = normalized.reduce((latestIndex, comment, index) => {
+  const lastIddReplyAt = normalized.reduce((latestTimestamp, comment) => {
     if (isOperationalOrDigestComment(comment.body) || !iddAgentLogins.has(comment.authorLogin)) {
-      return latestIndex;
+      return latestTimestamp;
     }
-    return index;
-  }, -1);
+    if (!latestTimestamp || compareIsoTimestamps(comment.createdAt, latestTimestamp) > 0) {
+      return comment.createdAt;
+    }
+    return latestTimestamp;
+  }, "");
 
   const classificationComments = normalized.map((comment) => ({
     author: { login: comment.authorLogin },
@@ -1001,7 +1028,7 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
   const items = normalized
     .filter((comment) => !isOperationalOrDigestComment(comment.body))
     .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
-    .filter((comment) => comment.sortedIndex > lastIddReplyIndex)
+    .filter((comment) => !lastIddReplyAt || compareIsoTimestamps(lastIddReplyAt, comment.activityAt) <= 0)
     .filter((comment) => {
       if (!isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins)) {
         return true;
@@ -1072,6 +1099,11 @@ export function summarizeBranchReviewRequirements(branchRules = [], branchProtec
       for (const name of checkMetadata.names) {
         requiredCheckNames.add(name);
       }
+      continue;
+    }
+
+    if (rule?.type === "workflows") {
+      requiredCheckSourcePinned = true;
     }
   }
 
@@ -1498,6 +1530,7 @@ export function buildPreMergeReadinessSummary(
     reviewerStates,
     advisoryWait: {
       outcome: advisoryWait.outcome,
+      f3Outcome: advisoryWait.f3Outcome,
       lastCopilotCommit: advisoryWait.lastCopilotCommit,
       copilotPending: advisoryWait.copilotPending,
       copilotPendingCoversHead: advisoryWait.copilotPendingCoversHead,
@@ -1803,7 +1836,11 @@ function summarizeRequiredCheckMetadata(parameters) {
       continue;
     }
 
-    if (rawCheck?.app_id || rawCheck?.integration_id || rawCheck?.source) {
+    if (
+      isSourcePinnedRequirementId(rawCheck?.app_id)
+      || isSourcePinnedRequirementId(rawCheck?.integration_id)
+      || rawCheck?.source
+    ) {
       sourcePinned = true;
     }
 
@@ -1860,7 +1897,7 @@ function parseCodeownersRules(codeownersText) {
     .filter(Boolean)
     .filter((line) => !line.startsWith("#"))
     .map((line) => {
-      const tokens = line.split(/\s+/).filter(Boolean);
+      const tokens = tokenizeCodeownersLine(line);
       const pattern = tokens.shift() ?? "";
       const ownerTokens = [];
       for (const token of tokens) {
@@ -1914,8 +1951,7 @@ function matchesCodeownersPattern(pattern, path) {
   const anyDepthFromRoot = rawBody.startsWith("**/");
   const directoryLikePattern = !trailingSlashPattern
     && !lastSegment.includes("*")
-    && !lastSegment.includes("?")
-    && !lastSegment.slice(1).includes(".");
+    && !lastSegment.includes("?");
 
   if (trailingSlashPattern) {
     body = `${body}**`;
@@ -1957,6 +1993,53 @@ function matchesCodeownersPattern(pattern, path) {
   source += "$";
 
   return new RegExp(source).test(normalizedPath);
+}
+
+function effectiveRegularCommentActivityAt(comment) {
+  const updatedAt = String(comment.updatedAt ?? "");
+  if (isValidIsoTimestamp(updatedAt) && compareIsoTimestamps(updatedAt, comment.createdAt) > 0) {
+    return updatedAt;
+  }
+  return comment.createdAt;
+}
+
+function isSourcePinnedRequirementId(value) {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0;
+}
+
+function tokenizeCodeownersLine(line) {
+  const tokens = [];
+  let current = "";
+  let escaped = false;
+
+  for (const character of String(line ?? "")) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === " " || character === "\t") {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += character;
+  }
+
+  if (escaped) {
+    current += "\\";
+  }
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens;
 }
 
 function hasCodeownerOwners(rule) {
