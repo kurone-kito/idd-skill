@@ -77,6 +77,14 @@ If the repository chooses a non-default profile, update the review
 snapshot, triage, review-fix, pre-merge, and merge phase files named in
 `docs/idd-review-policy-profiles.md`.
 
+### Critique-loop profile
+
+Confirm whether the repository keeps the distributed critique-loop
+defaults from `docs/policy-constants.md` or documents a local override.
+At minimum, record whether the repository uses the shipped guardrails or
+intentionally customizes the critique-loop behavior before unattended
+execution begins.
+
 ### Issue-author approval gate
 
 Choose whether the repository keeps the distributed secure-by-default
@@ -196,6 +204,10 @@ This repository uses the following IDD policies:
 
 **Policy**: `{fast-agent-resolve | hybrid-reviewer-ack | strict-reviewer-resolve}`
 
+### Critique-Loop Profile
+
+**Profile**: `{distributed defaults | repository override}`
+
 ### Claim Timing
 
 - **claim-stale-age**: 24 h (or repository override)
@@ -261,8 +273,9 @@ Keep these rules in mind:
   approval model that the distributed runtime already enforces
 - use `skipIssueAuthorApprovalGate: true` when the repository
   intentionally opts out; omitted or `false` keeps the gate enabled
-- replace `<trusted-login>` in `trustedMarkerActors` with the GitHub
-  login of each person or bot allowed to post trusted IDD markers
+- replace `{{TRUSTED_MARKER_ACTORS}}` in `trustedMarkerActors` with a
+  single JSON-escaped GitHub login string first, then add any extra
+  quoted array entries manually for additional trusted marker actors
 - keep command strings JSON-escaped instead of pasting fragile raw shell
 - keep `helperRuntime.profile` aligned with the human-readable helper
   runtime section when helper support is enabled

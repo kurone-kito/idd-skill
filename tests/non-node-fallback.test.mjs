@@ -33,8 +33,50 @@ test("onboarding links extracted placeholder guidance and keeps fallback wording
     onboarding.includes("docs/onboarding/placeholders.md"),
     "ONBOARDING must link to the extracted placeholder reference",
   );
+  assert.match(
+    onboarding,
+    /all seven placeholders:[\s\S]*`{{TRUSTED_MARKER_ACTORS}}`/,
+    "ONBOARDING must include the trusted marker actors placeholder in Step 1A",
+  );
+  assert.match(
+    onboarding,
+    /perform a global replacement for:[\s\S]*`{{TRUSTED_MARKER_ACTORS}}`/,
+    "ONBOARDING Step 4 must replace the trusted marker actors placeholder",
+  );
+  const configText = readText("idd-template/.github/idd/config.json");
+  assert.match(
+    configText,
+    /"trustedMarkerActors": \["{{TRUSTED_MARKER_ACTORS}}"\]/,
+    "template config must keep trustedMarkerActors as a real placeholder token",
+  );
 
   const text = readText("idd-template/docs/onboarding/placeholders.md");
+  assert.match(
+    text,
+    /### `{{TRUSTED_MARKER_ACTORS}}`/,
+    "placeholder reference must document the trusted marker actors placeholder",
+  );
+  assert.match(
+    text,
+    /single[\s\S]*login string first/,
+    "placeholder reference must explain the single-login replacement step",
+  );
+  assert.match(
+    text,
+    /extra[\s\S]*quoted array entries manually/,
+    "placeholder reference must explain how to add more trusted marker actors",
+  );
+  assert.match(
+    text,
+    /Only the command placeholders may be set to `true`/,
+    "placeholder reference must keep the trusted marker actors placeholder out of the `true` fallback",
+  );
+  const readme = readText("idd-template/README.md");
+  assert.match(
+    readme,
+    /\| `{{TRUSTED_MARKER_ACTORS}}` +\| JSON-escaped marker-author logins/,
+    "template README must list the trusted marker actors placeholder",
+  );
   const fixValidateSection = extractSection(
     text,
     "### `{{FIX_VALIDATE_COMMANDS}}`",
@@ -83,6 +125,11 @@ test("onboarding links extracted policy guidance including credential scope", ()
   );
   assert.match(
     policyText,
+    /### Critique-loop profile/,
+    "policy reference must keep critique-loop guidance outside ONBOARDING",
+  );
+  assert.match(
+    policyText,
     /Review `docs\/permissions\.md` with the operator/,
     "policy reference must point credential decisions at docs/permissions.md",
   );
@@ -91,10 +138,30 @@ test("onboarding links extracted policy guidance including credential scope", ()
     /### Credential Scope/,
     "policy reference template must include a credential-scope section",
   );
+  assert.match(
+    policyText,
+    /### Critique-Loop Profile/,
+    "policy reference template must keep critique-loop terminology aligned",
+  );
+  assert.match(
+    policyText,
+    /single[\s\S]*GitHub login string first/,
+    "policy reference must document the first trusted marker actor replacement step",
+  );
+  assert.match(
+    policyText,
+    /extra[\s\S]*quoted array entries manually/,
+    "policy reference must document how to add more trusted marker actors",
+  );
 });
 
 test("onboarding keeps claim timing in the explicit confirmation path", () => {
   const onboarding = readText("idd-template/ONBOARDING.md");
+  assert.match(
+    onboarding,
+    /critique-loop profile \(distributed defaults, or a documented\s+repository override\)/,
+    "ONBOARDING Step 1B must explicitly confirm the critique-loop profile",
+  );
   assert.match(
     onboarding,
     /claim-timing defaults \(`claim-stale-age` and\s+`claim-heartbeat-interval`\)/,
@@ -102,8 +169,18 @@ test("onboarding keeps claim timing in the explicit confirmation path", () => {
   );
   assert.match(
     onboarding,
-    /credential scope, claim-timing defaults, issue-author approval gate\s+posture, `maintainer-approval-actors` policy, issue-authoring\s+companion status, and helper runtime profile\./,
+    /critique-loop profile, credential scope, claim-timing defaults,\s+issue-authoring companion status, and helper runtime profile\./,
     "ONBOARDING Step 2 re-check must stay aligned with the Step 1B confirmation list",
+  );
+  assert.match(
+    onboarding,
+    /review-thread resolution policy and critique-loop\s+profile are recorded/,
+    "ONBOARDING Step 6 must keep critique-loop terminology aligned with Step 1B",
+  );
+  assert.match(
+    onboarding,
+    /`\.github\/instructions\/idd-overview\.instructions\.md` keeps/,
+    "ONBOARDING Step 6 must use the full idd-overview path in the checklist",
   );
 });
 
@@ -117,6 +194,7 @@ test("onboarding generated import surface includes extracted reference docs", ()
   );
 
   for (const file of [
+    "docs/onboarding/agent-entry-and-verification.md",
     "docs/onboarding/placeholders.md",
     "docs/onboarding/policy-decisions.md",
   ]) {
@@ -131,6 +209,7 @@ test("onboarding generated import surface includes extracted reference docs", ()
   );
   assert.ok(coreBlock, "sync manifest must define the idd-template core file block");
   for (const file of [
+    "idd-template/docs/onboarding/agent-entry-and-verification.md",
     "idd-template/docs/onboarding/placeholders.md",
     "idd-template/docs/onboarding/policy-decisions.md",
   ]) {
@@ -142,6 +221,65 @@ test("onboarding generated import surface includes extracted reference docs", ()
   assert.ok(
     coreBlock.sourceGlobs.includes("idd-template/docs/onboarding/*.md"),
     "sync manifest must include the onboarding docs glob in the generated file inputs",
+  );
+});
+
+test("onboarding links extracted agent-entry and verification guidance", () => {
+  const onboarding = readText("idd-template/ONBOARDING.md");
+  assert.ok(
+    onboarding.includes("docs/onboarding/agent-entry-and-verification.md"),
+    "ONBOARDING must link to the extracted agent-entry and verification reference",
+  );
+  assert.match(
+    onboarding,
+    /`CLAUDE\.md`, `AGENTS\.md`, and `GEMINI\.md`/,
+    "ONBOARDING must keep the root agent entry file list inline",
+  );
+  assert.match(
+    onboarding,
+    /explicitly opts out of adding new files/,
+    "ONBOARDING must keep the operator opt-out rule inline for agent entry files",
+  );
+  assert.ok(
+    onboarding.includes("If `.github/copilot-instructions.md` existed before onboarding,"),
+    "ONBOARDING must keep the Copilot entry-file reminder inline",
+  );
+
+  const reference = readText("idd-template/docs/onboarding/agent-entry-and-verification.md");
+  assert.match(
+    reference,
+    /### CLAUDE\.md/,
+    "agent-entry reference must keep the CLAUDE.md example outside ONBOARDING",
+  );
+  assert.match(
+    reference,
+    /### AGENTS\.md \(for Codex CLI\)/,
+    "agent-entry reference must keep the AGENTS.md example outside ONBOARDING",
+  );
+  assert.match(
+    reference,
+    /### GEMINI\.md/,
+    "agent-entry reference must keep the GEMINI.md example outside ONBOARDING",
+  );
+  assert.match(
+    reference,
+    /## Verification details/,
+    "agent-entry reference must include the expanded verification guidance",
+  );
+  assert.match(
+    reference,
+    /selected critique-loop profile is recorded/,
+    "agent-entry reference must keep critique-loop terminology aligned",
+  );
+  assert.match(
+    reference,
+    /`\.github\/instructions\/idd-overview\.instructions\.md` has/,
+    "agent-entry reference must use the full idd-overview path in the checklist",
+  );
+  assert.match(
+    reference,
+    /`\.github\/instructions\/idd-discover\.instructions\.md` and\s+`\.github\/instructions\/idd-overview\.instructions\.md`/,
+    "agent-entry reference must use the full instruction paths in the marker checklist",
   );
 });
 
