@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+
 const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
 const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)`;
 
@@ -89,6 +91,42 @@ export function parseReleaseComment(body) {
   return {
     agentId: match[1],
     claimId: match[2],
+  };
+}
+
+export function parseReviewWatermarkComment(body, createdAt) {
+  const match = body.trimEnd().match(
+    new RegExp(
+      `^<!--\\s*review-watermark:\\s+(\\S+)\\s+(\\S+)\\s+([0-9a-f]{40})\\s+(\\S+)\\s+(\\d+)\\s+(\\S+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+      "i",
+    ),
+  );
+  if (!match) {
+    return null;
+  }
+
+  const maxActivityUpdatedAt = match[4];
+  const latestCiCompletedAt = match[6];
+  if (maxActivityUpdatedAt !== "none" && !isValidIsoTimestamp(maxActivityUpdatedAt)) {
+    return null;
+  }
+  if (latestCiCompletedAt !== "none" && !isValidIsoTimestamp(latestCiCompletedAt)) {
+    return null;
+  }
+
+  const totalItemCount = Number.parseInt(match[5], 10);
+  if (!Number.isInteger(totalItemCount) || totalItemCount < 0) {
+    return null;
+  }
+
+  return {
+    agentId: match[1],
+    claimId: match[2],
+    headSha: match[3],
+    maxActivityUpdatedAt,
+    totalItemCount,
+    latestCiCompletedAt,
+    createdAt: isValidIsoTimestamp(createdAt) ? createdAt : "none",
   };
 }
 
@@ -246,17 +284,27 @@ export function classifyRegularBotComment(comment, comments, threads) {
 export function indexLatestGatingReviewsByAuthor(reviews) {
   const index = new Map();
   for (const review of reviews) {
-    if (review.state === "COMMENTED") {
+    const state = String(review.state ?? "");
+    if (state === "COMMENTED" || state === "PENDING") {
       continue;
     }
     const author = review.author?.login?.toLowerCase();
     if (!author) {
       continue;
     }
+    const effectiveSubmittedAt = normalizeGatingReviewTimestamp(review, state);
+    if (!effectiveSubmittedAt) {
+      continue;
+    }
     const current = index.get(author);
-    const submittedAt = review.submittedAt ?? "";
-    if (!current || submittedAt > (current.submittedAt ?? "")) {
-      index.set(author, review);
+    const currentTime = current ? Date.parse(current.submittedAt ?? current.submitted_at ?? "") : Number.NEGATIVE_INFINITY;
+    const reviewTime = Date.parse(effectiveSubmittedAt);
+    if (!current || reviewTime >= currentTime) {
+      index.set(author, {
+        ...review,
+        submittedAt: effectiveSubmittedAt,
+        submitted_at: effectiveSubmittedAt,
+      });
     }
   }
   return index;
@@ -534,17 +582,17 @@ function inferReviewerReopenedAt(thread) {
 
 export function hasFreshDisposition(thread) {
   const comments = thread.comments?.nodes ?? [];
-  const latestFeedbackAt = comments
+  const latestFeedbackAt = maxIsoTimestamp(
+    comments
     .filter((comment) => !isIddDispositionComment(comment))
-    .map((comment) => comment.createdAt)
-    .sort()
-    .at(-1);
+    .map((comment) => comment.createdAt),
+  );
 
   return comments.some((comment) => {
     if (!isIddDispositionComment(comment)) {
       return false;
     }
-    return !latestFeedbackAt || comment.createdAt > latestFeedbackAt;
+    return !latestFeedbackAt || compareIsoTimestamps(comment.createdAt, latestFeedbackAt) > 0;
   });
 }
 
@@ -605,7 +653,7 @@ export function findLastCopilotReviewCommit(reviews) {
       submittedAt: review.submitted_at ?? review.submittedAt ?? "",
       commitId: review.commit_id ?? review.commitId ?? "",
     }))
-    .sort((left, right) => left.submittedAt.localeCompare(right.submittedAt))
+    .sort((left, right) => compareIsoTimestamps(left.submittedAt, right.submittedAt))
     .at(-1);
 
   return latest?.commitId ?? "";
@@ -653,6 +701,30 @@ export function normalizeTrustedMarkerLogins(logins) {
   )].sort();
 }
 
+export function deriveIddAgentLogins({
+  viewerLogin = "",
+  iddAgentLogins = [],
+  trustedMarkerLogins = [],
+  operationalComments = [],
+} = {}) {
+  const trustedLogins = new Set(normalizeTrustedMarkerLogins(trustedMarkerLogins));
+  const derivedLogins = [
+    viewerLogin,
+    ...(iddAgentLogins ?? []),
+  ];
+
+  for (const comment of operationalComments ?? []) {
+    const authorLogin = String(comment?.author?.login ?? comment?.user?.login ?? "").trim().toLowerCase();
+    const body = String(comment?.body ?? "");
+    if (!trustedLogins.has(authorLogin) || !isOperationalOrDigestComment(body)) {
+      continue;
+    }
+    derivedLogins.push(authorLogin);
+  }
+
+  return normalizeTrustedMarkerLogins(derivedLogins);
+}
+
 export function summarizeAdvisoryWaitMarkers(comments, prHeadSha, trustedMarkerLogins) {
   const trustedLogins = new Set(normalizeTrustedMarkerLogins(trustedMarkerLogins));
   let earliestSameHeadAt = "";
@@ -672,7 +744,10 @@ export function summarizeAdvisoryWaitMarkers(comments, prHeadSha, trustedMarkerL
       if (trusted) {
         trustedSameHeadMarkerCount += 1;
         const createdAt = String(comment?.createdAt ?? comment?.created_at ?? "");
-        if (isValidIsoTimestamp(createdAt) && (!earliestSameHeadAt || createdAt < earliestSameHeadAt)) {
+        if (
+          isValidIsoTimestamp(createdAt)
+          && (!earliestSameHeadAt || compareIsoTimestamps(createdAt, earliestSameHeadAt) < 0)
+        ) {
           earliestSameHeadAt = createdAt;
         }
       } else {
@@ -730,6 +805,13 @@ export function evaluateAdvisoryWaitOutcome(input) {
   return input.elapsedMinutes >= settledWindowMinutes ? "SATISFIED" : "WAIT";
 }
 
+export function evaluateAdvisoryWaitF3Outcome(input) {
+  if (input.lastCopilotCommit === input.prHeadSha || !input.copilotPending) {
+    return "SATISFIED";
+  }
+  return evaluateAdvisoryWaitOutcome(input);
+}
+
 export function buildAdvisoryWaitSummary(
   {
     prHeadSha,
@@ -772,6 +854,18 @@ export function buildAdvisoryWaitSummary(
     copilotPending,
     copilotPendingCoversHead,
     outcome: evaluateAdvisoryWaitOutcome({
+      lastCopilotCommit,
+      prHeadSha,
+      copilotPending,
+      copilotPendingCoversHead,
+      sameHeadMarkerPresent: markerSummary.sameHeadMarkerPresent,
+      requestMarkerCount: markerSummary.requestMarkerCount,
+      elapsedMinutes,
+      requestCap,
+      pendingWindowMinutes,
+      settledWindowMinutes,
+    }),
+    f3Outcome: evaluateAdvisoryWaitF3Outcome({
       lastCopilotCommit,
       prHeadSha,
       copilotPending,
@@ -874,6 +968,604 @@ export function buildActivitySnapshotSummary(
       reviews: reviews.length,
       threads: threads.length,
     },
+  };
+}
+
+export function resolveLatestReviewWatermark(comments, options = {}) {
+  const expectedClaimId = String(options.expectedClaimId ?? "").trim();
+  const isTrustedAuthor = options.isTrustedAuthor ?? (() => true);
+
+  let latest = null;
+  for (const comment of comments) {
+    if (!isTrustedAuthor(comment.author?.login ?? comment.user?.login ?? "")) {
+      continue;
+    }
+
+    const parsed = parseReviewWatermarkComment(
+      comment.body ?? "",
+      comment.createdAt ?? comment.created_at ?? "",
+    );
+    if (!parsed) {
+      continue;
+    }
+    if (expectedClaimId && parsed.claimId !== expectedClaimId) {
+      continue;
+    }
+    const parsedCreatedAt = normalizeComparableTimestamp(parsed.createdAt);
+    if (parsedCreatedAt === null || parsedCreatedAt === "none") {
+      continue;
+    }
+    const latestCreatedAt = normalizeComparableTimestamp(latest?.createdAt ?? "none");
+    if (latestCreatedAt === null || latestCreatedAt === "none" || parsedCreatedAt > latestCreatedAt) {
+      latest = parsed;
+    }
+  }
+
+  return latest;
+}
+
+export function summarizeRegularCommentsForGate(comments, options = {}) {
+  const iddAgentLogins = new Set(normalizeTrustedMarkerLogins(options.iddAgentLogins ?? []));
+  const advisoryBotLogins = new Set(normalizeTrustedMarkerLogins(options.advisoryBotLogins ?? []));
+  const threads = Array.isArray(options.threads) ? options.threads : [];
+
+  const normalized = comments
+    .map((comment, inputIndex) => ({
+      id: String(comment.id ?? ""),
+      authorLogin: String(comment.author?.login ?? comment.user?.login ?? "").trim().toLowerCase(),
+      body: String(comment.body ?? ""),
+      createdAt: String(comment.createdAt ?? comment.created_at ?? ""),
+      updatedAt: String(comment.updatedAt ?? comment.updated_at ?? ""),
+      inputIndex,
+    }))
+    .filter((comment) => isValidIsoTimestamp(comment.createdAt))
+    .map((comment) => ({
+      ...comment,
+      activityAt: effectiveRegularCommentActivityAt(comment),
+    }))
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.activityAt);
+      const rightTime = Date.parse(right.activityAt);
+      if (leftTime !== rightTime) {
+        return leftTime - rightTime;
+      }
+      return left.inputIndex - right.inputIndex;
+    })
+    .map((comment, sortedIndex) => ({ ...comment, sortedIndex }));
+
+  const lastIddReplyAt = normalized.reduce((latestTimestamp, comment) => {
+    if (isOperationalOrDigestComment(comment.body) || !iddAgentLogins.has(comment.authorLogin)) {
+      return latestTimestamp;
+    }
+    if (!latestTimestamp || compareIsoTimestamps(comment.createdAt, latestTimestamp) > 0) {
+      return comment.createdAt;
+    }
+    return latestTimestamp;
+  }, "");
+
+  const classificationComments = normalized.map((comment) => ({
+    author: { login: comment.authorLogin },
+    body: comment.body,
+    createdAt: comment.createdAt,
+  }));
+
+  const items = normalized
+    .filter((comment) => !isOperationalOrDigestComment(comment.body))
+    .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
+    .filter((comment) => !lastIddReplyAt || compareIsoTimestamps(lastIddReplyAt, comment.activityAt) <= 0)
+    .filter((comment) => {
+      if (!isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins)) {
+        return true;
+      }
+      return classifyRegularBotComment(
+        {
+          author: { login: comment.authorLogin },
+          body: comment.body,
+          createdAt: comment.createdAt,
+        },
+        classificationComments,
+        threads,
+      ) === null;
+    })
+    .map((comment) => ({
+      id: comment.id,
+      authorLogin: comment.authorLogin,
+      createdAt: comment.createdAt,
+      bodyPreview: buildBodyPreview(comment.body),
+    }));
+
+  return {
+    count: items.length,
+    items,
+  };
+}
+
+export function summarizeBranchReviewRequirements(branchRules = [], branchProtection = {}) {
+  const requiredCheckNames = new Set();
+  const requiredReviewerLogins = new Set();
+  const requiredReviewerTeams = new Set();
+  const requiredReviewerRequirements = [];
+
+  let requiredApprovingReviewCount = 0;
+  let requireCodeOwnerReview = false;
+  let requiresConversationResolution = false;
+  let requiredCheckSourcePinned = false;
+
+  for (const rule of branchRules) {
+    if (rule?.type === "pull_request") {
+      const parameters = rule.parameters ?? {};
+      requiredApprovingReviewCount = Math.max(
+        requiredApprovingReviewCount,
+        Number(parameters.required_approving_review_count ?? 0) || 0,
+      );
+      requireCodeOwnerReview = requireCodeOwnerReview || Boolean(parameters.require_code_owner_review);
+      requiresConversationResolution = requiresConversationResolution
+        || Boolean(parameters.required_review_thread_resolution);
+
+      for (const reviewer of parameters.required_reviewers ?? []) {
+        const requirement = extractRequiredReviewerRequirement(reviewer);
+        if (!requirement.identity) {
+          continue;
+        }
+        requiredReviewerRequirements.push(requirement);
+        if (requirement.identity.includes("/")) {
+          requiredReviewerTeams.add(requirement.identity);
+        } else {
+          requiredReviewerLogins.add(requirement.identity);
+        }
+      }
+      continue;
+    }
+
+    if (rule?.type === "required_status_checks") {
+      const checkMetadata = summarizeRequiredCheckMetadata(rule.parameters ?? {});
+      requiredCheckSourcePinned = requiredCheckSourcePinned || checkMetadata.sourcePinned;
+      for (const name of checkMetadata.names) {
+        requiredCheckNames.add(name);
+      }
+      continue;
+    }
+
+    if (rule?.type === "workflows") {
+      requiredCheckSourcePinned = true;
+    }
+  }
+
+  const protectionReviews = branchProtection.required_pull_request_reviews ?? {};
+  requiredApprovingReviewCount = Math.max(
+    requiredApprovingReviewCount,
+    Number(protectionReviews.required_approving_review_count ?? 0) || 0,
+  );
+  requireCodeOwnerReview = requireCodeOwnerReview
+    || Boolean(protectionReviews.require_code_owner_reviews)
+    || Boolean(protectionReviews.require_code_owner_review);
+  requiresConversationResolution = requiresConversationResolution
+    || Boolean(branchProtection.required_conversation_resolution?.enabled);
+
+  const protectionCheckMetadata = summarizeRequiredCheckMetadata(
+    branchProtection.required_status_checks ?? {},
+  );
+  requiredCheckSourcePinned = requiredCheckSourcePinned || protectionCheckMetadata.sourcePinned;
+  for (const name of protectionCheckMetadata.names) {
+    requiredCheckNames.add(name);
+  }
+
+  return {
+    requiredApprovingReviewCount,
+    requireCodeOwnerReview,
+    requiresConversationResolution,
+    requiredCheckSourcePinned,
+    requiredReviewerLogins: [...requiredReviewerLogins].sort(),
+    requiredReviewerTeams: [...requiredReviewerTeams].sort(),
+    requiredReviewerRequirements,
+    requiredCheckNames: [...requiredCheckNames].sort(),
+  };
+}
+
+export function summarizeRequiredChecks(checks = [], branchRules = [], branchProtection = {}) {
+  const branchReviewRequirements = summarizeBranchReviewRequirements(branchRules, branchProtection);
+  const requiredCheckNames = branchReviewRequirements.requiredCheckNames;
+  const requiredCheckNameSet = new Set(requiredCheckNames);
+  const normalizedChecks = checks.map((check) => ({
+    name: String(check.name ?? ""),
+    state: String(check.state ?? "").toUpperCase(),
+    completedAt: String(check.completedAt ?? ""),
+  }));
+  const matchedRequiredChecks = normalizedChecks.filter((check) => requiredCheckNameSet.has(check.name));
+  const presentNames = new Set(matchedRequiredChecks.map((check) => check.name));
+  const missingRequiredCheckNames = requiredCheckNames.filter((name) => !presentNames.has(name));
+
+  let status = "unknown";
+  if (requiredCheckNames.length > 0) {
+    const ciClassification = classifyCiChecks(matchedRequiredChecks);
+    status = missingRequiredCheckNames.length > 0
+      ? "missing"
+      : ciClassification.status;
+    if (status === "success" && branchReviewRequirements.requiredCheckSourcePinned) {
+      status = "unknown";
+    }
+  }
+
+  return {
+    status,
+    requiredCheckCount: requiredCheckNames.length,
+    generatedRequiredCheckCount: matchedRequiredChecks.length,
+    requiredChecksGenerated: requiredCheckNames.length > 0 && missingRequiredCheckNames.length === 0,
+    requiredChecksPassing: requiredCheckNames.length > 0 && status === "success",
+    requiredCheckNames,
+    missingRequiredCheckNames,
+    checks: normalizedChecks.map((check) => ({
+      name: check.name,
+      state: check.state,
+      completedAt: isValidIsoTimestamp(check.completedAt) ? check.completedAt : "",
+      required: requiredCheckNameSet.has(check.name),
+    })),
+  };
+}
+
+export function resolveCodeownersForFiles(codeownersText, changedFiles = []) {
+  const rules = parseCodeownersRules(codeownersText);
+  return collectCodeownersForFiles(rules, changedFiles);
+}
+
+export function selectCodeownersText(payloads = []) {
+  for (const payload of payloads) {
+    if (!payload || typeof payload !== "object" || !Object.hasOwn(payload, "content")) {
+      continue;
+    }
+    const content = String(payload.content ?? "").replace(/\n/g, "");
+    return Buffer.from(content, "base64").toString("utf8");
+  }
+  return "";
+}
+
+function collectCodeownersForFiles(rules, changedFiles = []) {
+  const codeownerUsers = new Set();
+  const codeownerTeams = new Set();
+  const unmatchedFiles = [];
+
+  for (const filePath of changedFiles) {
+    const normalizedPath = String(filePath ?? "").replace(/^\/+/, "");
+    if (!normalizedPath) {
+      continue;
+    }
+
+    const owners = findCodeownersForPath(rules, normalizedPath);
+    if (!owners) {
+      unmatchedFiles.push(normalizedPath);
+      continue;
+    }
+    if (!hasCodeownerOwners(owners)) {
+      continue;
+    }
+
+    for (const owner of owners.users) {
+      codeownerUsers.add(owner);
+    }
+    for (const owner of owners.teams) {
+      codeownerTeams.add(owner);
+    }
+  }
+
+  return {
+    ruleCount: rules.length,
+    changedFileCount: changedFiles.length,
+    unmatchedFiles,
+    codeownerUserLogins: [...codeownerUsers].sort(),
+    codeownerTeamSlugs: [...codeownerTeams].sort(),
+  };
+}
+
+export function summarizeReviewerStates(
+  reviews = [],
+  {
+    reviewDecision = "",
+    branchRules = [],
+    branchProtection = {},
+    codeownersText = "",
+    changedFiles = [],
+    advisoryBotLogins = [],
+  } = {},
+) {
+  const branchReviewRequirements = summarizeBranchReviewRequirements(branchRules, branchProtection);
+  const requiredReviewerLogins = new Set(branchReviewRequirements.requiredReviewerLogins);
+  const advisoryBotLoginSet = new Set(normalizeTrustedMarkerLogins(advisoryBotLogins));
+  const codeownerRules = parseCodeownersRules(codeownersText);
+  const codeowners = collectCodeownersForFiles(codeownerRules, changedFiles);
+  const codeownerUsers = new Set(codeowners.codeownerUserLogins);
+  const normalizedReviewDecision = String(reviewDecision ?? "");
+
+  const latestByAuthor = [...indexLatestGatingReviewsByAuthor(reviews).values()]
+    .map((review) => {
+      const login = String(review.author?.login ?? "").trim().toLowerCase();
+      const isAdvisoryBot = isGateAdvisoryBotLogin(login, advisoryBotLoginSet);
+      const isCodeowner = codeownerUsers.has(login);
+      const isRequiredReviewer = requiredReviewerLogins.has(login);
+      return {
+        login,
+        state: String(review.state ?? ""),
+        submittedAt: String(review.submittedAt ?? review.submitted_at ?? ""),
+        isHuman: !isAdvisoryBot,
+        isAdvisoryBot,
+        isCodeowner,
+        isRequiredReviewer,
+      };
+    })
+    .sort((left, right) => left.login.localeCompare(right.login));
+
+  const blockingChangesRequestedLogins = latestByAuthor
+    .filter((review) => {
+      return review.state === "CHANGES_REQUESTED"
+        && !review.isAdvisoryBot;
+    })
+    .map((review) => review.login);
+
+  const humanApprovedCount = latestByAuthor.filter((review) => {
+    return review.isHuman && review.state === "APPROVED";
+  }).length;
+  const codeownerApproved = latestByAuthor.some((review) => {
+    return review.isCodeowner && review.state === "APPROVED";
+  });
+  const hasExplicitCodeownerMatches = changedFiles.some((filePath) => {
+    const normalizedPath = String(filePath ?? "").replace(/^\/+/, "");
+    if (!normalizedPath) {
+      return false;
+    }
+    const owners = findCodeownersForPath(codeownerRules, normalizedPath);
+    return !!owners && hasCodeownerOwners(owners);
+  });
+  const latestByLogin = new Map(latestByAuthor.map((review) => [review.login, review]));
+  const requiredReviewerApprovalsSatisfied = branchReviewRequirements.requiredReviewerRequirements
+    .every((requirement) => {
+      if (
+        requirement.filePatterns.length > 0
+        && !changedFiles.some((filePath) => {
+          return requirement.filePatterns.some((pattern) => matchesCodeownersPattern(pattern, filePath));
+        })
+      ) {
+        return true;
+      }
+      if ((requirement.minimumApprovals ?? 0) <= 0) {
+        return true;
+      }
+      if (normalizedReviewDecision === "APPROVED") {
+        return true;
+      }
+      if (requirement.identity.includes("/")) {
+        return false;
+      }
+      return latestByLogin.get(requirement.identity)?.state === "APPROVED";
+    });
+
+  return {
+    reviewDecision: normalizedReviewDecision,
+    requiredApprovingReviewCount: branchReviewRequirements.requiredApprovingReviewCount,
+    requireCodeOwnerReview: branchReviewRequirements.requireCodeOwnerReview,
+    requiresConversationResolution: branchReviewRequirements.requiresConversationResolution,
+    requiredReviewerLogins: branchReviewRequirements.requiredReviewerLogins,
+    requiredReviewerTeams: branchReviewRequirements.requiredReviewerTeams,
+    codeownerUserLogins: codeowners.codeownerUserLogins,
+    codeownerTeamSlugs: codeowners.codeownerTeamSlugs,
+    unmatchedCodeownerFiles: codeowners.unmatchedFiles,
+    latestByAuthor,
+    humanApprovedCount,
+    requiredApprovalsSatisfied:
+      requiredReviewerApprovalsSatisfied
+      && (
+        normalizedReviewDecision === "APPROVED"
+        || (
+          !normalizedReviewDecision
+          && (
+            branchReviewRequirements.requiredApprovingReviewCount === 0
+            || humanApprovedCount >= branchReviewRequirements.requiredApprovingReviewCount
+          )
+        )
+      ),
+    codeownerApprovalSatisfied:
+      !branchReviewRequirements.requireCodeOwnerReview
+        || !hasExplicitCodeownerMatches
+        || codeownerApproved
+        || normalizedReviewDecision === "APPROVED",
+    humanChangesRequestedCount: blockingChangesRequestedLogins.length,
+    blockingChangesRequestedLogins,
+  };
+}
+
+export function summarizeClaimValidation(claimEvents = [], options = {}) {
+  const trustedMarkerLogins = new Set(normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []));
+  const expectedClaimId = String(options.expectedClaimId ?? "").trim();
+  const expectedAgentId = String(options.expectedAgentId ?? "").trim();
+  const activeClaim = resolveActiveClaim(
+    claimEvents,
+    (login) => trustedMarkerLogins.size === 0 || trustedMarkerLogins.has(String(login ?? "").trim().toLowerCase()),
+  );
+
+  let reason = "match";
+  if (!activeClaim) {
+    reason = "missing-active-claim";
+  } else if (expectedClaimId && activeClaim.claimId !== expectedClaimId) {
+    reason = "claim-id-mismatch";
+  } else if (expectedAgentId && activeClaim.agentId !== expectedAgentId) {
+    reason = "agent-id-mismatch";
+  }
+
+  return {
+    expectedClaimId,
+    expectedAgentId,
+    activeClaimPresent: Boolean(activeClaim),
+    activeClaim: {
+      agentId: activeClaim?.agentId ?? "",
+      claimId: activeClaim?.claimId ?? "",
+      supersedes: activeClaim?.supersedes ?? "",
+      branch: activeClaim?.branch ?? "",
+      createdAt: activeClaim?.createdAt ?? "",
+    },
+    matchesExpectedClaim: reason === "match",
+    claimLost: reason !== "match",
+    reason,
+  };
+}
+
+export function buildPreMergeReadinessSummary(
+  {
+    prHeadSha,
+    comments = [],
+    reviews = [],
+    threads = [],
+    checks = [],
+    branchRules = [],
+    branchProtection = {},
+    requestedReviewers = [],
+    timelineEvents = [],
+    claimEvents = [],
+    changedFiles = [],
+    codeownersText = "",
+    reviewDecision = "",
+  },
+  options = {},
+) {
+  const now = String(options.now ?? "");
+  if (!isValidIsoTimestamp(now)) {
+    throw new Error("now must be an ISO 8601 UTC timestamp");
+  }
+  if (!/^[0-9a-f]{40}$/.test(String(prHeadSha ?? ""))) {
+    throw new Error("prHeadSha must be a 40-character lowercase commit SHA");
+  }
+
+  const trustedMarkerLogins = normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []);
+  const iddAgentLogins = normalizeTrustedMarkerLogins(options.iddAgentLogins ?? []);
+  const advisoryBotLogins = normalizeTrustedMarkerLogins(options.advisoryBotLogins ?? []);
+  const prAuthorLogin = String(options.prAuthorLogin ?? "").trim().toLowerCase();
+  const branchReviewRequirements = summarizeBranchReviewRequirements(
+    branchRules,
+    branchProtection,
+  );
+  const liveSnapshot = buildActivitySnapshotSummary(
+    {
+      comments,
+      reviews,
+      threads,
+      checks,
+    },
+    { trustedMarkerLogins },
+  );
+  const watermark = resolveLatestReviewWatermark(comments, {
+    expectedClaimId: options.expectedClaimId,
+    isTrustedAuthor: (login) => trustedMarkerLogins.includes(String(login ?? "").trim().toLowerCase()),
+  });
+  const reviewCurrency = watermark
+    ? diffReviewSnapshot(
+      {
+        headSha: watermark.headSha,
+        maxActivityUpdatedAt: watermark.maxActivityUpdatedAt,
+        totalItemCount: watermark.totalItemCount,
+        latestPassingCiCompletedAt: watermark.latestCiCompletedAt,
+      },
+      {
+        headSha: prHeadSha,
+        ...liveSnapshot,
+      },
+    )
+    : { route: "return-to-e1", reason: "missing-watermark" };
+  const threadSummary = summarizeReviewThreadsForGate(threads, {
+    iddAgentLogins,
+    prAuthorLogin,
+    requiresConversationResolution: branchReviewRequirements.requiresConversationResolution,
+  });
+  const unrepliedComments = summarizeRegularCommentsForGate(comments, {
+    iddAgentLogins,
+    advisoryBotLogins,
+    threads,
+  });
+  const reviewerStates = summarizeReviewerStates(reviews, {
+    reviewDecision,
+    branchRules,
+    branchProtection,
+    codeownersText,
+    changedFiles,
+    advisoryBotLogins,
+  });
+  const ci = summarizeRequiredChecks(checks, branchRules, branchProtection);
+  const advisoryWait = buildAdvisoryWaitSummary(
+    {
+      prHeadSha,
+      reviews,
+      requestedReviewers,
+      timelineEvents,
+      comments,
+    },
+    {
+      now,
+      requestCap: Number.isFinite(options.requestCap) ? options.requestCap : 30,
+      pendingWindowMinutes: Number.isFinite(options.pendingWindowMinutes)
+        ? options.pendingWindowMinutes
+        : 30,
+      settledWindowMinutes: Number.isFinite(options.settledWindowMinutes)
+        ? options.settledWindowMinutes
+        : 10,
+      viewerLogin: options.viewerLogin,
+      configuredTrustedActors: options.configuredTrustedActors,
+      collaboratorTrustEnabled: options.collaboratorTrustEnabled,
+      trustedMarkerLogins,
+    },
+  );
+  const claim = summarizeClaimValidation(claimEvents, {
+    trustedMarkerLogins,
+    expectedClaimId: options.expectedClaimId,
+    expectedAgentId: options.expectedAgentId,
+  });
+
+  return {
+    protocolVersion: "1",
+    decisionAuthority: "instructions",
+    prHeadSha,
+    now,
+    reviewCurrency: {
+      watermarkPresent: Boolean(watermark),
+      watermark: {
+        agentId: watermark?.agentId ?? "",
+        claimId: watermark?.claimId ?? "",
+        headSha: watermark?.headSha ?? "",
+        maxActivityUpdatedAt: watermark?.maxActivityUpdatedAt ?? "none",
+        totalItemCount: watermark?.totalItemCount ?? 0,
+        latestCiCompletedAt: watermark?.latestCiCompletedAt ?? "none",
+        createdAt: watermark?.createdAt ?? "none",
+      },
+      live: {
+        totalItemCount: liveSnapshot.totalItemCount,
+        maxActivityUpdatedAt: liveSnapshot.maxActivityUpdatedAt,
+        latestCiCompletedAt: liveSnapshot.latestCiCompletedAt,
+        latestPassingCiCompletedAt: liveSnapshot.latestPassingCiCompletedAt,
+        counts: liveSnapshot.counts,
+      },
+      comparisonRoute: reviewCurrency.route,
+      comparisonReason: reviewCurrency.reason,
+    },
+    threads: {
+      unresolvedCount: threads.filter((thread) => !thread.isResolved).length,
+      actionableCount: threadSummary.actionableCount,
+      awaitingReviewerCount: threadSummary.awaitingReviewerCount,
+      amdBlockingCount: threadSummary.amdBlockingCount,
+      conversationResolveAgentCount: threadSummary.conversationResolveAgentCount,
+      conversationResolveAuthorCount: threadSummary.conversationResolveAuthorCount,
+      classifications: threadSummary.classifications,
+    },
+    unrepliedComments,
+    reviewerStates,
+    advisoryWait: {
+      outcome: advisoryWait.outcome,
+      f3Outcome: advisoryWait.f3Outcome,
+      lastCopilotCommit: advisoryWait.lastCopilotCommit,
+      copilotPending: advisoryWait.copilotPending,
+      copilotPendingCoversHead: advisoryWait.copilotPendingCoversHead,
+      sameHeadMarkerPresent: advisoryWait.sameHeadMarkerPresent,
+      earliestSameHeadAt: advisoryWait.earliestSameHeadAt,
+      sameHeadMarkerCount: advisoryWait.sameHeadMarkerCount,
+      requestMarkerCount: advisoryWait.requestMarkerCount,
+      elapsedMinutes: advisoryWait.elapsedMinutes,
+    },
+    ci,
+    claim,
   };
 }
 
@@ -1121,12 +1813,276 @@ function hasExplicitDispositionAfter(targetComment, comments) {
   });
 }
 
+function normalizeGatingReviewTimestamp(review, state) {
+  const submittedAt = String(review.submittedAt ?? review.submitted_at ?? "");
+  if (isValidIsoTimestamp(submittedAt)) {
+    return submittedAt;
+  }
+  if (state !== "APPROVED" && state !== "CHANGES_REQUESTED" && state !== "DISMISSED") {
+    return null;
+  }
+  const updatedAt = String(review.updatedAt ?? review.updated_at ?? "");
+  if (isValidIsoTimestamp(updatedAt)) {
+    return updatedAt;
+  }
+  return null;
+}
+
 function maxIsoTimestamp(values) {
-  const sorted = values
-    .map((value) => String(value))
-    .filter(isValidIsoTimestamp)
-    .sort();
-  return sorted.at(-1) ?? null;
+  let latest = null;
+  for (const value of values) {
+    const normalized = String(value);
+    if (!isValidIsoTimestamp(normalized)) {
+      continue;
+    }
+    if (!latest || compareIsoTimestamps(normalized, latest) > 0) {
+      latest = normalized;
+    }
+  }
+  return latest;
+}
+
+function summarizeRequiredCheckMetadata(parameters) {
+  const names = new Set();
+  let sourcePinned = false;
+  const rawChecks = [
+    ...(parameters.required_status_checks ?? []),
+    ...(parameters.required_checks ?? []),
+    ...(parameters.checks ?? []),
+    ...(parameters.contexts ?? []),
+  ];
+
+  for (const rawCheck of rawChecks) {
+    if (typeof rawCheck === "string") {
+      if (rawCheck.trim()) {
+        names.add(rawCheck.trim());
+      }
+      continue;
+    }
+
+    if (
+      isSourcePinnedRequirementId(rawCheck?.app_id)
+      || isSourcePinnedRequirementId(rawCheck?.integration_id)
+      || rawCheck?.source
+    ) {
+      sourcePinned = true;
+    }
+
+    for (const candidate of [
+      rawCheck?.context,
+      rawCheck?.name,
+      rawCheck?.check,
+      rawCheck?.integration_id ? rawCheck?.name : "",
+    ]) {
+      const normalized = String(candidate ?? "").trim();
+      if (normalized) {
+        names.add(normalized);
+        break;
+      }
+    }
+  }
+
+  return {
+    names: [...names].sort(),
+    sourcePinned,
+  };
+}
+
+function extractRequiredReviewerRequirement(reviewer) {
+  const reviewerRef = reviewer?.reviewer ?? {};
+  const reviewerType = String(reviewerRef.type ?? reviewer?.type ?? "").trim().toLowerCase();
+  const reviewerId = String(reviewerRef.id ?? reviewer?.id ?? "").trim();
+  let candidate = typeof reviewer === "string"
+    ? reviewer
+    : reviewer?.login
+      ?? reviewerRef.login
+      ?? reviewer?.slug
+      ?? reviewer?.team
+      ?? reviewerRef.slug
+      ?? reviewerRef.team
+      ?? reviewerRef.name
+      ?? "";
+  if (!candidate && reviewerType && reviewerId) {
+    candidate = `${reviewerType}/${reviewerId}`;
+  }
+  return {
+    identity: String(candidate ?? "").trim().replace(/^@/, "").toLowerCase(),
+    minimumApprovals: Number(reviewer?.minimum_approvals ?? reviewer?.min_approvals ?? 1) || 0,
+    filePatterns: (reviewer?.file_patterns ?? reviewer?.filePatterns ?? [])
+      .map((pattern) => String(pattern ?? "").trim())
+      .filter(Boolean),
+  };
+}
+
+function parseCodeownersRules(codeownersText) {
+  return String(codeownersText ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !line.startsWith("#"))
+    .map((line) => {
+      const tokens = tokenizeCodeownersLine(line);
+      const pattern = tokens.shift() ?? "";
+      const ownerTokens = [];
+      for (const token of tokens) {
+        if (token.startsWith("#")) {
+          break;
+        }
+        ownerTokens.push(token);
+      }
+      const users = ownerTokens
+        .filter((token) => /^@[^/\s#]+$/.test(token))
+        .map((token) => token.slice(1).toLowerCase());
+      const teams = ownerTokens
+        .filter((token) => /^@[^/\s#]+\/[^/\s#]+$/.test(token))
+        .map((token) => token.slice(1).toLowerCase());
+      const emails = ownerTokens
+        .filter((token) => /^[^@\s#][^\s#]*@[^\s#]+$/.test(token))
+        .map((token) => token.toLowerCase());
+      if (!pattern) {
+        return null;
+      }
+      return { pattern, users, teams, emails };
+    })
+    .filter(Boolean);
+}
+
+function findCodeownersForPath(rules, path) {
+  let latest = null;
+  for (const rule of rules) {
+    if (matchesCodeownersPattern(rule.pattern, path)) {
+      latest = rule;
+    }
+  }
+  return latest;
+}
+
+function matchesCodeownersPattern(pattern, path) {
+  const normalizedPattern = String(pattern ?? "").trim();
+  const normalizedPath = String(path ?? "").replace(/^\/+/, "").replace(/\\/g, "/");
+  if (!normalizedPattern || !normalizedPath) {
+    return false;
+  }
+
+  let body = normalizedPattern;
+  const anchored = body.startsWith("/");
+  if (anchored) {
+    body = body.slice(1);
+  }
+  const rawBody = body;
+  const trailingSlashPattern = rawBody.endsWith("/");
+  const lastSegment = rawBody.split("/").at(-1) ?? "";
+  const anyDepthFromRoot = rawBody.startsWith("**/");
+  const directoryLikePattern = !trailingSlashPattern
+    && !lastSegment.includes("*")
+    && !lastSegment.includes("?");
+
+  if (trailingSlashPattern) {
+    body = `${body}**`;
+  }
+
+  if (anyDepthFromRoot) {
+    body = body.slice(3);
+  }
+
+  const slashAnchored = anchored || (rawBody.includes("/") && !anyDepthFromRoot && !trailingSlashPattern);
+  let source = anyDepthFromRoot || !slashAnchored ? "^(?:|.*\\/)" : "^";
+  for (let index = 0; index < body.length; index += 1) {
+    const triplet = body.slice(index, index + 3);
+    const pair = body.slice(index, index + 2);
+    if (triplet === "**/") {
+      source += "(?:[^/]+/)*";
+      index += 2;
+      continue;
+    }
+    if (pair === "**") {
+      source += ".*";
+      index += 1;
+      continue;
+    }
+    const character = body[index];
+    if (character === "*") {
+      source += "[^/]*";
+      continue;
+    }
+    if (character === "?") {
+      source += "[^/]";
+      continue;
+    }
+    source += escapeRegExp(character);
+  }
+  if (directoryLikePattern) {
+    source += "(?:/.*)?";
+  }
+  source += "$";
+
+  return new RegExp(source).test(normalizedPath);
+}
+
+function effectiveRegularCommentActivityAt(comment) {
+  const updatedAt = String(comment.updatedAt ?? "");
+  if (isValidIsoTimestamp(updatedAt) && compareIsoTimestamps(updatedAt, comment.createdAt) > 0) {
+    return updatedAt;
+  }
+  return comment.createdAt;
+}
+
+function isSourcePinnedRequirementId(value) {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0;
+}
+
+function tokenizeCodeownersLine(line) {
+  const tokens = [];
+  let current = "";
+  let escaped = false;
+
+  for (const character of String(line ?? "")) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === " " || character === "\t") {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += character;
+  }
+
+  if (escaped) {
+    current += "\\";
+  }
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens;
+}
+
+function hasCodeownerOwners(rule) {
+  return (rule?.users?.length ?? 0) > 0
+    || (rule?.teams?.length ?? 0) > 0
+    || (rule?.emails?.length ?? 0) > 0;
+}
+
+function isGateAdvisoryBotLogin(login, advisoryBotLogins) {
+  const normalized = String(login ?? "").trim().toLowerCase();
+  return isKnownReviewBot(normalized) || advisoryBotLogins.has(normalized);
+}
+
+function isOperationalOrDigestComment(body) {
+  return operationalMarkerPrefix(body) !== null || firstLine(body) === LIVE_STATUS_DIGEST_MARKER;
+}
+
+function buildBodyPreview(body) {
+  return firstLine(String(body ?? "")).slice(0, 120);
 }
 
 function advisoryWaitMarkerMatchesHead(body, prHeadSha) {
@@ -1150,6 +2106,24 @@ function minutesBetweenIso(start, end) {
     return 0;
   }
   return Math.floor((endMs - startMs) / 60000);
+}
+
+function compareIsoTimestamps(left, right) {
+  const leftComparable = normalizeComparableTimestamp(left);
+  const rightComparable = normalizeComparableTimestamp(right);
+  if (typeof leftComparable === "number" && typeof rightComparable === "number") {
+    if (leftComparable !== rightComparable) {
+      return leftComparable - rightComparable;
+    }
+    return String(left ?? "").localeCompare(String(right ?? ""));
+  }
+  if (typeof leftComparable === "number") {
+    return 1;
+  }
+  if (typeof rightComparable === "number") {
+    return -1;
+  }
+  return String(left ?? "").localeCompare(String(right ?? ""));
 }
 
 function threadActivityAt(thread) {

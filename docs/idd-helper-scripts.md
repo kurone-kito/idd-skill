@@ -6,12 +6,14 @@ directly instead of re-evaluating the same suggestion from scratch.
 
 ## Decision
 
-In the idd-skill source repository, four optional helpers were adopted:
+In the idd-skill source repository, the following optional helpers were adopted:
 
 - `scripts/review-activity-snapshot.mjs` for read-only E/F review
   activity and CI snapshot metrics
 - `scripts/advisory-wait-state.mjs` for read-only advisory-wait evidence
   collection and AW outcome reporting
+- `scripts/pre-merge-readiness.mjs` for read-only F2/F3 readiness
+  evidence collection
 - `scripts/live-status-digest.mjs` for issue or PR live status digest
   discovery, rendering, dry-run, and claim-checked upsert
 - `scripts/audit-pr-cleanup.mjs` for post-merge comment cleanup auditing
@@ -78,6 +80,14 @@ The adopted helper boundaries are intentionally narrow:
 - it does not replace the advisory-wait decision table; it only reduces
   command-copy variance when collecting canonical AW evidence
 
+- `pre-merge-readiness.mjs` is read-only, emits machine-readable F2/F3
+  evidence including review currency, unresolved-thread state,
+  unreplied comments, reviewer states, advisory state, CI, and claim
+  validation
+- it does not replace the pre-merge or merge decision tables; it only
+  reduces command-copy variance when collecting canonical merge-gate
+  evidence
+
 - `live-status-digest.mjs` defaults to dry-run, supports issue and PR
   targets, and mutates only with explicit `--apply`
 - apply mode re-validates an active claim unless a maintainer explicitly
@@ -108,7 +118,7 @@ The workflow areas most likely to benefit from optional helpers are:
 | Review activity snapshots       | Adopted helper     | Read-only evidence collector       | Low           | E1/F2/F3 activity-universe fetches via `gh` / GitHub API               | Medium — helper output must keep matching the review-currency rules exactly              | High — roughly 600 to 900 bytes of repeated multi-surface fetch prose   |
 | Live status digest edits        | Adopted helper     | Dry-run by default, explicit apply | Medium        | Phase-specific digest discovery and update flow                        | Medium — digest text must remain UI-only and never look authoritative                    | Medium — roughly 300 to 500 bytes of repeated digest-upsert prose       |
 | Advisory-wait state             | Adopted helper     | Read-only evidence collector       | Low           | `.github/instructions/idd-advisory-wait.instructions.md`               | Medium — helper must expose evidence without hiding the canonical decision table         | Very high — roughly 900 to 1400 bytes of repeated AW command prose      |
-| Pre-merge readiness             | Selected now       | Read-only evidence collector       | Low           | `.github/instructions/idd-pre-merge.instructions.md` and F3 live fetch | Medium — helper must stay evidence-only and preserve the written merge gates             | Very high — roughly 1200 to 1800 bytes of repeated merge-evidence prose |
+| Pre-merge readiness             | Adopted helper     | Read-only evidence collector       | Low           | `.github/instructions/idd-pre-merge.instructions.md` and F3 live fetch | Medium — helper must stay evidence-only and preserve the written merge gates             | Very high — roughly 1200 to 1800 bytes of repeated merge-evidence prose |
 | Post-merge cleanup candidates   | Adopted helper     | Dry-run by default, explicit apply | High          | GraphQL minimize-comment fallback flow                                 | Medium — minimization safety still depends on exact review/marker rules                  | Medium — roughly 400 to 700 bytes of repeated GraphQL audit prose       |
 | Branch protection/ruleset reads | Deferred candidate | Read-only API adapter              | Low           | Direct ruleset / branch-protection API reads                           | Medium — repository support varies and incomplete coverage could create false confidence | Low to medium — roughly 150 to 300 bytes of repeated ruleset prose      |
 
@@ -122,11 +132,11 @@ reserve candidates:
    and a clear non-goal boundary, so the source roadmap landed it first
    as
    [kurone-kito/idd-skill#308](https://github.com/kurone-kito/idd-skill/issues/308).
-2. **Pre-merge readiness** — **select now**. F2/F3 collect the largest
-   evidence set in the workflow and already compose existing pure
-   protocol logic, making a read-only helper valuable without moving
-   merge authority out of the instructions. This maps directly to the
-   source follow-up issue
+2. **Pre-merge readiness** — **implemented now**. F2/F3 collect the
+   largest evidence set in the workflow and already compose existing
+   pure protocol logic, making a read-only helper valuable without
+   moving merge authority out of the instructions. This maps directly to
+   the source follow-up issue
    [kurone-kito/idd-skill#309](https://github.com/kurone-kito/idd-skill/issues/309).
 3. **Claim-state parsing** — **reserve, defer for now**. The payoff is
    real, but claim ownership drift would be more dangerous than
@@ -166,7 +176,7 @@ rule must be maintained twice: once in the instructions that agents read,
 and once in code that agents run.
 
 For now, the safer balance is to keep pre-merge and advisory
-instructions canonical while allowing two read-only evidence helpers,
+instructions canonical while allowing three read-only evidence helpers,
 one live digest upsert helper, and one post-merge cleanup helper. Merge
 safety still depends on the written checks, not on helper output alone.
 

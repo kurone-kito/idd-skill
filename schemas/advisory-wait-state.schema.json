@@ -11,6 +11,7 @@
     "copilotPending",
     "copilotPendingCoversHead",
     "outcome",
+    "f3Outcome",
     "now",
     "requestCap",
     "pendingWindowMinutes",
@@ -42,6 +43,16 @@
       "type": "boolean"
     },
     "outcome": {
+      "type": "string",
+      "enum": [
+        "SATISFIED",
+        "REQUEST_NEEDED",
+        "RECOVERY_NEEDED",
+        "CAP_EXHAUSTED",
+        "WAIT"
+      ]
+    },
+    "f3Outcome": {
       "type": "string",
       "enum": [
         "SATISFIED",

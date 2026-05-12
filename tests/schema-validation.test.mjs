@@ -30,6 +30,22 @@ test("advisory-wait-state schema uses only allowed keywords", () => {
   assert.deepEqual(checkSchemaKeywords(schema), []);
 });
 
+test("pre-merge-readiness schema uses only allowed keywords", () => {
+  const schema = loadJson("schemas/pre-merge-readiness.schema.json");
+  assert.deepEqual(checkSchemaKeywords(schema), []);
+});
+
+test("pre-merge-readiness schema publishes metadata fields", () => {
+  const schema = loadJson("schemas/pre-merge-readiness.schema.json");
+  assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema");
+  assert.equal(
+    schema.$id,
+    "https://kurone-kito.github.io/idd-skill/schemas/pre-merge-readiness.schema.json",
+  );
+  assert.equal(schema.title, "Pre-Merge Readiness");
+  assert.equal(schema.description, "Read-only pre-merge readiness evidence snapshot for a PR head.");
+});
+
 test("policy schema uses only allowed keywords", () => {
   const schema = loadJson("schemas/policy.schema.json");
   assert.deepEqual(checkSchemaKeywords(schema), []);
@@ -106,6 +122,65 @@ test("advisory-wait-state invalid fixture fails validation", () => {
     false,
   );
   assert.ok(ok, "Expected invalid fixture to fail schema validation");
+});
+
+test("pre-merge-readiness valid fixture passes validation", () => {
+  const { ok, errors } = validateFixture(
+    "schemas/pre-merge-readiness.schema.json",
+    "fixtures/schemas/pre-merge-readiness.valid.json",
+    true,
+  );
+  assert.ok(ok, errors.join("\n"));
+});
+
+test("pre-merge-readiness invalid fixture fails validation", () => {
+  const { ok } = validateFixture(
+    "schemas/pre-merge-readiness.schema.json",
+    "fixtures/schemas/pre-merge-readiness.invalid.json",
+    false,
+  );
+  assert.ok(ok, "Expected invalid fixture to fail schema validation");
+});
+
+test("pre-merge-readiness valid fixture accepts fractional timestamp evidence", () => {
+  const schema = loadJson("schemas/pre-merge-readiness.schema.json");
+  const fixture = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/pre-merge-readiness.valid.json")),
+  );
+  fixture.reviewCurrency.watermark.maxActivityUpdatedAt = "2026-05-11T23:56:00.100Z";
+  fixture.reviewCurrency.watermark.latestCiCompletedAt = "2026-05-11T23:57:00.200Z";
+  fixture.reviewCurrency.watermark.createdAt = "2026-05-11T23:58:00.300Z";
+  fixture.reviewCurrency.live.maxActivityUpdatedAt = "2026-05-11T23:56:00.400Z";
+  fixture.reviewCurrency.live.latestCiCompletedAt = "2026-05-11T23:57:00.500Z";
+  fixture.reviewCurrency.live.latestPassingCiCompletedAt = "2026-05-11T23:57:00.600Z";
+  fixture.advisoryWait.earliestSameHeadAt = "2026-05-11T23:59:00.700Z";
+  fixture.ci.checks[0].completedAt = "2026-05-11T23:57:00.800Z";
+  fixture.claim.activeClaim.createdAt = "2026-05-11T23:20:00.900Z";
+
+  const errors = validate(fixture, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("pre-merge-readiness count fields require non-negative integers", () => {
+  const schema = loadJson("schemas/pre-merge-readiness.schema.json");
+  const fixture = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/pre-merge-readiness.valid.json")),
+  );
+  fixture.reviewCurrency.watermark.totalItemCount = 1.5;
+  fixture.reviewCurrency.live.counts.comments = -1;
+  fixture.threads.unresolvedCount = 2.25;
+  fixture.unrepliedComments.count = -1;
+  fixture.reviewerStates.requiredApprovingReviewCount = 0.5;
+  fixture.advisoryWait.sameHeadMarkerCount = -1;
+  fixture.ci.requiredCheckCount = 3.5;
+
+  const errors = validate(fixture, schema);
+  assert.ok(errors.length > 0, "Expected fractional or negative counts to fail validation");
+});
+
+test("integer validation reports non-integer numbers explicitly", () => {
+  const errors = validate(1.5, { type: "integer" });
+  assert.deepEqual(errors, ['$: expected type "integer", got non-integer number 1.5']);
 });
 
 test("policy valid fixture passes validation", () => {

@@ -36,12 +36,25 @@ gate. The active claim must still use your current `{claim-id}`.
    `idd-pre-merge.instructions.md`. Return to E1 if **any** of the
    following is true:
 
-   In the idd-skill source repository, you may optionally use the read-only
-   helper `node scripts/review-activity-snapshot.mjs --pr {pr-number}`
-   and pass trusted marker actors with
-   `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"` to
-   compute the same activity metrics; the written gate rules remain
-   canonical.
+   In the idd-skill source repository, you may optionally use the
+   read-only helper:
+
+   ```sh
+   node scripts/review-activity-snapshot.mjs --pr {pr-number} \
+     --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
+   ```
+
+   You may also optionally use:
+
+   ```sh
+   node scripts/pre-merge-readiness.mjs --pr {pr-number} \
+     --claim-issue {issue-number} --expected-claim-id {claim-id} \
+     --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
+   ```
+
+   to collect the broader F2/F3 evidence set immediately before the
+   merge attempt. Both helpers are evidence collectors only; the written
+   gate rules remain canonical.
 
    - The current PR HEAD SHA differs from `{f2-head-SHA}`.
    - `{f2-max-activity-updatedAt}` is `none` and the final fetch is
@@ -97,6 +110,9 @@ gate. The active claim must still use your current `{claim-id}`.
        bot wait check** in `idd-pre-merge.instructions.md` (go back to
        the first condition in F2). F2 will reuse the existing same-HEAD
        marker — do not post a new one.
+
+   If the optional helper output disagrees with the live fetch above,
+   follow the live fetch and the written gate rules.
 
 4. Merge the PR using a **merge commit**, binding to the validated SHA
    to prevent a race where a new push lands after the F3 freshness check

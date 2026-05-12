@@ -1,0 +1,439 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/pre-merge-readiness.schema.json",
+  "title": "Pre-Merge Readiness",
+  "description": "Read-only pre-merge readiness evidence snapshot for a PR head.",
+  "type": "object",
+  "required": [
+    "protocolVersion",
+    "decisionAuthority",
+    "prHeadSha",
+    "now",
+    "reviewCurrency",
+    "threads",
+    "unrepliedComments",
+    "reviewerStates",
+    "advisoryWait",
+    "ci",
+    "claim"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "enum": ["1"]
+    },
+    "decisionAuthority": {
+      "type": "string",
+      "enum": ["instructions"]
+    },
+    "prHeadSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "now": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+    },
+    "reviewCurrency": {
+      "type": "object",
+      "required": [
+        "watermarkPresent",
+        "watermark",
+        "live",
+        "comparisonRoute",
+        "comparisonReason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "watermarkPresent": {
+          "type": "boolean"
+        },
+        "watermark": {
+          "type": "object",
+          "required": [
+            "agentId",
+            "claimId",
+            "headSha",
+            "maxActivityUpdatedAt",
+            "totalItemCount",
+            "latestCiCompletedAt",
+            "createdAt"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "claimId": {
+              "type": "string"
+            },
+            "headSha": {
+              "type": "string",
+              "pattern": "^$|^[0-9a-f]{40}$"
+            },
+            "maxActivityUpdatedAt": {
+              "type": "string",
+              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$"
+            },
+            "totalItemCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "latestCiCompletedAt": {
+              "type": "string",
+              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$"
+            },
+            "createdAt": {
+              "type": "string",
+              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$"
+            }
+          }
+        },
+        "live": {
+          "type": "object",
+          "required": [
+            "totalItemCount",
+            "maxActivityUpdatedAt",
+            "latestCiCompletedAt",
+            "latestPassingCiCompletedAt",
+            "counts"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "totalItemCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxActivityUpdatedAt": {
+              "type": "string",
+              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$"
+            },
+            "latestCiCompletedAt": {
+              "type": "string",
+              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$"
+            },
+            "latestPassingCiCompletedAt": {
+              "type": "string",
+              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$"
+            },
+            "counts": {
+              "type": "object",
+              "required": ["comments", "reviews", "threads"],
+              "additionalProperties": false,
+              "properties": {
+                "comments": { "type": "integer", "minimum": 0 },
+                "reviews": { "type": "integer", "minimum": 0 },
+                "threads": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        },
+        "comparisonRoute": {
+          "type": "string",
+          "enum": ["proceed", "return-to-e1"]
+        },
+        "comparisonReason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "threads": {
+      "type": "object",
+      "required": [
+        "unresolvedCount",
+        "actionableCount",
+        "awaitingReviewerCount",
+        "amdBlockingCount",
+        "conversationResolveAgentCount",
+        "conversationResolveAuthorCount",
+        "classifications"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "unresolvedCount": { "type": "integer", "minimum": 0 },
+        "actionableCount": { "type": "integer", "minimum": 0 },
+        "awaitingReviewerCount": { "type": "integer", "minimum": 0 },
+        "amdBlockingCount": { "type": "integer", "minimum": 0 },
+        "conversationResolveAgentCount": { "type": "integer", "minimum": 0 },
+        "conversationResolveAuthorCount": { "type": "integer", "minimum": 0 },
+        "classifications": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "classification"],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "classification": {
+                "type": "string",
+                "enum": [
+                  "actionable-blocking",
+                  "amd-blocking",
+                  "awaiting-reviewer",
+                  "conversation-resolve-agent",
+                  "conversation-resolve-author"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "unrepliedComments": {
+      "type": "object",
+      "required": ["count", "items"],
+      "additionalProperties": false,
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "authorLogin", "createdAt", "bodyPreview"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "authorLogin": { "type": "string", "minLength": 1 },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+              },
+              "bodyPreview": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "reviewerStates": {
+      "type": "object",
+      "required": [
+        "reviewDecision",
+        "requiredApprovingReviewCount",
+        "requireCodeOwnerReview",
+        "requiresConversationResolution",
+        "requiredReviewerLogins",
+        "requiredReviewerTeams",
+        "codeownerUserLogins",
+        "codeownerTeamSlugs",
+        "unmatchedCodeownerFiles",
+        "latestByAuthor",
+        "humanApprovedCount",
+        "requiredApprovalsSatisfied",
+        "codeownerApprovalSatisfied",
+        "humanChangesRequestedCount",
+        "blockingChangesRequestedLogins"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "reviewDecision": { "type": "string" },
+        "requiredApprovingReviewCount": { "type": "integer", "minimum": 0 },
+        "requireCodeOwnerReview": { "type": "boolean" },
+        "requiresConversationResolution": { "type": "boolean" },
+        "requiredReviewerLogins": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "requiredReviewerTeams": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "codeownerUserLogins": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "codeownerTeamSlugs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "unmatchedCodeownerFiles": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "latestByAuthor": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "login",
+              "state",
+              "submittedAt",
+              "isHuman",
+              "isAdvisoryBot",
+              "isCodeowner",
+              "isRequiredReviewer"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "login": { "type": "string", "minLength": 1 },
+              "state": { "type": "string", "minLength": 1 },
+              "submittedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+              },
+              "isHuman": { "type": "boolean" },
+              "isAdvisoryBot": { "type": "boolean" },
+              "isCodeowner": { "type": "boolean" },
+              "isRequiredReviewer": { "type": "boolean" }
+            }
+          }
+        },
+        "humanApprovedCount": { "type": "integer", "minimum": 0 },
+        "requiredApprovalsSatisfied": { "type": "boolean" },
+        "codeownerApprovalSatisfied": { "type": "boolean" },
+        "humanChangesRequestedCount": { "type": "integer", "minimum": 0 },
+        "blockingChangesRequestedLogins": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "advisoryWait": {
+      "type": "object",
+      "required": [
+        "outcome",
+        "f3Outcome",
+        "lastCopilotCommit",
+        "copilotPending",
+        "copilotPendingCoversHead",
+        "sameHeadMarkerPresent",
+        "earliestSameHeadAt",
+        "sameHeadMarkerCount",
+        "requestMarkerCount",
+        "elapsedMinutes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "SATISFIED",
+            "WAIT",
+            "REQUEST_NEEDED",
+            "RECOVERY_NEEDED",
+            "CAP_EXHAUSTED"
+          ]
+        },
+        "f3Outcome": {
+          "type": "string",
+          "enum": [
+            "SATISFIED",
+            "WAIT",
+            "REQUEST_NEEDED",
+            "RECOVERY_NEEDED",
+            "CAP_EXHAUSTED"
+          ]
+        },
+        "lastCopilotCommit": {
+          "type": "string",
+          "pattern": "^$|^[0-9a-f]{40}$"
+        },
+        "copilotPending": { "type": "boolean" },
+        "copilotPendingCoversHead": { "type": "boolean" },
+        "sameHeadMarkerPresent": { "type": "boolean" },
+        "earliestSameHeadAt": {
+          "type": "string",
+          "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+        },
+        "sameHeadMarkerCount": { "type": "integer", "minimum": 0 },
+        "requestMarkerCount": { "type": "integer", "minimum": 0 },
+        "elapsedMinutes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ci": {
+      "type": "object",
+      "required": [
+        "status",
+        "requiredCheckCount",
+        "generatedRequiredCheckCount",
+        "requiredChecksGenerated",
+        "requiredChecksPassing",
+        "requiredCheckNames",
+        "missingRequiredCheckNames",
+        "checks"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["missing", "success", "pending", "failed", "unknown"]
+        },
+        "requiredCheckCount": { "type": "integer", "minimum": 0 },
+        "generatedRequiredCheckCount": { "type": "integer", "minimum": 0 },
+        "requiredChecksGenerated": { "type": "boolean" },
+        "requiredChecksPassing": { "type": "boolean" },
+        "requiredCheckNames": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "missingRequiredCheckNames": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "state", "completedAt", "required"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "state": { "type": "string", "minLength": 1 },
+              "completedAt": {
+                "type": "string",
+                "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+              },
+              "required": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "required": [
+        "expectedClaimId",
+        "expectedAgentId",
+        "activeClaimPresent",
+        "activeClaim",
+        "matchesExpectedClaim",
+        "claimLost",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "expectedClaimId": { "type": "string" },
+        "expectedAgentId": { "type": "string" },
+        "activeClaimPresent": { "type": "boolean" },
+        "activeClaim": {
+          "type": "object",
+          "required": ["agentId", "claimId", "supersedes", "branch", "createdAt"],
+          "additionalProperties": false,
+          "properties": {
+            "agentId": { "type": "string" },
+            "claimId": { "type": "string" },
+            "supersedes": { "type": "string" },
+            "branch": { "type": "string" },
+            "createdAt": {
+              "type": "string",
+              "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+            }
+          }
+        },
+        "matchesExpectedClaim": { "type": "boolean" },
+        "claimLost": { "type": "boolean" },
+        "reason": {
+          "type": "string",
+          "enum": ["match", "missing-active-claim", "claim-id-mismatch", "agent-id-mismatch"]
+        }
+      }
+    }
+  }
+}

@@ -6,7 +6,7 @@
  *
  * Supported enforcement keywords:
  *   type, required, properties, additionalProperties,
- *   minLength, pattern, format (date-time only),
+ *   minLength, minimum, pattern, format (date-time only),
  *   minItems, items, enum
  *
  * Any other keyword in a schema triggers an error, preventing false
@@ -29,6 +29,7 @@ const ENFORCED_KEYWORDS = new Set([
   "properties",
   "additionalProperties",
   "minLength",
+  "minimum",
   "pattern",
   "format",
   "minItems",
@@ -92,9 +93,20 @@ export function validate(data, schema, path = "$") {
   const errors = [];
   const actualType = getType(data);
 
-  if (schema.type !== undefined && actualType !== schema.type) {
-    errors.push(`${path}: expected type "${schema.type}", got "${actualType}"`);
-    return errors;
+  if (schema.type !== undefined) {
+    if (schema.type === "integer") {
+      if (actualType !== "number") {
+        errors.push(`${path}: expected type "integer", got "${actualType}"`);
+        return errors;
+      }
+      if (!Number.isInteger(data)) {
+        errors.push(`${path}: expected type "integer", got non-integer number ${data}`);
+        return errors;
+      }
+    } else if (actualType !== schema.type) {
+      errors.push(`${path}: expected type "${schema.type}", got "${actualType}"`);
+      return errors;
+    }
   }
 
   if (actualType === "string") {
@@ -111,6 +123,10 @@ export function validate(data, schema, path = "$") {
 
   if (schema.enum !== undefined && !schema.enum.includes(data)) {
     errors.push(`${path}: "${String(data)}" not in enum [${schema.enum.join(", ")}]`);
+  }
+
+  if (actualType === "number" && schema.minimum !== undefined && data < schema.minimum) {
+    errors.push(`${path}: ${data} < minimum ${schema.minimum}`);
   }
 
   if (actualType === "array") {
@@ -231,6 +247,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     ["schemas/live-status-digest.schema.json", "fixtures/schemas/live-status-digest.invalid.json", false],
     ["schemas/advisory-wait-state.schema.json", "fixtures/schemas/advisory-wait-state.valid.json", true],
     ["schemas/advisory-wait-state.schema.json", "fixtures/schemas/advisory-wait-state.invalid.json", false],
+    ["schemas/pre-merge-readiness.schema.json", "fixtures/schemas/pre-merge-readiness.valid.json", true],
+    ["schemas/pre-merge-readiness.schema.json", "fixtures/schemas/pre-merge-readiness.invalid.json", false],
     ["schemas/policy.schema.json", "fixtures/schemas/policy.valid.json", true],
     ["schemas/policy.schema.json", "fixtures/schemas/policy.invalid.json", false],
     ["schemas/phase-graph.schema.json", "fixtures/schemas/phase-graph.valid.json", true],
