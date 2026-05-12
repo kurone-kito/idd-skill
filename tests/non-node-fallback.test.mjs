@@ -27,38 +27,140 @@ test("customization docs keep npx fallback wording aligned", () => {
   }
 });
 
-test("onboarding keeps non-node fallback scoped to no relevant tooling", () => {
-  const text = readText("idd-template/ONBOARDING.md");
+test("onboarding links extracted placeholder guidance and keeps fallback wording there", () => {
+  const onboarding = readText("idd-template/ONBOARDING.md");
+  assert.ok(
+    onboarding.includes("docs/onboarding/placeholders.md"),
+    "ONBOARDING must link to the extracted placeholder reference",
+  );
+
+  const text = readText("idd-template/docs/onboarding/placeholders.md");
   const fixValidateSection = extractSection(
     text,
-    "- **Fix-validate commands**",
-    "- **Pre-push-validate commands**",
+    "### `{{FIX_VALIDATE_COMMANDS}}`",
+    "### `{{PRE_PUSH_VALIDATE_COMMANDS}}`",
   );
   assert.match(
     fixValidateSection,
-    /Node\.js \(no relevant project script, `npx` available\):/,
-    "ONBOARDING fix-validate section must gate npx fallback on `npx` availability",
+    /Node\.js without a relevant script but with `npx` available:/,
+    "placeholder reference must gate fix-validate npx fallback on `npx` availability",
   );
   assert.match(
     fixValidateSection,
-    /No Node\.js and no other relevant tooling: `true` \(no-op\)/,
-    "ONBOARDING fix-validate section must scope no-op fallback to no-relevant-tooling cases",
+    /no relevant auto-fix tooling: `true`/,
+    "placeholder reference must scope fix-validate no-op fallback to no-relevant-tooling cases",
   );
 
   const prePushSection = extractSection(
     text,
-    "- **Pre-push-validate commands**",
-    "- **Post-fix-validate commands**",
+    "### `{{PRE_PUSH_VALIDATE_COMMANDS}}`",
+    "### `{{POST_FIX_VALIDATE_COMMANDS}}`",
   );
   assert.match(
     prePushSection,
-    /Node\.js \(no relevant project script, `npx` available\):/,
-    "ONBOARDING pre-push section must gate npx fallback on `npx` availability",
+    /Node\.js without a relevant script but with `npx` available:/,
+    "placeholder reference must gate pre-push npx fallback on `npx` availability",
   );
   assert.match(
     prePushSection,
-    /No Node\.js and no other relevant tooling: `true` \(no-op\)/,
-    "ONBOARDING pre-push section must scope no-op fallback to no-relevant-tooling cases",
+    /no relevant verification command: `true`/,
+    "placeholder reference must scope pre-push no-op fallback to no-relevant-tooling cases",
+  );
+});
+
+test("onboarding links extracted policy guidance including credential scope", () => {
+  const onboarding = readText("idd-template/ONBOARDING.md");
+  assert.ok(
+    onboarding.includes("docs/onboarding/policy-decisions.md"),
+    "ONBOARDING must link to the extracted policy reference",
+  );
+
+  const policyText = readText("idd-template/docs/onboarding/policy-decisions.md");
+  assert.match(
+    policyText,
+    /### Credential scope/,
+    "policy reference must keep credential-scope guidance outside ONBOARDING",
+  );
+  assert.match(
+    policyText,
+    /Review `docs\/permissions\.md` with the operator/,
+    "policy reference must point credential decisions at docs/permissions.md",
+  );
+  assert.match(
+    policyText,
+    /### Credential Scope/,
+    "policy reference template must include a credential-scope section",
+  );
+});
+
+test("onboarding keeps claim timing in the explicit confirmation path", () => {
+  const onboarding = readText("idd-template/ONBOARDING.md");
+  assert.match(
+    onboarding,
+    /claim-timing defaults \(`claim-stale-age` and\s+`claim-heartbeat-interval`\)/,
+    "ONBOARDING Step 1B must explicitly confirm claim-timing defaults",
+  );
+  assert.match(
+    onboarding,
+    /credential scope, claim-timing defaults, issue-authoring companion\s+status, and helper runtime profile\./,
+    "ONBOARDING Step 2 re-check must stay aligned with the Step 1B confirmation list",
+  );
+});
+
+test("onboarding generated import surface includes extracted reference docs", () => {
+  const onboarding = readText("idd-template/ONBOARDING.md");
+  const manifest = JSON.parse(readText("audit/sync-manifest.json"));
+  const coreFilesBlockText = extractSection(
+    onboarding,
+    "<!-- audit:generated id=idd-template-core-files -->",
+    "<!-- /audit:generated -->",
+  );
+
+  for (const file of [
+    "docs/onboarding/placeholders.md",
+    "docs/onboarding/policy-decisions.md",
+  ]) {
+    assert.ok(
+      coreFilesBlockText.includes(file),
+      `ONBOARDING must list ${file} in its generated import surface`,
+    );
+  }
+
+  const coreBlock = manifest.generatedBlocks.find(
+    (block) => block.id === "idd-template-core-files",
+  );
+  assert.ok(coreBlock, "sync manifest must define the idd-template core file block");
+  for (const file of [
+    "idd-template/docs/onboarding/placeholders.md",
+    "idd-template/docs/onboarding/policy-decisions.md",
+  ]) {
+    assert.ok(
+      coreBlock.paths.includes(file),
+      `sync manifest must include ${file} in the core file list`,
+    );
+  }
+  assert.ok(
+    coreBlock.sourceGlobs.includes("idd-template/docs/onboarding/*.md"),
+    "sync manifest must include the onboarding docs glob in the generated file inputs",
+  );
+});
+
+test("policy reference keeps helper specs pinned and config scope accurate", () => {
+  const policyText = readText("idd-template/docs/onboarding/policy-decisions.md");
+  assert.match(
+    policyText,
+    /npx --yes --package <reviewed-helper-spec> \\/,
+    "policy reference must use a reviewed helper package spec by default",
+  );
+  assert.match(
+    policyText,
+    /Treat\s+`refs\/heads\/main`\s+as a manual opt-in/,
+    "policy reference must treat moving branch helper specs as opt-in",
+  );
+  assert.doesNotMatch(
+    policyText,
+    /policy fields override the command table values/,
+    "policy reference must not claim non-command policy fields override phase behavior",
   );
 });
 
