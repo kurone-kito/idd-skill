@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { countLatestChangesRequestedByReviewer, selectResumeRoute } from "../scripts/resume-route-selection.mjs";
+import {
+  countLatestChangesRequestedByReviewer,
+  recoverJsonFromGhFailure,
+  selectResumeRoute,
+} from "../scripts/resume-route-selection.mjs";
 
 test("routes D4 when no PR and required checks are not generated", () => {
   const result = selectResumeRoute({
@@ -113,6 +117,15 @@ test("routes E15 when PR exists, CI fails, and reviews exist", () => {
   assert.equal(result.route, "E15");
 });
 
+test("routes E15 when PR exists, required checks are not generated, and reviews exist", () => {
+  const result = selectResumeRoute({
+    prExists: true,
+    requiredChecksGenerated: false,
+    reviewExists: true,
+  });
+  assert.equal(result.route, "E15");
+});
+
 test("counts CHANGES_REQUESTED using each reviewer's latest gating state", () => {
   const count = countLatestChangesRequestedByReviewer([
     {
@@ -132,4 +145,13 @@ test("counts CHANGES_REQUESTED using each reviewer's latest gating state", () =>
     },
   ]);
   assert.equal(count, 1);
+});
+
+test("recovers empty required-check set from gh pr checks failure", () => {
+  const recovered = recoverJsonFromGhFailure(
+    { stderr: "no required checks reported on the 'main' branch" },
+    { allowNoRequiredChecks: true },
+  );
+  assert.equal(recovered.recovered, true);
+  assert.deepEqual(recovered.value, []);
 });

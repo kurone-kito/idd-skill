@@ -121,7 +121,10 @@ function collectRoutingInput({ repository, issueNumber }) {
     };
   }
 
-  const checks = ghJson(["pr", "checks", String(issuePr.number), "--repo", repository, "--required", "--json", "name,state,completedAt"]);
+  const checks = ghJson(
+    ["pr", "checks", String(issuePr.number), "--repo", repository, "--required", "--json", "name,state,completedAt"],
+    { allowNoRequiredChecks: true },
+  );
   const normalizedStates = checks.map((check) => String(check.state ?? "").toLowerCase());
   const requiredChecksGenerated = checks.length > 0;
   const ciRunning = normalizedStates.some((state) => RUNNING_STATES.has(state));
@@ -411,16 +414,30 @@ function ghApiJson(path, paginate = false) {
   return parsed.flatMap((entry) => (Array.isArray(entry) ? entry : [entry]));
 }
 
-function ghJson(args) {
+function ghJson(args, options = {}) {
   try {
     return JSON.parse(runGh(args).trim() || "{}");
   } catch (error) {
-    const stdout = String(error?.stdout ?? "").trim();
-    if (stdout) {
-      return JSON.parse(stdout);
+    const recovered = recoverJsonFromGhFailure(error, options);
+    if (recovered.recovered) {
+      return recovered.value;
     }
     throw error;
   }
+}
+
+export function recoverJsonFromGhFailure(error, options = {}) {
+  const stderr = String(error?.stderr ?? "");
+  if (options.allowNoRequiredChecks && /no required checks reported/i.test(stderr)) {
+    return { recovered: true, value: [] };
+  }
+
+  const stdout = String(error?.stdout ?? "").trim();
+  if (stdout) {
+    return { recovered: true, value: JSON.parse(stdout) };
+  }
+
+  return { recovered: false, value: null };
 }
 
 function ghText(args) {
