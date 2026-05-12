@@ -28,7 +28,7 @@ issue author will not be self-authorizing under the repository's
 `maintainer-approval-actors` policy. The distributed `idd:ready` label
 is accepted by presence, while standalone `IDD ready` comments from a
 maintainer approval actor must stay fresh against the latest issue
-content and generated plan updates. Until that approval condition is
+content and generated-plan update signal. Until that approval condition is
 satisfied, later discovery should treat the issue as part of the
 approval-needed fallback bucket instead of the normal ready-to-start
 set.

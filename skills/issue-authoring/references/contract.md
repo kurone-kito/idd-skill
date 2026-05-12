@@ -163,9 +163,10 @@ surface the same post-publication approval step for orphan issues,
 roadmaps, and sub-issues whenever the issue author is not
 self-authorizing under the repository's
 `maintainer-approval-actors` policy. The distributed `idd:ready` label
-is accepted by presence, while standalone `IDD ready` comments must stay
-fresh against the latest issue content and generated plan updates. Until
-that approval condition is satisfied, route the draft to the
+is accepted by presence, while standalone `IDD ready` comments from a
+maintainer approval actor must stay fresh against the latest issue
+content and generated-plan update signal. Until that approval condition
+is satisfied, route the draft to the
 approval-needed fallback bucket instead of the normal ready-to-start
 set.
 
