@@ -1,0 +1,336 @@
+#!/usr/bin/env node
+
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROADMAP_MARKER_REGEX = /<!--\s*idd-skill-roadmap-id\s*:/i;
+const BLOCKED_MARKER_REGEX = /<!--\s*idd-skill-blocked-by\s*:/i;
+const BLOCKED_LABELS = new Set(["status:blocked-by-human", "status:needs-decision"]);
+
+if (isCliExecution()) {
+  runCli();
+}
+
+export function extractBlockedByReferences(body) {
+  const references = [];
+  const regex = /^\s*Blocked by #(\d+)\b.*$/gmi;
+  let match = regex.exec(body ?? "");
+  while (match) {
+    const number = Number.parseInt(match[1], 10);
+    if (Number.isInteger(number) && number > 0) {
+      references.push(number);
+    }
+    match = regex.exec(body ?? "");
+  }
+  return references;
+}
+
+export function getOrphanFirstPolicy(config) {
+  if (!config || typeof config !== "object") {
+    return "none";
+  }
+
+  const commands = config.commands;
+  if (commands && typeof commands === "object" && typeof commands["orphan-first-policy"] === "string") {
+    return commands["orphan-first-policy"];
+  }
+
+  if (typeof config.orphanFirstPolicy === "string") {
+    return config.orphanFirstPolicy;
+  }
+
+  return "none";
+}
+
+export function classifyIssue(issue, options) {
+  const labels = new Set(normalizeLabels(issue.labels));
+  const body = String(issue.body ?? "");
+
+  if (ROADMAP_MARKER_REGEX.test(body)) {
+    return { orphan: false, reason: "roadmap_marker" };
+  }
+
+  if (BLOCKED_MARKER_REGEX.test(body)) {
+    return { orphan: false, reason: "blocked_by_marker" };
+  }
+
+  const blockedLabel = [...labels].find((label) => BLOCKED_LABELS.has(label));
+  if (blockedLabel) {
+    return { orphan: false, reason: "blocked_label", details: blockedLabel };
+  }
+
+  const refs = extractBlockedByReferences(body);
+  if (refs.length === 0) {
+    return { orphan: true, reason: "orphan" };
+  }
+
+  const unresolved = [];
+  for (const ref of refs) {
+    const state = resolveIssueState(ref, options.issueStateByNumber, options.fetchIssueStateByNumber);
+    if (state === "OPEN") {
+      return { orphan: false, reason: "blocked_by_open_reference", details: ref };
+    }
+    if (state === "UNRESOLVABLE") {
+      unresolved.push(ref);
+    }
+  }
+
+  if (unresolved.length > 0) {
+    return { orphan: false, reason: "unresolvable_reference", details: unresolved };
+  }
+
+  return { orphan: true, reason: "blocked_references_closed" };
+}
+
+export function filterOrphanIssues(issues, options = {}) {
+  const issueStateByNumber = new Map(options.issueStateByNumber ?? []);
+  const filtered = {
+    roadmap_marker: [],
+    blocked_by_marker: [],
+    blocked_label: [],
+    blocked_by_open_reference: [],
+    unresolvable_reference: [],
+  };
+  const orphans = [];
+  const unresolvable = [];
+
+  for (const issue of issues) {
+    const result = classifyIssue(issue, {
+      issueStateByNumber,
+      fetchIssueStateByNumber: options.fetchIssueStateByNumber,
+    });
+    const entry = {
+      number: issue.number,
+      title: issue.title,
+      state: issue.state,
+      reason: result.reason,
+      details: result.details ?? null,
+      url: issue.url ?? "",
+    };
+
+    if (result.reason === "unresolvable_reference") {
+      for (const number of result.details ?? []) {
+        unresolvable.push({
+          issue: issue.number,
+          reference: number,
+          reason: "issue-not-found-or-inaccessible",
+        });
+      }
+    }
+
+    if (result.orphan) {
+      orphans.push({
+        number: issue.number,
+        title: issue.title,
+        state: issue.state,
+        reason: result.reason,
+        url: issue.url ?? "",
+      });
+      continue;
+    }
+
+    filtered[result.reason].push(entry);
+  }
+
+  const counts = {
+    scanned: issues.length,
+    orphans: orphans.length,
+    filtered: Object.fromEntries(
+      Object.entries(filtered).map(([reason, entries]) => [reason, entries.length]),
+    ),
+    unresolvable: unresolvable.length,
+  };
+
+  return {
+    orphans,
+    filtered,
+    unresolvable,
+    counts,
+  };
+}
+
+function runCli() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
+
+  const owner = args.owner || ghText(["repo", "view", "--json", "owner", "--jq", ".owner.login"]);
+  const repo = args.repo || ghText(["repo", "view", "--json", "name", "--jq", ".name"]);
+  const repoRef = `${owner}/${repo}`;
+  const policy = loadPolicy(args.policy);
+
+  const openIssues = ghJson([
+    "issue",
+    "list",
+    "--repo",
+    repoRef,
+    "--state",
+    "open",
+    "--limit",
+    "200",
+    "--json",
+    "number,title,state,labels,body,url",
+  ]).map(normalizeIssue);
+  const openStateByNumber = new Map(openIssues.map((issue) => [issue.number, issue.state]));
+
+  const result = filterOrphanIssues(openIssues, {
+    issueStateByNumber: openStateByNumber,
+    fetchIssueStateByNumber: (issueNumber) => fetchIssueState(repoRef, issueNumber),
+  });
+
+  const output = {
+    repository: { owner, repo },
+    policy: {
+      source: policy.source,
+      orphanFirstPolicy: policy.orphanFirstPolicy,
+    },
+    ...result,
+  };
+
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+}
+
+function parseArgs(argv) {
+  const parsed = {
+    owner: "",
+    repo: "",
+    policy: "",
+    help: false,
+  };
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    const value = argv[index + 1];
+    if (token === "--owner") {
+      parsed.owner = value ?? "";
+      index += 1;
+      continue;
+    }
+    if (token === "--repo") {
+      parsed.repo = value ?? "";
+      index += 1;
+      continue;
+    }
+    if (token === "--policy") {
+      parsed.policy = value ?? "";
+      index += 1;
+      continue;
+    }
+    if (token === "--help" || token === "-h") {
+      parsed.help = true;
+      continue;
+    }
+    throw new Error(`unknown argument: ${token}`);
+  }
+  return parsed;
+}
+
+function printHelp() {
+  process.stdout.write(`Usage:
+  node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>]
+
+Output schema:
+{
+  "repository": {"owner": "...", "repo": "..."},
+  "policy": {"source": "...", "orphanFirstPolicy": "none|maintainer-approved|public-disabled"},
+  "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|blocked_references_closed", "url": "..."}],
+  "filtered": {
+    "roadmap_marker": [...],
+    "blocked_by_marker": [...],
+    "blocked_label": [...],
+    "blocked_by_open_reference": [...],
+    "unresolvable_reference": [...]
+  },
+  "unresolvable": [{"issue": 1, "reference": 2, "reason": "issue-not-found-or-inaccessible"}],
+  "counts": {"scanned": 0, "orphans": 0, "filtered": {...}, "unresolvable": 0}
+}
+`);
+}
+
+function loadPolicy(policyPath) {
+  const defaultPath = resolve(process.cwd(), ".github/idd/config.json");
+  const targetPath = policyPath ? resolve(process.cwd(), policyPath) : defaultPath;
+  try {
+    const config = JSON.parse(readFileSync(targetPath, "utf8"));
+    return {
+      source: targetPath,
+      orphanFirstPolicy: getOrphanFirstPolicy(config),
+    };
+  } catch {
+    return {
+      source: targetPath,
+      orphanFirstPolicy: "none",
+    };
+  }
+}
+
+function normalizeIssue(issue) {
+  return {
+    number: Number.parseInt(String(issue.number), 10),
+    title: issue.title ?? "",
+    state: issue.state ?? "",
+    labels: normalizeLabels(issue.labels),
+    body: issue.body ?? "",
+    url: issue.url ?? "",
+  };
+}
+
+function normalizeLabels(labels) {
+  if (!Array.isArray(labels)) {
+    return [];
+  }
+  return labels
+    .map((label) => {
+      if (typeof label === "string") {
+        return label;
+      }
+      return label?.name ?? "";
+    })
+    .filter(Boolean);
+}
+
+function resolveIssueState(number, issueStateByNumber, fetchIssueStateByNumber) {
+  if (issueStateByNumber.has(number)) {
+    return issueStateByNumber.get(number);
+  }
+  return fetchIssueStateByNumber(number);
+}
+
+function fetchIssueState(repoRef, issueNumber) {
+  try {
+    const state = ghText([
+      "issue",
+      "view",
+      String(issueNumber),
+      "--repo",
+      repoRef,
+      "--json",
+      "state",
+      "--jq",
+      ".state",
+    ]);
+    return state || "UNRESOLVABLE";
+  } catch {
+    return "UNRESOLVABLE";
+  }
+}
+
+function ghJson(args) {
+  return JSON.parse(runGh(args).trim() || "[]");
+}
+
+function ghText(args) {
+  return runGh(args).trim();
+}
+
+function runGh(args) {
+  return execFileSync("gh", args, { encoding: "utf8" });
+}
+
+function isCliExecution() {
+  return process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+}
