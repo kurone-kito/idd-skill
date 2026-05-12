@@ -272,12 +272,14 @@ When a phase refers to a named command set, run the corresponding
 commands. **Adapt this section when applying this workflow to a
 different project.**
 
-If `.github/idd/config.json` exists and is valid per the canonical schema at
+If `.github/idd/config.json` exists and validates against the canonical
+schema at
 <https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>, its `commands`
-object provides the authoritative command values and overrides the table
-values below. Its policy fields (`mergePolicy`, `reviewPolicy`, etc.) are
-the machine-readable equivalent of the repository's recorded policy
-decisions.
+object overrides the table below. Policy fields such as
+`skipIssueAuthorApprovalGate` and `maintainerApprovalActorPolicy` are
+the recorded machine-readable policy. Absent values keep the gate
+enabled and default approval actors to
+`owners-and-maintainers-only`.
 
 | Name                    | Commands                         |
 | ----------------------- | -------------------------------- |
@@ -288,17 +290,15 @@ decisions.
 | **issue-scope**         | `roadmap`                        |
 | **orphan-first-policy** | `none`                           |
 
-Rows whose values are not shell syntax, such as **issue-scope** and
-**orphan-first-policy**, are workflow settings. Read them literally
-instead of executing them.
+Non-shell rows such as **issue-scope** and **orphan-first-policy** are
+workflow settings. Read them literally, not as commands.
 
-`pre-push-validate` intentionally omits auto-fix — all code should
-already pass lint at the push step. If lint fails, run **fix-validate**
-first, commit, then re-run **pre-push-validate**.
+`pre-push-validate` omits auto-fix. If lint fails, run
+**fix-validate**, commit, then re-run **pre-push-validate**.
 
-If **fix-validate** or **post-fix-validate** produces file changes
-(auto-fixes), stage and commit those changes before any push, rebase, or
-next step that requires no uncommitted changes.
+If **fix-validate** or **post-fix-validate** changes files, stage and
+commit them before any push, rebase, or step that requires a clean
+tree.
 
 `install-deps` must be idempotent. Re-running it in fresh, reused, or
 recreated worktrees must not require manual cleanup and should not leave

@@ -115,6 +115,9 @@
       "type": "string",
       "enum": ["none", "maintainer-approved", "public-disabled"]
     },
+    "skipIssueAuthorApprovalGate": {
+      "type": "boolean"
+    },
     "critiqueLoopProfile": {
       "type": "string",
       "minLength": 1
@@ -126,6 +129,10 @@
     "externalAdvisoryBot": {
       "type": "string",
       "minLength": 1
+    },
+    "maintainerApprovalActorPolicy": {
+      "type": "string",
+      "enum": ["owners-and-maintainers-only", "all-write-permission-actors"]
     },
     "maintainerApprovalActors": {
       "type": "array",

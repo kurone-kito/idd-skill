@@ -202,6 +202,29 @@ test("policy schema accepts missing helperRuntime as instructions-only fallback"
   assert.deepEqual(errors, []);
 });
 
+test("policy schema accepts explicit issue-author approval opt-out", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+  );
+  instance.skipIssueAuthorApprovalGate = true;
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects non-boolean issue-author approval opt-out", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+  );
+  instance.skipIssueAuthorApprovalGate = "true";
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes("$.skipIssueAuthorApprovalGate")),
+    errors.join("\n"),
+  );
+});
+
 test("policy invalid fixture fails validation", () => {
   const { ok } = validateFixture(
     "schemas/policy.schema.json",
@@ -277,6 +300,52 @@ test("policy schema accepts explicit ephemeral-npx helperRuntime", () => {
   instance.helperRuntime = { profile: "ephemeral-npx" };
   const errors = validate(instance, schema);
   assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts owners-and-maintainers-only approval actors", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.maintainerApprovalActorPolicy = "owners-and-maintainers-only";
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts all-write-permission approval actors", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.maintainerApprovalActorPolicy = "all-write-permission-actors";
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects unsupported maintainer approval actor policy", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.maintainerApprovalActorPolicy = "write-only";
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes("$.maintainerApprovalActorPolicy")),
+    errors.join("\n"),
+  );
+});
+
+test("policy schema preserves legacy maintainerApprovalActors arrays", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.maintainerApprovalActors = ["owner", "maintainer"];
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects empty legacy maintainerApprovalActors arrays", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.maintainerApprovalActors = [];
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes("$.maintainerApprovalActors")),
+    errors.join("\n"),
+  );
 });
 
 test("policy schema rejects unsupported helperRuntime profiles", () => {
