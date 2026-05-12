@@ -65,12 +65,12 @@ test("suitability instructions keep issue-author approval outside A4.5 outcomes"
 test("overview documents the secure default issue-author approval config behavior", () => {
   const live = read(".github/instructions/idd-overview.instructions.md");
   const template = read("idd-template/.github/instructions/idd-overview.instructions.md");
-  const expected = "Absent\nvalues keep the gate enabled and default approval actors to\n`owners-and-maintainers-only`.";
+  const expected = /Absent values keep the gate\s+enabled and default approval actors to\s+`owners-and-maintainers-only`\./;
 
   assert.match(live, /skipIssueAuthorApprovalGate/);
   assert.match(live, /maintainerApprovalActorPolicy/);
-  assert.ok(live.includes(expected), "live overview is missing the secure-default note");
-  assert.ok(template.includes(expected), "template overview is missing the secure-default note");
+  assert.match(live, expected, "live overview is missing the secure-default note");
+  assert.match(template, expected, "template overview is missing the secure-default note");
 });
 
 test("repository config keeps the issue-author approval gate enabled by default", () => {
