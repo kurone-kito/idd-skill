@@ -952,6 +952,7 @@ export function resolveLatestReviewWatermark(comments, options = {}) {
 export function summarizeRegularCommentsForGate(comments, options = {}) {
   const iddAgentLogins = new Set(normalizeTrustedMarkerLogins(options.iddAgentLogins ?? []));
   const advisoryBotLogins = new Set(normalizeTrustedMarkerLogins(options.advisoryBotLogins ?? []));
+  const threads = Array.isArray(options.threads) ? options.threads : [];
 
   const normalized = comments
     .map((comment) => ({
@@ -970,10 +971,29 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
       .map((comment) => comment.createdAt),
   );
 
+  const classificationComments = normalized.map((comment) => ({
+    author: { login: comment.authorLogin },
+    body: comment.body,
+    createdAt: comment.createdAt,
+  }));
+
   const items = normalized
     .filter((comment) => !isOperationalOrDigestComment(comment.body))
     .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
-    .filter((comment) => !isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins))
+    .filter((comment) => {
+      if (!isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins)) {
+        return true;
+      }
+      return classifyRegularBotComment(
+        {
+          author: { login: comment.authorLogin },
+          body: comment.body,
+          createdAt: comment.createdAt,
+        },
+        classificationComments,
+        threads,
+      ) === null;
+    })
     .filter((comment) => !latestIddReplyAt || compareIsoTimestamps(latestIddReplyAt, comment.createdAt) <= 0)
     .map((comment) => ({
       id: comment.id,
@@ -1367,6 +1387,7 @@ export function buildPreMergeReadinessSummary(
   const unrepliedComments = summarizeRegularCommentsForGate(comments, {
     iddAgentLogins,
     advisoryBotLogins,
+    threads,
   });
   const reviewerStates = summarizeReviewerStates(reviews, {
     reviewDecision,

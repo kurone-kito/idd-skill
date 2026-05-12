@@ -376,6 +376,36 @@ test("regular comment gate only keeps comments after the latest IDD reply", () =
   assert.deepEqual(summary.items.map((item) => item.id), ["4"]);
 });
 
+test("regular comment gate keeps advisory bot comments after the latest IDD reply", () => {
+  const summary = summarizeRegularCommentsForGate(
+    [
+      { id: 1, createdAt: "2026-05-12T00:00:00Z", body: "first", author: { login: "reviewer-a" } },
+      { id: 2, createdAt: "2026-05-12T00:00:01Z", body: "**Accepted** — reply", author: { login: "idd-bot" } },
+      { id: 3, createdAt: "2026-05-12T00:00:02Z", body: "please address this bot finding", author: { login: "chatgpt-codex-connector[bot]" } },
+    ],
+    { iddAgentLogins: ["idd-bot"] },
+  );
+
+  assert.equal(summary.count, 1);
+  assert.deepEqual(summary.items.map((item) => item.id), ["3"]);
+});
+
+test("regular comment gate skips resolved CodeRabbit summary comments", () => {
+  const summary = summarizeRegularCommentsForGate(
+    [
+      {
+        id: 1,
+        createdAt: "2026-05-12T00:00:00Z",
+        body: "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\nNo actionable comments were generated.",
+        author: { login: "coderabbitai[bot]" },
+      },
+    ],
+    { threads: [] },
+  );
+
+  assert.equal(summary.count, 0);
+});
+
 function readJson(relativePath) {
   return JSON.parse(readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8"));
 }
