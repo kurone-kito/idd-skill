@@ -92,6 +92,15 @@ test("helper runtime inspection accepts absent and supported profiles, rejects u
     status: "invalid",
     reason: 'unsupported helperRuntime.profile "bun"',
   });
+  assert.deepEqual(inspectHelperRuntimeConfig({
+    helperRuntime: {
+      profile: "package-manager",
+      manager: "pnpm",
+    },
+  }), {
+    status: "invalid",
+    reason: "unsupported helperRuntime keys: manager",
+  });
 });
 
 test("A4.5 outcome fixtures match the documented check-to-outcome mapping", () => {

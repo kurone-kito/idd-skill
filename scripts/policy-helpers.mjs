@@ -4,6 +4,7 @@ const HELPER_RUNTIME_PROFILES = new Set([
   "ephemeral-npx",
   "instructions-only",
 ]);
+const HELPER_RUNTIME_KEYS = new Set(["profile"]);
 
 export function parseProjectCommandRows(text) {
   const commands = new Map();
@@ -29,6 +30,14 @@ export function inspectHelperRuntimeConfig(config) {
   const helperRuntime = config.helperRuntime;
   if (typeof helperRuntime !== "object" || helperRuntime === null || Array.isArray(helperRuntime)) {
     return { status: "invalid", reason: "helperRuntime must be an object when present" };
+  }
+
+  const unexpectedKeys = Object.keys(helperRuntime).filter((key) => !HELPER_RUNTIME_KEYS.has(key));
+  if (unexpectedKeys.length > 0) {
+    return {
+      status: "invalid",
+      reason: `unsupported helperRuntime keys: ${unexpectedKeys.join(", ")}`,
+    };
   }
 
   const profile = helperRuntime.profile;
