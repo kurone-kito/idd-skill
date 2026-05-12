@@ -464,7 +464,7 @@ test("regular comment gate only keeps comments after the latest IDD reply", () =
   assert.deepEqual(summary.items.map((item) => item.id), ["4"]);
 });
 
-test("regular comment gate drops comments earlier in the same second as the latest IDD reply", () => {
+test("regular comment gate keeps same-second comments when no strictly later IDD reply exists", () => {
   const summary = summarizeRegularCommentsForGate(
     [
       { id: 1, createdAt: "2026-05-12T00:00:00Z", body: "first", author: { login: "reviewer-a" } },
