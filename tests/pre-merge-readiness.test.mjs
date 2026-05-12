@@ -3,8 +3,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  buildActivitySnapshotSummary,
   buildPreMergeReadinessSummary,
+  findLastCopilotReviewCommit,
   resolveCodeownersForFiles,
+  summarizeAdvisoryWaitMarkers,
+  summarizeRegularCommentsForGate,
   summarizeRequiredChecks,
   summarizeReviewerStates,
 } from "../scripts/protocol-helpers.mjs";
@@ -192,6 +196,53 @@ test("advisory bots do not block CHANGES_REQUESTED even when configured in polic
 
   assert.equal(summary.humanChangesRequestedCount, 0);
   assert.deepEqual(summary.blockingChangesRequestedLogins, []);
+});
+
+test("mixed-precision timestamps compare by time instead of string order", () => {
+  const headSha = "a".repeat(40);
+  assert.equal(
+    summarizeAdvisoryWaitMarkers(
+      [
+        { body: `advisory-wait: kurone-kito ${headSha} 2026-05-12T00:00:00Z`, createdAt: "2026-05-12T00:00:00Z", author: { login: "kurone-kito" } },
+        { body: `advisory-wait: kurone-kito ${headSha} 2026-05-12T00:00:00.100Z`, createdAt: "2026-05-12T00:00:00.100Z", author: { login: "kurone-kito" } },
+      ],
+      headSha,
+      ["kurone-kito"],
+    ).earliestSameHeadAt,
+    "2026-05-12T00:00:00Z",
+  );
+
+  assert.equal(
+    buildActivitySnapshotSummary({
+      comments: [
+        { createdAt: "2026-05-12T00:00:00Z", updatedAt: "2026-05-12T00:00:00Z", body: "a", author: { login: "reviewer" } },
+        { createdAt: "2026-05-12T00:00:00.100Z", updatedAt: "2026-05-12T00:00:00.100Z", body: "b", author: { login: "reviewer" } },
+      ],
+      reviews: [],
+      threads: [],
+      checks: [],
+    }).maxActivityUpdatedAt,
+    "2026-05-12T00:00:00.100Z",
+  );
+
+  assert.equal(
+    summarizeRegularCommentsForGate(
+      [
+        { id: 1, createdAt: "2026-05-12T00:00:00Z", body: "question", author: { login: "reviewer" } },
+        { id: 2, createdAt: "2026-05-12T00:00:00.100Z", body: "**Accepted** — reply", author: { login: "idd-bot" } },
+      ],
+      { iddAgentLogins: ["idd-bot"] },
+    ).count,
+    0,
+  );
+
+  assert.equal(
+    findLastCopilotReviewCommit([
+      { author: { login: "copilot-pull-request-reviewer" }, submittedAt: "2026-05-12T00:00:00Z", commitId: "old" },
+      { author: { login: "copilot-pull-request-reviewer" }, submittedAt: "2026-05-12T00:00:00.100Z", commitId: "new" },
+    ]),
+    "new",
+  );
 });
 
 function readJson(relativePath) {

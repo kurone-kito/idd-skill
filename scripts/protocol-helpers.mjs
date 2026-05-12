@@ -570,17 +570,17 @@ function inferReviewerReopenedAt(thread) {
 
 export function hasFreshDisposition(thread) {
   const comments = thread.comments?.nodes ?? [];
-  const latestFeedbackAt = comments
+  const latestFeedbackAt = maxIsoTimestamp(
+    comments
     .filter((comment) => !isIddDispositionComment(comment))
-    .map((comment) => comment.createdAt)
-    .sort()
-    .at(-1);
+    .map((comment) => comment.createdAt),
+  );
 
   return comments.some((comment) => {
     if (!isIddDispositionComment(comment)) {
       return false;
     }
-    return !latestFeedbackAt || comment.createdAt > latestFeedbackAt;
+    return !latestFeedbackAt || compareIsoTimestamps(comment.createdAt, latestFeedbackAt) > 0;
   });
 }
 
@@ -641,7 +641,7 @@ export function findLastCopilotReviewCommit(reviews) {
       submittedAt: review.submitted_at ?? review.submittedAt ?? "",
       commitId: review.commit_id ?? review.commitId ?? "",
     }))
-    .sort((left, right) => left.submittedAt.localeCompare(right.submittedAt))
+    .sort((left, right) => compareIsoTimestamps(left.submittedAt, right.submittedAt))
     .at(-1);
 
   return latest?.commitId ?? "";
@@ -708,7 +708,10 @@ export function summarizeAdvisoryWaitMarkers(comments, prHeadSha, trustedMarkerL
       if (trusted) {
         trustedSameHeadMarkerCount += 1;
         const createdAt = String(comment?.createdAt ?? comment?.created_at ?? "");
-        if (isValidIsoTimestamp(createdAt) && (!earliestSameHeadAt || createdAt < earliestSameHeadAt)) {
+        if (
+          isValidIsoTimestamp(createdAt)
+          && (!earliestSameHeadAt || compareIsoTimestamps(createdAt, earliestSameHeadAt) < 0)
+        ) {
           earliestSameHeadAt = createdAt;
         }
       } else {
@@ -958,14 +961,14 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
       createdAt: String(comment.createdAt ?? comment.created_at ?? ""),
     }))
     .filter((comment) => isValidIsoTimestamp(comment.createdAt))
-    .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    .sort((left, right) => compareIsoTimestamps(left.createdAt, right.createdAt));
 
   const items = normalized
     .filter((comment) => !isOperationalOrDigestComment(comment.body))
     .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
     .filter((comment) => !isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins))
     .filter((comment) => !normalized.some((candidate) => {
-      return candidate.createdAt > comment.createdAt
+      return compareIsoTimestamps(candidate.createdAt, comment.createdAt) > 0
         && iddAgentLogins.has(candidate.authorLogin)
         && !isOperationalOrDigestComment(candidate.body);
     }))
@@ -1684,11 +1687,17 @@ function hasExplicitDispositionAfter(targetComment, comments) {
 }
 
 function maxIsoTimestamp(values) {
-  const sorted = values
-    .map((value) => String(value))
-    .filter(isValidIsoTimestamp)
-    .sort();
-  return sorted.at(-1) ?? null;
+  let latest = null;
+  for (const value of values) {
+    const normalized = String(value);
+    if (!isValidIsoTimestamp(normalized)) {
+      continue;
+    }
+    if (!latest || compareIsoTimestamps(normalized, latest) > 0) {
+      latest = normalized;
+    }
+  }
+  return latest;
 }
 
 function summarizeRequiredCheckMetadata(parameters) {
@@ -1874,6 +1883,24 @@ function minutesBetweenIso(start, end) {
     return 0;
   }
   return Math.floor((endMs - startMs) / 60000);
+}
+
+function compareIsoTimestamps(left, right) {
+  const leftComparable = normalizeComparableTimestamp(left);
+  const rightComparable = normalizeComparableTimestamp(right);
+  if (typeof leftComparable === "number" && typeof rightComparable === "number") {
+    if (leftComparable !== rightComparable) {
+      return leftComparable - rightComparable;
+    }
+    return String(left ?? "").localeCompare(String(right ?? ""));
+  }
+  if (typeof leftComparable === "number") {
+    return -1;
+  }
+  if (typeof rightComparable === "number") {
+    return 1;
+  }
+  return String(left ?? "").localeCompare(String(right ?? ""));
 }
 
 function threadActivityAt(thread) {
