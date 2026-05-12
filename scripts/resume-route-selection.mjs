@@ -121,21 +121,18 @@ function collectRoutingInput({ repository, issueNumber }) {
     };
   }
 
-  const checks = ghJson(["pr", "checks", String(issuePr.number), "--repo", repository, "--json", "name,state,completedAt"]);
+  const checks = ghJson(["pr", "checks", String(issuePr.number), "--repo", repository, "--required", "--json", "name,state,completedAt"]);
   const normalizedStates = checks.map((check) => String(check.state ?? "").toLowerCase());
   const requiredChecksGenerated = checks.length > 0;
   const ciRunning = normalizedStates.some((state) => RUNNING_STATES.has(state));
   const ciFailed = normalizedStates.some((state) => FAILURE_STATES.has(state));
   const ciSuccess = requiredChecksGenerated && !ciRunning && !ciFailed && normalizedStates.every((state) => PASS_EQUIVALENT_STATES.has(state));
 
-  const reviewThreads = ghApiGraphqlJson({
-    query: "query($owner:String!, $repo:String!, $number:Int!) { repository(owner:$owner,name:$repo){ pullRequest(number:$number){ reviewThreads(first:100){ nodes{ isResolved } } } } }",
-    variables: {
-      owner: repository.split("/")[0],
-      repo: repository.split("/")[1],
-      number: issuePr.number,
-    },
-  }).data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+  const reviewThreads = fetchReviewThreads({
+    owner: repository.split("/")[0],
+    repo: repository.split("/")[1],
+    number: issuePr.number,
+  });
   const unresolvedThreadCount = reviewThreads.filter((thread) => thread.isResolved === false).length;
 
   const reviews = ghApiJson(`repos/${repository}/pulls/${issuePr.number}/reviews`, true);
@@ -291,6 +288,33 @@ function decisionTable() {
   ];
 }
 
+function fetchReviewThreads({ owner, repo, number }) {
+  const threads = [];
+  let cursor = null;
+  while (true) {
+    const response = ghApiGraphqlJson({
+      query: "query($owner:String!, $repo:String!, $number:Int!, $cursor:String) { repository(owner:$owner,name:$repo){ pullRequest(number:$number){ reviewThreads(first:100, after:$cursor){ nodes{ isResolved } pageInfo{ hasNextPage endCursor } } } } }",
+      variables: {
+        owner,
+        repo,
+        number,
+        cursor,
+      },
+    }).data?.repository?.pullRequest?.reviewThreads;
+    const nodes = response?.nodes ?? [];
+    threads.push(...nodes);
+    const pageInfo = response?.pageInfo;
+    if (!pageInfo?.hasNextPage) {
+      break;
+    }
+    cursor = pageInfo.endCursor;
+    if (!cursor) {
+      break;
+    }
+  }
+  return threads;
+}
+
 function parseArgs(argv) {
   const parsed = {
     issue: null,
@@ -359,6 +383,9 @@ Output schema:
 function ghApiGraphqlJson({ query, variables }) {
   const args = ["api", "graphql", "-f", `query=${query}`];
   for (const [key, value] of Object.entries(variables)) {
+    if (value === null || value === undefined) {
+      continue;
+    }
     if (Number.isInteger(value)) {
       args.push("-F", `${key}=${value}`);
     } else {
@@ -372,12 +399,28 @@ function ghApiJson(path, paginate = false) {
   const args = ["api", path];
   if (paginate) {
     args.push("--paginate");
+    args.push("--slurp");
   }
-  return JSON.parse(runGh(args).trim() || "[]");
+  const parsed = JSON.parse(runGh(args).trim() || "[]");
+  if (!paginate) {
+    return parsed;
+  }
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  return parsed.flatMap((entry) => (Array.isArray(entry) ? entry : [entry]));
 }
 
 function ghJson(args) {
-  return JSON.parse(runGh(args).trim() || "{}");
+  try {
+    return JSON.parse(runGh(args).trim() || "{}");
+  } catch (error) {
+    const stdout = String(error?.stdout ?? "").trim();
+    if (stdout) {
+      return JSON.parse(stdout);
+    }
+    throw error;
+  }
 }
 
 function ghText(args) {
