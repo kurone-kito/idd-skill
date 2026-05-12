@@ -1,4 +1,9 @@
 allowCompoundWords: true
+cache:
+  cacheFormat: universal
+  cacheLocation: node_modules/.cache/cspell/.cspell.cache
+  cacheStrategy: metadata
+  useCache: true
 dictionaries:
   - cpp
   - en_US
