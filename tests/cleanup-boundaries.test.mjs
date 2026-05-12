@@ -20,6 +20,9 @@ function classifyComment(comment, disposition, isOperationalMarker, threads = []
     threads.length > 0 && threads.every((t) => t.isResolved === true);
 
   // Operational markers (review-watermark, review-baseline, advisory-wait) on merged PRs
+  if (isOperationalMarker === "<!-- forced-handoff:") {
+    return null;
+  }
   if (isOperationalMarker) {
     return { classifier: "OUTDATED" };
   }
@@ -116,6 +119,25 @@ describe("Cleanup candidate boundaries", () => {
     );
 
     assert.strictEqual(result?.classifier, "OUTDATED");
+  });
+
+  test("unsafe: forced-handoff audit markers stay out of cleanup candidates", () => {
+    const marker = {
+      id: 350,
+      body:
+        "<!-- forced-handoff: {\"old-agent-id\":\"a\",\"old-claim-id\":\"c1\",\"new-agent-id\":\"b\",\"new-claim-id\":\"c2\",\"branch\":\"issue/1-task\",\"forced-by\":\"kurone-kito\",\"reason\":\"approved\",\"timestamp\":\"2026-05-10T10:00:00Z\",\"context-scope\":\"issue-only\"} -->",
+      user: { login: "kurone-kito" },
+      created_at: "2026-05-10T10:00:00Z",
+    };
+
+    const result = classifyComment(
+      marker.body,
+      null,
+      "<!-- forced-handoff:",
+      []
+    );
+
+    assert.strictEqual(result, null);
   });
 
   test("safe: CodeRabbit completed summary with IDD disposition marker", () => {

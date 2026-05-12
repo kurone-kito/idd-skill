@@ -7,6 +7,7 @@ import {
   normalizeForcedHandoffPayload,
   operationalMarkerPrefixByStart,
   parseForcedHandoffComment,
+  renderForcedHandoffConsentNote,
   renderForcedHandoffComment,
 } from "../scripts/protocol-helpers.mjs";
 
@@ -276,6 +277,16 @@ test("forced handoff accepts PR URLs in linked PR scope", () => {
       createdAt: "2026-05-12T11:00:05Z",
     });
   }
+});
+
+test("forced handoff consent note keeps URL PR references unprefixed", () => {
+  assert.match(
+    renderForcedHandoffConsentNote({
+      ...payload,
+      linkedPr: "https://github.com/kurone-kito/idd-skill/pull/359",
+    }),
+    /for PR https:\/\/github\.com\/kurone-kito\/idd-skill\/pull\/359\./,
+  );
 });
 
 test("forced handoff rejects conflicting alias keys", () => {

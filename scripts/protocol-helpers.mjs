@@ -206,10 +206,11 @@ export function renderForcedHandoffConsentNote(payload) {
   }
 
   if (normalized.contextScope === "issue-plus-pr") {
+    const prReference = /^\d+$/.test(normalized.linkedPr) ? `#${normalized.linkedPr}` : normalized.linkedPr;
     return [
       `Forced handoff approved by ${normalized.forcedBy}. I verified that the current`,
       "owning session or agent is unavailable. This transfers ownership away",
-      `from claim \`${normalized.oldClaimId}\` on branch \`${normalized.branch}\` for PR #${normalized.linkedPr}.`,
+      `from claim \`${normalized.oldClaimId}\` on branch \`${normalized.branch}\` for PR ${prReference}.`,
       "If the prior session resumes, it must stop immediately and must not",
       "push, comment, resolve review state, or merge until a maintainer",
       "reassigns ownership.",

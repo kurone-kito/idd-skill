@@ -167,6 +167,11 @@ function evaluateOperationalComment(comment, pr, report, owner, repo) {
     return true;
   }
 
+  if (prefix === "<!-- forced-handoff:") {
+    addSkipped(report, subject, "forced-handoff markers remain audit evidence");
+    return true;
+  }
+
   if (!pr.merged) {
     addSkipped(report, subject, "PR is not merged");
     return true;
