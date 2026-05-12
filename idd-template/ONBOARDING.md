@@ -711,6 +711,16 @@ This repository uses the following IDD policies:
   `instructions-only`.
 - Existing pnpm/npm/yarn repositories should reuse their package-manager
   dependencies instead of ad hoc `npx`.
+- Run `npx --yes --package github:kurone-kito/idd-skill
+  idd-helper-bundle-manifest --profile <selected-profile>` from the
+  target repository root to print the exact dependency, script, vendored
+  file, or one-shot command surface for that choice.
+- If the repository chooses `package-manager` and auto-detection does not
+  resolve npm, pnpm, or yarn, pass `--package-manager <npm|pnpm|yarn>`
+  explicitly to the manifest helper.
+- When switching profiles later, rerun the same helper with
+  `--from-profile <current-profile>` so the add/remove surface is
+  explicit and auditable.
 - Repositories without Node.js stay supported through
   `instructions-only`.
 
@@ -731,8 +741,8 @@ override the command table values in `idd-overview.instructions.md`. It is
 included in the core file list and copied as part of Step 2. The file is
 optional; IDD operates from the Markdown instruction files when the JSON is
 absent or invalid. When you do use it, keep the human-readable policy
-section in sync with this JSON file, except for helper runtime which stays
-human-readable only until the schema is extended.
+section in sync with this JSON file, including the selected
+`helperRuntime.profile` when helper support is enabled.
 
 After copying, the file contains placeholders. Fill them in along with the
 rest of the placeholder-replacement pass in Step 4. Also replace the

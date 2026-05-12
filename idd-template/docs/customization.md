@@ -44,6 +44,27 @@ This choice is separate from the project command placeholders. A
 repository without Node.js can still import and run IDD with the written
 instructions alone.
 
+When a repository does opt into helper support, run the manifest helper
+from the target repository root to get the concrete import surface for
+the chosen profile:
+
+```sh
+npx --yes --package github:kurone-kito/idd-skill \
+  idd-helper-bundle-manifest --profile package-manager
+```
+
+The manifest auto-detects npm, pnpm, or yarn from the target repository
+when possible. If detection is ambiguous, pass `--package-manager
+<npm|pnpm|yarn>` explicitly. The output shows which dependency entries,
+`package.json` scripts, vendored files, or one-shot commands belong to
+the selected profile.
+
+To switch profiles later, rerun the same command with
+`--from-profile <current-profile>` and the new `--profile
+<target-profile>`. Use the returned add/remove lists to update the
+repository intentionally instead of leaving stale vendored files or
+helper dependency wiring behind.
+
 ## Review Policy
 
 Start with [IDD review policy profiles](idd-review-policy-profiles.md).
