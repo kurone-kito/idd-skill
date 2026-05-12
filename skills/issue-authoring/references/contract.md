@@ -158,6 +158,19 @@ Choose the smallest safe output shape:
 - **Stable non-ready buckets**: some work is deferred, blocked by a
   human, waiting on a decision, or outside the repository scope.
 
+When the repository keeps the broader issue-author approval gate,
+surface the same post-publication approval step for orphan issues,
+roadmaps, and sub-issues whenever the issue author is not
+self-authorizing under the repository's
+`maintainer-approval-actors` policy. The distributed `idd:ready` label
+is accepted by presence, while standalone `IDD ready` comments from a
+maintainer approval actor must stay fresh against the latest issue
+content and generated-plan update (or an equivalent draft-stability
+signal). Until that approval condition is satisfied, route the draft to
+the
+approval-needed fallback bucket instead of the normal ready-to-start
+set.
+
 ## Dependency minimization
 
 Encode a dependency edge only when it reflects a true correctness,

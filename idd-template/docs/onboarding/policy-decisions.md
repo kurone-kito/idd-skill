@@ -85,6 +85,46 @@ At minimum, record whether the repository uses the shipped guardrails or
 intentionally customizes the critique-loop behavior before unattended
 execution begins.
 
+### Issue-author approval gate
+
+Choose whether the repository keeps the distributed secure-by-default
+issue-author approval gate or records a current config opt-out:
+
+- `enabled-by-default` (distributed default): unattended work requires a
+  self-authorizing issue author or a fresh explicit maintainer approval
+  signal before claim
+- config opt-out: set `skipIssueAuthorApprovalGate: true` in
+  `.github/idd/config.json` and record the same decision in
+  human-readable policy notes
+
+When the gate stays enabled:
+
+- explicit-target execution stops before claim when approval is missing
+- discovery keeps underprivileged unapproved issues in an
+  approval-needed fallback bucket instead of treating them as
+  ready-to-start
+- GitHub organization `MEMBER` association alone is not enough to count
+  as approval authority
+
+### `maintainer-approval-actors` policy
+
+Choose exactly one approval-actor policy for repositories that keep the
+issue-author approval gate enabled:
+
+- `owners-and-maintainers-only` (recommended default): only owners and
+  collaborators with Maintain or Admin permission count as approval
+  actors
+- `all-write-permission-actors`: collaborators with Write permission may
+  also approve issue start
+
+Keep this human-readable policy choice distinct from the machine-readable
+`maintainerApprovalActorPolicy` config field. When
+`.github/idd/config.json` is present, record the same enum there so the
+distributed discover/claim runtime uses the documented approval model.
+The optional `maintainerApprovalActors` config field is a
+schema-supported explicit GitHub login allowlist, but the distributed
+runtime does not enforce that explicit allowlist yet.
+
 ### Issue-authoring companion
 
 Confirm whether the operator wants the optional issue-authoring skill:
@@ -183,6 +223,18 @@ This repository uses the following IDD policies:
 
 **Profile**: `{instructions-only | package-manager | vendored-node | ephemeral-npx}`
 
+### Issue-Author Approval Gate
+
+- **Gate posture**: `{enabled-by-default | opted-out}`
+- **Opt-out state**:
+  `{gate remains default-enabled | skipIssueAuthorApprovalGate: true opt-out}`
+- **`maintainer-approval-actors` policy**:
+  `{owners-and-maintainers-only | all-write-permission-actors}`
+- **Approval signals**:
+  `{idd:ready label | standalone IDD ready comment | both}`
+- **Missing-approval behavior**:
+  `{explicit-target stop-before-claim + discovery approval-needed fallback bucket}`
+
 ### Issue-Authoring Companion
 
 **Status**: `{installed | not installed}`
@@ -209,6 +261,18 @@ Keep these rules in mind:
   aligned in the same change
 - treat non-command policy fields as synchronized metadata, not as a
   substitute for updating the instruction files that own phase behavior
+- if the repository chooses a `maintainer-approval-actors` policy,
+  record the same enum in `maintainerApprovalActorPolicy` when
+  `.github/idd/config.json` is present
+- if the repository also chooses an explicit `maintainerApprovalActors`
+  list, record it as an optional array of GitHub login strings and keep
+  it aligned with the human-readable issue-author approval notes
+- treat `maintainerApprovalActors` as distinct from the
+  `maintainer-approval-actors` policy choice: the config field is an
+  explicit allowlist, while the policy choice records the broader
+  approval model that the distributed runtime already enforces
+- use `skipIssueAuthorApprovalGate: true` when the repository
+  intentionally opts out; omitted or `false` keeps the gate enabled
 - replace `{{TRUSTED_MARKER_ACTORS}}` in `trustedMarkerActors` with a
   single JSON-escaped GitHub login string first, then add any extra
   quoted array entries manually for additional trusted marker actors
