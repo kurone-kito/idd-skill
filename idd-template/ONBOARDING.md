@@ -225,9 +225,9 @@ notes, and `blocked-by` guidance, see
 
 You need the following core execution and profile artifact files in the
 target repository. Use whichever method applies to your situation.
-For detailed maintenance guidance about this generated file list and the
+For `idd-skill` maintainers working on this generated file list and the
 remote-fetch examples, see
-[Template distribution reference](docs/onboarding/template-distribution.md).
+[Template distribution maintainer reference](docs/onboarding/template-distribution.md).
 
 The issue-authoring skill is available as an optional companion artifact
 from `skills/issue-authoring/` in the idd-skill source repository. That path is

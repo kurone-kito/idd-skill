@@ -1,4 +1,4 @@
-# Template Distribution Reference
+# Template Distribution Maintainer Reference
 
 Use this page when maintaining the file distribution surface for
 `idd-template/ONBOARDING.md`. The onboarding entry point remains the
