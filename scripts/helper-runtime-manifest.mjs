@@ -114,6 +114,14 @@ const HELPER_COMMANDS = [
     description: "Evaluate Resume Step 1 claim routing outcomes from claim marker history.",
   },
   {
+    id: "resume-route-selection",
+    scriptName: "idd:resume-route-selection",
+    binName: "idd-resume-route-selection",
+    entryPath: "scripts/resume-route-selection.mjs",
+    vendoredCommand: "node scripts/resume-route-selection.mjs",
+    description: "Evaluate Resume Step 3 route selection from PR, CI, and review state.",
+  },
+  {
     id: "suitability-triage",
     scriptName: "idd:suitability-triage",
     binName: "idd-suitability-triage",
