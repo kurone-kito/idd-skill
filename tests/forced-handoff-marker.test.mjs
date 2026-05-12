@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { currentIsoTimestamp } from "../scripts/forced-handoff-marker.mjs";
+import { currentIsoTimestamp, parsePositiveInteger } from "../scripts/forced-handoff-marker.mjs";
 import {
   applyClaimEvent,
   normalizeForcedHandoffPayload,
@@ -48,6 +48,11 @@ test("forced handoff normalization omits createdAt when comment metadata is unav
 
 test("forced handoff helper timestamps stay on whole seconds", () => {
   assert.match(currentIsoTimestamp(), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+});
+
+test("forced handoff helper rejects malformed positive integers", () => {
+  assert.equal(parsePositiveInteger("123", "--issue"), 123);
+  assert.throws(() => parsePositiveInteger("123abc", "--issue"), /invalid --issue value: 123abc/);
 });
 
 test("forced handoff markers are ignored by default when the feature is not enabled", () => {
@@ -128,4 +133,46 @@ test("forced handoff requires an exact old-claim match before transferring owner
   );
 
   assert.deepEqual(next, activeClaim);
+});
+
+test("forced handoff requires an exact old-agent match before transferring ownership", () => {
+  const body = renderForcedHandoffComment({
+    ...payload,
+    oldAgentId: "github-copilot-cli-other",
+  });
+  const next = applyClaimEvent(
+    activeClaim,
+    {
+      author: { login: "trusted-relay[bot]" },
+      body,
+      createdAt: "2026-05-12T11:00:05Z",
+    },
+    {
+      isTrustedAuthor: (login) => login === "trusted-relay[bot]",
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === "kurone-kito",
+    },
+  );
+
+  assert.deepEqual(next, activeClaim);
+});
+
+test("forced handoff rejects fractional-second timestamps", () => {
+  assert.throws(
+    () => renderForcedHandoffComment({
+      ...payload,
+      timestamp: "2026-05-12T11:00:00.123Z",
+    }),
+    /invalid forced handoff payload/,
+  );
+});
+
+test("forced handoff rejects marker-breaking token values", () => {
+  assert.throws(
+    () => renderForcedHandoffComment({
+      ...payload,
+      forcedBy: "kurone-kito-->",
+    }),
+    /invalid forced handoff payload/,
+  );
 });

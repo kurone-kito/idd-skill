@@ -139,10 +139,10 @@ export function normalizeForcedHandoffPayload(payload, options = {}) {
   const branch = normalizeBranchToken(pickPayloadValue(payload, "branch"));
   const forcedBy = normalizeNonWhitespaceToken(pickPayloadValue(payload, "forcedBy", "forced-by"));
   const reason = normalizeForcedHandoffReason(pickPayloadValue(payload, "reason"));
-  const timestamp = normalizeIsoTimestamp(pickPayloadValue(payload, "timestamp"));
+  const timestamp = normalizeSecondPrecisionIsoTimestamp(pickPayloadValue(payload, "timestamp"));
   const contextScope = normalizeContextScope(pickPayloadValue(payload, "contextScope", "context-scope"));
   const linkedPr = normalizeLinkedPr(pickPayloadValue(payload, "linkedPr", "linked-pr"));
-  const createdAt = normalizeIsoTimestamp(options.createdAt);
+  const createdAt = normalizeSecondPrecisionIsoTimestamp(options.createdAt);
 
   if (
     !oldAgentId
@@ -1907,7 +1907,7 @@ function normalizeNonWhitespaceToken(value) {
     return "";
   }
   const trimmed = value.trim();
-  if (!trimmed || /\s/.test(trimmed)) {
+  if (!trimmed || /\s/.test(trimmed) || trimmed.includes("<!--") || trimmed.includes("-->")) {
     return "";
   }
   return trimmed;
@@ -1950,6 +1950,14 @@ function normalizeIsoTimestamp(value) {
     return "";
   }
   return trimmed;
+}
+
+function normalizeSecondPrecisionIsoTimestamp(value) {
+  const timestamp = normalizeIsoTimestamp(value);
+  if (!timestamp || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(timestamp)) {
+    return "";
+  }
+  return timestamp;
 }
 
 function normalizeContextScope(value) {

@@ -161,17 +161,23 @@ function buildTrustedMarkerLogins(owner, repo, viewerLogin, cliLogins, issueComm
   }
 
   const trusted = new Set(configured.filter(Boolean).map((login) => login.toLowerCase()));
-  for (const comment of issueComments) {
-    const login = String(comment.user?.login ?? "").toLowerCase();
-    if (!login) {
+  const permissionCache = new Map();
+  const uniqueLogins = new Set(
+    issueComments
+      .map((comment) => String(comment.user?.login ?? "").toLowerCase())
+      .filter(Boolean),
+  );
+  for (const login of uniqueLogins) {
+    if (trusted.has(login)) {
       continue;
     }
-    const permission = safeGhText([
+    const permission = permissionCache.get(login) ?? safeGhText([
       "api",
       `repos/${owner}/${repo}/collaborators/${login}/permission`,
       "--jq",
       ".permission",
     ]).toLowerCase();
+    permissionCache.set(login, permission);
     if (permission === "admin" || permission === "maintain" || permission === "write") {
       trusted.add(login);
     }
@@ -208,12 +214,12 @@ function readValue(argv, index, name) {
   return value;
 }
 
-function parsePositiveInteger(value, flag) {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+export function parsePositiveInteger(value, flag) {
+  const raw = String(value ?? "").trim();
+  if (!/^[1-9]\d*$/.test(raw)) {
     throw new Error(`invalid ${flag} value: ${value}`);
   }
-  return parsed;
+  return Number(raw);
 }
 
 function ghJson(args, slurp = false) {
