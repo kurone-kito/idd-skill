@@ -1,61 +1,39 @@
-# Issue #327: F4 cleanup apply results tracking
+# Issue #328: Minimize safe post-merge cleanup backlog
 
-## Problem and approach
+## Problem statement
 
-The F4 (post-merge cleanup) phase currently treats cleanup as best-effort
-but doesn't require agents to attempt or record cleanup results. Recent
-merged PRs show agents often stop after merge digest and local cleanup
-without running the audit-pr-cleanup script.
+Issue #328 requires a maintainer-authorized cleanup pass across merged
+PRs 313, 315, 316, 317, 318, 320, and 321:
 
-The fix is to update F4 instructions so:
+- minimize only helper-classified safe candidates
+- keep unsafe or ambiguous context visible with explicit reasons
+- record before/after evidence per PR
 
-1. After merge and local cleanup, agents run `audit-pr-cleanup --dry-run`
-2. If credentials permit, run `audit-pr-cleanup --apply`
-3. Record the result (applied count, skipped, failed, remaining) in the
-   PR digest or as an audit comment
-4. Keep cleanup outside the merge gate
+## Execution record
 
-## Scope
+1. Captured full **before** snapshots with:
+   - `node scripts/audit-pr-cleanup.mjs --pr <N> --dry-run --format json`
+2. Executed **apply** with active claim protection:
+   - `--apply --claim-issue 328 --claim-id claim-20260512T185604Z-328-b09aeb60`
+3. Captured full **after** snapshots with:
+   - `node scripts/audit-pr-cleanup.mjs --pr <N> --dry-run --format json`
+4. Summarized factual results in `AUDIT-SUMMARY.md`.
 
-Two files to update (must be kept synchronized):
+## Safety constraints
 
-- `.github/instructions/idd-merge.instructions.md` (F4 section)
-- `idd-template/.github/instructions/idd-merge.instructions.md` (F4 section)
+- Never minimize unresolved review threads, failed-CI context, maintainer
+  decision context, or unlabeled human discussion.
+- Keep all non-minimized items visible with helper-provided skip reasons.
+- Revalidate active claim before apply mutations.
 
-These files were updated in previous work (PR #305) but F4 didn't
-explicitly require the dry-run/apply cycle. This issue adds that requirement.
+## Evidence location
 
-## Implementation plan
+The canonical evidence for this PR is the committed `AUDIT-SUMMARY.md`
+before/after table plus helper outputs captured during execution.
+Issue comments may mirror the same summary but are not the sole source.
 
-### Step 1: Read F4 current state
+## Remaining PR-loop work
 
-- Find F4 section in idd-merge.instructions.md
-- Note current cleanup flow and constraints
-
-### Step 2: Draft updated F4 flow
-
-- Add `audit-pr-cleanup --dry-run` after best-effort cleanup comment
-- Add conditional `audit-pr-cleanup --apply` when claim validates and
-  credentials available
-- Add digest/comment requirement for results
-
-### Step 3: Update both files
-
-- Update .github/instructions/ version
-- Update idd-template/ version (keep synchronized)
-
-### Step 4: Verify
-
-- Markdown lint passes
-- Template sync is maintained
-- No instruction conflicts with #312 (future slimming)
-
-## Acceptance criteria
-
-✓ Both instruction files updated together
-✓ F4 explicitly requires audit-pr-cleanup attempt
-✓ Results are recorded in digest or comment
-✓ Cleanup remains best-effort, post-merge only
-✓ Claim revalidation preserved
-✓ No changes to helper runtime profile (deferred to #312)
-✓ Existing validation passes (lint, spellcheck, tests)
+- Address open PR #334 review comments against the updated summary text.
+- Pass repository lint/test checks and push.
+- Continue E-phase review/CI loop until merge readiness.
