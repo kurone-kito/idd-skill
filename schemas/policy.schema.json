@@ -90,6 +90,23 @@
         }
       }
     },
+    "helperRuntime": {
+      "type": "object",
+      "description": "Optional helper runtime selection. When absent, repositories remain on the instructions-only fallback.",
+      "additionalProperties": false,
+      "required": ["profile"],
+      "properties": {
+        "profile": {
+          "type": "string",
+          "enum": [
+            "package-manager",
+            "vendored-node",
+            "ephemeral-npx",
+            "instructions-only"
+          ]
+        }
+      }
+    },
     "issueScope": {
       "type": "string",
       "enum": ["roadmap", "orphan-first"]

@@ -117,6 +117,16 @@ test("policy valid fixture passes validation", () => {
   assert.ok(ok, errors.join("\n"));
 });
 
+test("policy schema accepts missing helperRuntime as instructions-only fallback", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+  );
+  delete instance.helperRuntime;
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
 test("policy invalid fixture fails validation", () => {
   const { ok } = validateFixture(
     "schemas/policy.schema.json",
@@ -160,6 +170,46 @@ test(".github/idd/config.json validates against policy schema", () => {
     true,
   );
   assert.ok(ok, errors.join("\n"));
+});
+
+test("policy schema accepts explicit instructions-only helperRuntime", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.helperRuntime = { profile: "instructions-only" };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts explicit package-manager helperRuntime", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.helperRuntime = { profile: "package-manager" };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts explicit vendored-node helperRuntime", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.helperRuntime = { profile: "vendored-node" };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts explicit ephemeral-npx helperRuntime", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.helperRuntime = { profile: "ephemeral-npx" };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects unsupported helperRuntime profiles", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.helperRuntime = { profile: "bun" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((error) => error.includes("$.helperRuntime.profile")));
 });
 
 // ---------------------------------------------------------------------------

@@ -16,6 +16,9 @@
     "pre-push-validate": "npx dprint check \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress",
     "post-fix-validate": "npx dprint fmt \"**/*.md\" && npx markdownlint-cli2 --fix \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress"
   },
+  "helperRuntime": {
+    "profile": "package-manager"
+  },
   "issueScope": "roadmap",
   "orphanFirstPolicy": "none"
 }

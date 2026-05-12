@@ -1,4 +1,6 @@
-import { parseProjectCommandRows } from "./idd-doctor.mjs";
+import { parseProjectCommandRows } from "./policy-helpers.mjs";
+
+export { inspectHelperRuntimeConfig } from "./policy-helpers.mjs";
 
 const COMMAND_KEYS = [
   "install-deps",
