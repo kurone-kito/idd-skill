@@ -4,13 +4,15 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-import { renderForcedHandoffComment, resolveActiveClaim } from "./protocol-helpers.mjs";
+import { renderForcedHandoffComment, summarizeClaimValidation } from "./protocol-helpers.mjs";
 
 const APPROVAL_ACTOR_POLICIES = new Set([
   "owners-and-maintainers-only",
   "all-write-permission-actors",
 ]);
 const APPROVAL_ACTOR_POLICY_DEFAULT = "owners-and-maintainers-only";
+const FORCED_HANDOFF_MODES = new Set(["disabled", "human-gated"]);
+const FORCED_HANDOFF_MODE_DEFAULT = "disabled";
 
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
@@ -38,12 +40,18 @@ export function main(argv = process.argv.slice(2)) {
 
   const repoRef = args.repo ?? ghText(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
   const { owner, name } = parseOwnerRepo(repoRef);
+  if (readForcedHandoffMode() !== "human-gated") {
+    throw new Error("forced-handoff mode is not human-gated; marker generation is disabled");
+  }
   const issueComments = ghJson(["api", "--paginate", `repos/${owner}/${name}/issues/${args.issueNumber}/comments`], true).flat();
   const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
   const trustedMarkerLogins = buildTrustedMarkerLogins(owner, name, viewerLogin, args.trustedMarkerLogins, issueComments);
   const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
   const permissionCache = new Map();
   const activeClaim = resolveHelperActiveClaim(issueComments, trustedMarkerLogins, {
+    expectedLinkedPrs: args.prNumber
+      ? [String(args.prNumber), `https://github.com/${owner}/${name}/pull/${args.prNumber}`]
+      : [],
     isAuthorizedForcedHandoff:
       (forcedBy) => isAuthorizedForcedHandoffActor(
         owner,
@@ -56,6 +64,20 @@ export function main(argv = process.argv.slice(2)) {
 
   if (!activeClaim) {
     throw new Error(`issue #${args.issueNumber} has no active trusted claim`);
+  }
+
+  if (
+    !isAuthorizedForcedHandoffActor(
+      owner,
+      name,
+      args.forcedBy,
+      forcedHandoffAuthorityPolicy,
+      permissionCache,
+    )
+  ) {
+    throw new Error(
+      `--forced-by actor ${args.forcedBy} is not authorized under ${forcedHandoffAuthorityPolicy}`,
+    );
   }
 
   let linkedPr = "";
@@ -124,17 +146,20 @@ export function resolveHelperActiveClaim(issueComments, trustedMarkerLogins, opt
       .map((login) => String(login ?? "").trim().toLowerCase())
       .filter(Boolean),
   );
-  return resolveActiveClaim(
+  const summary = summarizeClaimValidation(
     issueComments.map(normalizeIssueComment),
     {
-      isTrustedAuthor: (login) => trustedLogins.has(String(login ?? "").trim().toLowerCase()),
-      isForcedHandoffEnabled: () => true,
+      trustedMarkerLogins: [...trustedLogins],
+      forcedHandoffEnabled: true,
+      expectedLinkedPrs: options.expectedLinkedPrs ?? [],
       isAuthorizedForcedHandoff:
         typeof options.isAuthorizedForcedHandoff === "function"
           ? options.isAuthorizedForcedHandoff
           : () => false,
     },
   );
+
+  return summary.activeClaimPresent ? summary.activeClaim : null;
 }
 
 function parseArgs(argv) {
@@ -304,6 +329,19 @@ function readForcedHandoffAuthorityPolicy() {
     // Default policy remains owners-and-maintainers-only.
   }
   return APPROVAL_ACTOR_POLICY_DEFAULT;
+}
+
+function readForcedHandoffMode() {
+  try {
+    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    const mode = String(config?.forcedHandoff ?? config?.["forced-handoff"] ?? "").trim();
+    if (FORCED_HANDOFF_MODES.has(mode)) {
+      return mode;
+    }
+  } catch {
+    // Default mode remains disabled.
+  }
+  return FORCED_HANDOFF_MODE_DEFAULT;
 }
 
 function collaboratorPermission(owner, repo, login, cache) {

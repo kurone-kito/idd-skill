@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { test } from "node:test";
 
 import {
@@ -209,6 +212,79 @@ test("forced handoff helper replays prior handoffs when resolving the active cla
     branch: "issue/337-feat-protocol-add-auditable-forced",
     createdAt: "2026-05-12T12:00:05Z",
   });
+});
+
+test("forced handoff helper keeps PR-scoped active claim when issue-only handoff exists", () => {
+  const trustedLogins = ["github-copilot-cli-old", "github-copilot-cli-mid", "github-copilot-cli-new", "kurone-kito"];
+  const claimBody = [
+    "<!-- claimed-by: github-copilot-cli-old claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat-protocol-add-auditable-forced -->",
+    "",
+    "_github-copilot-cli-old: issue claim - IDD automation marker. Do not edit._",
+  ].join("\n");
+  const issueOnlyHandoff = renderForcedHandoffComment({
+    oldAgentId: "github-copilot-cli-old",
+    oldClaimId: "claim-20260512T090000Z-337-old",
+    newAgentId: "github-copilot-cli-mid",
+    newClaimId: "claim-20260512T110000Z-337-mid",
+    branch: "issue/337-feat-protocol-add-auditable-forced",
+    forcedBy: "kurone-kito",
+    reason: "operator-approved-recovery",
+    timestamp: "2026-05-12T11:00:00Z",
+    contextScope: "issue-only",
+  });
+
+  const active = resolveHelperActiveClaim(
+    [
+      {
+        body: claimBody,
+        created_at: "2026-05-12T09:00:00Z",
+        user: { login: "github-copilot-cli-old" },
+      },
+      {
+        body: issueOnlyHandoff,
+        created_at: "2026-05-12T11:00:05Z",
+        user: { login: "github-copilot-cli-mid" },
+      },
+    ],
+    trustedLogins,
+    {
+      expectedLinkedPrs: ["359", "https://github.com/kurone-kito/idd-skill/pull/359"],
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === "kurone-kito",
+    },
+  );
+
+  assert.equal(active?.claimId, "claim-20260512T090000Z-337-old");
+  assert.equal(active?.agentId, "github-copilot-cli-old");
+});
+
+test("forced handoff helper refuses output when forced-handoff mode is disabled", () => {
+  const originalCwd = process.cwd();
+  const sandbox = mkdtempSync(join(tmpdir(), "idd-forced-handoff-marker-"));
+  mkdirSync(join(sandbox, ".github", "idd"), { recursive: true });
+  writeFileSync(join(sandbox, ".github", "idd", "config.json"), JSON.stringify({ forcedHandoff: "disabled" }));
+
+  process.chdir(sandbox);
+  try {
+    assert.throws(
+      () => main([
+        "--issue",
+        "337",
+        "--new-agent-id",
+        "github-copilot-cli-new",
+        "--new-claim-id",
+        "claim-20260512T110000Z-337-new",
+        "--forced-by",
+        "kurone-kito",
+        "--reason",
+        "operator-approved-recovery",
+        "--repo",
+        "kurone-kito/idd-skill",
+      ]),
+      /forced-handoff mode is not human-gated; marker generation is disabled/,
+    );
+  } finally {
+    process.chdir(originalCwd);
+  }
 });
 
 test("forced handoff markers are ignored by default when the feature is not enabled", () => {

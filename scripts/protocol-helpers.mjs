@@ -2056,6 +2056,23 @@ function normalizeLinkedPrReference(value) {
   if (/^#?[1-9]\d*$/.test(token)) {
     return token.replace(/^#/, "");
   }
+  try {
+    const parsed = new URL(token);
+    const protocol = parsed.protocol.toLowerCase();
+    const hostname = parsed.hostname.toLowerCase();
+    if (protocol !== "http:" && protocol !== "https:") {
+      return token.toLowerCase();
+    }
+    if (hostname !== "github.com" && hostname !== "www.github.com") {
+      return token.toLowerCase();
+    }
+    const pathMatch = parsed.pathname.match(/^\/[^/]+\/[^/]+\/pull\/([1-9]\d*)\/?$/i);
+    if (pathMatch) {
+      return pathMatch[1];
+    }
+  } catch {
+    // Not a URL-form linked-pr reference.
+  }
   return token.toLowerCase();
 }
 
