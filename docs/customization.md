@@ -54,16 +54,26 @@ npx --yes --package github:kurone-kito/idd-skill \
 ```
 
 The manifest auto-detects npm, pnpm, or yarn from the target repository
-when possible. If detection is ambiguous, pass `--package-manager
-<npm|pnpm|yarn>` explicitly. The output shows which dependency entries,
-`package.json` scripts, vendored files, or one-shot commands belong to
-the selected profile.
+when possible. If detection is ambiguous, pass this flag explicitly:
+
+```text
+--package-manager <npm|pnpm|yarn>
+```
+
+The output shows which dependency entries, `package.json` scripts,
+vendored files, or one-shot commands belong to the selected profile.
 
 To switch profiles later, rerun the same command with
-`--from-profile <current-profile>` and the new `--profile
-<target-profile>`. Use the returned add/remove lists to update the
-repository intentionally instead of leaving stale vendored files or
-helper dependency wiring behind.
+these flags:
+
+```text
+--from-profile <current-profile>
+--profile <target-profile>
+```
+
+Use the returned add/remove lists to update the repository
+intentionally instead of leaving stale vendored files or helper
+dependency wiring behind.
 
 ## Review Policy
 
