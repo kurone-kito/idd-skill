@@ -95,8 +95,12 @@ export function validate(data, schema, path = "$") {
 
   if (schema.type !== undefined) {
     if (schema.type === "integer") {
-      if (actualType !== "number" || !Number.isInteger(data)) {
+      if (actualType !== "number") {
         errors.push(`${path}: expected type "integer", got "${actualType}"`);
+        return errors;
+      }
+      if (!Number.isInteger(data)) {
+        errors.push(`${path}: expected type "integer", got non-integer number ${data}`);
         return errors;
       }
     } else if (actualType !== schema.type) {

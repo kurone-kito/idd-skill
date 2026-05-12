@@ -1914,8 +1914,7 @@ function matchesCodeownersPattern(pattern, path) {
   const anyDepthFromRoot = rawBody.startsWith("**/");
   const directoryLikePattern = !trailingSlashPattern
     && !lastSegment.includes("*")
-    && !lastSegment.includes("?")
-    && !lastSegment.includes(".");
+    && !lastSegment.includes("?");
 
   if (trailingSlashPattern) {
     body = `${body}**`;

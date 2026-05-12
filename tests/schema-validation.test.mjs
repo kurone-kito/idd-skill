@@ -178,6 +178,11 @@ test("pre-merge-readiness count fields require non-negative integers", () => {
   assert.ok(errors.length > 0, "Expected fractional or negative counts to fail validation");
 });
 
+test("integer validation reports non-integer numbers explicitly", () => {
+  const errors = validate(1.5, { type: "integer" });
+  assert.deepEqual(errors, ['$: expected type "integer", got non-integer number 1.5']);
+});
+
 test("policy valid fixture passes validation", () => {
   const { ok, errors } = validateFixture(
     "schemas/policy.schema.json",

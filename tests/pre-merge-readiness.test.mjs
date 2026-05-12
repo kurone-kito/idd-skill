@@ -146,6 +146,19 @@ test("CODEOWNERS directory-style patterns match descendants", () => {
   );
 });
 
+test("CODEOWNERS dot-prefixed directory patterns match descendants", () => {
+  assert.deepEqual(
+    resolveCodeownersForFiles(".github @org/automation\n", [".github/workflows/ci.yml"]),
+    {
+      ruleCount: 1,
+      changedFileCount: 1,
+      unmatchedFiles: [],
+      codeownerUserLogins: [],
+      codeownerTeamSlugs: ["org/automation"],
+    },
+  );
+});
+
 test("CODEOWNERS ownerless overrides clear inherited ownership", () => {
   assert.deepEqual(
     resolveCodeownersForFiles("/apps/ @org/apps\n/apps/github\n", ["apps/github/routes.ts"]),
