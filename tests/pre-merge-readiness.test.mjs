@@ -8,6 +8,7 @@ import {
   findLastCopilotReviewCommit,
   indexLatestGatingReviewsByAuthor,
   resolveCodeownersForFiles,
+  selectCodeownersText,
   summarizeAdvisoryWaitMarkers,
   summarizeRegularCommentsForGate,
   summarizeRequiredChecks,
@@ -155,6 +156,17 @@ test("CODEOWNERS ownerless overrides clear inherited ownership", () => {
       codeownerUserLogins: [],
       codeownerTeamSlugs: [],
     },
+  );
+});
+
+test("higher-priority empty CODEOWNERS files stop fallback to lower-priority locations", () => {
+  assert.equal(
+    selectCodeownersText([
+      {},
+      { content: "" },
+      { content: Buffer.from("*.js @org/root\n").toString("base64") },
+    ]),
+    "",
   );
 });
 

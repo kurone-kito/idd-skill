@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+
 const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
 const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)`;
 
@@ -1148,6 +1150,17 @@ export function summarizeRequiredChecks(checks = [], branchRules = [], branchPro
 export function resolveCodeownersForFiles(codeownersText, changedFiles = []) {
   const rules = parseCodeownersRules(codeownersText);
   return collectCodeownersForFiles(rules, changedFiles);
+}
+
+export function selectCodeownersText(payloads = []) {
+  for (const payload of payloads) {
+    if (!payload || typeof payload !== "object" || !Object.hasOwn(payload, "content")) {
+      continue;
+    }
+    const content = String(payload.content ?? "").replace(/\n/g, "");
+    return Buffer.from(content, "base64").toString("utf8");
+  }
+  return "";
 }
 
 function collectCodeownersForFiles(rules, changedFiles = []) {

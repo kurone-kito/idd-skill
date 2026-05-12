@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
-import { Buffer } from "node:buffer";
 import { execFileSync } from "node:child_process";
 
 import {
   buildPreMergeReadinessSummary,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
+  selectCodeownersText,
 } from "./protocol-helpers.mjs";
 
 const args = parseArgs(process.argv.slice(2));
@@ -302,20 +302,15 @@ function resolveTrustedCollaboratorMarkerLogins(owner, repo, comments) {
 }
 
 function fetchCodeownersText(owner, repo, ref) {
-  for (const path of [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"]) {
-    const payload = ghApiJson(
+  const payloads = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"].map((path) => {
+    return ghApiJson(
       `repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`,
       false,
       [],
       { allowHttpStatuses: [404] },
     );
-    const content = String(payload?.content ?? "").replace(/\n/g, "");
-    if (!content) {
-      continue;
-    }
-    return Buffer.from(content, "base64").toString("utf8");
-  }
-  return "";
+  });
+  return selectCodeownersText(payloads);
 }
 
 function fetchReviewThreads(owner, repo, prNumber) {
