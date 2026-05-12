@@ -138,6 +138,46 @@ The adopted helper boundaries are intentionally narrow:
 - direct GraphQL fallback commands remain documented in
   `docs/idd-comment-minimization.md`
 
+## Stable Helper Evidence Outputs
+
+The references in this section apply only when a repository explicitly
+installs the matching helper scripts. Repositories that stay on the
+default `instructions-only` profile keep using the written shell /
+`gh` / `jq` procedures in the phase instructions and do not need a
+`scripts/` directory.
+
+### Advisory-wait evidence
+
+- Command: `node scripts/advisory-wait-state.mjs --pr <pr-number>`
+- Stable contract:
+  [`advisory-wait-state.schema.json`][advisory-wait-state-schema]
+- Stable fields consumed by the instructions: `prHeadSha`,
+  `lastCopilotCommit`, `copilotPending`,
+  `copilotPendingCoversHead`, `outcome`, `f3Outcome`,
+  `earliestSameHeadAt`, `requestMarkerCount`, and
+  `trustedMarkerSummary`
+
+### Merge-gate evidence
+
+- Snapshot command: `node scripts/review-activity-snapshot.mjs`
+  with `--pr <pr-number>` and
+  `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`
+- Stable E1/F2/F3 snapshot tuple: `headSha`,
+  `maxActivityUpdatedAt`, `totalItemCount`,
+  `latestPassingCiCompletedAt`, and `counts`
+- Additional CI completion field: `latestCiCompletedAt` reports the
+  latest terminal run of any state; watermark and merge-gate checks use
+  `latestPassingCiCompletedAt`
+- Readiness command: `node scripts/pre-merge-readiness.mjs`
+  with `--pr <pr-number>`, `--claim-issue <issue-number>`,
+  `--expected-claim-id <claim-id>`, and
+  `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`
+- Stable contract:
+  [`pre-merge-readiness.schema.json`][pre-merge-readiness-schema]
+- Stable sections consumed by the instructions: `reviewCurrency`,
+  `threads`, `unrepliedComments`, `reviewerStates`,
+  `advisoryWait`, `ci`, and `claim`
+
 ## Friction Inventory
 
 The workflow areas most likely to benefit from optional helpers are:
@@ -242,3 +282,6 @@ the following:
 Good future candidates remain read-only evidence collectors for
 pre-merge readiness or later claim-state inspection. They should not
 replace the written decision tables.
+
+[advisory-wait-state-schema]: https://kurone-kito.github.io/idd-skill/schemas/advisory-wait-state.schema.json
+[pre-merge-readiness-schema]: https://kurone-kito.github.io/idd-skill/schemas/pre-merge-readiness.schema.json
