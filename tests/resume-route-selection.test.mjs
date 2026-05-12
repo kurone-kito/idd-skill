@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { selectResumeRoute } from "../scripts/resume-route-selection.mjs";
+import { countLatestChangesRequestedByReviewer, selectResumeRoute } from "../scripts/resume-route-selection.mjs";
 
 test("routes D4 when no PR and required checks are not generated", () => {
   const result = selectResumeRoute({
@@ -16,11 +16,21 @@ test("routes D4 when no PR and required checks are not generated", () => {
 test("routes D1 when no PR and clean worktree has unpushed commits", () => {
   const result = selectResumeRoute({
     prExists: false,
-    requiredChecksGenerated: true,
+    requiredChecksGenerated: false,
     hasUnpushedCommits: true,
     worktreeDirty: false,
   });
   assert.equal(result.route, "D1");
+});
+
+test("routes D4 when no PR and worktree is dirty", () => {
+  const result = selectResumeRoute({
+    prExists: false,
+    requiredChecksGenerated: false,
+    hasUnpushedCommits: true,
+    worktreeDirty: true,
+  });
+  assert.equal(result.route, "D4");
 });
 
 test("routes D4 when PR exists, CI is running, and no reviews exist", () => {
@@ -89,4 +99,25 @@ test("routes E15 when PR exists, CI fails, and reviews exist", () => {
     reviewPending: true,
   });
   assert.equal(result.route, "E15");
+});
+
+test("counts CHANGES_REQUESTED using each reviewer's latest gating state", () => {
+  const count = countLatestChangesRequestedByReviewer([
+    {
+      user: { login: "alice" },
+      state: "CHANGES_REQUESTED",
+      submitted_at: "2026-05-12T10:00:00Z",
+    },
+    {
+      user: { login: "alice" },
+      state: "APPROVED",
+      submitted_at: "2026-05-12T11:00:00Z",
+    },
+    {
+      user: { login: "bob" },
+      state: "CHANGES_REQUESTED",
+      submitted_at: "2026-05-12T09:00:00Z",
+    },
+  ]);
+  assert.equal(count, 1);
 });

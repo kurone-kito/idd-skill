@@ -17,11 +17,11 @@ export function selectResumeRoute(input) {
   const reasonParts = [];
 
   if (!state.prExists) {
-    if (!state.requiredChecksGenerated) {
-      return result("D4", "no-pr-required-checks-not-generated", state, reasonParts);
-    }
     if (state.hasUnpushedCommits && !state.worktreeDirty) {
       return result("D1", "no-pr-unpushed-clean-worktree", state, reasonParts);
+    }
+    if (!state.requiredChecksGenerated) {
+      return result("D4", "no-pr-required-checks-not-generated", state, reasonParts);
     }
     return result("stop", "no-pr-no-unpushed-clean-path", state, reasonParts);
   }
@@ -92,13 +92,14 @@ function collectRoutingInput({ repository, issueNumber }) {
   const prs = findIssueRelatedOpenPrs({ repository, issueNumber });
   const issuePr = prs.length === 1 ? prs[0] : null;
   const viewerLogin = ghText(["api", "user", "--jq", ".login"]).toLowerCase();
+  const gitState = collectLocalGitState();
 
   if (!issuePr) {
     return {
       prExists: false,
       requiredChecksGenerated: false,
-      hasUnpushedCommits: false,
-      worktreeDirty: false,
+      hasUnpushedCommits: gitState.hasUnpushedCommits,
+      worktreeDirty: gitState.worktreeDirty,
       ciChecks: [],
       ciRunning: false,
       ciFailed: false,
@@ -133,7 +134,7 @@ function collectRoutingInput({ repository, issueNumber }) {
   const unresolvedThreadCount = reviewThreads.filter((thread) => thread.isResolved === false).length;
 
   const reviews = ghApiJson(`repos/${repository}/pulls/${issuePr.number}/reviews`, true);
-  const changesRequestedCount = reviews.filter((review) => String(review.state ?? "").toUpperCase() === "CHANGES_REQUESTED").length;
+  const changesRequestedCount = countLatestChangesRequestedByReviewer(reviews);
   const reviewExists = unresolvedThreadCount > 0 || reviews.length > 0;
 
   const comments = ghApiJson(`repos/${repository}/issues/${issuePr.number}/comments`, true);
@@ -146,8 +147,8 @@ function collectRoutingInput({ repository, issueNumber }) {
   return {
     prExists: true,
     requiredChecksGenerated,
-    hasUnpushedCommits: false,
-    worktreeDirty: false,
+    hasUnpushedCommits: gitState.hasUnpushedCommits,
+    worktreeDirty: gitState.worktreeDirty,
     ciChecks: checks,
     ciRunning,
     ciFailed,
@@ -162,6 +163,23 @@ function collectRoutingInput({ repository, issueNumber }) {
     prNumber: issuePr.number,
     prUrl: issuePr.url,
   };
+}
+
+function collectLocalGitState() {
+  const worktreeDirty = runGit(["status", "--porcelain"]).trim().length > 0;
+  const hasUnpushedCommits = detectUnpushedCommits();
+  return {
+    hasUnpushedCommits,
+    worktreeDirty,
+  };
+}
+
+function detectUnpushedCommits() {
+  const hasUpstream = runGitAllowFailure(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).ok;
+  if (hasUpstream) {
+    return runGit(["log", "--oneline", "@{u}..HEAD"]).trim().length > 0;
+  }
+  return runGit(["rev-list", "--count", "HEAD"]).trim() !== "0";
 }
 
 function findIssueRelatedOpenPrs({ repository, issueNumber }) {
@@ -197,6 +215,32 @@ function isMergeRebaseRequired(mergeState) {
   const mergeable = String(mergeState?.mergeable ?? "").toUpperCase();
   const mergeStateStatus = String(mergeState?.mergeStateStatus ?? "").toUpperCase();
   return mergeable === "CONFLICTING" || mergeStateStatus === "BEHIND" || mergeStateStatus === "DIRTY";
+}
+
+export function countLatestChangesRequestedByReviewer(reviews) {
+  const latestByReviewer = new Map();
+  for (const review of reviews) {
+    const reviewer = String(review.user?.login ?? "").toLowerCase();
+    const state = String(review.state ?? "").toUpperCase();
+    if (!reviewer || state === "COMMENTED" || state === "PENDING") {
+      continue;
+    }
+    const submittedAt = Date.parse(String(review.submitted_at ?? ""));
+    if (!Number.isFinite(submittedAt)) {
+      continue;
+    }
+    const current = latestByReviewer.get(reviewer);
+    if (!current || submittedAt >= current.submittedAt) {
+      latestByReviewer.set(reviewer, { state, submittedAt });
+    }
+  }
+  let count = 0;
+  for (const review of latestByReviewer.values()) {
+    if (review.state === "CHANGES_REQUESTED") {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function normalizeState(input) {
@@ -345,6 +389,38 @@ function runGh(args) {
       throw new Error(`gh command failed: ${stderr}`);
     }
     throw error;
+  }
+}
+
+function runGit(args) {
+  try {
+    return execFileSync("git", args, {
+      encoding: "utf8",
+      timeout: 30_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    const stderr = String(error?.stderr ?? "").trim();
+    if (stderr) {
+      throw new Error(`git command failed: ${stderr}`);
+    }
+    throw error;
+  }
+}
+
+function runGitAllowFailure(args) {
+  try {
+    const stdout = execFileSync("git", args, {
+      encoding: "utf8",
+      timeout: 30_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { ok: true, stdout };
+  } catch (error) {
+    return {
+      ok: false,
+      stderr: String(error?.stderr ?? ""),
+    };
   }
 }
 
