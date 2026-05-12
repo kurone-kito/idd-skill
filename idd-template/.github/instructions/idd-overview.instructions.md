@@ -139,7 +139,9 @@ push, rebase, reply, resolve, reviewer request, merge), re-read the
 issue and parse the active claim using the rules in
 `idd-claim.instructions.md`. The active claim must still use your
 current `{claim-id}`. If it does not, the claim was lost. Stop, do not
-post further operational comments, and report the handoff or race.
+post further operational comments, and report the handoff or race. If
+loss came from handoff, the displaced session must not push,
+comment, resolve reviews, request reviewers, or merge.
 
 A1.5 roadmap completion audit side effects use the roadmap issue itself
 as the claim target (see `idd-roadmap-audit.instructions.md`). Even

@@ -1,0 +1,18 @@
+{
+  "name": "non-owned claim with trusted forced handoff routes to successor recovery",
+  "input": {
+    "hasActiveClaim": true,
+    "claimOwnedBySession": false,
+    "claimAgeHours": 2,
+    "latestActivityAgeMinutes": 4,
+    "ciState": "in_progress",
+    "worktreeDirty": false,
+    "hasUnpushedCommits": false,
+    "rebaseInProgress": false,
+    "hasUsableForcedHandoffEvidence": true
+  },
+  "expected": {
+    "route": "forced-handoff-recovery",
+    "reasonContains": "forced-handoff evidence"
+  }
+}
