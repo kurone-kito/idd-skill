@@ -6,11 +6,11 @@ import { pathToFileURL } from "node:url";
 
 import { renderForcedHandoffComment, resolveActiveClaim } from "./protocol-helpers.mjs";
 
-const MAINTAINER_APPROVAL_POLICIES = new Set([
+const APPROVAL_ACTOR_POLICIES = new Set([
   "owners-and-maintainers-only",
   "all-write-permission-actors",
 ]);
-const MAINTAINER_APPROVAL_POLICY_DEFAULT = "owners-and-maintainers-only";
+const APPROVAL_ACTOR_POLICY_DEFAULT = "owners-and-maintainers-only";
 
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
@@ -41,7 +41,7 @@ export function main(argv = process.argv.slice(2)) {
   const issueComments = ghJson(["api", "--paginate", `repos/${owner}/${name}/issues/${args.issueNumber}/comments`], true).flat();
   const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
   const trustedMarkerLogins = buildTrustedMarkerLogins(owner, name, viewerLogin, args.trustedMarkerLogins, issueComments);
-  const maintainerApprovalActorPolicy = readMaintainerApprovalActorPolicy();
+  const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
   const permissionCache = new Map();
   const activeClaim = resolveHelperActiveClaim(issueComments, trustedMarkerLogins, {
     isAuthorizedForcedHandoff:
@@ -49,7 +49,7 @@ export function main(argv = process.argv.slice(2)) {
         owner,
         name,
         forcedBy,
-        maintainerApprovalActorPolicy,
+        forcedHandoffAuthorityPolicy,
         permissionCache,
       ),
   });
@@ -293,17 +293,17 @@ function safeGhText(args) {
   }
 }
 
-function readMaintainerApprovalActorPolicy() {
+function readForcedHandoffAuthorityPolicy() {
   try {
     const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    const policy = String(config?.maintainerApprovalActorPolicy ?? "").trim();
-    if (MAINTAINER_APPROVAL_POLICIES.has(policy)) {
+    const policy = String(config?.forcedHandoffAuthority ?? config?.["forced-handoff-authority"] ?? "").trim();
+    if (APPROVAL_ACTOR_POLICIES.has(policy)) {
       return policy;
     }
   } catch {
     // Default policy remains owners-and-maintainers-only.
   }
-  return MAINTAINER_APPROVAL_POLICY_DEFAULT;
+  return APPROVAL_ACTOR_POLICY_DEFAULT;
 }
 
 function collaboratorPermission(owner, repo, login, cache) {

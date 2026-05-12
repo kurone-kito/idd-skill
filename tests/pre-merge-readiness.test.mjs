@@ -550,6 +550,47 @@ test("regular comment gate skips resolved CodeRabbit summary comments", () => {
   assert.equal(summary.count, 0);
 });
 
+test("regular comment gate keeps untrusted forced-handoff marker-shaped comments", () => {
+  const summary = summarizeRegularCommentsForGate(
+    [
+      {
+        id: 1,
+        createdAt: "2026-05-12T00:00:00Z",
+        body: "<!-- forced-handoff: {} -->\n\nPlease verify this marker by a maintainer.",
+        author: { login: "external-user" },
+      },
+    ],
+    {
+      trustedMarkerLogins: ["idd-bot"],
+    },
+  );
+
+  assert.equal(summary.count, 1);
+  assert.deepEqual(summary.items.map((item) => item.id), ["1"]);
+});
+
+test("regular comment gate ignores trusted forced-handoff operational markers", () => {
+  const summary = summarizeRegularCommentsForGate(
+    [
+      {
+        id: 1,
+        createdAt: "2026-05-12T00:00:00Z",
+        body: [
+          "<!-- forced-handoff: {\"old-agent-id\":\"github-copilot-cli-old\",\"old-claim-id\":\"claim-20260512T090000Z-337-old\",\"new-agent-id\":\"github-copilot-cli-new\",\"new-claim-id\":\"claim-20260512T110000Z-337-new\",\"branch\":\"issue/337-feat-protocol-add-auditable-forced\",\"forced-by\":\"maintainer\",\"reason\":\"operator-approved-recovery\",\"timestamp\":\"2026-05-12T11:00:00Z\",\"context-scope\":\"issue-only\"} -->",
+          "",
+          "Forced handoff approved by maintainer.",
+        ].join("\n"),
+        author: { login: "maintainer" },
+      },
+    ],
+    {
+      trustedMarkerLogins: ["maintainer"],
+    },
+  );
+
+  assert.equal(summary.count, 0);
+});
+
 test("deriveIddAgentLogins keeps prior trusted operational actors but not generic maintainer comments", () => {
   assert.deepEqual(
     deriveIddAgentLogins({
@@ -627,6 +668,8 @@ test("summarizeClaimValidation follows trusted forced-handoff transitions", () =
 
   const summary = summarizeClaimValidation(claimEvents, {
     trustedMarkerLogins: ["github-copilot-cli-old", "github-copilot-cli-new", "kurone-kito"],
+    forcedHandoffEnabled: true,
+    isAuthorizedForcedHandoff: (forcedBy) => forcedBy === "kurone-kito",
     expectedClaimId: "claim-20260512T110000Z-337-new",
     expectedAgentId: "github-copilot-cli-new",
   });
@@ -666,6 +709,7 @@ test("summarizeClaimValidation rejects forced handoff from unauthorized approver
 
   const summary = summarizeClaimValidation(claimEvents, {
     trustedMarkerLogins: ["github-copilot-cli-old", "trusted-relay[bot]"],
+    forcedHandoffEnabled: true,
     isAuthorizedForcedHandoff: (forcedBy) => forcedBy === "kurone-kito",
     expectedClaimId: "claim-20260512T090000Z-337-old",
     expectedAgentId: "github-copilot-cli-old",
@@ -675,6 +719,113 @@ test("summarizeClaimValidation rejects forced handoff from unauthorized approver
   assert.equal(summary.reason, "match");
   assert.equal(summary.activeClaim.claimId, "claim-20260512T090000Z-337-old");
   assert.equal(summary.activeClaim.agentId, "github-copilot-cli-old");
+});
+
+test("summarizeClaimValidation ignores forced handoff when policy is disabled", () => {
+  const claimEvents = [
+    {
+      body: [
+        "<!-- claimed-by: github-copilot-cli-old claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat-protocol-add-auditable-forced -->",
+        "",
+        "_github-copilot-cli-old: issue claim - IDD automation marker. Do not edit._",
+      ].join("\n"),
+      createdAt: "2026-05-12T09:00:00Z",
+      author: { login: "github-copilot-cli-old" },
+    },
+    {
+      body: [
+        "<!-- forced-handoff: {\"old-agent-id\":\"github-copilot-cli-old\",\"old-claim-id\":\"claim-20260512T090000Z-337-old\",\"new-agent-id\":\"github-copilot-cli-new\",\"new-claim-id\":\"claim-20260512T110000Z-337-new\",\"branch\":\"issue/337-feat-protocol-add-auditable-forced\",\"forced-by\":\"kurone-kito\",\"reason\":\"operator-approved-recovery\",\"timestamp\":\"2026-05-12T11:00:00Z\",\"context-scope\":\"issue-only\"} -->",
+        "",
+        "Forced handoff approved by kurone-kito.",
+      ].join("\n"),
+      createdAt: "2026-05-12T11:00:05Z",
+      author: { login: "kurone-kito" },
+    },
+  ];
+
+  const summary = summarizeClaimValidation(claimEvents, {
+    trustedMarkerLogins: ["github-copilot-cli-old", "kurone-kito"],
+    forcedHandoffEnabled: false,
+    expectedClaimId: "claim-20260512T090000Z-337-old",
+    expectedAgentId: "github-copilot-cli-old",
+  });
+
+  assert.equal(summary.claimLost, false);
+  assert.equal(summary.reason, "match");
+  assert.equal(summary.activeClaim.claimId, "claim-20260512T090000Z-337-old");
+});
+
+test("summarizeClaimValidation requires linked-pr match for issue-plus-pr handoff", () => {
+  const claimEvents = [
+    {
+      body: [
+        "<!-- claimed-by: github-copilot-cli-old claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat-protocol-add-auditable-forced -->",
+        "",
+        "_github-copilot-cli-old: issue claim - IDD automation marker. Do not edit._",
+      ].join("\n"),
+      createdAt: "2026-05-12T09:00:00Z",
+      author: { login: "github-copilot-cli-old" },
+    },
+    {
+      body: [
+        "<!-- forced-handoff: {\"old-agent-id\":\"github-copilot-cli-old\",\"old-claim-id\":\"claim-20260512T090000Z-337-old\",\"new-agent-id\":\"github-copilot-cli-new\",\"new-claim-id\":\"claim-20260512T110000Z-337-new\",\"branch\":\"issue/337-feat-protocol-add-auditable-forced\",\"linked-pr\":\"359\",\"forced-by\":\"kurone-kito\",\"reason\":\"operator-approved-recovery\",\"timestamp\":\"2026-05-12T11:00:00Z\",\"context-scope\":\"issue-plus-pr\"} -->",
+        "",
+        "Forced handoff approved by kurone-kito.",
+      ].join("\n"),
+      createdAt: "2026-05-12T11:00:05Z",
+      author: { login: "kurone-kito" },
+    },
+  ];
+
+  const summary = summarizeClaimValidation(claimEvents, {
+    trustedMarkerLogins: ["github-copilot-cli-old", "github-copilot-cli-new", "kurone-kito"],
+    forcedHandoffEnabled: true,
+    expectedLinkedPrs: ["#1000", "https://github.com/octo/repo/pull/1000"],
+    expectedClaimId: "claim-20260512T090000Z-337-old",
+    expectedAgentId: "github-copilot-cli-old",
+  });
+
+  assert.equal(summary.claimLost, false);
+  assert.equal(summary.reason, "match");
+  assert.equal(summary.activeClaim.claimId, "claim-20260512T090000Z-337-old");
+  assert.equal(summary.activeClaim.agentId, "github-copilot-cli-old");
+});
+
+test("summarizeClaimValidation accepts issue-plus-pr handoff with matching linked-pr", () => {
+  const claimEvents = [
+    {
+      body: [
+        "<!-- claimed-by: github-copilot-cli-old claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat-protocol-add-auditable-forced -->",
+        "",
+        "_github-copilot-cli-old: issue claim - IDD automation marker. Do not edit._",
+      ].join("\n"),
+      createdAt: "2026-05-12T09:00:00Z",
+      author: { login: "github-copilot-cli-old" },
+    },
+    {
+      body: [
+        "<!-- forced-handoff: {\"old-agent-id\":\"github-copilot-cli-old\",\"old-claim-id\":\"claim-20260512T090000Z-337-old\",\"new-agent-id\":\"github-copilot-cli-new\",\"new-claim-id\":\"claim-20260512T110000Z-337-new\",\"branch\":\"issue/337-feat-protocol-add-auditable-forced\",\"linked-pr\":\"359\",\"forced-by\":\"kurone-kito\",\"reason\":\"operator-approved-recovery\",\"timestamp\":\"2026-05-12T11:00:00Z\",\"context-scope\":\"issue-plus-pr\"} -->",
+        "",
+        "Forced handoff approved by kurone-kito.",
+      ].join("\n"),
+      createdAt: "2026-05-12T11:00:05Z",
+      author: { login: "kurone-kito" },
+    },
+  ];
+
+  const summary = summarizeClaimValidation(claimEvents, {
+    trustedMarkerLogins: ["github-copilot-cli-old", "github-copilot-cli-new", "kurone-kito"],
+    forcedHandoffEnabled: true,
+    isAuthorizedForcedHandoff: (forcedBy) => forcedBy === "kurone-kito",
+    expectedLinkedPrs: ["#359", "https://github.com/kurone-kito/idd-skill/pull/359"],
+    expectedClaimId: "claim-20260512T110000Z-337-new",
+    expectedAgentId: "github-copilot-cli-new",
+  });
+
+  assert.equal(summary.claimLost, false);
+  assert.equal(summary.reason, "match");
+  assert.equal(summary.activeClaim.claimId, "claim-20260512T110000Z-337-new");
+  assert.equal(summary.activeClaim.agentId, "github-copilot-cli-new");
 });
 
 test("advisory wait summary keeps F2 and F3 outcomes distinct when Copilot is no longer pending", () => {
