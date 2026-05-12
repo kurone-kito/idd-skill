@@ -81,6 +81,14 @@ const HELPER_COMMANDS = [
     vendoredCommand: "node scripts/audit-pr-cleanup.mjs",
     description: "Audit or apply post-merge comment cleanup.",
   },
+  {
+    id: "discover-orphan-filter",
+    scriptName: "idd:discover-orphan-filter",
+    binName: "idd-discover-orphan-filter",
+    entryPath: "scripts/discover-orphan-filter.mjs",
+    vendoredCommand: "node scripts/discover-orphan-filter.mjs",
+    description: "Classify open issues into orphan candidates and filtered buckets.",
+  },
 ];
 
 if (isMainModule(import.meta.url)) {
