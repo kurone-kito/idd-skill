@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,8 +67,9 @@ const DISCOVER_TEXT = `# IDD discover
 <!-- helper-runtime-fixture-blocked-by: value -->
 `;
 
-test("idd-doctor accepts missing helperRuntime as instructions-only fallback fixture", () => {
+test("idd-doctor accepts missing helperRuntime as instructions-only fallback fixture", (t) => {
   const root = createDoctorFixtureRepo("absent.json");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
   const report = runDoctor({ root, requireGithub: false });
 
   assert.deepEqual(report.errors, []);
@@ -77,8 +78,9 @@ test("idd-doctor accepts missing helperRuntime as instructions-only fallback fix
   );
 });
 
-test("instructions-only fixture emits no helper commands or dependencies", () => {
+test("instructions-only fixture emits no helper commands or dependencies", (t) => {
   const root = createDoctorFixtureRepo("instructions-only.json");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
   const manifest = buildHelperRuntimeManifest({
     profile: "instructions-only",
     targetRoot: root,
@@ -93,13 +95,14 @@ test("instructions-only fixture emits no helper commands or dependencies", () =>
   assert.deepEqual(profile.managedFiles, []);
 });
 
-test("package-manager fixture can run idd-doctor through the helper bin", () => {
+test("package-manager fixture can run idd-doctor through the helper bin", (t) => {
   const root = createDoctorFixtureRepo("package-manager.json", {
     packageJson: {
       name: "fixture-package-manager",
       packageManager: "npm@10.9.0",
     },
   });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
   const manifest = buildHelperRuntimeManifest({
     profile: "package-manager",
     targetRoot: root,
@@ -123,8 +126,9 @@ test("package-manager fixture can run idd-doctor through the helper bin", () => 
   );
 });
 
-test("idd-doctor fixture rejects unsupported helperRuntime profiles", () => {
+test("idd-doctor fixture rejects unsupported helperRuntime profiles", (t) => {
   const root = createDoctorFixtureRepo("invalid-profile.json");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
   const report = runDoctor({ root, requireGithub: false });
 
   assert.ok(
@@ -132,8 +136,9 @@ test("idd-doctor fixture rejects unsupported helperRuntime profiles", () => {
   );
 });
 
-test("idd-doctor fixture rejects unsupported helperRuntime keys", () => {
+test("idd-doctor fixture rejects unsupported helperRuntime keys", (t) => {
   const root = createDoctorFixtureRepo("invalid-extra-key.json");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
   const report = runDoctor({ root, requireGithub: false });
 
   assert.ok(

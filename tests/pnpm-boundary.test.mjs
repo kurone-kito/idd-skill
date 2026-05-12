@@ -58,6 +58,6 @@ test("helper runtime docs avoid pnpm-only command assumptions", () => {
 
   for (const file of files) {
     const text = readFileSync(join(REPO_ROOT, file), "utf8");
-    assert.doesNotMatch(text, /\bpnpm\s+(add|install|exec|dlx|run)\b/i, file);
+    assert.doesNotMatch(text, /`[^`\n]*\bpnpm\s+\S+[^`\n]*`/i, file);
   }
 });
