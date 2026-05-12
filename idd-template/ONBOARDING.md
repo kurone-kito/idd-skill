@@ -88,25 +88,14 @@ reasoning depth, not for routine IDD loop execution.
 
 ## Your task
 
-1. Read this entire document first.
-2. **Auto-derive candidate values** from the target repository's evidence
-   (build tooling, package managers, git remote). Propose derived values
-   to the operator for confirmation or correction (Step 1A below).
-3. **Confirm policy decisions** with the operator (merge policy, review
-   policy, issue-authoring companion, credentials) — these cannot be
-   safely inferred and require explicit confirmation (Step 1B below).
-4. Fetch or copy the template files into the target repository.
-5. Replace every placeholder with the correct values (confirmed by the
-   operator in Steps 1A-1B).
-6. Review `docs/permissions.md` with the operator before granting agent
-   credentials, matching the merge policy confirmed in Step 1B.
-7. If the selected PR review policy profile is non-default, apply the
-   matching profile artifact from `profiles/`.
-8. Record all policy decisions in repository documentation that future IDD
-   sessions read: merge policy, review policy profile, thread-resolution
-   policy, and timing defaults.
-9. Add IDD references to the repository's agent entry files.
-10. Verify the result with the checklist at the bottom.
+1. Read this document before changing files.
+2. Auto-derive candidate placeholder values from repository evidence.
+3. Confirm policy decisions with the operator.
+4. Fetch or copy the template files.
+5. Replace placeholders with the confirmed values.
+6. Record the selected policies where future IDD sessions will read them.
+7. Update the repository's agent entry files.
+8. Verify the imported result with the checklist at the bottom.
 
 ---
 
@@ -146,34 +135,19 @@ before starting Step 1A.
 
 ## Step 1A — Auto-derive candidate values
 
-Before asking the operator to enter values, inspect the target
-repository and propose candidate values for all seven placeholders:
+Inspect the target repository and propose candidate values for all seven placeholders:
 `{{REPO_NAME}}`, `{{PROJECT_MARKER_PREFIX}}`,
 `{{TRUSTED_MARKER_ACTORS}}`, `{{FIX_VALIDATE_COMMANDS}}`,
 `{{PRE_PUSH_VALIDATE_COMMANDS}}`, `{{POST_FIX_VALIDATE_COMMANDS}}`,
 and `{{INSTALL_DEPS_COMMAND}}`.
 
-Use the detailed derivation rules in
-[Onboarding Reference — Placeholder Values](docs/onboarding/placeholders.md),
-including the tooling-boundary fallback order and marker-prefix notes.
+Use
+[Onboarding Reference — Placeholder Values](docs/onboarding/placeholders.md)
+for the detailed derivation rules, fallback order, and marker-prefix
+notes.
 
-**Present proposed values to the operator.** Format:
-
-> Based on the target repository's structure, I've derived these candidate
-> values. Please confirm or correct them:
->
-> - Repository name: `{proposed-repo-name}`
-> - Marker prefix: `{proposed-prefix}`
-> - Trusted marker actors: `{proposed-trusted-marker-actors}`
-> - Install command: `{proposed-install}`
-> - Fix-validate: `{proposed-fix-validate}`
-> - Pre-push-validate: `{proposed-pre-push}`
-> - Post-fix-validate: `{proposed-post-fix}`
->
-> If any of these needs to change, provide the corrected value.
-
-Record the operator's confirmations or corrections for Step 3 (placeholder
-replacement).
+Present the proposed values to the operator for confirmation or
+correction, then carry the confirmed values into Steps 1C and 4.
 
 ---
 
