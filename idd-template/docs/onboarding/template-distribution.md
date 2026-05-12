@@ -6,6 +6,11 @@ operator-facing import path; this page explains how the file list and
 fetch examples stay correct when the template gains, removes, or moves
 files.
 
+This is primarily a maintainer reference for the `idd-skill` source
+repository. Adopters who receive it with the copied template can treat it
+as background unless they intentionally customize their local template
+distribution lists.
+
 ## Distribution surfaces
 
 The template has three distribution surfaces:
