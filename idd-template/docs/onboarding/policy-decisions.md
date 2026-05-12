@@ -77,6 +77,14 @@ If the repository chooses a non-default profile, update the review
 snapshot, triage, review-fix, pre-merge, and merge phase files named in
 `docs/idd-review-policy-profiles.md`.
 
+### Critique-loop profile
+
+Confirm whether the repository keeps the distributed critique-loop
+defaults from `docs/policy-constants.md` or documents a local override.
+At minimum, record whether the repository uses the shipped guardrails or
+intentionally customizes the critique-loop behavior before unattended
+execution begins.
+
 ### Issue-authoring companion
 
 Confirm whether the operator wants the optional issue-authoring skill:
@@ -155,6 +163,10 @@ This repository uses the following IDD policies:
 ### Review-Thread Resolution Policy
 
 **Policy**: `{fast-agent-resolve | hybrid-reviewer-ack | strict-reviewer-resolve}`
+
+### Critique-Loop Profile
+
+**Profile**: `{distributed defaults | repository override}`
 
 ### Claim Timing
 
