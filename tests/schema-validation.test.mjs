@@ -248,6 +248,73 @@ test("policy schema rejects non-boolean issue-author approval opt-out", () => {
   );
 });
 
+test("policy schema accepts x-* extension keys", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+  );
+  instance["x-local-note"] = "opt-in";
+  instance["x-local-flags"] = {
+    dryRun: true,
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects unknown non x-* top-level keys", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+  );
+  instance.localNote = "opt-in";
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes('additional property "localNote"')),
+    errors.join("\n"),
+  );
+});
+
+test("validate reports invalid patternProperties regex without throwing", () => {
+  const schema = {
+    type: "object",
+    patternProperties: {
+      "[invalid": {
+        type: "string",
+      },
+    },
+    additionalProperties: false,
+  };
+  const errors = validate({ sample: "value" }, schema);
+  assert.ok(
+    errors.some((error) => error.includes('invalid patternProperties regex "[invalid"')),
+    errors.join("\n"),
+  );
+});
+
+test("validate applies patternProperties even for declared properties", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      foo: {
+        type: "string",
+      },
+    },
+    patternProperties: {
+      "^foo$": {
+        minLength: 3,
+      },
+    },
+    additionalProperties: false,
+  };
+  const failing = validate({ foo: "ab" }, schema);
+  assert.ok(
+    failing.some((error) => error.includes("$.foo: length 2 < minLength 3")),
+    failing.join("\n"),
+  );
+  const passing = validate({ foo: "abc" }, schema);
+  assert.deepEqual(passing, []);
+});
+
 test("policy invalid fixture fails validation", () => {
   const { ok } = validateFixture(
     "schemas/policy.schema.json",

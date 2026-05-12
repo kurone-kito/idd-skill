@@ -5,7 +5,7 @@
  * fixture instances against their schemas.
  *
  * Supported enforcement keywords:
- *   type, required, properties, additionalProperties,
+ *   type, required, properties, patternProperties, additionalProperties,
  *   minLength, minimum, pattern, format (date-time only),
  *   minItems, items, enum
  *
@@ -27,6 +27,7 @@ const ENFORCED_KEYWORDS = new Set([
   "type",
   "required",
   "properties",
+  "patternProperties",
   "additionalProperties",
   "minLength",
   "minimum",
@@ -61,6 +62,9 @@ export function checkSchemaKeywords(schema, path = "$") {
   }
   for (const [prop, propSchema] of Object.entries(schema.properties ?? {})) {
     errors.push(...checkSchemaKeywords(propSchema, `${path}.properties.${prop}`));
+  }
+  for (const [pattern, propSchema] of Object.entries(schema.patternProperties ?? {})) {
+    errors.push(...checkSchemaKeywords(propSchema, `${path}.patternProperties.${pattern}`));
   }
   if (schema.items && typeof schema.items === "object") {
     errors.push(...checkSchemaKeywords(schema.items, `${path}.items`));
@@ -151,12 +155,38 @@ export function validate(data, schema, path = "$") {
         errors.push(...validate(data[prop], propSchema, `${path}.${prop}`));
       }
     }
-    if (schema.additionalProperties === false) {
-      const allowed = new Set(Object.keys(schema.properties ?? {}));
-      for (const key of Object.keys(data)) {
-        if (!allowed.has(key)) {
-          errors.push(`${path}: additional property "${key}" not allowed`);
+    const declaredProperties = schema.properties ?? {};
+    const compiledPatternSchemas = [];
+    for (const [pattern, patternSchema] of Object.entries(schema.patternProperties ?? {})) {
+      try {
+        compiledPatternSchemas.push([new RegExp(pattern), patternSchema]);
+      } catch {
+        errors.push(`${path}: invalid patternProperties regex "${pattern}"`);
+      }
+    }
+    const additionalPropertiesSchema = (
+      typeof schema.additionalProperties === "object" && schema.additionalProperties !== null
+    )
+      ? schema.additionalProperties
+      : null;
+    for (const key of Object.keys(data)) {
+      const isDeclaredProperty = Object.hasOwn(declaredProperties, key);
+      let matchedPattern = false;
+      for (const [patternRegex, patternSchema] of compiledPatternSchemas) {
+        if (patternRegex.test(key)) {
+          matchedPattern = true;
+          errors.push(...validate(data[key], patternSchema, `${path}.${key}`));
         }
+      }
+      if (isDeclaredProperty || matchedPattern) {
+        continue;
+      }
+      if (schema.additionalProperties === false) {
+        errors.push(`${path}: additional property "${key}" not allowed`);
+        continue;
+      }
+      if (additionalPropertiesSchema !== null) {
+        errors.push(...validate(data[key], additionalPropertiesSchema, `${path}.${key}`));
       }
     }
   }
