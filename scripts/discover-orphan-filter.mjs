@@ -5,8 +5,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROADMAP_MARKER_REGEX = /<!--\s*idd-skill-roadmap-id\b[\s\S]*?-->/i;
-const BLOCKED_MARKER_REGEX = /<!--\s*idd-skill-blocked-by\b[\s\S]*?-->/i;
+const DEFAULT_MARKER_PREFIX = "idd-skill";
 const BLOCKED_LABELS = new Set(["status:blocked-by-human", "status:needs-decision"]);
 
 if (isCliExecution()) {
@@ -47,12 +46,15 @@ export function getOrphanFirstPolicy(config) {
 export function classifyIssue(issue, options) {
   const labels = new Set(normalizeLabels(issue.labels));
   const body = String(issue.body ?? "");
+  const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
+  const roadmapMarkerRegex = createMarkerRegex(markerPrefix, "roadmap-id");
+  const blockedMarkerRegex = createMarkerRegex(markerPrefix, "blocked-by");
 
-  if (ROADMAP_MARKER_REGEX.test(body)) {
+  if (roadmapMarkerRegex.test(body)) {
     return { orphan: false, reason: "roadmap_marker" };
   }
 
-  if (BLOCKED_MARKER_REGEX.test(body)) {
+  if (blockedMarkerRegex.test(body)) {
     return { orphan: false, reason: "blocked_by_marker" };
   }
 
@@ -100,6 +102,7 @@ export function filterOrphanIssues(issues, options = {}) {
     const result = classifyIssue(issue, {
       issueStateByNumber,
       fetchIssueStateByNumber: options.fetchIssueStateByNumber,
+      markerPrefix: options.markerPrefix,
     });
     const entry = {
       number: issue.number,
@@ -175,7 +178,8 @@ function runCli() {
     repository: { owner, repo },
     policy: {
       source: policy.source,
-      orphanFirstPolicy: policy.orphanFirstPolicy,
+    orphanFirstPolicy: policy.orphanFirstPolicy,
+    markerPrefix: policy.markerPrefix,
     },
     ...result,
   };
@@ -225,7 +229,7 @@ function printHelp() {
 Output schema:
 {
   "repository": {"owner": "...", "repo": "..."},
-  "policy": {"source": "...", "orphanFirstPolicy": "none|maintainer-approved|public-disabled"},
+  "policy": {"source": "...", "orphanFirstPolicy": "none|maintainer-approved|public-disabled", "markerPrefix": "..."},
   "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|blocked_references_closed", "url": "..."}],
   "filtered": {
     "roadmap_marker": [...],
@@ -248,11 +252,13 @@ function loadPolicy(policyPath) {
     return {
       source: targetPath,
       orphanFirstPolicy: getOrphanFirstPolicy(config),
+      markerPrefix: normalizeMarkerPrefix(config.markerPrefix),
     };
   } catch {
     return {
       source: targetPath,
       orphanFirstPolicy: "none",
+      markerPrefix: DEFAULT_MARKER_PREFIX,
     };
   }
 }
@@ -336,6 +342,21 @@ function runGh(args) {
 
 function isCliExecution() {
   return process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+}
+
+function createMarkerRegex(prefix, suffix) {
+  return new RegExp(`<!--\\s*${escapeRegex(prefix)}-${suffix}\\b[\\s\\S]*?-->`, "i");
+}
+
+function normalizeMarkerPrefix(prefix) {
+  if (typeof prefix !== "string" || prefix.length === 0) {
+    return DEFAULT_MARKER_PREFIX;
+  }
+  return prefix;
+}
+
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function fetchOpenIssues(repoRef) {

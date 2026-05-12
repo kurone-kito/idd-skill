@@ -76,6 +76,40 @@ test("classifyIssue accepts marker forms without colon", () => {
   assert.equal(blocked.reason, "blocked_by_marker");
 });
 
+test("classifyIssue supports custom marker prefix", () => {
+  const roadmap = classifyIssue(
+    {
+      number: 5,
+      title: "custom roadmap marker",
+      state: "OPEN",
+      labels: [],
+      body: "<!-- custom-roadmap-id: phase-a -->",
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => "UNRESOLVABLE",
+      markerPrefix: "custom",
+    },
+  );
+  assert.equal(roadmap.reason, "roadmap_marker");
+
+  const blocked = classifyIssue(
+    {
+      number: 6,
+      title: "custom blocked marker",
+      state: "OPEN",
+      labels: [],
+      body: "<!-- custom-blocked-by: phase-a -->",
+    },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => "UNRESOLVABLE",
+      markerPrefix: "custom",
+    },
+  );
+  assert.equal(blocked.reason, "blocked_by_marker");
+});
+
 test("filterOrphanIssues excludes blocked labels and open blockers", () => {
   const issues = [
     {
