@@ -87,6 +87,7 @@
         "idd-template/docs/reference.md",
         "idd-template/docs/onboarding/placeholders.md",
         "idd-template/docs/onboarding/policy-decisions.md",
+        "idd-template/docs/onboarding/template-distribution.md",
         "idd-template/profiles/README.md",
         "idd-template/profiles/human-required/README.md",
         "idd-template/profiles/no-advisory/README.md",
