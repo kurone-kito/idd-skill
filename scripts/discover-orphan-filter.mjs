@@ -71,7 +71,7 @@ export function classifyIssue(issue, options) {
   const unresolved = [];
   for (const ref of refs) {
     const state = resolveIssueState(ref, options.issueStateByNumber, options.fetchIssueStateByNumber);
-    if (state === "OPEN") {
+    if ((state ?? "").toUpperCase() === "OPEN") {
       return { orphan: false, reason: "blocked_by_open_reference", details: ref };
     }
     if (state === "UNRESOLVABLE") {
@@ -175,6 +175,7 @@ function runCli() {
   const result = filterOrphanIssues(openIssues, {
     issueStateByNumber: openStateByNumber,
     fetchIssueStateByNumber: (issueNumber) => fetchIssueState(repoRef, issueNumber),
+    markerPrefix: policy.markerPrefix,
   });
 
   const output = {
@@ -380,15 +381,16 @@ function fetchOpenIssues(repoRef) {
   const issues = [];
   const pageSize = 100;
   for (let page = 1; ; page += 1) {
-    const pageItems = ghJson([
+    const rawPage = ghJson([
       "api",
       `repos/${repoRef}/issues?state=open&per_page=${pageSize}&page=${page}`,
-    ])
+    ]);
+    const pageItems = rawPage
       .filter((item) => item?.pull_request === undefined)
       .map(normalizeIssue);
 
     issues.push(...pageItems);
-    if (pageItems.length < pageSize) {
+    if (rawPage.length < pageSize) {
       break;
     }
   }
