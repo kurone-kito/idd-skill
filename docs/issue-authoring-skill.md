@@ -191,10 +191,11 @@ shape, but state clearly that:
 - the issue author is self-authorizing only when they satisfy the
   repository's `maintainer-approval-actors` policy
 - otherwise an explicit approval signal is still required after the
-  final issue content and generated plan are stable: the distributed
+  final issue content and generated-plan update are stable: the distributed
   `idd:ready` label is accepted by presence, and standalone `IDD ready`
   comments from a maintainer approval actor must stay fresh against the
-  latest issue edits and generated-plan updates
+  latest issue edits and generated-plan update (or an equivalent
+  draft-stability signal)
 - until that approval exists, later discovery should treat the issue as
   part of the approval-needed fallback bucket rather than the normal
   ready-to-start set

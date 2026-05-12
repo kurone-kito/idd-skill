@@ -165,8 +165,9 @@ self-authorizing under the repository's
 `maintainer-approval-actors` policy. The distributed `idd:ready` label
 is accepted by presence, while standalone `IDD ready` comments from a
 maintainer approval actor must stay fresh against the latest issue
-content and generated-plan update signal. Until that approval condition
-is satisfied, route the draft to the
+content and generated-plan update (or an equivalent draft-stability
+signal). Until that approval condition is satisfied, route the draft to
+the
 approval-needed fallback bucket instead of the normal ready-to-start
 set.
 
