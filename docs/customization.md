@@ -515,8 +515,10 @@ push, comment, resolve review state, or merge until a maintainer
 reassigns ownership.
 ```
 
-Future protocol work may use a dedicated marker or marker pair, but the
-contract must record at least these fields:
+The implemented protocol uses a dedicated `<!-- forced-handoff: {json} -->`
+marker followed by the visible consent note above. The JSON payload uses
+the field names below exactly, and maintainer-facing helpers should
+generate the full body so humans do not hand-write fragile claim IDs.
 
 | Field           | Requirement | Meaning                                                            |
 | --------------- | ----------- | ------------------------------------------------------------------ |

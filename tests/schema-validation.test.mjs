@@ -9,7 +9,7 @@ import {
   validateFixture,
   validatePhaseGraph,
 } from "../scripts/validate-schemas.mjs";
-import { parseClaimComment } from "../scripts/protocol-helpers.mjs";
+import { parseClaimComment, parseForcedHandoffComment } from "../scripts/protocol-helpers.mjs";
 
 // ---------------------------------------------------------------------------
 // Schema keyword hygiene — no unsupported keywords allowed
@@ -17,6 +17,11 @@ import { parseClaimComment } from "../scripts/protocol-helpers.mjs";
 
 test("claim-marker schema uses only allowed keywords", () => {
   const schema = loadJson("schemas/claim-marker.schema.json");
+  assert.deepEqual(checkSchemaKeywords(schema), []);
+});
+
+test("forced-handoff-marker schema uses only allowed keywords", () => {
+  const schema = loadJson("schemas/forced-handoff-marker.schema.json");
   assert.deepEqual(checkSchemaKeywords(schema), []);
 });
 
@@ -83,6 +88,24 @@ test("claim-marker invalid fixture fails validation", () => {
   const { ok } = validateFixture(
     "schemas/claim-marker.schema.json",
     "fixtures/schemas/claim-marker.invalid.json",
+    false,
+  );
+  assert.ok(ok, "Expected invalid fixture to fail schema validation");
+});
+
+test("forced-handoff-marker valid fixture passes validation", () => {
+  const { ok, errors } = validateFixture(
+    "schemas/forced-handoff-marker.schema.json",
+    "fixtures/schemas/forced-handoff-marker.valid.json",
+    true,
+  );
+  assert.ok(ok, errors.join("\n"));
+});
+
+test("forced-handoff-marker invalid fixture fails validation", () => {
+  const { ok } = validateFixture(
+    "schemas/forced-handoff-marker.schema.json",
+    "fixtures/schemas/forced-handoff-marker.invalid.json",
     false,
   );
   assert.ok(ok, "Expected invalid fixture to fail schema validation");
@@ -373,6 +396,25 @@ test("protocol-helpers parseClaimComment output matches claim-marker schema", ()
   assert.ok(parsed !== null, "parseClaimComment returned null");
 
   const schema = loadJson("schemas/claim-marker.schema.json");
+  const errors = validate(parsed, schema);
+  assert.deepEqual(errors, [], `Schema/runtime drift detected:\n${errors.join("\n")}`);
+});
+
+test("protocol-helpers parseForcedHandoffComment output matches forced-handoff schema", () => {
+  const body = [
+    "<!-- forced-handoff: {\"old-agent-id\":\"github-copilot-cli-old\",\"old-claim-id\":\"claim-20260512T090000Z-337-old\",\"new-agent-id\":\"github-copilot-cli-new\",\"new-claim-id\":\"claim-20260512T110000Z-337-new\",\"branch\":\"issue/337-feat-protocol-add-auditable-forced\",\"linked-pr\":\"341\",\"forced-by\":\"kurone-kito\",\"reason\":\"operator-approved-recovery\",\"timestamp\":\"2026-05-12T11:00:00Z\",\"context-scope\":\"issue-plus-pr\"} -->",
+    "",
+    "Forced handoff approved by kurone-kito. I verified that the current",
+    "owning session or agent is unavailable. This transfers ownership away",
+    "from claim `claim-20260512T090000Z-337-old` on branch `issue/337-feat-protocol-add-auditable-forced` for PR #341.",
+    "If the prior session resumes, it must stop immediately and must not",
+    "push, comment, resolve review state, or merge until a maintainer",
+    "reassigns ownership.",
+  ].join("\n");
+  const parsed = parseForcedHandoffComment(body, "2026-05-12T11:00:05Z");
+  assert.ok(parsed !== null, "parseForcedHandoffComment returned null");
+
+  const schema = loadJson("schemas/forced-handoff-marker.schema.json");
   const errors = validate(parsed, schema);
   assert.deepEqual(errors, [], `Schema/runtime drift detected:\n${errors.join("\n")}`);
 });
