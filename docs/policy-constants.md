@@ -70,6 +70,18 @@ Record the selected values for `claim-stale-age` and
 `claim-heartbeat-interval` in repository onboarding notes before running
 unattended sessions.
 
+## Phase ID Compatibility Defaults
+
+The phase-ID compatibility contract separates machine-facing canonical
+IDs from human-facing display labels. Keep this contract stable before
+semver introduction so helper/runtime changes can migrate safely.
+
+| Policy key                      | Policy default                                               | Distributed value                                                                                                                                                               | Owning surface                                                                                                                                             | Onboarding expectation                                                                                  |
+| ------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `phase-id-canonical`            | Canonical phase ID stability                                 | One canonical ID per phase is treated as machine-facing API. Display numbering or labels are separate presentation fields.                                                      | [Customizing IDD](customization.md#phase-id-compatibility-contract), [IDD workflow](idd-workflow.md), helper/runtime docs and tests touching phase routing | Keep canonical IDs stable unless a major migration is intentionally planned and documented.             |
+| `phase-id-legacy-aliases`       | Input aliases allowed during migration                       | Legacy aliases may be accepted on input, but new machine-generated output should emit canonical IDs.                                                                            | [Customizing IDD](customization.md#phase-id-compatibility-contract), helper/runtime parsers, migration tests                                               | Record accepted aliases and output normalization behavior before introducing implementation changes.    |
+| `phase-id-alias-removal-policy` | Alias removal deferred to semver-major with migration notice | Alias removal is not a patch/minor change. Removal requires major-version timing, a documented compatibility window, and explicit deprecation notice before enforcement change. | [Customizing IDD](customization.md#phase-id-compatibility-contract), release policy docs, semver migration plans                                           | Do not remove aliases opportunistically; schedule removal only with explicit semver migration criteria. |
+
 ## Issue-Author Approval Defaults
 
 The repository-wide issue-author approval gate is part of the current

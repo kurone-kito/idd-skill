@@ -159,6 +159,35 @@ changes `claim-stale-age` (24 h default) and
 `claim-heartbeat-interval` (12 h default) before enabling unattended
 workers.
 
+## Phase ID Compatibility Contract
+
+Treat phase IDs as a compatibility surface, not as presentation text.
+Use one canonical ID per phase for machine-facing behavior
+(instructions, helpers, tests, routing), and treat display labels or
+ordering as a separate human-facing concern.
+
+When phase numbering needs cleanup, keep behavior compatibility first:
+
+- keep canonical IDs stable while introducing display-only ordering
+- accept legacy aliases on input during migration
+- emit canonical IDs in new machine-written outputs
+
+Example:
+
+- canonical ID: `A4_5`
+- accepted legacy aliases (input only): `A4.5`, `A4-5`
+- preferred display label: `A4.5`
+
+Alias removal is a semver-governed change. Do not remove supported
+aliases in patch or minor releases. Removal requires:
+
+1. A major-version boundary with explicit migration guidance.
+2. A documented compatibility window where aliases are still accepted.
+3. A deprecation announcement in docs before enforcement switches.
+
+This issue defines the policy contract only. Broad phase renumbering or
+global identifier rewrites must land in follow-up implementation issues.
+
 ## Merge Policy and Credentials
 
 IDD can describe an end-to-end loop, but that does not mean every worker
