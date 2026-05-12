@@ -454,7 +454,10 @@ function runGh(args) {
   } catch (error) {
     const stderr = String(error?.stderr ?? "").trim();
     if (stderr) {
-      throw new Error(`gh command failed: ${stderr}`);
+      const wrapped = new Error(`gh command failed: ${stderr}`);
+      wrapped.stderr = String(error?.stderr ?? "");
+      wrapped.stdout = String(error?.stdout ?? "");
+      throw wrapped;
     }
     throw error;
   }
