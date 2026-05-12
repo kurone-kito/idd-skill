@@ -16,6 +16,10 @@ export function selectResumeRoute(input) {
   const state = normalizeState(input);
   const reasonParts = [];
 
+  if (state.prAmbiguous) {
+    return result("stop", "multiple-open-prs-for-issue", state, reasonParts);
+  }
+
   if (!state.prExists) {
     if (state.hasUnpushedCommits && !state.worktreeDirty) {
       return result("D1", "no-pr-unpushed-clean-worktree", state, reasonParts);
@@ -96,6 +100,7 @@ function collectRoutingInput({ repository, issueNumber }) {
 
   if (!issuePr) {
     return {
+      prAmbiguous: prs.length > 1,
       prExists: false,
       requiredChecksGenerated: false,
       hasUnpushedCommits: gitState.hasUnpushedCommits,
@@ -145,6 +150,7 @@ function collectRoutingInput({ repository, issueNumber }) {
   const mergeNeedsRebase = isMergeRebaseRequired(mergeState);
 
   return {
+    prAmbiguous: false,
     prExists: true,
     requiredChecksGenerated,
     hasUnpushedCommits: gitState.hasUnpushedCommits,
@@ -245,6 +251,7 @@ export function countLatestChangesRequestedByReviewer(reviews) {
 
 function normalizeState(input) {
   return {
+    prAmbiguous: input.prAmbiguous === true,
     prExists: input.prExists === true,
     requiredChecksGenerated: input.requiredChecksGenerated === true,
     hasUnpushedCommits: input.hasUnpushedCommits === true,
@@ -271,6 +278,7 @@ function result(route, reason, state, reasonParts) {
 
 function decisionTable() {
   return [
+    { condition: "multiple open PRs match issue", route: "stop" },
     { condition: "no PR + required checks not generated", route: "D4" },
     { condition: "no PR + clean worktree + unpushed commits", route: "D1" },
     { condition: "PR + checks not generated + no reviews", route: "D4" },

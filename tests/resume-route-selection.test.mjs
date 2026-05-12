@@ -13,6 +13,18 @@ test("routes D4 when no PR and required checks are not generated", () => {
   assert.equal(result.route, "D4");
 });
 
+test("routes stop when multiple matching open PRs are detected", () => {
+  const result = selectResumeRoute({
+    prAmbiguous: true,
+    prExists: false,
+    requiredChecksGenerated: false,
+    hasUnpushedCommits: true,
+    worktreeDirty: false,
+  });
+  assert.equal(result.route, "stop");
+  assert.equal(result.reason, "multiple-open-prs-for-issue");
+});
+
 test("routes D1 when no PR and clean worktree has unpushed commits", () => {
   const result = selectResumeRoute({
     prExists: false,
