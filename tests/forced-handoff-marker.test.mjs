@@ -164,6 +164,25 @@ test("forced handoff is rejected when the approving actor is unauthorized", () =
   assert.deepEqual(next, activeClaim);
 });
 
+test("forced handoff is rejected when the marker author is untrusted", () => {
+  const body = renderForcedHandoffComment(payload);
+  const next = applyClaimEvent(
+    activeClaim,
+    {
+      author: { login: "untrusted-user" },
+      body,
+      createdAt: "2026-05-12T11:00:05Z",
+    },
+    {
+      isTrustedAuthor: (login) => login === "trusted-relay[bot]",
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === "kurone-kito",
+    },
+  );
+
+  assert.deepEqual(next, activeClaim);
+});
+
 test("forced handoff requires an exact old-claim match before transferring ownership", () => {
   const body = renderForcedHandoffComment({
     ...payload,
@@ -242,16 +261,21 @@ test("forced handoff rejects invalid linked PR tokens", () => {
 });
 
 test("forced handoff accepts PR URLs in linked PR scope", () => {
-  const body = renderForcedHandoffComment({
-    ...payload,
-    linkedPr: "https://github.com/kurone-kito/idd-skill/pull/359",
-  });
+  for (const linkedPr of [
+    "https://github.com/kurone-kito/idd-skill/pull/359",
+    "http://github.com/kurone-kito/idd-skill/pull/359",
+  ]) {
+    const body = renderForcedHandoffComment({
+      ...payload,
+      linkedPr,
+    });
 
-  assert.deepEqual(parseForcedHandoffComment(body, "2026-05-12T11:00:05Z"), {
-    ...payload,
-    linkedPr: "https://github.com/kurone-kito/idd-skill/pull/359",
-    createdAt: "2026-05-12T11:00:05Z",
-  });
+    assert.deepEqual(parseForcedHandoffComment(body, "2026-05-12T11:00:05Z"), {
+      ...payload,
+      linkedPr,
+      createdAt: "2026-05-12T11:00:05Z",
+    });
+  }
 });
 
 test("forced handoff rejects conflicting alias keys", () => {
