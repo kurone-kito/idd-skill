@@ -158,12 +158,13 @@ During a run:
 - If a command asks for a credential, deployment approval, or unexpected
   privileged operation, stop and ask the operator.
 
-## Issue-Author Approval Gate (planned contract)
+## Issue-Author Approval Gate
 
 Treat issue-author approval as a pre-start control, not as a PR review
-or merge control. This contract is documented ahead of the discover and
-claim implementation work; it does not change runtime behavior until the
-follow-up instruction changes land.
+or merge control. The distributed discover and claim instructions
+already enforce this gate through `skipIssueAuthorApprovalGate`,
+`maintainerApprovalActorPolicy`, the reserved `idd:ready` label, and
+fresh standalone `IDD ready` comments.
 
 - When a repository keeps the secure-by-default issue-author approval
   gate, a self-authorizing issue author must satisfy the documented
@@ -189,9 +190,10 @@ CODEOWNERS coverage.
 
 Keep approval labels and operational marker trust as separate controls:
 
-- `idd:ready` (or local equivalent) is an issue-selection approval signal
-  for orphan-first policy and should be restricted to maintainer approval
-  actors.
+- `idd:ready` is the distributed issue-selection approval signal for
+  orphan-first policy and should be restricted to maintainer approval
+  actors. If a repository wants a different label name, it must patch
+  the discover/claim instruction files in the same change.
 - Trusted marker actors govern operational marker authority
   (`claimed-by`, `unclaimed-by`, `review-watermark`,
   `review-baseline`, `advisory-wait`) and may include different actors.
