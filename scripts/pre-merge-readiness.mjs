@@ -65,7 +65,7 @@ const checks = ghJson(
 );
 const branchRules = ghApiJson(
   `repos/${owner}/${repo}/rules/branches/${encodedBaseRefName}`,
-  false,
+  true,
   [],
   { allowHttpStatuses: [404] },
 );
@@ -466,7 +466,7 @@ function runGh(args, options = {}) {
       return String(error?.stdout ?? "");
     }
     const stderr = String(error?.stderr ?? "");
-    const httpStatus = Number(stderr.match(/HTTP\\s+(\\d+)/i)?.[1] ?? -1);
+    const httpStatus = Number(stderr.match(/HTTP\s+(\d+)/i)?.[1] ?? -1);
     if ((options.allowHttpStatuses ?? []).includes(httpStatus)) {
       return String(error?.stdout ?? "");
     }

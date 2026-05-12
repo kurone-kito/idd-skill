@@ -1072,7 +1072,7 @@ export function summarizeRequiredChecks(checks = [], branchRules = [], branchPro
   const presentNames = new Set(matchedRequiredChecks.map((check) => check.name));
   const missingRequiredCheckNames = requiredCheckNames.filter((name) => !presentNames.has(name));
 
-  let status = "none";
+  let status = "unknown";
   if (requiredCheckNames.length > 0) {
     const ciClassification = classifyCiChecks(matchedRequiredChecks);
     status = missingRequiredCheckNames.length > 0
@@ -1087,8 +1087,8 @@ export function summarizeRequiredChecks(checks = [], branchRules = [], branchPro
     status,
     requiredCheckCount: requiredCheckNames.length,
     generatedRequiredCheckCount: matchedRequiredChecks.length,
-    requiredChecksGenerated: missingRequiredCheckNames.length === 0,
-    requiredChecksPassing: requiredCheckNames.length === 0 || status === "success",
+    requiredChecksGenerated: requiredCheckNames.length > 0 && missingRequiredCheckNames.length === 0,
+    requiredChecksPassing: requiredCheckNames.length > 0 && status === "success",
     requiredCheckNames,
     missingRequiredCheckNames,
     checks: normalizedChecks.map((check) => ({
@@ -1719,9 +1719,22 @@ function summarizeRequiredCheckMetadata(parameters) {
 }
 
 function extractRequiredReviewerRequirement(reviewer) {
-  const candidate = typeof reviewer === "string"
+  const reviewerRef = reviewer?.reviewer ?? {};
+  const reviewerType = String(reviewerRef.type ?? reviewer?.type ?? "").trim().toLowerCase();
+  const reviewerId = String(reviewerRef.id ?? reviewer?.id ?? "").trim();
+  let candidate = typeof reviewer === "string"
     ? reviewer
-    : reviewer?.login ?? reviewer?.reviewer?.login ?? reviewer?.slug ?? reviewer?.team ?? "";
+    : reviewer?.login
+      ?? reviewerRef.login
+      ?? reviewer?.slug
+      ?? reviewer?.team
+      ?? reviewerRef.slug
+      ?? reviewerRef.team
+      ?? reviewerRef.name
+      ?? "";
+  if (!candidate && reviewerType && reviewerId) {
+    candidate = `${reviewerType}/${reviewerId}`;
+  }
   return {
     identity: String(candidate ?? "").trim().replace(/^@/, "").toLowerCase(),
     minimumApprovals: Number(reviewer?.minimum_approvals ?? reviewer?.min_approvals ?? 1) || 0,
@@ -1784,7 +1797,8 @@ function matchesCodeownersPattern(pattern, path) {
     body = `${body}**`;
   }
 
-  let source = anchored ? "^" : "^(?:|.*\\/)";
+  const slashAnchored = anchored || (body.includes("/") && !body.startsWith("**/"));
+  let source = slashAnchored ? "^" : "^(?:|.*\\/)";
   for (let index = 0; index < body.length; index += 1) {
     const pair = body.slice(index, index + 2);
     if (pair === "**") {

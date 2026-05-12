@@ -29,7 +29,8 @@
     },
     "now": {
       "type": "string",
-      "format": "date-time"
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
     },
     "reviewCurrency": {
       "type": "object",
@@ -193,7 +194,11 @@
             "properties": {
               "id": { "type": "string" },
               "authorLogin": { "type": "string", "minLength": 1 },
-              "createdAt": { "type": "string", "format": "date-time" },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+              },
               "bodyPreview": { "type": "string" }
             }
           }
