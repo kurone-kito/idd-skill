@@ -182,6 +182,25 @@ skill should route it into one of these stable buckets:
 - **out-of-scope**: the request does not belong in the repository or is
   materially outside the skill's target problem.
 
+When the target repository keeps a secure-by-default issue-author
+approval gate, a drafted issue can be execution-ready in content yet
+still need a post-publication approval step before unattended execution
+may start. In that case, keep the issue itself in the normal ready
+shape, but state clearly that:
+
+- the issue author is self-authorizing only when they satisfy the
+  repository's `maintainer-approval-actors` policy
+- otherwise a fresh explicit approval signal such as `idd:ready` or a
+  standalone `IDD ready` comment from a maintainer approval actor is
+  still required after the final issue content and generated plan are
+  stable
+- until that approval exists, later discovery should treat the issue as
+  part of the approval-needed fallback bucket rather than the normal
+  ready-to-start set
+
+Do not treat organization `MEMBER` association alone or CODEOWNERS
+coverage as a substitute for that repository-local approval rule.
+
 Recommended routing rules:
 
 - if only **limited scope** fails, split the work or draft a roadmap

@@ -158,6 +158,33 @@ During a run:
 - If a command asks for a credential, deployment approval, or unexpected
   privileged operation, stop and ask the operator.
 
+## Issue-Author Approval Gate (planned contract)
+
+Treat issue-author approval as a pre-start control, not as a PR review
+or merge control. This contract is documented ahead of the discover and
+claim implementation work; it does not change runtime behavior until the
+follow-up instruction changes land.
+
+- When a repository keeps the secure-by-default issue-author approval
+  gate, a self-authorizing issue author must satisfy the documented
+  `maintainer-approval-actors` policy.
+- GitHub organization `MEMBER` association alone is not sufficient,
+  because it does not prove repository-specific write authority or local
+  approval policy.
+- If the author is not self-authorizing, unattended execution should
+  require a fresh explicit approval signal such as a reserved
+  `idd:ready` label or a standalone `IDD ready` comment from a
+  maintainer approval actor.
+- Treat approval freshness separately from author association. A stale
+  approval comment that predates the latest issue edit or generated-plan
+  update should not be reused silently.
+
+CODEOWNERS mismatch is not the pre-start gate for this feature.
+CODEOWNERS affect later review and merge policy, not whether an issue is
+safe to claim before any branch or PR exists. Record the issue-author
+approval rule in repository policy docs instead of inferring it from
+CODEOWNERS coverage.
+
 ## Approval Labels vs Trusted Marker Actors
 
 Keep approval labels and operational marker trust as separate controls:

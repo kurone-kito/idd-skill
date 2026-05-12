@@ -147,11 +147,10 @@ before starting Step 1A.
 ## Step 1A — Auto-derive candidate values
 
 Before asking the operator to enter values, inspect the target
-repository and propose candidate values for all seven placeholders:
+repository and propose candidate values for all six placeholders:
 `{{REPO_NAME}}`, `{{PROJECT_MARKER_PREFIX}}`,
-`{{TRUSTED_MARKER_ACTORS}}`, `{{FIX_VALIDATE_COMMANDS}}`,
-`{{PRE_PUSH_VALIDATE_COMMANDS}}`, `{{POST_FIX_VALIDATE_COMMANDS}}`,
-and `{{INSTALL_DEPS_COMMAND}}`.
+`{{FIX_VALIDATE_COMMANDS}}`, `{{PRE_PUSH_VALIDATE_COMMANDS}}`,
+`{{POST_FIX_VALIDATE_COMMANDS}}`, and `{{INSTALL_DEPS_COMMAND}}`.
 
 Use the detailed derivation rules in
 [Onboarding Reference — Placeholder Values](docs/onboarding/placeholders.md),
@@ -164,7 +163,6 @@ including the tooling-boundary fallback order and marker-prefix notes.
 >
 > - Repository name: `{proposed-repo-name}`
 > - Marker prefix: `{proposed-prefix}`
-> - Trusted marker actors: `{proposed-trusted-marker-actors}`
 > - Install command: `{proposed-install}`
 > - Fix-validate: `{proposed-fix-validate}`
 > - Pre-push-validate: `{proposed-pre-push}`
@@ -188,13 +186,13 @@ require explicit operator confirmation:
    non-default profile)
 3. review-thread resolution policy (`fast-agent-resolve` by default, or
    a stricter profile)
-4. critique-loop profile (distributed defaults, or a documented
-   repository override)
-5. credential scope for worker and merge-capable sessions
-6. claim-timing defaults (`claim-stale-age` and
+4. credential scope for worker and merge-capable sessions
+5. claim-timing defaults (`claim-stale-age` and
    `claim-heartbeat-interval`)
-7. issue-authoring companion status (`installed` or `not installed`)
-8. helper runtime profile (`instructions-only` by default, or an
+6. issue-author approval gate posture and opt-out state
+7. `maintainer-approval-actors` policy
+8. issue-authoring companion status (`installed` or `not installed`)
+9. helper runtime profile (`instructions-only` by default, or an
    explicitly requested helper profile)
 
 Use
@@ -206,12 +204,11 @@ policy-recording template.
 
 ## Step 1C — Collect placeholder values
 
-Use the operator-confirmed values from Step 1A for these seven
+Use the operator-confirmed values from Step 1A for these six
 placeholders:
 
 - `{{REPO_NAME}}`
 - `{{PROJECT_MARKER_PREFIX}}`
-- `{{TRUSTED_MARKER_ACTORS}}`
 - `{{FIX_VALIDATE_COMMANDS}}`
 - `{{PRE_PUSH_VALIDATE_COMMANDS}}`
 - `{{POST_FIX_VALIDATE_COMMANDS}}`
@@ -230,9 +227,6 @@ notes, and `blocked-by` guidance, see
 
 You need the following core execution and profile artifact files in the
 target repository. Use whichever method applies to your situation.
-For `idd-skill` maintainers working on this generated file list and the
-remote-fetch examples, see
-[Template distribution maintainer reference](docs/onboarding/template-distribution.md).
 
 The issue-authoring skill is available as an optional companion artifact
 from `skills/issue-authoring/` in the idd-skill source repository. That path is
@@ -244,8 +238,9 @@ pre-execution issue drafting or roadmap decomposition support.
 
 Before importing files, re-check the policy choices confirmed in Step 1B:
 merge policy, PR review profile, review-thread resolution policy,
-critique-loop profile, credential scope, claim-timing defaults,
-issue-authoring companion status, and helper runtime profile.
+credential scope, claim-timing defaults, issue-author approval gate
+posture, `maintainer-approval-actors` policy, issue-authoring
+companion status, and helper runtime profile.
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)
@@ -285,10 +280,8 @@ docs/concepts.md
 docs/customization.md
 docs/policy-constants.md
 docs/reference.md
-docs/onboarding/agent-entry-and-verification.md
 docs/onboarding/placeholders.md
 docs/onboarding/policy-decisions.md
-docs/onboarding/template-distribution.md
 profiles/README.md
 profiles/human-required/README.md
 profiles/no-advisory/README.md
@@ -359,10 +352,8 @@ for FILE in \
   "docs/customization.md" \
   "docs/policy-constants.md" \
   "docs/reference.md" \
-  "docs/onboarding/agent-entry-and-verification.md" \
   "docs/onboarding/placeholders.md" \
   "docs/onboarding/policy-decisions.md" \
-  "docs/onboarding/template-distribution.md" \
   "profiles/README.md" \
   "profiles/human-required/README.md" \
   "profiles/no-advisory/README.md" \
@@ -441,10 +432,8 @@ for FILE in \
   "docs/customization.md" \
   "docs/policy-constants.md" \
   "docs/reference.md" \
-  "docs/onboarding/agent-entry-and-verification.md" \
   "docs/onboarding/placeholders.md" \
   "docs/onboarding/policy-decisions.md" \
-  "docs/onboarding/template-distribution.md" \
   "profiles/README.md" \
   "profiles/human-required/README.md" \
   "profiles/no-advisory/README.md" \
@@ -515,18 +504,15 @@ machine-readable policy-file notes, and helper-runtime recording rules in
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md).
 
 Make the policy section discoverable and point to it from any entry files
-(`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`)
-that mention IDD workflow.
-
----
+(`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`,
+`.github/copilot-instructions.md`) that mention IDD workflow.
 
 ## Step 4 — Replace placeholders
 
 In the copied files, perform a global replacement for:
 `{{REPO_NAME}}`, `{{PROJECT_MARKER_PREFIX}}`,
-`{{TRUSTED_MARKER_ACTORS}}`, `{{FIX_VALIDATE_COMMANDS}}`,
-`{{PRE_PUSH_VALIDATE_COMMANDS}}`, `{{POST_FIX_VALIDATE_COMMANDS}}`,
-and `{{INSTALL_DEPS_COMMAND}}`.
+`{{FIX_VALIDATE_COMMANDS}}`, `{{PRE_PUSH_VALIDATE_COMMANDS}}`,
+`{{POST_FIX_VALIDATE_COMMANDS}}`, and `{{INSTALL_DEPS_COMMAND}}`.
 
 Use
 [Onboarding Reference — Placeholder Values](docs/onboarding/placeholders.md)
@@ -550,12 +536,10 @@ manually-routed non-Copilot agent named in `docs/idd-workflow.md`:
 - Only skip creating a missing root agent entry file when the operator
   explicitly opts out of adding new files.
 
-Use
-[Onboarding Reference — Agent Entry and Verification](docs/onboarding/agent-entry-and-verification.md)
-for the per-file examples, create-from-scratch stubs, and expanded
-verification guidance for this step.
+### CLAUDE.md
 
-The minimal IDD workflow section should tell agents to:
+If `CLAUDE.md` already exists, add the following section (adapt wording
+to fit the existing document style):
 
 ```markdown
 ## IDD Workflow
@@ -569,57 +553,170 @@ Before starting IDD work, open
 phase file manually when the current step changes.
 ```
 
-- point to `docs/idd-workflow.md` as the cross-agent entry path
-- open `.github/instructions/idd-overview.instructions.md` before
-  starting IDD work
-- manually open the routed phase file when the current step changes
+If `CLAUDE.md` does not exist, create a minimal file such as:
 
-Apply this section to `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md`,
-adapting the surrounding wording to each tool while preserving the same
-workflow references and the same opt-out rule.
+```markdown
+# Guidelines for AI Agents
 
-If `.github/copilot-instructions.md` already exists, add a parallel IDD
-workflow section there as well. Keep the
-`excludeAgent: "code-review"` behavior in
-`.github/instructions/idd-overview.instructions.md`; repository-wide
-Copilot guidance may still apply to reviews.
+## Immediate rules
+
+- Match the conversational language to the user's language.
+- Write comments and documentation in English unless there is a clear
+  project-specific reason otherwise.
+- If uncertainty, hidden risk, or missing context blocks a safe change,
+  stop and ask a concise question before proceeding.
+
+## IDD Workflow
+
+This project uses Issue-Driven Development (IDD) with parallel AI
+agents. Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
+cross-agent entry path and phase routing.
+
+Before starting IDD work, open
+`.github/instructions/idd-overview.instructions.md`. Open the routed
+phase file manually when the current step changes.
+```
+
+### .github/copilot-instructions.md (if present)
+
+Add a parallel section so GitHub Copilot execution surfaces also receive
+the IDD context. The content can mirror the CLAUDE.md addition above.
+The template keeps the heavier `idd-overview.instructions.md` out of
+Copilot code review with `excludeAgent: "code-review"`; repository-wide
+`.github/copilot-instructions.md` guidance may still apply to reviews.
+
+### AGENTS.md (for Codex CLI)
+
+If `AGENTS.md` already exists, add a short IDD workflow section that
+points to `docs/idd-workflow.md` and tells Codex CLI agents to manually
+open `.github/instructions/idd-overview.instructions.md` and the
+relevant phase file before starting IDD work.
+
+If `AGENTS.md` does not exist, create a minimal file such as:
+
+```markdown
+# Guidelines for AI Agents
+
+## Immediate rules
+
+- Match the conversational language to the user's language.
+- Write comments and documentation in English unless there is a clear
+  project-specific reason otherwise.
+- If uncertainty, hidden risk, or missing context blocks a safe change,
+  stop and ask a concise question before proceeding.
+
+## IDD Workflow
+
+This project uses Issue-Driven Development (IDD) with parallel AI
+agents. Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
+cross-agent entry path and phase routing.
+
+Before starting IDD work, open
+`.github/instructions/idd-overview.instructions.md`. Open the routed
+phase file manually when the current step changes.
+```
+
+### GEMINI.md
+
+If `GEMINI.md` already exists, apply the same IDD guidance as
+`AGENTS.md`, adapted to Gemini CLI's wording and still pointing to
+`docs/idd-workflow.md`.
+
+If `GEMINI.md` does not exist, create a minimal file such as:
+
+```markdown
+# Guidelines for AI Agents
+
+## Immediate rules
+
+- Match the conversational language to the user's language.
+- Write comments and documentation in English unless there is a clear
+  project-specific reason otherwise.
+- If uncertainty, hidden risk, or missing context blocks a safe change,
+  stop and ask a concise question before proceeding.
+
+## IDD Workflow
+
+This project uses Issue-Driven Development (IDD) with parallel AI
+agents. Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
+cross-agent entry path and phase routing.
+
+Before starting IDD work, open
+`.github/instructions/idd-overview.instructions.md`. Open the routed
+phase file manually when the current step changes.
+```
 
 ---
 
 ## Step 6 — Verification checklist
 
-Use
-[Onboarding Reference — Agent Entry and Verification](docs/onboarding/agent-entry-and-verification.md)
-for the expanded verification details and evidence expectations.
-
 After completing the steps above, confirm each item:
 
-- [ ] Every core execution file, supporting doc, and profile artifact
-      listed in Step 2 is present in the imported repository.
-- [ ] The selected PR review profile is recorded, and any non-default
-      profile artifact and phase-file edits are complete.
-- [ ] The selected review-thread resolution policy and critique-loop
-      profile are recorded, and any non-default phase-file
-      customizations are complete.
-- [ ] The selected merge policy, credential scope, claim timing values,
-      and helper runtime profile are explicitly recorded.
-- [ ] If the operator opted into issue authoring, the companion skill
-      files are present.
-- [ ] No `{{...}}` placeholders remain, the `Project commands` table is
-      correct, and any `orphan-first` scope choice has a valid policy
-      value.
-- [ ] `.github/instructions/idd-overview.instructions.md` keeps
-      `applyTo: "**"` and `excludeAgent: "code-review"` in its
-      frontmatter.
-- [ ] `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md` exist and reference
-      `docs/idd-workflow.md`, unless the operator explicitly opted out
-      of creating them.
+- [ ] Every `idd-*.instructions.md` file listed in the generated core
+      file list is present in `.github/instructions/`.
+- [ ] `docs/getting-started.md`, `docs/concepts.md`,
+      `docs/customization.md`, `docs/reference.md`,
+      `docs/idd-workflow.md`,
+      `docs/idd-review-policy-profiles.md`,
+      `docs/idd-helper-scripts.md`,
+      `docs/idd-comment-minimization.md`, and `docs/permissions.md`
+      are present.
+- [ ] `profiles/README.md` and the non-default profile artifacts under
+      `profiles/` are present.
+- [ ] The operator's selected PR review policy profile is recorded, and
+      the matching edit-surface checklist in
+      `docs/idd-review-policy-profiles.md` is complete.
+- [ ] If the selected PR review policy profile is non-default, the
+      matching `profiles/<profile>/README.md` artifact was applied and
+      its verification evidence is recorded.
+- [ ] The operator's selected review-thread resolution policy is
+      recorded, and any non-default profile has matching phase-file
+      customizations.
+- [ ] The operator's selected critique-loop policy is recorded, and any
+      non-default profile has matching phase-file customizations.
+- [ ] The operator's selected merge policy is recorded in repository
+      documentation, the F3 handoff behavior matches that policy, and
+      worker credentials match that boundary.
+- [ ] Ownership timing policy values `claim-stale-age` and
+      `claim-heartbeat-interval` are explicitly recorded for the target
+      repository.
+- [ ] The selected helper runtime profile is recorded, including whether
+      the repository stays on `instructions-only` or opted into
+      `package-manager`, `vendored-node`, or `ephemeral-npx`.
+- [ ] If the operator opted into issue authoring,
+      `skills/issue-authoring/SKILL.md`,
+      `skills/issue-authoring/agents/openai.yaml`, and the
+      `skills/issue-authoring/references/` files are present.
+- [ ] No `{{...}}` placeholders remain in any copied file.
+- [ ] `idd-overview.instructions.md` has `applyTo: "**"` and
+      `excludeAgent: "code-review"` in its frontmatter.
+- [ ] `CLAUDE.md` exists and references `docs/idd-workflow.md`, unless
+      the operator explicitly opted out of creating it.
+- [ ] `AGENTS.md` exists and references `docs/idd-workflow.md`, unless
+      the operator explicitly opted out of creating it.
+- [ ] `GEMINI.md` exists and references `docs/idd-workflow.md`, unless
+      the operator explicitly opted out of creating it.
 - [ ] If `.github/copilot-instructions.md` existed before onboarding,
       it now includes the IDD workflow reference as well.
+- [ ] The `Project commands` table in `idd-overview.instructions.md`
+      contains the correct commands for this project.
+- [ ] If the project chooses `issue-scope: orphan-first`, the
+      `orphan-first-policy` value is recorded as `none`,
+      `maintainer-approved`, or `public-disabled`. Public repositories
+      use either `maintainer-approved` or `public-disabled`, not `none`.
+- [ ] The issue-author approval gate decision is recorded, including the
+      `maintainer-approval-actors` policy, how that choice maps to
+      `maintainerApprovalActorPolicy` when `.github/idd/config.json` is
+      present, whether `skipIssueAuthorApprovalGate` stays
+      omitted/default `false` or is intentionally set to `true`, and
+      the approval-needed fallback behavior when approval is missing.
 - [ ] The `{{PROJECT_MARKER_PREFIX}}-roadmap-id` and
-      `{{PROJECT_MARKER_PREFIX}}-blocked-by` marker names match the
-      selected prefix, and `.github/idd/config.json` stays aligned when
-      the repository uses it.
+      `{{PROJECT_MARKER_PREFIX}}-blocked-by` marker names in
+      `idd-discover.instructions.md` and `idd-overview.instructions.md`
+      match the prefix chosen for this project.
+- [ ] If `.github/idd/config.json` is used, it matches the recorded
+      `iddVersion`, marker prefix, merge/review/thread policies,
+      claim timing values, `trustedMarkerActors`, and command values.
 
 Once all items are checked, the IDD workflow is ready for use. Point the
 operator to `docs/idd-workflow.md` as the starting guide.

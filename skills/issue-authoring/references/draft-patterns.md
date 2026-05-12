@@ -22,6 +22,15 @@ maintainer-approved`, include a post-publication approval step after the
 final issue content is stable. If a public repository uses
 `orphan-first-policy: public-disabled`, draft a roadmap package instead.
 
+If the repository keeps the broader secure-by-default issue-author
+approval gate, use the same post-publication approval note whenever the
+issue author will not be self-authorizing under the repository's
+`maintainer-approval-actors` policy. Until a fresh `idd:ready` label or
+standalone `IDD ready` comment from a maintainer approval actor exists,
+later discovery should treat the issue as part of the
+approval-needed fallback bucket instead of the normal ready-to-start
+set.
+
 Draft a roadmap plus sub-issues when the request needs visible
 sequencing, parallel tracks, or multi-session handoff.
 

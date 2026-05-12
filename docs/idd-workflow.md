@@ -103,6 +103,18 @@ enumeration, but it still applies targeted readiness checks, the A4
 viability gate, and the A4.5 suitability gate before the normal A5 claim
 safety checks.
 
+## Issue-author approval contract (planned)
+
+Repositories may also keep a secure-by-default issue-author approval
+gate ahead of Claim. This section records the intended contract before
+the discover and claim instruction updates land. When implemented,
+explicit-target runs will stop before claim when the selected issue
+lacks the required approval, and discovery will keep underprivileged
+unapproved issues in an approval-needed fallback bucket instead of
+treating them as ready to start. Approval actors are a repository-local
+policy choice and remain distinct from trusted operational marker
+actors; CODEOWNERS mismatch does not replace this pre-start gate.
+
 ## Suitability policy handoff
 
 A4.5 outcomes should map to explicit repository policy, not ad hoc
