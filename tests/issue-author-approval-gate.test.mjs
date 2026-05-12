@@ -21,7 +21,11 @@ test("discover instructions define approval-needed fallback routing", () => {
   assert.match(live, /maintainerApprovalActorPolicy/);
   assert.match(live, /owners-and-maintainers-only/);
   assert.match(live, /all-write-permission-actors/);
+  assert.match(live, /visible approval comment/i);
+  assert.match(live, /IDD ready/);
+  assert.match(live, /bare organization `MEMBER` association/i);
   assert.match(live, /stop before A5/i);
+  assert.match(live, /do not auto-claim from the fallback[\s\S]*bucket/i);
 });
 
 test("discover approval gate section stays synced with the template mirror", () => {
@@ -51,6 +55,8 @@ test("claim approval pre-check stays synced with the template mirror", () => {
     "**(b) Assignee and project status**",
   );
 
+  assert.match(live, /stop without[\s\S]*claiming/i);
+  assert.match(live, /bare organization `MEMBER` association/i);
   assert.equal(template, live);
 });
 
