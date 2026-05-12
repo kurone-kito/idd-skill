@@ -1,4 +1,5 @@
 {
   "markerPrefix": "example-skill",
+  "trustedMarkerActors": ["trusted-user-a", "trusted-bot-a"],
   "issueScope": "roadmap"
 }

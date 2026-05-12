@@ -30,6 +30,26 @@ short hyphenated marker prefix. The final value must match:
 
 That means 2-32 characters, lowercase, starting with a letter.
 
+### `{{TRUSTED_MARKER_ACTORS}}`
+
+List the GitHub logins allowed to post trusted IDD markers in
+`.github/idd/config.json`. Because the placeholder sits inside a quoted
+JSON array entry, replace the quoted placeholder with a single
+JSON-escaped login string first. Examples:
+
+- one trusted marker actor → `trusted-user-a`
+
+If the target repository needs more than one trusted marker actor, add
+the extra quoted array entries manually after the first replacement, for
+example:
+
+- multiple trusted marker actors → `"trusted-user-a", "trusted-bot-a"`
+
+Derive the candidate list from the people or bots allowed to post
+trusted claim, release, watermark, baseline, and advisory markers for
+the target repository. Keep the value aligned with any helper
+invocations that pass `--trusted-marker-logins`.
+
 ### `{{INSTALL_DEPS_COMMAND}}`
 
 Look for the target repository's dependency tooling and propose the
@@ -90,22 +110,23 @@ For the full fallback order and policy matrix, see
 
 ## Final placeholder meanings
 
-After Step 1A and Step 1C, you should have final values for these six
+After Step 1A and Step 1C, you should have final values for these seven
 placeholders:
 
-| Placeholder                      | Meaning                                                | Example                            |
-| -------------------------------- | ------------------------------------------------------ | ---------------------------------- |
-| `{{REPO_NAME}}`                  | Repository short name used in worktree examples        | `my-app`                           |
-| `{{PROJECT_MARKER_PREFIX}}`      | Hidden issue-body marker prefix                        | `my-app`                           |
-| `{{FIX_VALIDATE_COMMANDS}}`      | Auto-fix plus validate command row                     | `npm run lint:fix && npm run lint` |
-| `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Non-mutating verify command row                        | `npm run lint && npm run test`     |
-| `{{POST_FIX_VALIDATE_COMMANDS}}` | Post-fix validate command row                          | `npm run lint:fix && npm test`     |
-| `{{INSTALL_DEPS_COMMAND}}`       | Dependency install command, or `true` when unnecessary | `npm install`                      |
+| Placeholder                      | Meaning                                                | Example                             |
+| -------------------------------- | ------------------------------------------------------ | ----------------------------------- |
+| `{{REPO_NAME}}`                  | Repository short name used in worktree examples        | `my-app`                            |
+| `{{PROJECT_MARKER_PREFIX}}`      | Hidden issue-body marker prefix                        | `my-app`                            |
+| `{{TRUSTED_MARKER_ACTORS}}`      | JSON-escaped logins allowed to post trusted markers    | `"trusted-user-a", "trusted-bot-a"` |
+| `{{FIX_VALIDATE_COMMANDS}}`      | Auto-fix plus validate command row                     | `npm run lint:fix && npm run lint`  |
+| `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Non-mutating verify command row                        | `npm run lint && npm run test`      |
+| `{{POST_FIX_VALIDATE_COMMANDS}}` | Post-fix validate command row                          | `npm run lint:fix && npm test`      |
+| `{{INSTALL_DEPS_COMMAND}}`       | Dependency install command, or `true` when unnecessary | `npm install`                       |
 
 ### No-op substitution
 
-Any command row that does not apply to the target project may be set to
-`true`. For example:
+Only the command placeholders may be set to `true` when a step does not
+apply to the target project. For example:
 
 - no dependency install step →
   `{{INSTALL_DEPS_COMMAND}} = true`
@@ -143,5 +164,5 @@ task list as `- [ ] #NNN` entries.
 ## Replacement pass
 
 After copying the template files into the target repository, replace the
-six placeholders above globally. Then verify that no `{{...}}` strings
+seven placeholders above globally. Then verify that no `{{...}}` strings
 remain in the copied files.

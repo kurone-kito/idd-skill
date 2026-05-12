@@ -1,4 +1,5 @@
 {
   "markerPrefix": "{{PROJECT_MARKER_PREFIX}}",
+  "trustedMarkerActors": ["{{TRUSTED_MARKER_ACTORS}}"],
   "issueScope": "roadmap"
 }

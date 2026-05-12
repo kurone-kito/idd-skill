@@ -9,7 +9,7 @@
     "staleAge": "PT24H",
     "heartbeatInterval": "PT12H"
   },
-  "trustedMarkerActors": ["<trusted-login>"],
+  "trustedMarkerActors": ["{{TRUSTED_MARKER_ACTORS}}"],
   "commands": {
     "install-deps": "{{INSTALL_DEPS_COMMAND}}",
     "fix-validate": "{{FIX_VALIDATE_COMMANDS}}",
