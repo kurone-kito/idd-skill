@@ -185,6 +185,7 @@ test("legacy claim released by matching legacy unclaim returns unclaimed", () =>
 
   assert.equal(result.state, "unclaimed");
   assert.equal(result.reason, "legacy-released");
+  assert.equal(result.active_claim, null);
 });
 
 test("legacy non-stale claim is non_inheritable", () => {
@@ -299,4 +300,5 @@ test("legacy matching release remains valid after unrelated later unclaim", () =
 
   assert.equal(result.state, "unclaimed");
   assert.equal(result.reason, "legacy-released");
+  assert.equal(result.active_claim, null);
 });

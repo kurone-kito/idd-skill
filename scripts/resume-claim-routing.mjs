@@ -86,7 +86,9 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     action,
     reason,
     claim_id_checked: claimIdChecked || null,
-    active_claim: state.activeClaim
+    active_claim: routeState === "unclaimed"
+      ? null
+      : state.activeClaim
       ? {
         agent_id: state.activeClaim.agentId,
         claim_id: state.activeClaim.claimId,
@@ -123,11 +125,15 @@ function runCli() {
   if (!Number.isInteger(args.issue) || args.issue <= 0) {
     throw new Error("--issue is required and must be a positive integer");
   }
+  if (args.token) {
+    process.env.GH_TOKEN = args.token;
+    process.env.GITHUB_TOKEN = args.token;
+  }
 
   const owner = args.owner || ghText(["repo", "view", "--json", "owner", "--jq", ".owner.login"]);
   const repo = args.repo || ghText(["repo", "view", "--json", "name", "--jq", ".name"]);
   const repository = `${owner}/${repo}`;
-  const policy = loadPolicy(args.policy);
+  const policy = loadPolicy(args.policy, { strict: Boolean(args.policy) });
   const staleAgeMs = args.staleAgeMs > 0 ? args.staleAgeMs : policy.staleAgeMs;
   const trustedLogins = resolveTrustedLogins({
     fromArgs: args.trustedMarkerLogins,
@@ -373,6 +379,7 @@ function parseArgs(argv) {
     issue: null,
     owner: "",
     repo: "",
+    token: "",
     claimId: "",
     now: "",
     policy: "",
@@ -401,6 +408,11 @@ function parseArgs(argv) {
     }
     if (token === "--repo") {
       parsed.repo = requireValue();
+      index += 1;
+      continue;
+    }
+    if (token === "--token") {
+      parsed.token = requireValue();
       index += 1;
       continue;
     }
@@ -440,7 +452,7 @@ function parseArgs(argv) {
 
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--claim-id <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"]
+  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--token <token>] [--claim-id <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"]
 
 Output schema:
 {
@@ -468,7 +480,7 @@ function fetchIssueComments(repository, issueNumber) {
   return comments;
 }
 
-function loadPolicy(policyPath) {
+function loadPolicy(policyPath, { strict = false } = {}) {
   const source = policyPath ? resolve(process.cwd(), policyPath) : resolve(process.cwd(), ".github/idd/config.json");
   try {
     const config = JSON.parse(readFileSync(source, "utf8"));
@@ -479,7 +491,10 @@ function loadPolicy(policyPath) {
         ? config.trustedMarkerActors.map((value) => String(value ?? "").trim()).filter(Boolean)
         : [],
     };
-  } catch {
+  } catch (error) {
+    if (strict) {
+      throw new Error(`failed to load policy from ${source}: ${String(error?.message ?? error)}`);
+    }
     return {
       source,
       staleAgeMs: DEFAULT_STALE_AGE_MS,
