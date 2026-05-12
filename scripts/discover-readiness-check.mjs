@@ -2,6 +2,9 @@
 
 import { execFileSync } from "node:child_process";
 
+const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({ __iddLookupStatus: "inaccessible" });
+const INACCESSIBLE_HTTP_STATUSES = new Set([403, 410, 451]);
+
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
   if (args.issueNumbers.length === 0) {
@@ -45,17 +48,18 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
 
   for (const issueNumber of normalizeIssueNumbers(issueNumbers)) {
     const issue = await getIssue(issueNumber, issueCache, loadIssue);
-    if (!issue) {
+    if (!issue || isInaccessibleIssue(issue)) {
+      const issueReason = isInaccessibleIssue(issue) ? "issue_inaccessible" : "issue_not_found";
       unresolvable.push({
         issueNumber,
         kind: "issue",
         reference: `#${issueNumber}`,
-        reason: "issue_not_found",
+        reason: issueReason,
       });
       filteredOut.push({
         number: issueNumber,
         title: "",
-        reasons: ["issue_not_found"],
+        reasons: [issueReason],
       });
       continue;
     }
@@ -79,13 +83,16 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
 
     for (const dependencyNumber of extractDependencyIssueNumbers(issue.body)) {
       const dependencyIssue = await getIssue(dependencyNumber, issueCache, loadIssue);
-      if (!dependencyIssue) {
+      if (!dependencyIssue || isInaccessibleIssue(dependencyIssue)) {
+        const dependencyReason = isInaccessibleIssue(dependencyIssue)
+          ? "issue_inaccessible"
+          : "issue_not_found";
         reasons.add("unresolvable_dependency_issue");
         unresolvable.push({
           issueNumber: issue.number,
           kind: "dependency",
           reference: `#${dependencyNumber}`,
-          reason: "issue_not_found",
+          reason: dependencyReason,
         });
         continue;
       }
@@ -96,13 +103,14 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
 
     for (const blockedNumber of extractBlockedByIssueNumbers(issue.body)) {
       const blockedIssue = await getIssue(blockedNumber, issueCache, loadIssue);
-      if (!blockedIssue) {
+      if (!blockedIssue || isInaccessibleIssue(blockedIssue)) {
+        const blockedReason = isInaccessibleIssue(blockedIssue) ? "issue_inaccessible" : "issue_not_found";
         reasons.add("unresolvable_blocked_by_issue");
         unresolvable.push({
           issueNumber: issue.number,
           kind: "blocked_by_issue",
           reference: `#${blockedNumber}`,
-          reason: "issue_not_found",
+          reason: blockedReason,
         });
         continue;
       }
@@ -300,7 +308,9 @@ async function getIssue(issueNumber, cache, loadIssue) {
     return cache.get(issueNumber);
   }
   const rawIssue = await loadIssue(issueNumber);
-  const issue = rawIssue ? normalizeIssue(rawIssue) : null;
+  const issue = isInaccessibleIssue(rawIssue)
+    ? INACCESSIBLE_ISSUE_SENTINEL
+    : (rawIssue ? normalizeIssue(rawIssue) : null);
   cache.set(issueNumber, issue);
   return issue;
 }
@@ -354,11 +364,18 @@ function buildIssueLoader(owner, repo) {
       "--jq",
       ".",
     ];
-    const result = runGh(args, { allowStatuses: [404] }).trim();
-    if (!result || result === "null") {
-      return null;
+    try {
+      const result = runGh(args, { allowStatuses: [404] }).trim();
+      if (!result || result === "null") {
+        return null;
+      }
+      return JSON.parse(result);
+    } catch (error) {
+      if (isInaccessibleIssueLookupError(error)) {
+        return INACCESSIBLE_ISSUE_SENTINEL;
+      }
+      throw error;
     }
-    return JSON.parse(result);
   };
 }
 
@@ -394,8 +411,27 @@ function runGh(args, options = {}) {
     }
     const stderr = String(error.stderr ?? "").trim();
     const prefix = `gh ${args.join(" ")}`;
-    throw new Error(stderr ? `${prefix} failed: ${stderr}` : `${prefix} failed`);
+    const wrapped = new Error(stderr ? `${prefix} failed: ${stderr}` : `${prefix} failed`);
+    wrapped.status = status;
+    wrapped.stderr = stderr;
+    throw wrapped;
   }
+}
+
+function isInaccessibleIssue(value) {
+  return value?.__iddLookupStatus === "inaccessible";
+}
+
+function isInaccessibleIssueLookupError(error) {
+  if (!error) {
+    return false;
+  }
+  const status = typeof error.status === "number" ? error.status : null;
+  if (status !== null && INACCESSIBLE_HTTP_STATUSES.has(status)) {
+    return true;
+  }
+  const stderr = String(error.stderr ?? error.message ?? "");
+  return /resource not accessible|forbidden|requires authentication|visibility/i.test(stderr);
 }
 
 function isMainModule(metaUrl) {
