@@ -1,8 +1,8 @@
 # IDD — Pre-Merge Conditions Phase (F1–F2)
 
 Read this file after ReviewItems_snapshot is empty (E3 or E8), or when
-returning to merge gate checks after a fix cycle. It covers final conflict
-resolution
+returning to merge gate checks after a fix cycle. It covers final
+conflict resolution
 (F1) and the full pre-merge condition checklist (F2).
 
 This phase includes a repository-specific GitHub Copilot advisory review

@@ -62,8 +62,8 @@ CI pass exists yet for this HEAD.
 start of Step 1, compute `{max-activity-updatedAt}` as the highest
 `updatedAt` server timestamp across the **entire snapshot** (not just
 the items that will appear in ReviewItems_snapshot). Write `none` if
-the snapshot is empty. Compute `{total-item-count}` as the total number
-of items in the
+the snapshot is
+empty. Compute `{total-item-count}` as the total number of items in the
 snapshot (0 if empty). Persist all six values immediately by posting a
 PR comment with this format:
 
