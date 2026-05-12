@@ -5,6 +5,10 @@ rate-limited session and needs a dedicated, safety-first decision path.
 This path relies only on externally observable state. It never depends
 on the prior session posting a graceful shutdown.
 
+This file applies only to unattended stale-takeover evidence for a
+non-owned claim. Human-gated forced handoff is a separate recovery path
+and is routed from `idd-resume.instructions.md` before this file runs.
+
 Read `idd-overview.instructions.md` and
 `idd-resume.instructions.md` first.
 
@@ -34,6 +38,11 @@ Use GitHub server timestamps only.
 - If no active claim exists, or the active claim already uses your
   current `{claim-id}`, this is not a stalled-session takeover case.
   Return to `idd-resume.instructions.md`.
+- If trusted forced-handoff evidence exists and matches the active claim
+  or inheritable released branch / PR state, this is not a
+  stalled-session takeover case. Return to
+  `idd-resume.instructions.md` Step 1 and use the forced-handoff route
+  instead. Do not apply the quiet-window or stale-threshold gates here.
 - If the active claim belongs to another `{claim-id}`, continue.
 
 ### S2 — Quiet-window check (stall evidence, not ownership transfer)

@@ -1722,6 +1722,13 @@ export function classifyResumeRoutingCase(input, options = {}) {
   const pendingCiStates = new Set(options.pendingCiStates ?? ["queued", "in_progress", "waiting", "pending"]);
   const terminalSafeCiStates = new Set(options.terminalSafeCiStates ?? ["success", "none"]);
 
+  if (input.displacedByForcedHandoff) {
+    return {
+      route: "claim-lost-stop",
+      reason: "session was displaced by trusted forced-handoff evidence",
+    };
+  }
+
   if (!input.hasActiveClaim) {
     return {
       route: "unclaimed-reclaim-required",
@@ -1739,6 +1746,13 @@ export function classifyResumeRoutingCase(input, options = {}) {
     return {
       route: "ordinary-continuation",
       reason: "owned claim with clean local state",
+    };
+  }
+
+  if (input.hasUsableForcedHandoffEvidence) {
+    return {
+      route: "forced-handoff-recovery",
+      reason: "trusted forced-handoff evidence takes precedence over stalled-session takeover",
     };
   }
 

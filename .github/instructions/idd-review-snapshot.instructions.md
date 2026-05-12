@@ -107,6 +107,10 @@ watermark comments from any other claim or from untrusted authors.
 Legacy watermarks without `{claim-id}` are not resumable across a
 restart or takeover; if no trusted same-claim watermark exists, rerun E1
 from scratch.
+After forced handoff, all prior-claim watermarks are foreign restore
+markers. Do not delete, hide, minimize, or otherwise unmark them on an
+open PR to "clear" state; ignore them and rerun E1 under the successor
+claim instead.
 
 Do not create or edit the PR live status digest after posting this
 watermark unless the next route is to E1, to an F3 blocked reroute that
@@ -156,7 +160,8 @@ GitHub author is a trusted marker actor). Reset to full-branch diff
 after a rebase, multi-fix batch, when the baseline SHA is not an
 ancestor of the current HEAD, when no trusted same-claim baseline
 exists, or whenever the active `{claim-id}` changed due to restart or
-takeover. List A is session-local; do not inherit a previous claim's
+takeover, including forced handoff. List A is session-local; do not
+inherit a previous claim's
 critique findings unless they were persisted as reviewer-visible
 comments.
 

@@ -66,6 +66,9 @@ comment. An inheritable claim comment is either:
 - the latest trusted `claimed-by` comment that was later released by a
   matching trusted `unclaimed-by` comment (the last voluntarily released
   branch), or
+- trusted forced-handoff evidence already verified by Resume Step 1,
+  but only when its branch and linked PR fields match the live GitHub
+  state, or
 - the latest trusted legacy `claimed-by` comment when performing a
   legacy migration (see the migration-only decision input above)
 
@@ -89,7 +92,8 @@ name:
 6. If the result is empty, use `task`.
 
 No remote branch with that name may exist, unless it matches the
-`branch` field in an inheritable claim comment as defined in (c) above.
+`branch` field in an inheritable claim comment or trusted
+forced-handoff evidence as defined in (c) above.
 
 Before posting a claim, also perform a **scoped issue-wide branch pattern
 check** to detect concurrent sessions working on the same issue with
@@ -117,9 +121,9 @@ catches parallel-session concurrency before a new claim comment is posted.
    - **If no local worktree or remote branch matches `issue/<number>-*`**:
      Proceed to claim posting (the safe, single-session path).
 
-   - **If a match is found and corresponds to an inheritable claim** (i.e.,
-     its `branch` field matches one of the branches in an inheritable claim
-     comment as defined in (c) above):
+   - **If a match is found and corresponds to an inheritable claim or
+     trusted forced-handoff evidence** (i.e., its `branch` field matches
+     one of the branches allowed in (c) above):
      Proceed to claim posting. The branch is expected.
 
    - **If a match is found, does NOT correspond to an inheritable claim,
@@ -149,10 +153,12 @@ claim.
 
 Determine `{branch-name}`:
 
-- **Re-claim / takeover**: use the exact branch name from the
-  inheritable claim comment (the `branch` field of the active stale
-  claim, the last-released trusted `claimed-by`, or the trusted legacy
-  claim being migrated). Do not compute a new name.
+- **Re-claim / takeover / forced-handoff recovery**: use the exact
+  branch name from the inheritable claim comment or trusted
+  forced-handoff evidence (the `branch` field of the active stale claim, the
+  last-released trusted `claimed-by`, the forced-handoff evidence
+  approved in Resume Step 1, or the trusted legacy claim being
+  migrated). Do not compute a new name.
 - **Fresh claim**: compute a new name using the IDD naming convention:
   `issue/<number>-<slug>` where `<slug>` follows the deterministic title
   normalization algorithm from pre-check (d).
@@ -161,6 +167,11 @@ Generate a fresh `{claim-id}`. Determine `{prior-claim-id}`:
 
 - **Takeover of an active claim** (stale claim recovery) → the current
   active claim's `{claim-id}`
+- **Forced-handoff recovery** → `none` once the human-gated handoff has
+  already released or otherwise cleared the displaced claim in GitHub
+  state; if the displaced non-stale claim is still active, stop and wait
+  for the handoff mechanism instead of inventing a local superseding
+  claim
 - **Migration from a legacy claim** → `none`
 - **Fresh claim** or claim after a released / unclaimed state → `none`
 
@@ -213,6 +224,11 @@ unless the operator has explicitly switched to normal discovery.
 Once verified, record this `{claim-id}` as your current claim token for
 the rest of the workflow.
 
+When the new claim came from forced-handoff recovery, cite the trusted
+forced-handoff evidence in the issue digest or resume report's
+`Authoritative by` field. Do not invent ad hoc `claimed-by` fields and
+do not reuse the displaced `{claim-id}`.
+
 After claim verification, upsert the issue live status digest when there
 is exactly one marked digest or none. Use the verified `claimed-by`
 comment as the authority: set `Phase` to `A5 claimed`, `Claim` to the
@@ -263,6 +279,9 @@ and use heartbeats; do not post a fresh takeover claim. If the session
 cannot prove ownership of the active `{claim-id}`, the active claim is
 treated as owned by another live session until it is released or stale,
 even when `{agent-id}` matches.
+If a successor posts a fresh claim after forced handoff, later
+heartbeats from the displaced old `{claim-id}` are ignored as stale
+events; they do not reclaim ownership or refresh the stale clock.
 
 ## Legacy claim migration
 

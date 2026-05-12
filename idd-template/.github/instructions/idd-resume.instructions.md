@@ -7,15 +7,30 @@ definitions (claim format, stale threshold, abort, hold).
 Resume stale checks use the `claim-stale-age` policy default from
 `docs/policy-constants.md` (distributed default: `24 h`).
 
-## Step 0 — Route stalled-session recovery
+## Step 0 — Route forced handoff and stalled-session recovery
 
-Before Step 1, decide whether this is a stalled-session case:
+Before Step 1, decide whether this run should route through the
+forced-handoff path, the stalled-session path, or neither:
 
 - If the issue is already closed, or the corresponding PR is already
   merged, skip stalled-session routing and continue to Step 1 cleanup
   behavior.
-- If a non-owned active claim exists, run
+- If the repository records `forced-handoff: human-gated`, first check
+  whether trusted forced-handoff evidence exists for this issue or its
+  linked PR under the contract recorded in `docs/customization.md`.
+  Record the approving human, displaced `{claim-id}`, `{branch}`,
+  linked PR (if any), and the evidence comment URL.
+- If trusted forced-handoff evidence exists and matches the current
+  active claim or inheritable released branch / PR state, skip
+  stalled-session routing and continue to Step 1's forced-handoff path.
+  Quiet-window and stale-threshold checks do not apply once this
+  human-gated recovery route is verified.
+- Only when no usable forced-handoff evidence exists and a non-owned
+  active claim remains, run
   `idd-resume-stall.instructions.md` first.
+- Autopilot and unattended agents must never invent, request, or
+  broaden forced handoff on their own. They may only consume already
+  recorded human-gated evidence.
 - Use only externally observable evidence (trusted claim heartbeat
   timestamps, PR head movement, remote branch tip movement, review/
   comment activity, and CI timestamps).
@@ -35,28 +50,37 @@ Before routing, collect all of the following:
    unclaimed. Also record the latest released branch, if any. The
    shared rules ignore marker-shaped comments from untrusted authors;
    record their URLs as suspicious context when they affect routing.
-2. **Open PR and current head** — check for an open PR that
+2. **Forced-handoff evidence** — when the repository records
+   `forced-handoff: human-gated`, collect the trusted human approval
+   note that satisfies the contract in `docs/customization.md`. Record
+   the approving human, old claim ID, branch, linked PR if any, and
+   evidence URL. When an open PR exists, require the issue-plus-PR
+   approval text that names that PR; an issue-only approval is
+   insufficient for PR-scoped recovery. If any field required by the
+   current approval-note format is missing or contradictory, treat the
+   evidence as unusable and do not route forced handoff.
+3. **Open PR and current head** — check for an open PR that
    closes/references this issue. Record the current PR HEAD SHA.
-3. **Issue/PR activity recency** — snapshot issue comments, review
+4. **Issue/PR activity recency** — snapshot issue comments, review
    threads, review bodies, and regular PR comments, then record the
    latest `updatedAt` across that universe. When an open PR exists,
    include PR `createdAt`/`updatedAt` as additional recency signals.
-4. **PR HEAD movement evidence** — define a baseline before comparison:
+5. **PR HEAD movement evidence** — define a baseline before comparison:
    use the latest trusted same-claim `review-watermark`/`review-baseline`
    marker SHA when available; otherwise use the current PR HEAD SHA
-   captured in step 2 as the baseline. Then confirm whether commits were
+   captured in step 3 as the baseline. Then confirm whether commits were
    added after that baseline from PR timeline/activity.
-5. **CI transition state** — record current CI states for the PR HEAD,
+6. **CI transition state** — record current CI states for the PR HEAD,
    the latest completed CI transition `completedAt` (any terminal
    outcome), and the latest successful CI pass `completedAt` (or `none`).
-6. **Local worktrees** — run `git worktree list`.
-7. **Local branch** — check whether the branch named in the claim
+7. **Local worktrees** — run `git worktree list`.
+8. **Local branch** — check whether the branch named in the claim
    comment exists locally.
-8. **Dirty/clean** — run `git status` in the worktree (if it exists).
-9. **Unpushed commits** — run `git log @{u}..HEAD` in the worktree. If
-   no upstream is configured, treat all local commits as unpushed.
-10. **Current local HEAD SHA** — run `git rev-parse HEAD`.
-11. **Live status digest state** — record whether the issue or PR has
+9. **Dirty/clean** — run `git status` in the worktree (if it exists).
+10. **Unpushed commits** — run `git log @{u}..HEAD` in the worktree. If
+    no upstream is configured, treat all local commits as unpushed.
+11. **Current local HEAD SHA** — run `git rev-parse HEAD`.
+12. **Live status digest state** — record whether the issue or PR has
     zero, one, or multiple comments whose first line is
     `<!-- idd-live-status: current -->`. Do not use digest text to route
     resume; it is repairable UI state only.
@@ -65,6 +89,36 @@ Before routing, collect all of the following:
 
 - If the issue is **closed** or the corresponding PR is **merged**:
   clean up any remaining local worktree and branch, then stop.
+
+Before ordinary claim-state branching, check for trusted forced-handoff
+evidence under a repository policy of `forced-handoff: human-gated`:
+
+- If the evidence names a `{claim-id}` that this current session had
+  already verified before this routing step, this is the displaced old
+  session. Recording the old claim ID as evidence does not count as
+  ownership. Stop immediately. Do not push, comment, reply, resolve
+  threads, request reviewers, or merge until a maintainer reassigns
+  ownership.
+- If the active claim already uses a `{claim-id}` that this current
+  session had previously verified, and the forced-handoff evidence cites
+  a different displaced claim ID, ignore that historical evidence and
+  continue with the normal already-owned branch below.
+- If no usable forced-handoff evidence exists, continue with the normal
+  legacy and claim-state flow below.
+- If the evidence cites a `{claim-id}`, branch, or linked PR that does
+  not match the live active claim or inheritable released branch / PR
+  state, stop and report the mismatch. Do not claim, push, or mutate
+  review state.
+- Otherwise, treat the issue as **forced-handoff recovery**. Re-claim
+  only after the human-gated handoff mechanism has already updated the
+  GitHub claim stream to a released or successor-ready state. If the
+  displaced non-stale claim still remains active, stop and wait instead
+  of inventing a local superseding claim. Once GitHub state reflects the
+  handoff outcome, re-claim via `idd-claim.instructions.md` with a fresh
+  `{claim-id}` and the branch named in the forced-handoff evidence, then
+  continue to Step 2 after A5 verification. The successor must cite the
+  forced-handoff evidence in its resume report or digest
+  `Authoritative by`; it must not silently inherit the old `{claim-id}`.
 
 If the issue has no trusted new-format `claimed-by` comments but has legacy
 claim comments from trusted marker actors, treat the latest trusted
@@ -98,7 +152,8 @@ Otherwise, determine claim state from the parsed active claim:
   `{claim-id}` whose `supersedes:` value is the current active claim's
   `{claim-id}`, then continue to Step 2.
 
-When Step 1 performs a re-claim or stale takeover, claim verification
+When Step 1 performs a re-claim, forced-handoff recovery, or stale
+takeover, claim verification
 must follow A5 race-safe verification from
 `idd-claim.instructions.md`: wait 5–10 seconds after posting
 `claimed-by`, re-read and parse the full claim stream chronologically,
@@ -108,7 +163,10 @@ verification if a later trusted competing `claimed-by` with a different
 
 A branch left by a stale or released claim is inheritable. An open PR or
 remote branch may be reused when it matches the branch recorded in the
-stale active claim you are taking over, or in the latest released claim.
+stale active claim you are taking over, in the latest released claim, or
+in trusted forced-handoff evidence whose branch and linked PR fields
+still match the live GitHub state. Forced-handoff recovery never waives
+the normal A5 branch-collision and open-PR safety checks.
 
 If the active or inherited branch field starts with `roadmap-audit/`,
 the claim is an A1.5 roadmap-audit coordination claim, not a work branch.
@@ -133,6 +191,10 @@ reuse prior-claim review-watermark or review-baseline comments. For
 non-owned, non-stale claims, do not edit the digest; stalled-session
 handling records evidence in session logs only unless the claim becomes
 yours.
+During forced handoff on an open PR, do not delete, hide, minimize, or
+otherwise unmark prior-claim operational markers just to clear state;
+they remain audit context while the successor rebuilds fresh markers
+under its own `{claim-id}`.
 
 ## Step 2 — Locate or restore branch and worktree
 
@@ -177,6 +239,14 @@ the routing decision.
 
 Read the PR's current CI and review status:
 
+After a forced handoff on an open PR, rebuild review state from current
+GitHub state. Prior-claim `review-watermark` and `review-baseline`
+comments are not reusable, even when the branch and HEAD are unchanged.
+If the linked PR is open and review state matters, route to E1 before
+any merge-bound F check. Live status digests remain UI-only handoff
+context and do not satisfy review currency, claim ownership, advisory
+wait, or CI gates.
+
 | Condition                                                                          | Action                                                         |
 | ---------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | Required CI checks not yet generated, no reviews yet                               | Wait for generation, then apply D4 logic                       |
@@ -187,3 +257,8 @@ Read the PR's current CI and review status:
 | CI `failure` / `cancelled` / `timed_out`, reviews exist                            | Apply E15 CI failure/cancelled branch                          |
 | CI `success`, unresolved threads / unreplied comments / active `CHANGES_REQUESTED` | Resume from E1                                                 |
 | CI `success`, none of the above                                                    | Resume from F1                                                 |
+
+For forced-handoff recovery on an open PR, treat the final
+`CI success, none of the above` row as `Resume from E1` until the
+successor has posted its own same-claim review watermark and baseline
+for the current `{claim-id}`.
