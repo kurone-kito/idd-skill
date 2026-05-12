@@ -23,6 +23,15 @@ const HELPER_COMMANDS = [
     description: "Run IDD onboarding drift checks against the local repository.",
   },
   {
+    id: "forced-handoff-marker",
+    scriptName: "idd:forced-handoff-marker",
+    binName: "idd-forced-handoff-marker",
+    entryPath: "scripts/forced-handoff-marker.mjs",
+    vendoredCommand: "node scripts/forced-handoff-marker.mjs",
+    description: "Render a maintainer-approved forced-handoff marker body for an active claim.",
+    contractPaths: ["schemas/forced-handoff-marker.schema.json"],
+  },
+  {
     id: "helper-bundle-manifest",
     scriptName: "idd:helper-bundle-manifest",
     binName: "idd-helper-bundle-manifest",

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/forced-handoff-marker.schema.json",
+  "title": "IDD Forced Handoff Parsed Payload",
+  "description": "Normalized camelCase payload returned by parseForcedHandoffComment; raw on-wire marker JSON may use hyphen-case aliases that the parser resolves before schema validation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "oldAgentId",
+    "oldClaimId",
+    "newAgentId",
+    "newClaimId",
+    "branch",
+    "forcedBy",
+    "reason",
+    "timestamp",
+    "contextScope"
+  ],
+  "properties": {
+    "oldAgentId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!.*(?:<!--|-->))\\S+$"
+    },
+    "oldClaimId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!.*(?:<!--|-->))\\S+$"
+    },
+    "newAgentId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!.*(?:<!--|-->))\\S+$"
+    },
+    "newClaimId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!.*(?:<!--|-->))\\S+$"
+    },
+    "branch": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!.*(?:<!--|-->))[^\\s>]+$"
+    },
+    "linkedPr": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?:[1-9]\\d*|https?://[^\\s<>\"]+)$"
+    },
+    "forcedBy": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!.*(?:<!--|-->))\\S+$"
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!.*(?:-->)).+$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+    },
+    "contextScope": {
+      "type": "string",
+      "enum": [
+        "issue-only",
+        "issue-plus-pr"
+      ]
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+    }
+  }
+}

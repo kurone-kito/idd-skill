@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import {
   classifyRegularBotComment,
   hasFreshDisposition,
@@ -8,17 +9,26 @@ import {
   indexThreadsByReview,
   isDispositionComment,
   isKnownReviewBot,
+  normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
+  summarizeClaimValidation,
   unsafeTextReason,
 } from "./protocol-helpers.mjs";
 
-const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)`;
 const TRUSTED_MARKER_PERMISSIONS = new Set(["admin", "maintain", "write"]);
+const FORCED_HANDOFF_AUTHORITY_POLICIES = new Set([
+  "owners-and-maintainers-only",
+  "all-write-permission-actors",
+]);
+const FORCED_HANDOFF_AUTHORITY_POLICY_DEFAULT = "owners-and-maintainers-only";
+const FORCED_HANDOFF_MODES = new Set(["disabled", "human-gated"]);
+const FORCED_HANDOFF_MODE_DEFAULT = "disabled";
 const trustedMarkerAuthorCache = new Map();
+const collaboratorPermissionCache = new Map();
 let cachedConfiguredTrustedMarkerAuthors = null;
 let cachedCurrentViewerLogin = null;
-
-const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
+let cachedForcedHandoffAuthorityPolicy = null;
+let cachedForcedHandoffMode = null;
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -51,6 +61,7 @@ const repository = args.repo ?? detectRepository();
 const [owner, repo] = parseRepository(repository);
 
 const prNumber = parsePositiveInteger(args.pr, "--pr");
+const claimContext = { expectedLinkedPrs: buildExpectedLinkedPrReferences(owner, repo, prNumber) };
 
 if (args.claimIssue) {
   args.claimIssue = String(parsePositiveInteger(args.claimIssue, "--claim-issue"));
@@ -63,7 +74,7 @@ if (args.apply) {
   for (const candidate of report.candidates) {
     if (!args.skipClaimCheck) {
       try {
-        assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId);
+        assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId, claimContext);
       } catch (error) {
         report.failed.push({
           ...candidate,
@@ -79,7 +90,7 @@ if (args.apply) {
       }
       if (!args.skipClaimCheck) {
         try {
-          assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId);
+          assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId, claimContext);
         } catch (error) {
           report.failed.push({
             ...freshCandidate,
@@ -164,6 +175,11 @@ function evaluateOperationalComment(comment, pr, report, owner, repo) {
 
   if (!isTrustedMarkerAuthor(owner, repo, author)) {
     addSkipped(report, subject, "operational marker author is not trusted");
+    return true;
+  }
+
+  if (prefix === "<!-- forced-handoff:") {
+    addSkipped(report, subject, "forced-handoff markers remain audit evidence");
     return true;
   }
 
@@ -666,15 +682,15 @@ async function revalidateCandidate(owner, repo, prNumber, candidate, report) {
   return null;
 }
 
-function assertActiveClaim(owner, repo, issueNumber, agentId, claimId) {
-  const active = readActiveClaim(owner, repo, issueNumber);
+function assertActiveClaim(owner, repo, issueNumber, agentId, claimId, options = {}) {
+  const active = readActiveClaim(owner, repo, issueNumber, options);
   if (!active || active.claimId !== claimId || (agentId && active.agentId !== agentId)) {
     const activeLabel = active ? `${active.agentId} ${active.claimId}` : "none";
     throw new Error(`claim check failed for #${issueNumber}: active claim is ${activeLabel}`);
   }
 }
 
-function readActiveClaim(owner, repo, issueNumber) {
+function readActiveClaim(owner, repo, issueNumber, options = {}) {
   const result = JSON.parse(
     execFileSync(
       "gh",
@@ -691,101 +707,96 @@ function readActiveClaim(owner, repo, issueNumber) {
     ),
   );
 
-  const comments = [...(result.comments ?? [])].sort((left, right) => {
-    return new Date(left.createdAt) - new Date(right.createdAt);
+  const comments = (result.comments ?? []).map((comment) => ({
+    body: comment.body ?? "",
+    createdAt: comment.createdAt ?? "",
+    author: { login: comment.author?.login ?? "" },
+  }));
+
+  const summary = summarizeClaimValidation(comments, {
+    trustedMarkerLogins: resolveTrustedMarkerLogins(owner, repo, comments),
+    forcedHandoffEnabled: readForcedHandoffMode() === "human-gated",
+    expectedLinkedPrs: options.expectedLinkedPrs ?? [],
+    isAuthorizedForcedHandoff: (forcedBy) => {
+      return isAuthorizedForcedHandoffActor(
+        owner,
+        repo,
+        forcedBy,
+        forcedHandoffAuthorityPolicy(),
+      );
+    },
   });
 
-  let active = null;
-  const retiredClaimIds = new Set();
-
-  for (const comment of comments) {
-    const author = comment.author?.login ?? "";
-
-    const claim = parseClaim(comment.body, comment.createdAt, author);
-    if (claim) {
-      if (!isTrustedMarkerAuthor(owner, repo, author)) {
-        continue;
-      }
-      if (retiredClaimIds.has(claim.claimId)) {
-        continue;
-      }
-
-      if (active && claim.agentId === active.agentId && claim.claimId === active.claimId) {
-        active.createdAt = claim.createdAt;
-        continue;
-      }
-
-      if (active && claim.claimId === active.claimId) {
-        continue;
-      }
-
-      if (!active && claim.supersedes === "none") {
-        active = claim;
-        continue;
-      }
-
-      if (
-        active
-        && claim.supersedes === active.claimId
-        && isStaleAt(active.createdAt, claim.createdAt)
-      ) {
-        retiredClaimIds.add(active.claimId);
-        active = claim;
-      }
-      continue;
-    }
-
-    const release = parseRelease(comment.body, author);
-    if (
-      release
-      && isTrustedMarkerAuthor(owner, repo, author)
-      && active
-      && release.agentId === active.agentId
-      && release.claimId === active.claimId
-    ) {
-      retiredClaimIds.add(active.claimId);
-      active = null;
-    }
-  }
-
-  return active;
+  return summary.activeClaimPresent ? summary.activeClaim : null;
 }
 
-function parseClaim(body, createdAt, author) {
-  const match = body.trimEnd().match(
-    new RegExp(
-      `^<!--\\s*claimed-by:\\s+(\\S+)\\s+(\\S+)\\s+supersedes:\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s+branch:\\s+([^\\s>]+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
-      "i",
-    ),
-  );
-  if (!match || !isValidIsoTimestamp(match[4])) {
-    return null;
+function buildExpectedLinkedPrReferences(owner, repo, prNumber) {
+  const normalized = String(prNumber ?? "").trim();
+  if (!normalized) {
+    return [];
   }
-  return {
-    agentId: match[1],
-    claimId: match[2],
-    supersedes: match[3],
-    branch: match[5],
-    createdAt,
-    author,
-  };
+  return [
+    normalized,
+    `#${normalized}`,
+    `https://github.com/${owner}/${repo}/pull/${normalized}`,
+  ];
 }
 
-function parseRelease(body, author) {
-  const match = body.trimEnd().match(
-    new RegExp(
-      `^<!--\\s*unclaimed-by:\\s+(\\S+)\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
-      "i",
-    ),
+function resolveTrustedMarkerLogins(owner, repo, comments) {
+  return normalizeTrustedMarkerLogins(
+    comments
+      .map((comment) => comment.author?.login ?? "")
+      .filter(Boolean)
+      .filter((login) => isTrustedMarkerAuthor(owner, repo, login)),
   );
-  if (!match || !isValidIsoTimestamp(match[3])) {
-    return null;
+}
+
+function forcedHandoffAuthorityPolicy() {
+  if (cachedForcedHandoffAuthorityPolicy !== null) {
+    return cachedForcedHandoffAuthorityPolicy;
   }
-  return {
-    agentId: match[1],
-    claimId: match[2],
-    author,
-  };
+  try {
+    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    const policy = String(config?.forcedHandoffAuthority ?? config?.["forced-handoff-authority"] ?? "").trim();
+    if (FORCED_HANDOFF_AUTHORITY_POLICIES.has(policy)) {
+      cachedForcedHandoffAuthorityPolicy = policy;
+      return cachedForcedHandoffAuthorityPolicy;
+    }
+  } catch {
+    // Default policy remains owners-and-maintainers-only.
+  }
+  cachedForcedHandoffAuthorityPolicy = FORCED_HANDOFF_AUTHORITY_POLICY_DEFAULT;
+  return cachedForcedHandoffAuthorityPolicy;
+}
+
+function readForcedHandoffMode() {
+  if (cachedForcedHandoffMode !== null) {
+    return cachedForcedHandoffMode;
+  }
+  try {
+    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    const mode = String(config?.forcedHandoff ?? config?.["forced-handoff"] ?? "").trim();
+    if (FORCED_HANDOFF_MODES.has(mode)) {
+      cachedForcedHandoffMode = mode;
+      return cachedForcedHandoffMode;
+    }
+  } catch {
+    // Default mode remains disabled.
+  }
+  cachedForcedHandoffMode = FORCED_HANDOFF_MODE_DEFAULT;
+  return cachedForcedHandoffMode;
+}
+
+function isAuthorizedForcedHandoffActor(owner, repo, login, policy = forcedHandoffAuthorityPolicy()) {
+  const normalized = String(login ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const permission = collaboratorPermission(owner, repo, normalized);
+  if (policy === "all-write-permission-actors") {
+    return permission === "admin" || permission === "maintain" || permission === "write";
+  }
+  return permission === "admin" || permission === "maintain";
 }
 
 function isTrustedMarkerAuthor(owner, repo, login) {
@@ -866,14 +877,30 @@ function trustCollaboratorMarkers() {
   return /^(1|true|yes)$/i.test(process.env.IDD_TRUST_COLLABORATOR_MARKERS ?? "");
 }
 
-function isValidIsoTimestamp(value) {
-  const time = Date.parse(value);
-  return Number.isFinite(time) && new Date(time).toISOString().replace(".000Z", "Z") === value;
-}
+function collaboratorPermission(owner, repo, login) {
+  const cacheKey = `${owner}/${repo}:${login}`;
+  if (collaboratorPermissionCache.has(cacheKey)) {
+    return collaboratorPermissionCache.get(cacheKey);
+  }
 
-function isStaleAt(activeCreatedAt, nextCreatedAt) {
-  const staleMs = 24 * 60 * 60 * 1000;
-  return new Date(nextCreatedAt).getTime() - new Date(activeCreatedAt).getTime() >= staleMs;
+  let permission = "";
+  try {
+    permission = execFileSync(
+      "gh",
+      [
+        "api",
+        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
+        "--jq",
+        ".permission",
+      ],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim().toLowerCase();
+  } catch {
+    permission = "";
+  }
+
+  collaboratorPermissionCache.set(cacheKey, permission);
+  return permission;
 }
 
 function ghGraphql(query, variables, options = {}) {

@@ -34,7 +34,22 @@ const OPERATIONAL_MARKERS = [
     label: "<!-- advisory-wait:",
     pattern: /^<!--\s*advisory-wait:\s+\S+\s+[0-9a-f]{40}\s+\S+\s*-->\s*$/,
   },
+  {
+    label: "<!-- forced-handoff:",
+    pattern: /^\s*<!--\s*forced-handoff:\s*\{[\s\S]*\}\s*-->[\s\S]*$/i,
+    startPattern: /^<!--\s*forced-handoff:/i,
+  },
 ];
+
+const IDD_AGENT_DERIVED_MARKERS = new Set([
+  "<!-- claimed-by:",
+  "<!-- unclaimed-by:",
+  "<!-- review-watermark:",
+  "<!-- review-baseline:",
+  "advisory-wait:",
+  "advisory-wait-recovery:",
+  "<!-- advisory-wait:",
+]);
 
 const REVIEW_BOT_LOGINS = new Set([
   "coderabbitai",
@@ -58,6 +73,8 @@ const UNSAFE_TEXT_RULES = [
   },
 ];
 const AMD_MARKER_PATTERN = /^\*\*Awaiting maintainer decision\*\*/i;
+const FORCED_HANDOFF_CONTEXT_SCOPES = new Set(["issue-only", "issue-plus-pr"]);
+const FORCED_HANDOFF_LINKED_PR_PATTERN = /^(?:[1-9]\d*|https?:\/\/[^\s<>"]+)$/;
 
 export function parseClaimComment(body, createdAt) {
   const match = body.trimEnd().match(
@@ -92,6 +109,158 @@ export function parseReleaseComment(body) {
     agentId: match[1],
     claimId: match[2],
   };
+}
+
+export function parseForcedHandoffComment(body, createdAt) {
+  const trimmed = body.trimStart().trimEnd();
+  const markerMatch = trimmed.match(/^<!--\s*forced-handoff:\s*/i);
+  if (!markerMatch) {
+    return null;
+  }
+
+  const markerEnd = trimmed.indexOf("-->");
+  if (markerEnd < 0) {
+    return null;
+  }
+
+  const visibleNote = trimmed.slice(markerEnd + 3);
+  const visibleText = visibleNote
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<!--[\s\S]*$/g, " ")
+    .trim();
+  if (!visibleText) {
+    return null;
+  }
+
+  const payloadText = trimmed.slice(markerMatch[0].length, markerEnd).trim();
+  let payload;
+  try {
+    payload = JSON.parse(payloadText);
+  } catch {
+    return null;
+  }
+
+  return normalizeForcedHandoffPayload(payload, { createdAt });
+}
+
+export function normalizeForcedHandoffPayload(payload, options = {}) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+
+  if (
+    hasConflictingPayloadAliases(payload, "oldAgentId", "old-agent-id")
+    || hasConflictingPayloadAliases(payload, "oldClaimId", "old-claim-id")
+    || hasConflictingPayloadAliases(payload, "newAgentId", "new-agent-id")
+    || hasConflictingPayloadAliases(payload, "newClaimId", "new-claim-id")
+    || hasConflictingPayloadAliases(payload, "forcedBy", "forced-by")
+    || hasConflictingPayloadAliases(payload, "linkedPr", "linked-pr")
+    || hasConflictingPayloadAliases(payload, "contextScope", "context-scope")
+  ) {
+    return null;
+  }
+
+  const oldAgentId = normalizeNonWhitespaceToken(pickPayloadValue(payload, "oldAgentId", "old-agent-id"));
+  const oldClaimId = normalizeNonWhitespaceToken(pickPayloadValue(payload, "oldClaimId", "old-claim-id"));
+  const newAgentId = normalizeNonWhitespaceToken(pickPayloadValue(payload, "newAgentId", "new-agent-id"));
+  const newClaimId = normalizeNonWhitespaceToken(pickPayloadValue(payload, "newClaimId", "new-claim-id"));
+  const branch = normalizeBranchToken(pickPayloadValue(payload, "branch"));
+  const forcedBy = normalizeNonWhitespaceToken(pickPayloadValue(payload, "forcedBy", "forced-by"));
+  const reason = normalizeForcedHandoffReason(pickPayloadValue(payload, "reason"));
+  const timestamp = normalizeSecondPrecisionIsoTimestamp(pickPayloadValue(payload, "timestamp"));
+  const contextScope = normalizeContextScope(pickPayloadValue(payload, "contextScope", "context-scope"));
+  const linkedPr = normalizeLinkedPr(pickPayloadValue(payload, "linkedPr", "linked-pr"));
+  const createdAt = normalizeSecondPrecisionIsoTimestamp(options.createdAt);
+
+  if (
+    !oldAgentId
+    || !oldClaimId
+    || !newAgentId
+    || !newClaimId
+    || !branch
+    || !forcedBy
+    || !reason
+    || !timestamp
+    || !contextScope
+  ) {
+    return null;
+  }
+
+  if (oldClaimId === newClaimId) {
+    return null;
+  }
+
+  if (contextScope === "issue-plus-pr" && !linkedPr) {
+    return null;
+  }
+
+  if (contextScope === "issue-only" && linkedPr) {
+    return null;
+  }
+
+  return {
+    oldAgentId,
+    oldClaimId,
+    newAgentId,
+    newClaimId,
+    branch,
+    ...(linkedPr ? { linkedPr } : {}),
+    forcedBy,
+    reason,
+    timestamp,
+    contextScope,
+    ...(createdAt ? { createdAt } : {}),
+  };
+}
+
+export function renderForcedHandoffConsentNote(payload) {
+  const normalized = normalizeForcedHandoffPayload(payload);
+  if (!normalized) {
+    throw new Error("invalid forced handoff payload");
+  }
+
+  if (normalized.contextScope === "issue-plus-pr") {
+    const prReference = /^\d+$/.test(normalized.linkedPr) ? `#${normalized.linkedPr}` : normalized.linkedPr;
+    return [
+      `Forced handoff approved by ${normalized.forcedBy}. I verified that the current`,
+      "owning session or agent is unavailable. This transfers ownership away",
+      `from claim \`${normalized.oldClaimId}\` on branch \`${normalized.branch}\` for PR ${prReference}.`,
+      "If the prior session resumes, it must stop immediately and must not",
+      "push, comment, resolve review state, or merge until a maintainer",
+      "reassigns ownership.",
+    ].join("\n");
+  }
+
+  return [
+    `Forced handoff approved by ${normalized.forcedBy}. I verified that the current`,
+    "owning session or agent is unavailable. This transfers ownership away",
+    `from claim \`${normalized.oldClaimId}\` on branch \`${normalized.branch}\`.`,
+    "If the prior session resumes, it must stop immediately and must not",
+    "push, comment, resolve review state, or merge until a maintainer",
+    "reassigns ownership.",
+  ].join("\n");
+}
+
+export function renderForcedHandoffComment(payload) {
+  const normalized = normalizeForcedHandoffPayload(payload);
+  if (!normalized) {
+    throw new Error("invalid forced handoff payload");
+  }
+
+  const markerPayload = {
+    "old-agent-id": normalized.oldAgentId,
+    "old-claim-id": normalized.oldClaimId,
+    "new-agent-id": normalized.newAgentId,
+    "new-claim-id": normalized.newClaimId,
+    branch: normalized.branch,
+    ...(normalized.linkedPr ? { "linked-pr": normalized.linkedPr } : {}),
+    "forced-by": normalized.forcedBy,
+    reason: normalized.reason,
+    timestamp: normalized.timestamp,
+    "context-scope": normalized.contextScope,
+  };
+
+  return `<!-- forced-handoff: ${JSON.stringify(markerPayload)} -->\n\n${renderForcedHandoffConsentNote(normalized)}`;
 }
 
 export function parseReviewWatermarkComment(body, createdAt) {
@@ -132,14 +301,27 @@ export function parseReviewWatermarkComment(body, createdAt) {
 
 export function operationalMarkerPrefix(body) {
   const normalized = body.trimEnd();
-  return OPERATIONAL_MARKERS.find((marker) => marker.pattern.test(normalized))?.label ?? null;
+  const marker = OPERATIONAL_MARKERS.find((candidate) => candidate.pattern.test(normalized));
+  if (!marker) {
+    return null;
+  }
+  if (marker.label === "<!-- forced-handoff:" && !isValidForcedHandoffOperationalMarker(normalized)) {
+    return null;
+  }
+  return marker.label;
 }
 
 export function operationalMarkerPrefixByStart(body) {
   const normalized = body.trimStart();
-  return OPERATIONAL_MARKERS
-    .map((marker) => marker.label)
-    .find((prefix) => normalized.startsWith(prefix)) ?? null;
+  const marker = OPERATIONAL_MARKERS
+    .find((candidate) => candidate.startPattern?.test(normalized) ?? normalized.startsWith(candidate.label));
+  if (!marker) {
+    return null;
+  }
+  if (marker.label === "<!-- forced-handoff:" && !isValidForcedHandoffOperationalMarker(normalized)) {
+    return null;
+  }
+  return marker.label;
 }
 
 export function findLiveStatusDigestComments(comments) {
@@ -716,7 +898,12 @@ export function deriveIddAgentLogins({
   for (const comment of operationalComments ?? []) {
     const authorLogin = String(comment?.author?.login ?? comment?.user?.login ?? "").trim().toLowerCase();
     const body = String(comment?.body ?? "");
-    if (!trustedLogins.has(authorLogin) || !isOperationalOrDigestComment(body)) {
+    const markerPrefix = operationalMarkerPrefix(body);
+    if (
+      !trustedLogins.has(authorLogin)
+      || !markerPrefix
+      || !IDD_AGENT_DERIVED_MARKERS.has(markerPrefix)
+    ) {
       continue;
     }
     derivedLogins.push(authorLogin);
@@ -1007,6 +1194,7 @@ export function resolveLatestReviewWatermark(comments, options = {}) {
 export function summarizeRegularCommentsForGate(comments, options = {}) {
   const iddAgentLogins = new Set(normalizeTrustedMarkerLogins(options.iddAgentLogins ?? []));
   const advisoryBotLogins = new Set(normalizeTrustedMarkerLogins(options.advisoryBotLogins ?? []));
+  const trustedMarkerLogins = new Set(normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []));
   const threads = Array.isArray(options.threads) ? options.threads : [];
 
   const normalized = comments
@@ -1034,7 +1222,10 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
     .map((comment, sortedIndex) => ({ ...comment, sortedIndex }));
 
   const lastIddReplyAt = normalized.reduce((latestTimestamp, comment) => {
-    if (isOperationalOrDigestComment(comment.body) || !iddAgentLogins.has(comment.authorLogin)) {
+    if (
+      isOperationalOrDigestCommentForGate(comment.body, comment.authorLogin, trustedMarkerLogins)
+      || !iddAgentLogins.has(comment.authorLogin)
+    ) {
       return latestTimestamp;
     }
     if (!latestTimestamp || compareIsoTimestamps(comment.createdAt, latestTimestamp) > 0) {
@@ -1050,7 +1241,7 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
   }));
 
   const items = normalized
-    .filter((comment) => !isOperationalOrDigestComment(comment.body))
+    .filter((comment) => !isOperationalOrDigestCommentForGate(comment.body, comment.authorLogin, trustedMarkerLogins))
     .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
     .filter((comment) => !lastIddReplyAt || compareIsoTimestamps(lastIddReplyAt, comment.activityAt) <= 0)
     .filter((comment) => {
@@ -1373,11 +1564,50 @@ export function summarizeReviewerStates(
 
 export function summarizeClaimValidation(claimEvents = [], options = {}) {
   const trustedMarkerLogins = new Set(normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []));
+  const authorizedForcedHandoffLogins = new Set(
+    normalizeTrustedMarkerLogins(options.authorizedForcedHandoffLogins ?? []),
+  );
+  const expectedLinkedPrReferences = new Set(
+    (options.expectedLinkedPrs ?? [])
+      .map((value) => normalizeLinkedPrReference(value))
+      .filter(Boolean),
+  );
   const expectedClaimId = String(options.expectedClaimId ?? "").trim();
   const expectedAgentId = String(options.expectedAgentId ?? "").trim();
+  const trustedAuthorPredicate =
+    typeof options.isTrustedAuthor === "function"
+      ? options.isTrustedAuthor
+      : (login) => trustedMarkerLogins.has(String(login ?? "").trim().toLowerCase());
+
   const activeClaim = resolveActiveClaim(
     claimEvents,
-    (login) => trustedMarkerLogins.size === 0 || trustedMarkerLogins.has(String(login ?? "").trim().toLowerCase()),
+    {
+      isTrustedAuthor: trustedAuthorPredicate,
+      isForcedHandoffEnabled:
+        typeof options.isForcedHandoffEnabled === "function"
+          ? options.isForcedHandoffEnabled
+          : (forcedHandoff) => {
+            if (options.forcedHandoffEnabled !== true) {
+              return false;
+            }
+            if (expectedLinkedPrReferences.size === 0) {
+              return true;
+            }
+            if (forcedHandoff.contextScope !== "issue-plus-pr") {
+              return false;
+            }
+            return expectedLinkedPrReferences.has(normalizeLinkedPrReference(forcedHandoff.linkedPr));
+          },
+      isAuthorizedForcedHandoff:
+        typeof options.isAuthorizedForcedHandoff === "function"
+          ? options.isAuthorizedForcedHandoff
+          : (forcedBy) => {
+            if (authorizedForcedHandoffLogins.size === 0) {
+              return false;
+            }
+            return authorizedForcedHandoffLogins.has(String(forcedBy ?? "").trim().toLowerCase());
+          },
+    },
   );
 
   let reason = "match";
@@ -1475,6 +1705,7 @@ export function buildPreMergeReadinessSummary(
   const unrepliedComments = summarizeRegularCommentsForGate(comments, {
     iddAgentLogins,
     advisoryBotLogins,
+    trustedMarkerLogins,
     threads,
   });
   const reviewerStates = summarizeReviewerStates(reviews, {
@@ -1511,6 +1742,11 @@ export function buildPreMergeReadinessSummary(
   );
   const claim = summarizeClaimValidation(claimEvents, {
     trustedMarkerLogins,
+    forcedHandoffEnabled: options.forcedHandoffEnabled === true,
+    expectedLinkedPrs: options.expectedLinkedPrs ?? [],
+    authorizedForcedHandoffLogins: options.authorizedForcedHandoffLogins,
+    isAuthorizedForcedHandoff: options.isAuthorizedForcedHandoff,
+    isForcedHandoffEnabled: options.isForcedHandoffEnabled,
     expectedClaimId: options.expectedClaimId,
     expectedAgentId: options.expectedAgentId,
   });
@@ -1636,6 +1872,7 @@ function createdAtToSecond(createdAt) {
 }
 
 export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
+  const options = normalizeClaimResolutionOptions(isTrustedAuthor);
   const orderedEvents = events
     .map((event, index) => {
       const claim = parseClaimComment(event.body ?? "", event.createdAt ?? "");
@@ -1678,13 +1915,15 @@ export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
 
   let active = null;
   for (const event of orderedEvents) {
-    active = applyClaimEvent(active, event, isTrustedAuthor);
+    active = applyClaimEvent(active, event, options);
   }
   return active;
 }
 
-export function applyClaimEvent(activeClaim, event, isTrustedAuthor = () => true) {
-  if (!isTrustedAuthor(event.author?.login ?? "")) {
+export function applyClaimEvent(activeClaim, event, options = {}) {
+  const normalizedOptions = normalizeClaimResolutionOptions(options);
+  const authorLogin = event.author?.login ?? "";
+  if (!normalizedOptions.isTrustedAuthor(authorLogin)) {
     return activeClaim;
   }
 
@@ -1713,7 +1952,163 @@ export function applyClaimEvent(activeClaim, event, isTrustedAuthor = () => true
     return null;
   }
 
+  const forcedHandoff = parseForcedHandoffComment(event.body ?? "", event.createdAt ?? "");
+  if (
+    forcedHandoff
+    && activeClaim
+    && normalizedOptions.isForcedHandoffEnabled(forcedHandoff, event)
+    && normalizedOptions.isAuthorizedForcedHandoff(forcedHandoff.forcedBy, forcedHandoff, event)
+    && forcedHandoff.oldAgentId === activeClaim.agentId
+    && forcedHandoff.oldClaimId === activeClaim.claimId
+    && forcedHandoff.branch === activeClaim.branch
+  ) {
+    return {
+      agentId: forcedHandoff.newAgentId,
+      claimId: forcedHandoff.newClaimId,
+      supersedes: forcedHandoff.oldClaimId,
+      branch: forcedHandoff.branch,
+      createdAt: forcedHandoff.createdAt ?? activeClaim.createdAt,
+    };
+  }
+
   return activeClaim;
+}
+
+function normalizeClaimResolutionOptions(optionsOrPredicate) {
+  if (typeof optionsOrPredicate === "function") {
+    return {
+      isTrustedAuthor: optionsOrPredicate,
+      isForcedHandoffEnabled: () => false,
+      isAuthorizedForcedHandoff: () => false,
+    };
+  }
+
+  const options = optionsOrPredicate ?? {};
+  return {
+    isTrustedAuthor:
+      typeof options.isTrustedAuthor === "function" ? options.isTrustedAuthor : () => true,
+    isForcedHandoffEnabled:
+      typeof options.isForcedHandoffEnabled === "function"
+        ? options.isForcedHandoffEnabled
+        : () => false,
+    isAuthorizedForcedHandoff:
+      typeof options.isAuthorizedForcedHandoff === "function"
+        ? options.isAuthorizedForcedHandoff
+        : () => false,
+  };
+}
+
+function normalizeNonWhitespaceToken(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const trimmed = value.trim();
+  if (!trimmed || /\s/.test(trimmed) || trimmed.includes("<!--") || trimmed.includes("-->")) {
+    return "";
+  }
+  return trimmed;
+}
+
+function pickPayloadValue(payload, ...keys) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(payload, key)) {
+      return payload[key];
+    }
+  }
+  return undefined;
+}
+
+function hasConflictingPayloadAliases(payload, firstKey, secondKey) {
+  if (
+    !Object.prototype.hasOwnProperty.call(payload, firstKey)
+    || !Object.prototype.hasOwnProperty.call(payload, secondKey)
+  ) {
+    return false;
+  }
+
+  return String(payload[firstKey] ?? "").trim() !== String(payload[secondKey] ?? "").trim();
+}
+
+function normalizeBranchToken(value) {
+  const token = normalizeNonWhitespaceToken(value);
+  if (!token || token.includes(">")) {
+    return "";
+  }
+  return token;
+}
+
+function normalizeForcedHandoffReason(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const trimmed = value.trim();
+  if (!trimmed || /[\r\n]/.test(trimmed) || trimmed.includes("-->")) {
+    return "";
+  }
+  return trimmed;
+}
+
+function normalizeLinkedPrReference(value) {
+  const token = String(value ?? "").trim();
+  if (!token) {
+    return "";
+  }
+  if (/^#?[1-9]\d*$/.test(token)) {
+    return token.replace(/^#/, "");
+  }
+  try {
+    const parsed = new URL(token);
+    const protocol = parsed.protocol.toLowerCase();
+    const hostname = parsed.hostname.toLowerCase();
+    if (protocol !== "http:" && protocol !== "https:") {
+      return token.toLowerCase();
+    }
+    if (hostname !== "github.com" && hostname !== "www.github.com") {
+      return token.toLowerCase();
+    }
+    const pathMatch = parsed.pathname.match(/^\/[^/]+\/[^/]+\/pull\/([1-9]\d*)\/?$/i);
+    if (pathMatch) {
+      return pathMatch[1];
+    }
+  } catch {
+    // Not a URL-form linked-pr reference.
+  }
+  return token.toLowerCase();
+}
+
+function normalizeIsoTimestamp(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !isValidIsoTimestamp(trimmed)) {
+    return "";
+  }
+  return trimmed;
+}
+
+function normalizeSecondPrecisionIsoTimestamp(value) {
+  const timestamp = normalizeIsoTimestamp(value);
+  if (!timestamp || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(timestamp)) {
+    return "";
+  }
+  return timestamp;
+}
+
+function normalizeContextScope(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const trimmed = value.trim();
+  return FORCED_HANDOFF_CONTEXT_SCOPES.has(trimmed) ? trimmed : "";
+}
+
+function normalizeLinkedPr(value) {
+  const token = normalizeNonWhitespaceToken(value);
+  if (!token || !FORCED_HANDOFF_LINKED_PR_PATTERN.test(token)) {
+    return "";
+  }
+  return token;
 }
 
 export function classifyResumeRoutingCase(input, options = {}) {
@@ -2093,6 +2488,18 @@ function isGateAdvisoryBotLogin(login, advisoryBotLogins) {
 
 function isOperationalOrDigestComment(body) {
   return operationalMarkerPrefix(body) !== null || firstLine(body) === LIVE_STATUS_DIGEST_MARKER;
+}
+
+function isOperationalOrDigestCommentForGate(body, authorLogin, trustedMarkerLogins) {
+  const marker = operationalMarkerPrefix(body);
+  if (marker === "<!-- forced-handoff:") {
+    return trustedMarkerLogins.has(String(authorLogin ?? "").trim().toLowerCase());
+  }
+  return marker !== null || firstLine(body) === LIVE_STATUS_DIGEST_MARKER;
+}
+
+function isValidForcedHandoffOperationalMarker(body) {
+  return parseForcedHandoffComment(body, "") !== null;
 }
 
 function buildBodyPreview(body) {

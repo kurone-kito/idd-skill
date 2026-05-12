@@ -598,29 +598,31 @@ For `issue-plus-pr` context:
 ```text
 Forced handoff approved by {human-actor}. I verified that the current
 owning session or agent is unavailable. This transfers ownership away
-from claim `{old-claim-id}` on branch `{branch}` for PR #{pr-number}.
+from claim `{old-claim-id}` on branch `{branch}` for PR {pr-reference}.
 If the prior session resumes, it must stop immediately and must not
 push, comment, resolve review state, or merge until a maintainer
 reassigns ownership.
 ```
 
-Future protocol work may use a dedicated marker or marker pair, but the
-contract must record at least these fields:
+The implemented protocol uses a dedicated `<!-- forced-handoff: {json} -->`
+marker followed by the visible consent note above. The JSON payload uses
+the field names below exactly, and maintainer-facing helpers should
+generate the full body so humans do not hand-write fragile claim IDs.
 
-| Field           | Requirement | Meaning                                                            |
-| --------------- | ----------- | ------------------------------------------------------------------ |
-| `old-agent-id`  | Required    | The agent ID that held the superseded claim                        |
-| `old-claim-id`  | Required    | The exact active claim being taken over                            |
-| `new-agent-id`  | Required    | The agent or session identifier that receives ownership            |
-| `new-claim-id`  | Required    | The new claim token that becomes authoritative after the handoff   |
-| `branch`        | Required    | The inherited work branch                                          |
-| `linked-pr`     | Conditional | The PR number or URL when PR context is part of the handoff        |
-| `forced-by`     | Required    | The approving human actor                                          |
-| `reason`        | Required    | Why the prior session is considered unavailable                    |
-| `timestamp`     | Required    | The GitHub server timestamp of the approval                        |
-| `context-scope` | Required    | Whether the handoff covers `issue-only` or `issue-plus-pr` context |
+| Field           | Requirement | Meaning                                                                       |
+| --------------- | ----------- | ----------------------------------------------------------------------------- |
+| `old-agent-id`  | Required    | The agent ID that held the superseded claim                                   |
+| `old-claim-id`  | Required    | The exact active claim being taken over                                       |
+| `new-agent-id`  | Required    | The agent or session identifier that receives ownership                       |
+| `new-claim-id`  | Required    | The new claim token that becomes authoritative after the handoff              |
+| `branch`        | Required    | The inherited work branch                                                     |
+| `linked-pr`     | Conditional | The decimal PR number or `http(s)` URL when PR context is part of the handoff |
+| `forced-by`     | Required    | The approving human actor                                                     |
+| `reason`        | Required    | Why the prior session is considered unavailable                               |
+| `timestamp`     | Required    | Operator-recorded UTC timestamp captured in the marker payload                |
+| `context-scope` | Required    | Whether the handoff covers `issue-only` or `issue-plus-pr` context            |
 
-The future marker must stay distinct from normal `claimed-by` and
+The forced-handoff marker must stay distinct from normal `claimed-by` and
 `unclaimed-by` events so older parsers do not mistake it for a standard
 release or claim.
 

@@ -10,6 +10,7 @@
     "idd-advisory-wait-state": "./bin/idd-advisory-wait-state.mjs",
     "idd-audit-pr-cleanup": "./bin/idd-audit-pr-cleanup.mjs",
     "idd-doctor": "./bin/idd-doctor.mjs",
+    "idd-forced-handoff-marker": "./bin/idd-forced-handoff-marker.mjs",
     "idd-helper-bundle-manifest": "./bin/idd-helper-bundle-manifest.mjs",
     "idd-live-status-digest": "./bin/idd-live-status-digest.mjs",
     "idd-pre-merge-readiness": "./bin/idd-pre-merge-readiness.mjs",

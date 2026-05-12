@@ -71,8 +71,10 @@ test("vendored-node managed files match the canonical helper import closure", ()
   const expectedFiles = collectVendoredFiles(REPO_ROOT).map((file) => file.targetPath);
 
   assert.deepEqual(managedFiles, expectedFiles);
+  assert.ok(managedFiles.includes("scripts/forced-handoff-marker.mjs"));
   assert.ok(managedFiles.includes("scripts/protocol-helpers.mjs"));
   assert.ok(managedFiles.includes("scripts/idd-doctor.mjs"));
+  assert.ok(managedFiles.includes("schemas/forced-handoff-marker.schema.json"));
   assert.ok(managedFiles.includes("schemas/pre-merge-readiness.schema.json"));
   assert.ok(managedFiles.includes("schemas/advisory-wait-state.schema.json"));
   for (const relativePath of managedFiles) {
@@ -170,6 +172,28 @@ test("helper bundle manifest bin wrapper produces JSON output", () => {
 
   const launcher = readFileSync(join(REPO_ROOT, "bin/idd-helper-bundle-manifest.mjs"), "utf8");
   assert.ok(launcher.startsWith("#!/usr/bin/env node"));
+});
+
+test("helper bundle manifest publishes the forced handoff helper command", () => {
+  const packageManagerManifest = buildHelperRuntimeManifest({
+    profile: "package-manager",
+    packageManager: "pnpm",
+    targetRoot: REPO_ROOT,
+  });
+  const vendoredManifest = buildHelperRuntimeManifest({
+    profile: "vendored-node",
+    targetRoot: REPO_ROOT,
+  });
+
+  assert.equal(
+    packageManagerManifest.profiles["package-manager"].commands["idd:forced-handoff-marker"],
+    "idd-forced-handoff-marker",
+  );
+  assert.equal(
+    vendoredManifest.profiles["vendored-node"].commands["idd:forced-handoff-marker"],
+    "node scripts/forced-handoff-marker.mjs",
+  );
+  assert.equal(existsSync(join(REPO_ROOT, "bin/idd-forced-handoff-marker.mjs")), true);
 });
 
 test("manifest accepts an explicit package spec override", () => {

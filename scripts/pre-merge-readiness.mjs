@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 import {
   buildPreMergeReadinessSummary,
@@ -9,6 +10,14 @@ import {
   operationalMarkerPrefix,
   selectCodeownersText,
 } from "./protocol-helpers.mjs";
+
+const APPROVAL_ACTOR_POLICY = new Set([
+  "owners-and-maintainers-only",
+  "all-write-permission-actors",
+]);
+const APPROVAL_ACTOR_POLICY_DEFAULT = "owners-and-maintainers-only";
+const FORCED_HANDOFF_MODES = new Set(["disabled", "human-gated"]);
+const FORCED_HANDOFF_MODE_DEFAULT = "disabled";
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.prNumber) {
@@ -35,12 +44,13 @@ const pr = ghJson([
   "-R",
   repoRef,
   "--json",
-  "headRefOid,baseRefName,author,reviewDecision",
+  "headRefOid,baseRefName,url,author,reviewDecision",
   "--jq",
   ".",
 ]);
 const prHeadSha = String(pr.headRefOid ?? "");
 const baseRefName = String(pr.baseRefName ?? "");
+const prUrl = String(pr.url ?? "");
 const prAuthorLogin = String(pr.author?.login ?? "").toLowerCase();
 const reviewDecision = String(pr.reviewDecision ?? "");
 const encodedBaseRefName = encodeURIComponent(baseRefName);
@@ -106,6 +116,9 @@ const iddAgentLogins = deriveIddAgentLogins({
   trustedMarkerLogins,
   operationalComments: [...comments, ...claimComments],
 });
+const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
+const forcedHandoffEnabled = readForcedHandoffMode() === "human-gated";
+const forcedHandoffPermissionCache = new Map();
 
 const summary = buildPreMergeReadinessSummary(
   {
@@ -134,6 +147,16 @@ const summary = buildPreMergeReadinessSummary(
     requestCap: 30,
     pendingWindowMinutes: 30,
     settledWindowMinutes: 10,
+    forcedHandoffEnabled,
+    expectedLinkedPrs: [String(args.prNumber), prUrl].filter(Boolean),
+    isAuthorizedForcedHandoff:
+      (forcedBy) => isAuthorizedForcedHandoffActor(
+        owner,
+        repo,
+        forcedBy,
+        forcedHandoffAuthorityPolicy,
+        forcedHandoffPermissionCache,
+      ),
     viewerLogin,
     configuredTrustedActors,
     collaboratorTrustEnabled,
@@ -483,4 +506,53 @@ function splitCsv(value) {
 
 function isTruthy(value) {
   return /^(1|true|yes)$/i.test(String(value ?? "").trim());
+}
+
+function readForcedHandoffAuthorityPolicy() {
+  try {
+    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    const policy = String(config?.forcedHandoffAuthority ?? config?.["forced-handoff-authority"] ?? "").trim();
+    if (APPROVAL_ACTOR_POLICY.has(policy)) {
+      return policy;
+    }
+  } catch {
+    // Default policy remains owners-and-maintainers-only.
+  }
+  return APPROVAL_ACTOR_POLICY_DEFAULT;
+}
+
+function readForcedHandoffMode() {
+  try {
+    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    const mode = String(config?.forcedHandoff ?? config?.["forced-handoff"] ?? "").trim();
+    if (FORCED_HANDOFF_MODES.has(mode)) {
+      return mode;
+    }
+  } catch {
+    // Default mode remains disabled.
+  }
+  return FORCED_HANDOFF_MODE_DEFAULT;
+}
+
+function isAuthorizedForcedHandoffActor(owner, repo, login, policy, cache) {
+  const normalized = String(login ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (cache.has(normalized)) {
+    return cache.get(normalized);
+  }
+
+  const permission = safeGhText([
+    "api",
+    `repos/${owner}/${repo}/collaborators/${encodeURIComponent(normalized)}/permission`,
+    "--jq",
+    ".permission",
+  ]).toLowerCase();
+  const isAuthorized = policy === "all-write-permission-actors"
+    ? permission === "admin" || permission === "maintain" || permission === "write"
+    : permission === "admin" || permission === "maintain";
+
+  cache.set(normalized, isAuthorized);
+  return isAuthorized;
 }

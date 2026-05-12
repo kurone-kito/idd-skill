@@ -1,0 +1,11 @@
+{
+  "oldAgentId": "github-copilot-cli-old",
+  "oldClaimId": "claim-20260512T090000Z-337-old",
+  "newAgentId": "github-copilot-cli-new",
+  "branch": "issue/337-feat-protocol-add-auditable-forced",
+  "forcedBy": "kurone-kito",
+  "reason": "",
+  "timestamp": "2026-05-12 11:00:00",
+  "contextScope": "issue-plus-pr",
+  "createdAt": "2026-05-12T11:00:05Z"
+}

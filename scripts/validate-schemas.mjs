@@ -243,6 +243,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const cases = [
     ["schemas/claim-marker.schema.json", "fixtures/schemas/claim-marker.valid.json", true],
     ["schemas/claim-marker.schema.json", "fixtures/schemas/claim-marker.invalid.json", false],
+    ["schemas/forced-handoff-marker.schema.json", "fixtures/schemas/forced-handoff-marker.valid.json", true],
+    ["schemas/forced-handoff-marker.schema.json", "fixtures/schemas/forced-handoff-marker.invalid.json", false],
     ["schemas/live-status-digest.schema.json", "fixtures/schemas/live-status-digest.valid.json", true],
     ["schemas/live-status-digest.schema.json", "fixtures/schemas/live-status-digest.invalid.json", false],
     ["schemas/advisory-wait-state.schema.json", "fixtures/schemas/advisory-wait-state.valid.json", true],
