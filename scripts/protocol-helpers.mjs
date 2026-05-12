@@ -36,7 +36,7 @@ const OPERATIONAL_MARKERS = [
   },
   {
     label: "<!-- forced-handoff:",
-    pattern: /^<!--\s*forced-handoff:\s*\{[\s\S]*\}\s*-->[\s\S]*$/i,
+    pattern: /^\s*<!--\s*forced-handoff:\s*\{[\s\S]*\}\s*-->[\s\S]*$/i,
     startPattern: /^<!--\s*forced-handoff:/i,
   },
 ];
@@ -112,7 +112,7 @@ export function parseReleaseComment(body) {
 }
 
 export function parseForcedHandoffComment(body, createdAt) {
-  const trimmed = body.trimEnd();
+  const trimmed = body.trimStart().trimEnd();
   const markerMatch = trimmed.match(/^<!--\s*forced-handoff:\s*/i);
   if (!markerMatch) {
     return null;

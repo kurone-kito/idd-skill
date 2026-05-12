@@ -10,6 +10,7 @@ import {
 import {
   applyClaimEvent,
   normalizeForcedHandoffPayload,
+  operationalMarkerPrefix,
   operationalMarkerPrefixByStart,
   parseForcedHandoffComment,
   renderForcedHandoffConsentNote,
@@ -63,6 +64,26 @@ test("forced handoff parsing accepts flexible marker spacing and casing", () => 
     ...payload,
     createdAt: "2026-05-12T11:00:05Z",
   });
+});
+
+test("forced handoff parsing accepts leading whitespace before marker", () => {
+  const body = [
+    "   ",
+    "<!-- forced-handoff: {\"old-agent-id\":\"github-copilot-cli-old\",\"old-claim-id\":\"claim-20260512T090000Z-337-old\",\"new-agent-id\":\"github-copilot-cli-new\",\"new-claim-id\":\"claim-20260512T110000Z-337-new\",\"branch\":\"issue/337-feat-protocol-add-auditable-forced\",\"linked-pr\":\"341\",\"forced-by\":\"kurone-kito\",\"reason\":\"operator-approved-recovery\",\"timestamp\":\"2026-05-12T11:00:00Z\",\"context-scope\":\"issue-plus-pr\"} -->",
+    "",
+    "Forced handoff approved by kurone-kito. I verified that the current",
+    "owning session or agent is unavailable. This transfers ownership away",
+    "from claim `claim-20260512T090000Z-337-old` on branch `issue/337-feat-protocol-add-auditable-forced` for PR #341.",
+    "If the prior session resumes, it must stop immediately and must not",
+    "push, comment, resolve review state, or merge until a maintainer",
+    "reassigns ownership.",
+  ].join("\n");
+
+  assert.deepEqual(parseForcedHandoffComment(body, "2026-05-12T11:00:05Z"), {
+    ...payload,
+    createdAt: "2026-05-12T11:00:05Z",
+  });
+  assert.equal(operationalMarkerPrefix(body), "<!-- forced-handoff:");
 });
 
 test("forced handoff rejects markers without visible consent text", () => {
