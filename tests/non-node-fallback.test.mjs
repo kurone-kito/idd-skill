@@ -102,8 +102,41 @@ test("onboarding keeps claim timing in the explicit confirmation path", () => {
   );
   assert.match(
     onboarding,
-    /claim-timing defaults, issue-authoring companion status, and helper\s+runtime profile\./,
+    /credential scope, claim-timing defaults, issue-authoring companion\s+status, and helper runtime profile\./,
     "ONBOARDING Step 2 re-check must stay aligned with the Step 1B confirmation list",
+  );
+});
+
+test("onboarding generated import surface includes extracted reference docs", () => {
+  const onboarding = readText("idd-template/ONBOARDING.md");
+  const manifest = JSON.parse(readText("audit/sync-manifest.json"));
+
+  for (const file of [
+    "docs/onboarding/placeholders.md",
+    "docs/onboarding/policy-decisions.md",
+  ]) {
+    assert.ok(
+      onboarding.includes(file),
+      `ONBOARDING must list ${file} in its generated import surface`,
+    );
+  }
+
+  const coreBlock = manifest.generatedBlocks.find(
+    (block) => block.id === "idd-template-core-files",
+  );
+  assert.ok(coreBlock, "sync manifest must define the idd-template core file block");
+  for (const file of [
+    "idd-template/docs/onboarding/placeholders.md",
+    "idd-template/docs/onboarding/policy-decisions.md",
+  ]) {
+    assert.ok(
+      coreBlock.paths.includes(file),
+      `sync manifest must include ${file} in the core file list`,
+    );
+  }
+  assert.ok(
+    coreBlock.sourceGlobs.includes("idd-template/docs/onboarding/*.md"),
+    "sync manifest must include the onboarding docs glob in the generated file inputs",
   );
 });
 

@@ -236,8 +236,8 @@ pre-execution issue drafting or roadmap decomposition support.
 
 Before importing files, re-check the policy choices confirmed in Step 1B:
 merge policy, PR review profile, review-thread resolution policy,
-claim-timing defaults, issue-authoring companion status, and helper
-runtime profile.
+credential scope, claim-timing defaults, issue-authoring companion
+status, and helper runtime profile.
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)
@@ -277,6 +277,8 @@ docs/concepts.md
 docs/customization.md
 docs/policy-constants.md
 docs/reference.md
+docs/onboarding/placeholders.md
+docs/onboarding/policy-decisions.md
 profiles/README.md
 profiles/human-required/README.md
 profiles/no-advisory/README.md
@@ -315,7 +317,8 @@ Fetch all files with `gh api` (recommended — handles auth automatically):
 ```sh
 DEST="."  # root of the target repository
 
-mkdir -p "${DEST}/.github/idd" "${DEST}/.github/instructions" "${DEST}/docs"
+mkdir -p "${DEST}/.github/idd" "${DEST}/.github/instructions" "${DEST}/docs" \
+  "${DEST}/docs/onboarding"
 
 for FILE in \
   ".github/idd/config.json" \
@@ -346,6 +349,8 @@ for FILE in \
   "docs/customization.md" \
   "docs/policy-constants.md" \
   "docs/reference.md" \
+  "docs/onboarding/placeholders.md" \
+  "docs/onboarding/policy-decisions.md" \
   "profiles/README.md" \
   "profiles/human-required/README.md" \
   "profiles/no-advisory/README.md" \
@@ -392,7 +397,8 @@ repository):
 BASE="https://raw.githubusercontent.com/kurone-kito/idd-skill/main/idd-template"
 DEST="."  # root of the target repository
 
-mkdir -p "${DEST}/.github/idd" "${DEST}/.github/instructions" "${DEST}/docs"
+mkdir -p "${DEST}/.github/idd" "${DEST}/.github/instructions" "${DEST}/docs" \
+  "${DEST}/docs/onboarding"
 
 for FILE in \
   ".github/idd/config.json" \
@@ -423,6 +429,8 @@ for FILE in \
   "docs/customization.md" \
   "docs/policy-constants.md" \
   "docs/reference.md" \
+  "docs/onboarding/placeholders.md" \
+  "docs/onboarding/policy-decisions.md" \
   "profiles/README.md" \
   "profiles/human-required/README.md" \
   "profiles/no-advisory/README.md" \
