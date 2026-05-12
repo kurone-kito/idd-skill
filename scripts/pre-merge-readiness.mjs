@@ -457,7 +457,10 @@ function runGh(args, options = {}) {
   } catch (error) {
     const status = Number(error?.status ?? -1);
     if ((options.allowStatuses ?? []).includes(status)) {
-      return String(error?.stdout ?? "");
+      const stdout = String(error?.stdout ?? "");
+      if (/^\s*[[{]/.test(stdout)) {
+        return stdout;
+      }
     }
     const stderr = String(error?.stderr ?? "");
     const httpStatus = Number(stderr.match(/HTTP\s+(\d+)/i)?.[1] ?? -1);
