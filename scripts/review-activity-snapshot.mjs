@@ -40,7 +40,7 @@ const checks = ghJson(
     "--jq",
     ".",
   ],
-  { allowStatuses: [8] },
+  { allowStatuses: [1, 8] },
 );
 const reviews = ghApiJson(
   `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
