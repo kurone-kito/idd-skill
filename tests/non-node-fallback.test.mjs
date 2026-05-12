@@ -224,6 +224,11 @@ test("onboarding links extracted agent-entry and verification guidance", () => {
     /`\.github\/instructions\/idd-overview\.instructions\.md` has/,
     "agent-entry reference must use the full idd-overview path in the checklist",
   );
+  assert.match(
+    reference,
+    /`\.github\/instructions\/idd-discover\.instructions\.md` and\s+`\.github\/instructions\/idd-overview\.instructions\.md`/,
+    "agent-entry reference must use the full instruction paths in the marker checklist",
+  );
 });
 
 test("policy reference keeps helper specs pinned and config scope accurate", () => {

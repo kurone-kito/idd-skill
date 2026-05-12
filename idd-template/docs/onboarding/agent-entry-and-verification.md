@@ -192,7 +192,8 @@ checks, confirm the detailed items below.
 - [ ] `.github/instructions/idd-overview.instructions.md` has
       `applyTo: "**"` and `excludeAgent: "code-review"` in its
       frontmatter.
-- [ ] The `Project commands` table in `idd-overview.instructions.md`
+- [ ] The `Project commands` table in
+      `.github/instructions/idd-overview.instructions.md`
       contains the correct commands for this project.
 - [ ] If the project chooses `issue-scope: orphan-first`, the
       `orphan-first-policy` value is recorded as `none`,
@@ -200,7 +201,8 @@ checks, confirm the detailed items below.
       use either `maintainer-approved` or `public-disabled`, not `none`.
 - [ ] The `{{PROJECT_MARKER_PREFIX}}-roadmap-id` and
       `{{PROJECT_MARKER_PREFIX}}-blocked-by` marker names in
-      `idd-discover.instructions.md` and `idd-overview.instructions.md`
+      `.github/instructions/idd-discover.instructions.md` and
+      `.github/instructions/idd-overview.instructions.md`
       match the prefix chosen for this project.
 - [ ] If `.github/idd/config.json` is used, it matches the recorded
       `iddVersion`, marker prefix, merge/review/thread policies,
