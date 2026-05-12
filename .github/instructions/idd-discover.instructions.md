@@ -107,7 +107,7 @@ body satisfies **all** of the following:
   issue is open (apply the same fail-safe as A3: if a reference cannot
   be resolved, treat as blocked).
 
-Apply the configured policy before passing A0-O candidates to A4:
+Apply the configured policy before passing A0-O candidates to A3.5:
 
 - `none` (the default): apply no extra orphan-first approval gate.
 - `maintainer-approved`: keep only candidates that have at least one
