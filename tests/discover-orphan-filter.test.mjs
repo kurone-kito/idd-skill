@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   classifyIssue,
   extractBlockedByReferences,
+  fetchOpenIssues,
   filterOrphanIssues,
   getOrphanFirstPolicy,
 } from "../scripts/discover-orphan-filter.mjs";
@@ -149,6 +150,26 @@ test("filterOrphanIssues excludes blocked labels and open blockers", () => {
   assert.equal(result.filtered.blocked_label.length, 1);
 });
 
+test("filterOrphanIssues treats lowercase open state as open blocker", () => {
+  const issues = [
+    {
+      number: 20,
+      title: "candidate",
+      state: "OPEN",
+      labels: [],
+      body: "Blocked by #21",
+      url: "https://example.com/20",
+    },
+  ];
+
+  const result = filterOrphanIssues(issues, {
+    issueStateByNumber: new Map([[21, "open"]]),
+    fetchIssueStateByNumber: () => "UNRESOLVABLE",
+  });
+
+  assert.equal(result.filtered.blocked_by_open_reference.length, 1);
+});
+
 test("filterOrphanIssues keeps closed-blocker issues as orphan candidates", () => {
   const issues = [
     {
@@ -214,4 +235,56 @@ test("filterOrphanIssues reports unresolvable and circular references", () => {
     reason: "issue-not-found-or-inaccessible",
     reference: 99,
   });
+});
+
+test("filterOrphanIssues applies custom marker prefix across issue set filtering", () => {
+  const issues = [
+    {
+      number: 50,
+      title: "custom marker issue",
+      state: "OPEN",
+      labels: [],
+      body: "<!-- custom-roadmap-id: phase-a -->",
+      url: "https://example.com/50",
+    },
+  ];
+
+  const result = filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => "UNRESOLVABLE",
+    markerPrefix: "custom",
+  });
+
+  assert.equal(result.filtered.roadmap_marker.length, 1);
+  assert.equal(result.orphans.length, 0);
+});
+
+test("fetchOpenIssues paginates by raw API page length, not filtered issue length", () => {
+  const pages = [
+    [
+      { number: 60, title: "issue 60", state: "open", labels: [], body: "" },
+      ...Array.from({ length: 99 }, (_, index) => ({
+        number: 1000 + index,
+        title: `pr ${index}`,
+        state: "open",
+        labels: [],
+        body: "",
+        pull_request: { url: "https://example.com/pr" },
+      })),
+    ],
+    [
+      { number: 61, title: "issue 61", state: "open", labels: [], body: "" },
+    ],
+  ];
+  let callCount = 0;
+  const ghJsonMock = () => {
+    const page = pages[callCount] ?? [];
+    callCount += 1;
+    return page;
+  };
+
+  const issues = fetchOpenIssues("owner/repo", ghJsonMock);
+
+  assert.equal(callCount, 2);
+  assert.deepEqual(issues.map((issue) => issue.number), [60, 61]);
 });
