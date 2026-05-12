@@ -186,11 +186,13 @@ require explicit operator confirmation:
    non-default profile)
 3. review-thread resolution policy (`fast-agent-resolve` by default, or
    a stricter profile)
-4. credential scope for worker and merge-capable sessions
-5. claim-timing defaults (`claim-stale-age` and
+4. critique-loop profile (distributed defaults, or a documented
+   repository override)
+5. credential scope for worker and merge-capable sessions
+6. claim-timing defaults (`claim-stale-age` and
    `claim-heartbeat-interval`)
-6. issue-authoring companion status (`installed` or `not installed`)
-7. helper runtime profile (`instructions-only` by default, or an
+7. issue-authoring companion status (`installed` or `not installed`)
+8. helper runtime profile (`instructions-only` by default, or an
    explicitly requested helper profile)
 
 Use
@@ -236,8 +238,8 @@ pre-execution issue drafting or roadmap decomposition support.
 
 Before importing files, re-check the policy choices confirmed in Step 1B:
 merge policy, PR review profile, review-thread resolution policy,
-credential scope, claim-timing defaults, issue-authoring companion
-status, and helper runtime profile.
+critique-loop profile, credential scope, claim-timing defaults,
+issue-authoring companion status, and helper runtime profile.
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)

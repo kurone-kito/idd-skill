@@ -83,6 +83,11 @@ test("onboarding links extracted policy guidance including credential scope", ()
   );
   assert.match(
     policyText,
+    /### Critique-loop profile/,
+    "policy reference must keep critique-loop guidance outside ONBOARDING",
+  );
+  assert.match(
+    policyText,
     /Review `docs\/permissions\.md` with the operator/,
     "policy reference must point credential decisions at docs/permissions.md",
   );
@@ -97,12 +102,17 @@ test("onboarding keeps claim timing in the explicit confirmation path", () => {
   const onboarding = readText("idd-template/ONBOARDING.md");
   assert.match(
     onboarding,
+    /critique-loop profile \(distributed defaults, or a documented\s+repository override\)/,
+    "ONBOARDING Step 1B must explicitly confirm the critique-loop profile",
+  );
+  assert.match(
+    onboarding,
     /claim-timing defaults \(`claim-stale-age` and\s+`claim-heartbeat-interval`\)/,
     "ONBOARDING Step 1B must explicitly confirm claim-timing defaults",
   );
   assert.match(
     onboarding,
-    /credential scope, claim-timing defaults, issue-authoring companion\s+status, and helper runtime profile\./,
+    /critique-loop profile, credential scope, claim-timing defaults,\s+issue-authoring companion status, and helper runtime profile\./,
     "ONBOARDING Step 2 re-check must stay aligned with the Step 1B confirmation list",
   );
 });
