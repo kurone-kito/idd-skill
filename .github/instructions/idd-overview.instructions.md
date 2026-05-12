@@ -314,7 +314,7 @@ file that matches your current situation.
 | PR open, CI running, reviews exist            | `idd-review-snapshot.instructions.md` (E1–E3)                         |
 | PR open, CI passed, no reviews yet            | `idd-review-snapshot.instructions.md` (E3 empty-list → merge)         |
 | PR open, CI passed, reviews pending           | `idd-review-snapshot.instructions.md`                                 |
-| Snapshot done, List A non-empty               | `idd-review-triage.instructions.md` (E4–E8)                           |
+| Snapshot done, ReviewItems_snapshot non-empty | `idd-review-triage.instructions.md` (E4–E8)                           |
 | Review feedback accepted, pushing fixes       | `idd-review-fix.instructions.md`                                      |
 | Ready for pre-merge gate check                | `idd-pre-merge.instructions.md`                                       |
 | All pre-merge conditions satisfied            | `idd-merge-handoff.instructions.md` (F2.5)                            |

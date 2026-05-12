@@ -19,7 +19,7 @@ reviewer request, hold comment, or digest update).
 
 ## E9 — Fix accepted issues
 
-Fix all Accepted PATH A items from List A. Run **fix-validate**.
+Fix all Accepted PATH A items from ReviewItems_snapshot. Run **fix-validate**.
 
 Commit fixes atomically — one logical change per commit.
 
