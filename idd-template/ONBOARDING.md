@@ -167,9 +167,13 @@ require explicit operator confirmation:
 5. credential scope for worker and merge-capable sessions
 6. claim-timing defaults (`claim-stale-age` and
    `claim-heartbeat-interval`)
-7. issue-authoring companion status (`installed` or `not installed`)
-8. helper runtime profile (`instructions-only` by default, or an
-   explicitly requested helper profile)
+7. issue-author approval gate (`enabled-by-default` by default, or
+   explicit config opt-out via `skipIssueAuthorApprovalGate: true`)
+8. maintainer approval actor policy (`owners-and-maintainers-only` by
+   default, or `all-write-permission-actors`)
+9. issue-authoring companion status (`installed` or `not installed`)
+10. helper runtime profile (`instructions-only` by default, or an
+    explicitly requested helper profile)
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)
@@ -219,6 +223,7 @@ pre-execution issue drafting or roadmap decomposition support.
 Before importing files, re-check the policy choices confirmed in Step 1B:
 merge policy, PR review profile, review-thread resolution policy,
 critique-loop profile, credential scope, claim-timing defaults,
+issue-author approval gate, maintainer approval actor policy,
 issue-authoring companion status, and helper runtime profile.
 
 Use
@@ -576,7 +581,8 @@ After completing the steps above, confirm each item:
       profile are recorded, and any non-default phase-file
       customizations are complete.
 - [ ] The selected merge policy, credential scope, claim timing values,
-      and helper runtime profile are explicitly recorded.
+      issue-author approval gate decision, maintainer approval actor
+      policy, and helper runtime profile are explicitly recorded.
 - [ ] If the operator opted into issue authoring, the companion skill
       files are present.
 - [ ] No `{{...}}` placeholders remain, the `Project commands` table is
