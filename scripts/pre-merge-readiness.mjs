@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 import {
   buildPreMergeReadinessSummary,
@@ -9,6 +10,12 @@ import {
   operationalMarkerPrefix,
   selectCodeownersText,
 } from "./protocol-helpers.mjs";
+
+const MAINTAINER_APPROVAL_POLICY = new Set([
+  "owners-and-maintainers-only",
+  "all-write-permission-actors",
+]);
+const MAINTAINER_APPROVAL_POLICY_DEFAULT = "owners-and-maintainers-only";
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.prNumber) {
@@ -106,6 +113,8 @@ const iddAgentLogins = deriveIddAgentLogins({
   trustedMarkerLogins,
   operationalComments: [...comments, ...claimComments],
 });
+const maintainerApprovalActorPolicy = readMaintainerApprovalActorPolicy();
+const forcedHandoffPermissionCache = new Map();
 
 const summary = buildPreMergeReadinessSummary(
   {
@@ -134,6 +143,14 @@ const summary = buildPreMergeReadinessSummary(
     requestCap: 30,
     pendingWindowMinutes: 30,
     settledWindowMinutes: 10,
+    isAuthorizedForcedHandoff:
+      (forcedBy) => isAuthorizedForcedHandoffActor(
+        owner,
+        repo,
+        forcedBy,
+        maintainerApprovalActorPolicy,
+        forcedHandoffPermissionCache,
+      ),
     viewerLogin,
     configuredTrustedActors,
     collaboratorTrustEnabled,
@@ -483,4 +500,40 @@ function splitCsv(value) {
 
 function isTruthy(value) {
   return /^(1|true|yes)$/i.test(String(value ?? "").trim());
+}
+
+function readMaintainerApprovalActorPolicy() {
+  try {
+    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    const policy = String(config?.maintainerApprovalActorPolicy ?? "").trim();
+    if (MAINTAINER_APPROVAL_POLICY.has(policy)) {
+      return policy;
+    }
+  } catch {
+    // Default policy remains owners-and-maintainers-only.
+  }
+  return MAINTAINER_APPROVAL_POLICY_DEFAULT;
+}
+
+function isAuthorizedForcedHandoffActor(owner, repo, login, policy, cache) {
+  const normalized = String(login ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (cache.has(normalized)) {
+    return cache.get(normalized);
+  }
+
+  const permission = safeGhText([
+    "api",
+    `repos/${owner}/${repo}/collaborators/${encodeURIComponent(normalized)}/permission`,
+    "--jq",
+    ".permission",
+  ]).toLowerCase();
+  const isAuthorized = policy === "all-write-permission-actors"
+    ? permission === "admin" || permission === "maintain" || permission === "write"
+    : permission === "admin" || permission === "maintain";
+
+  cache.set(normalized, isAuthorized);
+  return isAuthorized;
 }

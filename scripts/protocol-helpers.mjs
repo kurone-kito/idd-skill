@@ -1557,6 +1557,9 @@ export function summarizeReviewerStates(
 
 export function summarizeClaimValidation(claimEvents = [], options = {}) {
   const trustedMarkerLogins = new Set(normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []));
+  const authorizedForcedHandoffLogins = new Set(
+    normalizeTrustedMarkerLogins(options.authorizedForcedHandoffLogins ?? options.trustedMarkerLogins ?? []),
+  );
   const expectedClaimId = String(options.expectedClaimId ?? "").trim();
   const expectedAgentId = String(options.expectedAgentId ?? "").trim();
   const activeClaim = resolveActiveClaim(
@@ -1566,7 +1569,14 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
         (login) => trustedMarkerLogins.size === 0 || trustedMarkerLogins.has(String(login ?? "").trim().toLowerCase()),
       isForcedHandoffEnabled: () => true,
       isAuthorizedForcedHandoff:
-        (forcedBy) => trustedMarkerLogins.size === 0 || trustedMarkerLogins.has(String(forcedBy ?? "").trim().toLowerCase()),
+        typeof options.isAuthorizedForcedHandoff === "function"
+          ? options.isAuthorizedForcedHandoff
+          : (forcedBy) => {
+            if (authorizedForcedHandoffLogins.size === 0) {
+              return false;
+            }
+            return authorizedForcedHandoffLogins.has(String(forcedBy ?? "").trim().toLowerCase());
+          },
     },
   );
 
@@ -1701,6 +1711,8 @@ export function buildPreMergeReadinessSummary(
   );
   const claim = summarizeClaimValidation(claimEvents, {
     trustedMarkerLogins,
+    authorizedForcedHandoffLogins: options.authorizedForcedHandoffLogins,
+    isAuthorizedForcedHandoff: options.isAuthorizedForcedHandoff,
     expectedClaimId: options.expectedClaimId,
     expectedAgentId: options.expectedAgentId,
   });

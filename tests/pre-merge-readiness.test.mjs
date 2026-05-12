@@ -637,6 +637,46 @@ test("summarizeClaimValidation follows trusted forced-handoff transitions", () =
   assert.equal(summary.activeClaim.agentId, "github-copilot-cli-new");
 });
 
+test("summarizeClaimValidation rejects forced handoff from unauthorized approver", () => {
+  const claimEvents = [
+    {
+      body: [
+        "<!-- claimed-by: github-copilot-cli-old claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat-protocol-add-auditable-forced -->",
+        "",
+        "_github-copilot-cli-old: issue claim - IDD automation marker. Do not edit._",
+      ].join("\n"),
+      createdAt: "2026-05-12T09:00:00Z",
+      author: { login: "github-copilot-cli-old" },
+    },
+    {
+      body: [
+        "<!-- forced-handoff: {\"old-agent-id\":\"github-copilot-cli-old\",\"old-claim-id\":\"claim-20260512T090000Z-337-old\",\"new-agent-id\":\"github-copilot-cli-new\",\"new-claim-id\":\"claim-20260512T110000Z-337-new\",\"branch\":\"issue/337-feat-protocol-add-auditable-forced\",\"forced-by\":\"trusted-relay[bot]\",\"reason\":\"operator-approved-recovery\",\"timestamp\":\"2026-05-12T11:00:00Z\",\"context-scope\":\"issue-only\"} -->",
+        "",
+        "Forced handoff approved by trusted-relay[bot]. I verified that the current",
+        "owning session or agent is unavailable. This transfers ownership away",
+        "from claim `claim-20260512T090000Z-337-old` on branch `issue/337-feat-protocol-add-auditable-forced`.",
+        "If the prior session resumes, it must stop immediately and must not",
+        "push, comment, resolve review state, or merge until a maintainer",
+        "reassigns ownership.",
+      ].join("\n"),
+      createdAt: "2026-05-12T11:00:05Z",
+      author: { login: "trusted-relay[bot]" },
+    },
+  ];
+
+  const summary = summarizeClaimValidation(claimEvents, {
+    trustedMarkerLogins: ["github-copilot-cli-old", "trusted-relay[bot]"],
+    isAuthorizedForcedHandoff: (forcedBy) => forcedBy === "kurone-kito",
+    expectedClaimId: "claim-20260512T090000Z-337-old",
+    expectedAgentId: "github-copilot-cli-old",
+  });
+
+  assert.equal(summary.claimLost, false);
+  assert.equal(summary.reason, "match");
+  assert.equal(summary.activeClaim.claimId, "claim-20260512T090000Z-337-old");
+  assert.equal(summary.activeClaim.agentId, "github-copilot-cli-old");
+});
+
 test("advisory wait summary keeps F2 and F3 outcomes distinct when Copilot is no longer pending", () => {
   const summary = buildAdvisoryWaitSummary(
     {

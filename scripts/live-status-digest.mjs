@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 import {
   planLiveStatusDigestUpsert,
@@ -8,9 +9,16 @@ import {
 } from "./protocol-helpers.mjs";
 
 const TRUSTED_MARKER_PERMISSIONS = new Set(["admin", "maintain", "write"]);
+const MAINTAINER_APPROVAL_POLICIES = new Set([
+  "owners-and-maintainers-only",
+  "all-write-permission-actors",
+]);
+const MAINTAINER_APPROVAL_POLICY_DEFAULT = "owners-and-maintainers-only";
 const trustedMarkerAuthorCache = new Map();
+const collaboratorPermissionCache = new Map();
 let cachedConfiguredTrustedMarkerAuthors = null;
 let cachedCurrentViewerLogin = null;
+let cachedMaintainerApprovalPolicy = null;
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -198,9 +206,42 @@ function readActiveClaim(owner, repo, issueNumber) {
     {
       isTrustedAuthor: (login) => isTrustedMarkerAuthor(owner, repo, login),
       isForcedHandoffEnabled: () => true,
-      isAuthorizedForcedHandoff: (forcedBy) => isTrustedMarkerAuthor(owner, repo, forcedBy),
+      isAuthorizedForcedHandoff: (forcedBy) => isAuthorizedForcedHandoffActor(owner, repo, forcedBy),
     },
   );
+}
+
+function isAuthorizedForcedHandoffActor(owner, repo, login) {
+  const normalized = String(login ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const permission = collaboratorPermission(owner, repo, normalized);
+  if (maintainerApprovalActorPolicy() === "all-write-permission-actors") {
+    return permission === "admin" || permission === "maintain" || permission === "write";
+  }
+  return permission === "admin" || permission === "maintain";
+}
+
+function maintainerApprovalActorPolicy() {
+  if (cachedMaintainerApprovalPolicy !== null) {
+    return cachedMaintainerApprovalPolicy;
+  }
+  cachedMaintainerApprovalPolicy = readMaintainerApprovalActorPolicy();
+  return cachedMaintainerApprovalPolicy;
+}
+
+function readMaintainerApprovalActorPolicy() {
+  try {
+    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    const policy = String(config?.maintainerApprovalActorPolicy ?? "").trim();
+    if (MAINTAINER_APPROVAL_POLICIES.has(policy)) {
+      return policy;
+    }
+  } catch {
+    // Default policy remains owners-and-maintainers-only.
+  }
+  return MAINTAINER_APPROVAL_POLICY_DEFAULT;
 }
 
 function isTrustedMarkerAuthor(owner, repo, login) {
@@ -225,22 +266,7 @@ function isTrustedMarkerAuthor(owner, repo, login) {
     return trustedMarkerAuthorCache.get(cacheKey);
   }
 
-  let trusted = false;
-  try {
-    const permission = execFileSync(
-      "gh",
-      [
-        "api",
-        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-        "--jq",
-        ".permission",
-      ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-    ).trim().toLowerCase();
-    trusted = TRUSTED_MARKER_PERMISSIONS.has(permission);
-  } catch {
-    trusted = false;
-  }
+  const trusted = TRUSTED_MARKER_PERMISSIONS.has(collaboratorPermission(owner, repo, normalized));
 
   trustedMarkerAuthorCache.set(cacheKey, trusted);
   return trusted;
@@ -261,6 +287,32 @@ function currentViewerLogin() {
     cachedCurrentViewerLogin = "";
   }
   return cachedCurrentViewerLogin;
+}
+
+function collaboratorPermission(owner, repo, login) {
+  const cacheKey = `${owner}/${repo}:${login}`;
+  if (collaboratorPermissionCache.has(cacheKey)) {
+    return collaboratorPermissionCache.get(cacheKey);
+  }
+
+  let permission = "";
+  try {
+    permission = execFileSync(
+      "gh",
+      [
+        "api",
+        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
+        "--jq",
+        ".permission",
+      ],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim().toLowerCase();
+  } catch {
+    permission = "";
+  }
+
+  collaboratorPermissionCache.set(cacheKey, permission);
+  return permission;
 }
 
 function configuredTrustedMarkerAuthors() {
