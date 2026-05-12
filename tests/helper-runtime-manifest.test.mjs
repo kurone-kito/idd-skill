@@ -87,6 +87,11 @@ test("detectPackageManager respects package metadata and lockfiles", () => {
   const lockfileRoot = mkdtempSync(join(tmpdir(), "idd-helper-runtime-lockfile-"));
   writeFileSync(join(lockfileRoot, "yarn.lock"), "# lockfile");
   assert.equal(detectPackageManager(lockfileRoot), "yarn");
+
+  const ambiguousRoot = mkdtempSync(join(tmpdir(), "idd-helper-runtime-ambiguous-lockfile-"));
+  writeFileSync(join(ambiguousRoot, "package-lock.json"), "{}");
+  writeFileSync(join(ambiguousRoot, "yarn.lock"), "# lockfile");
+  assert.equal(detectPackageManager(ambiguousRoot), "");
 });
 
 test("source package metadata falls back when vendored into another repository", () => {

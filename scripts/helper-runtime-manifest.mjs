@@ -193,14 +193,13 @@ export function detectPackageManager(root = process.cwd()) {
     }
   }
 
-  if (existsSync(resolve(root, "pnpm-lock.yaml"))) {
-    return "pnpm";
-  }
-  if (existsSync(resolve(root, "package-lock.json"))) {
-    return "npm";
-  }
-  if (existsSync(resolve(root, "yarn.lock"))) {
-    return "yarn";
+  const lockfileMatches = [
+    ["pnpm-lock.yaml", "pnpm"],
+    ["package-lock.json", "npm"],
+    ["yarn.lock", "yarn"],
+  ].filter(([filename]) => existsSync(resolve(root, filename)));
+  if (lockfileMatches.length === 1) {
+    return lockfileMatches[0][1];
   }
 
   return "";
