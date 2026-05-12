@@ -155,24 +155,30 @@ export function validate(data, schema, path = "$") {
         errors.push(...validate(data[prop], propSchema, `${path}.${prop}`));
       }
     }
-    const patternSchemas = Object.entries(schema.patternProperties ?? {});
+    const declaredProperties = schema.properties ?? {};
+    const compiledPatternSchemas = [];
+    for (const [pattern, patternSchema] of Object.entries(schema.patternProperties ?? {})) {
+      try {
+        compiledPatternSchemas.push([new RegExp(pattern), patternSchema]);
+      } catch {
+        errors.push(`${path}: invalid patternProperties regex "${pattern}"`);
+      }
+    }
     const additionalPropertiesSchema = (
       typeof schema.additionalProperties === "object" && schema.additionalProperties !== null
     )
       ? schema.additionalProperties
       : null;
     for (const key of Object.keys(data)) {
-      if ((schema.properties ?? {})[key] !== undefined) {
-        continue;
-      }
+      const isDeclaredProperty = Object.hasOwn(declaredProperties, key);
       let matchedPattern = false;
-      for (const [pattern, patternSchema] of patternSchemas) {
-        if (new RegExp(pattern).test(key)) {
+      for (const [patternRegex, patternSchema] of compiledPatternSchemas) {
+        if (patternRegex.test(key)) {
           matchedPattern = true;
           errors.push(...validate(data[key], patternSchema, `${path}.${key}`));
         }
       }
-      if (matchedPattern) {
+      if (isDeclaredProperty || matchedPattern) {
         continue;
       }
       if (schema.additionalProperties === false) {
