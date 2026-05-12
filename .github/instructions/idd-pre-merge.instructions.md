@@ -92,8 +92,8 @@ must align with every F2 condition below.
   [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#stable-helper-evidence-outputs)
   may collect the documented snapshot tuple and broader
   `pre-merge-readiness` JSON report. The instruction rules remain
-  canonical. Then fetch the activity universe snapshot (same scope as
-  E1 Step 1) and the current CI state for the HEAD SHA. Return to E1 if
+  canonical. Fetch the activity universe snapshot (same scope as E1
+  Step 1) and the current CI state for the HEAD SHA. Return to E1 if
   **any** of the
   following is true:
   - The current PR HEAD SHA differs from the stored `{head-SHA}` (a new
