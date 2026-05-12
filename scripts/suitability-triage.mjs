@@ -75,6 +75,10 @@ const DUPLICATE_NEGATION_PATTERN = /\b(not|no|avoid)\b[\s\S]{0,30}$/i;
 const SUBJECTIVE_SUBJECT_PATTERN = /\b(maintainer|stakeholder|human|opinion|judgment|judgement|ux|feel)\b/i;
 const SUBJECTIVE_GATE_PATTERN = /\b(approval|sign-?off|decision|preference)\b/i;
 const OUTCOME_SIGNAL_PATTERN = /\b(pass|fail|result|output|contains|include|present|required|objective|measurable|deterministic)\b/i;
+const EXPLICIT_UNSAFE_DIRECTIVE_PATTERN = /\b(execute|run|paste|install|invoke)\b[\s\S]{0,100}(?:this|untrusted|user-provided|user input|from user|from the user)\b/i;
+const NEGATION_PATTERN = /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
+const POLICY_OVERRIDE_PATTERN = /\b(ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)\b[\s\S]{0,60}\b(repo|repository|policy|workflow|idd|process|check|gate|requirement)\b/i;
+const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 
 if (isCliExecution()) {
   runCli();
@@ -200,6 +204,24 @@ export function checkTrustSafety(context) {
     };
   }
 
+  // Check for explicit policy-override directives
+  if (POLICY_OVERRIDE_PATTERN.test(corpus)) {
+    const match = corpus.match(POLICY_OVERRIDE_PATTERN);
+    return {
+      pass: false,
+      evidence: `Policy-override directive detected: "${match?.[0] ?? ""}". Untrusted policy-manipulation instructions cannot be processed.`,
+    };
+  }
+
+  // Check for explicit unsafe execution directives
+  if (EXPLICIT_UNSAFE_DIRECTIVE_PATTERN.test(corpus)) {
+    const match = corpus.match(EXPLICIT_UNSAFE_DIRECTIVE_PATTERN);
+    return {
+      pass: false,
+      evidence: `Explicit unsafe execution directive detected: "${match?.[0] ?? ""}". Cannot execute untrusted user-provided instructions.`,
+    };
+  }
+
   const matchedUnsafe = UNSAFE_PATTERNS.find((pattern) => pattern.test(corpus));
   if (matchedUnsafe) {
     const unsafeMatch = corpus.match(matchedUnsafe);
@@ -265,12 +287,57 @@ export function checkDuplicateOrSuperseded(context) {
     };
   }
 
+  // Near-duplicate detection: check for high similarity (>80% Levenshtein match)
+  const nearDuplicate = duplicateCandidates.find((candidate) => {
+    if (candidate.number === issue.number) {
+      return false;
+    }
+    if (candidate.state === "CLOSED") {
+      return false;
+    }
+    const sim = computeSimilarity(exactTitle, normalizeText(candidate.title));
+    return sim > 0.8;
+  });
+  if (nearDuplicate) {
+    return {
+      pass: false,
+      evidence: `Near-duplicate found: #${nearDuplicate.number} ("${nearDuplicate.title}"). Title similarity >80%.`,
+    };
+  }
+
   return {
     pass: true,
     evidence: duplicateCandidates.length === 0
       ? "No duplicate candidate matched."
-      : `Checked ${duplicateCandidates.length} duplicate candidates; no match.`,
+      : `Checked ${duplicateCandidates.length} duplicate candidates; no exact or near match.`,
   };
+}
+
+function computeSimilarity(str1, str2) {
+  const maxLen = Math.max(str1.length, str2.length);
+  if (maxLen === 0) {
+    return 1;
+  }
+  const distance = levenshteinDistance(str1, str2);
+  return (maxLen - distance) / maxLen;
+}
+
+function levenshteinDistance(str1, str2) {
+  const memo = {};
+  function lev(i, j) {
+    if (i === 0) return j;
+    if (j === 0) return i;
+    const key = `${i},${j}`;
+    if (memo[key] !== undefined) return memo[key];
+    const cost = str1[i - 1] === str2[j - 1] ? 0 : 1;
+    memo[key] = Math.min(
+      lev(i - 1, j) + 1,
+      lev(i, j - 1) + 1,
+      lev(i - 1, j - 1) + cost,
+    );
+    return memo[key];
+  }
+  return lev(str1.length, str2.length);
 }
 
 export function checkActionability(context) {
@@ -307,13 +374,27 @@ export function checkAutonomy(context) {
     }
   }
 
-  if (
-    /\brequires (?:maintainer|human|stakeholder) (?:decision|approval|sign-?off)\b/i.test(body)
-    || /\bstakeholder\b[\s\S]{0,80}\b(sign-?off|approval|decision)\b/i.test(body)
-  ) {
+  // Negation-aware parsing for external coordination and human decision requirements
+  const coordinationMatches = [
+    ...body.matchAll(/\brequires (?:maintainer|human|stakeholder) (?:decision|approval|sign-?off)\b/gi),
+    ...body.matchAll(/\bstakeholder\b[\s\S]{0,80}\b(sign-?off|approval|decision)\b/gi),
+  ];
+
+  for (const match of coordinationMatches) {
+    const matchedText = match[0] ?? "";
+    const matchIndex = match.index ?? 0;
+    const contextBefore = body.slice(Math.max(0, matchIndex - 60), matchIndex);
+    const contextAfter = body.slice(matchIndex + matchedText.length, Math.min(body.length, matchIndex + matchedText.length + 60));
+
+    // Check if negated (either before or immediately after)
+    if (NEGATION_PATTERN.test(contextBefore) || NEGATION_PATTERN.test(contextAfter)) {
+      // This is a negated non-requirement; skip this match
+      continue;
+    }
+
     return {
       pass: false,
-      evidence: "Issue explicitly requires external human coordination.",
+      evidence: "Issue explicitly requires external human coordination or approval.",
     };
   }
 
@@ -327,15 +408,42 @@ export function checkVerifiability(context) {
   const { issue } = context;
   const body = issue.body;
   const hasVerificationChannel = /\btests?\b|\bverification\b|\bvalidate\b|\blint\b|\bci\b/i.test(body);
-  const hasObjectiveCriteria = /\bacceptance criteria\b|\bcoverage\b|\boutput\b/i.test(body)
-    || (/^\s*\d+\.\s+/m.test(body) && OUTCOME_SIGNAL_PATTERN.test(body))
-    || (/^\s*[-*]\s+\[[ xX]\]/m.test(body) && OUTCOME_SIGNAL_PATTERN.test(body));
+  
+  // Check for substantive objective criteria, not just empty headings
+  let hasObjectiveCriteria = false;
+  
+  // Check for "Acceptance Criteria" with substantive content after it
+  const acceptanceCriteriaMatch = body.match(ACCEPTANCE_CRITERIA_PATTERN);
+  if (acceptanceCriteriaMatch) {
+    const indexAfter = (acceptanceCriteriaMatch.index ?? 0) + (acceptanceCriteriaMatch[0]?.length ?? 0);
+    const contentAfter = body.slice(indexAfter, indexAfter + 500).trim();
+    // Require either a list (starting with - or *) or numbered content with outcome signals
+    if (/^[-*]\s+/.test(contentAfter) || /^\d+\.\s+/.test(contentAfter)) {
+      const hasOutcomeSignals = OUTCOME_SIGNAL_PATTERN.test(contentAfter);
+      if (hasOutcomeSignals) {
+        hasObjectiveCriteria = true;
+      }
+    }
+  }
+
+  // Alternative: check for numbered steps with outcome signals or checklists
+  if (!hasObjectiveCriteria) {
+    const hasNumSteps = /^\s*\d+\.\s+/m.test(body) && OUTCOME_SIGNAL_PATTERN.test(body);
+    const hasChecklist = /^\s*[-*]\s+\[[ xX]\]/m.test(body) && OUTCOME_SIGNAL_PATTERN.test(body);
+    hasObjectiveCriteria = hasNumSteps || hasChecklist;
+  }
+
+  // Fallback: check for "Output", "Deliverables", or "Verification" keywords with signal words
+  if (!hasObjectiveCriteria) {
+    hasObjectiveCriteria = /\b(?:Output|Deliverables|Verification)\b[\s\S]{0,300}(?:must|should|required|contains|includes|result)/i.test(body);
+  }
+
   const hasObjectiveSignals = hasVerificationChannel || hasObjectiveCriteria;
 
   if (!hasObjectiveSignals) {
     return {
       pass: false,
-      evidence: "Issue does not provide objective verification signals.",
+      evidence: "Issue does not provide objective verification signals or substantive acceptance criteria.",
     };
   }
   const hasSubjectiveApproval = (() => {
@@ -352,7 +460,7 @@ export function checkVerifiability(context) {
 
   return {
     pass: true,
-    evidence: "Issue includes objective verification language.",
+    evidence: "Issue includes objective verification language and substantive criteria.",
   };
 }
 
