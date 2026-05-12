@@ -215,3 +215,67 @@ test("filterOrphanIssues reports unresolvable and circular references", () => {
     reference: 99,
   });
 });
+
+test("classifyIssue handles lowercase state casing", () => {
+  const issue = {
+    number: 50,
+    title: "blocked by open issue with lowercase state",
+    state: "open",
+    labels: [],
+    body: "Blocked by #51",
+    url: "https://example.com/50",
+  };
+
+  const result = filterOrphanIssues([issue], {
+    issueStateByNumber: new Map([[51, "open"]]),
+    fetchIssueStateByNumber: () => "UNRESOLVABLE",
+  });
+
+  assert.equal(result.orphans.length, 0, "Issue should not be orphan when blocked by open reference");
+  assert.equal(result.filtered.blocked_by_open_reference.length, 1, "Should classify as blocked_by_open_reference");
+});
+
+test("classifyIssue supports custom marker prefix in filtering", () => {
+  const issue = {
+    number: 60,
+    title: "issue with custom marker",
+    state: "OPEN",
+    labels: [],
+    body: "<!-- my-org-idd-blocked-by: gap-123 -->",
+    url: "https://example.com/60",
+  };
+
+  const result = filterOrphanIssues([issue], {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => "UNRESOLVABLE",
+    markerPrefix: "my-org-idd",
+  });
+
+  assert.equal(result.orphans.length, 0, "Issue should not be orphan when has custom-prefix blocked marker");
+  assert.equal(result.filtered.blocked_by_marker.length, 1, "Should detect custom marker");
+});
+
+test("filterOrphanIssues handles pagination with PR-heavy pages", () => {
+  const mockFetchIssueStateByNumber = (number) => {
+    return number === 100 ? "CLOSED" : "UNRESOLVABLE";
+  };
+
+  const issues = [
+    {
+      number: 70,
+      title: "issue on pr-heavy page",
+      state: "OPEN",
+      labels: [],
+      body: "Blocked by #100",
+      url: "https://example.com/70",
+    },
+  ];
+
+  const result = filterOrphanIssues(issues, {
+    issueStateByNumber: new Map([[100, "CLOSED"]]),
+    fetchIssueStateByNumber: mockFetchIssueStateByNumber,
+  });
+
+  assert.equal(result.orphans.length, 1, "Issue should be orphan when blocker is closed");
+  assert.equal(result.orphans[0].reason, "blocked_references_closed");
+});
