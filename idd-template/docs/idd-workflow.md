@@ -280,8 +280,8 @@ reviewer because that is part of this repository's current PR policy.
 
 ## Optional helper scripts
 
-The idd-skill source repository that ships this template currently includes five
-optional helper scripts:
+The idd-skill source repository that ships this template currently includes the
+following optional helper scripts:
 
 - `scripts/review-activity-snapshot.mjs` (read-only E/F activity and CI
   snapshot metrics)

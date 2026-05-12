@@ -291,7 +291,7 @@ reviewer because that is part of this repository's current PR policy.
 
 ## Optional helper scripts
 
-This source repository currently ships five optional helper scripts:
+This source repository currently ships the following optional helper scripts:
 
 - `scripts/review-activity-snapshot.mjs` (read-only E/F activity and CI
   snapshot metrics)
