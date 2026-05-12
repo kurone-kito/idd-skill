@@ -33,28 +33,15 @@ gate. The active claim must still use your current `{claim-id}`.
    (all review threads, review bodies, and regular PR comments,
    excluding trusted agent operational marker comments only). Compare
    against the F2 snapshot carried forward from
-   `idd-pre-merge.instructions.md`. Return to E1 if **any** of the
-   following is true:
-
-   In the idd-skill source repository, you may optionally use the
-   read-only helper:
-
-   ```sh
-   node scripts/review-activity-snapshot.mjs --pr {pr-number} \
-     --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
-   ```
-
-   You may also optionally use:
-
-   ```sh
-   node scripts/pre-merge-readiness.mjs --pr {pr-number} \
-     --claim-issue {issue-number} --expected-claim-id {claim-id} \
-     --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
-   ```
-
-   to collect the broader F2/F3 evidence set immediately before the
-   merge attempt. Both helpers are evidence collectors only; the written
-   gate rules remain canonical.
+   `idd-pre-merge.instructions.md`. In the idd-skill source repository,
+   or in adopters that explicitly
+   installed the same helpers, the documented merge-gate helper
+   reference in
+   [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#stable-helper-evidence-outputs)
+   may collect the documented snapshot tuple and broader
+   `pre-merge-readiness` JSON report. Both helpers are evidence
+   collectors only; the written gate rules remain canonical. Return to
+   E1 if **any** of the following is true:
 
    - The current PR HEAD SHA differs from `{f2-head-SHA}`.
    - `{f2-max-activity-updatedAt}` is `none` and the final fetch is

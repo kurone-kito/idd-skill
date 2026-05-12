@@ -86,27 +86,14 @@ must align with every F2 condition below.
   watermarks without `{claim-id}` must not be reused across a restart or
   takeover, and same-claim watermarks from untrusted authors must be
   ignored and reported as suspicious context when they affect routing.
-  Then fetch the activity universe snapshot (same scope as E1 Step 1)
-  and the current CI state for the HEAD SHA. In the idd-skill source
-  repository, you may optionally use the read-only helper:
-
-  ```sh
-  node scripts/review-activity-snapshot.mjs --pr {pr-number} \
-    --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
-  ```
-
-  You may also optionally use:
-
-  ```sh
-  node scripts/pre-merge-readiness.mjs --pr {pr-number} \
-    --claim-issue {issue-number} --expected-claim-id {claim-id} \
-    --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
-  ```
-
-  to collect the wider F2 evidence set (review currency, unresolved
-  threads, unreplied comments, reviewer states, advisory state, CI, and
-  claim validation) in one read-only JSON report; the instruction rules
-  remain canonical. Return to E1 if **any** of the
+  To collect this evidence, either use the documented merge-gate helper
+  reference in
+  [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#stable-helper-evidence-outputs)
+  (in the idd-skill source repository or adopters that explicitly
+  installed the same helpers) or fetch the activity universe snapshot
+  (same scope as E1 Step 1) and the current CI state for the HEAD SHA
+  directly. The instruction rules remain canonical. Return to E1 if
+  **any** of the
   following is true:
   - The current PR HEAD SHA differs from the stored `{head-SHA}` (a new
     push occurred after E1's snapshot, even if the watermark comment was
