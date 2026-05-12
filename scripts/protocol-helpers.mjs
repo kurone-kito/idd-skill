@@ -102,7 +102,8 @@ export function parseReleaseComment(body) {
 
 export function parseForcedHandoffComment(body, createdAt) {
   const trimmed = body.trimEnd();
-  if (!trimmed.startsWith(FORCED_HANDOFF_MARKER_PREFIX)) {
+  const markerMatch = trimmed.match(/^<!--\s*forced-handoff:\s*/i);
+  if (!markerMatch) {
     return null;
   }
 
@@ -116,7 +117,7 @@ export function parseForcedHandoffComment(body, createdAt) {
     return null;
   }
 
-  const payloadText = trimmed.slice(FORCED_HANDOFF_MARKER_PREFIX.length, markerEnd).trim();
+  const payloadText = trimmed.slice(markerMatch[0].length, markerEnd).trim();
   let payload;
   try {
     payload = JSON.parse(payloadText);
@@ -129,6 +130,18 @@ export function parseForcedHandoffComment(body, createdAt) {
 
 export function normalizeForcedHandoffPayload(payload, options = {}) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+
+  if (
+    hasConflictingPayloadAliases(payload, "oldAgentId", "old-agent-id")
+    || hasConflictingPayloadAliases(payload, "oldClaimId", "old-claim-id")
+    || hasConflictingPayloadAliases(payload, "newAgentId", "new-agent-id")
+    || hasConflictingPayloadAliases(payload, "newClaimId", "new-claim-id")
+    || hasConflictingPayloadAliases(payload, "forcedBy", "forced-by")
+    || hasConflictingPayloadAliases(payload, "linkedPr", "linked-pr")
+    || hasConflictingPayloadAliases(payload, "contextScope", "context-scope")
+  ) {
     return null;
   }
 
@@ -1871,7 +1884,7 @@ export function applyClaimEvent(activeClaim, event, options = {}) {
       claimId: forcedHandoff.newClaimId,
       supersedes: forcedHandoff.oldClaimId,
       branch: forcedHandoff.branch,
-      createdAt: event.createdAt ?? activeClaim.createdAt,
+      createdAt: forcedHandoff.createdAt ?? activeClaim.createdAt,
     };
   }
 
@@ -1920,6 +1933,17 @@ function pickPayloadValue(payload, ...keys) {
     }
   }
   return undefined;
+}
+
+function hasConflictingPayloadAliases(payload, firstKey, secondKey) {
+  if (
+    !Object.prototype.hasOwnProperty.call(payload, firstKey)
+    || !Object.prototype.hasOwnProperty.call(payload, secondKey)
+  ) {
+    return false;
+  }
+
+  return String(payload[firstKey] ?? "").trim() !== String(payload[secondKey] ?? "").trim();
 }
 
 function normalizeBranchToken(value) {

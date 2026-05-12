@@ -173,7 +173,7 @@ function buildTrustedMarkerLogins(owner, repo, viewerLogin, cliLogins, issueComm
     }
     const permission = permissionCache.get(login) ?? safeGhText([
       "api",
-      `repos/${owner}/${repo}/collaborators/${login}/permission`,
+      `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
       "--jq",
       ".permission",
     ]).toLowerCase();
