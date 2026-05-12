@@ -1,85 +1,66 @@
 # Issue #328: Cleanup Backlog Audit Summary
 
-**Issue**: https://github.com/kurone-kito/idd-skill/issues/328
-**Roadmap**: #324 (Post-merge cleanup improvements)
-**Predecessor issues**: #325 (helper), #326 (tests), #327 (instructions)
+**Issue**: <https://github.com/kurone-kito/idd-skill/issues/328>\
+**Roadmap**: #324\
+**Execution branch**: `issue/328-cleanup-minimize-backlog`
 
-## Audit Scope
+## Scope
 
-Analyzed 7 recently merged PRs for safe post-merge cleanup candidates:
-- PR #313 (docs: roadmap structure proposal)
-- PR #315 (docs: IDD overview structure update)
-- PR #316 (docs: add IDD phase docs)
-- PR #317 (docs: complete IDD instructions distribution)
-- PR #318 (docs: add audit-pr-cleanup.mjs)
-- PR #320 (Merge pull request #318)
-- PR #321 (Merge pull request #319)
+Audited merged PRs:
 
-## Results
+- #313 `docs(issue-authoring): define specificity target`
+- #315 `docs(issue-authoring): add specificity checklist`
+- #316 `docs: define helper runtime profile policy`
+- #317 `docs(helper): rank roadmap helper targets`
+- #318 `test(issue-authoring): cover specificity guidance sync`
+- #320 `docs(onboarding): document helper runtime selection`
+- #321 `feat(helper): add advisory-wait state helper`
 
-### Summary Statistics
+## Method
 
-| Metric | Count |
-|--------|-------|
-| Total candidates | 137 |
-| Safe (OUTDATED) | 54 |
-| Unsafe/Skip | 83 |
-| Audit status | ✅ complete |
-| Apply status | ⏸️ rate-limited |
+For each PR:
 
-### Classification Breakdown
+1. Before snapshot: `audit-pr-cleanup --dry-run --format json`
+2. Apply pass where safe candidates existed:
+   `audit-pr-cleanup --apply --claim-issue 328 --claim-id <active-claim>`
+3. After snapshot: `audit-pr-cleanup --dry-run --format json`
 
-**Safe Candidates (54)**
-- Stale review-watermark markers: ~30
-- Stale advisory-wait markers: ~15
-- Resolved Copilot code review comments: ~9
-- All classifed as OUTDATED and non-blocking
+## Before/After by PR
 
-**Unsafe/Skip (83)**
-- Unresolved review threads: ~40
-- Active maintainer holds: ~20
-- Failed CI context: ~15
-- Non-bot human discussion: ~8
+| PR        | Before safe candidates | Applied this pass | Already minimized at start | Remaining skipped (non-already) | After safe candidates |
+| --------- | ---------------------: | ----------------: | -------------------------: | ------------------------------: | --------------------: |
+| #313      |                      0 |                 0 |                         15 |                               8 |                     0 |
+| #315      |                      0 |                 0 |                         18 |                               2 |                     0 |
+| #316      |                      0 |                 0 |                         20 |                               3 |                     0 |
+| #317      |                      0 |                 0 |                         35 |                               7 |                     0 |
+| #318      |                      8 |                 8 |                         13 |                               4 |                     0 |
+| #320      |                     23 |                23 |                          0 |                               2 |                     0 |
+| #321      |                      5 |                 5 |                          0 |                               2 |                     0 |
+| **Total** |                 **36** |            **36** |                    **101** |                          **28** |                 **0** |
 
-## Key Findings
+## Result
 
-1. **Helper Validation**
-   - ✅ `audit-pr-cleanup.mjs` successfully audited all 7 PRs
-   - ✅ OUTDATED classification accurate for safe cleanup
-   - ✅ Skip reasons preserved for unsafe context
+- All helper-classified safe candidates in scope were minimized
+  (**36/36 applied, 0 failed**).
+- PRs #313/#315/#316/#317 had no remaining safe candidates at execution
+  start; their safe candidates were already minimized.
+- No remaining safe candidates were left after execution.
 
-2. **Safety Practice**
-   - ✅ No human discussion would be minimized
-   - ✅ All unresolved threads preserved
-   - ✅ All maintainer decisions preserved
-   - ✅ All failed CI context preserved
+## Remaining visible items (by reason)
 
-3. **Rate Limiting**
-   - GraphQL minimizeComment mutations rate-limited at ~20 mutations/min
-   - Apply phase requires pagination or batch deferral
-   - Recommendation: apply in 2-3 PR batches with delay between
+These items intentionally stayed visible:
 
-## Acceptance Criteria Met
+- 13 — known review-bot regular comment lacks a completed-review signal
+- 10 — review has no associated review threads
+- 2 — review thread is missing an IDD accept/reject disposition
+- 2 — associated review threads are missing IDD accept/reject
+  dispositions
+- 1 — contains failed-CI context
 
-- ✅ Dry-run audit completed for all target PRs
-- ✅ Before/after table recorded (137 total, 54 safe, 83 unsafe)
-- ✅ Safe candidates identified and classified
-- ✅ Unsafe items remain visible with reasons
-- ✅ Audit evidence posted to issue #328
-- ✅ Apply path documented for maintainer follow-up
+## Acceptance mapping for #328
 
-## Recommendations
-
-For maintainer apply pass:
-```sh
-# Apply one PR at a time to avoid rate limits
-node scripts/audit-pr-cleanup.mjs --pr 313 --apply --skip-claim-check
-# Wait 30-60s between PRs
-node scripts/audit-pr-cleanup.mjs --pr 315 --apply --skip-claim-check
-# ... etc
-```
-
-## Closure
-
-This issue has completed the audit phase. The apply phase has been deferred to maintainer due to rate-limiting constraints. A follow-up maintenance pass can apply remaining safe candidates in batches.
-
+- Before/after evidence recorded per target PR: **done**
+- Safe candidates minimized or failure reported: **done** (36 applied,
+  0 failed)
+- Unsafe context kept visible with reasons: **done** (reason totals
+  listed above)
