@@ -165,6 +165,30 @@ test("approval comment older than issue edit is stale", () => {
   assert.equal(result.reason, "approval-comment-stale");
 });
 
+test("unauthorized ready comments route to approval-missing, not stale", () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: BASE_ISSUE,
+      timeline: BASE_TIMELINE,
+      comments: [
+        {
+          user: { login: "outsider" },
+          body: "IDD ready",
+          created_at: "2026-05-10T12:00:00Z",
+        },
+      ],
+    },
+    {
+      resolvePermission: permissionResolver({
+        author: { known: true, permission: "none" },
+        outsider: { known: true, permission: "none" },
+      }),
+    },
+  );
+  assert.equal(result.approved, false);
+  assert.equal(result.reason, "approval-missing");
+});
+
 test("approval comment equal to anchor timestamp is stale (must be strictly newer)", () => {
   const result = evaluateClaimApprovalGate(
     {

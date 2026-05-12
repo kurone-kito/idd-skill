@@ -144,6 +144,7 @@ export function evaluateClaimApprovalGate(input, options = {}) {
       authorSelfAuthorized,
       hasReadyLabel,
       readyCommentFresh,
+      hasAuthorizedReadyComment: Boolean(approvalCommentState.comment),
       ambiguityBlocking,
       permissionAmbiguity,
       freshnessDeterminable,
@@ -238,33 +239,39 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
+    const requireValue = () => {
+      if (value === undefined || String(value).startsWith("--")) {
+        throw new Error(`missing value for argument: ${token}`);
+      }
+      return value;
+    };
     if (token === "--issue") {
-      parsed.issue = Number.parseInt(String(value ?? ""), 10);
+      parsed.issue = Number.parseInt(String(requireValue()), 10);
       index += 1;
       continue;
     }
     if (token === "--owner") {
-      parsed.owner = value ?? "";
+      parsed.owner = requireValue();
       index += 1;
       continue;
     }
     if (token === "--repo") {
-      parsed.repo = value ?? "";
+      parsed.repo = requireValue();
       index += 1;
       continue;
     }
     if (token === "--policy") {
-      parsed.policy = value ?? "";
+      parsed.policy = requireValue();
       index += 1;
       continue;
     }
     if (token === "--token") {
-      parsed.token = value ?? "";
+      parsed.token = requireValue();
       index += 1;
       continue;
     }
     if (token === "--generated-plan-updated-at") {
-      parsed.generatedPlanUpdatedAt = value ?? "";
+      parsed.generatedPlanUpdatedAt = requireValue();
       index += 1;
       continue;
     }
@@ -436,7 +443,7 @@ function deriveReason(state) {
     if (state.ambiguityBlocking) {
       return "approval-ambiguous";
     }
-    if (state.readyCommentFresh === false) {
+    if (state.hasAuthorizedReadyComment && state.readyCommentFresh === false) {
       return "approval-comment-stale";
     }
     return "approval-missing";
@@ -608,7 +615,9 @@ function runGh(args) {
   } catch (error) {
     const stderr = String(error?.stderr ?? "").trim();
     if (stderr) {
-      throw new Error(`gh command failed: ${stderr}`);
+      const wrapped = new Error(`gh command failed: ${stderr}`);
+      wrapped.stderr = stderr;
+      throw wrapped;
     }
     throw error;
   }
