@@ -67,8 +67,13 @@ const UNSAFE_PATTERNS = [
   /\beval\s*\(/i,
 ];
 
-const EXECUTION_DIRECTIVE_PATTERN = /\b(run|execute|paste|install|invoke)\b[\s\S]{0,80}\b(command|script|snippet)\b/i;
+const EXECUTION_VERB_PATTERN = /\b(run|execute|paste|install|invoke)\b/i;
+const NEGATED_DIRECTIVE_PATTERN = /\b(do not|don't|never|avoid)\s+(?:run|execute|paste|install|invoke)\b/i;
 const EXTERNAL_COORDINATION_PATTERN = /\b(cross-repo|cross repo|external repo|another repo|upstream change|maintainer of)\b/i;
+const EXTERNAL_SYSTEM_ACCESS_PATTERN = /\b(requires?|need(?:s)?|must|depends on)\b[\s\S]{0,120}\b(access|credentials?|login|permission|sign-?in)\b[\s\S]{0,120}\b(external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog)\b/i;
+const DUPLICATE_DECLARATION_PATTERN = /\b(duplicate of|superseded by)\s*#\d+\b/gi;
+const DUPLICATE_NEGATION_PATTERN = /\b(not|no|avoid)\b[\s\S]{0,30}$/i;
+const SUBJECTIVE_VERIFICATION_PATTERN = /\b(maintainer|stakeholder|human|opinion|judgment|judgement|ux|feel)\b[\s\S]{0,80}\b(approval|sign-?off|decision|preference)\b/i;
 const OUTCOME_SIGNAL_PATTERN = /\b(pass|fail|result|output|contains|include|present|required|objective|measurable|deterministic)\b/i;
 
 if (isCliExecution()) {
@@ -138,6 +143,12 @@ export function checkRepositoryFit(context) {
       evidence: `Cross-repository references detected: ${crossRepoLinks.join(", ")}`,
     };
   }
+  if (EXTERNAL_SYSTEM_ACCESS_PATTERN.test(body)) {
+    return {
+      pass: false,
+      evidence: "Issue requires external system access beyond repository scope.",
+    };
+  }
 
   return {
     pass: true,
@@ -164,13 +175,6 @@ export function checkCoherence(context) {
       evidence: "Issue body contains unresolved conflict markers.",
     };
   }
-  if (/\bTBD\b|\bTODO\b/i.test(body) && !/\bAcceptance Criteria\b|\bScope\b|\bPurpose\b/i.test(body)) {
-    return {
-      pass: false,
-      evidence: "Issue body still appears as an unfinished draft.",
-    };
-  }
-
   return {
     pass: true,
     evidence: "Issue body is structurally coherent and interpretable.",
@@ -198,7 +202,11 @@ export function checkTrustSafety(context) {
 
   const matchedUnsafe = UNSAFE_PATTERNS.find((pattern) => pattern.test(corpus));
   if (matchedUnsafe) {
-    if (!EXECUTION_DIRECTIVE_PATTERN.test(corpus)) {
+    const directivePattern = new RegExp(
+      `${EXECUTION_VERB_PATTERN.source}[\\s\\S]{0,120}${matchedUnsafe.source}`,
+      "i",
+    );
+    if (!directivePattern.test(corpus) || NEGATED_DIRECTIVE_PATTERN.test(corpus)) {
       return {
         pass: true,
         evidence: "Unsafe command string appears as context only; no execution directive detected.",
@@ -220,10 +228,17 @@ export function checkDuplicateOrSuperseded(context) {
   const { issue, duplicateCandidates } = context;
   const body = issue.body;
 
-  if (/duplicate of #\d+/i.test(body) || /superseded by #\d+/i.test(body)) {
+  const declarations = [...body.matchAll(DUPLICATE_DECLARATION_PATTERN)];
+  for (const declaration of declarations) {
+    const matched = declaration[0] ?? "";
+    const index = declaration.index ?? 0;
+    const prefix = body.slice(Math.max(0, index - 30), index);
+    if (DUPLICATE_NEGATION_PATTERN.test(prefix)) {
+      continue;
+    }
     return {
       pass: false,
-      evidence: "Issue body declares duplicate/superseded status.",
+      evidence: `Issue body declares duplicate/superseded status: ${matched}`,
     };
   }
 
@@ -283,7 +298,10 @@ export function checkAutonomy(context) {
     }
   }
 
-  if (/\brequires (?:maintainer|human) (?:decision|approval)\b/i.test(body)) {
+  if (
+    /\brequires (?:maintainer|human|stakeholder) (?:decision|approval|sign-?off)\b/i.test(body)
+    || /\bstakeholder\b[\s\S]{0,80}\b(sign-?off|approval|decision)\b/i.test(body)
+  ) {
     return {
       pass: false,
       evidence: "Issue explicitly requires external human coordination.",
@@ -309,6 +327,12 @@ export function checkVerifiability(context) {
     return {
       pass: false,
       evidence: "Issue does not provide objective verification signals.",
+    };
+  }
+  if (SUBJECTIVE_VERIFICATION_PATTERN.test(body)) {
+    return {
+      pass: false,
+      evidence: "Issue success depends on subjective approval or judgment.",
     };
   }
 
