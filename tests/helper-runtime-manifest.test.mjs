@@ -83,6 +83,20 @@ test("detectPackageManager respects package metadata and lockfiles", () => {
   assert.equal(detectPackageManager(lockfileRoot), "yarn");
 });
 
+test("empty targetRoot falls back to the current working directory", () => {
+  const emptyTarget = buildHelperRuntimeManifest({
+    profile: "package-manager",
+    packageManager: "pnpm",
+    targetRoot: "",
+  });
+  const defaultTarget = buildHelperRuntimeManifest({
+    profile: "package-manager",
+    packageManager: "pnpm",
+  });
+
+  assert.deepEqual(emptyTarget, defaultTarget);
+});
+
 test("switching away from vendored-node enumerates removal paths", () => {
   const manifest = buildHelperRuntimeManifest({
     profile: "instructions-only",
@@ -107,4 +121,15 @@ test("helper bundle manifest bin wrapper produces JSON output", () => {
 
   const launcher = readFileSync(join(REPO_ROOT, "bin/idd-helper-bundle-manifest.mjs"), "utf8");
   assert.ok(launcher.startsWith("#!/usr/bin/env node"));
+});
+
+test("manifest CLI rejects flags that are missing required values", () => {
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [join(REPO_ROOT, "scripts/helper-runtime-manifest.mjs"), "--profile"],
+      { encoding: "utf8", stdio: "pipe" },
+    ),
+    /missing value for argument: --profile/,
+  );
 });

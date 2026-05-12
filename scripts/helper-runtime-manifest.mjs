@@ -71,21 +71,23 @@ const HELPER_COMMANDS = [
   },
 ];
 
-const args = parseArgs(process.argv.slice(2));
+if (isMainModule(import.meta.url)) {
+  const args = parseArgs(process.argv.slice(2));
 
-if (args.help) {
-  printHelp();
-  process.exit(0);
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
+
+  const manifest = buildHelperRuntimeManifest({
+    profile: args.profile,
+    fromProfile: args.fromProfile,
+    packageManager: args.packageManager,
+    targetRoot: args.targetRoot,
+  });
+
+  process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
 }
-
-const manifest = buildHelperRuntimeManifest({
-  profile: args.profile,
-  fromProfile: args.fromProfile,
-  packageManager: args.packageManager,
-  targetRoot: args.targetRoot,
-});
-
-process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
 
 export function buildHelperRuntimeManifest({
   profile = "",
@@ -97,8 +99,9 @@ export function buildHelperRuntimeManifest({
   const packageJson = JSON.parse(readFileSync(resolve(packageRoot, "package.json"), "utf8"));
   const normalizedProfile = normalizeProfile(profile);
   const normalizedFromProfile = normalizeOptionalProfile(fromProfile);
+  const normalizedTargetRoot = targetRoot || process.cwd();
   const normalizedPackageManager = normalizePackageManager(
-    packageManager || detectPackageManager(targetRoot),
+    packageManager || detectPackageManager(normalizedTargetRoot),
     normalizedProfile,
   );
   const managedFiles = collectVendoredFiles(packageRoot);
@@ -355,28 +358,34 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
+    const requireValue = () => {
+      if (value === undefined || value.startsWith("--")) {
+        throw new Error(`missing value for argument: ${token}`);
+      }
+      return value;
+    };
 
     if (token === "--help" || token === "-h") {
       parsed.help = true;
       continue;
     }
     if (token === "--profile") {
-      parsed.profile = value ?? "";
+      parsed.profile = requireValue();
       index += 1;
       continue;
     }
     if (token === "--from-profile") {
-      parsed.fromProfile = value ?? "";
+      parsed.fromProfile = requireValue();
       index += 1;
       continue;
     }
     if (token === "--package-manager") {
-      parsed.packageManager = value ?? "";
+      parsed.packageManager = requireValue();
       index += 1;
       continue;
     }
     if (token === "--target-root") {
-      parsed.targetRoot = value ?? "";
+      parsed.targetRoot = requireValue();
       index += 1;
       continue;
     }
@@ -455,4 +464,8 @@ function resolveRelativeImport(fromFile, specifier) {
 
 function relativePath(root, target) {
   return relative(root, target).replaceAll("\\", "/");
+}
+
+function isMainModule(moduleUrl) {
+  return process.argv[1] === fileURLToPath(moduleUrl);
 }
