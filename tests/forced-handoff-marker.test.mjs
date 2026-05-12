@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { currentIsoTimestamp } from "../scripts/forced-handoff-marker.mjs";
 import {
   applyClaimEvent,
   normalizeForcedHandoffPayload,
@@ -43,6 +44,10 @@ test("forced handoff normalization omits createdAt when comment metadata is unav
   const normalized = normalizeForcedHandoffPayload(payload);
 
   assert.deepEqual(normalized, payload);
+});
+
+test("forced handoff helper timestamps stay on whole seconds", () => {
+  assert.match(currentIsoTimestamp(), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
 });
 
 test("forced handoff markers are ignored by default when the feature is not enabled", () => {

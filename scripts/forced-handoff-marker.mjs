@@ -1,98 +1,101 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 import { renderForcedHandoffComment, resolveActiveClaim } from "./protocol-helpers.mjs";
 
-const args = parseArgs(process.argv.slice(2));
+export function main(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv);
 
-if (args.help) {
-  printUsage();
-  process.exit(0);
-}
-
-if (!args.issueNumber) {
-  throw new Error("missing required --issue <number> argument");
-}
-if (!args.newAgentId) {
-  throw new Error("missing required --new-agent-id <id> argument");
-}
-if (!args.newClaimId) {
-  throw new Error("missing required --new-claim-id <id> argument");
-}
-if (!args.forcedBy) {
-  throw new Error("missing required --forced-by <actor> argument");
-}
-if (!args.reason) {
-  throw new Error("missing required --reason <text> argument");
-}
-
-const repo = args.repo ?? ghText(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
-const [owner, name] = repo.split("/", 2);
-const issueComments = ghJson(["api", "--paginate", `repos/${owner}/${name}/issues/${args.issueNumber}/comments`], true).flat();
-const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
-const trustedMarkerLogins = buildTrustedMarkerLogins(owner, name, viewerLogin, args.trustedMarkerLogins, issueComments);
-const activeClaim = resolveActiveClaim(
-  issueComments.map(normalizeIssueComment),
-  (login) => trustedMarkerLogins.has(String(login ?? "").trim().toLowerCase()),
-);
-
-if (!activeClaim) {
-  throw new Error(`issue #${args.issueNumber} has no active trusted claim`);
-}
-
-let linkedPr = "";
-if (args.prNumber) {
-  const pr = ghJson([
-    "pr",
-    "view",
-    String(args.prNumber),
-    "-R",
-    repo,
-    "--json",
-    "headRefName,url",
-    "--jq",
-    ".",
-  ]);
-  const headRefName = String(pr.headRefName ?? "");
-  if (headRefName !== activeClaim.branch) {
-    throw new Error(
-      `PR #${args.prNumber} head branch ${headRefName} does not match active claim branch ${activeClaim.branch}`,
-    );
+  if (args.help) {
+    printUsage();
+    return;
   }
-  linkedPr = String(args.prNumber);
-}
 
-const payload = {
-  oldAgentId: activeClaim.agentId,
-  oldClaimId: activeClaim.claimId,
-  newAgentId: args.newAgentId,
-  newClaimId: args.newClaimId,
-  branch: activeClaim.branch,
-  ...(linkedPr ? { linkedPr } : {}),
-  forcedBy: args.forcedBy,
-  reason: args.reason,
-  timestamp: args.timestamp ?? currentIsoTimestamp(),
-  contextScope: linkedPr ? "issue-plus-pr" : "issue-only",
-};
+  if (!args.issueNumber) {
+    throw new Error("missing required --issue <number> argument");
+  }
+  if (!args.newAgentId) {
+    throw new Error("missing required --new-agent-id <id> argument");
+  }
+  if (!args.newClaimId) {
+    throw new Error("missing required --new-claim-id <id> argument");
+  }
+  if (!args.forcedBy) {
+    throw new Error("missing required --forced-by <actor> argument");
+  }
+  if (!args.reason) {
+    throw new Error("missing required --reason <text> argument");
+  }
 
-const commentBody = renderForcedHandoffComment(payload);
-if (args.format === "json") {
-  console.log(
-    JSON.stringify(
-      {
-        repository: repo,
-        issueNumber: args.issueNumber,
-        activeClaim,
-        payload,
-        commentBody,
-      },
-      null,
-      2,
-    ),
+  const repo = args.repo ?? ghText(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
+  const [owner, name] = repo.split("/", 2);
+  const issueComments = ghJson(["api", "--paginate", `repos/${owner}/${name}/issues/${args.issueNumber}/comments`], true).flat();
+  const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
+  const trustedMarkerLogins = buildTrustedMarkerLogins(owner, name, viewerLogin, args.trustedMarkerLogins, issueComments);
+  const activeClaim = resolveActiveClaim(
+    issueComments.map(normalizeIssueComment),
+    (login) => trustedMarkerLogins.has(String(login ?? "").trim().toLowerCase()),
   );
-} else {
-  console.log(commentBody);
+
+  if (!activeClaim) {
+    throw new Error(`issue #${args.issueNumber} has no active trusted claim`);
+  }
+
+  let linkedPr = "";
+  if (args.prNumber) {
+    const pr = ghJson([
+      "pr",
+      "view",
+      String(args.prNumber),
+      "-R",
+      repo,
+      "--json",
+      "headRefName,url",
+      "--jq",
+      ".",
+    ]);
+    const headRefName = String(pr.headRefName ?? "");
+    if (headRefName !== activeClaim.branch) {
+      throw new Error(
+        `PR #${args.prNumber} head branch ${headRefName} does not match active claim branch ${activeClaim.branch}`,
+      );
+    }
+    linkedPr = String(args.prNumber);
+  }
+
+  const payload = {
+    oldAgentId: activeClaim.agentId,
+    oldClaimId: activeClaim.claimId,
+    newAgentId: args.newAgentId,
+    newClaimId: args.newClaimId,
+    branch: activeClaim.branch,
+    ...(linkedPr ? { linkedPr } : {}),
+    forcedBy: args.forcedBy,
+    reason: args.reason,
+    timestamp: args.timestamp ?? currentIsoTimestamp(),
+    contextScope: linkedPr ? "issue-plus-pr" : "issue-only",
+  };
+
+  const commentBody = renderForcedHandoffComment(payload);
+  if (args.format === "json") {
+    console.log(
+      JSON.stringify(
+        {
+          repository: repo,
+          issueNumber: args.issueNumber,
+          activeClaim,
+          payload,
+          commentBody,
+        },
+        null,
+        2,
+      ),
+    );
+  } else {
+    console.log(commentBody);
+  }
 }
 
 function parseArgs(argv) {
@@ -233,8 +236,8 @@ function safeGhText(args) {
   }
 }
 
-function currentIsoTimestamp() {
-  return new Date().toISOString().replace(".000Z", "Z");
+export function currentIsoTimestamp() {
+  return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 function printUsage() {
@@ -256,4 +259,8 @@ Environment:
   IDD_TRUSTED_MARKER_ACTORS        comma-separated trusted bot/app logins
   IDD_TRUST_COLLABORATOR_MARKERS   set true to trust Write/Maintain/Admin collaborators
 `);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
 }
