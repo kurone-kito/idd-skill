@@ -159,6 +159,19 @@ test("CODEOWNERS dot-prefixed directory patterns match descendants", () => {
   );
 });
 
+test("CODEOWNERS file patterns do not match descendant paths", () => {
+  assert.deepEqual(
+    resolveCodeownersForFiles("README.md @org/docs\n", ["README.md", "docs/README.md/child.md"]),
+    {
+      ruleCount: 1,
+      changedFileCount: 2,
+      unmatchedFiles: ["docs/README.md/child.md"],
+      codeownerUserLogins: [],
+      codeownerTeamSlugs: ["org/docs"],
+    },
+  );
+});
+
 test("CODEOWNERS ownerless overrides clear inherited ownership", () => {
   assert.deepEqual(
     resolveCodeownersForFiles("/apps/ @org/apps\n/apps/github\n", ["apps/github/routes.ts"]),
