@@ -15,7 +15,7 @@
     "test:scripts": "node --test tests/*.mjs"
   },
   "devDependencies": {
-    "@commitlint/cli": "^19.8.1",
+    "@commitlint/cli": "^21.0.0",
     "@commitlint/config-conventional": "^19.8.1",
     "cspell": "^10.0.0",
     "dprint": "0.54.0",
