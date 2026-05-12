@@ -88,6 +88,9 @@ export function classifyIssue(issue, options) {
 
 export function filterOrphanIssues(issues, options = {}) {
   const issueStateByNumber = new Map(options.issueStateByNumber ?? []);
+  const fetchIssueStateByNumber = typeof options.fetchIssueStateByNumber === "function"
+    ? options.fetchIssueStateByNumber
+    : () => "UNRESOLVABLE";
   const filtered = {
     roadmap_marker: [],
     blocked_by_marker: [],
@@ -101,7 +104,7 @@ export function filterOrphanIssues(issues, options = {}) {
   for (const issue of issues) {
     const result = classifyIssue(issue, {
       issueStateByNumber,
-      fetchIssueStateByNumber: options.fetchIssueStateByNumber,
+      fetchIssueStateByNumber,
       markerPrefix: options.markerPrefix,
     });
     const entry = {
@@ -176,10 +179,13 @@ function runCli() {
 
   const output = {
     repository: { owner, repo },
+    diagnostics: {
+      pr: args.pr,
+    },
     policy: {
       source: policy.source,
-    orphanFirstPolicy: policy.orphanFirstPolicy,
-    markerPrefix: policy.markerPrefix,
+      orphanFirstPolicy: policy.orphanFirstPolicy,
+      markerPrefix: policy.markerPrefix,
     },
     ...result,
   };
@@ -192,6 +198,7 @@ function parseArgs(argv) {
     owner: "",
     repo: "",
     policy: "",
+    pr: null,
     help: false,
   };
 
@@ -213,6 +220,15 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (token === "--pr") {
+      const parsedNumber = Number.parseInt(String(value ?? ""), 10);
+      if (!Number.isInteger(parsedNumber) || parsedNumber <= 0) {
+        throw new Error(`invalid --pr value: ${value ?? ""}`);
+      }
+      parsed.pr = parsedNumber;
+      index += 1;
+      continue;
+    }
     if (token === "--help" || token === "-h") {
       parsed.help = true;
       continue;
@@ -224,11 +240,12 @@ function parseArgs(argv) {
 
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>]
+  node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>] [--pr <number>]
 
 Output schema:
 {
   "repository": {"owner": "...", "repo": "..."},
+  "diagnostics": {"pr": 404},
   "policy": {"source": "...", "orphanFirstPolicy": "none|maintainer-approved|public-disabled", "markerPrefix": "..."},
   "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|blocked_references_closed", "url": "..."}],
   "filtered": {
