@@ -33,11 +33,16 @@ That means 2-32 characters, lowercase, starting with a letter.
 ### `{{TRUSTED_MARKER_ACTORS}}`
 
 List the GitHub logins allowed to post trusted IDD markers in
-`.github/idd/config.json`. Because the placeholder sits inside a JSON
-array, the replacement value should be one or more JSON-escaped string
-entries separated by commas. Examples:
+`.github/idd/config.json`. Because the placeholder sits inside a quoted
+JSON array entry, replace the quoted placeholder with a single
+JSON-escaped login string first. Examples:
 
-- one trusted marker actor → `"trusted-user-a"`
+- one trusted marker actor → `trusted-user-a`
+
+If the target repository needs more than one trusted marker actor, add
+the extra quoted array entries manually after the first replacement, for
+example:
+
 - multiple trusted marker actors → `"trusted-user-a", "trusted-bot-a"`
 
 Derive the candidate list from the people or bots allowed to post

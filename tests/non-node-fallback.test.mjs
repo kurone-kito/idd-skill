@@ -58,6 +58,16 @@ test("onboarding links extracted placeholder guidance and keeps fallback wording
   );
   assert.match(
     text,
+    /single[\s\S]*login string first/,
+    "placeholder reference must explain the single-login replacement step",
+  );
+  assert.match(
+    text,
+    /extra[\s\S]*quoted array entries manually/,
+    "placeholder reference must explain how to add more trusted marker actors",
+  );
+  assert.match(
+    text,
     /Only the command placeholders may be set to `true`/,
     "placeholder reference must keep the trusted marker actors placeholder out of the `true` fallback",
   );
@@ -135,8 +145,13 @@ test("onboarding links extracted policy guidance including credential scope", ()
   );
   assert.match(
     policyText,
-    /replace `{{TRUSTED_MARKER_ACTORS}}` in `trustedMarkerActors`/,
-    "policy reference must document the trusted marker actors placeholder token",
+    /single[\s\S]*GitHub login string first/,
+    "policy reference must document the first trusted marker actor replacement step",
+  );
+  assert.match(
+    policyText,
+    /extra[\s\S]*quoted array entries manually/,
+    "policy reference must document how to add more trusted marker actors",
   );
 });
 
