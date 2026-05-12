@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { currentIsoTimestamp, parsePositiveInteger } from "../scripts/forced-handoff-marker.mjs";
+import { currentIsoTimestamp, main, parsePositiveInteger } from "../scripts/forced-handoff-marker.mjs";
 import {
   applyClaimEvent,
   normalizeForcedHandoffPayload,
@@ -90,6 +90,11 @@ test("forced handoff helper timestamps stay on whole seconds", () => {
 test("forced handoff helper rejects malformed positive integers", () => {
   assert.equal(parsePositiveInteger("123", "--issue"), 123);
   assert.throws(() => parsePositiveInteger("123abc", "--issue"), /invalid --issue value: 123abc/);
+});
+
+test("forced handoff helper reports missing numeric flag values clearly", () => {
+  assert.throws(() => main(["--issue"]), /missing value for --issue/);
+  assert.throws(() => main(["--issue", "337", "--pr"]), /missing value for --pr/);
 });
 
 test("forced handoff markers are ignored by default when the feature is not enabled", () => {

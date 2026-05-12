@@ -107,10 +107,10 @@ function parseArgs(argv) {
     const token = argv[index];
     switch (token) {
       case "--issue":
-        parsed.issueNumber = parsePositiveInteger(argv[++index], "--issue");
+        parsed.issueNumber = parsePositiveInteger(readValue(argv, ++index, token), token);
         break;
       case "--pr":
-        parsed.prNumber = parsePositiveInteger(argv[++index], "--pr");
+        parsed.prNumber = parsePositiveInteger(readValue(argv, ++index, token), token);
         break;
       case "--new-agent-id":
         parsed.newAgentId = readValue(argv, ++index, token);
