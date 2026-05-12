@@ -117,6 +117,7 @@ test("onboarding generated import surface includes extracted reference docs", ()
   );
 
   for (const file of [
+    "docs/onboarding/agent-entry-and-verification.md",
     "docs/onboarding/placeholders.md",
     "docs/onboarding/policy-decisions.md",
   ]) {
@@ -131,6 +132,7 @@ test("onboarding generated import surface includes extracted reference docs", ()
   );
   assert.ok(coreBlock, "sync manifest must define the idd-template core file block");
   for (const file of [
+    "idd-template/docs/onboarding/agent-entry-and-verification.md",
     "idd-template/docs/onboarding/placeholders.md",
     "idd-template/docs/onboarding/policy-decisions.md",
   ]) {
@@ -142,6 +144,50 @@ test("onboarding generated import surface includes extracted reference docs", ()
   assert.ok(
     coreBlock.sourceGlobs.includes("idd-template/docs/onboarding/*.md"),
     "sync manifest must include the onboarding docs glob in the generated file inputs",
+  );
+});
+
+test("onboarding links extracted agent-entry and verification guidance", () => {
+  const onboarding = readText("idd-template/ONBOARDING.md");
+  assert.ok(
+    onboarding.includes("docs/onboarding/agent-entry-and-verification.md"),
+    "ONBOARDING must link to the extracted agent-entry and verification reference",
+  );
+  assert.match(
+    onboarding,
+    /`CLAUDE\.md`, `AGENTS\.md`, and `GEMINI\.md`/,
+    "ONBOARDING must keep the root agent entry file list inline",
+  );
+  assert.match(
+    onboarding,
+    /explicitly opts out of adding new files/,
+    "ONBOARDING must keep the operator opt-out rule inline for agent entry files",
+  );
+  assert.ok(
+    onboarding.includes("If `.github/copilot-instructions.md` existed before onboarding,"),
+    "ONBOARDING must keep the Copilot entry-file reminder inline",
+  );
+
+  const reference = readText("idd-template/docs/onboarding/agent-entry-and-verification.md");
+  assert.match(
+    reference,
+    /### CLAUDE\.md/,
+    "agent-entry reference must keep the CLAUDE.md example outside ONBOARDING",
+  );
+  assert.match(
+    reference,
+    /### AGENTS\.md \(for Codex CLI\)/,
+    "agent-entry reference must keep the AGENTS.md example outside ONBOARDING",
+  );
+  assert.match(
+    reference,
+    /### GEMINI\.md/,
+    "agent-entry reference must keep the GEMINI.md example outside ONBOARDING",
+  );
+  assert.match(
+    reference,
+    /## Verification details/,
+    "agent-entry reference must include the expanded verification guidance",
   );
 });
 

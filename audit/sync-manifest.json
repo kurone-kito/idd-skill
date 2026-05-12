@@ -85,6 +85,7 @@
         "idd-template/docs/customization.md",
         "idd-template/docs/policy-constants.md",
         "idd-template/docs/reference.md",
+        "idd-template/docs/onboarding/agent-entry-and-verification.md",
         "idd-template/docs/onboarding/placeholders.md",
         "idd-template/docs/onboarding/policy-decisions.md",
         "idd-template/profiles/README.md",
