@@ -33,8 +33,40 @@ test("onboarding links extracted placeholder guidance and keeps fallback wording
     onboarding.includes("docs/onboarding/placeholders.md"),
     "ONBOARDING must link to the extracted placeholder reference",
   );
+  assert.match(
+    onboarding,
+    /all seven placeholders:[\s\S]*`{{TRUSTED_MARKER_ACTORS}}`/,
+    "ONBOARDING must include the trusted marker actors placeholder in Step 1A",
+  );
+  assert.match(
+    onboarding,
+    /perform a global replacement for:[\s\S]*`{{TRUSTED_MARKER_ACTORS}}`/,
+    "ONBOARDING Step 4 must replace the trusted marker actors placeholder",
+  );
+  const configText = readText("idd-template/.github/idd/config.json");
+  assert.match(
+    configText,
+    /"trustedMarkerActors": \["{{TRUSTED_MARKER_ACTORS}}"\]/,
+    "template config must keep trustedMarkerActors as a real placeholder token",
+  );
 
   const text = readText("idd-template/docs/onboarding/placeholders.md");
+  assert.match(
+    text,
+    /### `{{TRUSTED_MARKER_ACTORS}}`/,
+    "placeholder reference must document the trusted marker actors placeholder",
+  );
+  assert.match(
+    text,
+    /Only the command placeholders may be set to `true`/,
+    "placeholder reference must keep the trusted marker actors placeholder out of the `true` fallback",
+  );
+  const readme = readText("idd-template/README.md");
+  assert.match(
+    readme,
+    /\| `{{TRUSTED_MARKER_ACTORS}}` +\| JSON-escaped marker-author logins/,
+    "template README must list the trusted marker actors placeholder",
+  );
   const fixValidateSection = extractSection(
     text,
     "### `{{FIX_VALIDATE_COMMANDS}}`",
@@ -100,6 +132,11 @@ test("onboarding links extracted policy guidance including credential scope", ()
     policyText,
     /### Critique-Loop Profile/,
     "policy reference template must keep critique-loop terminology aligned",
+  );
+  assert.match(
+    policyText,
+    /replace `{{TRUSTED_MARKER_ACTORS}}` in `trustedMarkerActors`/,
+    "policy reference must document the trusted marker actors placeholder token",
   );
 });
 

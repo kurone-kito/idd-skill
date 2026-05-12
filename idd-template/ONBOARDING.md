@@ -147,10 +147,11 @@ before starting Step 1A.
 ## Step 1A — Auto-derive candidate values
 
 Before asking the operator to enter values, inspect the target
-repository and propose candidate values for all six placeholders:
+repository and propose candidate values for all seven placeholders:
 `{{REPO_NAME}}`, `{{PROJECT_MARKER_PREFIX}}`,
-`{{FIX_VALIDATE_COMMANDS}}`, `{{PRE_PUSH_VALIDATE_COMMANDS}}`,
-`{{POST_FIX_VALIDATE_COMMANDS}}`, and `{{INSTALL_DEPS_COMMAND}}`.
+`{{TRUSTED_MARKER_ACTORS}}`, `{{FIX_VALIDATE_COMMANDS}}`,
+`{{PRE_PUSH_VALIDATE_COMMANDS}}`, `{{POST_FIX_VALIDATE_COMMANDS}}`,
+and `{{INSTALL_DEPS_COMMAND}}`.
 
 Use the detailed derivation rules in
 [Onboarding Reference — Placeholder Values](docs/onboarding/placeholders.md),
@@ -163,6 +164,7 @@ including the tooling-boundary fallback order and marker-prefix notes.
 >
 > - Repository name: `{proposed-repo-name}`
 > - Marker prefix: `{proposed-prefix}`
+> - Trusted marker actors: `{proposed-trusted-marker-actors}`
 > - Install command: `{proposed-install}`
 > - Fix-validate: `{proposed-fix-validate}`
 > - Pre-push-validate: `{proposed-pre-push}`
@@ -204,11 +206,12 @@ policy-recording template.
 
 ## Step 1C — Collect placeholder values
 
-Use the operator-confirmed values from Step 1A for these six
+Use the operator-confirmed values from Step 1A for these seven
 placeholders:
 
 - `{{REPO_NAME}}`
 - `{{PROJECT_MARKER_PREFIX}}`
+- `{{TRUSTED_MARKER_ACTORS}}`
 - `{{FIX_VALIDATE_COMMANDS}}`
 - `{{PRE_PUSH_VALIDATE_COMMANDS}}`
 - `{{POST_FIX_VALIDATE_COMMANDS}}`
@@ -515,8 +518,9 @@ that mention IDD workflow.
 
 In the copied files, perform a global replacement for:
 `{{REPO_NAME}}`, `{{PROJECT_MARKER_PREFIX}}`,
-`{{FIX_VALIDATE_COMMANDS}}`, `{{PRE_PUSH_VALIDATE_COMMANDS}}`,
-`{{POST_FIX_VALIDATE_COMMANDS}}`, and `{{INSTALL_DEPS_COMMAND}}`.
+`{{TRUSTED_MARKER_ACTORS}}`, `{{FIX_VALIDATE_COMMANDS}}`,
+`{{PRE_PUSH_VALIDATE_COMMANDS}}`, `{{POST_FIX_VALIDATE_COMMANDS}}`,
+and `{{INSTALL_DEPS_COMMAND}}`.
 
 Use
 [Onboarding Reference — Placeholder Values](docs/onboarding/placeholders.md)

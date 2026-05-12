@@ -209,8 +209,9 @@ Keep these rules in mind:
   aligned in the same change
 - treat non-command policy fields as synchronized metadata, not as a
   substitute for updating the instruction files that own phase behavior
-- replace `<trusted-login>` in `trustedMarkerActors` with the GitHub
-  login of each person or bot allowed to post trusted IDD markers
+- replace `{{TRUSTED_MARKER_ACTORS}}` in `trustedMarkerActors` with one
+  or more JSON-escaped GitHub login strings for each person or bot
+  allowed to post trusted IDD markers
 - keep command strings JSON-escaped instead of pasting fragile raw shell
 - keep `helperRuntime.profile` aligned with the human-readable helper
   runtime section when helper support is enabled
