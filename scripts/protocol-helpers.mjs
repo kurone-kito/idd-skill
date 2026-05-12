@@ -282,17 +282,27 @@ export function classifyRegularBotComment(comment, comments, threads) {
 export function indexLatestGatingReviewsByAuthor(reviews) {
   const index = new Map();
   for (const review of reviews) {
-    if (review.state === "COMMENTED") {
+    const state = String(review.state ?? "");
+    if (state === "COMMENTED" || state === "PENDING") {
       continue;
     }
     const author = review.author?.login?.toLowerCase();
     if (!author) {
       continue;
     }
+    const effectiveSubmittedAt = normalizeGatingReviewTimestamp(review, state);
+    if (!effectiveSubmittedAt) {
+      continue;
+    }
     const current = index.get(author);
-    const submittedAt = review.submittedAt ?? "";
-    if (!current || compareIsoTimestamps(submittedAt, current.submittedAt ?? "") > 0) {
-      index.set(author, review);
+    const currentTime = current ? Date.parse(current.submittedAt ?? current.submitted_at ?? "") : Number.NEGATIVE_INFINITY;
+    const reviewTime = Date.parse(effectiveSubmittedAt);
+    if (!current || reviewTime >= currentTime) {
+      index.set(author, {
+        ...review,
+        submittedAt: effectiveSubmittedAt,
+        submitted_at: effectiveSubmittedAt,
+      });
     }
   }
   return index;
@@ -955,21 +965,30 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
   const threads = Array.isArray(options.threads) ? options.threads : [];
 
   const normalized = comments
-    .map((comment) => ({
+    .map((comment, inputIndex) => ({
       id: String(comment.id ?? ""),
       authorLogin: String(comment.author?.login ?? comment.user?.login ?? "").trim().toLowerCase(),
       body: String(comment.body ?? ""),
       createdAt: String(comment.createdAt ?? comment.created_at ?? ""),
+      inputIndex,
     }))
     .filter((comment) => isValidIsoTimestamp(comment.createdAt))
-    .sort((left, right) => compareIsoTimestamps(left.createdAt, right.createdAt));
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.createdAt);
+      const rightTime = Date.parse(right.createdAt);
+      if (leftTime !== rightTime) {
+        return leftTime - rightTime;
+      }
+      return left.inputIndex - right.inputIndex;
+    })
+    .map((comment, sortedIndex) => ({ ...comment, sortedIndex }));
 
-  const latestIddReplyAt = maxIsoTimestamp(
-    normalized
-      .filter((comment) => !isOperationalOrDigestComment(comment.body))
-      .filter((comment) => iddAgentLogins.has(comment.authorLogin))
-      .map((comment) => comment.createdAt),
-  );
+  const lastIddReplyIndex = normalized.reduce((latestIndex, comment, index) => {
+    if (isOperationalOrDigestComment(comment.body) || !iddAgentLogins.has(comment.authorLogin)) {
+      return latestIndex;
+    }
+    return index;
+  }, -1);
 
   const classificationComments = normalized.map((comment) => ({
     author: { login: comment.authorLogin },
@@ -980,6 +999,7 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
   const items = normalized
     .filter((comment) => !isOperationalOrDigestComment(comment.body))
     .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
+    .filter((comment) => comment.sortedIndex > lastIddReplyIndex)
     .filter((comment) => {
       if (!isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins)) {
         return true;
@@ -994,7 +1014,6 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
         threads,
       ) === null;
     })
-    .filter((comment) => !latestIddReplyAt || compareIsoTimestamps(latestIddReplyAt, comment.createdAt) <= 0)
     .map((comment) => ({
       id: comment.id,
       authorLogin: comment.authorLogin,
@@ -1722,6 +1741,21 @@ function hasExplicitDispositionAfter(targetComment, comments) {
       && Number.isFinite(dispositionTime)
       && dispositionTime > targetTime;
   });
+}
+
+function normalizeGatingReviewTimestamp(review, state) {
+  const submittedAt = String(review.submittedAt ?? review.submitted_at ?? "");
+  if (isValidIsoTimestamp(submittedAt)) {
+    return submittedAt;
+  }
+  if (state !== "APPROVED" && state !== "CHANGES_REQUESTED" && state !== "DISMISSED") {
+    return null;
+  }
+  const updatedAt = String(review.updatedAt ?? review.updated_at ?? "");
+  if (isValidIsoTimestamp(updatedAt)) {
+    return updatedAt;
+  }
+  return null;
 }
 
 function maxIsoTimestamp(values) {

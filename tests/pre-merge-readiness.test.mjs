@@ -361,6 +361,20 @@ test("latest gating reviews ignore invalid timestamps when a valid review exists
   assert.equal(latest.get("reviewer")?.state, "APPROVED");
 });
 
+test("latest gating reviews keep blocking reviews when only updatedAt is valid", () => {
+  const latest = indexLatestGatingReviewsByAuthor([
+    {
+      author: { login: "reviewer" },
+      state: "CHANGES_REQUESTED",
+      submittedAt: "",
+      updatedAt: "2026-05-12T01:00:00Z",
+    },
+  ]);
+
+  assert.equal(latest.get("reviewer")?.state, "CHANGES_REQUESTED");
+  assert.equal(latest.get("reviewer")?.submittedAt, "2026-05-12T01:00:00Z");
+});
+
 test("regular comment gate only keeps comments after the latest IDD reply", () => {
   const summary = summarizeRegularCommentsForGate(
     [
@@ -374,6 +388,31 @@ test("regular comment gate only keeps comments after the latest IDD reply", () =
 
   assert.equal(summary.count, 1);
   assert.deepEqual(summary.items.map((item) => item.id), ["4"]);
+});
+
+test("regular comment gate drops comments earlier in the same second as the latest IDD reply", () => {
+  const summary = summarizeRegularCommentsForGate(
+    [
+      { id: 1, createdAt: "2026-05-12T00:00:00Z", body: "first", author: { login: "reviewer-a" } },
+      { id: 2, createdAt: "2026-05-12T00:00:00Z", body: "**Accepted** — reply", author: { login: "idd-bot" } },
+    ],
+    { iddAgentLogins: ["idd-bot"] },
+  );
+
+  assert.equal(summary.count, 0);
+});
+
+test("regular comment gate keeps comments later in the same second as the latest IDD reply", () => {
+  const summary = summarizeRegularCommentsForGate(
+    [
+      { id: 1, createdAt: "2026-05-12T00:00:00Z", body: "**Accepted** — reply", author: { login: "idd-bot" } },
+      { id: 2, createdAt: "2026-05-12T00:00:00Z", body: "follow-up", author: { login: "reviewer-a" } },
+    ],
+    { iddAgentLogins: ["idd-bot"] },
+  );
+
+  assert.equal(summary.count, 1);
+  assert.deepEqual(summary.items.map((item) => item.id), ["2"]);
 });
 
 test("regular comment gate keeps advisory bot comments after the latest IDD reply", () => {

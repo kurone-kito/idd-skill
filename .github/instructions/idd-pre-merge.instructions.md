@@ -99,7 +99,8 @@ must align with every F2 condition below.
 
   ```sh
   node scripts/pre-merge-readiness.mjs --pr {pr-number} \
-    --claim-issue {issue-number} --expected-claim-id {claim-id}
+    --claim-issue {issue-number} --expected-claim-id {claim-id} \
+    --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
   ```
 
   to collect the wider F2 evidence set (review currency, unresolved

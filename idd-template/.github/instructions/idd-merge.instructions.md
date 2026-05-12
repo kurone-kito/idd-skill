@@ -48,7 +48,8 @@ gate. The active claim must still use your current `{claim-id}`.
 
    ```sh
    node scripts/pre-merge-readiness.mjs --pr {pr-number} \
-     --claim-issue {issue-number} --expected-claim-id {claim-id}
+     --claim-issue {issue-number} --expected-claim-id {claim-id} \
+     --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
    ```
 
    to collect the broader F2/F3 evidence set immediately before the
