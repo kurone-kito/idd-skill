@@ -6,7 +6,7 @@
  *
  * Supported enforcement keywords:
  *   type, required, properties, additionalProperties,
- *   minLength, pattern, format (date-time only),
+ *   minLength, minimum, pattern, format (date-time only),
  *   minItems, items, enum
  *
  * Any other keyword in a schema triggers an error, preventing false
@@ -29,6 +29,7 @@ const ENFORCED_KEYWORDS = new Set([
   "properties",
   "additionalProperties",
   "minLength",
+  "minimum",
   "pattern",
   "format",
   "minItems",
@@ -92,9 +93,16 @@ export function validate(data, schema, path = "$") {
   const errors = [];
   const actualType = getType(data);
 
-  if (schema.type !== undefined && actualType !== schema.type) {
-    errors.push(`${path}: expected type "${schema.type}", got "${actualType}"`);
-    return errors;
+  if (schema.type !== undefined) {
+    if (schema.type === "integer") {
+      if (actualType !== "number" || !Number.isInteger(data)) {
+        errors.push(`${path}: expected type "integer", got "${actualType}"`);
+        return errors;
+      }
+    } else if (actualType !== schema.type) {
+      errors.push(`${path}: expected type "${schema.type}", got "${actualType}"`);
+      return errors;
+    }
   }
 
   if (actualType === "string") {
@@ -111,6 +119,10 @@ export function validate(data, schema, path = "$") {
 
   if (schema.enum !== undefined && !schema.enum.includes(data)) {
     errors.push(`${path}: "${String(data)}" not in enum [${schema.enum.join(", ")}]`);
+  }
+
+  if (actualType === "number" && schema.minimum !== undefined && data < schema.minimum) {
+    errors.push(`${path}: ${data} < minimum ${schema.minimum}`);
   }
 
   if (actualType === "array") {

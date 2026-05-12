@@ -161,6 +161,23 @@ test("pre-merge-readiness valid fixture accepts fractional timestamp evidence", 
   assert.deepEqual(errors, []);
 });
 
+test("pre-merge-readiness count fields require non-negative integers", () => {
+  const schema = loadJson("schemas/pre-merge-readiness.schema.json");
+  const fixture = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/pre-merge-readiness.valid.json")),
+  );
+  fixture.reviewCurrency.watermark.totalItemCount = 1.5;
+  fixture.reviewCurrency.live.counts.comments = -1;
+  fixture.threads.unresolvedCount = 2.25;
+  fixture.unrepliedComments.count = -1;
+  fixture.reviewerStates.requiredApprovingReviewCount = 0.5;
+  fixture.advisoryWait.sameHeadMarkerCount = -1;
+  fixture.ci.requiredCheckCount = 3.5;
+
+  const errors = validate(fixture, schema);
+  assert.ok(errors.length > 0, "Expected fractional or negative counts to fail validation");
+});
+
 test("policy valid fixture passes validation", () => {
   const { ok, errors } = validateFixture(
     "schemas/policy.schema.json",
