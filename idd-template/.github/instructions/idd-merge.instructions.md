@@ -37,12 +37,20 @@ gate. The active claim must still use your current `{claim-id}`.
    following is true:
 
    In the idd-skill source repository, you may optionally use the
-   read-only helper `node scripts/review-activity-snapshot.mjs --pr
-   {pr-number}` and pass trusted marker actors with
-   `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"` to
-   compute the same activity metrics. You may also optionally use
-   `node scripts/pre-merge-readiness.mjs --pr {pr-number}
-   --claim-issue {issue-number} --expected-claim-id {claim-id}`
+   read-only helper:
+
+   ```sh
+   node scripts/review-activity-snapshot.mjs --pr {pr-number} \
+     --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
+   ```
+
+   You may also optionally use:
+
+   ```sh
+   node scripts/pre-merge-readiness.mjs --pr {pr-number} \
+     --claim-issue {issue-number} --expected-claim-id {claim-id}
+   ```
+
    to collect the broader F2/F3 evidence set immediately before the
    merge attempt. Both helpers are evidence collectors only; the written
    gate rules remain canonical.

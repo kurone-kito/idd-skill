@@ -1,4 +1,8 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/pre-merge-readiness.schema.json",
+  "title": "Pre-Merge Readiness",
+  "description": "Read-only pre-merge readiness evidence snapshot for a PR head.",
   "type": "object",
   "required": [
     "protocolVersion",
@@ -71,18 +75,18 @@
             },
             "maxActivityUpdatedAt": {
               "type": "string",
-              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z)$"
+              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$"
             },
             "totalItemCount": {
               "type": "number"
             },
             "latestCiCompletedAt": {
               "type": "string",
-              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z)$"
+              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$"
             },
             "createdAt": {
               "type": "string",
-              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z)$"
+              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$"
             }
           }
         },
@@ -102,15 +106,15 @@
             },
             "maxActivityUpdatedAt": {
               "type": "string",
-              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z)$"
+              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$"
             },
             "latestCiCompletedAt": {
               "type": "string",
-              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z)$"
+              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$"
             },
             "latestPassingCiCompletedAt": {
               "type": "string",
-              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z)$"
+              "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$"
             },
             "counts": {
               "type": "object",
@@ -324,7 +328,7 @@
         "sameHeadMarkerPresent": { "type": "boolean" },
         "earliestSameHeadAt": {
           "type": "string",
-          "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+          "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
         },
         "sameHeadMarkerCount": { "type": "number" },
         "requestMarkerCount": { "type": "number" },
@@ -372,7 +376,7 @@
               "state": { "type": "string", "minLength": 1 },
               "completedAt": {
                 "type": "string",
-                "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+                "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
               },
               "required": { "type": "boolean" }
             }
@@ -407,7 +411,7 @@
             "branch": { "type": "string" },
             "createdAt": {
               "type": "string",
-              "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+              "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
             }
           }
         },

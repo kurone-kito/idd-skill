@@ -35,6 +35,17 @@ test("pre-merge-readiness schema uses only allowed keywords", () => {
   assert.deepEqual(checkSchemaKeywords(schema), []);
 });
 
+test("pre-merge-readiness schema publishes metadata fields", () => {
+  const schema = loadJson("schemas/pre-merge-readiness.schema.json");
+  assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema");
+  assert.equal(
+    schema.$id,
+    "https://kurone-kito.github.io/idd-skill/schemas/pre-merge-readiness.schema.json",
+  );
+  assert.equal(schema.title, "Pre-Merge Readiness");
+  assert.equal(schema.description, "Read-only pre-merge readiness evidence snapshot for a PR head.");
+});
+
 test("policy schema uses only allowed keywords", () => {
   const schema = loadJson("schemas/policy.schema.json");
   assert.deepEqual(checkSchemaKeywords(schema), []);
@@ -129,6 +140,25 @@ test("pre-merge-readiness invalid fixture fails validation", () => {
     false,
   );
   assert.ok(ok, "Expected invalid fixture to fail schema validation");
+});
+
+test("pre-merge-readiness valid fixture accepts fractional timestamp evidence", () => {
+  const schema = loadJson("schemas/pre-merge-readiness.schema.json");
+  const fixture = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/pre-merge-readiness.valid.json")),
+  );
+  fixture.reviewCurrency.watermark.maxActivityUpdatedAt = "2026-05-11T23:56:00.100Z";
+  fixture.reviewCurrency.watermark.latestCiCompletedAt = "2026-05-11T23:57:00.200Z";
+  fixture.reviewCurrency.watermark.createdAt = "2026-05-11T23:58:00.300Z";
+  fixture.reviewCurrency.live.maxActivityUpdatedAt = "2026-05-11T23:56:00.400Z";
+  fixture.reviewCurrency.live.latestCiCompletedAt = "2026-05-11T23:57:00.500Z";
+  fixture.reviewCurrency.live.latestPassingCiCompletedAt = "2026-05-11T23:57:00.600Z";
+  fixture.advisoryWait.earliestSameHeadAt = "2026-05-11T23:59:00.700Z";
+  fixture.ci.checks[0].completedAt = "2026-05-11T23:57:00.800Z";
+  fixture.claim.activeClaim.createdAt = "2026-05-11T23:20:00.900Z";
+
+  const errors = validate(fixture, schema);
+  assert.deepEqual(errors, []);
 });
 
 test("policy valid fixture passes validation", () => {

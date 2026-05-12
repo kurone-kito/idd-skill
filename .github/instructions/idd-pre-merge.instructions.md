@@ -88,13 +88,20 @@ must align with every F2 condition below.
   ignored and reported as suspicious context when they affect routing.
   Then fetch the activity universe snapshot (same scope as E1 Step 1)
   and the current CI state for the HEAD SHA. In the idd-skill source
-  repository, you may optionally use the read-only helper
-  `node scripts/review-activity-snapshot.mjs --pr {pr-number}` and pass
-  trusted marker actors with
-  `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`.
-  You may also optionally use
-  `node scripts/pre-merge-readiness.mjs --pr {pr-number}
-  --claim-issue {issue-number} --expected-claim-id {claim-id}`
+  repository, you may optionally use the read-only helper:
+
+  ```sh
+  node scripts/review-activity-snapshot.mjs --pr {pr-number} \
+    --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
+  ```
+
+  You may also optionally use:
+
+  ```sh
+  node scripts/pre-merge-readiness.mjs --pr {pr-number} \
+    --claim-issue {issue-number} --expected-claim-id {claim-id}
+  ```
+
   to collect the wider F2 evidence set (review currency, unresolved
   threads, unreplied comments, reviewer states, advisory state, CI, and
   claim validation) in one read-only JSON report; the instruction rules
