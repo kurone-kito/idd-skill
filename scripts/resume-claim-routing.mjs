@@ -267,7 +267,7 @@ function parseLegacyClaimComment(body, createdAt) {
   }
   return {
     agentId: match[1],
-    createdAt: normalizeIso(createdAt) ?? createdAt,
+    createdAt: normalizeIso(match[2]) ?? normalizeIso(createdAt) ?? createdAt,
     branch: match[3],
   };
 }
@@ -279,7 +279,7 @@ function parseLegacyReleaseComment(body, createdAt) {
   }
   return {
     agentId: match[1],
-    createdAt: normalizeIso(createdAt) ?? createdAt,
+    createdAt: normalizeIso(match[2]) ?? normalizeIso(createdAt) ?? createdAt,
   };
 }
 

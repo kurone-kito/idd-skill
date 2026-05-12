@@ -200,3 +200,22 @@ test("legacy stale claim routes to takeover", () => {
   assert.equal(result.action, "takeover");
   assert.equal(result.reason, "legacy-claim-stale");
 });
+
+test("legacy freshness uses marker timestamp over comment metadata timestamp", () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      now: "2026-05-13T10:00:01Z",
+      events: [
+        {
+          createdAt: "2026-05-13T09:59:59Z",
+          author: { login: "maintainer" },
+          body: "<!-- claimed-by: old-agent 2026-05-12T09:00:00Z branch: issue/9-task -->",
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(["maintainer"]) },
+  );
+
+  assert.equal(result.state, "stale");
+  assert.equal(result.reason, "legacy-claim-stale");
+});
