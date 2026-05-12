@@ -496,5 +496,8 @@ function relativePath(root, target) {
 }
 
 function isMainModule(moduleUrl) {
-  return process.argv[1] === fileURLToPath(moduleUrl);
+  if (!process.argv[1]) {
+    return false;
+  }
+  return fileURLToPath(moduleUrl) === resolve(process.argv[1]);
 }

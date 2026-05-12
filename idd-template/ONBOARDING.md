@@ -768,9 +768,8 @@ Notes:
   notes and JSON as a configuration bug and update both in the same change.
 - Keep command strings JSON-escaped. Do not paste raw shell directly if
   it contains quotes or backslashes.
-- Helper runtime selection is currently recorded in the human-readable
-  policy section. Do not add a `helperRuntime` JSON field unless the
-  schema is extended first.
+- When helper support is enabled, keep `helperRuntime.profile` in sync
+  with the human-readable helper runtime section above.
 - Extend the schema only when the repository records extra policy
   decisions (for example: critique-loop profile, merge handoff actor,
   external advisory bot, or maintainer approval actors).
