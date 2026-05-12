@@ -315,7 +315,6 @@
           "type": "string",
           "enum": [
             "SATISFIED",
-            "HOLD",
             "WAIT",
             "REQUEST_NEEDED",
             "RECOVERY_NEEDED",
@@ -326,7 +325,6 @@
           "type": "string",
           "enum": [
             "SATISFIED",
-            "HOLD",
             "WAIT",
             "REQUEST_NEEDED",
             "RECOVERY_NEEDED",
