@@ -6,6 +6,7 @@ import {
   buildActivitySnapshotSummary,
   buildPreMergeReadinessSummary,
   findLastCopilotReviewCommit,
+  indexLatestGatingReviewsByAuthor,
   resolveCodeownersForFiles,
   summarizeAdvisoryWaitMarkers,
   summarizeRegularCommentsForGate,
@@ -101,6 +102,58 @@ test("CODEOWNERS **/ patterns match both root and nested files", () => {
       unmatchedFiles: [],
       codeownerUserLogins: [],
       codeownerTeamSlugs: ["org/docs"],
+    },
+  );
+});
+
+test("CODEOWNERS middle **/ segments match zero or more directories", () => {
+  assert.deepEqual(
+    resolveCodeownersForFiles("docs/**/README.md @org/docs\n", ["docs/README.md", "docs/guides/README.md"]),
+    {
+      ruleCount: 1,
+      changedFileCount: 2,
+      unmatchedFiles: [],
+      codeownerUserLogins: [],
+      codeownerTeamSlugs: ["org/docs"],
+    },
+  );
+});
+
+test("CODEOWNERS trailing slash patterns match directories at any depth", () => {
+  assert.deepEqual(
+    resolveCodeownersForFiles("apps/ @org/apps\n", ["apps/main.ts", "src/apps/main.ts"]),
+    {
+      ruleCount: 1,
+      changedFileCount: 2,
+      unmatchedFiles: [],
+      codeownerUserLogins: [],
+      codeownerTeamSlugs: ["org/apps"],
+    },
+  );
+});
+
+test("CODEOWNERS directory-style patterns match descendants", () => {
+  assert.deepEqual(
+    resolveCodeownersForFiles("**/logs @org/ops\n", ["build/logs/app.log"]),
+    {
+      ruleCount: 1,
+      changedFileCount: 1,
+      unmatchedFiles: [],
+      codeownerUserLogins: [],
+      codeownerTeamSlugs: ["org/ops"],
+    },
+  );
+});
+
+test("CODEOWNERS ownerless overrides clear inherited ownership", () => {
+  assert.deepEqual(
+    resolveCodeownersForFiles("/apps/ @org/apps\n/apps/github\n", ["apps/github/routes.ts"]),
+    {
+      ruleCount: 2,
+      changedFileCount: 1,
+      unmatchedFiles: [],
+      codeownerUserLogins: [],
+      codeownerTeamSlugs: [],
     },
   );
 });
@@ -211,6 +264,22 @@ test("advisory bots do not block CHANGES_REQUESTED even when configured in polic
   assert.deepEqual(summary.blockingChangesRequestedLogins, []);
 });
 
+test("email-only CODEOWNERS rules still block codeowner approval", () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [{
+      type: "pull_request",
+      parameters: {
+        require_code_owner_review: true,
+      },
+    }],
+    codeownersText: "*.js user@example.com\n",
+    changedFiles: ["app.js"],
+  });
+
+  assert.equal(summary.codeownerApprovalSatisfied, false);
+  assert.deepEqual(summary.unmatchedCodeownerFiles, []);
+});
+
 test("mixed-precision timestamps compare by time instead of string order", () => {
   const headSha = "a".repeat(40);
   assert.equal(
@@ -256,6 +325,23 @@ test("mixed-precision timestamps compare by time instead of string order", () =>
     ]),
     "new",
   );
+});
+
+test("latest gating reviews compare timestamps by parsed time", () => {
+  const latest = indexLatestGatingReviewsByAuthor([
+    {
+      author: { login: "reviewer" },
+      state: "APPROVED",
+      submittedAt: "2026-05-12T01:00:00Z",
+    },
+    {
+      author: { login: "reviewer" },
+      state: "CHANGES_REQUESTED",
+      submittedAt: "2026-05-12T01:00:00.100Z",
+    },
+  ]);
+
+  assert.equal(latest.get("reviewer")?.state, "CHANGES_REQUESTED");
 });
 
 function readJson(relativePath) {

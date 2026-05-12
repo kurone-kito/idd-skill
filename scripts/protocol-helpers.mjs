@@ -291,7 +291,7 @@ export function indexLatestGatingReviewsByAuthor(reviews) {
     }
     const current = index.get(author);
     const submittedAt = review.submittedAt ?? "";
-    if (!current || submittedAt > (current.submittedAt ?? "")) {
+    if (!current || compareIsoTimestamps(submittedAt, current.submittedAt ?? "") > 0) {
       index.set(author, review);
     }
   }
@@ -1105,6 +1105,10 @@ export function summarizeRequiredChecks(checks = [], branchRules = [], branchPro
 
 export function resolveCodeownersForFiles(codeownersText, changedFiles = []) {
   const rules = parseCodeownersRules(codeownersText);
+  return collectCodeownersForFiles(rules, changedFiles);
+}
+
+function collectCodeownersForFiles(rules, changedFiles = []) {
   const codeownerUsers = new Set();
   const codeownerTeams = new Set();
   const unmatchedFiles = [];
@@ -1118,6 +1122,9 @@ export function resolveCodeownersForFiles(codeownersText, changedFiles = []) {
     const owners = findCodeownersForPath(rules, normalizedPath);
     if (!owners) {
       unmatchedFiles.push(normalizedPath);
+      continue;
+    }
+    if (!hasCodeownerOwners(owners)) {
       continue;
     }
 
@@ -1152,7 +1159,8 @@ export function summarizeReviewerStates(
   const branchReviewRequirements = summarizeBranchReviewRequirements(branchRules, branchProtection);
   const requiredReviewerLogins = new Set(branchReviewRequirements.requiredReviewerLogins);
   const advisoryBotLoginSet = new Set(normalizeTrustedMarkerLogins(advisoryBotLogins));
-  const codeowners = resolveCodeownersForFiles(codeownersText, changedFiles);
+  const codeownerRules = parseCodeownersRules(codeownersText);
+  const codeowners = collectCodeownersForFiles(codeownerRules, changedFiles);
   const codeownerUsers = new Set(codeowners.codeownerUserLogins);
   const normalizedReviewDecision = String(reviewDecision ?? "");
 
@@ -1187,8 +1195,14 @@ export function summarizeReviewerStates(
   const codeownerApproved = latestByAuthor.some((review) => {
     return review.isCodeowner && review.state === "APPROVED";
   });
-  const hasExplicitCodeownerMatches = codeowners.codeownerUserLogins.length > 0
-    || codeowners.codeownerTeamSlugs.length > 0;
+  const hasExplicitCodeownerMatches = changedFiles.some((filePath) => {
+    const normalizedPath = String(filePath ?? "").replace(/^\/+/, "");
+    if (!normalizedPath) {
+      return false;
+    }
+    const owners = findCodeownersForPath(codeownerRules, normalizedPath);
+    return !!owners && hasCodeownerOwners(owners);
+  });
   const latestByLogin = new Map(latestByAuthor.map((review) => [review.login, review]));
   const requiredReviewerApprovalsSatisfied = branchReviewRequirements.requiredReviewerRequirements
     .every((requirement) => {
@@ -1790,10 +1804,13 @@ function parseCodeownersRules(codeownersText) {
       const teams = ownerTokens
         .filter((token) => /^@[^/\s#]+\/[^/\s#]+$/.test(token))
         .map((token) => token.slice(1).toLowerCase());
-      if (!pattern || (users.length === 0 && teams.length === 0)) {
+      const emails = ownerTokens
+        .filter((token) => /^[^@\s#][^\s#]*@[^\s#]+$/.test(token))
+        .map((token) => token.toLowerCase());
+      if (!pattern) {
         return null;
       }
-      return { pattern, users, teams };
+      return { pattern, users, teams, emails };
     })
     .filter(Boolean);
 }
@@ -1820,19 +1837,33 @@ function matchesCodeownersPattern(pattern, path) {
   if (anchored) {
     body = body.slice(1);
   }
-  if (body.endsWith("/")) {
+  const rawBody = body;
+  const trailingSlashPattern = rawBody.endsWith("/");
+  const lastSegment = rawBody.split("/").at(-1) ?? "";
+  const anyDepthFromRoot = rawBody.startsWith("**/");
+  const directoryLikePattern = !trailingSlashPattern
+    && !lastSegment.includes("*")
+    && !lastSegment.includes("?")
+    && !lastSegment.includes(".");
+
+  if (trailingSlashPattern) {
     body = `${body}**`;
   }
 
-  const anyDepthFromRoot = body.startsWith("**/");
   if (anyDepthFromRoot) {
     body = body.slice(3);
   }
 
-  const slashAnchored = anchored || (body.includes("/") && !anyDepthFromRoot);
+  const slashAnchored = anchored || (rawBody.includes("/") && !anyDepthFromRoot && !trailingSlashPattern);
   let source = anyDepthFromRoot || !slashAnchored ? "^(?:|.*\\/)" : "^";
   for (let index = 0; index < body.length; index += 1) {
+    const triplet = body.slice(index, index + 3);
     const pair = body.slice(index, index + 2);
+    if (triplet === "**/") {
+      source += "(?:[^/]+/)*";
+      index += 2;
+      continue;
+    }
     if (pair === "**") {
       source += ".*";
       index += 1;
@@ -1849,9 +1880,18 @@ function matchesCodeownersPattern(pattern, path) {
     }
     source += escapeRegExp(character);
   }
+  if (directoryLikePattern) {
+    source += "(?:/.*)?";
+  }
   source += "$";
 
   return new RegExp(source).test(normalizedPath);
+}
+
+function hasCodeownerOwners(rule) {
+  return (rule?.users?.length ?? 0) > 0
+    || (rule?.teams?.length ?? 0) > 0
+    || (rule?.emails?.length ?? 0) > 0;
 }
 
 function isGateAdvisoryBotLogin(login, advisoryBotLogins) {
