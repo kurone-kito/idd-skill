@@ -274,9 +274,9 @@ If `.github/idd/config.json` exists and is valid per the canonical schema at
 <https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>, its `commands`
 object provides the authoritative command values and overrides the table
 values below. Its policy fields, including
-`skipIssueAuthorApprovalGate` and `maintainerApprovalActors`, are the
-machine-readable equivalent of recorded policy decisions. Absent values
-keep the gate enabled and default approval actors to
+`skipIssueAuthorApprovalGate` and `maintainerApprovalActorPolicy`, are
+the machine-readable equivalent of recorded policy decisions. Absent
+values keep the gate enabled and default approval actors to
 `owners-and-maintainers-only`.
 
 | Name                    | Commands                         |

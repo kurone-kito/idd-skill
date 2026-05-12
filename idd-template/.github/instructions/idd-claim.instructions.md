@@ -3,7 +3,7 @@
 Read this file after `idd-suitability.instructions.md` (A4.5) passes for
 the selected issue — whether selected via A4 or verified through an
 explicit issue target (A0-T) — or after a successful re-claim decision
-in the resume phase. It covers the four pre-checks, claim execution, and
+in the resume phase. It covers the five pre-checks, claim execution, and
 claim verification.
 
 ## Pre-checks (all five must pass)
@@ -18,8 +18,9 @@ issue-author approval rule immediately before claim.
 
 - If `.github/idd/config.json` exists and is valid and
   `skipIssueAuthorApprovalGate` is `true`, skip this check.
-- Otherwise, use `maintainerApprovalActors` from `.github/idd/config.json`
-  when present; if absent, default to `owners-and-maintainers-only`.
+- Otherwise, use `maintainerApprovalActorPolicy` from
+  `.github/idd/config.json` when present; if absent, default to
+  `owners-and-maintainers-only`.
 - A target issue is startable only when the issue author is
   self-authorized under the current maintainer-approval actor policy, or
   a fresh explicit approval signal exists, using the same actor,
@@ -176,7 +177,7 @@ Determine `{branch-name}`:
   claim being migrated). Do not compute a new name.
 - **Fresh claim**: compute a new name using the IDD naming convention:
   `issue/<number>-<slug>` where `<slug>` follows the deterministic title
-  normalization algorithm from pre-check (d).
+  normalization algorithm from pre-check (e).
 
 Generate a fresh `{claim-id}`. Determine `{prior-claim-id}`:
 

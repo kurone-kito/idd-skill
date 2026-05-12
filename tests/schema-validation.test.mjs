@@ -305,7 +305,7 @@ test("policy schema accepts explicit ephemeral-npx helperRuntime", () => {
 test("policy schema accepts owners-and-maintainers-only approval actors", () => {
   const schema = loadJson("schemas/policy.schema.json");
   const instance = loadJson("fixtures/schemas/policy.valid.json");
-  instance.maintainerApprovalActors = "owners-and-maintainers-only";
+  instance.maintainerApprovalActorPolicy = "owners-and-maintainers-only";
   const errors = validate(instance, schema);
   assert.deepEqual(errors, []);
 });
@@ -313,7 +313,7 @@ test("policy schema accepts owners-and-maintainers-only approval actors", () => 
 test("policy schema accepts all-write-permission approval actors", () => {
   const schema = loadJson("schemas/policy.schema.json");
   const instance = loadJson("fixtures/schemas/policy.valid.json");
-  instance.maintainerApprovalActors = "all-write-permission-actors";
+  instance.maintainerApprovalActorPolicy = "all-write-permission-actors";
   const errors = validate(instance, schema);
   assert.deepEqual(errors, []);
 });
@@ -321,7 +321,26 @@ test("policy schema accepts all-write-permission approval actors", () => {
 test("policy schema rejects unsupported maintainer approval actor policy", () => {
   const schema = loadJson("schemas/policy.schema.json");
   const instance = loadJson("fixtures/schemas/policy.valid.json");
-  instance.maintainerApprovalActors = "write-only";
+  instance.maintainerApprovalActorPolicy = "write-only";
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes("$.maintainerApprovalActorPolicy")),
+    errors.join("\n"),
+  );
+});
+
+test("policy schema preserves legacy maintainerApprovalActors arrays", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.maintainerApprovalActors = ["owner", "maintainer"];
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects empty legacy maintainerApprovalActors arrays", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.maintainerApprovalActors = [];
   const errors = validate(instance, schema);
   assert.ok(
     errors.some((error) => error.includes("$.maintainerApprovalActors")),

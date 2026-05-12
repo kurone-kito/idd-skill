@@ -46,8 +46,9 @@ that issue only:
    approval gate and keep the target selected.
 5. Otherwise, apply the same issue-author approval evaluation used in
    **A3.5**:
-   - use `maintainerApprovalActors` from `.github/idd/config.json` when
-     present; if absent, default to `owners-and-maintainers-only`;
+   - use `maintainerApprovalActorPolicy` from `.github/idd/config.json`
+     when present; if absent, default to
+     `owners-and-maintainers-only`;
    - treat the issue author as self-authorized only when that author is
      permitted by the current maintainer-approval actor policy;
    - treat bare organization `MEMBER` association, issue body text,
@@ -131,7 +132,7 @@ Apply the configured policy before passing A0-O candidates to A4:
   same as `none`.
 
 A maintainer approval actor is a human repository actor allowed by the
-current `maintainerApprovalActors` policy:
+current `maintainerApprovalActorPolicy`:
 
 - `owners-and-maintainers-only` (default): repository owners and
   collaborators with Maintain or Admin permission. Write-only
@@ -330,7 +331,7 @@ from A3 — evaluate the repository-wide issue-author approval gate.
 - If `.github/idd/config.json` exists and is valid and
   `skipIssueAuthorApprovalGate` is `true`, the gate is disabled. Keep
   every ready candidate in the normal startable set.
-- Otherwise the gate is enabled. Use `maintainerApprovalActors` from
+- Otherwise the gate is enabled. Use `maintainerApprovalActorPolicy` from
   `.github/idd/config.json` when present; if absent, default to
   `owners-and-maintainers-only`.
 

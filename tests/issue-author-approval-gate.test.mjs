@@ -18,6 +18,7 @@ test("discover instructions define approval-needed fallback routing", () => {
 
   assert.match(live, /approval-needed fallback bucket/i);
   assert.match(live, /skipIssueAuthorApprovalGate/);
+  assert.match(live, /maintainerApprovalActorPolicy/);
   assert.match(live, /owners-and-maintainers-only/);
   assert.match(live, /all-write-permission-actors/);
   assert.match(live, /stop before A5/i);
@@ -64,10 +65,10 @@ test("suitability instructions keep issue-author approval outside A4.5 outcomes"
 test("overview documents the secure default issue-author approval config behavior", () => {
   const live = read(".github/instructions/idd-overview.instructions.md");
   const template = read("idd-template/.github/instructions/idd-overview.instructions.md");
-  const expected = "Absent values\nkeep the gate enabled and default approval actors to\n`owners-and-maintainers-only`.";
+  const expected = "Absent\nvalues keep the gate enabled and default approval actors to\n`owners-and-maintainers-only`.";
 
   assert.match(live, /skipIssueAuthorApprovalGate/);
-  assert.match(live, /maintainerApprovalActors/);
+  assert.match(live, /maintainerApprovalActorPolicy/);
   assert.ok(live.includes(expected), "live overview is missing the secure-default note");
   assert.ok(template.includes(expected), "template overview is missing the secure-default note");
 });
