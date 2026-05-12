@@ -128,6 +128,8 @@ async function buildReport(owner, repo, prNumber, options = {}) {
     skipped: [],
     applied: [],
     failed: [],
+    summary: null,
+    status: null,
   };
 
   for (const comment of comments) {
@@ -144,6 +146,9 @@ async function buildReport(owner, repo, prNumber, options = {}) {
   for (const review of reviews) {
     evaluateReviewParent(review, pr, threadIndex, latestGatingReviews, report);
   }
+
+  // Calculate summary and status
+  computeReportSummary(report);
 
   return report;
 }
@@ -412,6 +417,57 @@ function addSkipped(report, subject, reason) {
     skipReason: reason,
   });
 }
+
+function computeReportSummary(report) {
+  // Count already-minimized and viewer-can-minimize from skipped reasons
+  let alreadyMinimized = 0;
+  let viewerCannotMinimize = 0;
+
+  for (const skip of report.skipped) {
+    if (skip.skipReason === "already minimized") {
+      alreadyMinimized += 1;
+    } else if (skip.skipReason === "viewer cannot minimize this comment") {
+      viewerCannotMinimize += 1;
+    }
+  }
+
+  // From candidates, we know viewerCanMinimize is true
+  const viewerCanMinimize = report.candidates.length;
+
+  report.summary = {
+    candidate: report.candidates.length,
+    skipped: report.skipped.length,
+    applied: report.applied.length,
+    failed: report.failed.length,
+    "already-minimized": alreadyMinimized,
+    "viewer-can-minimize": viewerCanMinimize,
+  };
+
+  // Determine status
+  if (report.mode === "dry-run") {
+    if (report.candidates.length === 0) {
+      report.status = "clean";
+    } else {
+      report.status = "needs-apply";
+    }
+  } else if (report.mode === "apply") {
+    if (report.failed.length > 0) {
+      report.status = "failed";
+    } else if (
+      report.applied.length > 0 &&
+      report.candidates.length === report.applied.length
+    ) {
+      report.status = "applied";
+    } else if (report.applied.length > 0) {
+      report.status = "incomplete";
+    } else if (report.candidates.length === 0) {
+      report.status = "clean";
+    } else {
+      report.status = "incomplete";
+    }
+  }
+}
+
 
 function fetchPullRequest(owner, repo, number, options = {}) {
   const query = `query($owner:String!,$repo:String!,$number:Int!){
@@ -891,6 +947,14 @@ function writeReport(report, format) {
   if (format === "json") {
     console.log(`${JSON.stringify(report, null, 2)}\n`);
     return;
+  }
+
+  // Print summary header
+  if (report.summary) {
+    console.log(
+      `summary: status=${report.status}, candidates=${report.summary.candidate}, applied=${report.summary.applied}, failed=${report.summary.failed}, skipped=${report.summary.skipped}`
+    );
+    console.log("");
   }
 
   printRows("candidates", report.candidates);
