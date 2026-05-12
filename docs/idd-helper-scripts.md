@@ -83,9 +83,11 @@ manifest instead of hand-maintaining helper file lists.
 - `vendored-node`: use the manifest's `managedFiles` list to copy the
   helper bundle into matching paths in the target repository, then run
   the emitted local `node scripts/...` commands.
-- `ephemeral-npx`: use the manifest's one-shot
-  `npx --yes --package github:kurone-kito/idd-skill idd-*` commands
-  without copying helper files into the repository.
+- `ephemeral-npx`: use the manifest's one-shot `npx --yes --package
+  <helper-package-spec> idd-*` commands without copying helper files
+  into the repository. The default helper package spec is an HTTPS
+  archive URL, and `--package-spec` lets adopters pin a reviewed tarball
+  or mirror URL explicitly.
 - `instructions-only`: keep helper dependencies, helper files, and helper
   wrapper scripts out of the target repository entirely.
 

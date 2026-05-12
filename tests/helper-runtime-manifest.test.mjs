@@ -14,12 +14,13 @@ import {
 } from "../scripts/helper-runtime-manifest.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
+const DEFAULT_PACKAGE_SPEC = "https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main";
 
 test("package-manager profile emits manager-specific install commands without hard-coded pnpm", () => {
   const expectedInstall = {
-    npm: "npm install --save-dev github:kurone-kito/idd-skill",
-    pnpm: "pnpm add -D github:kurone-kito/idd-skill",
-    yarn: "yarn add --dev github:kurone-kito/idd-skill",
+    npm: `npm install --save-dev ${DEFAULT_PACKAGE_SPEC}`,
+    pnpm: `pnpm add -D ${DEFAULT_PACKAGE_SPEC}`,
+    yarn: `yarn add --dev ${DEFAULT_PACKAGE_SPEC}`,
   };
 
   for (const packageManager of ["npm", "pnpm", "yarn"]) {
@@ -32,11 +33,11 @@ test("package-manager profile emits manager-specific install commands without ha
 
     assert.equal(profile.packageManager, packageManager);
     assert.equal(profile.installCommand, expectedInstall[packageManager]);
-    assert.deepEqual(profile.managedDependencies, {
-      devDependencies: {
-        "@kurone-kito/idd-skill": "github:kurone-kito/idd-skill",
-      },
-    });
+      assert.deepEqual(profile.managedDependencies, {
+        devDependencies: {
+        "@kurone-kito/idd-skill": DEFAULT_PACKAGE_SPEC,
+        },
+      });
     if (packageManager !== "pnpm") {
       assert.doesNotMatch(profile.installCommand, /\bpnpm\b/);
     }
@@ -164,11 +165,25 @@ test("helper bundle manifest bin wrapper produces JSON output", () => {
   );
   const parsed = JSON.parse(output);
 
-  assert.equal(parsed.packageSpec, "github:kurone-kito/idd-skill");
+  assert.equal(parsed.packageSpec, DEFAULT_PACKAGE_SPEC);
   assert.ok(parsed.profiles["instructions-only"]);
 
   const launcher = readFileSync(join(REPO_ROOT, "bin/idd-helper-bundle-manifest.mjs"), "utf8");
   assert.ok(launcher.startsWith("#!/usr/bin/env node"));
+});
+
+test("manifest accepts an explicit package spec override", () => {
+  const packageSpec = "https://codeload.github.com/kurone-kito/idd-skill/tar.gz/0123456789abcdef0123456789abcdef01234567";
+  const manifest = buildHelperRuntimeManifest({
+    profile: "ephemeral-npx",
+    packageSpec,
+  });
+
+  assert.equal(manifest.packageSpec, packageSpec);
+  assert.equal(
+    manifest.profiles["ephemeral-npx"].commands["idd:helper-bundle-manifest"],
+    `npx --yes --package ${packageSpec} idd-helper-bundle-manifest`,
+  );
 });
 
 test("manifest CLI rejects flags that are missing required values", () => {

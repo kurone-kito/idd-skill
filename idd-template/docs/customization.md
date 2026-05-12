@@ -49,7 +49,7 @@ from the target repository root to get the concrete import surface for
 the chosen profile:
 
 ```sh
-npx --yes --package github:kurone-kito/idd-skill \
+npx --yes --package https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main \
   idd-helper-bundle-manifest --profile package-manager
 ```
 
@@ -62,6 +62,8 @@ when possible. If detection is ambiguous, pass this flag explicitly:
 
 The output shows which dependency entries, `package.json` scripts,
 vendored files, or one-shot commands belong to the selected profile.
+Pass `--package-spec <pinned-spec>` when you want the manifest to emit a
+reviewed tarball or mirror URL instead of the default archive URL.
 
 To switch profiles later, rerun the same command with
 these flags:

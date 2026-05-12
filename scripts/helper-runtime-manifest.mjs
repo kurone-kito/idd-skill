@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 const PACKAGE_MANAGERS = ["npm", "pnpm", "yarn"];
 const PROFILE_NAMES = ["package-manager", "vendored-node", "ephemeral-npx", "instructions-only"];
 const PACKAGE_NAME = "@kurone-kito/idd-skill";
-const PACKAGE_SPEC = "github:kurone-kito/idd-skill";
+const DEFAULT_PACKAGE_SPEC = "https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main";
 const SOURCE_REPOSITORY = "github:kurone-kito/idd-skill";
-const PACKAGE_SPEC_PIN_HINT = "Pin the helper package to a tag or commit SHA when importing into another repository.";
+const PACKAGE_SPEC_PIN_HINT = "Pass --package-spec with a pinned tarball URL or reviewed commit archive when you need reproducible helper imports.";
 const NODE_ENGINES = "^22.22.2 || >=24";
 const SCRIPT_FILE_EXTENSIONS = [".mjs", ".js", ".json"];
 
@@ -86,6 +86,7 @@ if (isMainModule(import.meta.url)) {
     profile: args.profile,
     fromProfile: args.fromProfile,
     packageManager: args.packageManager,
+    packageSpec: args.packageSpec,
     targetRoot: args.targetRoot,
   });
 
@@ -96,6 +97,7 @@ export function buildHelperRuntimeManifest({
   profile = "",
   fromProfile = "",
   packageManager = "",
+  packageSpec = "",
   targetRoot = process.cwd(),
 } = {}) {
   const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -103,6 +105,7 @@ export function buildHelperRuntimeManifest({
   const normalizedProfile = normalizeProfile(profile);
   const normalizedFromProfile = normalizeOptionalProfile(fromProfile);
   const normalizedTargetRoot = targetRoot || process.cwd();
+  const normalizedPackageSpec = normalizePackageSpec(packageSpec);
   const normalizedPackageManager = normalizePackageManager(
     packageManager || detectPackageManager(normalizedTargetRoot),
     normalizedProfile,
@@ -113,6 +116,7 @@ export function buildHelperRuntimeManifest({
     packageMetadata,
     managedFiles,
     packageManager: normalizedPackageManager,
+    packageSpec: normalizedPackageSpec,
   });
 
   const selectedProfiles = normalizedProfile
@@ -123,7 +127,7 @@ export function buildHelperRuntimeManifest({
     version: 1,
     sourceRepository: packageMetadata.repository,
     packageName: packageMetadata.name,
-    packageSpec: PACKAGE_SPEC,
+    packageSpec: normalizedPackageSpec,
     packageSpecPinHint: PACKAGE_SPEC_PIN_HINT,
     nodeEngines: packageMetadata.nodeEngines,
     packageManager: normalizedPackageManager,
@@ -253,7 +257,7 @@ function normalizeRepository(repository) {
   return SOURCE_REPOSITORY;
 }
 
-function buildProfileCatalog({ packageMetadata, managedFiles, packageManager }) {
+function buildProfileCatalog({ packageMetadata, managedFiles, packageManager, packageSpec }) {
   const packageManagerScripts = Object.fromEntries(
     HELPER_COMMANDS.map((command) => [command.scriptName, command.binName]),
   );
@@ -263,7 +267,7 @@ function buildProfileCatalog({ packageMetadata, managedFiles, packageManager }) 
   const ephemeralCommands = Object.fromEntries(
     HELPER_COMMANDS.map((command) => [
       command.scriptName,
-      `npx --yes --package ${PACKAGE_SPEC} ${command.binName}`,
+      `npx --yes --package ${packageSpec} ${command.binName}`,
     ]),
   );
 
@@ -272,10 +276,10 @@ function buildProfileCatalog({ packageMetadata, managedFiles, packageManager }) 
       profile: "package-manager",
       description: "Install the helper bundle through the repository's existing package manager and invoke helper bins through package.json scripts.",
       packageManager,
-      installCommand: packageManager ? buildPackageManagerInstallCommand(packageManager) : "",
+      installCommand: packageManager ? buildPackageManagerInstallCommand(packageManager, packageSpec) : "",
       managedDependencies: {
         devDependencies: {
-          [packageMetadata.name]: PACKAGE_SPEC,
+          [packageMetadata.name]: packageSpec,
         },
       },
       managedPackageJsonScripts: packageManagerScripts,
@@ -371,15 +375,15 @@ function subtractPaths(leftFiles, rightFiles) {
     .sort();
 }
 
-function buildPackageManagerInstallCommand(packageManager) {
+function buildPackageManagerInstallCommand(packageManager, packageSpec) {
   if (packageManager === "npm") {
-    return `npm install --save-dev ${PACKAGE_SPEC}`;
+    return `npm install --save-dev ${packageSpec}`;
   }
   if (packageManager === "pnpm") {
-    return `pnpm add -D ${PACKAGE_SPEC}`;
+    return `pnpm add -D ${packageSpec}`;
   }
   if (packageManager === "yarn") {
-    return `yarn add --dev ${PACKAGE_SPEC}`;
+    return `yarn add --dev ${packageSpec}`;
   }
   throw new Error(`unsupported package manager: ${packageManager}`);
 }
@@ -390,6 +394,7 @@ function parseArgs(argv) {
     profile: "",
     fromProfile: "",
     packageManager: "",
+    packageSpec: "",
     targetRoot: "",
   };
 
@@ -422,6 +427,11 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (token === "--package-spec") {
+      parsed.packageSpec = requireValue();
+      index += 1;
+      continue;
+    }
     if (token === "--target-root") {
       parsed.targetRoot = requireValue();
       index += 1;
@@ -441,9 +451,14 @@ Options:
   --profile <package-manager|vendored-node|ephemeral-npx|instructions-only>
   --from-profile <package-manager|vendored-node|ephemeral-npx|instructions-only>
   --package-manager <npm|pnpm|yarn>
+  --package-spec <npm-spec-or-tarball-url>
   --target-root <path>
   --help
 `);
+}
+
+function normalizePackageSpec(packageSpec) {
+  return packageSpec || DEFAULT_PACKAGE_SPEC;
 }
 
 function normalizeProfile(profile) {

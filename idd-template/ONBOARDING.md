@@ -715,12 +715,15 @@ This repository uses the following IDD policies:
   dependency, script, vendored file, or one-shot command surface for
   the selected profile:
 
-      npx --yes --package github:kurone-kito/idd-skill \
+      npx --yes --package https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main \
         idd-helper-bundle-manifest --profile <selected-profile>
 
 - If the repository chooses `package-manager` and auto-detection does not
   resolve npm, pnpm, or yarn, pass `--package-manager <npm|pnpm|yarn>`
   explicitly to the manifest helper.
+- Pass `--package-spec <pinned-spec>` when the repository wants the
+  emitted package-manager or `ephemeral-npx` commands to use a reviewed
+  tarball or internal mirror URL instead of the default archive URL.
 - When switching profiles later, rerun the same helper with
   `--from-profile <current-profile>` so the add/remove surface is
   explicit and auditable.
