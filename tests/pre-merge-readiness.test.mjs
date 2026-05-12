@@ -344,6 +344,38 @@ test("latest gating reviews compare timestamps by parsed time", () => {
   assert.equal(latest.get("reviewer")?.state, "CHANGES_REQUESTED");
 });
 
+test("latest gating reviews ignore invalid timestamps when a valid review exists", () => {
+  const latest = indexLatestGatingReviewsByAuthor([
+    {
+      author: { login: "reviewer" },
+      state: "APPROVED",
+      submittedAt: "2026-05-12T01:00:00Z",
+    },
+    {
+      author: { login: "reviewer" },
+      state: "CHANGES_REQUESTED",
+      submittedAt: "",
+    },
+  ]);
+
+  assert.equal(latest.get("reviewer")?.state, "APPROVED");
+});
+
+test("regular comment gate only keeps comments after the latest IDD reply", () => {
+  const summary = summarizeRegularCommentsForGate(
+    [
+      { id: 1, createdAt: "2026-05-12T00:00:00Z", body: "first", author: { login: "reviewer-a" } },
+      { id: 2, createdAt: "2026-05-12T00:00:01Z", body: "second", author: { login: "reviewer-b" } },
+      { id: 3, createdAt: "2026-05-12T00:00:02Z", body: "**Accepted** — reply", author: { login: "idd-bot" } },
+      { id: 4, createdAt: "2026-05-12T00:00:03Z", body: "third", author: { login: "reviewer-c" } },
+    ],
+    { iddAgentLogins: ["idd-bot"] },
+  );
+
+  assert.equal(summary.count, 1);
+  assert.deepEqual(summary.items.map((item) => item.id), ["4"]);
+});
+
 function readJson(relativePath) {
   return JSON.parse(readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8"));
 }

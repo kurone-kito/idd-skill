@@ -963,15 +963,18 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
     .filter((comment) => isValidIsoTimestamp(comment.createdAt))
     .sort((left, right) => compareIsoTimestamps(left.createdAt, right.createdAt));
 
+  const latestIddReplyAt = maxIsoTimestamp(
+    normalized
+      .filter((comment) => !isOperationalOrDigestComment(comment.body))
+      .filter((comment) => iddAgentLogins.has(comment.authorLogin))
+      .map((comment) => comment.createdAt),
+  );
+
   const items = normalized
     .filter((comment) => !isOperationalOrDigestComment(comment.body))
     .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
     .filter((comment) => !isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins))
-    .filter((comment) => !normalized.some((candidate) => {
-      return compareIsoTimestamps(candidate.createdAt, comment.createdAt) > 0
-        && iddAgentLogins.has(candidate.authorLogin)
-        && !isOperationalOrDigestComment(candidate.body);
-    }))
+    .filter((comment) => !latestIddReplyAt || compareIsoTimestamps(latestIddReplyAt, comment.createdAt) <= 0)
     .map((comment) => ({
       id: comment.id,
       authorLogin: comment.authorLogin,
@@ -1940,10 +1943,10 @@ function compareIsoTimestamps(left, right) {
     return String(left ?? "").localeCompare(String(right ?? ""));
   }
   if (typeof leftComparable === "number") {
-    return -1;
+    return 1;
   }
   if (typeof rightComparable === "number") {
-    return 1;
+    return -1;
   }
   return String(left ?? "").localeCompare(String(right ?? ""));
 }
