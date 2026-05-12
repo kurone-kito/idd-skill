@@ -6,8 +6,11 @@ import { fileURLToPath } from "node:url";
 
 const PACKAGE_MANAGERS = ["npm", "pnpm", "yarn"];
 const PROFILE_NAMES = ["package-manager", "vendored-node", "ephemeral-npx", "instructions-only"];
+const PACKAGE_NAME = "@kurone-kito/idd-skill";
 const PACKAGE_SPEC = "github:kurone-kito/idd-skill";
+const SOURCE_REPOSITORY = "github:kurone-kito/idd-skill";
 const PACKAGE_SPEC_PIN_HINT = "Pin the helper package to a tag or commit SHA when importing into another repository.";
+const NODE_ENGINES = "^22.22.2 || >=24";
 const SCRIPT_FILE_EXTENSIONS = [".mjs", ".js", ".json"];
 
 const HELPER_COMMANDS = [
@@ -96,7 +99,7 @@ export function buildHelperRuntimeManifest({
   targetRoot = process.cwd(),
 } = {}) {
   const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const packageJson = JSON.parse(readFileSync(resolve(packageRoot, "package.json"), "utf8"));
+  const packageMetadata = resolveSourcePackageMetadata(packageRoot);
   const normalizedProfile = normalizeProfile(profile);
   const normalizedFromProfile = normalizeOptionalProfile(fromProfile);
   const normalizedTargetRoot = targetRoot || process.cwd();
@@ -107,7 +110,7 @@ export function buildHelperRuntimeManifest({
   const managedFiles = collectVendoredFiles(packageRoot);
   const commandCatalog = buildCommandCatalog();
   const profileCatalog = buildProfileCatalog({
-    packageJson,
+    packageMetadata,
     managedFiles,
     packageManager: normalizedPackageManager,
   });
@@ -118,11 +121,11 @@ export function buildHelperRuntimeManifest({
 
   return {
     version: 1,
-    sourceRepository: packageJson.repository,
-    packageName: packageJson.name,
+    sourceRepository: packageMetadata.repository,
+    packageName: packageMetadata.name,
     packageSpec: PACKAGE_SPEC,
     packageSpecPinHint: PACKAGE_SPEC_PIN_HINT,
-    nodeEngines: packageJson.engines?.node ?? "",
+    nodeEngines: packageMetadata.nodeEngines,
     packageManager: normalizedPackageManager,
     availableProfiles: [...PROFILE_NAMES],
     commandCatalog,
@@ -215,7 +218,33 @@ function buildCommandCatalog() {
   }));
 }
 
-function buildProfileCatalog({ packageJson, managedFiles, packageManager }) {
+export function resolveSourcePackageMetadata(packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")) {
+  const fallback = {
+    name: PACKAGE_NAME,
+    repository: SOURCE_REPOSITORY,
+    nodeEngines: NODE_ENGINES,
+  };
+  const packageJsonPath = resolve(packageRoot, "package.json");
+  if (!existsSync(packageJsonPath)) {
+    return fallback;
+  }
+
+  try {
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+    if (packageJson.name !== PACKAGE_NAME) {
+      return fallback;
+    }
+    return {
+      name: PACKAGE_NAME,
+      repository: String(packageJson.repository ?? SOURCE_REPOSITORY),
+      nodeEngines: String(packageJson.engines?.node ?? NODE_ENGINES),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function buildProfileCatalog({ packageMetadata, managedFiles, packageManager }) {
   const packageManagerScripts = Object.fromEntries(
     HELPER_COMMANDS.map((command) => [command.scriptName, command.binName]),
   );
@@ -237,7 +266,7 @@ function buildProfileCatalog({ packageJson, managedFiles, packageManager }) {
       installCommand: packageManager ? buildPackageManagerInstallCommand(packageManager) : "",
       managedDependencies: {
         devDependencies: {
-          [packageJson.name]: PACKAGE_SPEC,
+          [packageMetadata.name]: PACKAGE_SPEC,
         },
       },
       managedPackageJsonScripts: packageManagerScripts,

@@ -10,6 +10,7 @@ import {
   buildHelperRuntimeManifest,
   collectVendoredFiles,
   detectPackageManager,
+  resolveSourcePackageMetadata,
 } from "../scripts/helper-runtime-manifest.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -31,6 +32,11 @@ test("package-manager profile emits manager-specific install commands without ha
 
     assert.equal(profile.packageManager, packageManager);
     assert.equal(profile.installCommand, expectedInstall[packageManager]);
+    assert.deepEqual(profile.managedDependencies, {
+      devDependencies: {
+        "@kurone-kito/idd-skill": "github:kurone-kito/idd-skill",
+      },
+    });
     if (packageManager !== "pnpm") {
       assert.doesNotMatch(profile.installCommand, /\bpnpm\b/);
     }
@@ -81,6 +87,23 @@ test("detectPackageManager respects package metadata and lockfiles", () => {
   const lockfileRoot = mkdtempSync(join(tmpdir(), "idd-helper-runtime-lockfile-"));
   writeFileSync(join(lockfileRoot, "yarn.lock"), "# lockfile");
   assert.equal(detectPackageManager(lockfileRoot), "yarn");
+});
+
+test("source package metadata falls back when vendored into another repository", () => {
+  const foreignRoot = mkdtempSync(join(tmpdir(), "idd-helper-runtime-foreign-root-"));
+  writeFileSync(join(foreignRoot, "package.json"), JSON.stringify({ name: "target-app" }));
+  assert.deepEqual(resolveSourcePackageMetadata(foreignRoot), {
+    name: "@kurone-kito/idd-skill",
+    repository: "github:kurone-kito/idd-skill",
+    nodeEngines: "^22.22.2 || >=24",
+  });
+
+  const missingRoot = mkdtempSync(join(tmpdir(), "idd-helper-runtime-missing-root-"));
+  assert.deepEqual(resolveSourcePackageMetadata(missingRoot), {
+    name: "@kurone-kito/idd-skill",
+    repository: "github:kurone-kito/idd-skill",
+    nodeEngines: "^22.22.2 || >=24",
+  });
 });
 
 test("empty targetRoot falls back to the current working directory", () => {
