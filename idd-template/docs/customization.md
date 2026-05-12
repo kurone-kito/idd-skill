@@ -396,6 +396,11 @@ Trusted marker actors remain a separate control. Approval labels or
 approval comments decide whether work may start; trusted marker actors
 decide who may post operational state markers.
 
+The policy config schema keeps top-level keys strict. Unknown
+top-level keys fail validation unless they use the `x-` prefix. Use
+`x-*` keys for repository-local extensions and keep official policy keys
+exact so typoed settings fail loudly.
+
 ## Suitability Outcomes and Label Mapping
 
 Use this mapping when A4.5 rejects a candidate. The goal is to preserve
