@@ -153,17 +153,21 @@ Choose the smallest safe output shape:
   keeps the default `issue-scope: roadmap` or disables public
   orphan-first discovery with `orphan-first-policy: public-disabled`,
   surface that constraint and prefer a roadmap package instead.
-  When the repository also keeps the broader issue-author approval gate,
-  surface the same post-publication approval step whenever the issue
-  author is not self-authorizing under the repository's
-  `maintainer-approval-actors` policy. Until a fresh `idd:ready` label
-  or standalone `IDD ready` comment from a maintainer approval actor
-  exists, route the issue to the approval-needed fallback bucket instead
-  of the normal ready-to-start set.
 - **Roadmap plus sub-issues**: the request needs visible sequencing,
   parallel tracks, multiple ready issues, or multi-session handoff.
 - **Stable non-ready buckets**: some work is deferred, blocked by a
   human, waiting on a decision, or outside the repository scope.
+
+When the repository keeps the broader issue-author approval gate,
+surface the same post-publication approval step for orphan issues,
+roadmaps, and sub-issues whenever the issue author is not
+self-authorizing under the repository's
+`maintainer-approval-actors` policy. The distributed `idd:ready` label
+is accepted by presence, while standalone `IDD ready` comments must stay
+fresh against the latest issue content and generated plan updates. Until
+that approval condition is satisfied, route the draft to the
+approval-needed fallback bucket instead of the normal ready-to-start
+set.
 
 ## Dependency minimization
 

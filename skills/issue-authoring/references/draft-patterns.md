@@ -25,9 +25,11 @@ final issue content is stable. If a public repository uses
 If the repository keeps the broader secure-by-default issue-author
 approval gate, use the same post-publication approval note whenever the
 issue author will not be self-authorizing under the repository's
-`maintainer-approval-actors` policy. Until a fresh `idd:ready` label or
-standalone `IDD ready` comment from a maintainer approval actor exists,
-later discovery should treat the issue as part of the
+`maintainer-approval-actors` policy. The distributed `idd:ready` label
+is accepted by presence, while standalone `IDD ready` comments from a
+maintainer approval actor must stay fresh against the latest issue
+content and generated plan updates. Until that approval condition is
+satisfied, later discovery should treat the issue as part of the
 approval-needed fallback bucket instead of the normal ready-to-start
 set.
 

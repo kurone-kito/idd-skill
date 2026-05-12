@@ -490,7 +490,7 @@ This repository uses the following IDD configuration:
 - **trusted-marker-logins**: `kurone-kito`, `renovate[bot]`, `github-actions[bot]`
 - **maintainer-approval-actors**: `owners-and-maintainers-only`
 - **issue-author-approval-gate**: `enabled-by-default`
-- **issue-author-approval-opt-out**: planned `skipIssueAuthorApprovalGate: true` only when the repository intentionally skips the gate
+- **issue-author-approval-opt-out**: `skipIssueAuthorApprovalGate: true` only when the repository intentionally skips the gate
 - **collaborator-authored-markers**: `false`
 - **forced-handoff**: `disabled`
 - **forced-handoff-authority**: `owners-and-maintainers-only`
@@ -530,12 +530,10 @@ Keep the distributed default whenever the repository wants unattended
 execution to require a self-authorizing issue author or explicit
 maintainer approval.
 
-**issue-author-approval-opt-out**: Reserve
-`skipIssueAuthorApprovalGate: true` for repositories that intentionally
-skip the gate once schema/config support lands. Until then, record the
-planned opt-out in onboarding notes or local policy docs rather than
-inventing an unsupported JSON key. After rollout, omitting the key or
-setting it to `false` keeps the gate enabled.
+**issue-author-approval-opt-out**: Use
+`skipIssueAuthorApprovalGate: true` only for repositories that
+intentionally skip the gate. Omitting the key or setting it to `false`
+keeps the gate enabled.
 
 **collaborator-authored-markers**: Boolean (true/false). Determines
 whether to trust operational markers authored by repository
