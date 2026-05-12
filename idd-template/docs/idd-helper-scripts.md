@@ -66,6 +66,36 @@ turning every adopter into a Node.js-first repository. The written
 decision tables remain the canonical protocol regardless of which helper
 profile is selected.
 
+## Profile Wiring Surface
+
+Use `idd-helper-bundle-manifest` as the canonical import helper for these
+profiles. It is published from this source repository as both
+`scripts/helper-runtime-manifest.mjs` and the package bin
+`idd-helper-bundle-manifest`, so adopters can inspect one machine-readable
+manifest instead of hand-maintaining helper file lists.
+
+- `package-manager`: run the manifest from the target repository root and
+  let it detect npm, pnpm, or yarn (or pass `--package-manager` if
+  detection is ambiguous). The output includes the package-manager
+  install command, the `@kurone-kito/idd-skill` helper dependency, and a
+  `package.json` scripts block that calls stable `idd-*` bins without
+  assuming pnpm.
+- `vendored-node`: use the manifest's `managedFiles` list to copy the
+  helper bundle into matching paths in the target repository, then run
+  the emitted local `node scripts/...` commands.
+- `ephemeral-npx`: use the manifest's one-shot `npx --yes --package
+  <helper-package-spec> idd-*` commands without copying helper files
+  into the repository. The default helper package spec is an HTTPS
+  archive URL, and `--package-spec` lets adopters pin a reviewed tarball
+  or mirror URL explicitly.
+- `instructions-only`: keep helper dependencies, helper files, and helper
+  wrapper scripts out of the target repository entirely.
+
+To switch profiles later, rerun the manifest with both
+`--profile <target-profile>` and `--from-profile <current-profile>`. The
+switch section reports the files, dependency entries, and `package.json`
+scripts to add or remove for that transition.
+
 The adopted helper boundaries are intentionally narrow:
 
 - `review-activity-snapshot.mjs` is read-only, emits machine-readable

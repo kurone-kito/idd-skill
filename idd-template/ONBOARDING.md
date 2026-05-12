@@ -711,6 +711,22 @@ This repository uses the following IDD policies:
   `instructions-only`.
 - Existing pnpm/npm/yarn repositories should reuse their package-manager
   dependencies instead of ad hoc `npx`.
+- Run this command from the target repository root to print the exact
+  dependency, script, vendored file, or one-shot command surface for
+  the selected profile:
+
+      npx --yes --package https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main \
+        idd-helper-bundle-manifest --profile <selected-profile>
+
+- If the repository chooses `package-manager` and auto-detection does not
+  resolve npm, pnpm, or yarn, pass `--package-manager <npm|pnpm|yarn>`
+  explicitly to the manifest helper.
+- Pass `--package-spec <pinned-spec>` when the repository wants the
+  emitted package-manager or `ephemeral-npx` commands to use a reviewed
+  tarball or internal mirror URL instead of the default archive URL.
+- When switching profiles later, rerun the same helper with
+  `--from-profile <current-profile>` so the add/remove surface is
+  explicit and auditable.
 - Repositories without Node.js stay supported through
   `instructions-only`.
 
@@ -731,8 +747,8 @@ override the command table values in `idd-overview.instructions.md`. It is
 included in the core file list and copied as part of Step 2. The file is
 optional; IDD operates from the Markdown instruction files when the JSON is
 absent or invalid. When you do use it, keep the human-readable policy
-section in sync with this JSON file, except for helper runtime which stays
-human-readable only until the schema is extended.
+section in sync with this JSON file, including the selected
+`helperRuntime.profile` when helper support is enabled.
 
 After copying, the file contains placeholders. Fill them in along with the
 rest of the placeholder-replacement pass in Step 4. Also replace the
@@ -758,9 +774,8 @@ Notes:
   notes and JSON as a configuration bug and update both in the same change.
 - Keep command strings JSON-escaped. Do not paste raw shell directly if
   it contains quotes or backslashes.
-- Helper runtime selection is currently recorded in the human-readable
-  policy section. Do not add a `helperRuntime` JSON field unless the
-  schema is extended first.
+- When helper support is enabled, keep `helperRuntime.profile` in sync
+  with the human-readable helper runtime section above.
 - Extend the schema only when the repository records extra policy
   decisions (for example: critique-loop profile, merge handoff actor,
   external advisory bot, or maintainer approval actors).
