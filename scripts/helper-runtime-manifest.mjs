@@ -82,6 +82,14 @@ const HELPER_COMMANDS = [
     description: "Audit or apply post-merge comment cleanup.",
   },
   {
+    id: "claim-approval-gate",
+    scriptName: "idd:claim-approval-gate",
+    binName: "idd-claim-approval-gate",
+    entryPath: "scripts/claim-approval-gate.mjs",
+    vendoredCommand: "node scripts/claim-approval-gate.mjs",
+    description: "Evaluate the A5(a) issue-author approval gate against issue state.",
+  },
+  {
     id: "discover-orphan-filter",
     scriptName: "idd:discover-orphan-filter",
     binName: "idd-discover-orphan-filter",

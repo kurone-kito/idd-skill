@@ -9,6 +9,7 @@
   "bin": {
     "idd-advisory-wait-state": "./bin/idd-advisory-wait-state.mjs",
     "idd-audit-pr-cleanup": "./bin/idd-audit-pr-cleanup.mjs",
+    "idd-claim-approval-gate": "./bin/idd-claim-approval-gate.mjs",
     "idd-discover-orphan-filter": "./bin/idd-discover-orphan-filter.mjs",
     "idd-doctor": "./bin/idd-doctor.mjs",
     "idd-forced-handoff-marker": "./bin/idd-forced-handoff-marker.mjs",
