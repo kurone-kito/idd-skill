@@ -113,8 +113,9 @@ export function parseForcedHandoffComment(body, createdAt) {
     return null;
   }
 
-  const visibleNote = trimmed.slice(markerEnd + 3).trim();
-  if (!visibleNote) {
+  const visibleNote = trimmed.slice(markerEnd + 3);
+  const visibleText = visibleNote.replace(/<!--[\s\S]*?-->/g, " ").trim();
+  if (!visibleText) {
     return null;
   }
 

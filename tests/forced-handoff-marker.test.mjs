@@ -60,6 +60,16 @@ test("forced handoff parsing accepts flexible marker spacing and casing", () => 
   });
 });
 
+test("forced handoff rejects markers without visible consent text", () => {
+  const body = [
+    "<!-- forced-handoff: {\"old-agent-id\":\"github-copilot-cli-old\",\"old-claim-id\":\"claim-20260512T090000Z-337-old\",\"new-agent-id\":\"github-copilot-cli-new\",\"new-claim-id\":\"claim-20260512T110000Z-337-new\",\"branch\":\"issue/337-feat-protocol-add-auditable-forced\",\"forced-by\":\"kurone-kito\",\"reason\":\"operator-approved-recovery\",\"timestamp\":\"2026-05-12T11:00:00Z\",\"context-scope\":\"issue-only\"} -->",
+    "",
+    "<!-- hidden only -->",
+  ].join("\n");
+
+  assert.equal(parseForcedHandoffComment(body, "2026-05-12T11:00:05Z"), null);
+});
+
 test("forced handoff start-prefix detection matches flexible marker spelling", () => {
   assert.equal(
     operationalMarkerPrefixByStart("  <!--   FORCED-HANDOFF: {\"old-agent-id\":\"a\"} -->"),
