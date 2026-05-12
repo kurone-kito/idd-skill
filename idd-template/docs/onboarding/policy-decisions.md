@@ -90,6 +90,9 @@ execution begins.
 Choose whether the repository keeps the distributed secure-by-default
 issue-author approval gate or records a current config opt-out:
 
+Onboarding should ask this question explicitly before unattended
+execution is allowed to start.
+
 - `enabled-by-default` (distributed default): unattended work requires a
   self-authorizing issue author or a fresh explicit maintainer approval
   signal before claim

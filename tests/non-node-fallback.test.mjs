@@ -169,7 +169,12 @@ test("onboarding keeps claim timing in the explicit confirmation path", () => {
   );
   assert.match(
     onboarding,
-    /critique-loop profile, credential scope, claim-timing defaults,\s+issue-authoring companion status, and helper runtime profile\./,
+    /issue-author approval gate \(`enabled-by-default` by default, or\s+explicit config opt-out via `skipIssueAuthorApprovalGate: true`\)/,
+    "ONBOARDING Step 1B must explicitly confirm keep-default vs opt-out for the issue-author gate",
+  );
+  assert.match(
+    onboarding,
+    /critique-loop profile, credential scope, claim-timing defaults,\s+issue-author approval gate, maintainer approval actor policy,\s+issue-authoring companion status, and helper runtime profile\./,
     "ONBOARDING Step 2 re-check must stay aligned with the Step 1B confirmation list",
   );
   assert.match(
