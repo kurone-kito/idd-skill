@@ -64,7 +64,7 @@ const UNSAFE_TEXT_RULES = [
 ];
 const AMD_MARKER_PATTERN = /^\*\*Awaiting maintainer decision\*\*/i;
 const FORCED_HANDOFF_CONTEXT_SCOPES = new Set(["issue-only", "issue-plus-pr"]);
-const FORCED_HANDOFF_LINKED_PR_PATTERN = /^(?:[1-9]\d*|https?:\/\/[^\s<>"]+)$/i;
+const FORCED_HANDOFF_LINKED_PR_PATTERN = /^(?:[1-9]\d*|https?:\/\/[^\s<>"]+)$/;
 
 export function parseClaimComment(body, createdAt) {
   const match = body.trimEnd().match(

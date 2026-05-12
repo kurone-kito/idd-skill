@@ -509,7 +509,7 @@ For `issue-plus-pr` context:
 ```text
 Forced handoff approved by {human-actor}. I verified that the current
 owning session or agent is unavailable. This transfers ownership away
-from claim `{old-claim-id}` on branch `{branch}` for PR #{pr-number}.
+from claim `{old-claim-id}` on branch `{branch}` for PR {pr-reference}.
 If the prior session resumes, it must stop immediately and must not
 push, comment, resolve review state, or merge until a maintainer
 reassigns ownership.
@@ -530,7 +530,7 @@ generate the full body so humans do not hand-write fragile claim IDs.
 | `linked-pr`     | Conditional | The decimal PR number or `http(s)` URL when PR context is part of the handoff |
 | `forced-by`     | Required    | The approving human actor                                                     |
 | `reason`        | Required    | Why the prior session is considered unavailable                               |
-| `timestamp`     | Required    | The GitHub server timestamp of the approval                                   |
+| `timestamp`     | Required    | Operator-recorded UTC timestamp captured in the marker payload                |
 | `context-scope` | Required    | Whether the handoff covers `issue-only` or `issue-plus-pr` context            |
 
 The forced-handoff marker must stay distinct from normal `claimed-by` and

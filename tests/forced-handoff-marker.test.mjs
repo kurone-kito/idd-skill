@@ -259,7 +259,15 @@ test("forced handoff rejects marker-breaking token values", () => {
 });
 
 test("forced handoff rejects invalid linked PR tokens", () => {
-  for (const linkedPr of ["0", "-1", "1.5", "not-a-pr", "ftp://example.test/pr/341", "<!--hidden"]) {
+  for (const linkedPr of [
+    "0",
+    "-1",
+    "1.5",
+    "not-a-pr",
+    "ftp://example.test/pr/341",
+    "HTTP://github.com/kurone-kito/idd-skill/pull/359",
+    "<!--hidden",
+  ]) {
     assert.throws(
       () => renderForcedHandoffComment({
         ...payload,
