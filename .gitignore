@@ -123,6 +123,8 @@ node_modules/
 .pnpm-store/
 .pnpm-config/
 .pnpm-debug.log*
+*.tgz
+pnpm-lock.yaml.*
 
 ### AI Agents ###
 # Claude Code local config
