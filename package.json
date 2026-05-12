@@ -16,6 +16,7 @@
     "idd-helper-bundle-manifest": "./bin/idd-helper-bundle-manifest.mjs",
     "idd-live-status-digest": "./bin/idd-live-status-digest.mjs",
     "idd-pre-merge-readiness": "./bin/idd-pre-merge-readiness.mjs",
+    "idd-resume-claim-routing": "./bin/idd-resume-claim-routing.mjs",
     "idd-review-activity-snapshot": "./bin/idd-review-activity-snapshot.mjs",
     "idd-suitability-triage": "./bin/idd-suitability-triage.mjs"
   },

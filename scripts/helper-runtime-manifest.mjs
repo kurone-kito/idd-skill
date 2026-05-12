@@ -98,6 +98,14 @@ const HELPER_COMMANDS = [
     description: "Classify open issues into orphan candidates and filtered buckets.",
   },
   {
+    id: "resume-claim-routing",
+    scriptName: "idd:resume-claim-routing",
+    binName: "idd-resume-claim-routing",
+    entryPath: "scripts/resume-claim-routing.mjs",
+    vendoredCommand: "node scripts/resume-claim-routing.mjs",
+    description: "Evaluate Resume Step 1 claim routing outcomes from claim marker history.",
+  },
+  {
     id: "suitability-triage",
     scriptName: "idd:suitability-triage",
     binName: "idd-suitability-triage",
