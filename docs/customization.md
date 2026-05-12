@@ -18,7 +18,7 @@ behavior change too.
 | Policy constants        | Distributed timing, wait, and loop defaults                                                                | Review [IDD policy constants](policy-constants.md#configuration-authority-hierarchy) before changing claim ownership timing, advisory waits, CI waits, or critique-loop guardrails. The [Configuration Authority Hierarchy](policy-constants.md#configuration-authority-hierarchy) section maps key settings to the file(s) to update. Record the selected critique-loop profile in onboarding notes before unattended operation. |
 | Merge policy            | Merge gates after CI, review, freshness, and claim checks; distributed default is `fully_autonomous_merge` | Review [Permissions and threat model](permissions.md), record the selected policy in repository docs, and keep or customize the F2.5/F3 handoff gates for non-autonomous profiles.                                                                                                                                                                                                                                                |
 | Stall recovery safety   | 30-minute quiet-window evidence plus 24-hour stale-threshold ownership gate                                | Keep `idd-resume-stall.instructions.md` aligned with `idd-overview` claim rules, and customize both files together if local policy changes quiet-window or takeover timing.                                                                                                                                                                                                                                                       |
-| Forced handoff contract | Disabled unless the repository explicitly records a human-gated policy                                     | Keep forced handoff separate from trusted marker-author authority. Record the opt-in state, human approval authority, and canonical consent text in the repository-local policy block, and align any future implementation work with the shared-definition contract in `idd-overview.instructions.md`.                                                                                                                            |
+| Forced handoff contract | Disabled unless the repository explicitly records a human-gated policy                                     | Keep forced handoff separate from trusted marker-author authority. Record the opt-in state, human approval authority, canonical consent text, and marker contract in the repository-local policy block here, then keep the always-loaded overview pointer aligned with those docs.                                                                                                                                                |
 | CI commands             | Project-specific command rows in the overview file                                                         | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                                                                                                                                                                                                                                                                        |
 | Helper runtime          | `instructions-only` unless helper support is explicitly requested during onboarding                        | Use [IDD template onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#step-1b--confirm-policy-decisions) together with [IDD helper script evaluation](idd-helper-scripts.md#import-time-selection-order). Prefer existing pnpm/npm/yarn dependencies for `package-manager`, use `vendored-node` before `ephemeral-npx`, and keep `instructions-only` for repositories without Node.js.      |
 | Issue scope             | Roadmap-first discovery                                                                                    | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues to be considered before roadmap traversal.                                                                                                                                                                                                                                       |
@@ -429,8 +429,10 @@ security implications.
 is `disabled`. Repositories may opt in only for a human-gated recovery
 exception when a human maintainer or operator has verified that the
 current owning session or agent is unavailable. Autopilot and unattended
-agents must never initiate forced handoff, and enabling this surface
-does not shorten or bypass the normal 24-hour stale takeover path.
+agents must never initiate forced handoff. Enabling this surface does
+not change the unattended 24-hour stale takeover rule; it adds a
+separate human-gated exception for earlier recovery when a maintainer or
+operator verifies that the owner is unavailable.
 
 The 12-hour heartbeat remains the normal owner-refresh cadence. A missed
 heartbeat may inform a human investigation, but it is not transfer
@@ -487,6 +489,8 @@ contract must record at least these fields:
 | --------------- | ----------- | ------------------------------------------------------------------ |
 | `old-agent-id`  | Required    | The agent ID that held the superseded claim                        |
 | `old-claim-id`  | Required    | The exact active claim being taken over                            |
+| `new-agent-id`  | Required    | The agent or session identifier that receives ownership            |
+| `new-claim-id`  | Required    | The new claim token that becomes authoritative after the handoff   |
 | `branch`        | Required    | The inherited work branch                                          |
 | `linked-pr`     | Conditional | The PR number or URL when PR context is part of the handoff        |
 | `forced-by`     | Required    | The approving human actor                                          |
@@ -508,7 +512,7 @@ evidence.
 
 **Small team, high trust**:
 
-```yaml
+```text
 - trusted-marker-logins: `kurone-kito`, `chatgpt-codex-connector[bot]`
 - maintainer-approval-actors: `owners-and-maintainers-only`
 - collaborator-authored-markers: false
@@ -518,7 +522,7 @@ evidence.
 
 **OSS with external contributors**:
 
-```yaml
+```text
 - trusted-marker-logins: `github-actions[bot]`, `copilot-automation-bot`
 - maintainer-approval-actors: `owners-and-maintainers-only`
 - collaborator-authored-markers: false
@@ -528,7 +532,7 @@ evidence.
 
 **Team with trusted collaborators**:
 
-```yaml
+```text
 - trusted-marker-logins: `team-automation`, `renovate[bot]`
 - maintainer-approval-actors: `all-write-permission-actors`
 - collaborator-authored-markers: true
@@ -540,6 +544,6 @@ For further details, see:
 
 - `idd-claim.instructions.md` for how `trusted-marker-logins` and
   `collaborator-authored-markers` affect claim validation and parsing.
-- `idd-overview.instructions.md` for the default-disabled forced handoff
-  summary and heartbeat/stale-takeover relationship.
+- `idd-overview.instructions.md` for the always-loaded pointer that
+  keeps the forced-handoff policy discoverable to agents.
 - `docs/policy-constants.md` for distributed policy defaults.
