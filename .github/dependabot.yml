@@ -13,3 +13,16 @@ updates:
     package-ecosystem: github-actions
     schedule:
       interval: monthly
+  - directory: /
+    groups:
+      npm-minor:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    labels:
+      - dependencies
+    package-ecosystem: npm
+    schedule:
+      interval: monthly
