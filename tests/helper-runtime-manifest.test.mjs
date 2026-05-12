@@ -106,6 +106,26 @@ test("source package metadata falls back when vendored into another repository",
   });
 });
 
+test("source package metadata accepts repository objects with url", () => {
+  const sourceRoot = mkdtempSync(join(tmpdir(), "idd-helper-runtime-source-root-"));
+  writeFileSync(join(sourceRoot, "package.json"), JSON.stringify({
+    name: "@kurone-kito/idd-skill",
+    repository: {
+      type: "git",
+      url: "https://github.com/kurone-kito/idd-skill.git",
+    },
+    engines: {
+      node: "^22.22.2 || >=24",
+    },
+  }));
+
+  assert.deepEqual(resolveSourcePackageMetadata(sourceRoot), {
+    name: "@kurone-kito/idd-skill",
+    repository: "https://github.com/kurone-kito/idd-skill.git",
+    nodeEngines: "^22.22.2 || >=24",
+  });
+});
+
 test("empty targetRoot falls back to the current working directory", () => {
   const emptyTarget = buildHelperRuntimeManifest({
     profile: "package-manager",

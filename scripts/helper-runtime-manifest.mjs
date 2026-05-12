@@ -236,12 +236,22 @@ export function resolveSourcePackageMetadata(packageRoot = resolve(dirname(fileU
     }
     return {
       name: PACKAGE_NAME,
-      repository: String(packageJson.repository ?? SOURCE_REPOSITORY),
+      repository: normalizeRepository(packageJson.repository),
       nodeEngines: String(packageJson.engines?.node ?? NODE_ENGINES),
     };
   } catch {
     return fallback;
   }
+}
+
+function normalizeRepository(repository) {
+  if (typeof repository === "string" && repository) {
+    return repository;
+  }
+  if (repository && typeof repository === "object" && typeof repository.url === "string" && repository.url) {
+    return repository.url;
+  }
+  return SOURCE_REPOSITORY;
 }
 
 function buildProfileCatalog({ packageMetadata, managedFiles, packageManager }) {
