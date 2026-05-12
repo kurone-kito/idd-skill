@@ -137,6 +137,32 @@ test("ignores heartbeat with mismatched branch and records warning", () => {
   assert.equal(result.warnings.length, 1);
 });
 
+test("returns disputed when a later competing claim appears after active claim", () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: "claim-owned",
+      now: "2026-05-12T11:00:00Z",
+      events: [
+        {
+          createdAt: "2026-05-12T10:00:00Z",
+          author: { login: "maintainer" },
+          body: "<!-- claimed-by: copilot claim-owned supersedes: none 2026-05-12T10:00:00Z branch: issue/10-task -->",
+        },
+        {
+          createdAt: "2026-05-12T10:05:00Z",
+          author: { login: "maintainer" },
+          body: "<!-- claimed-by: other claim-race supersedes: none 2026-05-12T10:05:00Z branch: issue/10-task -->",
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(["maintainer"]) },
+  );
+
+  assert.equal(result.state, "disputed");
+  assert.equal(result.reason, "later-competing-claim");
+  assert.equal(result.evidence.later_competing_claim.claim_id, "claim-race");
+});
+
 test("legacy claim released by matching legacy unclaim returns unclaimed", () => {
   const result = evaluateResumeClaimRouting(
     {
@@ -201,6 +227,32 @@ test("legacy stale claim routes to takeover", () => {
   assert.equal(result.reason, "legacy-claim-stale");
 });
 
+test("forced-handoff marker promotes successor claim before routing", () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: "claim-new",
+      now: "2026-05-12T11:00:00Z",
+      events: [
+        {
+          createdAt: "2026-05-12T10:00:00Z",
+          author: { login: "maintainer" },
+          body: "<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/11-task -->",
+        },
+        {
+          createdAt: "2026-05-12T10:01:00Z",
+          author: { login: "maintainer" },
+          body:
+            "<!-- forced-handoff: {\"oldAgentId\":\"copilot\",\"oldClaimId\":\"claim-old\",\"newAgentId\":\"copilot\",\"newClaimId\":\"claim-new\",\"branch\":\"issue/11-task\",\"forcedBy\":\"maintainer\",\"reason\":\"handoff\",\"timestamp\":\"2026-05-12T10:01:00Z\",\"contextScope\":\"issue-only\"} -->\n\n_maintainer: forced handoff — IDD automation marker. Do not edit._",
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(["maintainer"]) },
+  );
+
+  assert.equal(result.state, "already_owned");
+  assert.equal(result.active_claim?.claim_id, "claim-new");
+});
+
 test("legacy freshness uses marker timestamp over comment metadata timestamp", () => {
   const result = evaluateResumeClaimRouting(
     {
@@ -218,4 +270,33 @@ test("legacy freshness uses marker timestamp over comment metadata timestamp", (
 
   assert.equal(result.state, "stale");
   assert.equal(result.reason, "legacy-claim-stale");
+});
+
+test("legacy matching release remains valid after unrelated later unclaim", () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      now: "2026-05-12T12:00:00Z",
+      events: [
+        {
+          createdAt: "2026-05-12T08:00:00Z",
+          author: { login: "maintainer" },
+          body: "<!-- claimed-by: old-agent 2026-05-12T08:00:00Z branch: issue/12-task -->",
+        },
+        {
+          createdAt: "2026-05-12T08:10:00Z",
+          author: { login: "maintainer" },
+          body: "<!-- unclaimed-by: old-agent 2026-05-12T08:10:00Z -->",
+        },
+        {
+          createdAt: "2026-05-12T08:20:00Z",
+          author: { login: "maintainer" },
+          body: "<!-- unclaimed-by: someone-else 2026-05-12T08:20:00Z -->",
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(["maintainer"]) },
+  );
+
+  assert.equal(result.state, "unclaimed");
+  assert.equal(result.reason, "legacy-released");
 });

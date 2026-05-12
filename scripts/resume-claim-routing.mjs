@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { isStaleAt, parseClaimComment, parseReleaseComment } from "./protocol-helpers.mjs";
+import { isStaleAt, parseClaimComment, parseForcedHandoffComment, parseReleaseComment } from "./protocol-helpers.mjs";
 
 const DEFAULT_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 const LEGACY_CLAIM_PATTERN = /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
@@ -28,6 +28,9 @@ export function evaluateResumeClaimRouting(input, options = {}) {
   const sameSecondContenders = state.activeClaim
     ? findSameSecondContenders(events, state.activeClaim)
     : [];
+  const laterCompetingClaim = state.activeClaim
+    ? findLaterCompetingClaim(events, state.activeClaim)
+    : null;
 
   const warnings = [...state.warnings];
   let routeState = "unclaimed";
@@ -56,6 +59,10 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     routeState = "unclaimed";
     action = "re_claim";
     reason = "no-active-claim";
+  } else if (laterCompetingClaim) {
+    routeState = "disputed";
+    action = "stop";
+    reason = "later-competing-claim";
   } else if (claimIdChecked && claimIdChecked === state.activeClaim.claimId) {
     routeState = "already_owned";
     action = "keep";
@@ -102,6 +109,7 @@ export function evaluateResumeClaimRouting(input, options = {}) {
       new_format_claim_seen: state.mode === "new-format",
       legacy_claim_seen: state.mode === "legacy-only",
       same_second_contenders: sameSecondContenders,
+      later_competing_claim: laterCompetingClaim,
     },
   };
 }
@@ -198,6 +206,24 @@ function resolveClaimState(events, nowIso, staleAgeMs) {
     const release = parseReleaseComment(event.body);
     if (release && activeClaim && release.agentId === activeClaim.agentId && release.claimId === activeClaim.claimId) {
       activeClaim = null;
+      continue;
+    }
+
+    const forcedHandoff = parseForcedHandoffComment(event.body, event.createdAt);
+    if (
+      forcedHandoff
+      && activeClaim
+      && forcedHandoff.oldAgentId === activeClaim.agentId
+      && forcedHandoff.oldClaimId === activeClaim.claimId
+      && forcedHandoff.branch === activeClaim.branch
+    ) {
+      activeClaim = {
+        agentId: forcedHandoff.newAgentId,
+        claimId: forcedHandoff.newClaimId,
+        supersedes: forcedHandoff.oldClaimId,
+        branch: forcedHandoff.branch,
+        createdAt: forcedHandoff.createdAt ?? event.createdAt,
+      };
     }
   }
 
@@ -223,26 +249,28 @@ function resolveClaimState(events, nowIso, staleAgeMs) {
 
 function resolveLegacyClaimState(orderedEvents) {
   let latestClaim = null;
-  let latestRelease = null;
+  let latestMatchingRelease = null;
   for (const event of orderedEvents) {
     const claim = parseLegacyClaimComment(event.body, event.createdAt);
     if (claim) {
       latestClaim = claim;
+      latestMatchingRelease = null;
       continue;
     }
     const release = parseLegacyReleaseComment(event.body, event.createdAt);
-    if (release) {
-      latestRelease = release;
+    if (
+      release
+      && latestClaim
+      && release.agentId === latestClaim.agentId
+      && compareIso(release.createdAt, latestClaim.createdAt) > 0
+    ) {
+      latestMatchingRelease = release;
     }
   }
   if (!latestClaim) {
     return { claim: null, released: false };
   }
-  const released = Boolean(
-    latestRelease
-      && latestRelease.agentId === latestClaim.agentId
-      && compareIso(latestRelease.createdAt, latestClaim.createdAt) > 0,
-  );
+  const released = Boolean(latestMatchingRelease);
   return { claim: latestClaim, released };
 }
 
@@ -258,6 +286,29 @@ function findSameSecondContenders(events, activeClaim) {
     .map((claim) => claim.claimId)
     .filter((claimId) => claimId !== activeClaim.claimId)
     .sort();
+}
+
+function findLaterCompetingClaim(events, activeClaim) {
+  const activeSecond = toSecond(activeClaim.createdAt);
+  if (activeSecond === null) {
+    return null;
+  }
+  const contenders = events
+    .map((event) => parseClaimComment(event.body, event.createdAt))
+    .filter(Boolean)
+    .filter((claim) => claim.claimId !== activeClaim.claimId)
+    .filter((claim) => {
+      const claimSecond = toSecond(claim.createdAt);
+      return claimSecond !== null && claimSecond > activeSecond;
+    })
+    .sort((left, right) => compareIso(left.createdAt, right.createdAt));
+  if (contenders.length === 0) {
+    return null;
+  }
+  return {
+    claim_id: contenders[0].claimId,
+    created_at: contenders[0].createdAt,
+  };
 }
 
 function parseLegacyClaimComment(body, createdAt) {
