@@ -41,6 +41,25 @@ that issue only:
      A3, and the matching roadmap work is closed or otherwise complete;
    - no external human coordination is required to start.
 3. Run the normal A4 viability gate against the target only.
+4. If `.github/idd/config.json` exists and is valid and
+   `skipIssueAuthorApprovalGate` is `true`, skip the issue-author
+   approval gate and keep the target selected.
+5. Otherwise, apply the same issue-author approval evaluation used in
+   **A3.5**:
+   - use `maintainerApprovalActors` from `.github/idd/config.json` when
+     present; if absent, default to `owners-and-maintainers-only`;
+   - treat the issue author as self-authorized only when that author is
+     permitted by the current maintainer-approval actor policy;
+   - treat bare organization `MEMBER` association, issue body text,
+     generated plans, or operator attention as **not** authorizing the
+     issue;
+   - if approval state or permission resolution is unavailable or
+     ambiguous, fail closed and treat approval as missing unless the
+     repository explicitly opted out.
+     If the target lacks required approval, report that the issue-author
+     approval gate blocked claim and stop before A5. Do not fall back to
+     another issue unless the operator explicitly asks for normal
+     discovery in the same run.
 
 If any targeted readiness or viability check fails, report the exact
 failed criterion and stop without claiming. Do not fall back to another
@@ -97,31 +116,39 @@ Apply the configured policy before passing A0-O candidates to A4:
   current maintainer approval signal:
   - the `idd:ready` label, only when repository policy reserves that
     label to maintainer approval actors;
-  - an issue author who is a repository owner or collaborator with
-    Write, Maintain, or Admin permission, verified with the collaborator
-    permission API; do not treat organization `MEMBER` association alone
-    as approval;
+  - an issue author who is a repository owner or collaborator permitted
+    by the current maintainer-approval actor policy, verified with the
+    collaborator permission API; do not treat organization `MEMBER`
+    association alone as approval;
   - a visible comment from a maintainer approval actor whose trimmed
     body is exactly `IDD ready` or contains `IDD ready` as a standalone
     line. The approval comment must be newer than the latest issue
-    title/body edit and any generated-plan update; if freshness cannot
-    be determined, require a fresh approval comment or a reserved label.
+    title/body edit and any generated-plan update, or any equivalent
+    draft-stability signal the repository uses locally. If freshness
+    cannot be determined, require a fresh approval comment or a reserved
+    label.
 - `public-disabled`: for private or internal repositories, behave the
   same as `none`.
 
-A maintainer approval actor is a human repository owner or collaborator
-with Write, Maintain, or Admin permission. Do not reuse the trusted
-marker actor set for this approval gate, and do not count automation or
-the current agent unless repository policy explicitly grants that actor
-maintainer approval authority.
+A maintainer approval actor is a human repository actor allowed by the
+current `maintainerApprovalActors` policy:
+
+- `owners-and-maintainers-only` (default): repository owners and
+  collaborators with Maintain or Admin permission. Write-only
+  collaborators do not count.
+- `all-write-permission-actors`: repository owners and collaborators
+  with Write, Maintain, or Admin permission.
+
+Do not reuse the trusted marker actor set for this approval gate, and do
+not count automation or the current agent unless repository policy
+explicitly grants that actor maintainer approval authority.
 
 If at least one orphan issue remains after the configured policy is
-applied: pass the remaining set directly to **A4** (viability gate).
-Skip A1–A3 entirely.
+applied: pass the remaining set directly to **A3.5**. Skip A1–A3.
 
 If no orphan issues remain after the configured policy is applied: fall
 back to the roadmap path. Proceed to **A1** and continue with the normal
-A1 → A1.5 → A2 → A3 → A4 sequence.
+A1 → A1.5 → A2 → A3 → A3.5 → A4 sequence.
 
 The A3 decision tree (abort / ask operator in unattended mode) is
 reached when the active discovery path(s) produce zero results: when
@@ -295,13 +322,59 @@ scope:
      this run only. Prior or standing instructions do not count as
      opt-in.
 
+## A3.5 — Apply issue-author approval gate
+
+Before passing any candidate set to A4 — whether it came from A0-O or
+from A3 — evaluate the repository-wide issue-author approval gate.
+
+- If `.github/idd/config.json` exists and is valid and
+  `skipIssueAuthorApprovalGate` is `true`, the gate is disabled. Keep
+  every ready candidate in the normal startable set.
+- Otherwise the gate is enabled. Use `maintainerApprovalActors` from
+  `.github/idd/config.json` when present; if absent, default to
+  `owners-and-maintainers-only`.
+
+When the gate is enabled, a candidate is **startable** only when at
+least one of the following is true:
+
+- the issue author is self-authorized under the current
+  maintainer-approval actor policy;
+- the issue has the reserved `idd:ready` label, when repository policy
+  reserves that label to maintainer approval actors;
+- the issue has a visible approval comment from a maintainer approval
+  actor whose trimmed body is exactly `IDD ready` or contains
+  `IDD ready` as a standalone line, and that approval is newer than the
+  latest issue title/body edit and any generated-plan update, or any
+  equivalent draft-stability signal the repository uses locally. If
+  freshness cannot be determined, require a fresh approval comment or a
+  reserved label.
+
+Fail closed when approval state or permission resolution is unavailable
+or ambiguous unless the repository explicitly opted out via
+`skipIssueAuthorApprovalGate`.
+
+Candidates that fail the gate are **not** ready-to-start. Keep them in
+an **approval-needed fallback bucket** ordered by ascending issue number.
+Continue to A4 with only the startable candidates. Preserve any earlier
+A0-O filtering from `orphan-first-policy`; this gate never widens
+previously excluded orphan candidates back into scope.
+
+If no startable candidates remain but the approval-needed fallback
+bucket is non-empty:
+
+- **Unattended mode**: report that only approval-needed fallback issues
+  remain and stop without claiming. Do not auto-claim from the fallback
+  bucket.
+- **Attended mode**: ask the operator whether to obtain approval or to
+  opt out explicitly in `.github/idd/config.json`. Do not treat operator
+  attention alone as approval.
+
 ## A4 — Gate, then pick
 
 ### Step 1 — Viability gate
 
-For each candidate from A0-O or A3, evaluate **all three** criteria.
-Fail any one →
-discard the issue.
+For each **startable** candidate from A3.5, evaluate **all three**
+criteria. Fail any one → discard the issue.
 
 | Criterion                 | Pass                                                                                                                | Fail examples                                                                                    |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -309,9 +382,15 @@ discard the issue.
 | **Clear verification**    | Outcome verified by lint / test / CI — including adding or updating targeted automated tests as part of the work    | Success depends on UX or product judgment                                                        |
 | **Autonomous completion** | No external coordination, human decision, unavailable system, or product judgment required to **complete** the work | Requires operator to provide credentials; requires a product decision before the work can finish |
 
-If **no issue** survives the gate: report the full list of discarded
-issues with the criterion or criteria each failed, then **stop** — do
-not post `unclaimed-by` because no claim was made. This is not an abort.
+If **no issue** survives the gate:
+
+- if the approval-needed fallback bucket from A3.5 is non-empty, report
+  that only approval-needed issues remain and stop without claim in
+  unattended mode. In attended mode, ask the operator whether to obtain
+  approval or opt out explicitly;
+- otherwise report the full list of discarded issues with the criterion
+  or criteria each failed, then **stop** — do not post `unclaimed-by`
+  because no claim was made. This is not an abort.
 
 ### Step 1.5 — Active-claim pre-scan
 

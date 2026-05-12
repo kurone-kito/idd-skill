@@ -6,17 +6,38 @@ explicit issue target (A0-T) — or after a successful re-claim decision
 in the resume phase. It covers the four pre-checks, claim execution, and
 claim verification.
 
-## Pre-checks (all four must pass)
+## Pre-checks (all five must pass)
 
 Re-fetch the issue immediately before running these checks.
 All A5 checks are target-issue local: claims on related roadmap or
 child issues do not block this check unless they appear on the selected
 issue itself.
 
-**(a) Assignee and project status** — The issue must have no assignee
+**(a) Issue-author approval gate** — Re-evaluate the repository-wide
+issue-author approval rule immediately before claim.
+
+- If `.github/idd/config.json` exists and is valid and
+  `skipIssueAuthorApprovalGate` is `true`, skip this check.
+- Otherwise, use `maintainerApprovalActors` from `.github/idd/config.json`
+  when present; if absent, default to `owners-and-maintainers-only`.
+- A target issue is startable only when the issue author is
+  self-authorized under the current maintainer-approval actor policy, or
+  a fresh explicit approval signal exists, using the same actor,
+  freshness, and fail-closed rules defined in **A3.5** of
+  `idd-discover.instructions.md`.
+- Do not treat issue body text, generated plans, operator attention, or
+  bare organization `MEMBER` association as approval.
+- If approval is missing for a roadmap/default discovery run, return to
+  Discover using the same selection mode that produced this target so
+  A3.5 can continue with the next eligible startable issue or the
+  approval-needed stop path.
+- If approval is missing for an explicit-target A0-T run, stop without
+  claiming.
+
+**(b) Assignee and project status** — The issue must have no assignee
 set. If the project is in use, the project status must be "not started".
 
-**(b) Claim state** — Re-read the issue and parse the **active claim**
+**(c) Claim state** — Re-read the issue and parse the **active claim**
 using the shared claim-state rules:
 
 Use the `claim-stale-age` policy default from `docs/policy-constants.md`
@@ -57,7 +78,7 @@ Otherwise, use the latest trusted legacy `claimed-by` comment as a
 
 The migration claim uses a fresh `{claim-id}` and `supersedes: none`.
 
-**(c) Open PR** — No open PR may close or reference this issue, unless
+**(d) Open PR** — No open PR may close or reference this issue, unless
 that PR's head branch matches the `branch` field in an inheritable claim
 comment. An inheritable claim comment is either:
 
@@ -71,7 +92,7 @@ comment. An inheritable claim comment is either:
 
 Check both linked issues and closing keywords in PR bodies.
 
-**(d) Branch collision** — Compute the branch name using the IDD naming
+**(e) Branch collision** — Compute the branch name using the IDD naming
 convention: `issue/<number>-<slug>`. Generate `<slug>` deterministically
 from the issue title so parallel sessions converge on the same branch
 name:
@@ -135,14 +156,14 @@ catches parallel-session concurrency before a new claim comment is posted.
    - **If a match is found, does NOT correspond to an inheritable claim,
      AND no active claim references that branch**:
      Document the branch name and post a **hold note** to the issue: "_A5
-     pre-check (d) detected an unexpected branch `issue/<number>-*`
+     pre-check (e) detected an unexpected branch `issue/<number>-*`
      without an active claim. Possible orphaned branch from a crashed or
      stale session. Stopping for operator review._" Stop and wait for
      operator input. Do not post a claim or continue the workflow.
 
 ## Claim execution
 
-Skip this section if pre-check (b) classified the issue as already
+Skip this section if pre-check (c) classified the issue as already
 claimed by this current session. Keep the previously recorded `{claim-id}` and
 branch, then proceed directly to Claim verification without posting a new
 claim.
