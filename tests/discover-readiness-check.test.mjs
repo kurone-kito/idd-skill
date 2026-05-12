@@ -117,3 +117,59 @@ test("returns empty unresolvable list when include-unresolvable is disabled", as
   assert.deepEqual(summary.unresolvable, []);
   assert.equal(summary.summary.unresolvableCount, 1);
 });
+
+test("treats inaccessible dependencies as unresolvable entries", async () => {
+  const issues = new Map([
+    [601, { number: 601, title: "candidate", state: "OPEN", body: "Depends on #602", labels: [] }],
+    [602, { __iddLookupStatus: "inaccessible" }],
+  ]);
+  const summary = await evaluateDiscoverReadiness([601], {
+    includeUnresolvable: true,
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.ready.length, 0);
+  assert.match(summary.filteredOut[0].reasons.join(","), /unresolvable_dependency_issue/);
+  assert.deepEqual(summary.unresolvable, [
+    {
+      issueNumber: 601,
+      kind: "dependency",
+      reference: "#602",
+      reason: "issue_inaccessible",
+    },
+  ]);
+});
+
+test("treats inaccessible target issue as unresolvable", async () => {
+  const summary = await evaluateDiscoverReadiness([701], {
+    includeUnresolvable: true,
+    loadIssue: async () => ({ __iddLookupStatus: "inaccessible" }),
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.ready.length, 0);
+  assert.deepEqual(summary.filteredOut, [{
+    number: 701,
+    title: "",
+    reasons: ["issue_inaccessible"],
+  }]);
+  assert.deepEqual(summary.unresolvable, [{
+    issueNumber: 701,
+    kind: "issue",
+    reference: "#701",
+    reason: "issue_inaccessible",
+  }]);
+});
+
+test("bubbles non-recoverable loader failures", async () => {
+  await assert.rejects(
+    evaluateDiscoverReadiness([801], {
+      loadIssue: async () => {
+        throw new Error("network timeout");
+      },
+      findRoadmapsByMarker: async () => [],
+    }),
+    /network timeout/,
+  );
+});
