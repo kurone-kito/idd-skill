@@ -1,58 +1,61 @@
-# Issue #326: test(cleanup) cover post-merge cleanup boundaries
+# Issue #327: F4 cleanup apply results tracking
 
-## Problem statement
+## Problem and approach
 
-The `audit-pr-cleanup.mjs` script classifies PR comments as safe cleanup
-candidates (RESOLVED, OUTDATED) or intentional skips (keep unresolved
-decisions, holds, failed CI, missing dispositions). The policy boundary
-needs fixture-backed tests to prevent future regressions when the policy
-or script logic changes.
+The F4 (post-merge cleanup) phase currently treats cleanup as best-effort
+but doesn't require agents to attempt or record cleanup results. Recent
+merged PRs show agents often stop after merge digest and local cleanup
+without running the audit-pr-cleanup script.
 
-## Approach
+The fix is to update F4 instructions so:
 
-Add test fixtures and test cases to `tests/cleanup-boundaries.test.mjs`:
+1. After merge and local cleanup, agents run `audit-pr-cleanup --dry-run`
+2. If credentials permit, run `audit-pr-cleanup --apply`
+3. Record the result (applied count, skipped, failed, remaining) in the
+   PR digest or as an audit comment
+4. Keep cleanup outside the merge gate
 
-1. Safe candidate fixtures:
-   - resolved known-bot review comment with fresh IDD disposition
-   - bot review parent with resolved child threads + dispositions
-   - stale IDD operational marker on merged PR
-   - CodeRabbit completed summary with IDD disposition
+## Scope
 
-2. Unsafe (skip) fixtures:
-   - unresolved maintainer decision
-   - active hold note
-   - failed CI context needed by maintainers
-   - unresolved thread (new reviewer activity)
-   - missing accept/reject disposition
-   - orphan bot review parent (no children, no policy narrowing)
+Two files to update (must be kept synchronized):
 
-3. Test assertions:
-   - safe candidates classified correctly
-   - unsafe candidates remain skipped
-   - new completion summary fields from #325 are recognized
-   - script output format is stable
+- `.github/instructions/idd-merge.instructions.md` (F4 section)
+- `idd-template/.github/instructions/idd-merge.instructions.md` (F4 section)
 
-## Acceptance criteria checklist
+These files were updated in previous work (PR #305) but F4 didn't
+explicitly require the dry-run/apply cycle. This issue adds that requirement.
 
-- [x] `tests/cleanup-boundaries.test.mjs` created with
-      fixture-backed test cases
-- [x] All fixture categories (safe/unsafe) covered with realistic
-      PR comment shapes
-- [x] New completion summary fields from #325 tested
-- [x] All existing tests pass: `node --test tests/*.mjs`
-- [x] Documentation audit passes
-- [x] Markdown lint and spellcheck pass
-- [ ] Implementation ready for C1 self-review
+## Implementation plan
 
-## Files modified
+### Step 1: Read F4 current state
 
-- `tests/cleanup-boundaries.test.mjs` (new file)
-- `PLAN.md` (this file, for B2 planning)
+- Find F4 section in idd-merge.instructions.md
+- Note current cleanup flow and constraints
 
-## Notes
+### Step 2: Draft updated F4 flow
 
-- Fixtures use realistic PR comment JSON shapes from GitHub API
-- Test names clearly document the boundary being tested
-- Uses same test harness as `tests/claim-parser.test.mjs`
-  and `tests/advisory-wait.test.mjs`
-- All 113 protocol helper tests pass
+- Add `audit-pr-cleanup --dry-run` after best-effort cleanup comment
+- Add conditional `audit-pr-cleanup --apply` when claim validates and
+  credentials available
+- Add digest/comment requirement for results
+
+### Step 3: Update both files
+
+- Update .github/instructions/ version
+- Update idd-template/ version (keep synchronized)
+
+### Step 4: Verify
+
+- Markdown lint passes
+- Template sync is maintained
+- No instruction conflicts with #312 (future slimming)
+
+## Acceptance criteria
+
+✓ Both instruction files updated together
+✓ F4 explicitly requires audit-pr-cleanup attempt
+✓ Results are recorded in digest or comment
+✓ Cleanup remains best-effort, post-merge only
+✓ Claim revalidation preserved
+✓ No changes to helper runtime profile (deferred to #312)
+✓ Existing validation passes (lint, spellcheck, tests)
