@@ -68,12 +68,12 @@ const UNSAFE_PATTERNS = [
 ];
 
 const EXECUTION_VERB_PATTERN = /\b(run|execute|paste|install|invoke)\b/i;
-const NEGATED_DIRECTIVE_PATTERN = /\b(do not|don't|never|avoid)\s+(?:run|execute|paste|install|invoke)\b/i;
 const EXTERNAL_COORDINATION_PATTERN = /\b(cross-repo|cross repo|external repo|another repo|upstream change|maintainer of)\b/i;
-const EXTERNAL_SYSTEM_ACCESS_PATTERN = /\b(requires?|need(?:s)?|must|depends on)\b[\s\S]{0,120}\b(access|credentials?|login|permission|sign-?in)\b[\s\S]{0,120}\b(external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog)\b/i;
+const EXTERNAL_SYSTEM_ACCESS_PATTERN = /\b(requires?|need(?:s)?|must|depends on)\b[\s\S]{0,120}\b((?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog)[\s\S]{0,40}(?:access|credentials?|login|permission|sign-?in)|(?:access|credentials?|login|permission|sign-?in)[\s\S]{0,40}(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog))\b/i;
 const DUPLICATE_DECLARATION_PATTERN = /\b(duplicate of|superseded by)\s*#\d+\b/gi;
 const DUPLICATE_NEGATION_PATTERN = /\b(not|no|avoid)\b[\s\S]{0,30}$/i;
-const SUBJECTIVE_VERIFICATION_PATTERN = /\b(maintainer|stakeholder|human|opinion|judgment|judgement|ux|feel)\b[\s\S]{0,80}\b(approval|sign-?off|decision|preference)\b/i;
+const SUBJECTIVE_SUBJECT_PATTERN = /\b(maintainer|stakeholder|human|opinion|judgment|judgement|ux|feel)\b/i;
+const SUBJECTIVE_GATE_PATTERN = /\b(approval|sign-?off|decision|preference)\b/i;
 const OUTCOME_SIGNAL_PATTERN = /\b(pass|fail|result|output|contains|include|present|required|objective|measurable|deterministic)\b/i;
 
 if (isCliExecution()) {
@@ -110,7 +110,7 @@ export function evaluateSuitability(issue, options = {}) {
 
   return {
     passed: true,
-    outcome: "pass",
+    outcome: "ready",
     failedCheck: null,
     checks,
   };
@@ -202,11 +202,20 @@ export function checkTrustSafety(context) {
 
   const matchedUnsafe = UNSAFE_PATTERNS.find((pattern) => pattern.test(corpus));
   if (matchedUnsafe) {
+    const unsafeMatch = corpus.match(matchedUnsafe);
+    const unsafeIndex = unsafeMatch?.index ?? -1;
+    const contextStart = Math.max(0, unsafeIndex - 140);
+    const contextEnd = Math.min(corpus.length, unsafeIndex + (unsafeMatch?.[0]?.length ?? 0) + 40);
+    const localContext = unsafeIndex >= 0 ? corpus.slice(contextStart, contextEnd) : corpus;
     const directivePattern = new RegExp(
-      `${EXECUTION_VERB_PATTERN.source}[\\s\\S]{0,120}${matchedUnsafe.source}`,
+      `${EXECUTION_VERB_PATTERN.source}[\\s\\S]{0,80}${matchedUnsafe.source}`,
       "i",
     );
-    if (!directivePattern.test(corpus) || NEGATED_DIRECTIVE_PATTERN.test(corpus)) {
+    const negatedDirectivePattern = new RegExp(
+      `\\b(do not|don't|never|avoid)\\s+(?:run|execute|paste|install|invoke)\\b[^\\n.!?]{0,60}${matchedUnsafe.source}`,
+      "i",
+    );
+    if (!directivePattern.test(localContext) || negatedDirectivePattern.test(localContext)) {
       return {
         pass: true,
         evidence: "Unsafe command string appears as context only; no execution directive detected.",
@@ -329,7 +338,12 @@ export function checkVerifiability(context) {
       evidence: "Issue does not provide objective verification signals.",
     };
   }
-  if (SUBJECTIVE_VERIFICATION_PATTERN.test(body)) {
+  const hasSubjectiveApproval = (() => {
+    const lines = body.split(/\r?\n/);
+    return lines.some((line) => SUBJECTIVE_SUBJECT_PATTERN.test(line) && SUBJECTIVE_GATE_PATTERN.test(line))
+      || /\b(approval|sign-?off|decision|preference)\b[\s\S]{0,80}\b(maintainer|stakeholder|human|opinion|judgment|judgement|ux|feel)\b/i.test(body);
+  })();
+  if (hasSubjectiveApproval) {
     return {
       pass: false,
       evidence: "Issue success depends on subjective approval or judgment.",
@@ -446,7 +460,7 @@ Output schema:
   "repository": {"owner": "...", "repo": "..."},
   "issue": {"number": 392, "title": "...", "state": "OPEN", "url": "..."},
   "passed": true,
-  "outcome": "pass|unclear|needs-decision|blocked-by-human|duplicate|out-of-scope|invalid",
+  "outcome": "ready|unclear|needs-decision|blocked-by-human|duplicate|out-of-scope|invalid",
   "failedCheck": "repository_fit|...|null",
   "checks": [{"id":"repository_fit","name":"Repository Fit","result":"pass|fail","evidence":"..."}]
 }
