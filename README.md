@@ -99,6 +99,16 @@ The distributed default allows worker sessions to continue through merge
 the worker session by explicit opt-in. Choose and record one profile in
 [Customizing IDD](docs/customization.md).
 
+## Operational Evidence
+
+As of 2026-05-13, this repository has been dogfooding IDD through
+multi-agent, multi-session runs, including bursts of roughly x4-6
+parallel sessions. The workflow also originated in a private work
+repository and was later backported here, where it was exercised for
+about two weeks with roughly x8-10 concurrent Copilot CLI sessions.
+That is not zero-failure; it is a workflow that keeps getting tightened
+as edge cases appear.
+
 ## Local pnpm tooling baseline (contributors to this repository only)
 
 This repository uses a project-local pnpm baseline and Husky hooks so

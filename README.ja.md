@@ -96,6 +96,14 @@ IDD は Markdown ネイティブですが、依存関係なしではありませ
 の外に置き、明示的な opt-in により選択します。merge policy は
 [Customizing IDD](docs/customization.md) で 1 つ選んで記録します。
 
+## 実運用の実績
+
+2026-05-13 時点で、このリポジトリでは IDD を multi-agent / multi-session で
+dogfooding しており、x4-6 ほどの並列実行が入ることがあります。このワークフローは
+private な業務リポジトリで原型を運用したうえで本リポジトリへ逆輸入され、その後も
+約 2 週間、Copilot CLI を x8-10 同時に回す形で使われました。失敗ゼロではありま
+せんが、実運用で出た境界条件を拾いながら継続的に磨いています。
+
 ## ローカル pnpm ツール基盤（このリポジトリのコントリビューター専用）
 
 このリポジトリには project-local の pnpm 基盤と Husky hook を追加し、
