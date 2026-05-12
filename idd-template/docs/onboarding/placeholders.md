@@ -37,14 +37,16 @@ matching install command:
 
 - `package.json` → `npm install` (or the repository's existing package
   manager equivalent)
-- `pyproject.toml` or `requirements.txt` →
-  `pip install -r requirements.txt`
+- `requirements.txt` → `pip install -r requirements.txt`
+- `pyproject.toml` → use the repository's declared Python tool
+  (for example `poetry install`, `pdm install`, `hatch env create`, or
+  `uv sync`)
 - `go.mod` → `go mod download`
 - `Gemfile` → `bundle install`
 - no standard dependency tooling → `true`
 
-If multiple toolchains are present, confirm which one should drive the
-IDD command rows.
+If both `pyproject.toml` and `requirements.txt` are present, confirm
+which workflow should drive the IDD command rows.
 
 ### `{{FIX_VALIDATE_COMMANDS}}`
 

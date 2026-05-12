@@ -109,15 +109,16 @@ Run this manifest helper from the target repository root when helper
 support is enabled:
 
 ```sh
-npx --yes --package https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main \
+npx --yes --package <reviewed-helper-spec> \
   idd-helper-bundle-manifest --profile <selected-profile>
 ```
 
 If `package-manager` auto-detection does not resolve npm, pnpm, or yarn,
 pass `--package-manager <npm|pnpm|yarn>` explicitly. Pass
 `--package-spec <pinned-spec>` when the repository wants the helper to
-emit a reviewed tarball or internal mirror URL instead of the default
-archive URL.
+emit a reviewed tag, commit, tarball, or internal mirror URL. Treat
+`refs/heads/main` as a manual opt-in when the repository explicitly
+wants a mutable helper source instead of a reviewed pinned spec.
 
 ## Related default policies to confirm
 
@@ -160,6 +161,12 @@ This repository uses the following IDD policies:
 - **claim-stale-age**: 24 h (or repository override)
 - **claim-heartbeat-interval**: 12 h (or repository override)
 
+### Credential Scope
+
+**Worker credentials**: `{least-privilege worker scope}`
+
+**Merge-capable credentials**: `{same as worker | separate stronger scope | not granted}`
+
 ### Helper Runtime Profile
 
 **Profile**: `{instructions-only | package-manager | vendored-node | ephemeral-npx}`
@@ -176,9 +183,11 @@ agents do not need to infer what changed.
 ## Machine-readable policy file
 
 `.github/idd/config.json` is the machine-readable record of the same
-policy decisions. When present and valid, its `commands` object and
-policy fields override the command table values in
-`idd-overview.instructions.md`.
+policy decisions. When present and valid, its `commands` object
+overrides the command table values in
+`idd-overview.instructions.md`. The non-command policy fields are a
+machine-readable mirror that should stay aligned with the owning
+instruction files and human-readable policy notes.
 
 Keep these rules in mind:
 
@@ -186,6 +195,8 @@ Keep these rules in mind:
   fallback when the JSON file is absent or invalid
 - keep the human-readable policy section and `.github/idd/config.json`
   aligned in the same change
+- treat non-command policy fields as synchronized metadata, not as a
+  substitute for updating the instruction files that own phase behavior
 - replace `<trusted-login>` in `trustedMarkerActors` with the GitHub
   login of each person or bot allowed to post trusted IDD markers
 - keep command strings JSON-escaped instead of pasting fragile raw shell

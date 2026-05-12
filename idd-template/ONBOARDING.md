@@ -187,8 +187,10 @@ require explicit operator confirmation:
 3. review-thread resolution policy (`fast-agent-resolve` by default, or
    a stricter profile)
 4. credential scope for worker and merge-capable sessions
-5. issue-authoring companion status (`installed` or `not installed`)
-6. helper runtime profile (`instructions-only` by default, or an
+5. claim-timing defaults (`claim-stale-age` and
+   `claim-heartbeat-interval`)
+6. issue-authoring companion status (`installed` or `not installed`)
+7. helper runtime profile (`instructions-only` by default, or an
    explicitly requested helper profile)
 
 Use

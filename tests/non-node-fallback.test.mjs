@@ -86,6 +86,44 @@ test("onboarding links extracted policy guidance including credential scope", ()
     /Review `docs\/permissions\.md` with the operator/,
     "policy reference must point credential decisions at docs/permissions.md",
   );
+  assert.match(
+    policyText,
+    /### Credential Scope/,
+    "policy reference template must include a credential-scope section",
+  );
+});
+
+test("onboarding keeps claim timing in the explicit confirmation path", () => {
+  const onboarding = readText("idd-template/ONBOARDING.md");
+  assert.match(
+    onboarding,
+    /claim-timing defaults \(`claim-stale-age` and\s+`claim-heartbeat-interval`\)/,
+    "ONBOARDING Step 1B must explicitly confirm claim-timing defaults",
+  );
+  assert.match(
+    onboarding,
+    /claim-timing defaults, issue-authoring companion status, and helper\s+runtime profile\./,
+    "ONBOARDING Step 2 re-check must stay aligned with the Step 1B confirmation list",
+  );
+});
+
+test("policy reference keeps helper specs pinned and config scope accurate", () => {
+  const policyText = readText("idd-template/docs/onboarding/policy-decisions.md");
+  assert.match(
+    policyText,
+    /npx --yes --package <reviewed-helper-spec> \\/,
+    "policy reference must use a reviewed helper package spec by default",
+  );
+  assert.match(
+    policyText,
+    /Treat\s+`refs\/heads\/main`\s+as a manual opt-in/,
+    "policy reference must treat moving branch helper specs as opt-in",
+  );
+  assert.doesNotMatch(
+    policyText,
+    /policy fields override the command table values/,
+    "policy reference must not claim non-command policy fields override phase behavior",
+  );
 });
 
 test("overview instructions document the npx-availability gate", () => {
