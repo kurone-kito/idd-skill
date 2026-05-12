@@ -290,9 +290,32 @@ sub-issue when:
 
 - do not create a roadmap only because a description is long
 - do not keep multiple unrelated atomic changes in one sub-issue
+- do not create an artificial serial chain when sibling tasks could be
+  reviewed and verified independently
+- do not split one natural, cohesive change into artificial sibling
+  issues only to widen parallel execution
 - do not use hidden dependency markers to group active sub-tasks under
   an open roadmap
 - do not hide low-confidence work by omitting it from the output
+
+## Dependency minimization
+
+Encode a dependency edge only when it reflects a true correctness,
+availability, or ordering constraint.
+
+- keep independent sibling tasks as roadmap task-list entries, with
+  short sequencing or parallelization notes when that helps reviewers or
+  later agents
+- use visible or sequential dependency markers only when the issue
+  cannot start safely until the dependency resolves
+- do not create an artificial serial chain when sibling tasks could be
+  reviewed and verified independently
+- do not split one natural, cohesive change into artificial sibling
+  issues only to widen parallel execution
+
+When an issue keeps a dependency edge, justify each dependency edge in
+the surrounding issue body and confirm that the split still preserves
+natural cohesion.
 
 ## Dependency encoding rules
 
@@ -409,6 +432,7 @@ Validation expectations:
   as narrative text
 - dependency notes distinguish between active grouping and true
   sequential blocking
+- each dependency edge is justified and preserves natural cohesion
 - the roadmap can survive multi-session handoffs without relying on
   private session memory
 
@@ -436,7 +460,8 @@ Validation expectations:
 
 - the issue is referenced from its parent roadmap task list
 - acceptance criteria are locally verifiable
-- any dependency marker is resolvable and intentionally chosen
+- any dependency marker is resolvable, intentionally chosen, and
+  justified
 - the issue can be claimed independently without absorbing sibling work
 
 ## Validation checklist for drafted output
@@ -449,6 +474,7 @@ Before reporting or publishing issue drafts, the skill should verify:
   stable bucket instead of being dropped
 - each roadmap has one roadmap marker and uses task-list links for child
   issues
+- each dependency edge is justified and preserves natural cohesion
 - each `Blocked by #NNN` reference resolves to the intended issue
 - each `idd-skill-blocked-by` marker points to a real roadmap and is
   used only for true sequential dependencies
