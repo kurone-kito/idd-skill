@@ -198,7 +198,7 @@
             "required": ["id", "authorLogin", "createdAt", "bodyPreview"],
             "additionalProperties": false,
             "properties": {
-              "id": { "type": "string" },
+              "id": { "type": "string", "minLength": 1 },
               "authorLogin": { "type": "string", "minLength": 1 },
               "createdAt": {
                 "type": "string",

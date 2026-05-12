@@ -6,6 +6,7 @@ import {
   buildAdvisoryWaitSummary,
   buildActivitySnapshotSummary,
   buildPreMergeReadinessSummary,
+  deriveIddAgentLogins,
   findLastCopilotReviewCommit,
   indexLatestGatingReviewsByAuthor,
   resolveCodeownersForFiles,
@@ -52,6 +53,10 @@ test("pre-merge readiness schema keeps UTC timestamps strict", () => {
   const invalidCommentTime = JSON.parse(JSON.stringify(unrepliedSummary));
   invalidCommentTime.unrepliedComments.items[0].createdAt = "2026-05-12T00:14:04+09:00";
   assert.ok(validate(invalidCommentTime, readinessSchema).length > 0);
+
+  const invalidCommentId = JSON.parse(JSON.stringify(unrepliedSummary));
+  invalidCommentId.unrepliedComments.items[0].id = "";
+  assert.ok(validate(invalidCommentId, readinessSchema).length > 0);
 
   const invalidReviewerTime = JSON.parse(JSON.stringify(cleanSummary));
   invalidReviewerTime.reviewerStates.latestByAuthor[0].submittedAt = "2026-05-12T00:14:04+09:00";
@@ -542,6 +547,27 @@ test("regular comment gate skips resolved CodeRabbit summary comments", () => {
   );
 
   assert.equal(summary.count, 0);
+});
+
+test("deriveIddAgentLogins keeps prior trusted operational actors but not generic maintainer comments", () => {
+  assert.deepEqual(
+    deriveIddAgentLogins({
+      viewerLogin: "current-agent",
+      iddAgentLogins: ["explicit-agent"],
+      trustedMarkerLogins: ["current-agent", "prior-agent", "maintainer"],
+      operationalComments: [
+        {
+          author: { login: "prior-agent" },
+          body: "<!-- review-baseline: github-copilot-cli claim-123 abcdefabcdefabcdefabcdefabcdefabcdefabcd -->\n\n_github-copilot-cli: critique baseline — IDD automation marker. Do not edit._",
+        },
+        {
+          author: { login: "maintainer" },
+          body: "Please double-check the merge gate before landing this.",
+        },
+      ],
+    }),
+    ["current-agent", "explicit-agent", "prior-agent"],
+  );
 });
 
 test("advisory wait summary keeps F2 and F3 outcomes distinct when Copilot is no longer pending", () => {

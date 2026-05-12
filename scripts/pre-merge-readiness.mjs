@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 
 import {
   buildPreMergeReadinessSummary,
+  deriveIddAgentLogins,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   selectCodeownersText,
@@ -24,10 +25,6 @@ const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
 const configuredTrustedActors = normalizeTrustedMarkerLogins([
   ...splitCsv(args.trustedMarkerLogins),
   ...splitCsv(process.env.IDD_TRUSTED_MARKER_ACTORS),
-]);
-const iddAgentLogins = normalizeTrustedMarkerLogins([
-  viewerLogin,
-  ...splitCsv(args.iddAgentLogins),
 ]);
 const advisoryBotLogins = normalizeTrustedMarkerLogins(splitCsv(args.advisoryBotLogins));
 
@@ -103,6 +100,12 @@ const trustedMarkerLogins = normalizeTrustedMarkerLogins([
     ? resolveTrustedCollaboratorMarkerLogins(owner, repo, [...comments, ...claimComments])
     : []),
 ]);
+const iddAgentLogins = deriveIddAgentLogins({
+  viewerLogin,
+  iddAgentLogins: splitCsv(args.iddAgentLogins),
+  trustedMarkerLogins,
+  operationalComments: [...comments, ...claimComments],
+});
 
 const summary = buildPreMergeReadinessSummary(
   {

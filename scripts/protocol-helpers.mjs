@@ -701,6 +701,30 @@ export function normalizeTrustedMarkerLogins(logins) {
   )].sort();
 }
 
+export function deriveIddAgentLogins({
+  viewerLogin = "",
+  iddAgentLogins = [],
+  trustedMarkerLogins = [],
+  operationalComments = [],
+} = {}) {
+  const trustedLogins = new Set(normalizeTrustedMarkerLogins(trustedMarkerLogins));
+  const derivedLogins = [
+    viewerLogin,
+    ...(iddAgentLogins ?? []),
+  ];
+
+  for (const comment of operationalComments ?? []) {
+    const authorLogin = String(comment?.author?.login ?? comment?.user?.login ?? "").trim().toLowerCase();
+    const body = String(comment?.body ?? "");
+    if (!trustedLogins.has(authorLogin) || !isOperationalOrDigestComment(body)) {
+      continue;
+    }
+    derivedLogins.push(authorLogin);
+  }
+
+  return normalizeTrustedMarkerLogins(derivedLogins);
+}
+
 export function summarizeAdvisoryWaitMarkers(comments, prHeadSha, trustedMarkerLogins) {
   const trustedLogins = new Set(normalizeTrustedMarkerLogins(trustedMarkerLogins));
   let earliestSameHeadAt = "";
