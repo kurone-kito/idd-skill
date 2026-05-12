@@ -98,7 +98,7 @@ IDD は Markdown ネイティブですが、依存関係なしではありませ
 
 ## 実運用の実績
 
-2026-05-13 時点で、このリポジトリでは IDD を multi-agent / multi-session で
+2026-05-12 時点で、このリポジトリでは IDD を multi-agent / multi-session で
 dogfooding しており、x4-6 ほどの並列実行が入ることがあります。このワークフローは
 private な業務リポジトリで原型を運用したうえで本リポジトリへ逆輸入され、その後も
 約 2 週間、Copilot CLI を x8-10 同時に回す形で使われました。失敗ゼロではありま

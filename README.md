@@ -101,7 +101,7 @@ the worker session by explicit opt-in. Choose and record one profile in
 
 ## Operational Evidence
 
-As of 2026-05-13, this repository has been dogfooding IDD through
+As of 2026-05-12, this repository has been dogfooding IDD through
 multi-agent, multi-session runs, including bursts of roughly x4-6
 parallel sessions. The workflow also originated in a private work
 repository and was later backported here, where it was exercised for
