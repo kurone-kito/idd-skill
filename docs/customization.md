@@ -458,10 +458,23 @@ around the normal merge or stale-takeover flow.
 
 Required consent text for any future human approval note:
 
+For `issue-only` context:
+
 ```text
 Forced handoff approved by {human-actor}. I verified that the current
 owning session or agent is unavailable. This transfers ownership away
-from claim `{old-claim-id}` on branch `{branch}`{ for PR #{pr-number} }.
+from claim `{old-claim-id}` on branch `{branch}`.
+If the prior session resumes, it must stop immediately and must not
+push, comment, resolve review state, or merge until a maintainer
+reassigns ownership.
+```
+
+For `issue-plus-pr` context:
+
+```text
+Forced handoff approved by {human-actor}. I verified that the current
+owning session or agent is unavailable. This transfers ownership away
+from claim `{old-claim-id}` on branch `{branch}` for PR #{pr-number}.
 If the prior session resumes, it must stop immediately and must not
 push, comment, resolve review state, or merge until a maintainer
 reassigns ownership.
