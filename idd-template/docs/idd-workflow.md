@@ -42,21 +42,21 @@ entry file should be an explicit operator choice, not the default.
 | File                                                       | Role                                                                                 |
 | ---------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | `.github/instructions/idd-overview.instructions.md`        | Shared definitions, command sets, routing table, critique-pass mapping               |
-| `.github/instructions/idd-discover.instructions.md`        | Find the next viable issue, route roadmap audits, audit suitability, and start work  |
+| `.github/instructions/idd-discover.instructions.md`        | A0-T–A4.5: find a viable issue, route roadmap audits, run suitability, and hand off  |
 | `.github/instructions/idd-roadmap-audit.instructions.md`   | A1.5: audit roadmap completion and run roadmap-side coordination before A2           |
-| `.github/instructions/idd-claim.instructions.md`           | Run claim pre-checks and claim verification                                          |
-| `.github/instructions/idd-work.instructions.md`            | Create the worktree, plan, implement, and self-review                                |
-| `.github/instructions/idd-pr-submit.instructions.md`       | Rebase, validate, push, open the PR, and wait for CI                                 |
-| `.github/instructions/idd-ci.instructions.md`              | Shared CI polling helper used by later phases                                        |
-| `.github/instructions/idd-advisory-wait.instructions.md`   | Shared Copilot advisory-wait protocol (E14, F2, F3)                                  |
+| `.github/instructions/idd-claim.instructions.md`           | A5: run claim pre-checks and claim verification                                      |
+| `.github/instructions/idd-work.instructions.md`            | B1-B3 + C1-C6: create worktree, plan, implement, and self-review                     |
+| `.github/instructions/idd-pr-submit.instructions.md`       | D1-D4: rebase, validate, push, open PR, and wait for CI                              |
+| `.github/instructions/idd-ci.instructions.md`              | D4/E15 helper: shared CI polling helper used by later phases                         |
+| `.github/instructions/idd-advisory-wait.instructions.md`   | AW1-AW5 helper: shared Copilot advisory-wait protocol (E14, F2, F3)                  |
 | `.github/instructions/idd-review-snapshot.instructions.md` | E1–E3: fetch activity snapshot, run critique, check if ReviewItems_snapshot is empty |
-| `.github/instructions/idd-review-triage.instructions.md`   | E4–E8: classify items, score, record dispositions                                    |
-| `.github/instructions/idd-review-fix.instructions.md`      | Fix accepted review items and push follow-up commits                                 |
+| `.github/instructions/idd-review-triage.instructions.md`   | E4–E8: classify items, score, and record dispositions                                |
+| `.github/instructions/idd-review-fix.instructions.md`      | E9-E15: fix accepted review items and push follow-up commits                         |
 | `.github/instructions/idd-pre-merge.instructions.md`       | F1–F2: resolve conflicts and verify all pre-merge conditions                         |
 | `.github/instructions/idd-merge-handoff.instructions.md`   | F2.5: resolve merge-policy handoff vs autonomous merge routing                       |
 | `.github/instructions/idd-merge.instructions.md`           | F3–F5: execute the merge, clean up, and loop back to discover                        |
-| `.github/instructions/idd-resume.instructions.md`          | Route resume into crash, stalled, stale-takeover, or clean continuation              |
-| `.github/instructions/idd-resume-stall.instructions.md`    | Handle stalled-session recovery with a dedicated safety gate                         |
+| `.github/instructions/idd-resume.instructions.md`          | Resume Step 0-3: route crash, stalled, stale-takeover, or clean continuation         |
+| `.github/instructions/idd-resume-stall.instructions.md`    | Resume S1-S5: handle stalled-session recovery with a dedicated safety gate           |
 | `docs/idd-review-policy-profiles.md`                       | PR review policy profiles and customization surfaces                                 |
 | `docs/idd-comment-minimization.md`                         | Live status digest contract and post-merge comment minimization policy               |
 
