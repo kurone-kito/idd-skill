@@ -533,7 +533,7 @@ generate the full body so humans do not hand-write fragile claim IDs.
 | `timestamp`     | Required    | The GitHub server timestamp of the approval                                   |
 | `context-scope` | Required    | Whether the handoff covers `issue-only` or `issue-plus-pr` context            |
 
-The future marker must stay distinct from normal `claimed-by` and
+The forced-handoff marker must stay distinct from normal `claimed-by` and
 `unclaimed-by` events so older parsers do not mistake it for a standard
 release or claim.
 
