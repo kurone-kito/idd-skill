@@ -124,7 +124,10 @@ export function parseForcedHandoffComment(body, createdAt) {
   }
 
   const visibleNote = trimmed.slice(markerEnd + 3);
-  const visibleText = visibleNote.replace(/<!--[\s\S]*?-->/g, " ").trim();
+  const visibleText = visibleNote
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<!--[\s\S]*$/g, " ")
+    .trim();
   if (!visibleText) {
     return null;
   }
@@ -1571,11 +1574,15 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
   );
   const expectedClaimId = String(options.expectedClaimId ?? "").trim();
   const expectedAgentId = String(options.expectedAgentId ?? "").trim();
+  const trustedAuthorPredicate =
+    typeof options.isTrustedAuthor === "function"
+      ? options.isTrustedAuthor
+      : (login) => trustedMarkerLogins.has(String(login ?? "").trim().toLowerCase());
+
   const activeClaim = resolveActiveClaim(
     claimEvents,
     {
-      isTrustedAuthor:
-        (login) => trustedMarkerLogins.size === 0 || trustedMarkerLogins.has(String(login ?? "").trim().toLowerCase()),
+      isTrustedAuthor: trustedAuthorPredicate,
       isForcedHandoffEnabled:
         typeof options.isForcedHandoffEnabled === "function"
           ? options.isForcedHandoffEnabled

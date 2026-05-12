@@ -776,6 +776,30 @@ test("summarizeClaimValidation ignores forced handoff when policy is disabled", 
   assert.equal(summary.activeClaim.claimId, "claim-20260512T090000Z-337-old");
 });
 
+test("summarizeClaimValidation does not trust all authors when trusted marker set is empty", () => {
+  const claimEvents = [
+    {
+      body: [
+        "<!-- claimed-by: github-copilot-cli-old claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat-protocol-add-auditable-forced -->",
+        "",
+        "_github-copilot-cli-old: issue claim - IDD automation marker. Do not edit._",
+      ].join("\n"),
+      createdAt: "2026-05-12T09:00:00Z",
+      author: { login: "github-copilot-cli-old" },
+    },
+  ];
+
+  const summary = summarizeClaimValidation(claimEvents, {
+    trustedMarkerLogins: [],
+    expectedClaimId: "claim-20260512T090000Z-337-old",
+    expectedAgentId: "github-copilot-cli-old",
+  });
+
+  assert.equal(summary.activeClaimPresent, false);
+  assert.equal(summary.claimLost, true);
+  assert.equal(summary.reason, "missing-active-claim");
+});
+
 test("summarizeClaimValidation requires linked-pr match for issue-plus-pr handoff", () => {
   const claimEvents = [
     {

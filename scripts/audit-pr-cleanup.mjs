@@ -61,6 +61,7 @@ const repository = args.repo ?? detectRepository();
 const [owner, repo] = parseRepository(repository);
 
 const prNumber = parsePositiveInteger(args.pr, "--pr");
+const claimContext = { expectedLinkedPrs: buildExpectedLinkedPrReferences(owner, repo, prNumber) };
 
 if (args.claimIssue) {
   args.claimIssue = String(parsePositiveInteger(args.claimIssue, "--claim-issue"));
@@ -73,7 +74,7 @@ if (args.apply) {
   for (const candidate of report.candidates) {
     if (!args.skipClaimCheck) {
       try {
-        assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId);
+        assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId, claimContext);
       } catch (error) {
         report.failed.push({
           ...candidate,
@@ -89,7 +90,7 @@ if (args.apply) {
       }
       if (!args.skipClaimCheck) {
         try {
-          assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId);
+          assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId, claimContext);
         } catch (error) {
           report.failed.push({
             ...freshCandidate,
@@ -681,15 +682,15 @@ async function revalidateCandidate(owner, repo, prNumber, candidate, report) {
   return null;
 }
 
-function assertActiveClaim(owner, repo, issueNumber, agentId, claimId) {
-  const active = readActiveClaim(owner, repo, issueNumber);
+function assertActiveClaim(owner, repo, issueNumber, agentId, claimId, options = {}) {
+  const active = readActiveClaim(owner, repo, issueNumber, options);
   if (!active || active.claimId !== claimId || (agentId && active.agentId !== agentId)) {
     const activeLabel = active ? `${active.agentId} ${active.claimId}` : "none";
     throw new Error(`claim check failed for #${issueNumber}: active claim is ${activeLabel}`);
   }
 }
 
-function readActiveClaim(owner, repo, issueNumber) {
+function readActiveClaim(owner, repo, issueNumber, options = {}) {
   const result = JSON.parse(
     execFileSync(
       "gh",
@@ -715,6 +716,7 @@ function readActiveClaim(owner, repo, issueNumber) {
   const summary = summarizeClaimValidation(comments, {
     trustedMarkerLogins: resolveTrustedMarkerLogins(owner, repo, comments),
     forcedHandoffEnabled: readForcedHandoffMode() === "human-gated",
+    expectedLinkedPrs: options.expectedLinkedPrs ?? [],
     isAuthorizedForcedHandoff: (forcedBy) => {
       return isAuthorizedForcedHandoffActor(
         owner,
@@ -726,6 +728,18 @@ function readActiveClaim(owner, repo, issueNumber) {
   });
 
   return summary.activeClaimPresent ? summary.activeClaim : null;
+}
+
+function buildExpectedLinkedPrReferences(owner, repo, prNumber) {
+  const normalized = String(prNumber ?? "").trim();
+  if (!normalized) {
+    return [];
+  }
+  return [
+    normalized,
+    `#${normalized}`,
+    `https://github.com/${owner}/${repo}/pull/${normalized}`,
+  ];
 }
 
 function resolveTrustedMarkerLogins(owner, repo, comments) {
