@@ -196,6 +196,28 @@ test("helper bundle manifest publishes the forced handoff helper command", () =>
   assert.equal(existsSync(join(REPO_ROOT, "bin/idd-forced-handoff-marker.mjs")), true);
 });
 
+test("helper bundle manifest publishes the phase ID resolver helper command", () => {
+  const packageManagerManifest = buildHelperRuntimeManifest({
+    profile: "package-manager",
+    packageManager: "pnpm",
+    targetRoot: REPO_ROOT,
+  });
+  const vendoredManifest = buildHelperRuntimeManifest({
+    profile: "vendored-node",
+    targetRoot: REPO_ROOT,
+  });
+
+  assert.equal(
+    packageManagerManifest.profiles["package-manager"].commands["idd:phase-id-resolver"],
+    "idd-phase-id-resolver",
+  );
+  assert.equal(
+    vendoredManifest.profiles["vendored-node"].commands["idd:phase-id-resolver"],
+    "node scripts/phase-id-resolver.mjs",
+  );
+  assert.equal(existsSync(join(REPO_ROOT, "bin/idd-phase-id-resolver.mjs")), true);
+});
+
 test("manifest accepts an explicit package spec override", () => {
   const packageSpec = "https://codeload.github.com/kurone-kito/idd-skill/tar.gz/0123456789abcdef0123456789abcdef01234567";
   const manifest = buildHelperRuntimeManifest({

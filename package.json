@@ -16,6 +16,7 @@
     "idd-forced-handoff-marker": "./bin/idd-forced-handoff-marker.mjs",
     "idd-helper-bundle-manifest": "./bin/idd-helper-bundle-manifest.mjs",
     "idd-live-status-digest": "./bin/idd-live-status-digest.mjs",
+    "idd-phase-id-resolver": "./bin/idd-phase-id-resolver.mjs",
     "idd-pre-merge-readiness": "./bin/idd-pre-merge-readiness.mjs",
     "idd-resume-claim-routing": "./bin/idd-resume-claim-routing.mjs",
     "idd-resume-route-selection": "./bin/idd-resume-route-selection.mjs",

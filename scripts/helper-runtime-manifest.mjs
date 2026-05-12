@@ -129,6 +129,14 @@ const HELPER_COMMANDS = [
     vendoredCommand: "node scripts/suitability-triage.mjs",
     description: "Evaluate A4.5 suitability checks and map deterministic outcomes.",
   },
+  {
+    id: "phase-id-resolver",
+    scriptName: "idd:phase-id-resolver",
+    binName: "idd-phase-id-resolver",
+    entryPath: "scripts/phase-id-resolver.mjs",
+    vendoredCommand: "node scripts/phase-id-resolver.mjs",
+    description: "Resolve canonical phase IDs with legacy alias compatibility.",
+  },
 ];
 
 if (isMainModule(import.meta.url)) {
