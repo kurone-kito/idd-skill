@@ -5,8 +5,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROADMAP_MARKER_REGEX = /<!--\s*idd-skill-roadmap-id\s*:/i;
-const BLOCKED_MARKER_REGEX = /<!--\s*idd-skill-blocked-by\s*:/i;
+const ROADMAP_MARKER_REGEX = /<!--\s*idd-skill-roadmap-id\b[\s\S]*?-->/i;
+const BLOCKED_MARKER_REGEX = /<!--\s*idd-skill-blocked-by\b[\s\S]*?-->/i;
 const BLOCKED_LABELS = new Set(["status:blocked-by-human", "status:needs-decision"]);
 
 if (isCliExecution()) {
@@ -163,18 +163,7 @@ function runCli() {
   const repoRef = `${owner}/${repo}`;
   const policy = loadPolicy(args.policy);
 
-  const openIssues = ghJson([
-    "issue",
-    "list",
-    "--repo",
-    repoRef,
-    "--state",
-    "open",
-    "--limit",
-    "200",
-    "--json",
-    "number,title,state,labels,body,url",
-  ]).map(normalizeIssue);
+  const openIssues = fetchOpenIssues(repoRef);
   const openStateByNumber = new Map(openIssues.map((issue) => [issue.number, issue.state]));
 
   const result = filterOrphanIssues(openIssues, {
@@ -275,7 +264,7 @@ function normalizeIssue(issue) {
     state: issue.state ?? "",
     labels: normalizeLabels(issue.labels),
     body: issue.body ?? "",
-    url: issue.url ?? "",
+    url: issue.url ?? issue.html_url ?? "",
   };
 }
 
@@ -297,7 +286,9 @@ function resolveIssueState(number, issueStateByNumber, fetchIssueStateByNumber) 
   if (issueStateByNumber.has(number)) {
     return issueStateByNumber.get(number);
   }
-  return fetchIssueStateByNumber(number);
+  const state = fetchIssueStateByNumber(number);
+  issueStateByNumber.set(number, state);
+  return state;
 }
 
 function fetchIssueState(repoRef, issueNumber) {
@@ -328,9 +319,40 @@ function ghText(args) {
 }
 
 function runGh(args) {
-  return execFileSync("gh", args, { encoding: "utf8" });
+  try {
+    return execFileSync("gh", args, {
+      encoding: "utf8",
+      timeout: 30_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    const stderr = String(error?.stderr ?? "").trim();
+    if (stderr) {
+      throw new Error(`gh command failed: ${stderr}`);
+    }
+    throw error;
+  }
 }
 
 function isCliExecution() {
   return process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+}
+
+function fetchOpenIssues(repoRef) {
+  const issues = [];
+  const pageSize = 100;
+  for (let page = 1; ; page += 1) {
+    const pageItems = ghJson([
+      "api",
+      `repos/${repoRef}/issues?state=open&per_page=${pageSize}&page=${page}`,
+    ])
+      .filter((item) => item?.pull_request === undefined)
+      .map(normalizeIssue);
+
+    issues.push(...pageItems);
+    if (pageItems.length < pageSize) {
+      break;
+    }
+  }
+  return issues;
 }

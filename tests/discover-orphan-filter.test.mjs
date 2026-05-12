@@ -50,6 +50,32 @@ test("classifyIssue rejects roadmap and blocked marker issues", () => {
   assert.equal(blocked.reason, "blocked_by_marker");
 });
 
+test("classifyIssue accepts marker forms without colon", () => {
+  const roadmap = classifyIssue(
+    {
+      number: 3,
+      title: "roadmap marker without payload",
+      state: "OPEN",
+      labels: [],
+      body: "<!-- idd-skill-roadmap-id -->",
+    },
+    { issueStateByNumber: new Map(), fetchIssueStateByNumber: () => "UNRESOLVABLE" },
+  );
+  assert.equal(roadmap.reason, "roadmap_marker");
+
+  const blocked = classifyIssue(
+    {
+      number: 4,
+      title: "blocked marker without payload",
+      state: "OPEN",
+      labels: [],
+      body: "<!-- idd-skill-blocked-by -->",
+    },
+    { issueStateByNumber: new Map(), fetchIssueStateByNumber: () => "UNRESOLVABLE" },
+  );
+  assert.equal(blocked.reason, "blocked_by_marker");
+});
+
 test("filterOrphanIssues excludes blocked labels and open blockers", () => {
   const issues = [
     {
