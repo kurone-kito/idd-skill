@@ -4,21 +4,25 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 import {
+  normalizeTrustedMarkerLogins,
   planLiveStatusDigestUpsert,
-  resolveActiveClaim,
+  summarizeClaimValidation,
 } from "./protocol-helpers.mjs";
 
 const TRUSTED_MARKER_PERMISSIONS = new Set(["admin", "maintain", "write"]);
-const MAINTAINER_APPROVAL_POLICIES = new Set([
+const FORCED_HANDOFF_AUTHORITY_POLICIES = new Set([
   "owners-and-maintainers-only",
   "all-write-permission-actors",
 ]);
-const MAINTAINER_APPROVAL_POLICY_DEFAULT = "owners-and-maintainers-only";
+const FORCED_HANDOFF_AUTHORITY_POLICY_DEFAULT = "owners-and-maintainers-only";
+const FORCED_HANDOFF_MODES = new Set(["disabled", "human-gated"]);
+const FORCED_HANDOFF_MODE_DEFAULT = "disabled";
 const trustedMarkerAuthorCache = new Map();
 const collaboratorPermissionCache = new Map();
 let cachedConfiguredTrustedMarkerAuthors = null;
 let cachedCurrentViewerLogin = null;
-let cachedMaintainerApprovalPolicy = null;
+let cachedForcedHandoffAuthorityPolicy = null;
+let cachedForcedHandoffMode = null;
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -50,6 +54,9 @@ const repository = args.repo ?? detectRepository();
 const [owner, repo] = parseRepository(repository);
 const targetType = args.issue ? "issue" : "pr";
 const targetNumber = parsePositiveInteger(args.issue ?? args.pr, `--${targetType}`);
+const claimContext = targetType === "pr"
+  ? { expectedLinkedPrs: buildExpectedLinkedPrReferences(owner, repo, targetNumber) }
+  : {};
 
 if (args.claimIssue) {
   args.claimIssue = String(parsePositiveInteger(args.claimIssue, "--claim-issue"));
@@ -97,7 +104,7 @@ if (planned.action === "duplicate") {
 if (args.apply) {
   if (!args.skipClaimCheck) {
     try {
-      assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId);
+      assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId, claimContext);
     } catch (error) {
       fail(error.message);
     }
@@ -184,15 +191,15 @@ function updateIssueComment(owner, repo, commentId, body) {
   ]);
 }
 
-function assertActiveClaim(owner, repo, issueNumber, agentId, claimId) {
-  const active = readActiveClaim(owner, repo, issueNumber);
+function assertActiveClaim(owner, repo, issueNumber, agentId, claimId, options = {}) {
+  const active = readActiveClaim(owner, repo, issueNumber, options);
   if (!active || active.claimId !== claimId || (agentId && active.agentId !== agentId)) {
     const activeLabel = active ? `${active.agentId} ${active.claimId}` : "none";
     throw new Error(`claim check failed for #${issueNumber}: active claim is ${activeLabel}`);
   }
 }
 
-function readActiveClaim(owner, repo, issueNumber) {
+function readActiveClaim(owner, repo, issueNumber, options = {}) {
   const comments = fetchIssueComments(owner, repo, issueNumber).map((comment) => {
     return {
       body: comment.body,
@@ -201,47 +208,93 @@ function readActiveClaim(owner, repo, issueNumber) {
     };
   });
 
-  return resolveActiveClaim(
-    comments,
-    {
-      isTrustedAuthor: (login) => isTrustedMarkerAuthor(owner, repo, login),
-      isForcedHandoffEnabled: () => true,
-      isAuthorizedForcedHandoff: (forcedBy) => isAuthorizedForcedHandoffActor(owner, repo, forcedBy),
+  const summary = summarizeClaimValidation(comments, {
+    trustedMarkerLogins: resolveTrustedMarkerLogins(owner, repo, comments),
+    forcedHandoffEnabled: readForcedHandoffMode() === "human-gated",
+    expectedLinkedPrs: options.expectedLinkedPrs ?? [],
+    isAuthorizedForcedHandoff: (forcedBy) => {
+      return isAuthorizedForcedHandoffActor(
+        owner,
+        repo,
+        forcedBy,
+        forcedHandoffAuthorityPolicy(),
+      );
     },
+  });
+
+  return summary.activeClaimPresent ? summary.activeClaim : null;
+}
+
+function resolveTrustedMarkerLogins(owner, repo, comments) {
+  return normalizeTrustedMarkerLogins(
+    comments
+      .map((comment) => comment.author?.login ?? "")
+      .filter(Boolean)
+      .filter((login) => isTrustedMarkerAuthor(owner, repo, login)),
   );
 }
 
-function isAuthorizedForcedHandoffActor(owner, repo, login) {
+function buildExpectedLinkedPrReferences(owner, repo, prNumber) {
+  const normalized = String(prNumber ?? "").trim();
+  if (!normalized) {
+    return [];
+  }
+  return [
+    normalized,
+    `#${normalized}`,
+    `https://github.com/${owner}/${repo}/pull/${normalized}`,
+  ];
+}
+
+function isAuthorizedForcedHandoffActor(owner, repo, login, policy = forcedHandoffAuthorityPolicy()) {
   const normalized = String(login ?? "").trim().toLowerCase();
   if (!normalized) {
     return false;
   }
   const permission = collaboratorPermission(owner, repo, normalized);
-  if (maintainerApprovalActorPolicy() === "all-write-permission-actors") {
+  if (policy === "all-write-permission-actors") {
     return permission === "admin" || permission === "maintain" || permission === "write";
   }
   return permission === "admin" || permission === "maintain";
 }
 
-function maintainerApprovalActorPolicy() {
-  if (cachedMaintainerApprovalPolicy !== null) {
-    return cachedMaintainerApprovalPolicy;
+function forcedHandoffAuthorityPolicy() {
+  if (cachedForcedHandoffAuthorityPolicy !== null) {
+    return cachedForcedHandoffAuthorityPolicy;
   }
-  cachedMaintainerApprovalPolicy = readMaintainerApprovalActorPolicy();
-  return cachedMaintainerApprovalPolicy;
+  cachedForcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
+  return cachedForcedHandoffAuthorityPolicy;
 }
 
-function readMaintainerApprovalActorPolicy() {
+function readForcedHandoffAuthorityPolicy() {
   try {
     const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    const policy = String(config?.maintainerApprovalActorPolicy ?? "").trim();
-    if (MAINTAINER_APPROVAL_POLICIES.has(policy)) {
+    const policy = String(config?.forcedHandoffAuthority ?? config?.["forced-handoff-authority"] ?? "").trim();
+    if (FORCED_HANDOFF_AUTHORITY_POLICIES.has(policy)) {
       return policy;
     }
   } catch {
     // Default policy remains owners-and-maintainers-only.
   }
-  return MAINTAINER_APPROVAL_POLICY_DEFAULT;
+  return FORCED_HANDOFF_AUTHORITY_POLICY_DEFAULT;
+}
+
+function readForcedHandoffMode() {
+  if (cachedForcedHandoffMode !== null) {
+    return cachedForcedHandoffMode;
+  }
+  try {
+    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    const mode = String(config?.forcedHandoff ?? config?.["forced-handoff"] ?? "").trim();
+    if (FORCED_HANDOFF_MODES.has(mode)) {
+      cachedForcedHandoffMode = mode;
+      return cachedForcedHandoffMode;
+    }
+  } catch {
+    // Default mode remains disabled.
+  }
+  cachedForcedHandoffMode = FORCED_HANDOFF_MODE_DEFAULT;
+  return cachedForcedHandoffMode;
 }
 
 function isTrustedMarkerAuthor(owner, repo, login) {
