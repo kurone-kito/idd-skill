@@ -1,61 +1,61 @@
-# Issue #327: F4 cleanup apply results tracking
+# Issue #328: Minimize safe post-merge cleanup backlog
 
-## Problem and approach
+## Problem statement
 
-The F4 (post-merge cleanup) phase currently treats cleanup as best-effort
-but doesn't require agents to attempt or record cleanup results. Recent
-merged PRs show agents often stop after merge digest and local cleanup
-without running the audit-pr-cleanup script.
+Recent merged PRs (#313, #315, #316, #317, #318, #320, #321) still have safe cleanup candidates that can be minimized now that:
 
-The fix is to update F4 instructions so:
+1. Helper: `audit-pr-cleanup` provides stable completion summary
+2. F4 instructions: explicitly require apply attempt and result recording
+3. Issue #327: merged with visible results tracking
 
-1. After merge and local cleanup, agents run `audit-pr-cleanup --dry-run`
-2. If credentials permit, run `audit-pr-cleanup --apply`
-3. Record the result (applied count, skipped, failed, remaining) in the
-   PR digest or as an audit comment
-4. Keep cleanup outside the merge gate
+This issue audits those PRs and applies safe cleanup candidates while recording why unsafe candidates remain.
 
-## Scope
+## Implementation approach
 
-Two files to update (must be kept synchronized):
+1. **Per-PR audit workflow** (7 PRs × 4 steps each = 28 operations):
+   - Run `node scripts/audit-pr-cleanup.mjs --pr <N> --dry-run` 
+   - Record candidates, safe/unsafe counts
+   - Run `--apply` step with claim-backed mutation
+   - Document results in before/after summary table
 
-- `.github/instructions/idd-merge.instructions.md` (F4 section)
-- `idd-template/.github/instructions/idd-merge.instructions.md` (F4 section)
+2. **Fallback strategy** (if Node helpers unavailable):
+   - Document exact GraphQL minimizeComment calls needed
+   - Report as "requires manual execution" for next maintainer audit
 
-These files were updated in previous work (PR #305) but F4 didn't
-explicitly require the dry-run/apply cycle. This issue adds that requirement.
+3. **Result artifact**:
+   - Create summary table in comment on #328 showing:
+     * PR number, branch, merge date
+     * Dry-run counts (candidates, safe, unsafe, skipped)
+     * Apply results (minimized, failed, already-minimized)
+     * Skipped reasons (unresolved thread, active hold, maintainer decision, etc.)
 
-## Implementation plan
+4. **Safety constraints**:
+   - Never minimize: unresolved threads, active holds, maintainer decisions, failed CI, human discussion
+   - Always record: failed mutations with error, skipped candidates with reasons
+   - Validate claim before each mutation (D2 revalidation gate)
 
-### Step 1: Read F4 current state
+## Todos
 
-- Find F4 section in idd-merge.instructions.md
-- Note current cleanup flow and constraints
+- [ ] **audit-313**: Dry-run and apply for PR #313
+- [ ] **audit-315**: Dry-run and apply for PR #315
+- [ ] **audit-316**: Dry-run and apply for PR #316
+- [ ] **audit-317**: Dry-run and apply for PR #317
+- [ ] **audit-318**: Dry-run and apply for PR #318
+- [ ] **audit-320**: Dry-run and apply for PR #320
+- [ ] **audit-321**: Dry-run and apply for PR #321
+- [ ] **summarize**: Create before/after summary table and commit evidence
 
-### Step 2: Draft updated F4 flow
+## Acceptance path
 
-- Add `audit-pr-cleanup --dry-run` after best-effort cleanup comment
-- Add conditional `audit-pr-cleanup --apply` when claim validates and
-  credentials available
-- Add digest/comment requirement for results
+After all 7 PRs are audited and safe candidates are minimized:
 
-### Step 3: Update both files
+1. Document results in a summary comment on #328 (not committed to repo)
+2. Commit a single evidence summary to the repository (optional timeline artifact)
+3. Close #328 with link to summary evidence
 
-- Update .github/instructions/ version
-- Update idd-template/ version (keep synchronized)
+## Risks & considerations
 
-### Step 4: Verify
-
-- Markdown lint passes
-- Template sync is maintained
-- No instruction conflicts with #312 (future slimming)
-
-## Acceptance criteria
-
-✓ Both instruction files updated together
-✓ F4 explicitly requires audit-pr-cleanup attempt
-✓ Results are recorded in digest or comment
-✓ Cleanup remains best-effort, post-merge only
-✓ Claim revalidation preserved
-✓ No changes to helper runtime profile (deferred to #312)
-✓ Existing validation passes (lint, spellcheck, tests)
+- **Node helper dependency**: If helpers are unavailable, fallback to GraphQL commands
+- **Rate limiting**: GitHub API may rate-limit; use exponential backoff if needed
+- **Mutation ordering**: Apply PRs in ascending order to reduce cognitive load
+- **Claim revalidation**: Before each --apply, re-validate active claim for issue #328
