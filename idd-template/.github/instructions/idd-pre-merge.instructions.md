@@ -1,7 +1,8 @@
 # IDD — Pre-Merge Conditions Phase (F1–F2)
 
-Read this file after List A is empty (E3 or E8), or when returning to
-merge gate checks after a fix cycle. It covers final conflict resolution
+Read this file after ReviewItems_snapshot is empty (E3 or E8), or when
+returning to merge gate checks after a fix cycle. It covers final conflict
+resolution
 (F1) and the full pre-merge condition checklist (F2).
 
 This phase includes a repository-specific GitHub Copilot advisory review
@@ -159,7 +160,7 @@ must align with every F2 condition below.
   re-evaluate F2)
 - **Required reviews**: Required approvals count is satisfied and all
   CODEOWNER approvals are obtained. If approvals are absent but there
-  are no open actionable review items (List A is empty), do **not**
+  are no open actionable review items (ReviewItems_snapshot is empty), do **not**
   route to E1 — instead, request CODEOWNER/required reviewers directly
   (if not already requested), post a hold comment, and stop. Return to
   E1 only when there are actual review threads or comments to address (→

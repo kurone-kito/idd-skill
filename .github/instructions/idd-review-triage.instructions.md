@@ -1,7 +1,7 @@
 # IDD — Review Triage Phase (E4–E8)
 
 Read this file after `idd-review-snapshot.instructions.md` (E3) finds
-List A is non-empty. It covers classifying items, scoring, recording
+ReviewItems_snapshot is non-empty. It covers classifying items, scoring, recording
 dispositions, and counting accepted items.
 
 Before posting any E-phase operational comment or GitHub reply, apply
@@ -11,9 +11,9 @@ current `{claim-id}`.
 **Skip condition E8**: if the Accepted PATH A count after verification
 is zero, proceed to `idd-pre-merge.instructions.md`.
 
-## E4 — Classify and score List A
+## E4 — Classify and score ReviewItems_snapshot
 
-For each item in List A, first classify it:
+For each item in ReviewItems_snapshot, first classify it:
 
 - **PATH A — actionable feedback**: human reviewer threads and regular
   comments, `CHANGES_REQUESTED` review bodies, and critique-pass
@@ -92,7 +92,7 @@ For each Rejected PATH A item whose source is reviewer feedback:
   which point: if they agree with rejection, close the AMD by replying
   to confirm and remove the hold comment; if they override, Accept the
   feedback and implement it).
-- **When an `Awaiting maintainer decision` thread re-appears in List A**
+- **When an `Awaiting maintainer decision` thread re-appears in ReviewItems_snapshot**
   (because the maintainer has not yet responded in the thread): first
   check the full activity universe (PR review list, review threads, and
   regular PR comments) for any response from any CODEOWNER, required
@@ -184,7 +184,7 @@ PATH B — Advisory items:
 
 ## E7 — Verify recorded dispositions
 
-Before leaving triage, verify that every List A item has the evidence
+Before leaving triage, verify that every ReviewItems_snapshot item has the evidence
 required by its path:
 
 - Every PATH A item has a recorded classification and an Accept or
@@ -208,8 +208,9 @@ and the next route is E9, or when the update is followed by a fresh E1
 snapshot before F2. Set `Phase` to `E triage`, summarize remaining
 Accepted PATH A work or `none` in `Open blockers`, set `Next action` to
 E9 or F2 as appropriate, and cite the disposition replies plus the
-trusted review-watermark in `Authoritative by`. If List A is empty and
-the next step is F2, defer the digest update unless you intentionally
+trusted review-watermark in `Authoritative by`. If
+ReviewItems_snapshot is empty and the next step is F2, defer the digest
+update unless you intentionally
 return to E1 afterward.
 
 ## E8 — Accepted PATH A count check
@@ -221,8 +222,8 @@ Otherwise continue to `idd-review-fix.instructions.md`.
 
 ## Review item classes
 
-During E-phase review triage, classify each List A item into one of two
-paths before deciding what to do with it:
+During E-phase review triage, classify each ReviewItems_snapshot item
+into one of two paths before deciding what to do with it:
 
 - **PATH A — actionable feedback**: human reviewer comments,
   `CHANGES_REQUESTED` review bodies, and critique-pass findings that
