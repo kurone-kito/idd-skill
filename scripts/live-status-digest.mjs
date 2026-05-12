@@ -193,7 +193,14 @@ function readActiveClaim(owner, repo, issueNumber) {
     };
   });
 
-  return resolveActiveClaim(comments, (login) => isTrustedMarkerAuthor(owner, repo, login));
+  return resolveActiveClaim(
+    comments,
+    {
+      isTrustedAuthor: (login) => isTrustedMarkerAuthor(owner, repo, login),
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff: (forcedBy) => isTrustedMarkerAuthor(owner, repo, forcedBy),
+    },
+  );
 }
 
 function isTrustedMarkerAuthor(owner, repo, login) {

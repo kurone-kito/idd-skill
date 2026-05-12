@@ -1561,7 +1561,13 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
   const expectedAgentId = String(options.expectedAgentId ?? "").trim();
   const activeClaim = resolveActiveClaim(
     claimEvents,
-    (login) => trustedMarkerLogins.size === 0 || trustedMarkerLogins.has(String(login ?? "").trim().toLowerCase()),
+    {
+      isTrustedAuthor:
+        (login) => trustedMarkerLogins.size === 0 || trustedMarkerLogins.has(String(login ?? "").trim().toLowerCase()),
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff:
+        (forcedBy) => trustedMarkerLogins.size === 0 || trustedMarkerLogins.has(String(forcedBy ?? "").trim().toLowerCase()),
+    },
   );
 
   let reason = "match";

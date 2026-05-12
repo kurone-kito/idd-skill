@@ -430,6 +430,7 @@ test("forced-handoff schema rejects marker-breaking token values", () => {
     ["newClaimId", "new-->"],
     ["branch", "issue/337-<!--bad"],
     ["forcedBy", "owner-->"],
+    ["reason", "operator-->note"],
   ]) {
     const instance = { ...base, [field]: value };
     const errors = validate(instance, schema);
