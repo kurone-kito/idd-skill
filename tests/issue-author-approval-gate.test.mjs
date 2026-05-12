@@ -76,5 +76,9 @@ test("overview documents the secure default issue-author approval config behavio
 test("repository config keeps the issue-author approval gate enabled by default", () => {
   const config = JSON.parse(read(".github/idd/config.json"));
 
-  assert.equal("skipIssueAuthorApprovalGate" in config, false);
+  assert.notEqual(
+    config.skipIssueAuthorApprovalGate,
+    true,
+    "gate must stay enabled unless explicitly opted out with true",
+  );
 });

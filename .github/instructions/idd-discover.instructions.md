@@ -56,7 +56,7 @@ that issue only:
    - if approval state or permission resolution is unavailable or
      ambiguous, fail closed and treat approval as missing unless the
      repository explicitly opted out.
-     If the target lacks required approval, report that the issue-author
+   - if the target lacks required approval, report that the issue-author
      approval gate blocked claim and stop before A5. Do not fall back to
      another issue unless the operator explicitly asks for normal
      discovery in the same run.
