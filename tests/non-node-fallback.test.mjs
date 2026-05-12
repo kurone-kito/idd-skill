@@ -96,6 +96,11 @@ test("onboarding links extracted policy guidance including credential scope", ()
     /### Credential Scope/,
     "policy reference template must include a credential-scope section",
   );
+  assert.match(
+    policyText,
+    /### Critique-Loop Profile/,
+    "policy reference template must keep critique-loop terminology aligned",
+  );
 });
 
 test("onboarding keeps claim timing in the explicit confirmation path", () => {
@@ -114,6 +119,16 @@ test("onboarding keeps claim timing in the explicit confirmation path", () => {
     onboarding,
     /critique-loop profile, credential scope, claim-timing defaults,\s+issue-authoring companion status, and helper runtime profile\./,
     "ONBOARDING Step 2 re-check must stay aligned with the Step 1B confirmation list",
+  );
+  assert.match(
+    onboarding,
+    /review-thread resolution policy and critique-loop\s+profile are recorded/,
+    "ONBOARDING Step 6 must keep critique-loop terminology aligned with Step 1B",
+  );
+  assert.match(
+    onboarding,
+    /`\.github\/instructions\/idd-overview\.instructions\.md` keeps/,
+    "ONBOARDING Step 6 must use the full idd-overview path in the checklist",
   );
 });
 
@@ -198,6 +213,16 @@ test("onboarding links extracted agent-entry and verification guidance", () => {
     reference,
     /## Verification details/,
     "agent-entry reference must include the expanded verification guidance",
+  );
+  assert.match(
+    reference,
+    /selected critique-loop profile is recorded/,
+    "agent-entry reference must keep critique-loop terminology aligned",
+  );
+  assert.match(
+    reference,
+    /`\.github\/instructions\/idd-overview\.instructions\.md` has/,
+    "agent-entry reference must use the full idd-overview path in the checklist",
   );
 });
 

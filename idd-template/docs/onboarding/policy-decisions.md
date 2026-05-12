@@ -164,7 +164,7 @@ This repository uses the following IDD policies:
 
 **Policy**: `{fast-agent-resolve | hybrid-reviewer-ack | strict-reviewer-resolve}`
 
-### Critique-Loop Policy
+### Critique-Loop Profile
 
 **Profile**: `{distributed defaults | repository override}`
 

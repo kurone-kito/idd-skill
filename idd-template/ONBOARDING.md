@@ -571,8 +571,8 @@ workflow references and the same opt-out rule.
 If `.github/copilot-instructions.md` already exists, add a parallel IDD
 workflow section there as well. Keep the
 `excludeAgent: "code-review"` behavior in
-`idd-overview.instructions.md`; repository-wide Copilot guidance may
-still apply to reviews.
+`.github/instructions/idd-overview.instructions.md`; repository-wide
+Copilot guidance may still apply to reviews.
 
 ---
 
@@ -588,9 +588,9 @@ After completing the steps above, confirm each item:
       listed in Step 2 is present in the imported repository.
 - [ ] The selected PR review profile is recorded, and any non-default
       profile artifact and phase-file edits are complete.
-- [ ] The selected review-thread resolution and critique-loop policies
-      are recorded, and any non-default phase-file customizations are
-      complete.
+- [ ] The selected review-thread resolution policy and critique-loop
+      profile are recorded, and any non-default phase-file
+      customizations are complete.
 - [ ] The selected merge policy, credential scope, claim timing values,
       and helper runtime profile are explicitly recorded.
 - [ ] If the operator opted into issue authoring, the companion skill
@@ -598,8 +598,9 @@ After completing the steps above, confirm each item:
 - [ ] No `{{...}}` placeholders remain, the `Project commands` table is
       correct, and any `orphan-first` scope choice has a valid policy
       value.
-- [ ] `idd-overview.instructions.md` keeps `applyTo: "**"` and
-      `excludeAgent: "code-review"` in its frontmatter.
+- [ ] `.github/instructions/idd-overview.instructions.md` keeps
+      `applyTo: "**"` and `excludeAgent: "code-review"` in its
+      frontmatter.
 - [ ] `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md` exist and reference
       `docs/idd-workflow.md`, unless the operator explicitly opted out
       of creating them.

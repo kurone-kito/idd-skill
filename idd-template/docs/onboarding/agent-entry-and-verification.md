@@ -170,7 +170,7 @@ checks, confirm the detailed items below.
 - [ ] The operator's selected review-thread resolution policy is
       recorded, and any non-default profile has matching phase-file
       customizations.
-- [ ] The operator's selected critique-loop policy is recorded, and any
+- [ ] The operator's selected critique-loop profile is recorded, and any
       non-default profile has matching phase-file customizations.
 - [ ] The operator's selected merge policy is recorded in repository
       documentation, the F3 handoff behavior matches that policy, and
@@ -189,8 +189,9 @@ checks, confirm the detailed items below.
 ### Placeholder, marker, and config alignment
 
 - [ ] No `{{...}}` placeholders remain in any copied file.
-- [ ] `idd-overview.instructions.md` has `applyTo: "**"` and
-      `excludeAgent: "code-review"` in its frontmatter.
+- [ ] `.github/instructions/idd-overview.instructions.md` has
+      `applyTo: "**"` and `excludeAgent: "code-review"` in its
+      frontmatter.
 - [ ] The `Project commands` table in `idd-overview.instructions.md`
       contains the correct commands for this project.
 - [ ] If the project chooses `issue-scope: orphan-first`, the
