@@ -86,14 +86,13 @@ must align with every F2 condition below.
   watermarks without `{claim-id}` must not be reused across a restart or
   takeover, and same-claim watermarks from untrusted authors must be
   ignored and reported as suspicious context when they affect routing.
-  In the idd-skill source
-  repository, or in adopters that explicitly installed the same
-  helpers, the documented merge-gate helper reference in
+  To collect this evidence, either use the documented merge-gate helper
+  reference in
   [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#stable-helper-evidence-outputs)
-  may collect the documented snapshot tuple and broader
-  `pre-merge-readiness` JSON report. The instruction rules remain
-  canonical. Fetch the activity universe snapshot (same scope as E1
-  Step 1) and the current CI state for the HEAD SHA. Return to E1 if
+  (in the idd-skill source repository or adopters that explicitly
+  installed the same helpers) or fetch the activity universe snapshot
+  (same scope as E1 Step 1) and the current CI state for the HEAD SHA
+  directly. The instruction rules remain canonical. Return to E1 if
   **any** of the
   following is true:
   - The current PR HEAD SHA differs from the stored `{head-SHA}` (a new
