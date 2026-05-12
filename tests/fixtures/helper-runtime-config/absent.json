@@ -1,0 +1,18 @@
+{
+  "iddVersion": "0.1.0",
+  "mergePolicy": "fully_autonomous_merge",
+  "reviewPolicy": "copilot-advisory",
+  "threadResolutionPolicy": "fast-agent-resolve",
+  "claimTiming": {
+    "staleAge": "PT24H",
+    "heartbeatInterval": "PT12H"
+  },
+  "commands": {
+    "install-deps": "true",
+    "fix-validate": "node --test tests/*.mjs",
+    "pre-push-validate": "node --test tests/*.mjs",
+    "post-fix-validate": "node --test tests/*.mjs"
+  },
+  "issueScope": "roadmap",
+  "orphanFirstPolicy": "none"
+}
