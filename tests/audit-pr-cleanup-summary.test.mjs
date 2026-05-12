@@ -1,0 +1,58 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { computeReportSummary } from "../scripts/audit-pr-cleanup-summary.mjs";
+
+function createReport(overrides = {}) {
+  return {
+    mode: "dry-run",
+    candidates: [],
+    skipped: [],
+    applied: [],
+    failed: [],
+    summary: null,
+    status: null,
+    ...overrides,
+  };
+}
+
+test("computeReportSummary counts viewer eligibility from evaluated subjects", () => {
+  const report = createReport({
+    candidates: [{ subjectId: "candidate-1" }, { subjectId: "candidate-2" }],
+    skipped: [
+      { subjectId: "skip-1", isMinimized: true, viewerCanMinimize: true },
+      { subjectId: "skip-2", isMinimized: false, viewerCanMinimize: false },
+    ],
+  });
+
+  computeReportSummary(report);
+
+  assert.equal(report.summary.candidate, 2);
+  assert.equal(report.summary.skipped, 2);
+  assert.equal(report.summary["already-minimized"], 1);
+  assert.equal(report.summary["viewer-can-minimize"], 3);
+  assert.equal(report.summary["viewer-cannot-minimize"], 1);
+  assert.equal(report.status, "needs-apply");
+});
+
+test("computeReportSummary reflects apply results after mutations", () => {
+  const report = createReport({
+    mode: "apply",
+    candidates: [{ subjectId: "candidate-1" }],
+    skipped: [{ subjectId: "skip-1", isMinimized: false, viewerCanMinimize: true }],
+    applied: [],
+    failed: [],
+  });
+
+  computeReportSummary(report);
+  assert.equal(report.status, "incomplete");
+  assert.equal(report.summary.applied, 0);
+
+  report.applied.push({ subjectId: "candidate-1" });
+  computeReportSummary(report);
+
+  assert.equal(report.status, "applied");
+  assert.equal(report.summary.applied, 1);
+  assert.equal(report.summary.failed, 0);
+  assert.equal(report.summary.skipped, 1);
+});
