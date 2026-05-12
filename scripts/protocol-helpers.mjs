@@ -1173,7 +1173,7 @@ export function summarizeReviewerStates(
   const blockingChangesRequestedLogins = latestByAuthor
     .filter((review) => {
       return review.state === "CHANGES_REQUESTED"
-        && (review.isHuman || review.isCodeowner || review.isRequiredReviewer);
+        && !review.isAdvisoryBot;
     })
     .map((review) => review.login);
 

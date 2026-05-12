@@ -96,6 +96,35 @@ test("required reviewer rule objects stay blocking until GitHub marks approval s
   assert.equal(approved.requiredApprovalsSatisfied, true);
 });
 
+test("advisory bots do not block CHANGES_REQUESTED even when configured in policy", () => {
+  const summary = summarizeReviewerStates(
+    [
+      {
+        author: { login: "copilot-pull-request-reviewer" },
+        state: "CHANGES_REQUESTED",
+        submittedAt: "2026-05-12T00:25:11Z",
+      },
+    ],
+    {
+      advisoryBotLogins: ["copilot-pull-request-reviewer"],
+      branchRules: [
+        {
+          type: "pull_request",
+          parameters: {
+            required_reviewers: [{ login: "copilot-pull-request-reviewer", minimum_approvals: 1 }],
+            require_code_owner_review: true,
+          },
+        },
+      ],
+      codeownersText: "* @copilot-pull-request-reviewer",
+      changedFiles: ["docs/idd-workflow.md"],
+    },
+  );
+
+  assert.equal(summary.humanChangesRequestedCount, 0);
+  assert.deepEqual(summary.blockingChangesRequestedLogins, []);
+});
+
 function readJson(relativePath) {
   return JSON.parse(readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8"));
 }
