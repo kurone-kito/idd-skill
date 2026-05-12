@@ -48,6 +48,14 @@ const HELPER_COMMANDS = [
     description: "Collect read-only review activity and CI snapshot evidence.",
   },
   {
+    id: "discover-readiness-check",
+    scriptName: "idd:discover-readiness-check",
+    binName: "idd-discover-readiness-check",
+    entryPath: "scripts/discover-readiness-check.mjs",
+    vendoredCommand: "node scripts/discover-readiness-check.mjs",
+    description: "Collect read-only A3 readiness filtering evidence for candidate issues.",
+  },
+  {
     id: "advisory-wait-state",
     scriptName: "idd:advisory-wait-state",
     binName: "idd-advisory-wait-state",
