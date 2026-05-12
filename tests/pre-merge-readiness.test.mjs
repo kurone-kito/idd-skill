@@ -92,6 +92,19 @@ test("CODEOWNERS patterns with slashes stay root anchored", () => {
   );
 });
 
+test("CODEOWNERS **/ patterns match both root and nested files", () => {
+  assert.deepEqual(
+    resolveCodeownersForFiles("**/README.md @org/docs\n", ["README.md", "docs/README.md"]),
+    {
+      ruleCount: 1,
+      changedFileCount: 2,
+      unmatchedFiles: [],
+      codeownerUserLogins: [],
+      codeownerTeamSlugs: ["org/docs"],
+    },
+  );
+});
+
 test("required reviewer rule objects stay blocking until GitHub marks approval satisfied", () => {
   const branchRules = [
     {

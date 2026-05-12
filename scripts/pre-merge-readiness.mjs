@@ -60,7 +60,7 @@ const checks = ghJson(
     "--jq",
     ".",
   ],
-  { allowStatuses: [8] },
+  { allowStatuses: [1, 8] },
 );
 const branchRules = ghApiJson(
   `repos/${owner}/${repo}/rules/branches/${encodedBaseRefName}`,

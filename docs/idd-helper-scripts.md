@@ -6,7 +6,7 @@ directly instead of re-evaluating the same suggestion from scratch.
 
 ## Decision
 
-In the idd-skill source repository, five optional helpers were adopted:
+In the idd-skill source repository, the following optional helpers were adopted:
 
 - `scripts/review-activity-snapshot.mjs` for read-only E/F review
   activity and CI snapshot metrics

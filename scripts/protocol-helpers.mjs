@@ -1824,8 +1824,13 @@ function matchesCodeownersPattern(pattern, path) {
     body = `${body}**`;
   }
 
-  const slashAnchored = anchored || (body.includes("/") && !body.startsWith("**/"));
-  let source = slashAnchored ? "^" : "^(?:|.*\\/)";
+  const anyDepthFromRoot = body.startsWith("**/");
+  if (anyDepthFromRoot) {
+    body = body.slice(3);
+  }
+
+  const slashAnchored = anchored || (body.includes("/") && !anyDepthFromRoot);
+  let source = anyDepthFromRoot || !slashAnchored ? "^(?:|.*\\/)" : "^";
   for (let index = 0; index < body.length; index += 1) {
     const pair = body.slice(index, index + 2);
     if (pair === "**") {
