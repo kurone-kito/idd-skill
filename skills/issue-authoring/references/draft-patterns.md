@@ -97,6 +97,52 @@ Child issue:
 Keep ready child issues in the roadmap task list rather than grouping
 them with hidden dependency markers.
 
+## Dependency minimization examples
+
+### Natural parallel decomposition
+
+Roadmap `## Tracks` excerpt:
+
+```md
+- [ ] #401 — update the issue-authoring contract
+- [ ] #402 — add draft-pattern examples
+
+_Parallel note: #401 and #402 can proceed independently once the roadmap
+exists because neither task depends on the other's output._
+```
+
+This is the preferred shape for sibling tasks that can be reviewed and
+verified independently. The roadmap keeps both tasks visible in its task
+list, and the short note explains the safe parallelism without adding a
+fake `Blocked by` edge.
+
+### Artificial decomposition
+
+Bad serial chain:
+
+```md
+#401 — update the issue-authoring contract
+#402 — add draft-pattern examples
+
+Blocked by #401
+```
+
+This is over-serialized when `#402` can be reviewed and verified without
+waiting for `#401`. Do not create a serial chain just to make the order
+feel tidy.
+
+Bad split for parallelism:
+
+```md
+#410 — add one checklist bullet
+#411 — add one example paragraph
+#412 — add one anti-pattern sentence
+```
+
+This is an artificial split when the three edits form one natural,
+cohesive authoring change. Do not break a single reviewable task into
+multiple sibling issues only to widen parallel execution.
+
 Resolve `<marker-prefix>` from the target repository's onboarding or IDD
 docs before publishing the draft. Use `idd-skill` only when the target
 repository actually configured that prefix.

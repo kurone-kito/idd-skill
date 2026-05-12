@@ -44,7 +44,7 @@ needs-decision, blocked-by-human, and out-of-scope.
    dependency markers. Use the prefix documented by the target
    repository's onboarding or IDD docs, and ask the user instead of
    guessing when the prefix is not discoverable.
-5. Keep dependencies machine-readable:
+5. Keep dependencies machine-readable and minimal:
    - roadmap identity via
      `<!-- <marker-prefix>-roadmap-id: ... -->`
    - active child issues via roadmap task-list links
@@ -53,6 +53,9 @@ needs-decision, blocked-by-human, and out-of-scope.
      `<!-- <marker-prefix>-blocked-by: ... -->` only when a separate
      roadmap
      must close first
+   - keep independent sibling work in roadmap task lists unless a true
+     correctness, availability, or ordering constraint requires a
+     dependency edge
 6. Stop at the approval boundary. Drafting issues does not authorize
    publishing them or starting the IDD execution loop unless the user
    explicitly asked for that.
@@ -76,6 +79,8 @@ needs-decision, blocked-by-human, and out-of-scope.
 - Preserve low-readiness work in stable buckets instead of dropping it.
 - Keep acceptance criteria explicitly verifiable.
 - Link every active child issue from its roadmap body.
+- Justify each dependency edge and keep independent sibling work as
+  roadmap task-list entries.
 - Record reuse or extension decisions when the skill does not create a
   new issue.
 - Avoid widening drafting output beyond the user request without saying
