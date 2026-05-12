@@ -47,6 +47,7 @@ const prHeadSha = String(pr.headRefOid ?? "");
 const baseRefName = String(pr.baseRefName ?? "");
 const prAuthorLogin = String(pr.author?.login ?? "").toLowerCase();
 const reviewDecision = String(pr.reviewDecision ?? "");
+const encodedBaseRefName = encodeURIComponent(baseRefName);
 
 const checks = ghJson(
   [
@@ -62,7 +63,18 @@ const checks = ghJson(
   ],
   { allowStatuses: [8] },
 );
-const branchRules = ghApiJson(`repos/${owner}/${repo}/rules/branches/${baseRefName}`);
+const branchRules = ghApiJson(
+  `repos/${owner}/${repo}/rules/branches/${encodedBaseRefName}`,
+  false,
+  [],
+  { allowHttpStatuses: [404] },
+);
+const branchProtection = ghApiJson(
+  `repos/${owner}/${repo}/branches/${encodedBaseRefName}/protection`,
+  false,
+  [],
+  { allowHttpStatuses: [404] },
+);
 const reviews = ghApiJson(`repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`, true);
 const requestedReviewers = ghApiJson(
   `repos/${owner}/${repo}/pulls/${args.prNumber}/requested_reviewers`,
@@ -101,6 +113,7 @@ const summary = buildPreMergeReadinessSummary(
     threads: threads.map(normalizeThread),
     checks,
     branchRules,
+    branchProtection,
     requestedReviewers: requestedReviewers.users ?? [],
     timelineEvents,
     claimEvents: claimComments.map(normalizeClaimComment),
@@ -292,10 +305,10 @@ function resolveTrustedCollaboratorMarkerLogins(owner, repo, comments) {
 function fetchCodeownersText(owner, repo, ref) {
   for (const path of [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"]) {
     const payload = ghApiJson(
-      `repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`,
+      `repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`,
       false,
       [],
-      { allowStatuses: [404] },
+      { allowHttpStatuses: [404] },
     );
     const content = String(payload?.content ?? "").replace(/\n/g, "");
     if (!content) {
@@ -432,19 +445,14 @@ function safeGhText(args) {
 function ghApiJson(path, paginate = false, extraArgs = [], options = {}) {
   const args = ["api", path, ...extraArgs];
   if (paginate) {
-    args.push("--paginate");
+    args.push("--paginate", "--slurp");
   }
   const raw = runGh(args, options).trim();
   if (!raw) {
     return paginate ? [] : {};
   }
   if (paginate) {
-    const chunks = raw
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
-    return chunks.flatMap((chunk) => (Array.isArray(chunk) ? chunk : [chunk]));
+    return JSON.parse(raw).flat();
   }
   return JSON.parse(raw);
 }
@@ -455,6 +463,11 @@ function runGh(args, options = {}) {
   } catch (error) {
     const status = Number(error?.status ?? -1);
     if ((options.allowStatuses ?? []).includes(status)) {
+      return String(error?.stdout ?? "");
+    }
+    const stderr = String(error?.stderr ?? "");
+    const httpStatus = Number(stderr.match(/HTTP\\s+(\\d+)/i)?.[1] ?? -1);
+    if ((options.allowHttpStatuses ?? []).includes(httpStatus)) {
       return String(error?.stdout ?? "");
     }
     throw error;

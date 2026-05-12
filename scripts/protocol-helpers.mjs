@@ -933,7 +933,12 @@ export function resolveLatestReviewWatermark(comments, options = {}) {
     if (expectedClaimId && parsed.claimId !== expectedClaimId) {
       continue;
     }
-    if (!latest || parsed.createdAt > latest.createdAt) {
+    const parsedCreatedAt = normalizeComparableTimestamp(parsed.createdAt);
+    if (parsedCreatedAt === null || parsedCreatedAt === "none") {
+      continue;
+    }
+    const latestCreatedAt = normalizeComparableTimestamp(latest?.createdAt ?? "none");
+    if (latestCreatedAt === null || latestCreatedAt === "none" || parsedCreatedAt > latestCreatedAt) {
       latest = parsed;
     }
   }
@@ -977,14 +982,16 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
   };
 }
 
-export function summarizeBranchReviewRequirements(branchRules = []) {
+export function summarizeBranchReviewRequirements(branchRules = [], branchProtection = {}) {
   const requiredCheckNames = new Set();
   const requiredReviewerLogins = new Set();
   const requiredReviewerTeams = new Set();
+  const requiredReviewerRequirements = [];
 
   let requiredApprovingReviewCount = 0;
   let requireCodeOwnerReview = false;
   let requiresConversationResolution = false;
+  let requiredCheckSourcePinned = false;
 
   for (const rule of branchRules) {
     if (rule?.type === "pull_request") {
@@ -998,38 +1005,62 @@ export function summarizeBranchReviewRequirements(branchRules = []) {
         || Boolean(parameters.required_review_thread_resolution);
 
       for (const reviewer of parameters.required_reviewers ?? []) {
-        const value = extractReviewerIdentity(reviewer);
-        if (!value) {
+        const requirement = extractRequiredReviewerRequirement(reviewer);
+        if (!requirement.identity) {
           continue;
         }
-        if (value.includes("/")) {
-          requiredReviewerTeams.add(value);
+        requiredReviewerRequirements.push(requirement);
+        if (requirement.identity.includes("/")) {
+          requiredReviewerTeams.add(requirement.identity);
         } else {
-          requiredReviewerLogins.add(value);
+          requiredReviewerLogins.add(requirement.identity);
         }
       }
       continue;
     }
 
     if (rule?.type === "required_status_checks") {
-      for (const name of extractRequiredCheckNames(rule.parameters ?? {})) {
+      const checkMetadata = summarizeRequiredCheckMetadata(rule.parameters ?? {});
+      requiredCheckSourcePinned = requiredCheckSourcePinned || checkMetadata.sourcePinned;
+      for (const name of checkMetadata.names) {
         requiredCheckNames.add(name);
       }
     }
+  }
+
+  const protectionReviews = branchProtection.required_pull_request_reviews ?? {};
+  requiredApprovingReviewCount = Math.max(
+    requiredApprovingReviewCount,
+    Number(protectionReviews.required_approving_review_count ?? 0) || 0,
+  );
+  requireCodeOwnerReview = requireCodeOwnerReview
+    || Boolean(protectionReviews.require_code_owner_reviews)
+    || Boolean(protectionReviews.require_code_owner_review);
+  requiresConversationResolution = requiresConversationResolution
+    || Boolean(branchProtection.required_conversation_resolution?.enabled);
+
+  const protectionCheckMetadata = summarizeRequiredCheckMetadata(
+    branchProtection.required_status_checks ?? {},
+  );
+  requiredCheckSourcePinned = requiredCheckSourcePinned || protectionCheckMetadata.sourcePinned;
+  for (const name of protectionCheckMetadata.names) {
+    requiredCheckNames.add(name);
   }
 
   return {
     requiredApprovingReviewCount,
     requireCodeOwnerReview,
     requiresConversationResolution,
+    requiredCheckSourcePinned,
     requiredReviewerLogins: [...requiredReviewerLogins].sort(),
     requiredReviewerTeams: [...requiredReviewerTeams].sort(),
+    requiredReviewerRequirements,
     requiredCheckNames: [...requiredCheckNames].sort(),
   };
 }
 
-export function summarizeRequiredChecks(checks = [], branchRules = []) {
-  const branchReviewRequirements = summarizeBranchReviewRequirements(branchRules);
+export function summarizeRequiredChecks(checks = [], branchRules = [], branchProtection = {}) {
+  const branchReviewRequirements = summarizeBranchReviewRequirements(branchRules, branchProtection);
   const requiredCheckNames = branchReviewRequirements.requiredCheckNames;
   const requiredCheckNameSet = new Set(requiredCheckNames);
   const normalizedChecks = checks.map((check) => ({
@@ -1043,9 +1074,13 @@ export function summarizeRequiredChecks(checks = [], branchRules = []) {
 
   let status = "none";
   if (requiredCheckNames.length > 0) {
+    const ciClassification = classifyCiChecks(matchedRequiredChecks);
     status = missingRequiredCheckNames.length > 0
       ? "missing"
-      : classifyCiChecks(matchedRequiredChecks).status;
+      : ciClassification.status;
+    if (status === "success" && branchReviewRequirements.requiredCheckSourcePinned) {
+      status = "unknown";
+    }
   }
 
   return {
@@ -1105,12 +1140,13 @@ export function summarizeReviewerStates(
   {
     reviewDecision = "",
     branchRules = [],
+    branchProtection = {},
     codeownersText = "",
     changedFiles = [],
     advisoryBotLogins = [],
   } = {},
 ) {
-  const branchReviewRequirements = summarizeBranchReviewRequirements(branchRules);
+  const branchReviewRequirements = summarizeBranchReviewRequirements(branchRules, branchProtection);
   const requiredReviewerLogins = new Set(branchReviewRequirements.requiredReviewerLogins);
   const advisoryBotLoginSet = new Set(normalizeTrustedMarkerLogins(advisoryBotLogins));
   const codeowners = resolveCodeownersForFiles(codeownersText, changedFiles);
@@ -1147,6 +1183,22 @@ export function summarizeReviewerStates(
   const codeownerApproved = latestByAuthor.some((review) => {
     return review.isCodeowner && review.state === "APPROVED";
   });
+  const hasExplicitCodeownerMatches = codeowners.codeownerUserLogins.length > 0
+    || codeowners.codeownerTeamSlugs.length > 0;
+  const latestByLogin = new Map(latestByAuthor.map((review) => [review.login, review]));
+  const requiredReviewerApprovalsSatisfied = branchReviewRequirements.requiredReviewerRequirements
+    .every((requirement) => {
+      if ((requirement.minimumApprovals ?? 0) <= 0) {
+        return true;
+      }
+      if (String(reviewDecision ?? "") === "APPROVED") {
+        return true;
+      }
+      if (requirement.identity.includes("/")) {
+        return false;
+      }
+      return latestByLogin.get(requirement.identity)?.state === "APPROVED";
+    });
 
   return {
     reviewDecision: String(reviewDecision ?? ""),
@@ -1161,9 +1213,17 @@ export function summarizeReviewerStates(
     latestByAuthor,
     humanApprovedCount,
     requiredApprovalsSatisfied:
-      humanApprovedCount >= branchReviewRequirements.requiredApprovingReviewCount,
+      requiredReviewerApprovalsSatisfied
+      && (
+        branchReviewRequirements.requiredApprovingReviewCount === 0
+        || humanApprovedCount >= branchReviewRequirements.requiredApprovingReviewCount
+        || String(reviewDecision ?? "") === "APPROVED"
+      ),
     codeownerApprovalSatisfied:
-      !branchReviewRequirements.requireCodeOwnerReview || codeownerApproved,
+      !branchReviewRequirements.requireCodeOwnerReview
+        || !hasExplicitCodeownerMatches
+        || codeownerApproved
+        || String(reviewDecision ?? "") === "APPROVED",
     humanChangesRequestedCount: blockingChangesRequestedLogins.length,
     blockingChangesRequestedLogins,
   };
@@ -1212,6 +1272,7 @@ export function buildPreMergeReadinessSummary(
     threads = [],
     checks = [],
     branchRules = [],
+    branchProtection = {},
     requestedReviewers = [],
     timelineEvents = [],
     claimEvents = [],
@@ -1233,7 +1294,10 @@ export function buildPreMergeReadinessSummary(
   const iddAgentLogins = normalizeTrustedMarkerLogins(options.iddAgentLogins ?? []);
   const advisoryBotLogins = normalizeTrustedMarkerLogins(options.advisoryBotLogins ?? []);
   const prAuthorLogin = String(options.prAuthorLogin ?? "").trim().toLowerCase();
-  const branchReviewRequirements = summarizeBranchReviewRequirements(branchRules);
+  const branchReviewRequirements = summarizeBranchReviewRequirements(
+    branchRules,
+    branchProtection,
+  );
   const liveSnapshot = buildActivitySnapshotSummary(
     {
       comments,
@@ -1273,11 +1337,12 @@ export function buildPreMergeReadinessSummary(
   const reviewerStates = summarizeReviewerStates(reviews, {
     reviewDecision,
     branchRules,
+    branchProtection,
     codeownersText,
     changedFiles,
     advisoryBotLogins,
   });
-  const ci = summarizeRequiredChecks(checks, branchRules);
+  const ci = summarizeRequiredChecks(checks, branchRules, branchProtection);
   const advisoryWait = buildAdvisoryWaitSummary(
     {
       prHeadSha,
@@ -1612,8 +1677,9 @@ function maxIsoTimestamp(values) {
   return sorted.at(-1) ?? null;
 }
 
-function extractRequiredCheckNames(parameters) {
+function summarizeRequiredCheckMetadata(parameters) {
   const names = new Set();
+  let sourcePinned = false;
   const rawChecks = [
     ...(parameters.required_status_checks ?? []),
     ...(parameters.required_checks ?? []),
@@ -1626,6 +1692,10 @@ function extractRequiredCheckNames(parameters) {
         names.add(rawCheck.trim());
       }
       continue;
+    }
+
+    if (rawCheck?.app_id || rawCheck?.integration_id || rawCheck?.source) {
+      sourcePinned = true;
     }
 
     for (const candidate of [
@@ -1642,15 +1712,20 @@ function extractRequiredCheckNames(parameters) {
     }
   }
 
-  return [...names].sort();
+  return {
+    names: [...names].sort(),
+    sourcePinned,
+  };
 }
 
-function extractReviewerIdentity(reviewer) {
+function extractRequiredReviewerRequirement(reviewer) {
   const candidate = typeof reviewer === "string"
     ? reviewer
     : reviewer?.login ?? reviewer?.reviewer?.login ?? reviewer?.slug ?? reviewer?.team ?? "";
-  const normalized = String(candidate ?? "").trim().replace(/^@/, "").toLowerCase();
-  return normalized;
+  return {
+    identity: String(candidate ?? "").trim().replace(/^@/, "").toLowerCase(),
+    minimumApprovals: Number(reviewer?.minimum_approvals ?? reviewer?.min_approvals ?? 1) || 0,
+  };
 }
 
 function parseCodeownersRules(codeownersText) {
