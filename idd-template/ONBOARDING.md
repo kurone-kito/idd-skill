@@ -227,6 +227,9 @@ notes, and `blocked-by` guidance, see
 
 You need the following core execution and profile artifact files in the
 target repository. Use whichever method applies to your situation.
+For `idd-skill` maintainers working on this generated file list and the
+remote-fetch examples, see
+[Template distribution maintainer reference](docs/onboarding/template-distribution.md).
 
 The issue-authoring skill is available as an optional companion artifact
 from `skills/issue-authoring/` in the idd-skill source repository. That path is
@@ -282,6 +285,7 @@ docs/reference.md
 docs/onboarding/agent-entry-and-verification.md
 docs/onboarding/placeholders.md
 docs/onboarding/policy-decisions.md
+docs/onboarding/template-distribution.md
 profiles/README.md
 profiles/human-required/README.md
 profiles/no-advisory/README.md
@@ -355,6 +359,7 @@ for FILE in \
   "docs/onboarding/agent-entry-and-verification.md" \
   "docs/onboarding/placeholders.md" \
   "docs/onboarding/policy-decisions.md" \
+  "docs/onboarding/template-distribution.md" \
   "profiles/README.md" \
   "profiles/human-required/README.md" \
   "profiles/no-advisory/README.md" \
@@ -436,6 +441,7 @@ for FILE in \
   "docs/onboarding/agent-entry-and-verification.md" \
   "docs/onboarding/placeholders.md" \
   "docs/onboarding/policy-decisions.md" \
+  "docs/onboarding/template-distribution.md" \
   "profiles/README.md" \
   "profiles/human-required/README.md" \
   "profiles/no-advisory/README.md" \

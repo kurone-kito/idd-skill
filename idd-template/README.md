@@ -118,6 +118,8 @@ docs/
   idd-helper-scripts.md              ← optional helper-script evaluation and policy
   idd-comment-minimization.md        ← post-merge comment cleanup policy and experiment
   permissions.md                     ← permission profiles and threat model
+  onboarding/
+    template-distribution.md         ← generated file-list and fetch-surface maintenance
 profiles/
   README.md                          ← profile artifact index
   human-required/README.md           ← required human review artifact
