@@ -27,7 +27,6 @@ const configuredTrustedActors = normalizeTrustedMarkerLogins([
 ]);
 const iddAgentLogins = normalizeTrustedMarkerLogins([
   viewerLogin,
-  ...configuredTrustedActors,
   ...splitCsv(args.iddAgentLogins),
 ]);
 const advisoryBotLogins = normalizeTrustedMarkerLogins(splitCsv(args.advisoryBotLogins));

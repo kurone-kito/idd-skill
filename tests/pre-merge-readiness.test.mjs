@@ -60,6 +60,17 @@ test("required check summaries block when no merge-gate policy evidence exists",
   });
 });
 
+test("classic branch protection check metadata keeps source-pinned checks conservative", () => {
+  const summary = summarizeRequiredChecks(
+    [{ name: "lint", state: "SUCCESS", completedAt: "2026-05-12T00:32:10Z" }],
+    [],
+    { required_status_checks: { checks: [{ context: "lint", app_id: 1 }] } },
+  );
+
+  assert.equal(summary.status, "unknown");
+  assert.deepEqual(summary.requiredCheckNames, ["lint"]);
+});
+
 test("CODEOWNERS patterns with slashes stay root anchored", () => {
   assert.deepEqual(
     resolveCodeownersForFiles("docs/* @org/docs\n", ["docs/file.md", "src/docs/file.md"]),
@@ -94,6 +105,60 @@ test("required reviewer rule objects stay blocking until GitHub marks approval s
 
   const approved = summarizeReviewerStates([], { branchRules, reviewDecision: "APPROVED" });
   assert.equal(approved.requiredApprovalsSatisfied, true);
+});
+
+test("required reviewer file patterns only apply when changed files match", () => {
+  const branchRules = [
+    {
+      type: "pull_request",
+      parameters: {
+        required_reviewers: [
+          {
+            reviewer: { type: "Team", id: 42 },
+            minimum_approvals: 1,
+            file_patterns: ["docs/**"],
+          },
+        ],
+      },
+    },
+  ];
+
+  const nonMatching = summarizeReviewerStates([], {
+    branchRules,
+    changedFiles: ["src/index.js"],
+    reviewDecision: "",
+  });
+  assert.equal(nonMatching.requiredApprovalsSatisfied, true);
+
+  const matching = summarizeReviewerStates([], {
+    branchRules,
+    changedFiles: ["docs/idd-workflow.md"],
+    reviewDecision: "",
+  });
+  assert.equal(matching.requiredApprovalsSatisfied, false);
+});
+
+test("reviewDecision blocks approval-count fallback when GitHub still requires review", () => {
+  const summary = summarizeReviewerStates(
+    [
+      {
+        author: { login: "reviewer" },
+        state: "APPROVED",
+        submittedAt: "2026-05-12T00:25:11Z",
+      },
+    ],
+    {
+      branchRules: [
+        {
+          type: "pull_request",
+          parameters: { required_approving_review_count: 1 },
+        },
+      ],
+      reviewDecision: "REVIEW_REQUIRED",
+    },
+  );
+
+  assert.equal(summary.requiredApprovalsSatisfied, false);
 });
 
 test("advisory bots do not block CHANGES_REQUESTED even when configured in policy", () => {

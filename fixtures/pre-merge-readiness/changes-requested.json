@@ -152,7 +152,7 @@
         }
       ],
       "humanApprovedCount": 0,
-      "requiredApprovalsSatisfied": true,
+      "requiredApprovalsSatisfied": false,
       "codeownerApprovalSatisfied": false,
       "humanChangesRequestedCount": 1,
       "blockingChangesRequestedLogins": ["owner-reviewer"]

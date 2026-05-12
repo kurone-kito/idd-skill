@@ -343,7 +343,7 @@
       "properties": {
         "status": {
           "type": "string",
-          "enum": ["none", "missing", "success", "pending", "failed", "unknown"]
+          "enum": ["missing", "success", "pending", "failed", "unknown"]
         },
         "requiredCheckCount": { "type": "number" },
         "generatedRequiredCheckCount": { "type": "number" },

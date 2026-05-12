@@ -1151,6 +1151,7 @@ export function summarizeReviewerStates(
   const advisoryBotLoginSet = new Set(normalizeTrustedMarkerLogins(advisoryBotLogins));
   const codeowners = resolveCodeownersForFiles(codeownersText, changedFiles);
   const codeownerUsers = new Set(codeowners.codeownerUserLogins);
+  const normalizedReviewDecision = String(reviewDecision ?? "");
 
   const latestByAuthor = [...indexLatestGatingReviewsByAuthor(reviews).values()]
     .map((review) => {
@@ -1188,10 +1189,18 @@ export function summarizeReviewerStates(
   const latestByLogin = new Map(latestByAuthor.map((review) => [review.login, review]));
   const requiredReviewerApprovalsSatisfied = branchReviewRequirements.requiredReviewerRequirements
     .every((requirement) => {
+      if (
+        requirement.filePatterns.length > 0
+        && !changedFiles.some((filePath) => {
+          return requirement.filePatterns.some((pattern) => matchesCodeownersPattern(pattern, filePath));
+        })
+      ) {
+        return true;
+      }
       if ((requirement.minimumApprovals ?? 0) <= 0) {
         return true;
       }
-      if (String(reviewDecision ?? "") === "APPROVED") {
+      if (normalizedReviewDecision === "APPROVED") {
         return true;
       }
       if (requirement.identity.includes("/")) {
@@ -1201,7 +1210,7 @@ export function summarizeReviewerStates(
     });
 
   return {
-    reviewDecision: String(reviewDecision ?? ""),
+    reviewDecision: normalizedReviewDecision,
     requiredApprovingReviewCount: branchReviewRequirements.requiredApprovingReviewCount,
     requireCodeOwnerReview: branchReviewRequirements.requireCodeOwnerReview,
     requiresConversationResolution: branchReviewRequirements.requiresConversationResolution,
@@ -1215,15 +1224,20 @@ export function summarizeReviewerStates(
     requiredApprovalsSatisfied:
       requiredReviewerApprovalsSatisfied
       && (
-        branchReviewRequirements.requiredApprovingReviewCount === 0
-        || humanApprovedCount >= branchReviewRequirements.requiredApprovingReviewCount
-        || String(reviewDecision ?? "") === "APPROVED"
+        normalizedReviewDecision === "APPROVED"
+        || (
+          !normalizedReviewDecision
+          && (
+            branchReviewRequirements.requiredApprovingReviewCount === 0
+            || humanApprovedCount >= branchReviewRequirements.requiredApprovingReviewCount
+          )
+        )
       ),
     codeownerApprovalSatisfied:
       !branchReviewRequirements.requireCodeOwnerReview
         || !hasExplicitCodeownerMatches
         || codeownerApproved
-        || String(reviewDecision ?? "") === "APPROVED",
+        || normalizedReviewDecision === "APPROVED",
     humanChangesRequestedCount: blockingChangesRequestedLogins.length,
     blockingChangesRequestedLogins,
   };
@@ -1683,6 +1697,7 @@ function summarizeRequiredCheckMetadata(parameters) {
   const rawChecks = [
     ...(parameters.required_status_checks ?? []),
     ...(parameters.required_checks ?? []),
+    ...(parameters.checks ?? []),
     ...(parameters.contexts ?? []),
   ];
 
@@ -1738,6 +1753,9 @@ function extractRequiredReviewerRequirement(reviewer) {
   return {
     identity: String(candidate ?? "").trim().replace(/^@/, "").toLowerCase(),
     minimumApprovals: Number(reviewer?.minimum_approvals ?? reviewer?.min_approvals ?? 1) || 0,
+    filePatterns: (reviewer?.file_patterns ?? reviewer?.filePatterns ?? [])
+      .map((pattern) => String(pattern ?? "").trim())
+      .filter(Boolean),
   };
 }
 
