@@ -110,13 +110,18 @@ test("onboarding keeps claim timing in the explicit confirmation path", () => {
 test("onboarding generated import surface includes extracted reference docs", () => {
   const onboarding = readText("idd-template/ONBOARDING.md");
   const manifest = JSON.parse(readText("audit/sync-manifest.json"));
+  const coreFilesBlockText = extractSection(
+    onboarding,
+    "<!-- audit:generated id=idd-template-core-files -->",
+    "<!-- /audit:generated -->",
+  );
 
   for (const file of [
     "docs/onboarding/placeholders.md",
     "docs/onboarding/policy-decisions.md",
   ]) {
     assert.ok(
-      onboarding.includes(file),
+      coreFilesBlockText.includes(file),
       `ONBOARDING must list ${file} in its generated import surface`,
     );
   }
