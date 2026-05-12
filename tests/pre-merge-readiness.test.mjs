@@ -570,6 +570,33 @@ test("deriveIddAgentLogins keeps prior trusted operational actors but not generi
   );
 });
 
+test("deriveIddAgentLogins excludes trusted forced-handoff marker authors", () => {
+  const forcedHandoffBody = [
+    "<!-- forced-handoff: {\"old-agent-id\":\"github-copilot-cli-old\",\"old-claim-id\":\"claim-20260512T090000Z-337-old\",\"new-agent-id\":\"github-copilot-cli-new\",\"new-claim-id\":\"claim-20260512T110000Z-337-new\",\"branch\":\"issue/337-feat-protocol-add-auditable-forced\",\"forced-by\":\"maintainer\",\"reason\":\"operator-approved-recovery\",\"timestamp\":\"2026-05-12T11:00:00Z\",\"context-scope\":\"issue-only\"} -->",
+    "",
+    "Forced handoff approved by maintainer. I verified that the current",
+    "owning session or agent is unavailable. This transfers ownership away",
+    "from claim `claim-20260512T090000Z-337-old` on branch `issue/337-feat-protocol-add-auditable-forced`.",
+    "If the prior session resumes, it must stop immediately and must not",
+    "push, comment, resolve review state, or merge until a maintainer",
+    "reassigns ownership.",
+  ].join("\n");
+
+  assert.deepEqual(
+    deriveIddAgentLogins({
+      viewerLogin: "current-agent",
+      trustedMarkerLogins: ["current-agent", "maintainer"],
+      operationalComments: [
+        {
+          author: { login: "maintainer" },
+          body: forcedHandoffBody,
+        },
+      ],
+    }),
+    ["current-agent"],
+  );
+});
+
 test("advisory wait summary keeps F2 and F3 outcomes distinct when Copilot is no longer pending", () => {
   const summary = buildAdvisoryWaitSummary(
     {

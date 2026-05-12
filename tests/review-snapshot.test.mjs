@@ -145,6 +145,29 @@ test("builds activity snapshot metrics with trusted marker filtering", () => {
   assert.equal(summary.latestPassingCiCompletedAt, "2026-05-10T10:25:00Z");
 });
 
+test("malformed forced-handoff comments remain visible activity", () => {
+  const summary = buildActivitySnapshotSummary(
+    {
+      comments: [
+        {
+          author: { login: "idd-bot" },
+          body: "<!-- forced-handoff: {} -->\n\nPlease fix this handoff marker.",
+          createdAt: "2026-05-10T10:40:00Z",
+          updatedAt: "2026-05-10T10:40:00Z",
+        },
+      ],
+      reviews: [],
+      threads: [],
+      checks: [],
+    },
+    { trustedMarkerLogins: ["idd-bot"] },
+  );
+
+  assert.equal(summary.counts.comments, 1);
+  assert.equal(summary.totalItemCount, 1);
+  assert.equal(summary.maxActivityUpdatedAt, "2026-05-10T10:40:00Z");
+});
+
 function readJson(relativePath) {
   return JSON.parse(readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8"));
 }

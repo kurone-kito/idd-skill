@@ -29,15 +29,12 @@ export function main(argv = process.argv.slice(2)) {
     throw new Error("missing required --reason <text> argument");
   }
 
-  const repo = args.repo ?? ghText(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
-  const [owner, name] = repo.split("/", 2);
+  const repoRef = args.repo ?? ghText(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
+  const { owner, name } = parseOwnerRepo(repoRef);
   const issueComments = ghJson(["api", "--paginate", `repos/${owner}/${name}/issues/${args.issueNumber}/comments`], true).flat();
   const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
   const trustedMarkerLogins = buildTrustedMarkerLogins(owner, name, viewerLogin, args.trustedMarkerLogins, issueComments);
-  const activeClaim = resolveActiveClaim(
-    issueComments.map(normalizeIssueComment),
-    (login) => trustedMarkerLogins.has(String(login ?? "").trim().toLowerCase()),
-  );
+  const activeClaim = resolveHelperActiveClaim(issueComments, trustedMarkerLogins);
 
   if (!activeClaim) {
     throw new Error(`issue #${args.issueNumber} has no active trusted claim`);
@@ -48,12 +45,12 @@ export function main(argv = process.argv.slice(2)) {
     const pr = ghJson([
       "pr",
       "view",
-      String(args.prNumber),
-      "-R",
-      repo,
-      "--json",
-      "headRefName,url",
-      "--jq",
+        String(args.prNumber),
+        "-R",
+        `${owner}/${name}`,
+        "--json",
+        "headRefName,url",
+        "--jq",
       ".",
     ]);
     const headRefName = String(pr.headRefName ?? "");
@@ -82,8 +79,8 @@ export function main(argv = process.argv.slice(2)) {
   if (args.format === "json") {
     console.log(
       JSON.stringify(
-        {
-          repository: repo,
+          {
+          repository: `${owner}/${name}`,
           issueNumber: args.issueNumber,
           activeClaim,
           payload,
@@ -96,6 +93,27 @@ export function main(argv = process.argv.slice(2)) {
   } else {
     console.log(commentBody);
   }
+}
+
+export function resolveHelperActiveClaim(issueComments, trustedMarkerLogins) {
+  const trustedSources = Array.isArray(trustedMarkerLogins)
+    ? trustedMarkerLogins
+    : trustedMarkerLogins instanceof Set
+      ? [...trustedMarkerLogins]
+      : splitCsv(trustedMarkerLogins);
+  const trustedLogins = new Set(
+    trustedSources
+      .map((login) => String(login ?? "").trim().toLowerCase())
+      .filter(Boolean),
+  );
+  return resolveActiveClaim(
+    issueComments.map(normalizeIssueComment),
+    {
+      isTrustedAuthor: (login) => trustedLogins.has(String(login ?? "").trim().toLowerCase()),
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff: (forcedBy) => trustedLogins.has(String(forcedBy ?? "").trim().toLowerCase()),
+    },
+  );
 }
 
 function parseArgs(argv) {
@@ -220,6 +238,18 @@ export function parsePositiveInteger(value, flag) {
     throw new Error(`invalid ${flag} value: ${value}`);
   }
   return Number(raw);
+}
+
+function parseOwnerRepo(value) {
+  const repo = String(value ?? "").trim();
+  const match = repo.match(/^([^/\s]+)\/([^/\s]+)$/);
+  if (!match) {
+    throw new Error(`invalid --repo value: ${value} (expected owner/name)`);
+  }
+  return {
+    owner: match[1],
+    name: match[2],
+  };
 }
 
 function ghJson(args, slurp = false) {

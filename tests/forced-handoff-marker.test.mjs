@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { currentIsoTimestamp, main, parsePositiveInteger } from "../scripts/forced-handoff-marker.mjs";
+import {
+  currentIsoTimestamp,
+  main,
+  parsePositiveInteger,
+  resolveHelperActiveClaim,
+} from "../scripts/forced-handoff-marker.mjs";
 import {
   applyClaimEvent,
   normalizeForcedHandoffPayload,
@@ -72,8 +77,12 @@ test("forced handoff rejects markers without visible consent text", () => {
 
 test("forced handoff start-prefix detection matches flexible marker spelling", () => {
   assert.equal(
-    operationalMarkerPrefixByStart("  <!--   FORCED-HANDOFF: {\"old-agent-id\":\"a\"} -->"),
+    operationalMarkerPrefixByStart(`  ${renderForcedHandoffComment(payload)}`),
     "<!-- forced-handoff:",
+  );
+  assert.equal(
+    operationalMarkerPrefixByStart("  <!--   FORCED-HANDOFF: {\"old-agent-id\":\"a\"} -->"),
+    null,
   );
 });
 
@@ -95,6 +104,77 @@ test("forced handoff helper rejects malformed positive integers", () => {
 test("forced handoff helper reports missing numeric flag values clearly", () => {
   assert.throws(() => main(["--issue"]), /missing value for --issue/);
   assert.throws(() => main(["--issue", "337", "--pr"]), /missing value for --pr/);
+});
+
+test("forced handoff helper validates --repo format before API calls", () => {
+  assert.throws(
+    () => main([
+      "--issue",
+      "337",
+      "--new-agent-id",
+      "github-copilot-cli-new",
+      "--new-claim-id",
+      "claim-20260512T110000Z-337-new",
+      "--forced-by",
+      "kurone-kito",
+      "--reason",
+      "operator-approved-recovery",
+      "--repo",
+      "invalid-repo-format",
+    ]),
+    /invalid --repo value: invalid-repo-format \(expected owner\/name\)/,
+  );
+});
+
+test("forced handoff helper replays prior handoffs when resolving the active claim", () => {
+  const trustedLogins = ["github-copilot-cli-old", "github-copilot-cli-mid", "github-copilot-cli-new", "kurone-kito"];
+  const claimBody = [
+    "<!-- claimed-by: github-copilot-cli-old claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat-protocol-add-auditable-forced -->",
+    "",
+    "_github-copilot-cli-old: issue claim - IDD automation marker. Do not edit._",
+  ].join("\n");
+  const firstHandoff = renderForcedHandoffComment({
+    ...payload,
+    newAgentId: "github-copilot-cli-mid",
+    newClaimId: "claim-20260512T110000Z-337-mid",
+  });
+  const secondHandoff = renderForcedHandoffComment({
+    ...payload,
+    oldAgentId: "github-copilot-cli-mid",
+    oldClaimId: "claim-20260512T110000Z-337-mid",
+    newAgentId: "github-copilot-cli-new",
+    newClaimId: "claim-20260512T120000Z-337-next",
+    timestamp: "2026-05-12T12:00:00Z",
+  });
+
+  const active = resolveHelperActiveClaim(
+    [
+      {
+        body: claimBody,
+        created_at: "2026-05-12T09:00:00Z",
+        user: { login: "github-copilot-cli-old" },
+      },
+      {
+        body: firstHandoff,
+        created_at: "2026-05-12T11:00:05Z",
+        user: { login: "github-copilot-cli-mid" },
+      },
+      {
+        body: secondHandoff,
+        created_at: "2026-05-12T12:00:05Z",
+        user: { login: "github-copilot-cli-new" },
+      },
+    ],
+    trustedLogins,
+  );
+
+  assert.deepEqual(active, {
+    agentId: "github-copilot-cli-new",
+    claimId: "claim-20260512T120000Z-337-next",
+    supersedes: "claim-20260512T110000Z-337-mid",
+    branch: "issue/337-feat-protocol-add-auditable-forced",
+    createdAt: "2026-05-12T12:00:05Z",
+  });
 });
 
 test("forced handoff markers are ignored by default when the feature is not enabled", () => {

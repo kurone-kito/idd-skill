@@ -41,6 +41,16 @@ const OPERATIONAL_MARKERS = [
   },
 ];
 
+const IDD_AGENT_DERIVED_MARKERS = new Set([
+  "<!-- claimed-by:",
+  "<!-- unclaimed-by:",
+  "<!-- review-watermark:",
+  "<!-- review-baseline:",
+  "advisory-wait:",
+  "advisory-wait-recovery:",
+  "<!-- advisory-wait:",
+]);
+
 const REVIEW_BOT_LOGINS = new Set([
   "coderabbitai",
   "coderabbitai[bot]",
@@ -288,14 +298,27 @@ export function parseReviewWatermarkComment(body, createdAt) {
 
 export function operationalMarkerPrefix(body) {
   const normalized = body.trimEnd();
-  return OPERATIONAL_MARKERS.find((marker) => marker.pattern.test(normalized))?.label ?? null;
+  const marker = OPERATIONAL_MARKERS.find((candidate) => candidate.pattern.test(normalized));
+  if (!marker) {
+    return null;
+  }
+  if (marker.label === "<!-- forced-handoff:" && !isValidForcedHandoffOperationalMarker(normalized)) {
+    return null;
+  }
+  return marker.label;
 }
 
 export function operationalMarkerPrefixByStart(body) {
   const normalized = body.trimStart();
-  return OPERATIONAL_MARKERS
-    .find((marker) => marker.startPattern?.test(normalized) ?? normalized.startsWith(marker.label))
-    ?.label ?? null;
+  const marker = OPERATIONAL_MARKERS
+    .find((candidate) => candidate.startPattern?.test(normalized) ?? normalized.startsWith(candidate.label));
+  if (!marker) {
+    return null;
+  }
+  if (marker.label === "<!-- forced-handoff:" && !isValidForcedHandoffOperationalMarker(normalized)) {
+    return null;
+  }
+  return marker.label;
 }
 
 export function findLiveStatusDigestComments(comments) {
@@ -872,7 +895,12 @@ export function deriveIddAgentLogins({
   for (const comment of operationalComments ?? []) {
     const authorLogin = String(comment?.author?.login ?? comment?.user?.login ?? "").trim().toLowerCase();
     const body = String(comment?.body ?? "");
-    if (!trustedLogins.has(authorLogin) || !isOperationalOrDigestComment(body)) {
+    const markerPrefix = operationalMarkerPrefix(body);
+    if (
+      !trustedLogins.has(authorLogin)
+      || !markerPrefix
+      || !IDD_AGENT_DERIVED_MARKERS.has(markerPrefix)
+    ) {
       continue;
     }
     derivedLogins.push(authorLogin);
@@ -2366,6 +2394,10 @@ function isGateAdvisoryBotLogin(login, advisoryBotLogins) {
 
 function isOperationalOrDigestComment(body) {
   return operationalMarkerPrefix(body) !== null || firstLine(body) === LIVE_STATUS_DIGEST_MARKER;
+}
+
+function isValidForcedHandoffOperationalMarker(body) {
+  return parseForcedHandoffComment(body, "") !== null;
 }
 
 function buildBodyPreview(body) {

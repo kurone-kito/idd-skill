@@ -419,6 +419,24 @@ test("protocol-helpers parseForcedHandoffComment output matches forced-handoff s
   assert.deepEqual(errors, [], `Schema/runtime drift detected:\n${errors.join("\n")}`);
 });
 
+test("forced-handoff schema rejects marker-breaking token values", () => {
+  const schema = loadJson("schemas/forced-handoff-marker.schema.json");
+  const base = loadJson("fixtures/schemas/forced-handoff-marker.valid.json");
+
+  for (const [field, value] of [
+    ["oldAgentId", "agent-->"],
+    ["oldClaimId", "claim<!--x"],
+    ["newAgentId", "new<!--x"],
+    ["newClaimId", "new-->"],
+    ["branch", "issue/337-<!--bad"],
+    ["forcedBy", "owner-->"],
+  ]) {
+    const instance = { ...base, [field]: value };
+    const errors = validate(instance, schema);
+    assert.ok(errors.length > 0, `Expected ${field}=${value} to fail schema validation`);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Claim ID pattern — accepts opaque tokens including hyphens
 // ---------------------------------------------------------------------------

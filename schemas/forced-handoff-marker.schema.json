@@ -20,27 +20,27 @@
     "oldAgentId": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^\\S+$"
+      "pattern": "^(?!.*(?:<!--|-->))\\S+$"
     },
     "oldClaimId": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^\\S+$"
+      "pattern": "^(?!.*(?:<!--|-->))\\S+$"
     },
     "newAgentId": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^\\S+$"
+      "pattern": "^(?!.*(?:<!--|-->))\\S+$"
     },
     "newClaimId": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^\\S+$"
+      "pattern": "^(?!.*(?:<!--|-->))\\S+$"
     },
     "branch": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^[^\\s>]+$"
+      "pattern": "^(?!.*(?:<!--|-->))[^\\s>]+$"
     },
     "linkedPr": {
       "type": "string",
@@ -50,7 +50,7 @@
     "forcedBy": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^\\S+$"
+      "pattern": "^(?!.*(?:<!--|-->))\\S+$"
     },
     "reason": {
       "type": "string",
