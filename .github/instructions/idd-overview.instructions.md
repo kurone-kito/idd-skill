@@ -87,9 +87,8 @@ marker being authored by a trusted actor, and the GitHub server
 
 ## Repository-local IDD policy
 
-For repository-local configuration (trusted-marker-logins,
-maintainer-approval-actors, collaborator-authored-markers, and example
-policy blocks), see `docs/customization.md`.
+Repository-local actor policy and any forced-handoff settings live in
+`docs/customization.md`.
 
 ## Claim-state parsing
 

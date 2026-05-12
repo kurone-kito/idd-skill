@@ -10,18 +10,19 @@ behavior change too.
 
 ## Customization Surfaces
 
-| Surface               | Default                                                                                                    | Where to customize                                                                                                                                                                                                                                                                                                                                                                                                                |
-| --------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Review policy         | GitHub Copilot advisory review                                                                             | Choose a profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the listed phase files for any non-default profile.                                                                                                                                                                                                                                                                                    |
-| Advisory reviewer     | Copilot wait and recovery gates                                                                            | For `human-required`, `no-advisory`, or `external-bot`, update the review-fix, pre-merge, merge, advisory-wait, snapshot, and triage files named by the selected profile.                                                                                                                                                                                                                                                         |
-| Review threads        | Agents may resolve handled review threads under the fast default                                           | Choose a thread-resolution profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the snapshot, triage, review-fix, pre-merge, and merge phase files for stricter profiles.                                                                                                                                                                                                                            |
-| Policy constants      | Distributed timing, wait, and loop defaults                                                                | Review [IDD policy constants](policy-constants.md#configuration-authority-hierarchy) before changing claim ownership timing, advisory waits, CI waits, or critique-loop guardrails. The [Configuration Authority Hierarchy](policy-constants.md#configuration-authority-hierarchy) section maps key settings to the file(s) to update. Record the selected critique-loop profile in onboarding notes before unattended operation. |
-| Merge policy          | Merge gates after CI, review, freshness, and claim checks; distributed default is `fully_autonomous_merge` | Review [Permissions and threat model](permissions.md), record the selected policy in repository docs, and keep or customize the F2.5/F3 handoff gates for non-autonomous profiles.                                                                                                                                                                                                                                                |
-| Stall recovery safety | 30-minute quiet-window evidence plus 24-hour stale-threshold ownership gate                                | Keep `idd-resume-stall.instructions.md` aligned with `idd-overview` claim rules, and customize both files together if local policy changes quiet-window or takeover timing.                                                                                                                                                                                                                                                       |
-| CI commands           | Project-specific command rows in the overview file                                                         | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                                                                                                                                                                                                                                                                        |
-| Helper runtime        | `instructions-only` unless helper support is explicitly requested during onboarding                        | Use [IDD template onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#step-1b--confirm-policy-decisions) together with [IDD helper script evaluation](idd-helper-scripts.md#import-time-selection-order). Prefer existing pnpm/npm/yarn dependencies for `package-manager`, use `vendored-node` before `ephemeral-npx`, and keep `instructions-only` for repositories without Node.js.      |
-| Issue scope           | Roadmap-first discovery                                                                                    | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues to be considered before roadmap traversal.                                                                                                                                                                                                                                       |
-| Orphan-first approval | No extra gate beyond orphan readiness checks                                                               | Keep `orphan-first-policy` as `none`, or opt in to `maintainer-approved` or `public-disabled` when public or community-submitted issues need an explicit maintainer approval layer before A0-O can select them.                                                                                                                                                                                                                   |
+| Surface                 | Default                                                                                                    | Where to customize                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Review policy           | GitHub Copilot advisory review                                                                             | Choose a profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the listed phase files for any non-default profile.                                                                                                                                                                                                                                                                                    |
+| Advisory reviewer       | Copilot wait and recovery gates                                                                            | For `human-required`, `no-advisory`, or `external-bot`, update the review-fix, pre-merge, merge, advisory-wait, snapshot, and triage files named by the selected profile.                                                                                                                                                                                                                                                         |
+| Review threads          | Agents may resolve handled review threads under the fast default                                           | Choose a thread-resolution profile in [IDD review policy profiles](idd-review-policy-profiles.md), then edit the snapshot, triage, review-fix, pre-merge, and merge phase files for stricter profiles.                                                                                                                                                                                                                            |
+| Policy constants        | Distributed timing, wait, and loop defaults                                                                | Review [IDD policy constants](policy-constants.md#configuration-authority-hierarchy) before changing claim ownership timing, advisory waits, CI waits, or critique-loop guardrails. The [Configuration Authority Hierarchy](policy-constants.md#configuration-authority-hierarchy) section maps key settings to the file(s) to update. Record the selected critique-loop profile in onboarding notes before unattended operation. |
+| Merge policy            | Merge gates after CI, review, freshness, and claim checks; distributed default is `fully_autonomous_merge` | Review [Permissions and threat model](permissions.md), record the selected policy in repository docs, and keep or customize the F2.5/F3 handoff gates for non-autonomous profiles.                                                                                                                                                                                                                                                |
+| Stall recovery safety   | 30-minute quiet-window evidence plus 24-hour stale-threshold ownership gate                                | Keep `idd-resume-stall.instructions.md` aligned with `idd-overview` claim rules, and customize both files together if local policy changes quiet-window or takeover timing.                                                                                                                                                                                                                                                       |
+| Forced handoff contract | Disabled unless the repository explicitly records a human-gated policy                                     | Keep forced handoff separate from trusted marker-author authority. Record the opt-in state, human approval authority, canonical consent text, and marker contract in the repository-local policy block here, then keep the always-loaded overview pointer aligned with those docs.                                                                                                                                                |
+| CI commands             | Project-specific command rows in the overview file                                                         | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                                                                                                                                                                                                                                                                        |
+| Helper runtime          | `instructions-only` unless helper support is explicitly requested during onboarding                        | Use [IDD template onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#step-1b--confirm-policy-decisions) together with [IDD helper script evaluation](idd-helper-scripts.md#import-time-selection-order). Prefer existing pnpm/npm/yarn dependencies for `package-manager`, use `vendored-node` before `ephemeral-npx`, and keep `instructions-only` for repositories without Node.js.      |
+| Issue scope             | Roadmap-first discovery                                                                                    | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues to be considered before roadmap traversal.                                                                                                                                                                                                                                       |
+| Orphan-first approval   | No extra gate beyond orphan readiness checks                                                               | Keep `orphan-first-policy` as `none`, or opt in to `maintainer-approved` or `public-disabled` when public or community-submitted issues need an explicit maintainer approval layer before A0-O can select them.                                                                                                                                                                                                                   |
 
 ## Helper Runtime Profile
 
@@ -418,6 +419,8 @@ This repository uses the following IDD configuration:
 - **trusted-marker-logins**: `kurone-kito`, `renovate[bot]`, `github-actions[bot]`
 - **maintainer-approval-actors**: `owners-and-maintainers-only`
 - **collaborator-authored-markers**: `false`
+- **forced-handoff**: `disabled`
+- **forced-handoff-authority**: `owners-and-maintainers-only`
 ```
 
 **trusted-marker-logins**: Comma-separated GitHub user or bot logins
@@ -455,34 +458,125 @@ collaborators for IDD marker authority. This setting directly affects
 claim parsing rules and should not be changed without understanding the
 security implications.
 
+**forced-handoff**: `disabled` or `human-gated`. The distributed default
+is `disabled`. Repositories may opt in only for a human-gated recovery
+exception when a human maintainer or operator has verified that the
+current owning session or agent is unavailable. Autopilot and unattended
+agents must never initiate forced handoff. Enabling this surface does
+not change the unattended 24-hour stale takeover rule; it adds a
+separate human-gated exception for earlier recovery when a maintainer or
+operator verifies that the owner is unavailable.
+
+The 12-hour heartbeat remains the normal owner-refresh cadence. A missed
+heartbeat may inform a human investigation, but it is not transfer
+permission by itself and must not be treated as an automatic reclaim or
+takeover threshold.
+
+**forced-handoff-authority**: Human approval authority for forced
+handoff. Record this separately from `trusted-marker-logins`. Trusted
+marker actors may author or relay machine-readable markers once a future
+implementation exists, but they do not authorize forced handoff on
+their own. Prefer `owners-and-maintainers-only`; if a repository grants
+a broader or more specific operator set, record the exact human actors
+or role rule explicitly in the same policy block.
+
+When a repository sets `forced-handoff: human-gated`, also record the
+canonical consent text and marker contract below in a local runbook or
+policy note. Do not paraphrase them, because future helper or template
+generation should be able to reuse the exact wording.
+
+### Forced handoff consent and marker contract
+
+Forced handoff is distinct from the normal F2.5 merge-policy handoff. It
+is a recovery exception for a stuck non-stale claim, not a shortcut
+around the normal merge or stale-takeover flow.
+
+Required consent text for any future human approval note:
+
+For `issue-only` context:
+
+```text
+Forced handoff approved by {human-actor}. I verified that the current
+owning session or agent is unavailable. This transfers ownership away
+from claim `{old-claim-id}` on branch `{branch}`.
+If the prior session resumes, it must stop immediately and must not
+push, comment, resolve review state, or merge until a maintainer
+reassigns ownership.
+```
+
+For `issue-plus-pr` context:
+
+```text
+Forced handoff approved by {human-actor}. I verified that the current
+owning session or agent is unavailable. This transfers ownership away
+from claim `{old-claim-id}` on branch `{branch}` for PR #{pr-number}.
+If the prior session resumes, it must stop immediately and must not
+push, comment, resolve review state, or merge until a maintainer
+reassigns ownership.
+```
+
+Future protocol work may use a dedicated marker or marker pair, but the
+contract must record at least these fields:
+
+| Field           | Requirement | Meaning                                                            |
+| --------------- | ----------- | ------------------------------------------------------------------ |
+| `old-agent-id`  | Required    | The agent ID that held the superseded claim                        |
+| `old-claim-id`  | Required    | The exact active claim being taken over                            |
+| `new-agent-id`  | Required    | The agent or session identifier that receives ownership            |
+| `new-claim-id`  | Required    | The new claim token that becomes authoritative after the handoff   |
+| `branch`        | Required    | The inherited work branch                                          |
+| `linked-pr`     | Conditional | The PR number or URL when PR context is part of the handoff        |
+| `forced-by`     | Required    | The approving human actor                                          |
+| `reason`        | Required    | Why the prior session is considered unavailable                    |
+| `timestamp`     | Required    | The GitHub server timestamp of the approval                        |
+| `context-scope` | Required    | Whether the handoff covers `issue-only` or `issue-plus-pr` context |
+
+The future marker must stay distinct from normal `claimed-by` and
+`unclaimed-by` events so older parsers do not mistake it for a standard
+release or claim.
+
+Forced handoff must not delete, hide, minimize, or otherwise unmark
+open-PR operational markers such as `claimed-by`, `review-watermark`,
+`review-baseline`, or `advisory-wait`. The successor session must rerun
+the relevant freshness and review gates instead of mutating away the old
+evidence.
+
 ### Example configurations
 
 **Small team, high trust**:
 
-```yaml
+```text
 - trusted-marker-logins: `kurone-kito`, `chatgpt-codex-connector[bot]`
 - maintainer-approval-actors: `owners-and-maintainers-only`
 - collaborator-authored-markers: false
+- forced-handoff: disabled
+- forced-handoff-authority: `owners-and-maintainers-only`
 ```
 
 **OSS with external contributors**:
 
-```yaml
+```text
 - trusted-marker-logins: `github-actions[bot]`, `copilot-automation-bot`
 - maintainer-approval-actors: `owners-and-maintainers-only`
 - collaborator-authored-markers: false
+- forced-handoff: disabled
+- forced-handoff-authority: `owners-and-maintainers-only`
 ```
 
 **Team with trusted collaborators**:
 
-```yaml
+```text
 - trusted-marker-logins: `team-automation`, `renovate[bot]`
 - maintainer-approval-actors: `all-write-permission-actors`
 - collaborator-authored-markers: true
+- forced-handoff: disabled
+- forced-handoff-authority: `owners-and-maintainers-only`
 ```
 
 For further details, see:
 
 - `idd-claim.instructions.md` for how `trusted-marker-logins` and
   `collaborator-authored-markers` affect claim validation and parsing.
+- `idd-overview.instructions.md` for the always-loaded pointer that
+  keeps the forced-handoff policy discoverable to agents.
 - `docs/policy-constants.md` for distributed policy defaults.
