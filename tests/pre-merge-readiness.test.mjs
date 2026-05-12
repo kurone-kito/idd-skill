@@ -45,6 +45,10 @@ test("pre-merge readiness schema keeps UTC timestamps strict", () => {
   const invalidCommentTime = JSON.parse(JSON.stringify(unrepliedSummary));
   invalidCommentTime.unrepliedComments.items[0].createdAt = "2026-05-12T00:14:04+09:00";
   assert.ok(validate(invalidCommentTime, readinessSchema).length > 0);
+
+  const invalidReviewerTime = JSON.parse(JSON.stringify(cleanSummary));
+  invalidReviewerTime.reviewerStates.latestByAuthor[0].submittedAt = "2026-05-12T00:14:04+09:00";
+  assert.ok(validate(invalidReviewerTime, readinessSchema).length > 0);
 });
 
 test("required check summaries block when no merge-gate policy evidence exists", () => {

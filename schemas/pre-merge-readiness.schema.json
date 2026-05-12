@@ -267,7 +267,11 @@
             "properties": {
               "login": { "type": "string", "minLength": 1 },
               "state": { "type": "string", "minLength": 1 },
-              "submittedAt": { "type": "string", "format": "date-time" },
+              "submittedAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+              },
               "isHuman": { "type": "boolean" },
               "isAdvisoryBot": { "type": "boolean" },
               "isCodeowner": { "type": "boolean" },
