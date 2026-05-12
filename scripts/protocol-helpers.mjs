@@ -2454,7 +2454,7 @@ function isOperationalOrDigestComment(body) {
 
 function isOperationalOrDigestCommentForGate(body, authorLogin, trustedMarkerLogins) {
   const marker = operationalMarkerPrefix(body);
-  if (marker === "<!-- forced-handoff:" && trustedMarkerLogins.size > 0) {
+  if (marker === "<!-- forced-handoff:") {
     return trustedMarkerLogins.has(String(authorLogin ?? "").trim().toLowerCase());
   }
   return marker !== null || firstLine(body) === LIVE_STATUS_DIGEST_MARKER;

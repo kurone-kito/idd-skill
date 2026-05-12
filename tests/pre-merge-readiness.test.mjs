@@ -591,6 +591,27 @@ test("regular comment gate ignores trusted forced-handoff operational markers", 
   assert.equal(summary.count, 0);
 });
 
+test("regular comment gate keeps forced-handoff markers visible without explicit trust", () => {
+  const summary = summarizeRegularCommentsForGate(
+    [
+      {
+        id: 1,
+        createdAt: "2026-05-12T00:00:00Z",
+        body: [
+          "<!-- forced-handoff: {\"old-agent-id\":\"github-copilot-cli-old\",\"old-claim-id\":\"claim-20260512T090000Z-337-old\",\"new-agent-id\":\"github-copilot-cli-new\",\"new-claim-id\":\"claim-20260512T110000Z-337-new\",\"branch\":\"issue/337-feat-protocol-add-auditable-forced\",\"forced-by\":\"maintainer\",\"reason\":\"operator-approved-recovery\",\"timestamp\":\"2026-05-12T11:00:00Z\",\"context-scope\":\"issue-only\"} -->",
+          "",
+          "Forced handoff approved by maintainer.",
+        ].join("\n"),
+        author: { login: "maintainer" },
+      },
+    ],
+    {},
+  );
+
+  assert.equal(summary.count, 1);
+  assert.deepEqual(summary.items.map((item) => item.id), ["1"]);
+});
+
 test("deriveIddAgentLogins keeps prior trusted operational actors but not generic maintainer comments", () => {
   assert.deepEqual(
     deriveIddAgentLogins({
