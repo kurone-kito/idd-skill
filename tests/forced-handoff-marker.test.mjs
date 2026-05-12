@@ -5,6 +5,7 @@ import { currentIsoTimestamp, parsePositiveInteger } from "../scripts/forced-han
 import {
   applyClaimEvent,
   normalizeForcedHandoffPayload,
+  operationalMarkerPrefixByStart,
   parseForcedHandoffComment,
   renderForcedHandoffComment,
 } from "../scripts/protocol-helpers.mjs";
@@ -56,6 +57,13 @@ test("forced handoff parsing accepts flexible marker spacing and casing", () => 
     ...payload,
     createdAt: "2026-05-12T11:00:05Z",
   });
+});
+
+test("forced handoff start-prefix detection matches flexible marker spelling", () => {
+  assert.equal(
+    operationalMarkerPrefixByStart("  <!--   FORCED-HANDOFF: {\"old-agent-id\":\"a\"} -->"),
+    "<!-- forced-handoff:",
+  );
 });
 
 test("forced handoff normalization omits createdAt when comment metadata is unavailable", () => {
@@ -218,6 +226,32 @@ test("forced handoff rejects marker-breaking token values", () => {
     }),
     /invalid forced handoff payload/,
   );
+});
+
+test("forced handoff rejects invalid linked PR tokens", () => {
+  for (const linkedPr of ["0", "-1", "1.5", "not-a-pr", "ftp://example.test/pr/341", "<!--hidden"]) {
+    assert.throws(
+      () => renderForcedHandoffComment({
+        ...payload,
+        linkedPr,
+      }),
+      /invalid forced handoff payload/,
+      linkedPr,
+    );
+  }
+});
+
+test("forced handoff accepts PR URLs in linked PR scope", () => {
+  const body = renderForcedHandoffComment({
+    ...payload,
+    linkedPr: "https://github.com/kurone-kito/idd-skill/pull/359",
+  });
+
+  assert.deepEqual(parseForcedHandoffComment(body, "2026-05-12T11:00:05Z"), {
+    ...payload,
+    linkedPr: "https://github.com/kurone-kito/idd-skill/pull/359",
+    createdAt: "2026-05-12T11:00:05Z",
+  });
 });
 
 test("forced handoff rejects conflicting alias keys", () => {

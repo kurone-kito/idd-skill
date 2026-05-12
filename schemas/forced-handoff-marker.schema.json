@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://kurone-kito.github.io/idd-skill/schemas/forced-handoff-marker.schema.json",
-  "title": "IDD Forced Handoff Marker Payload",
-  "description": "Structured forced-handoff marker payload parsed from forced-handoff comments.",
+  "title": "IDD Forced Handoff Parsed Payload",
+  "description": "Normalized camelCase payload returned by parseForcedHandoffComment; raw on-wire marker JSON may use hyphen-case aliases that the parser resolves before schema validation.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -45,7 +45,7 @@
     "linkedPr": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^\\S+$"
+      "pattern": "^(?:[1-9]\\d*|https?://[^\\s<>\"]+)$"
     },
     "forcedBy": {
       "type": "string",

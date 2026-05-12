@@ -37,6 +37,7 @@ const OPERATIONAL_MARKERS = [
   {
     label: "<!-- forced-handoff:",
     pattern: /^<!--\s*forced-handoff:\s*\{[\s\S]*\}\s*-->[\s\S]*$/i,
+    startPattern: /^<!--\s*forced-handoff:/i,
   },
 ];
 
@@ -62,8 +63,8 @@ const UNSAFE_TEXT_RULES = [
   },
 ];
 const AMD_MARKER_PATTERN = /^\*\*Awaiting maintainer decision\*\*/i;
-const FORCED_HANDOFF_MARKER_PREFIX = "<!-- forced-handoff:";
 const FORCED_HANDOFF_CONTEXT_SCOPES = new Set(["issue-only", "issue-plus-pr"]);
+const FORCED_HANDOFF_LINKED_PR_PATTERN = /^(?:[1-9]\d*|https?:\/\/[^\s<>"]+)$/i;
 
 export function parseClaimComment(body, createdAt) {
   const match = body.trimEnd().match(
@@ -291,8 +292,8 @@ export function operationalMarkerPrefix(body) {
 export function operationalMarkerPrefixByStart(body) {
   const normalized = body.trimStart();
   return OPERATIONAL_MARKERS
-    .map((marker) => marker.label)
-    .find((prefix) => normalized.startsWith(prefix)) ?? null;
+    .find((marker) => marker.startPattern?.test(normalized) ?? normalized.startsWith(marker.label))
+    ?.label ?? null;
 }
 
 export function findLiveStatusDigestComments(comments) {
@@ -1993,17 +1994,11 @@ function normalizeContextScope(value) {
 }
 
 function normalizeLinkedPr(value) {
-  if (value === undefined || value === null) {
+  const token = normalizeNonWhitespaceToken(value);
+  if (!token || !FORCED_HANDOFF_LINKED_PR_PATTERN.test(token)) {
     return "";
   }
-  if (typeof value !== "string") {
-    return "";
-  }
-  const trimmed = value.trim();
-  if (!trimmed || /\s/.test(trimmed) || trimmed.includes("-->")) {
-    return "";
-  }
-  return trimmed;
+  return token;
 }
 
 export function classifyResumeRoutingCase(input, options = {}) {
