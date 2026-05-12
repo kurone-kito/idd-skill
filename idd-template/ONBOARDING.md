@@ -711,9 +711,13 @@ This repository uses the following IDD policies:
   `instructions-only`.
 - Existing pnpm/npm/yarn repositories should reuse their package-manager
   dependencies instead of ad hoc `npx`.
-- Run `npx --yes --package github:kurone-kito/idd-skill idd-helper-bundle-manifest --profile <selected-profile>` from the
-  target repository root to print the exact dependency, script, vendored
-  file, or one-shot command surface for that choice.
+- Run this command from the target repository root to print the exact
+  dependency, script, vendored file, or one-shot command surface for
+  the selected profile:
+
+      npx --yes --package github:kurone-kito/idd-skill \
+        idd-helper-bundle-manifest --profile <selected-profile>
+
 - If the repository chooses `package-manager` and auto-detection does not
   resolve npm, pnpm, or yarn, pass `--package-manager <npm|pnpm|yarn>`
   explicitly to the manifest helper.
