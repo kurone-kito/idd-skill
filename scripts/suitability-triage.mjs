@@ -12,7 +12,7 @@ const CHECKS = [
   {
     id: "repository_fit",
     name: "Repository Fit",
-    failureOutcome: "out_of_scope",
+    failureOutcome: "out-of-scope",
     evaluate: checkRepositoryFit,
   },
   {
@@ -36,19 +36,19 @@ const CHECKS = [
   {
     id: "actionability",
     name: "Actionability",
-    failureOutcome: "needs_decision",
+    failureOutcome: "needs-decision",
     evaluate: checkActionability,
   },
   {
     id: "autonomy",
     name: "Autonomy",
-    failureOutcome: "blocked_by_human",
+    failureOutcome: "blocked-by-human",
     evaluate: checkAutonomy,
   },
   {
     id: "verifiability",
     name: "Verifiability",
-    failureOutcome: "needs_decision",
+    failureOutcome: "needs-decision",
     evaluate: checkVerifiability,
   },
 ];
@@ -66,6 +66,10 @@ const UNSAFE_PATTERNS = [
   /\bwget\b[^\n|]*\|\s*(?:sh|bash)\b/i,
   /\beval\s*\(/i,
 ];
+
+const EXECUTION_DIRECTIVE_PATTERN = /\b(run|execute|paste|install|invoke)\b[\s\S]{0,80}\b(command|script|snippet)\b/i;
+const EXTERNAL_COORDINATION_PATTERN = /\b(cross-repo|cross repo|external repo|another repo|upstream change|maintainer of)\b/i;
+const OUTCOME_SIGNAL_PATTERN = /\b(pass|fail|result|output|contains|include|present|required|objective|measurable|deterministic)\b/i;
 
 if (isCliExecution()) {
   runCli();
@@ -128,7 +132,7 @@ export function checkRepositoryFit(context) {
     }
     match = regex.exec(body);
   }
-  if (crossRepoLinks.length > 0) {
+  if (crossRepoLinks.length > 0 && EXTERNAL_COORDINATION_PATTERN.test(body)) {
     return {
       pass: false,
       evidence: `Cross-repository references detected: ${crossRepoLinks.join(", ")}`,
@@ -137,7 +141,9 @@ export function checkRepositoryFit(context) {
 
   return {
     pass: true,
-    evidence: "No out-of-repository scope signals detected.",
+    evidence: crossRepoLinks.length > 0
+      ? "Cross-repository links appear contextual; no explicit external coordination signal detected."
+      : "No out-of-repository scope signals detected.",
   };
 }
 
@@ -192,6 +198,12 @@ export function checkTrustSafety(context) {
 
   const matchedUnsafe = UNSAFE_PATTERNS.find((pattern) => pattern.test(corpus));
   if (matchedUnsafe) {
+    if (!EXECUTION_DIRECTIVE_PATTERN.test(corpus)) {
+      return {
+        pass: true,
+        evidence: "Unsafe command string appears as context only; no execution directive detected.",
+      };
+    }
     return {
       pass: false,
       evidence: `Unsafe command execution pattern detected: ${matchedUnsafe}`,
@@ -240,12 +252,11 @@ export function checkDuplicateOrSuperseded(context) {
 export function checkActionability(context) {
   const { issue } = context;
   const body = issue.body;
-  const hasScope = /\bScope\b|\bPurpose\b/i.test(body);
   const hasAcceptance = /\bAcceptance Criteria\b|\bOutput\b|\bDeliverables\b/i.test(body);
   const hasChecklist = /^\s*[-*]\s+\[[ xX]\]/m.test(body);
   const hasSteps = /^\s*\d+\.\s+/m.test(body);
 
-  if (hasScope && (hasAcceptance || hasChecklist || hasSteps)) {
+  if (hasAcceptance || hasChecklist || hasSteps) {
     return {
       pass: true,
       evidence: "Issue defines actionable scope and verifiable delivery details.",
@@ -288,9 +299,11 @@ export function checkAutonomy(context) {
 export function checkVerifiability(context) {
   const { issue } = context;
   const body = issue.body;
-  const hasObjectiveSignals =
-    /\btests?\b|\bverification\b|\bvalidate\b|\blint\b|\bci\b/i.test(body)
-    && (/\bacceptance criteria\b|\bpass\b|\bcoverage\b|\boutput\b/i.test(body));
+  const hasVerificationChannel = /\btests?\b|\bverification\b|\bvalidate\b|\blint\b|\bci\b/i.test(body);
+  const hasObjectiveCriteria = /\bacceptance criteria\b|\bcoverage\b|\boutput\b/i.test(body)
+    || (/^\s*\d+\.\s+/m.test(body) && OUTCOME_SIGNAL_PATTERN.test(body))
+    || (/^\s*[-*]\s+\[[ xX]\]/m.test(body) && OUTCOME_SIGNAL_PATTERN.test(body));
+  const hasObjectiveSignals = hasVerificationChannel || hasObjectiveCriteria;
 
   if (!hasObjectiveSignals) {
     return {
@@ -313,6 +326,10 @@ function runCli() {
   }
   if (!Number.isInteger(args.issue) || args.issue <= 0) {
     throw new Error("--issue is required and must be a positive integer");
+  }
+  if (args.token) {
+    process.env.GH_TOKEN = args.token;
+    process.env.GITHUB_TOKEN = args.token;
   }
 
   const owner = args.owner || ghText(["repo", "view", "--json", "owner", "--jq", ".owner.login"]);
@@ -352,6 +369,7 @@ function runCli() {
 function parseArgs(argv) {
   const parsed = {
     issue: null,
+    token: "",
     owner: "",
     repo: "",
     verbose: false,
@@ -368,6 +386,11 @@ function parseArgs(argv) {
     }
     if (token === "--owner") {
       parsed.owner = value ?? "";
+      index += 1;
+      continue;
+    }
+    if (token === "--token") {
+      parsed.token = value ?? "";
       index += 1;
       continue;
     }
@@ -392,14 +415,14 @@ function parseArgs(argv) {
 
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/suitability-triage.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--verbose]
+  node scripts/suitability-triage.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--verbose]
 
 Output schema:
 {
   "repository": {"owner": "...", "repo": "..."},
   "issue": {"number": 392, "title": "...", "state": "OPEN", "url": "..."},
   "passed": true,
-  "outcome": "pass|unclear|needs_decision|blocked_by_human|duplicate|out_of_scope|invalid",
+  "outcome": "pass|unclear|needs-decision|blocked-by-human|duplicate|out-of-scope|invalid",
   "failedCheck": "repository_fit|...|null",
   "checks": [{"id":"repository_fit","name":"Repository Fit","result":"pass|fail","evidence":"..."}]
 }
@@ -447,7 +470,7 @@ function normalizeLabels(labels) {
   }
   return labels
     .map((label) => (typeof label === "string" ? label : label?.name ?? ""))
-    .map((label) => label.trim())
+    .map((label) => label.trim().toLowerCase())
     .filter(Boolean);
 }
 
@@ -465,7 +488,7 @@ function fetchIssue(repoRef, issueNumber) {
 
 function fetchDuplicateCandidates(repoRef, issue) {
   const escapedTitle = issue.title.replaceAll("\"", "\\\"");
-  const query = `repo:${repoRef} is:issue in:title "${escapedTitle}"`;
+  const query = `repo:${repoRef} in:title "${escapedTitle}"`;
   const payload = ghJson([
     "api",
     `search/issues?q=${encodeURIComponent(query)}&per_page=50`,

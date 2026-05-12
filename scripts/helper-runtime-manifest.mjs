@@ -89,6 +89,14 @@ const HELPER_COMMANDS = [
     vendoredCommand: "node scripts/discover-orphan-filter.mjs",
     description: "Classify open issues into orphan candidates and filtered buckets.",
   },
+  {
+    id: "suitability-triage",
+    scriptName: "idd:suitability-triage",
+    binName: "idd-suitability-triage",
+    entryPath: "scripts/suitability-triage.mjs",
+    vendoredCommand: "node scripts/suitability-triage.mjs",
+    description: "Evaluate A4.5 suitability checks and map deterministic outcomes.",
+  },
 ];
 
 if (isMainModule(import.meta.url)) {
