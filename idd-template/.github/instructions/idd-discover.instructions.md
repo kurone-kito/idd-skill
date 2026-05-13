@@ -437,8 +437,9 @@ Before selecting from the surviving viable issues, perform an
 
    - **If all top N are claimed**: the scan set is fully saturated with
      concurrent work. Proceed to **Step 2** with the **next batch**: scan
-     candidates 11–20, then 21–30, and so on, until an unclaimed candidate
-     is found or the viable candidate set is exhausted.
+     candidates `N+1`–`2N`, then `2N+1`–`3N`, and so on, until an
+     unclaimed candidate is found or the viable candidate set is
+     exhausted.
 
    - **If the entire viable candidate set is exhausted** (all issues up to the
      highest viable candidate are claimed): report that all viable issues are

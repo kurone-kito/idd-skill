@@ -86,7 +86,9 @@ Immediately before posting takeover:
    cleanup behavior.
 6. If takeover is still eligible, use A5 race-safe claim verification
    (`idd-claim.instructions.md`) for the upcoming takeover post-and-
-   verify sequence: wait 5–10 seconds after posting, re-parse
+   verify sequence: wait for the configured settle delay from
+   `.github/idd/config.json` `claim.verifySettleDelay`
+   (distributed default: `PT5S`) after posting, re-parse
    chronologically, apply same-second lexicographic `{claim-id}`
    tie-break, and reject later trusted competing `claimed-by` markers
    with different `{claim-id}` values.

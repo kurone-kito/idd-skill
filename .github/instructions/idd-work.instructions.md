@@ -117,7 +117,8 @@ or commits.
 `idd-pr-submit.instructions.md`.
 
 **Skip condition C4**: if Accept count is zero, or if the loop has run
-more than 3 times and all remaining Accepts are severity Low (minor
+more than `critiqueLoop.cPhaseLowSeveritySkipAfter` times (distributed
+default: `3`) and all remaining Accepts are severity Low (minor
 improvements unrelated to PR intent), skip to
 `idd-pr-submit.instructions.md`.
 
