@@ -18,7 +18,9 @@ Use two stable phases:
 1. **Intake and Clarification** — inspect relevant context, identify
    ambiguity, run a secondary critique or explicit self-critique, and
    ask only the questions that block safe issue drafting. Keep
-   clarification bounded; the default maximum is 3 rounds.
+   clarification bounded; use the repository-local
+   `issueAuthoring.maxClarificationRounds` value when available,
+   otherwise default to 3 rounds.
 2. **Decompose and Draft** — restate the request in implementation
    terms, split it into atomic tasks, classify readiness, reuse existing
    issues when safe, and draft the smallest issue shape that preserves

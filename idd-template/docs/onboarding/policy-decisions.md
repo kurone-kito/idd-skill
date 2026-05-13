@@ -234,13 +234,20 @@ This repository uses the following IDD policies:
 - **`maintainer-approval-actors` policy**:
   `{owners-and-maintainers-only | all-write-permission-actors}`
 - **Approval signals**:
-  `{idd:ready label | standalone IDD ready comment | both}`
+  `{configured ready label | standalone IDD ready comment | both}`
+- **`approvalSignals.readyLabelName`**:
+  `{idd:ready | custom ready label}`
+- **`approvalSignals.labelFreshnessMode`**:
+  `{presence-only | event-freshness}`
 - **Missing-approval behavior**:
   `{explicit-target stop-before-claim + discovery approval-needed fallback bucket}`
 
 ### Issue-Authoring Companion
 
 **Status**: `{installed | not installed}`
+
+- **`issueAuthoring.maxClarificationRounds`**:
+  `{3 | custom finite bound}`
 ```
 
 When the repository uses a non-default merge, review, or thread policy,

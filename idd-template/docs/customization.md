@@ -349,11 +349,12 @@ When `issue-scope` is `orphan-first`, keep `orphan-first-policy` as
 `none` to preserve the distributed default. Public or community-facing
 repositories should consider an explicit opt-in gate:
 
-- `maintainer-approved`: A0-O keeps only issues with the `idd:ready`
-  label reserved to maintainer approval actors, an issue author who is a
-  repository owner or collaborator with Write, Maintain, or Admin
-  permission, or a fresh standalone `IDD ready` comment from a
-  maintainer approval actor.
+- `maintainer-approved`: A0-O keeps only issues with the configured
+  ready label from `approvalSignals.readyLabelName` (default:
+  `idd:ready`) reserved to maintainer approval actors. Maintainer-approved
+  selection may also use an issue author who is a repository owner or
+  collaborator with Write, Maintain, or Admin permission, or a fresh
+  standalone `IDD ready` comment from a maintainer approval actor.
 - `public-disabled`: public repositories skip A0-O and fall back to
   roadmap discovery; private and internal repositories keep the default
   orphan-first behavior.
@@ -409,17 +410,49 @@ Otherwise the issue needs a fresh explicit approval signal from a
 maintainer approval actor before unattended work can start. Recommended
 signals are:
 
-- the reserved `idd:ready` label, restricted to maintainer approval
-  actors
+- the configured ready label from `approvalSignals.readyLabelName`
+  (default: `idd:ready`), restricted to maintainer approval actors
 - a standalone `IDD ready` comment from a maintainer approval actor
 
 Treat standalone `IDD ready` comments as fresh only when they are newer
 than the latest substantive issue title/body edit and any generated-plan
-update. The distributed gate accepts the reserved `idd:ready` label by
-presence alone. If a repository wants label-event freshness or a
-different approval label name, customize the discover/claim instruction
-files in the same change instead of documenting behavior the runtime
-does not implement.
+update. Label freshness is configured separately through
+`approvalSignals.labelFreshnessMode`:
+
+- `presence-only` (default): label presence is sufficient after the
+  label name matches `approvalSignals.readyLabelName`
+- `event-freshness`: the latest matching `labeled` timeline event for
+  the configured ready label must be newer than the latest substantive
+  issue title/body edit and any generated-plan update
+
+When `.github/idd/config.json` is present, repositories can record the
+approval-signal and issue-authoring knobs directly:
+
+```json
+{
+  "approvalSignals": {
+    "readyLabelName": "maintainer:ready",
+    "labelFreshnessMode": "event-freshness"
+  },
+  "issueAuthoring": {
+    "maxClarificationRounds": 5
+  }
+}
+```
+
+Migration notes:
+
+- omit `approvalSignals.readyLabelName`,
+  `approvalSignals.labelFreshnessMode`, and
+  `issueAuthoring.maxClarificationRounds` to keep the distributed
+  defaults (`idd:ready`, `presence-only`, and 3 clarification rounds)
+- when changing `readyLabelName`, update onboarding notes, label
+  automation, and any repository guidance that still mentions the old
+  label explicitly
+- when enabling `event-freshness`, expect maintainers to re-apply the
+  ready label after substantive issue edits or generated-plan updates
+- when increasing `issueAuthoring.maxClarificationRounds`, keep the
+  bound finite so issue drafting still converges instead of looping
 
 Keep this gate distinct from orphan-first policy.
 `orphan-first-policy: maintainer-approved` applies only to orphan issue
@@ -469,7 +502,8 @@ When confidence is low, keep the issue open and route via a concise
 comment. "Uncertain means open" is the safe default, and selection
 continues with the next candidate unless the outcome is `invalid`.
 
-`idd:ready` is the distributed approval label, not an operational
+The configured ready label from `approvalSignals.readyLabelName`
+(default: `idd:ready`) is an approval signal, not an operational
 marker. Restrict who may apply it to maintainers or trusted approval
 actors, and do not treat it as interchangeable with trusted marker
 actors used for `claimed-by`, `unclaimed-by`, or review
@@ -667,8 +701,9 @@ authority.
 
 When the issue-author approval gate stays enabled, issue authors are
 self-authorizing only when they satisfy this policy. Everyone else needs
-an explicit approval signal such as `idd:ready` or a fresh standalone
-`IDD ready` comment before unattended work may start.
+an explicit approval signal such as the configured ready label from
+`approvalSignals.readyLabelName` (default: `idd:ready`) or a fresh
+standalone `IDD ready` comment before unattended work may start.
 
 **issue-author-approval-gate**: `enabled-by-default` or `opted-out`.
 Keep the distributed default whenever the repository wants unattended

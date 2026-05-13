@@ -53,9 +53,11 @@ In this phase, the agent:
 
 The critique pass is agent-neutral: use a subagent or rubber-duck
 reviewer when available, otherwise run an explicit self-critique
-locally. Clarification must be bounded; the default maximum is 3 rounds.
-If safe drafting is still impossible after that, stop and report the
-remaining blockers instead of looping indefinitely.
+locally. Clarification must be bounded; use the repository-local
+`issueAuthoring.maxClarificationRounds` value when available,
+otherwise default to 3 rounds. If safe drafting is still impossible
+after that, stop and report the remaining blockers instead of looping
+indefinitely.
 
 ### 2. Decompose and Draft
 
@@ -162,12 +164,14 @@ When the repository keeps the broader issue-author approval gate,
 surface the same post-publication approval step for orphan issues,
 roadmaps, and sub-issues whenever the issue author is not
 self-authorizing under the repository's
-`maintainer-approval-actors` policy. The distributed `idd:ready` label
-is accepted by presence, while standalone `IDD ready` comments from a
-maintainer approval actor must stay fresh against the latest issue
-content and generated-plan update (or an equivalent draft-stability
-signal). Until that approval condition is satisfied, route the draft to
-the
+`maintainer-approval-actors` policy. The configured ready label from
+`approvalSignals.readyLabelName` (default: `idd:ready`) is accepted
+according to `approvalSignals.labelFreshnessMode` (`presence-only` by
+default, optional `event-freshness`), while standalone `IDD ready`
+comments from a maintainer approval actor must stay fresh against the
+latest issue content and generated-plan update (or an equivalent
+draft-stability signal). Until that approval condition is satisfied,
+route the draft to the
 approval-needed fallback bucket instead of the normal ready-to-start
 set.
 

@@ -115,8 +115,15 @@ Apply the configured policy before passing A0-O candidates to A3.5:
 - `none` (the default): apply no extra orphan-first approval gate.
 - `maintainer-approved`: keep only candidates that have at least one
   current maintainer approval signal:
-  - the `idd:ready` label, only when repository policy reserves that
-    label to maintainer approval actors;
+  - the configured ready label from `approvalSignals.readyLabelName`
+    (default: `idd:ready`), only when repository policy reserves that
+    label to maintainer approval actors. When
+    `approvalSignals.labelFreshnessMode` is `event-freshness`, the
+    latest matching `labeled` timeline event must be newer than the
+    latest issue title/body edit and any generated-plan update. When the
+    mode is `presence-only` (default), label presence is sufficient. If
+    freshness cannot be determined, require a fresh approval comment or
+    a re-applied ready label;
   - an issue author who is a repository owner or collaborator permitted
     by the current maintainer-approval actor policy, verified with the
     collaborator permission API; do not treat organization `MEMBER`
@@ -340,8 +347,13 @@ least one of the following is true:
 
 - the issue author is self-authorized under the current
   maintainer-approval actor policy;
-- the issue has the reserved `idd:ready` label, when repository policy
-  reserves that label to maintainer approval actors;
+- the issue has the configured ready label from
+  `approvalSignals.readyLabelName` (default: `idd:ready`), when
+  repository policy reserves that label to maintainer approval actors.
+  When `approvalSignals.labelFreshnessMode` is `event-freshness`, the
+  latest matching `labeled` timeline event must be newer than the
+  latest issue title/body edit and any generated-plan update. When the
+  mode is `presence-only` (default), label presence is sufficient;
 - the issue has a visible approval comment from a maintainer approval
   actor whose trimmed body is exactly `IDD ready` or contains
   `IDD ready` as a standalone line, and that approval is newer than the
