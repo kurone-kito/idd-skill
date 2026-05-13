@@ -109,5 +109,9 @@ function parseConfiguredDurationToMs(value) {
   const hours = Number.parseInt(match[2] ?? "0", 10);
   const minutes = Number.parseInt(match[3] ?? "0", 10);
   const seconds = Number.parseInt(match[4] ?? "0", 10);
-  return ((((days * 24) + hours) * 60 + minutes) * 60 + seconds) * 1000;
+  const totalMilliseconds = ((((days * 24) + hours) * 60 + minutes) * 60 + seconds) * 1000;
+  if (totalMilliseconds <= 0 || totalMilliseconds % 60000 !== 0) {
+    return null;
+  }
+  return totalMilliseconds;
 }

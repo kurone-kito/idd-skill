@@ -174,6 +174,20 @@ test("advisory wait policy resolves defaults, explicit values, and fail-safe fal
     pollIntervalMinutes: 2,
     capExhaustedRoute: "phase-specific",
   });
+
+  assert.deepEqual(resolveAdvisoryWaitPolicy({
+    advisoryWait: {
+      pendingWindow: "PT0M",
+      settledWindow: "PT30S",
+      pollInterval: "PT90S",
+    },
+  }), {
+    requestCap: 30,
+    pendingWindowMinutes: 30,
+    settledWindowMinutes: 10,
+    pollIntervalMinutes: 2,
+    capExhaustedRoute: "phase-specific",
+  });
 });
 
 test("advisory wait summary normalizes invalid direct options to defaults", () => {

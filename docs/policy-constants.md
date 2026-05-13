@@ -141,7 +141,8 @@ The current policy schema and helper runtime now support
 `.github/idd/config.json` `advisoryWait.requestCap`,
 `advisoryWait.pendingWindow`, `advisoryWait.settledWindow`,
 `advisoryWait.pollInterval`, and `advisoryWait.capExhaustedRoute`.
-Omitted keys keep the distributed defaults below.
+Omitted keys keep the distributed defaults below. The three duration
+keys accept positive whole-minute ISO 8601 durations only.
 
 | Policy default                          | Distributed value                                                           | Owning surface                                                                                                                                                                                                       | Onboarding expectation                                                                       |
 | --------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |

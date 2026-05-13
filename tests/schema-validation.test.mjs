@@ -856,6 +856,22 @@ test("policy schema rejects advisoryWait lowercase duration values", () => {
   assert.ok(errors.some((e) => e.includes("advisoryWait")), errors.join("\n"));
 });
 
+test("policy schema rejects advisoryWait zero-length durations", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.advisoryWait = { pendingWindow: "PT0M" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("advisoryWait")), errors.join("\n"));
+});
+
+test("policy schema rejects advisoryWait second-based durations", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.advisoryWait = { pollInterval: "PT30S" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("advisoryWait")), errors.join("\n"));
+});
+
 test("policy schema rejects advisoryWait.capExhaustedRoute unknown value", () => {
   const schema = loadJson("schemas/policy.schema.json");
   const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
