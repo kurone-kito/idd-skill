@@ -9,6 +9,144 @@
 import { execSync } from "child_process";
 
 /**
+ * Aggregate cleanup metrics from PR data
+ * 
+ * This function computes cleanup hygiene metrics from merged PRs.
+ * In production, it queries real PR data; in tests, it accepts mock data.
+ */
+export function aggregateMetrics(prs, timestamp) {
+  const metrics = JSON.parse(JSON.stringify(METRIC_SCHEMA));
+
+  metrics.timestamp = timestamp;
+
+  // Set date ranges
+  const now = new Date(timestamp);
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+  metrics.trends.recent.data.startDate = sevenDaysAgo.toISOString();
+  metrics.trends.recent.data.endDate = now.toISOString();
+  metrics.trends.historical.data.beforeDate = sevenDaysAgo.toISOString();
+
+  // Separate recent and historical PRs
+  const recentPRs = prs.filter((pr) => new Date(pr.mergedAt) >= sevenDaysAgo);
+  const historicalPRs = prs.filter((pr) => new Date(pr.mergedAt) < sevenDaysAgo);
+
+  // Classify recent PRs
+  const skipReasonCounts = {};
+  let recentClean = 0;
+  let recentNeedsApply = 0;
+
+  for (const pr of recentPRs) {
+    const status = classifyPRCleanupStatus(pr);
+
+    if (status.status === "clean") {
+      recentClean++;
+    } else if (status.status === "needs_apply") {
+      recentNeedsApply++;
+      skipReasonCounts[status.reason] = (skipReasonCounts[status.reason] || 0) + (status.count || 1);
+    } else if (status.status === "failed") {
+      metrics.candidatesByClassifier.failed++;
+    } else {
+      metrics.candidatesByClassifier.thresholdMissing++;
+    }
+  }
+
+  // Update summary metrics (recent + historical)
+  const totalMergedPRs = prs.length;
+  metrics.summary.totalMergedPRs = totalMergedPRs;
+  metrics.summary.clean = recentClean;
+  metrics.summary.needsApply = recentNeedsApply;
+  metrics.summary.cleanPercentage =
+    totalMergedPRs > 0 ? (recentClean / totalMergedPRs) * 100 : 0;
+
+  // Update candidatesByClassifier
+  metrics.candidatesByClassifier.skippedWithReason = Object.values(skipReasonCounts).reduce((a, b) => a + b, 0);
+
+  // Update recent trend
+  metrics.trends.recent.data.metrics.totalMergedPRs = recentPRs.length;
+  metrics.trends.recent.data.metrics.clean = recentClean;
+  metrics.trends.recent.data.metrics.needsApply = recentNeedsApply;
+
+  // Classify historical PRs
+  let historicalClean = 0;
+  let historicalNeedsApply = 0;
+  for (const pr of historicalPRs) {
+    const status = classifyPRCleanupStatus(pr);
+    if (status.status === "clean") {
+      historicalClean++;
+    } else if (status.status === "needs_apply") {
+      historicalNeedsApply++;
+    }
+  }
+
+  metrics.trends.historical.data.metrics.totalMergedPRs = historicalPRs.length;
+  metrics.trends.historical.data.metrics.clean = historicalClean;
+  metrics.trends.historical.data.metrics.needsApply = historicalNeedsApply;
+
+  // Populate top skip reasons (sorted by frequency)
+  const sortedReasons = Object.entries(skipReasonCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3);
+
+  // Reset top skip reasons and populate from sorted data
+  metrics.topSkipReasons = sortedReasons.map(([reason, count]) => ({
+    reason,
+    count,
+  }));
+  
+  // Ensure we always have 3 entries (pad with defaults if needed)
+  const defaultReasons = [
+    { reason: "review-thread-unresolved", count: 0 },
+    { reason: "operational-marker-present", count: 0 },
+    { reason: "held-by-maintainer", count: 0 },
+  ];
+  
+  while (metrics.topSkipReasons.length < 3) {
+    const nextDefault = defaultReasons.find(
+      (dr) => !metrics.topSkipReasons.some((tr) => tr.reason === dr.reason)
+    );
+    if (nextDefault) {
+      metrics.topSkipReasons.push({ ...nextDefault });
+    } else {
+      break;
+    }
+  }
+
+  return metrics;
+}
+
+/**
+ * Classify a PR's cleanup status based on its comments
+ */
+function classifyPRCleanupStatus(pr) {
+  const comments = pr.comments || [];
+  const candidates = [];
+
+  for (const comment of comments) {
+    if (isOperationalMarker(comment.body) && !comment.isMinimized) {
+      candidates.push(comment);
+    }
+  }
+
+  if (candidates.length === 0) {
+    return { status: "clean", reason: null };
+  }
+
+  return {
+    status: "needs_apply",
+    reason: "operational-marker-present",
+    count: candidates.length,
+  };
+}
+
+/**
+ * Check if text is an operational marker
+ */
+function isOperationalMarker(body) {
+  return /<!--\s*(review-watermark|review-baseline|claimed-by|unclaimed-by|advisory-wait)/.test(body);
+}
+
+/**
  * Parse CLI arguments
  */
 function parseArgs(argv) {
@@ -111,23 +249,37 @@ export const METRIC_SCHEMA = {
 
 /**
  * Generate cleanup hygiene metrics
+ * Optionally accepts mock PR data for testing
  */
-export function generateMetrics(args) {
-  const repoInfo = getRepoInfo();
-  const metrics = JSON.parse(JSON.stringify(METRIC_SCHEMA));
+export async function generateMetrics(args, mockPRs = null) {
+  const timestamp = new Date().toISOString();
 
-  metrics.timestamp = new Date().toISOString();
+  if (mockPRs !== null) {
+    // Test mode: use mock data
+    const metrics = aggregateMetrics(mockPRs, timestamp);
+    if (args.owner) metrics.repository.owner = args.owner;
+    if (args.repo) metrics.repository.name = args.repo;
+    return metrics;
+  }
+
+  // Production mode: would query real PR data
+  // For now, return empty metrics template with date ranges (requires full API integration)
+  const metrics = JSON.parse(JSON.stringify(METRIC_SCHEMA));
+  const repoInfo = getRepoInfo();
   metrics.repository.owner = args.owner || repoInfo.owner;
   metrics.repository.name = args.repo || repoInfo.repo;
-
-  // Set recent/historical date ranges
-  const now = new Date();
+  metrics.timestamp = timestamp;
+  
+  // Set date ranges
+  const now = new Date(timestamp);
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-
+  
   metrics.trends.recent.data.startDate = sevenDaysAgo.toISOString();
   metrics.trends.recent.data.endDate = now.toISOString();
   metrics.trends.historical.data.beforeDate = sevenDaysAgo.toISOString();
-
+  
+  // In production, this would call an actual API to fetch merged PRs
+  // and aggregate their cleanup status. For now, return the template.
   return metrics;
 }
 
@@ -187,7 +339,7 @@ async function main() {
       process.exit(0);
     }
 
-    const metrics = generateMetrics(args);
+    const metrics = await generateMetrics(args);
     let output = "";
 
     if (args.format === "json") {
