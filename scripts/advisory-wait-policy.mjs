@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 
+import { loadJson, validate } from "./validate-schemas.mjs";
+
 export const DEFAULT_ADVISORY_REQUEST_CAP = 30;
 export const DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES = 30;
 export const DEFAULT_ADVISORY_SETTLED_WINDOW_MINUTES = 10;
@@ -9,10 +11,15 @@ export const ADVISORY_CAP_EXHAUSTED_ROUTES = new Set([
   "phase-specific",
   "hold",
 ]);
+const POLICY_SCHEMA = loadJson("schemas/policy.schema.json");
 
 export function readAdvisoryWaitPolicy(path = ".github/idd/config.json") {
   try {
-    return resolveAdvisoryWaitPolicy(JSON.parse(readFileSync(path, "utf8")));
+    const config = JSON.parse(readFileSync(path, "utf8"));
+    if (validate(config, POLICY_SCHEMA).length > 0) {
+      return resolveAdvisoryWaitPolicy({});
+    }
+    return resolveAdvisoryWaitPolicy(config);
   } catch {
     return resolveAdvisoryWaitPolicy({});
   }
@@ -100,16 +107,15 @@ function normalizeCapExhaustedRoute(value) {
 
 function parseConfiguredDurationToMs(value) {
   if (typeof value !== "string" || value.length === 0) return null;
-  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(value);
+  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/.exec(value);
   if (!match) return null;
   const hasTimeDesignator = value.includes("T");
-  const hasAnyTimeUnit = match[2] !== undefined || match[3] !== undefined || match[4] !== undefined;
+  const hasAnyTimeUnit = match[2] !== undefined || match[3] !== undefined;
   if (hasTimeDesignator && !hasAnyTimeUnit) return null;
   const days = Number.parseInt(match[1] ?? "0", 10);
   const hours = Number.parseInt(match[2] ?? "0", 10);
   const minutes = Number.parseInt(match[3] ?? "0", 10);
-  const seconds = Number.parseInt(match[4] ?? "0", 10);
-  const totalMilliseconds = ((((days * 24) + hours) * 60 + minutes) * 60 + seconds) * 1000;
+  const totalMilliseconds = (((days * 24) + hours) * 60 + minutes) * 60000;
   if (totalMilliseconds <= 0 || totalMilliseconds % 60000 !== 0) {
     return null;
   }

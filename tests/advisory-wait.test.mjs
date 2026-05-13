@@ -1,5 +1,8 @@
 import { readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import {
@@ -8,7 +11,10 @@ import {
   operationalMarkerPrefix,
   unsafeTextReason,
 } from "../scripts/protocol-helpers.mjs";
-import { resolveAdvisoryWaitPolicy } from "../scripts/advisory-wait-policy.mjs";
+import {
+  readAdvisoryWaitPolicy,
+  resolveAdvisoryWaitPolicy,
+} from "../scripts/advisory-wait-policy.mjs";
 import { loadJson, validate } from "../scripts/validate-schemas.mjs";
 
 const ciSuccess = readJson("fixtures/ci/success.json");
@@ -178,10 +184,66 @@ test("advisory wait policy resolves defaults, explicit values, and fail-safe fal
   assert.deepEqual(resolveAdvisoryWaitPolicy({
     advisoryWait: {
       pendingWindow: "PT0M",
+      settledWindow: "PT60S",
+      pollInterval: "PT90S",
+    },
+  }), {
+    requestCap: 30,
+    pendingWindowMinutes: 30,
+    settledWindowMinutes: 10,
+    pollIntervalMinutes: 2,
+    capExhaustedRoute: "phase-specific",
+  });
+
+  assert.deepEqual(resolveAdvisoryWaitPolicy({
+    advisoryWait: {
+      pendingWindow: "PT30S",
       settledWindow: "PT30S",
       pollInterval: "PT90S",
     },
   }), {
+    requestCap: 30,
+    pendingWindowMinutes: 30,
+    settledWindowMinutes: 10,
+    pollIntervalMinutes: 2,
+    capExhaustedRoute: "phase-specific",
+  });
+});
+
+test("advisory wait policy only applies file overrides from schema-valid policy config", () => {
+  const root = mkdtempSync(join(tmpdir(), "idd-advisory-policy-"));
+  const validPath = join(root, "policy.valid.json");
+  const invalidPath = join(root, "policy.invalid.json");
+  const validConfig = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+
+  validConfig.advisoryWait = {
+    requestCap: 12,
+    pendingWindow: "PT45M",
+    settledWindow: "PT15M",
+    pollInterval: "PT3M",
+    capExhaustedRoute: "hold",
+  };
+
+  writeFileSync(validPath, JSON.stringify(validConfig), "utf8");
+  writeFileSync(
+    invalidPath,
+    JSON.stringify({
+      advisoryWait: {
+        pendingWindow: "PT1M",
+      },
+    }),
+    "utf8",
+  );
+
+  assert.deepEqual(readAdvisoryWaitPolicy(validPath), {
+    requestCap: 12,
+    pendingWindowMinutes: 45,
+    settledWindowMinutes: 15,
+    pollIntervalMinutes: 3,
+    capExhaustedRoute: "hold",
+  });
+
+  assert.deepEqual(readAdvisoryWaitPolicy(invalidPath), {
     requestCap: 30,
     pendingWindowMinutes: 30,
     settledWindowMinutes: 10,
