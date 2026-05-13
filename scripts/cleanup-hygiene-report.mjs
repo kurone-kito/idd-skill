@@ -15,6 +15,15 @@ import { execSync } from "child_process";
  * In production, it queries real PR data; in tests, it accepts mock data.
  */
 export function aggregateMetrics(prs, timestamp) {
+  // Validate inputs
+  if (!Array.isArray(prs)) {
+    throw new Error("prs must be an array");
+  }
+  
+  if (!timestamp || isNaN(new Date(timestamp).getTime())) {
+    throw new Error("timestamp must be a valid ISO 8601 date string");
+  }
+
   const metrics = JSON.parse(JSON.stringify(METRIC_SCHEMA));
 
   metrics.timestamp = timestamp;
@@ -28,8 +37,14 @@ export function aggregateMetrics(prs, timestamp) {
   metrics.trends.historical.data.beforeDate = sevenDaysAgo.toISOString();
 
   // Separate recent and historical PRs
-  const recentPRs = prs.filter((pr) => new Date(pr.mergedAt) >= sevenDaysAgo);
-  const historicalPRs = prs.filter((pr) => new Date(pr.mergedAt) < sevenDaysAgo);
+  const recentPRs = prs.filter((pr) => {
+    const mergedAt = new Date(pr.mergedAt);
+    return !isNaN(mergedAt.getTime()) && mergedAt >= sevenDaysAgo;
+  });
+  const historicalPRs = prs.filter((pr) => {
+    const mergedAt = new Date(pr.mergedAt);
+    return !isNaN(mergedAt.getTime()) && mergedAt < sevenDaysAgo;
+  });
 
   // Classify recent PRs
   const skipReasonCounts = {};
@@ -70,12 +85,16 @@ export function aggregateMetrics(prs, timestamp) {
   // Classify historical PRs
   let historicalClean = 0;
   let historicalNeedsApply = 0;
+  let historicalSkipped = 0;
   for (const pr of historicalPRs) {
     const status = classifyPRCleanupStatus(pr);
     if (status.status === "clean") {
       historicalClean++;
     } else if (status.status === "needs_apply") {
       historicalNeedsApply++;
+      historicalSkipped += status.count || 1;
+      // Also count skip reasons from historical PRs for complete frequency analysis
+      skipReasonCounts[status.reason] = (skipReasonCounts[status.reason] || 0) + (status.count || 1);
     }
   }
 
