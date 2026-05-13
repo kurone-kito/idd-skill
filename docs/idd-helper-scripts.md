@@ -45,6 +45,15 @@ In the idd-skill source repository, the following optional helpers were adopted:
 - `scripts/review-disposition-verify.mjs` for read-only E7 disposition
   marker presence verification across PATH A and PATH B items
 
+**Operator Recovery Helpers:**
+
+- `scripts/force-handoff.mjs` for the interactive TTY-only
+  `idd-force-handoff` operator facade that drives issue input, optional
+  PR confirmation from live branch state, and final `y/N` consent
+- `scripts/forced-handoff-marker.mjs` for low-level forced-handoff
+  marker rendering and inspection when maintainers need the canonical
+  payload without the interactive facade
+
 **Post-Merge Audit Helpers:**
 
 - `scripts/cleanup-hygiene-report.mjs` for post-merge cleanup hygiene
@@ -189,6 +198,25 @@ scripts to add or remove for that transition.
 
 The adopted helper boundaries are intentionally narrow:
 
+- `force-handoff.mjs` is intentionally operator-facing and interactive;
+  it asks for the issue number before any mutation, derives whether PR
+  input is required from live open PR state on the active claim branch,
+  previews the generated marker and successor IDs, and posts only after
+  an explicit `y` confirmation
+- it must fail closed outside a TTY and is not available to autopilot
+  or unattended agent contexts
+- it does not replace the forced-handoff policy contract; it is the
+  recommended maintainer workflow for producing canonical evidence under
+  that contract
+
+- `forced-handoff-marker.mjs` is a lower-level render and inspection
+  helper that can plan or emit the canonical marker body for a specific
+  issue, claim, branch, and optional PR context
+- it is useful for audited debugging and manual inspection, but normal
+  maintainer recovery should prefer `idd-force-handoff`
+- it does not authorize handoff on its own; the same human-gated policy
+  and live-claim validation rules still apply
+
 - `review-activity-snapshot.mjs` is read-only, emits machine-readable
   metrics, and does not evaluate accept/reject dispositions or merge
   decisions
@@ -252,6 +280,33 @@ The adopted helper boundaries are intentionally narrow:
   confirming marker presence before triage exits
 
 ## Stable Helper Evidence Outputs
+
+### Operator forced-handoff helpers
+
+- Command: `node scripts/force-handoff.mjs`
+- Published bin: `idd-force-handoff`
+- Contract:
+  - interactive TTY only
+  - asks for issue input before any mutation
+  - asks for PR input only when a live open PR exists on the active
+    claim branch and PR-scoped evidence is required
+  - prints the generated successor IDs and marker preview before the
+    final confirmation
+  - posts nothing unless the final confirmation is exactly `y`
+
+- Command: `node scripts/forced-handoff-marker.mjs --issue <number> --plan ...`
+- Published bin: `idd-forced-handoff-marker`
+- Stable contract:
+  [`schemas/forced-handoff-marker.schema.json`](../schemas/forced-handoff-marker.schema.json)
+- Intended use:
+  - render or inspect canonical forced-handoff marker payloads
+  - support audited debugging or manual review of the exact body
+  - stay distinct from the interactive operator facade above
+
+The references in this subsection apply only when a repository
+explicitly installs the matching helpers and records a human-gated
+forced-handoff policy. Repositories that stay on the default disabled
+policy must not expose either helper as an active recovery path.
 
 The references in this section apply only when a repository explicitly
 installs the matching helper scripts. Repositories that stay on the
