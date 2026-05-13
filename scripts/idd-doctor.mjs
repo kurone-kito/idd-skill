@@ -252,13 +252,11 @@ function checkCommandResidueAndConsistency(root, markerPrefix, projectCommands, 
   }
 
   const policyCommands = loadPolicyCommands(root)
-  if (!(policyCommands instanceof Map)) {
-    return
-  }
+  const policyCommandMap = policyCommands instanceof Map ? policyCommands : new Map()
 
-  const sharedKeys = unique([...policyCommands.keys()].filter((key) => projectCommands.has(key))).sort()
+  const sharedKeys = unique([...policyCommandMap.keys()].filter((key) => projectCommands.has(key))).sort()
   for (const key of sharedKeys) {
-    const configValue = normalizeCommandValue(policyCommands.get(key))
+    const configValue = normalizeCommandValue(policyCommandMap.get(key))
     const overviewValue = normalizeCommandValue(projectCommands.get(key))
     if (!isConcreteCommandValue(configValue) || !isConcreteCommandValue(overviewValue)) {
       continue
@@ -280,7 +278,7 @@ function checkCommandResidueAndConsistency(root, markerPrefix, projectCommands, 
 
   const residueMessages = new Set()
   for (const [source, commands] of [
-    [".github/idd/config.json", policyCommands],
+    [".github/idd/config.json", policyCommandMap],
     ["overview project commands table", projectCommands],
   ]) {
     for (const [key, value] of commands.entries()) {

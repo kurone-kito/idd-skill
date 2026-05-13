@@ -150,6 +150,28 @@ test("idd-doctor warns when adopter marker prefix keeps source-repo lint toolcha
   );
 });
 
+test("idd-doctor still checks overview residue when policy config is missing", (t) => {
+  const root = createDoctorFixtureRepoFromConfig(null, {
+    markerPrefix: "example-team",
+    overviewCommands: {
+      "fix-validate": "npx dprint check \"**/*.md\"",
+      "pre-push-validate": "npm run lint",
+      "post-fix-validate": "npm run test",
+      "install-deps": "true",
+    },
+    writeConfig: false,
+  });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const report = runDoctor({ root, requireGithub: false });
+
+  assert.equal(report.errors.length, 0);
+  assert.ok(
+    report.warnings.some((warning) =>
+      warning.includes('toolchain residue detected for marker prefix "example-team"'),
+    ),
+  );
+});
+
 test("idd-doctor skips residue warnings for idd-skill marker prefix", (t) => {
   const root = createDoctorFixtureRepoFromConfig({
     commands: {
@@ -235,9 +257,14 @@ function createDoctorFixtureRepoFromConfig(config, {
   packageJson = null,
   markerPrefix = DEFAULT_MARKER_PREFIX,
   overviewCommands = {},
+  writeConfig = true,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "idd-helper-runtime-profile-"));
-  const configText = typeof config === "string" ? config : `${JSON.stringify(config, null, 2)}\n`;
+  const configText = typeof config === "string"
+    ? config
+    : config === null
+      ? ""
+      : `${JSON.stringify(config, null, 2)}\n`;
   const overviewText = buildOverviewText(markerPrefix, overviewCommands);
   const discoverText = buildDiscoverText(markerPrefix);
 
@@ -261,7 +288,9 @@ function createDoctorFixtureRepoFromConfig(config, {
     ".github/copilot-instructions.md",
     "This fixture uses fully_autonomous_merge and copilot advisory.\n",
   );
-  writeFixtureFile(root, ".github/idd/config.json", configText);
+  if (writeConfig) {
+    writeFixtureFile(root, ".github/idd/config.json", configText);
+  }
   writeFixtureFile(root, "AGENTS.md", "See docs/idd-workflow.md.\n");
   writeFixtureFile(root, "CLAUDE.md", "See docs/idd-workflow.md.\n");
   writeFixtureFile(root, "GEMINI.md", "See docs/idd-workflow.md.\n");
