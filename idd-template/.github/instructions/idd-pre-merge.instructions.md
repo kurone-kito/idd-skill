@@ -228,7 +228,9 @@ must align with every F2 condition below.
   `dispositionEvidence.route == "proceed"` and
   `dispositionEvidence.blockingCount == 0`. If either check fails, route
   to E1/E4 with the missing-thread or missing-comment evidence reported
-  from that section.
+  from that section. This gate consumes the `pre-merge-readiness`
+  `dispositionEvidence` shape only; do not substitute E7 verifier fields
+  (`passed`, `items[]`) here.
 
 When any F2 condition routes to a hold/stop or back to E1/E14, update
 the PR live status digest after the blocking evidence is recorded and

@@ -69,7 +69,9 @@ gate. The active claim must still use your current `{claim-id}`.
    `dispositionEvidence.route == "proceed"` and
    `dispositionEvidence.blockingCount == 0` before merge. If either
    check fails, stop and return to E1/E4 with the reported missing
-   thread/comment disposition items.
+   thread/comment disposition items. Use only the carried
+   `pre-merge-readiness` `dispositionEvidence` shape here; E7 verifier
+   fields (`passed`, `items[]`) are not merge-gate substitutes.
 
    Execute the merge immediately after this final fetch **and the claim
    re-validation and advisory state revalidation below**, with no other

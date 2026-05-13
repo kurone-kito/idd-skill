@@ -321,6 +321,8 @@ following optional helper scripts:
   and AW outcome reporting)
 - `scripts/pre-merge-readiness.mjs` (read-only F2/F3 readiness evidence
   collection)
+- `scripts/review-disposition-verify.mjs` (read-only E7 disposition
+  verification evidence)
 - `scripts/live-status-digest.mjs` (issue or PR live status digest
   dry-run and claim-checked upsert)
 - `scripts/audit-pr-cleanup.mjs` (post-merge cleanup audit and optional

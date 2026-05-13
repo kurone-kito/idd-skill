@@ -430,7 +430,9 @@ default `instructions-only` profile keep using the written shell /
 
 ### E7 disposition verification
 
-- Command:
+- Preferred command when helper runtime is enabled:
+  `idd-review-disposition-verify --items '<json>'`
+- Source repository equivalent:
   `node scripts/review-disposition-verify.mjs --items '<json>'`
 - Input: JSON array of ReviewItems_snapshot items, each with `id`,
   `path` (`"A"` or `"B"`), `type`, `decision`, `markerReply`, and
@@ -461,6 +463,11 @@ default `instructions-only` profile keep using the written shell /
 
 - Stable fields consumed at E7: `passed`, `items[].passed`,
   `items[].checks`, and `items[].issues`
+- Read-only boundary: the helper never posts replies, resolves threads,
+  or performs any E6 mutation.
+- Fail closed: if execution fails, output is invalid JSON, required
+  fields are missing, or output conflicts with observed triage evidence,
+  discard helper output and apply written E7 checks directly.
 
 ### S2 quiet-window evidence
 
@@ -476,37 +483,6 @@ default `instructions-only` profile keep using the written shell /
 - `ci-running` activities always break the quiet window regardless
   of their timestamp; all other types are checked against
   `window_start = now - quiet_window_ms`
-
-### Review-disposition verification
-
-- Command: `node scripts/review-disposition-verify.mjs` or
-  `echo '<JSON array of review items>' | idd-review-disposition-verify`
-- Input format: JSON array of review items with schema:
-
-  ```json
-  [
-    {
-      "id": "unique-item-id",
-      "type": "REVIEW_THREAD|REVIEW_BODY|COMMENT",
-      "body": "comment body text",
-      "author": { "login": "github-username" },
-      "isThread": true,
-      "isResolved": false
-    }
-  ]
-  ```
-
-- Output format: Verification result with `isValid`, `missingMarkers`,
-  `errors`, and `summary` fields
-- Supported disposition markers: `**Accepted** —`, `**Rejected** —`,
-  `**Awaiting maintainer decision** —`
-- Classification rules:
-  - **PATH A (actionable feedback)**: Human reviewer threads, review
-    bodies, and comments (requires disposition marker)
-  - **PATH B (advisory feedback)**: Bot reviewer comments (should have
-    explicit marker)
-- Reference: E7 review-triage logic in
-  `.github/instructions/idd-review-triage.instructions.md`
 
 ## Friction Inventory
 
