@@ -54,11 +54,39 @@ remote branch tip movement, no running CI activity (`queued` or
 `in_progress` checks/runs), and no new review/comment/CI completion
 activity.
 
+When helper runtime is enabled, use
+`idd-stalled-session-quiet-check` as the canonical read-only evidence
+collector for this step. Pass the active PR number and, when known, the
+latest valid trusted `claimed-by` `created_at` from the active non-owned
+claim:
+
+```bash
+idd-stalled-session-quiet-check \
+  --pr <pr-number> \
+  --claim-created-at <latest-valid-claimed-by-created_at>
+```
+
+Use `node scripts/stalled-session-quiet-check.mjs ...` as the vendored
+equivalent when the packaged binary is unavailable. Consume the helper's
+stable fields `quiet_window_met`, `quiet_window_ms`, `window_start`,
+`now`, `latest_activity`, `latest_activity_type`, `reason`, and
+`evidence` (`activity_count_in_window`, `blocking_activities`,
+`has_heartbeat_in_window`, `has_ci_running`,
+`has_pr_head_movement`, `has_branch_tip_movement`).
+
+The helper gathers evidence only. It never decides trusted-marker
+validity, stale-age, advisory state, forced-handoff routing, or takeover
+eligibility by itself. If helper runtime is unavailable, the command
+fails, or the output is missing or contradictory, fall back to the
+written quiet-window procedure in this file and the collected live
+signals above. That written procedure remains authoritative.
+
 - Quiet window not met or evidence is contradictory/incomplete:
   **hold and stop**. Do not claim, push, or mutate review state.
 - Quiet window met: continue to S3.
 
-Quiet-window evidence does not permit takeover by itself.
+Quiet-window evidence does not permit takeover by itself and never
+waives the stale-threshold gate in S3.
 
 ### S3 — Stale-threshold gate (ownership transfer gate)
 
@@ -79,8 +107,10 @@ Immediately before posting takeover:
 2. Confirm the active claim still uses the same non-owned `{claim-id}`
    observed in S1-S3.
 3. Confirm it is still stale at this moment.
-4. Re-check quiet-window evidence against the latest externally visible
-   activity. If new progress appeared after S2, stop and restart.
+4. Re-run `idd-stalled-session-quiet-check` (or repeat the written
+   manual procedure when helper runtime is unavailable) against the
+   latest externally visible activity. If new progress appeared after
+   S2, stop and restart.
 5. Re-check closed/merged guards. If the issue is now closed or the PR
    is now merged, stop and return to `idd-resume.instructions.md` Step 1
    cleanup behavior.
