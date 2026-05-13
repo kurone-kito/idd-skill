@@ -102,14 +102,19 @@ must align with every F2 condition below.
   minimize, or otherwise unmark open-PR operational markers during this
   recovery; if no trusted same-claim watermark exists for the successor
   claim, return to E1 and rebuild review state there.
-  To collect this evidence, either use the documented merge-gate helper
-  reference in
+  When helper runtime is enabled, prefer the documented merge-gate
+  helper reference in
   [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#stable-helper-evidence-outputs)
-  (in the idd-skill source repository or adopters that explicitly
-  installed the same helpers) or fetch the activity universe snapshot
-  (same scope as E1 Step 1) and the current CI state for the HEAD SHA
-  directly. The instruction rules remain canonical. Return to E1 if
-  **any** of the
+  to collect this evidence. Consume helper evidence from
+  `reviewCurrency` (including `comparisonRoute`), `threads`,
+  `unrepliedComments`, `reviewerStates`, `advisoryWait`, `ci`, `claim`,
+  and optional `dispositionEvidence`.
+  Helpers remain read-only evidence collectors: if helper execution
+  fails, output is invalid JSON, required sections are missing, or live
+  GitHub state disagrees with helper output, discard helper output and
+  fetch the activity universe snapshot (same scope as E1 Step 1) plus
+  current CI state for the HEAD SHA directly. The instruction rules
+  remain canonical. Return to E1 if **any** of the
   following is true:
   - The current PR HEAD SHA differs from the stored `{head-SHA}` (a new
     push occurred after E1's snapshot, even if the watermark comment was

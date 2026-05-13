@@ -399,6 +399,9 @@ default `instructions-only` profile keep using the written shell /
 
 ### Merge-gate evidence
 
+- When helper runtime is enabled, these commands are the preferred
+  evidence collection path for E1/F2/F3 review-currency and merge-gate
+  checks.
 - Snapshot command: `node scripts/review-activity-snapshot.mjs`
   with `--pr <pr-number>` and
   `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`
@@ -417,8 +420,13 @@ default `instructions-only` profile keep using the written shell /
 - Stable sections consumed by the instructions: `reviewCurrency`,
   `threads`, `unrepliedComments`, `reviewerStates`,
   `advisoryWait` (including the effective advisory policy fields), `ci`,
-  `claim`, and optional
-  `dispositionEvidence`
+  `claim`, and optional `dispositionEvidence`
+- `reviewCurrency.comparisonRoute` remains advisory evidence only. Agents
+  must still apply written instruction checks against live GitHub state.
+- Fail closed: if helper execution fails, output is invalid JSON,
+  required fields/sections are missing, or helper evidence conflicts with
+  live GitHub state, discard helper output and use the portable manual
+  fetch path.
 
 ### E7 disposition verification
 

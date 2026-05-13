@@ -338,7 +338,10 @@ This source repository currently ships the following optional helper scripts:
 
 Shell / `gh` / `jq` snippets in
 `.github/instructions/*.instructions.md` remain the canonical portable
-path for adopters, and the helper scripts are convenience layers only.
+path for repositories that stay on `instructions-only`. When helper
+runtime is enabled, these shipped helpers are the preferred evidence
+collection path, while live GitHub checks and written gate rules remain
+authoritative.
 
 See [IDD helper script evaluation](idd-helper-scripts.md) for the
 current inventory of high-friction query patterns, the adopted helper
