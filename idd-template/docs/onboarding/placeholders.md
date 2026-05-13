@@ -55,8 +55,12 @@ invocations that pass `--trusted-marker-logins`.
 Look for the target repository's dependency tooling and propose the
 matching install command:
 
-- `package.json` → `npm install` (or the repository's existing package
-  manager equivalent)
+- declared `packageManager` metadata or exactly one supported lockfile
+  (`pnpm-lock.yaml`, `package-lock.json`, or `yarn.lock`) →
+  the matching package-manager install command
+- bare `package.json` without those signals → do not infer
+  `npm install` from that alone; use repository-specific docs or ask the
+  operator to confirm the real install command
 - `requirements.txt` → `pip install -r requirements.txt`
 - `pyproject.toml` → use the repository's declared Python tool
   (for example `poetry install`, `pdm install`, `hatch env create`, or

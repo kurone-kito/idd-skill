@@ -229,6 +229,72 @@ test("onboarding keeps claim timing and CI wait policy in the explicit confirmat
   );
 });
 
+test("helper runtime guidance uses evidence-based auto-proposals without bare package.json shortcuts", () => {
+  const onboarding = readText("idd-template/ONBOARDING.md");
+  assert.match(
+    normalizeWhitespace(onboarding),
+    /helper runtime profile \(`instructions-only` by default, or an evidence-based helper profile recommendation that still requires explicit operator confirmation`\)/,
+    "ONBOARDING Step 1B must allow evidence-based helper profile recommendations without recording them automatically",
+  );
+
+  const policyText = readText("idd-template/docs/onboarding/policy-decisions.md");
+  assert.doesNotMatch(
+    policyText,
+    /Keep `instructions-only` unless helper support was explicitly requested\./,
+    "policy guidance must not require prior helper opt-in before making a recommendation",
+  );
+  assert.match(
+    normalizeWhitespace(policyText),
+    /Auto-propose a helper runtime profile only when repository evidence shows a supported package-manager path or another real Node\.js helper path, but require explicit operator confirmation before recording anything other than `instructions-only`\./,
+    "policy guidance must describe evidence-based helper profile proposals and explicit confirmation",
+  );
+
+  const placeholders = readText("idd-template/docs/onboarding/placeholders.md");
+  assert.doesNotMatch(
+    placeholders,
+    /`package\.json` → `npm install`/,
+    "placeholder guidance must not derive npm install from bare package.json presence",
+  );
+  assert.match(
+    normalizeWhitespace(placeholders),
+    /declared `packageManager` metadata or exactly one supported lockfile[\s\S]*bare `package\.json` without those signals → do not infer `npm install` from that alone/,
+    "placeholder guidance must use the same package-manager evidence class as helper runtime auto-proposal",
+  );
+
+  for (const file of ["docs/customization.md", "idd-template/docs/customization.md"]) {
+    const text = readText(file);
+    assert.doesNotMatch(
+      text,
+      /unless helper support is explicitly requested during onboarding/,
+      `${file} must not require prior helper opt-in before making a recommendation`,
+    );
+    assert.match(
+      normalizeWhitespace(text),
+      /Auto-propose helper support only when repository evidence shows a real package-manager or Node\.js helper path, keep operator confirmation explicit, prefer `package-manager` when supported package-manager evidence exists, and otherwise prefer `vendored-node` before `ephemeral-npx`\./,
+      `${file} must describe evidence-based helper runtime selection order`,
+    );
+  }
+
+  for (const file of ["docs/idd-helper-scripts.md", "idd-template/docs/idd-helper-scripts.md"]) {
+    const text = readText(file);
+    assert.doesNotMatch(
+      text,
+      /Apply this order only after a maintainer or import flow has explicitly opted into helper support\./,
+      `${file} must not gate helper profile proposals on prior opt-in`,
+    );
+    assert.match(
+      normalizeWhitespace(text),
+      /Use repository evidence to decide whether helper support should be proposed for operator confirmation\./,
+      `${file} must describe evidence-based proposal flow`,
+    );
+    assert.match(
+      normalizeWhitespace(text),
+      /If supported `packageManager` metadata or exactly one supported lockfile is present, propose `package-manager`\./,
+      `${file} must prefer package-manager only for supported package-manager evidence`,
+    );
+  }
+});
+
 test("onboarding generated import surface includes extracted reference docs", () => {
   const onboarding = readText("idd-template/ONBOARDING.md");
   const manifest = JSON.parse(readText("audit/sync-manifest.json"));

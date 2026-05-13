@@ -176,7 +176,8 @@ require explicit operator confirmation:
    default, or `all-write-permission-actors`)
 10. issue-authoring companion status (`installed` or `not installed`)
 11. helper runtime profile (`instructions-only` by default, or an
-    explicitly requested helper profile)
+    evidence-based helper profile recommendation that still requires
+    explicit operator confirmation`)
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)

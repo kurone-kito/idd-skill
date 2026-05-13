@@ -200,19 +200,19 @@ selected from one of these profiles:
 
 ## Import-Time Selection Order
 
-Helper runtime choice is an import-time policy decision. Apply this order
-only after a maintainer or import flow has explicitly opted into helper
-support. If helper support was not requested, keep `instructions-only`.
+Helper runtime choice is an import-time policy decision. Use repository
+evidence to decide whether helper support should be proposed for
+operator confirmation. If helper support is not confirmed, keep
+`instructions-only`.
 
-1. If helper support has not been requested, use `instructions-only`.
-2. Otherwise, if the repository already has a supported package manager
-   project, select `package-manager`.
-3. Otherwise, if Node.js is available and the import flow is allowed to
-   copy helper files, select `vendored-node`.
-4. Otherwise, if Node.js is available and a published or otherwise
-   resolvable helper command exists for one-shot execution, select
+1. If supported `packageManager` metadata or exactly one supported
+   lockfile is present, propose `package-manager`.
+2. Otherwise, if Node.js is available and the import flow is allowed to
+   copy helper files, propose `vendored-node`.
+3. Otherwise, if Node.js is available and a published or otherwise
+   resolvable helper command exists for one-shot execution, propose
    `ephemeral-npx`.
-5. Otherwise, use `instructions-only`.
+4. Otherwise, use `instructions-only`.
 
 This selection order exists to keep helper support optional without
 turning every adopter into a Node.js-first repository. The written
@@ -225,7 +225,14 @@ Use `idd-helper-bundle-manifest` as the canonical import helper for these
 profiles. It is published from this source repository as both
 `scripts/helper-runtime-manifest.mjs` and the package bin
 `idd-helper-bundle-manifest`, so adopters can inspect one machine-readable
-manifest instead of hand-maintaining helper file lists.
+manifest instead of hand-maintaining helper file lists. The manifest's
+top-level `recommendation` field uses the same package-manager evidence
+class as onboarding: supported `packageManager` metadata or exactly one
+supported lockfile can recommend `package-manager`; ambiguous
+package-manager signals can still recommend `vendored-node`; otherwise
+it stays fail-closed at `instructions-only` and never treats bare
+`package.json` presence as enough evidence to assume npm or a real
+Node.js helper path.
 
 - `package-manager`: run the manifest from the target repository root and
   let it detect npm, pnpm, or yarn (or pass `--package-manager` if
