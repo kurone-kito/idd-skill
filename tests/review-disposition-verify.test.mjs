@@ -175,6 +175,19 @@ test("checkPathAItem: AMD — non-thread type, null threadResolved → pass", ()
   assert.equal(result.checks.threadResolutionCorrect, true);
 });
 
+test("checkPathAItem: AMD — non-thread type with non-null threadResolved → fail", () => {
+  const result = checkPathAItem({
+    id: "a10b",
+    path: "A",
+    type: "regular_comment",
+    decision: "awaiting_maintainer",
+    markerReply: "**Awaiting maintainer decision** — awaiting CODEOWNER response",
+    threadResolved: false,
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.issues.some((msg) => msg.includes("non-null threadResolved")));
+});
+
 test("checkPathAItem: null decision → fail", () => {
   const result = checkPathAItem({
     id: "a11",
