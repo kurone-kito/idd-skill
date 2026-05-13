@@ -13,6 +13,11 @@ This gate evaluates whether an issue is **suitable for autonomous
 execution** independent of the current run's context. Where A4 asks "can
 we do this NOW?", A4.5 asks "SHOULD we do this at all?"
 
+When helper support is enabled, use helper scripts from
+`docs/idd-helper-scripts.md` first for A4.5 evidence.
+Written checks and decision flow remain authoritative when helper output
+is missing or disagrees.
+
 Issue-author approval is a separate pre-claim gate. Candidates that fail
 the repository's issue-author approval evaluation are routed by
 `idd-discover.instructions.md` and re-checked in

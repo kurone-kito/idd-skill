@@ -31,6 +31,12 @@ you are reading this guide first, start at step 1.
 | Claude Code             | `CLAUDE.md`                       | None from `.github/instructions/` by default                                                                                                                       | `.github/instructions/idd-overview.instructions.md` and the routed phase file |
 | Gemini CLI              | `GEMINI.md`                       | None from `.github/instructions/`                                                                                                                                  | `.github/instructions/idd-overview.instructions.md` and the routed phase file |
 
+During onboarding, create or update `CLAUDE.md`, `AGENTS.md`, and
+`GEMINI.md` so each non-Copilot agent listed above has a stable first
+file to read. GitHub Copilot remains an update-if-present surface via
+`.github/copilot-instructions.md`. Skipping creation of a missing root
+entry file should be an explicit operator choice, not the default.
+
 ## IDD file map
 
 | File                                                       | Role                                                                                 |
@@ -112,6 +118,17 @@ If you need to understand or change distributed timing defaults, start
 with [IDD policy constants](policy-constants.md). It names the claim,
 advisory, CI, and critique-loop defaults and points to the instruction
 files that own each value.
+
+When helper support is enabled, the discover and suitability phases may
+use the helper-backed evidence collectors first, but the Markdown
+instruction files remain the final authority whenever helper output is
+missing or disagrees.
+
+During onboarding, create or update `CLAUDE.md`, `AGENTS.md`, and
+`GEMINI.md` so each non-Copilot agent listed above has a stable first
+file to read. GitHub Copilot remains an update-if-present surface via
+`.github/copilot-instructions.md`. Skipping creation of a missing root
+entry file should be an explicit operator choice, not the default.
 
 When an operator gives exactly one issue target, Discover can verify that
 target directly before Claim. The shortcut avoids broad roadmap
