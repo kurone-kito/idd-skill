@@ -220,7 +220,7 @@ function buildTrustedMarkerLogins(owner, repo, viewerLogin, cliLogins, issueComm
     ...splitCsv(cliLogins),
     ...splitCsv(process.env.IDD_TRUSTED_MARKER_ACTORS),
   ];
-  if (!isTruthy(process.env.IDD_TRUST_COLLABORATOR_MARKERS)) {
+  if (!readCollaboratorTrustEnabled()) {
     return new Set(configured.filter(Boolean).map((login) => login.toLowerCase()));
   }
 
@@ -316,6 +316,18 @@ function safeGhText(args) {
   } catch {
     return "";
   }
+}
+
+function readCollaboratorTrustEnabled() {
+  try {
+    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    if (typeof config?.markerTrust?.allowCollaboratorMarkers === "boolean") {
+      return config.markerTrust.allowCollaboratorMarkers;
+    }
+  } catch {
+    // Fall through to env-var fallback.
+  }
+  return isTruthy(process.env.IDD_TRUST_COLLABORATOR_MARKERS);
 }
 
 function readForcedHandoffAuthorityPolicy() {

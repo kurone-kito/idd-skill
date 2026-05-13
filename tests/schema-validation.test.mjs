@@ -687,6 +687,22 @@ test("policy schema rejects stallRecovery.quietWindow non-duration string", () =
   assert.ok(errors.some((e) => e.includes("stallRecovery")), errors.join("\n"));
 });
 
+test("policy schema rejects stallRecovery.quietWindow empty duration (P)", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.stallRecovery = { quietWindow: "P" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("stallRecovery")), errors.join("\n"));
+});
+
+test("policy schema rejects stallRecovery.quietWindow empty time marker (PT)", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.stallRecovery = { quietWindow: "PT" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("stallRecovery")), errors.join("\n"));
+});
+
 test("policy schema accepts forcedHandoff.mode human-gated", () => {
   const schema = loadJson("schemas/policy.schema.json");
   const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
