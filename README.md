@@ -208,6 +208,16 @@ directory your runtime reads, such as `.github/skills/`,
 tasks such as issue drafting, but they do not replace the portable
 instruction template.
 
+This source repository's optional helper bundle also includes a
+maintainer-facing forced-handoff path. `idd-force-handoff` is a TTY-only
+operator command that asks for an issue number, asks for a PR number
+only when a live open PR exists on the active claim branch, previews the
+successor claim IDs and marker body, and then requires a final `y/N`
+confirmation before posting anything. The lower-level
+`idd-forced-handoff-marker` helper remains available for rendering or
+inspection, but unattended or autopilot contexts must not use the
+interactive facade.
+
 ## For AI Agents
 
 If a user points you at `github:kurone-kito/idd-skill` and asks you to

@@ -781,10 +781,32 @@ their own. Prefer `owners-and-maintainers-only`; if a repository grants
 a broader or more specific operator set, record the exact human actors
 or role rule explicitly in the same policy block.
 
-When a repository sets `forced-handoff: human-gated`, also record the
-canonical consent text and marker contract below in a local runbook or
-policy note. Do not paraphrase them, because future helper or template
-generation should be able to reuse the exact wording.
+When a repository sets `forced-handoff: human-gated`, make one operator
+workflow the recommended path: run the interactive `idd-force-handoff`
+helper from an interactive TTY. That flow:
+
+1. prompts for the issue number before any mutation
+2. inspects live open PR state on the active claim branch and asks for a
+   PR number only when PR-scoped evidence is required
+3. prints the generated successor claim plan and requires a final
+   `y/N` confirmation before posting the canonical forced-handoff
+   marker
+
+The interactive helper is intentionally unavailable to autopilot and
+other unattended contexts. It fails closed outside a TTY instead of
+falling back to an unprompted destructive path.
+
+Keep the lower-level `idd-forced-handoff-marker` helper as a render and
+inspection surface, not the primary operator workflow. Use it when a
+maintainer needs to inspect or reproduce the exact marker payload, but
+prefer `idd-force-handoff` for routine recovery because it derives the
+optional PR prompt from live open PR state rather than digest phase
+text.
+
+When documenting the local forced-handoff policy, also record the
+canonical consent text and marker contract below. Do not paraphrase
+them, because future helper or template generation should be able to
+reuse the exact wording.
 
 ### Forced handoff consent and marker contract
 
