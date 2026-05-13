@@ -129,6 +129,9 @@ pnpm run test
 The pre-commit hook runs `pnpm run lint:minimum`, and the commit message
 hook enforces Conventional Commits through commitlint.
 
+When you edit canonical source files in `idd-template/`, run
+`pnpm run docs:sync` to propagate the changes to all mirrored artifacts.
+
 ### 5-Minute Reading Path
 
 Use the focused docs in this order when you are evaluating or adopting
