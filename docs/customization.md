@@ -159,6 +159,12 @@ changes `claim-stale-age` (24 h default) and
 `claim-heartbeat-interval` (12 h default) before enabling unattended
 workers.
 
+Policy foundation namespaces are available in `.github/idd/config.json`
+for parameterized follow-up work: `stallRecovery`, `forcedHandoff`,
+`markerTrust`, `advisoryWait`, `ciWait`, `discover`, `claim`,
+`critiqueLoop`, `reviewEscalation`, `approvalSignals`, and
+`issueAuthoring`. Leaving these keys unset keeps distributed behavior.
+
 ## Phase ID Compatibility Contract
 
 Treat phase IDs as a compatibility surface, not as presentation text.

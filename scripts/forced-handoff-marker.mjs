@@ -5,14 +5,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import { renderForcedHandoffComment, summarizeClaimValidation } from "./protocol-helpers.mjs";
-
-const APPROVAL_ACTOR_POLICIES = new Set([
-  "owners-and-maintainers-only",
-  "all-write-permission-actors",
-]);
-const APPROVAL_ACTOR_POLICY_DEFAULT = "owners-and-maintainers-only";
-const FORCED_HANDOFF_MODES = new Set(["disabled", "human-gated"]);
-const FORCED_HANDOFF_MODE_DEFAULT = "disabled";
+import { normalizePolicyConfig, resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
 
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
@@ -320,10 +313,10 @@ function safeGhText(args) {
 
 function readCollaboratorTrustEnabled() {
   try {
-    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    if (typeof config?.markerTrust?.allowCollaboratorMarkers === "boolean") {
-      return config.markerTrust.allowCollaboratorMarkers;
-    }
+    return resolveCollaboratorMarkerTrust(
+      JSON.parse(readFileSync(".github/idd/config.json", "utf8")),
+      process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+    );
   } catch {
     // Fall through to env-var fallback.
   }
@@ -331,36 +324,24 @@ function readCollaboratorTrustEnabled() {
 }
 
 function readForcedHandoffAuthorityPolicy() {
-  try {
-    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    const policy = String(
-      config?.forcedHandoff?.authorityPolicy ??
-        config?.forcedHandoffAuthority ??
-        config?.["forced-handoff-authority"] ??
-        "",
-    ).trim();
-    if (APPROVAL_ACTOR_POLICIES.has(policy)) {
-      return policy;
-    }
-  } catch {
-    // Default policy remains owners-and-maintainers-only.
-  }
-  return APPROVAL_ACTOR_POLICY_DEFAULT;
+  return readNormalizedPolicy().forcedHandoff.authorityPolicy;
 }
 
 function readForcedHandoffMode() {
   try {
-    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    const mode = String(
-      config?.forcedHandoff?.mode ?? config?.forcedHandoff ?? config?.["forced-handoff"] ?? "",
-    ).trim();
-    if (FORCED_HANDOFF_MODES.has(mode)) {
-      return mode;
-    }
+    return readNormalizedPolicy().forcedHandoff.mode;
   } catch {
     // Default mode remains disabled.
+    return "disabled";
   }
-  return FORCED_HANDOFF_MODE_DEFAULT;
+}
+
+function readNormalizedPolicy() {
+  try {
+    return normalizePolicyConfig(JSON.parse(readFileSync(".github/idd/config.json", "utf8")));
+  } catch {
+    return normalizePolicyConfig({});
+  }
 }
 
 function collaboratorPermission(owner, repo, login, cache) {

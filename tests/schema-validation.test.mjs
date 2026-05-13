@@ -360,6 +360,49 @@ test(".github/idd/config.json validates against policy schema", () => {
   assert.ok(ok, errors.join("\n"));
 });
 
+test("policy schema accepts foundation policy namespaces", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects scalar values at forced-handoff object keys", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.forcedHandoff = "human-gated";
+  instance["forced-handoff"] = "disabled";
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes("$.forcedHandoff: expected type \"object\"")),
+    errors.join("\n"),
+  );
+  assert.ok(
+    errors.some((error) => error.includes("$.forced-handoff: expected type \"object\"")),
+    errors.join("\n"),
+  );
+});
+
+test("policy schema accepts marker trust boolean aliases", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.markerTrustAllowCollaboratorMarkers = true;
+  instance.allowCollaboratorMarkers = false;
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects non-positive advisory wait request cap", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.advisoryWait.requestCap = 0;
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes("$.advisoryWait.requestCap")),
+    errors.join("\n"),
+  );
+});
+
 test("policy schema accepts explicit instructions-only helperRuntime", () => {
   const schema = loadJson("schemas/policy.schema.json");
   const instance = loadJson("fixtures/schemas/policy.valid.json");

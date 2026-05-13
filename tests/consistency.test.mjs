@@ -4,7 +4,12 @@ import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { collectPolicyConfigDrift, inspectHelperRuntimeConfig } from "../scripts/consistency-helpers.mjs";
+import {
+  collectPolicyConfigDrift,
+  inspectHelperRuntimeConfig,
+  normalizePolicyConfig,
+  resolveCollaboratorMarkerTrust,
+} from "../scripts/consistency-helpers.mjs";
 import { findPlaceholders } from "../scripts/idd-doctor.mjs";
 
 const FIXTURE_ROOT = new URL("./fixtures/", import.meta.url);
@@ -101,6 +106,190 @@ test("helper runtime inspection accepts absent and supported profiles, rejects u
     status: "invalid",
     reason: "unsupported helperRuntime keys: manager",
   });
+});
+
+test("policy normalization provides default-safe values and supports aliases", () => {
+  assert.deepEqual(normalizePolicyConfig(null), {
+    issueScope: "roadmap",
+    orphanFirstPolicy: "none",
+    skipIssueAuthorApprovalGate: false,
+    maintainerApprovalActorPolicy: "owners-and-maintainers-only",
+    stallRecovery: {
+      quietWindow: "PT30M",
+    },
+    forcedHandoff: {
+      mode: "disabled",
+      authorityPolicy: "owners-and-maintainers-only",
+    },
+    markerTrust: {
+      allowCollaboratorMarkers: false,
+    },
+    advisoryWait: {
+      requestCap: 30,
+      pendingWindow: "PT30M",
+      settledWindow: "PT10M",
+      pollInterval: "PT2M",
+      capExhaustedRoute: "phase-default",
+    },
+    ciWait: {
+      runningTimeout: "PT30M",
+      generationTimeout: "PT10M",
+      rerunPolicy: "rerun-once",
+    },
+    discover: {
+      activeClaimPreScanBatchSize: 10,
+    },
+    claim: {
+      verifySettleDelay: "PT5S",
+    },
+    critiqueLoop: {
+      cPhaseLowSeveritySkipAfter: 3,
+      e10NoProgressHoldAfter: 3,
+    },
+    reviewEscalation: {
+      changesRequestedFirstEscalation: "PT24H",
+      changesRequestedSecondEscalation: "PT48H",
+    },
+    approvalSignals: {
+      readyLabelName: "idd:ready",
+      labelFreshnessMode: "presence-only",
+    },
+    issueAuthoring: {
+      maxClarificationRounds: 3,
+    },
+  });
+
+  assert.deepEqual(normalizePolicyConfig({
+    issueScope: "orphan-first",
+    orphanFirstPolicy: "maintainer-approved",
+    skipIssueAuthorApprovalGate: true,
+    maintainerApprovalActorPolicy: "all-write-permission-actors",
+    stallRecovery: {
+      quietWindow: "PT45M",
+    },
+    forcedHandoffMode: "human-gated",
+    "forced-handoff-authority": "all-write-permission-actors",
+    markerTrustAllowCollaboratorMarkers: true,
+    advisoryWait: {
+      requestCap: 5,
+      pendingWindow: "PT40M",
+      settledWindow: "PT11M",
+      pollInterval: "PT3M",
+      capExhaustedRoute: "strict-hold",
+    },
+    ciWait: {
+      runningTimeout: "PT35M",
+      generationTimeout: "PT15M",
+      rerunPolicy: "rerun-once",
+    },
+    discover: {
+      activeClaimPreScanBatchSize: 11,
+    },
+    claim: {
+      verifySettleDelay: "PT7S",
+    },
+    critiqueLoop: {
+      cPhaseLowSeveritySkipAfter: 4,
+      e10NoProgressHoldAfter: 2,
+    },
+    reviewEscalation: {
+      changesRequestedFirstEscalation: "PT18H",
+      changesRequestedSecondEscalation: "PT36H",
+    },
+    approvalSignals: {
+      readyLabelName: "custom:ready",
+      labelFreshnessMode: "event-freshness",
+    },
+    issueAuthoring: {
+      maxClarificationRounds: 4,
+    },
+  }), {
+    issueScope: "orphan-first",
+    orphanFirstPolicy: "maintainer-approved",
+    skipIssueAuthorApprovalGate: true,
+    maintainerApprovalActorPolicy: "all-write-permission-actors",
+    stallRecovery: {
+      quietWindow: "PT45M",
+    },
+    forcedHandoff: {
+      mode: "human-gated",
+      authorityPolicy: "all-write-permission-actors",
+    },
+    markerTrust: {
+      allowCollaboratorMarkers: true,
+    },
+    advisoryWait: {
+      requestCap: 5,
+      pendingWindow: "PT40M",
+      settledWindow: "PT11M",
+      pollInterval: "PT3M",
+      capExhaustedRoute: "strict-hold",
+    },
+    ciWait: {
+      runningTimeout: "PT35M",
+      generationTimeout: "PT15M",
+      rerunPolicy: "rerun-once",
+    },
+    discover: {
+      activeClaimPreScanBatchSize: 11,
+    },
+    claim: {
+      verifySettleDelay: "PT7S",
+    },
+    critiqueLoop: {
+      cPhaseLowSeveritySkipAfter: 4,
+      e10NoProgressHoldAfter: 2,
+    },
+    reviewEscalation: {
+      changesRequestedFirstEscalation: "PT18H",
+      changesRequestedSecondEscalation: "PT36H",
+    },
+    approvalSignals: {
+      readyLabelName: "custom:ready",
+      labelFreshnessMode: "event-freshness",
+    },
+    issueAuthoring: {
+      maxClarificationRounds: 4,
+    },
+  });
+
+  assert.deepEqual(normalizePolicyConfig({
+    forcedHandoff: {
+      mode: "human-gated",
+      authorityPolicy: "owners-and-maintainers-only",
+    },
+    "forced-handoff-authority": "all-write-permission-actors",
+  }).forcedHandoff, {
+    mode: "human-gated",
+    authorityPolicy: "owners-and-maintainers-only",
+  });
+
+  assert.deepEqual(normalizePolicyConfig({
+    forcedHandoff: {
+      mode: "human-gated-invalid",
+      authorityPolicy: "owners-and-maintainers-invalid",
+    },
+    forcedHandoffMode: "human-gated",
+    "forced-handoff-authority": "all-write-permission-actors",
+  }).forcedHandoff, {
+    mode: "human-gated",
+    authorityPolicy: "all-write-permission-actors",
+  });
+});
+
+test("collaborator trust resolution honors aliases and env fallback", () => {
+  assert.equal(resolveCollaboratorMarkerTrust({}, "true"), true);
+  assert.equal(resolveCollaboratorMarkerTrust({
+    markerTrustAllowCollaboratorMarkers: true,
+  }, ""), true);
+  assert.equal(resolveCollaboratorMarkerTrust({
+    allowCollaboratorMarkers: false,
+  }, "true"), false);
+  assert.equal(resolveCollaboratorMarkerTrust({
+    markerTrust: {
+      allowCollaboratorMarkers: "invalid",
+    },
+  }, "true"), true);
 });
 
 test("A4.5 outcome fixtures match the documented check-to-outcome mapping", () => {
