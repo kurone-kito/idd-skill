@@ -123,6 +123,9 @@ pnpm run test
 pre-commit hook は `pnpm run lint:minimum` を実行し、commit-msg hook は
 commitlint により Conventional Commits を検証します。
 
+`idd-template/` 配下の正規ソースファイルを編集したときは、`pnpm run docs:sync`
+を実行して、すべてのミラーアーティファクトに変更を伝播してください。
+
 ### 5 分で読む導線
 
 IDD を評価または導入するときは、focused docs を次の順に読んでください:
