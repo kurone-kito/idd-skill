@@ -9,7 +9,7 @@
     "staleAge": "PT24H",
     "heartbeatInterval": "PT12H"
   },
-  "trustedMarkerActors": ["{{TRUSTED_MARKER_ACTORS}}"],
+  "trustedMarkerActors": ["{{TRUSTED_MARKER_ACTOR}}"],
   "commands": {
     "install-deps": "true",
     "fix-validate": "npx dprint fmt \"**/*.md\" && npx markdownlint-cli2 --fix \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\"",
@@ -22,4 +22,3 @@
   "issueScope": "roadmap",
   "orphanFirstPolicy": "none"
 }
-

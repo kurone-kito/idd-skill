@@ -276,7 +276,7 @@ Keep these rules in mind:
   approval model that the distributed runtime already enforces
 - use `skipIssueAuthorApprovalGate: true` when the repository
   intentionally opts out; omitted or `false` keeps the gate enabled
-- replace `{{TRUSTED_MARKER_ACTORS}}` in `trustedMarkerActors` with a
+- replace `{{TRUSTED_MARKER_ACTOR}}` in `trustedMarkerActors` with a
   single JSON-escaped GitHub login string first, then add any extra
   quoted array entries manually for additional trusted marker actors
 - keep command strings JSON-escaped instead of pasting fragile raw shell

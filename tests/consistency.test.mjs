@@ -16,7 +16,7 @@ test("placeholder scenarios detect clean and dirty post-onboarding fixtures", ()
 
   assert.deepEqual(clean, []);
   assert.deepEqual(dirty, [
-    ".github/idd/config.json: {{PROJECT_MARKER_PREFIX}}, {{TRUSTED_MARKER_ACTORS}}",
+    ".github/idd/config.json: {{PROJECT_MARKER_PREFIX}}, {{TRUSTED_MARKER_ACTOR}}",
     "README.md: {{REPO_NAME}}",
   ]);
 });

@@ -30,11 +30,11 @@ short hyphenated marker prefix. The final value must match:
 
 That means 2-32 characters, lowercase, starting with a letter.
 
-### `{{TRUSTED_MARKER_ACTORS}}`
+### `{{TRUSTED_MARKER_ACTOR}}`
 
 List the GitHub logins allowed to post trusted IDD markers in
-`.github/idd/config.json`. Because the placeholder sits inside a quoted
-JSON array entry, replace the quoted placeholder with a single
+`.github/idd/config.json`. This placeholder is intentionally singular:
+it fills one quoted JSON array entry, so replace it with a single
 JSON-escaped login string first. Examples:
 
 - one trusted marker actor → `trusted-user-a`
@@ -113,15 +113,15 @@ For the full fallback order and policy matrix, see
 After Step 1A and Step 1C, you should have final values for these seven
 placeholders:
 
-| Placeholder                      | Meaning                                                | Example                             |
-| -------------------------------- | ------------------------------------------------------ | ----------------------------------- |
-| `{{REPO_NAME}}`                  | Repository short name used in worktree examples        | `my-app`                            |
-| `{{PROJECT_MARKER_PREFIX}}`      | Hidden issue-body marker prefix                        | `my-app`                            |
-| `{{TRUSTED_MARKER_ACTORS}}`      | JSON-escaped logins allowed to post trusted markers    | `"trusted-user-a", "trusted-bot-a"` |
-| `{{FIX_VALIDATE_COMMANDS}}`      | Auto-fix plus validate command row                     | `npm run lint:fix && npm run lint`  |
-| `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Non-mutating verify command row                        | `npm run lint && npm run test`      |
-| `{{POST_FIX_VALIDATE_COMMANDS}}` | Post-fix validate command row                          | `npm run lint:fix && npm test`      |
-| `{{INSTALL_DEPS_COMMAND}}`       | Dependency install command, or `true` when unnecessary | `npm install`                       |
+| Placeholder                      | Meaning                                                   | Example                            |
+| -------------------------------- | --------------------------------------------------------- | ---------------------------------- |
+| `{{REPO_NAME}}`                  | Repository short name used in worktree examples           | `my-app`                           |
+| `{{PROJECT_MARKER_PREFIX}}`      | Hidden issue-body marker prefix                           | `my-app`                           |
+| `{{TRUSTED_MARKER_ACTOR}}`       | Single JSON-escaped login allowed to post trusted markers | `trusted-user-a`                   |
+| `{{FIX_VALIDATE_COMMANDS}}`      | Auto-fix plus validate command row                        | `npm run lint:fix && npm run lint` |
+| `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Non-mutating verify command row                           | `npm run lint && npm run test`     |
+| `{{POST_FIX_VALIDATE_COMMANDS}}` | Post-fix validate command row                             | `npm run lint:fix && npm test`     |
+| `{{INSTALL_DEPS_COMMAND}}`       | Dependency install command, or `true` when unnecessary    | `npm install`                      |
 
 ### No-op substitution
 
