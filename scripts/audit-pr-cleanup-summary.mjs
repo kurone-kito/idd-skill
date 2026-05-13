@@ -15,7 +15,13 @@ export function computeReportSummary(report) {
   };
 
   if (report.mode === "dry-run") {
-    report.status = report.candidates.length === 0 ? "clean" : "needs-apply";
+    if (report.candidates.length > 0) {
+      report.status = "needs-apply";
+    } else if (viewerCannotMinimize > 0) {
+      report.status = "permission-blocked";
+    } else {
+      report.status = "clean";
+    }
     return;
   }
 
