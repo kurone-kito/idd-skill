@@ -245,6 +245,13 @@ export function normalizePolicyConfig(config) {
   };
 }
 
+export function resolveCollaboratorMarkerTrust(config, envValue = "") {
+  if (hasConfiguredCollaboratorMarkerTrust(config)) {
+    return normalizePolicyConfig(config).markerTrust.allowCollaboratorMarkers;
+  }
+  return isTruthy(envValue);
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -296,6 +303,16 @@ function parsePositiveInteger(value, fallback) {
 
 function parseNonEmptyString(value, fallback) {
   return typeof value === "string" && value.length > 0 ? value : fallback;
+}
+
+function hasConfiguredCollaboratorMarkerTrust(config) {
+  return typeof config?.markerTrust?.allowCollaboratorMarkers === "boolean"
+    || typeof config?.markerTrustAllowCollaboratorMarkers === "boolean"
+    || typeof config?.allowCollaboratorMarkers === "boolean";
+}
+
+function isTruthy(value) {
+  return /^(1|true|yes)$/i.test(String(value ?? "").trim());
 }
 
 function hasOwn(value, key) {

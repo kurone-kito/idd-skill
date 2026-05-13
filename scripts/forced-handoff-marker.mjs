@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import { renderForcedHandoffComment, summarizeClaimValidation } from "./protocol-helpers.mjs";
-import { normalizePolicyConfig } from "./policy-helpers.mjs";
+import { normalizePolicyConfig, resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
 
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
@@ -313,10 +313,10 @@ function safeGhText(args) {
 
 function readCollaboratorTrustEnabled() {
   try {
-    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    if (typeof config?.markerTrust?.allowCollaboratorMarkers === "boolean") {
-      return config.markerTrust.allowCollaboratorMarkers;
-    }
+    return resolveCollaboratorMarkerTrust(
+      JSON.parse(readFileSync(".github/idd/config.json", "utf8")),
+      process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+    );
   } catch {
     // Fall through to env-var fallback.
   }

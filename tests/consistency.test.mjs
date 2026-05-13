@@ -8,6 +8,7 @@ import {
   collectPolicyConfigDrift,
   inspectHelperRuntimeConfig,
   normalizePolicyConfig,
+  resolveCollaboratorMarkerTrust,
 } from "../scripts/consistency-helpers.mjs";
 import { findPlaceholders } from "../scripts/idd-doctor.mjs";
 
@@ -274,6 +275,21 @@ test("policy normalization provides default-safe values and supports aliases", (
     mode: "human-gated",
     authorityPolicy: "all-write-permission-actors",
   });
+});
+
+test("collaborator trust resolution honors aliases and env fallback", () => {
+  assert.equal(resolveCollaboratorMarkerTrust({}, "true"), true);
+  assert.equal(resolveCollaboratorMarkerTrust({
+    markerTrustAllowCollaboratorMarkers: true,
+  }, ""), true);
+  assert.equal(resolveCollaboratorMarkerTrust({
+    allowCollaboratorMarkers: false,
+  }, "true"), false);
+  assert.equal(resolveCollaboratorMarkerTrust({
+    markerTrust: {
+      allowCollaboratorMarkers: "invalid",
+    },
+  }, "true"), true);
 });
 
 test("A4.5 outcome fixtures match the documented check-to-outcome mapping", () => {

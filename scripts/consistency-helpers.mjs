@@ -1,6 +1,6 @@
 import { parseProjectCommandRows } from "./policy-helpers.mjs";
 
-export { inspectHelperRuntimeConfig, normalizePolicyConfig } from "./policy-helpers.mjs";
+export { inspectHelperRuntimeConfig, normalizePolicyConfig, resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
 
 const COMMAND_KEYS = [
   "install-deps",

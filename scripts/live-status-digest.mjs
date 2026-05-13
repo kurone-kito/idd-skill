@@ -8,7 +8,7 @@ import {
   planLiveStatusDigestUpsert,
   summarizeClaimValidation,
 } from "./protocol-helpers.mjs";
-import { normalizePolicyConfig } from "./policy-helpers.mjs";
+import { normalizePolicyConfig, resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
 
 const TRUSTED_MARKER_PERMISSIONS = new Set(["admin", "maintain", "write"]);
 const trustedMarkerAuthorCache = new Map();
@@ -375,10 +375,10 @@ function configuredTrustedMarkerAuthors() {
 
 function trustCollaboratorMarkers() {
   try {
-    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    if (typeof config?.markerTrust?.allowCollaboratorMarkers === "boolean") {
-      return config.markerTrust.allowCollaboratorMarkers;
-    }
+    return resolveCollaboratorMarkerTrust(
+      JSON.parse(readFileSync(".github/idd/config.json", "utf8")),
+      process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+    );
   } catch {
     // Fall through to env-var fallback.
   }
