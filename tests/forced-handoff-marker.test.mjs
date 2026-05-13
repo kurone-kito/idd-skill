@@ -531,3 +531,103 @@ test("forced handoff rejects conflicting alias keys", () => {
 
   assert.equal(parseForcedHandoffComment(body, "2026-05-12T11:00:05Z"), null);
 });
+
+test("nested forcedHandoff.mode key enables human-gated mode", () => {
+  const originalCwd = process.cwd();
+  const sandbox = mkdtempSync(join(tmpdir(), "idd-forced-handoff-marker-"));
+  mkdirSync(join(sandbox, ".github", "idd"), { recursive: true });
+  writeFileSync(
+    join(sandbox, ".github", "idd", "config.json"),
+    JSON.stringify({ forcedHandoff: { mode: "human-gated" } }),
+  );
+
+  process.chdir(sandbox);
+  try {
+    assert.doesNotThrow(() =>
+      main([
+        "--issue",
+        "337",
+        "--new-agent-id",
+        "github-copilot-cli-new",
+        "--new-claim-id",
+        "claim-20260512T110000Z-337-new",
+        "--forced-by",
+        "kurone-kito",
+        "--reason",
+        "operator-approved-recovery",
+        "--repo",
+        "kurone-kito/idd-skill",
+      ]),
+    );
+  } finally {
+    process.chdir(originalCwd);
+  }
+});
+
+test("nested forcedHandoff.mode=disabled refuses output", () => {
+  const originalCwd = process.cwd();
+  const sandbox = mkdtempSync(join(tmpdir(), "idd-forced-handoff-marker-"));
+  mkdirSync(join(sandbox, ".github", "idd"), { recursive: true });
+  writeFileSync(
+    join(sandbox, ".github", "idd", "config.json"),
+    JSON.stringify({ forcedHandoff: { mode: "disabled" } }),
+  );
+
+  process.chdir(sandbox);
+  try {
+    assert.throws(
+      () =>
+        main([
+          "--issue",
+          "337",
+          "--new-agent-id",
+          "github-copilot-cli-new",
+          "--new-claim-id",
+          "claim-20260512T110000Z-337-new",
+          "--forced-by",
+          "kurone-kito",
+          "--reason",
+          "operator-approved-recovery",
+          "--repo",
+          "kurone-kito/idd-skill",
+        ]),
+      /forced-handoff mode is not human-gated; marker generation is disabled/,
+    );
+  } finally {
+    process.chdir(originalCwd);
+  }
+});
+
+test("forcedHandoff.mode defaults to disabled when key is absent", () => {
+  const originalCwd = process.cwd();
+  const sandbox = mkdtempSync(join(tmpdir(), "idd-forced-handoff-marker-"));
+  mkdirSync(join(sandbox, ".github", "idd"), { recursive: true });
+  writeFileSync(
+    join(sandbox, ".github", "idd", "config.json"),
+    JSON.stringify({ iddVersion: "1.0.0" }),
+  );
+
+  process.chdir(sandbox);
+  try {
+    assert.throws(
+      () =>
+        main([
+          "--issue",
+          "337",
+          "--new-agent-id",
+          "github-copilot-cli-new",
+          "--new-claim-id",
+          "claim-20260512T110000Z-337-new",
+          "--forced-by",
+          "kurone-kito",
+          "--reason",
+          "operator-approved-recovery",
+          "--repo",
+          "kurone-kito/idd-skill",
+        ]),
+      /forced-handoff mode is not human-gated; marker generation is disabled/,
+    );
+  } finally {
+    process.chdir(originalCwd);
+  }
+});

@@ -217,7 +217,7 @@ function resolveWindowFromPolicy(policyPath) {
     : resolve(process.cwd(), ".github/idd/config.json");
   try {
     const config = JSON.parse(readFileSync(source, "utf8"));
-    return parseDurationToMs(config?.claimTiming?.staleAge) ?? DEFAULT_QUIET_WINDOW_MS;
+    return parseDurationToMs(config?.stallRecovery?.quietWindow) ?? DEFAULT_QUIET_WINDOW_MS;
   } catch {
     return DEFAULT_QUIET_WINDOW_MS;
   }

@@ -321,7 +321,12 @@ function safeGhText(args) {
 function readForcedHandoffAuthorityPolicy() {
   try {
     const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    const policy = String(config?.forcedHandoffAuthority ?? config?.["forced-handoff-authority"] ?? "").trim();
+    const policy = String(
+      config?.forcedHandoff?.authorityPolicy ??
+        config?.forcedHandoffAuthority ??
+        config?.["forced-handoff-authority"] ??
+        "",
+    ).trim();
     if (APPROVAL_ACTOR_POLICIES.has(policy)) {
       return policy;
     }
@@ -334,7 +339,9 @@ function readForcedHandoffAuthorityPolicy() {
 function readForcedHandoffMode() {
   try {
     const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    const mode = String(config?.forcedHandoff ?? config?.["forced-handoff"] ?? "").trim();
+    const mode = String(
+      config?.forcedHandoff?.mode ?? config?.forcedHandoff ?? config?.["forced-handoff"] ?? "",
+    ).trim();
     if (FORCED_HANDOFF_MODES.has(mode)) {
       return mode;
     }
