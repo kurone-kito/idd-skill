@@ -296,6 +296,95 @@ The helper applies only safe candidates and reports applied, skipped,
 and failed rows. A helper failure is still cleanup-only context; it does
 not retroactively block a merge that already passed F3.
 
+## Mandatory F4 Cleanup Contract
+
+F4 cleanup apply is mandatory when candidates exist and the viewer can
+minimize them. No path may exit F4 without a recorded reason when
+cleanup candidates are detected.
+
+### Decision tree
+
+After the dry-run, evaluate the `status` field and follow the
+corresponding path:
+
+| Dry-run `status`     | Action                                                        |
+| -------------------- | ------------------------------------------------------------- |
+| `clean`              | No candidates and no permission-blocked items. Proceed to F4  |
+|                      | step 3.                                                       |
+| `needs-apply`        | Run apply (mandatory). Post a cleanup evidence comment.       |
+| `permission-blocked` | Post a cleanup-permission-blocked comment, then proceed to F4 |
+|                      | step 3.                                                       |
+
+After apply, if `status` is `failed` or `incomplete`, post a
+cleanup-failure comment. A cleanup failure after a successful F3 merge
+does not re-block the merge; it is an explicit record only.
+
+### Cleanup evidence comment
+
+Post this comment to the PR after a successful or partial apply. The
+HTML comment token on the first line acts as a stable machine-readable
+marker so a resuming agent can detect whether the evidence was already
+posted:
+
+```markdown
+<!-- idd-cleanup-evidence: {status} applied:{N} failed:{N} skipped:{N} viewer-cannot-minimize:{N} -->
+
+**F4 Cleanup Evidence**
+
+| Field              | Value                                  |
+| ------------------ | -------------------------------------- |
+| Status             | applied / failed / incomplete          |
+| Applied            | N                                      |
+| Failed             | N                                      |
+| Skipped            | N                                      |
+| Permission-blocked | N                                      |
+| Notes              | reason for any failed or skipped items |
+```
+
+### Cleanup-failure comment
+
+Post this comment when apply `status` is `failed` or `incomplete`. If
+`viewer-cannot-minimize > 0` is also non-zero, include the blocked count
+in the same comment rather than posting a separate permission-blocked
+comment:
+
+```markdown
+<!-- idd-cleanup-evidence: {status} applied:{N} failed:{N} skipped:{N} viewer-cannot-minimize:{N} -->
+
+**F4 Cleanup Failure**
+
+Cleanup candidates were detected but not all could be applied.
+
+- Status: failed / incomplete
+- Failed: N candidates (reason: ...)
+- Unapplied: N candidates
+- Permission-blocked: N candidates (if any)
+
+This does not re-block the merge. A maintainer may run cleanup
+manually: `node scripts/audit-pr-cleanup.mjs --pr <N> --apply --skip-claim-check`
+```
+
+### Cleanup-permission-blocked comment
+
+Post this comment when dry-run `status` is `permission-blocked` (no
+apply-eligible candidates exist, only viewer-cannot-minimize items).
+This status is only emitted in dry-run mode; it is never emitted during
+apply (apply failures use `failed` or `incomplete` instead):
+
+```markdown
+<!-- idd-cleanup-evidence: permission-blocked applied:0 failed:0 skipped:N viewer-cannot-minimize:{N} -->
+
+**F4 Cleanup Permission Blocked**
+
+Cleanup candidates were detected but the current viewer cannot minimize
+them (`viewerCanMinimize: false`).
+
+- Permission-blocked: N candidates
+
+This does not re-block the merge. A maintainer with minimize permission
+may run cleanup manually: `node scripts/audit-pr-cleanup.mjs --pr <N> --apply --skip-claim-check`
+```
+
 ## Fallback GraphQL
 
 If the helper is unavailable, use the direct GraphQL capability checks

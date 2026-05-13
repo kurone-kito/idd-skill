@@ -2,7 +2,9 @@ export function computeReportSummary(report) {
   const alreadyMinimized = report.skipped.filter((skip) => skip.isMinimized).length;
   const viewerCanMinimize = report.candidates.length
     + report.skipped.filter((skip) => skip.viewerCanMinimize).length;
-  const viewerCannotMinimize = report.skipped.filter((skip) => !skip.viewerCanMinimize).length;
+  const viewerCannotMinimize = report.skipped.filter(
+    (skip) => !skip.isMinimized && !skip.viewerCanMinimize,
+  ).length;
 
   report.summary = {
     candidate: report.candidates.length,
@@ -15,7 +17,13 @@ export function computeReportSummary(report) {
   };
 
   if (report.mode === "dry-run") {
-    report.status = report.candidates.length === 0 ? "clean" : "needs-apply";
+    if (report.candidates.length > 0) {
+      report.status = "needs-apply";
+    } else if (viewerCannotMinimize > 0) {
+      report.status = "permission-blocked";
+    } else {
+      report.status = "clean";
+    }
     return;
   }
 

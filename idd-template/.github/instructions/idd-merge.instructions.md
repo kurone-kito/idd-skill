@@ -162,12 +162,11 @@ gate. The active claim must still use your current `{claim-id}`.
    re-validating the claim. Do not minimize the digest as an
    operational marker unless a future cleanup policy explicitly supports
    digest retirement.
-2. Run best-effort merged-PR comment cleanup when credentials permit.
-   This cleanup is never a merge gate and must not run before F3
-   succeeds. If cleanup fails, record the failure only if it is useful
-   for a later audit, then continue with local cleanup.
-   Re-validate the active claim before each GitHub minimization
-   mutation.
+2. Run merged-PR comment cleanup. This step must not run before F3
+   succeeds. Re-validate the active claim before each GitHub
+   minimization mutation.
+
+   Apply the following cleanup policy rules when evaluating candidates:
 
    - Feedback or review parent comments may be minimized as `RESOLVED`
      only after every actionable child review comment/thread under that
@@ -193,32 +192,64 @@ gate. The active claim must still use your current `{claim-id}`.
      decisions, active holds, failed-CI context still needed by
      maintainers, non-operational human discussion, or any content that
      still participates in active F2/F3 gates.
-   - In the idd-skill source repository, `scripts/audit-pr-cleanup.mjs`
-     is available; run it first in dry-run mode so eligible and skipped
-     candidates are visible. In adopter repositories, skip to the
-     GitHub GraphQL step below unless the helper scripts were explicitly
-     installed.
 
-     ```sh
-     node scripts/audit-pr-cleanup.mjs --pr <pr-number> --dry-run --format table
-     ```
+   **Mandatory apply decision tree** — follow this sequence; no path
+   may exit without a recorded reason when cleanup candidates exist:
 
-     To apply the safe candidates during this claimed IDD run, pass the
-     active issue and claim token so the helper re-validates the claim
-     before each minimization mutation:
+   In the idd-skill source repository, run the helper in dry-run mode
+   first. In adopter repositories, skip to the GraphQL fallback below
+   unless the helper scripts were explicitly installed.
+
+   ```sh
+   node scripts/audit-pr-cleanup.mjs --pr <pr-number> --dry-run --format table
+   ```
+
+   Evaluate the dry-run `status` field (this is a dry-run status; apply
+   mode emits different values and is never invoked unless dry-run
+   shows `needs-apply`):
+
+   - **`clean`**: no candidates and no permission-blocked items.
+     Proceed to step 3.
+
+   - **`needs-apply`**: eligible candidates exist and the viewer can
+     minimize them. Apply is mandatory. Re-validate the active claim,
+     then run:
 
      ```sh
      node scripts/audit-pr-cleanup.mjs --pr <pr-number> --apply \
        --claim-issue <issue-number> --claim-id <claim-id> --format table
      ```
 
-   - Otherwise, use GitHub GraphQL `minimizeComment`
-     with node IDs. Check `viewerCanMinimize` and `isMinimized` before
-     minimizing; skip already-minimized comments and comments the viewer
-     cannot minimize. Re-validate the active claim before each mutation.
+     After apply, post a comment to the PR recording the outcome. See
+     `docs/idd-comment-minimization.md` for the exact format:
 
-   See `docs/idd-comment-minimization.md` for the helper report shape,
-   fallback GraphQL commands, and experiment notes.
+     If the apply `status` is `applied`: post the evidence comment
+     format (with `status`, `applied`, `failed`, `skipped`, and
+     `viewer-cannot-minimize` counts). Proceed to step 3.
+
+     If the apply `status` is `failed` or `incomplete`: post the
+     cleanup-failure comment format instead. Include the
+     `viewer-cannot-minimize` count when it is non-zero. This is
+     explicit evidence, not a merge gate — the merge already succeeded.
+     Proceed to step 3.
+
+   - **`permission-blocked`**: skipped items exist with
+     `viewerCanMinimize: false` and no apply-eligible candidates were
+     found. Post a cleanup-permission-blocked comment to the PR listing
+     the blocked candidates and the count, then proceed to step 3.
+
+   For the GraphQL fallback (when the helper is unavailable): check
+   `viewerCanMinimize` and `isMinimized` before minimizing; skip
+   already-minimized comments and comments the viewer cannot minimize.
+   Re-validate the active claim before each mutation. After GraphQL
+   cleanup, post an evidence comment summarizing the outcome (status,
+   applied count, skipped count with reasons). If the viewer cannot
+   minimize any detected candidates, post a
+   cleanup-permission-blocked comment instead of exiting silently.
+
+   See `docs/idd-comment-minimization.md` for the evidence comment
+   format, cleanup-failure comment format, permission-blocked comment
+   format, and fallback GraphQL commands.
 3. Delete the local worktree and local branch.
 4. Update the local `main` branch.
 5. If GitHub auto-delete is disabled: delete the remote branch too.
