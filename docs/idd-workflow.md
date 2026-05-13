@@ -31,6 +31,12 @@ you are reading this guide first, start at step 1.
 | Claude Code             | `CLAUDE.md`                       | None from `.github/instructions/` by default                                                                                                                       | `.github/instructions/idd-overview.instructions.md` and the routed phase file |
 | Gemini CLI              | `GEMINI.md`                       | None from `.github/instructions/`                                                                                                                                  | `.github/instructions/idd-overview.instructions.md` and the routed phase file |
 
+During onboarding, create or update `CLAUDE.md`, `AGENTS.md`, and
+`GEMINI.md` so each non-Copilot agent listed above has a stable first
+file to read. GitHub Copilot remains an update-if-present surface via
+`.github/copilot-instructions.md`. Skipping creation of a missing root
+entry file should be an explicit operator choice, not the default.
+
 ## IDD file map
 
 | File                                                       | Role                                                                                 |

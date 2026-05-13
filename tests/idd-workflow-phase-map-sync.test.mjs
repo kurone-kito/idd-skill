@@ -34,7 +34,16 @@ test("workflow onboarding guidance stays synced between docs and template", () =
   const canonicalText = readText(CANONICAL_DOC);
   const templateText = readText(TEMPLATE_DOC);
 
-  assert.match(canonicalText, /During onboarding, create or update `CLAUDE\.md`, `AGENTS\.md`, and\s+`GEMINI\.md`/);
+  assert.match(
+    normalizeWhitespace(canonicalText),
+    /During onboarding, create or update `CLAUDE\.md`, `AGENTS\.md`, and `GEMINI\.md` so each non-Copilot agent listed above has a stable first file to read\. GitHub Copilot remains an update-if-present surface via `\.github\/copilot-instructions\.md`\. Skipping creation of a missing root entry file should be an explicit operator choice, not the default\./,
+    "canonical workflow doc must keep onboarding guidance",
+  );
+  assert.match(
+    normalizeWhitespace(templateText),
+    /During onboarding, create or update `CLAUDE\.md`, `AGENTS\.md`, and `GEMINI\.md` so each non-Copilot agent listed above has a stable first file to read\. GitHub Copilot remains an update-if-present surface via `\.github\/copilot-instructions\.md`\. Skipping creation of a missing root entry file should be an explicit operator choice, not the default\./,
+    "template workflow doc must keep onboarding guidance",
+  );
   assert.equal(
     canonicalText.includes("helper-backed evidence collectors first"),
     templateText.includes("helper-backed evidence collectors first"),
@@ -52,4 +61,8 @@ function extractTopLevelSection(text, fileLabel, startMarker) {
   const nextSectionStart = text.indexOf(nextSectionMarker, start + startMarker.length);
   const end = nextSectionStart === -1 ? text.length : nextSectionStart;
   return text.slice(start, end).trim();
+}
+
+function normalizeWhitespace(text) {
+  return text.replace(/\s+/g, " ").trim();
 }
