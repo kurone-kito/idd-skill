@@ -144,6 +144,30 @@
     "alwaysLoadedLimitBytes": 20000,
     "phaseLimitBytes": 30000
   },
+  "bundleBudgets": [
+    {
+      "id": "bundle-discovery",
+      "description": "Discovery path: idd-overview-core + idd-overview-appendix + idd-discover + idd-suitability + idd-claim",
+      "files": [
+        ".github/instructions/idd-overview-core.instructions.md",
+        ".github/instructions/idd-overview-appendix.instructions.md",
+        ".github/instructions/idd-discover.instructions.md",
+        ".github/instructions/idd-suitability.instructions.md",
+        ".github/instructions/idd-claim.instructions.md"
+      ],
+      "limitBytes": 75000
+    },
+    {
+      "id": "bundle-resume",
+      "description": "Resume path: idd-overview-core + idd-overview-appendix + idd-resume",
+      "files": [
+        ".github/instructions/idd-overview-core.instructions.md",
+        ".github/instructions/idd-overview-appendix.instructions.md",
+        ".github/instructions/idd-resume.instructions.md"
+      ],
+      "limitBytes": 46000
+    }
+  ],
   "syncPairs": [
     {
       "id": "idd-advisory-wait-instructions",
