@@ -573,17 +573,17 @@ template copies.
    - Instruction files → `.github/instructions/idd-*.md`
 
 2. If the repository distributes IDD as a template (source of a reusable IDD
-   distribution), run the synchronization script to keep copies in sync:
+   distribution), run the documentation audit check:
 
    ```sh
-   node scripts/audit-docs.mjs
+   node scripts/audit-docs.mjs --check
    ```
 
-   This ensures `idd-template/` copies remain current and placeholder substitutions
-   are correct.
+   This verifies canonical/template pairs and placeholder substitutions stay
+   consistent.
 
-3. Do **not** manually edit files in `idd-template/`. They will be overwritten on
-   the next sync run.
+3. Do **not** edit files in `idd-template/` first. Update canonical sources
+   before mirroring equivalent template changes in the same commit.
 
 **When working with template imports** (external repositories importing IDD):
 
