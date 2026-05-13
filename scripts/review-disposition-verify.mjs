@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 
 const MARKER_ACCEPTED_RE = /^\*\*Accepted\*\*\s+—/;
 const MARKER_REJECTED_RE = /^\*\*Rejected\*\*\s+—/;
+const MARKER_REJECTION_CONFIRMED_RE = /^\*\*Rejection confirmed by maintainer\*\*\s+—/;
 const MARKER_AMD_RE = /^\*\*Awaiting maintainer decision\*\*\s+—/;
 
 if (isMainModule(import.meta.url)) {
@@ -20,8 +21,17 @@ if (isMainModule(import.meta.url)) {
   let rawItems;
   try {
     const parsed = JSON.parse(args.items);
-    rawItems = Array.isArray(parsed) ? parsed : (parsed.items ?? []);
-  } catch {
+    if (Array.isArray(parsed)) {
+      rawItems = parsed;
+    } else if (parsed !== null && typeof parsed === "object" && "items" in parsed) {
+      rawItems = parsed.items ?? [];
+    } else {
+      throw new Error("--items JSON object must have an 'items' key");
+    }
+  } catch (err) {
+    if (err.message.includes("--items")) {
+      throw err;
+    }
     throw new Error("--items must be a valid JSON array or object with an 'items' key");
   }
 
@@ -119,7 +129,7 @@ export function classifyMarker(text) {
   if (MARKER_ACCEPTED_RE.test(trimmed)) {
     return "accepted";
   }
-  if (MARKER_REJECTED_RE.test(trimmed)) {
+  if (MARKER_REJECTED_RE.test(trimmed) || MARKER_REJECTION_CONFIRMED_RE.test(trimmed)) {
     return "rejected";
   }
   if (MARKER_AMD_RE.test(trimmed)) {
@@ -306,7 +316,10 @@ function parseArgs(argv) {
     const token = argv[index];
     const value = argv[index + 1];
     if (token === "--items") {
-      parsed.items = value ?? "[]";
+      if (value === undefined || value.startsWith("-")) {
+        throw new Error("--items requires a JSON value");
+      }
+      parsed.items = value;
       index += 1;
       continue;
     }

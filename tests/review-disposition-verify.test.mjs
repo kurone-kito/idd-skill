@@ -42,6 +42,10 @@ test("classifyMarker: null for unrecognised text", () => {
   assert.equal(classifyMarker("LGTM"), null);
 });
 
+test("classifyMarker: rejection confirmed by maintainer → rejected", () => {
+  assert.equal(classifyMarker("**Rejection confirmed by maintainer** — agreed, closing thread"), "rejected");
+});
+
 // ─── checkPathAItem ───────────────────────────────────────────────────────────
 
 test("checkPathAItem: Accepted — no reply required", () => {
