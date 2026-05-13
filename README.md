@@ -99,6 +99,48 @@ The distributed default allows worker sessions to continue through merge
 the worker session by explicit opt-in. Choose and record one profile in
 [Customizing IDD](docs/customization.md).
 
+## Footprint and sizing guidance
+
+IDD keeps instruction growth mechanically bounded. The maintained budget
+values are tracked in policy docs and enforced by audit metadata rather
+than hand-counted file totals:
+
+| Budget type                           | Maintained value |
+| ------------------------------------- | ---------------- |
+| Always-loaded instruction file        | 20,000 bytes     |
+| Phase instruction file                | 30,000 bytes     |
+| Discovery bundle (`bundle-discovery`) | 75,000 bytes     |
+| Resume bundle (`bundle-resume`)       | 46,000 bytes     |
+
+See [Policy constants: Runtime Instruction Size and Bundle
+Budgets](docs/policy-constants.md#runtime-instruction-size-and-bundle-budgets)
+for the canonical table and ownership details.
+
+To inspect current source-repo footprint evidence:
+
+```sh
+node scripts/audit-docs.mjs --check
+jq '.instructionSizeBudgets, .bundleBudgets' audit/sync-manifest.json
+```
+
+`audit-docs` verifies that the current instruction files still fit the
+maintained limits, and `sync-manifest.json` carries the budget contract.
+
+For adopters, practical loop pressure depends on helper runtime choices:
+
+- Prefer helper runtime support when you want lower day-to-day context
+  pressure in E/F phases (helper commands collect evidence, while merge
+  and mutation decisions still follow written gates).
+- Keep `instructions-only` when your repository avoids Node.js/helper
+  tooling or your team prefers a fully manual shell/`gh`/`jq` path.
+- Expect variance either way: local policy additions, local docs, and
+  extra repository instructions can make your practical footprint smaller
+  or larger than this source repository.
+
+Use [ONBOARDING Step 1B policy decisions](idd-template/ONBOARDING.md#step-1b--confirm-policy-decisions)
+and [helper runtime selection order](docs/idd-helper-scripts.md#import-time-selection-order)
+to pick a profile deliberately.
+
 ## Operational Evidence
 
 As of 2026-05-12, this repository has been dogfooding IDD through

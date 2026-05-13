@@ -96,6 +96,47 @@ IDD は Markdown ネイティブですが、依存関係なしではありませ
 の外に置き、明示的な opt-in により選択します。merge policy は
 [Customizing IDD](docs/customization.md) で 1 つ選んで記録します。
 
+## フットプリントと導入規模の目安
+
+IDD は instruction の増加を、手作業のファイル数カウントではなく、
+メンテされる予算値と監査メタデータで機械的に上限管理します。
+
+| 予算タイプ                            | 維持される値 |
+| ------------------------------------- | ------------ |
+| 常時ロード instruction ファイル       | 20,000 bytes |
+| フェーズ instruction ファイル         | 30,000 bytes |
+| Discovery bundle (`bundle-discovery`) | 75,000 bytes |
+| Resume bundle (`bundle-resume`)       | 46,000 bytes |
+
+正規の値と所有箇所は
+[Policy constants: Runtime Instruction Size and Bundle Budgets](docs/policy-constants.md#runtime-instruction-size-and-bundle-budgets)
+を参照してください。
+
+source repository の最新フットプリント証跡を確認するには:
+
+```sh
+node scripts/audit-docs.mjs --check
+jq '.instructionSizeBudgets, .bundleBudgets' audit/sync-manifest.json
+```
+
+`audit-docs` は現在の instruction ファイルが維持予算内かを検証し、
+`sync-manifest.json` はその予算契約を保持します。
+
+導入先では、実運用時のループ負荷は helper runtime の選択で変わります:
+
+- E/F フェーズの文脈負荷を下げたい場合は helper runtime 対応を優先
+  します（helper は証跡収集のみで、マージや mutation の判断は引き続き
+  instruction のゲートに従います）。
+- Node.js / helper tooling を使わない方針なら `instructions-only` を選び、
+  shell/`gh`/`jq` の手動経路を維持します。
+- どちらの場合も、ローカル policy 追加、ローカル docs、追加 instruction
+  により実効フットプリントは source repository より小さくも大きくもなりえます。
+
+プロファイル選定時は
+[ONBOARDING Step 1B policy decisions](idd-template/ONBOARDING.md#step-1b--confirm-policy-decisions)
+と [helper runtime の選択順](docs/idd-helper-scripts.md#import-time-selection-order)
+を併せて確認してください。
+
 ## 実運用の実績
 
 2026-05-12 時点で、このリポジトリでは IDD を multi-agent / multi-session で
