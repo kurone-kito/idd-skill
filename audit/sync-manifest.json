@@ -59,6 +59,8 @@
       "paths": [
         "idd-template/.github/idd/config.json",
         "idd-template/.github/instructions/idd-overview.instructions.md",
+        "idd-template/.github/instructions/idd-overview-core.instructions.md",
+        "idd-template/.github/instructions/idd-overview-appendix.instructions.md",
         "idd-template/.github/instructions/idd-discover.instructions.md",
         "idd-template/.github/instructions/idd-roadmap-audit.instructions.md",
         "idd-template/.github/instructions/idd-suitability.instructions.md",
@@ -202,6 +204,18 @@
       "source": "idd-template/.github/instructions/idd-overview.instructions.md",
       "target": ".github/instructions/idd-overview.instructions.md",
       "mode": "structure"
+    },
+    {
+      "id": "idd-overview-core-instructions",
+      "source": "idd-template/.github/instructions/idd-overview-core.instructions.md",
+      "target": ".github/instructions/idd-overview-core.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-overview-appendix-instructions",
+      "source": "idd-template/.github/instructions/idd-overview-appendix.instructions.md",
+      "target": ".github/instructions/idd-overview-appendix.instructions.md",
+      "mode": "exact"
     },
     {
       "id": "idd-pr-submit-instructions",
@@ -359,6 +373,18 @@
         "This bundle handles pre-approval issue drafting only.",
         "start the Discover -> Claim -> Work loop implicitly"
       ]
+    },
+    {
+      "id": "idd-overview-core-instructions",
+      "source": "idd-template/.github/instructions/idd-overview-core.instructions.md",
+      "target": ".github/instructions/idd-overview-core.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-overview-appendix-instructions",
+      "source": "idd-template/.github/instructions/idd-overview-appendix.instructions.md",
+      "target": ".github/instructions/idd-overview-appendix.instructions.md",
+      "mode": "exact"
     }
   ],
   "forbiddenPatterns": [

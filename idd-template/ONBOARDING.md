@@ -238,6 +238,8 @@ recording template you will apply in Step 3.
 ```text
 .github/idd/config.json
 .github/instructions/idd-overview.instructions.md
+.github/instructions/idd-overview-core.instructions.md
+.github/instructions/idd-overview-appendix.instructions.md
 .github/instructions/idd-discover.instructions.md
 .github/instructions/idd-roadmap-audit.instructions.md
 .github/instructions/idd-suitability.instructions.md
@@ -312,6 +314,8 @@ mkdir -p "${DEST}/.github/idd" "${DEST}/.github/instructions" "${DEST}/docs" \
 for FILE in \
   ".github/idd/config.json" \
   ".github/instructions/idd-overview.instructions.md" \
+  ".github/instructions/idd-overview-core.instructions.md" \
+  ".github/instructions/idd-overview-appendix.instructions.md" \
   ".github/instructions/idd-discover.instructions.md" \
   ".github/instructions/idd-roadmap-audit.instructions.md" \
   ".github/instructions/idd-suitability.instructions.md" \
@@ -394,6 +398,8 @@ mkdir -p "${DEST}/.github/idd" "${DEST}/.github/instructions" "${DEST}/docs" \
 for FILE in \
   ".github/idd/config.json" \
   ".github/instructions/idd-overview.instructions.md" \
+  ".github/instructions/idd-overview-core.instructions.md" \
+  ".github/instructions/idd-overview-appendix.instructions.md" \
   ".github/instructions/idd-discover.instructions.md" \
   ".github/instructions/idd-roadmap-audit.instructions.md" \
   ".github/instructions/idd-suitability.instructions.md" \
