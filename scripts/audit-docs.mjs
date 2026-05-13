@@ -357,7 +357,7 @@ function buildRemediation(currentErrors) {
 
 function containsMirrorDrift(currentErrors) {
   return currentErrors.some((error) =>
-    /generated block .* is stale|shell file list .* is stale| and .* differ in (exact|concreted) mode/.test(
+    /generated block .* is stale|shell file list .* is stale| and .* differ in (exact|concreted) mode|heading structure differs between/.test(
       error,
     ),
   );
