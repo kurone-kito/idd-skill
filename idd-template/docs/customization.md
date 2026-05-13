@@ -450,6 +450,17 @@ top-level keys fail validation unless they use the `x-` prefix. Use
 `x-*` keys for repository-local extensions and keep official policy keys
 exact so typoed settings fail loudly.
 
+For discover/claim/review-loop threshold customization, the schema now
+supports these keys:
+
+- `discover.activeClaimPreScanBatchSize` (default `10`)
+- `claim.verifySettleDelay` (default `PT5S`)
+- `critiqueLoop.cPhaseLowSeveritySkipAfter` (default `3`)
+- `critiqueLoop.e10NoProgressHoldAfter` (default `3`)
+- `reviewEscalation.changesRequestedFirstEscalation` /
+  `reviewEscalation.changesRequestedSecondEscalation`
+  (default `PT24H` / `PT48H`)
+
 ## Suitability Outcomes and Label Mapping
 
 Use this mapping when A4.5 rejects a candidate. The goal is to preserve

@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { getReviewEscalationChangesRequestedPolicy } from "./policy-helpers.mjs";
 
 import {
   ADVISORY_CAP_EXHAUSTED_ROUTE_DEFAULT,
@@ -539,6 +540,12 @@ export function indexThreadsByReview(threads) {
 }
 
 export function routeRejectedChangesRequestedReview(input) {
+  const escalationPolicy = getReviewEscalationChangesRequestedPolicy(input?.policyConfig ?? {});
+  const firstEscalationWindowMs = escalationPolicy.escalateAfterMs;
+  const postEscalationWindowMs = escalationPolicy.releaseAfterEscalationMs;
+  const totalWindowLabel = formatDurationLabel(firstEscalationWindowMs + postEscalationWindowMs);
+  const firstWindowLabel = formatDurationLabel(firstEscalationWindowMs);
+
   const reviewState = String(input.reviewState ?? "");
   if (reviewState !== "CHANGES_REQUESTED") {
     return { route: "proceed", reason: "changes-requested state already cleared" };
@@ -580,16 +587,17 @@ export function routeRejectedChangesRequestedReview(input) {
     };
   }
 
-  if (elapsedMs < 24 * 60 * 60 * 1000) {
+  if (elapsedMs < firstEscalationWindowMs) {
     return {
       route: "hold-before-escalation",
-      reason: "still within the first 24 hours after the rejection reply",
+      reason: `still within the first ${firstWindowLabel} after the rejection reply`,
     };
   }
-  if (elapsedMs < 48 * 60 * 60 * 1000) {
+  if (elapsedMs < firstEscalationWindowMs + postEscalationWindowMs) {
     return {
       route: "escalate-maintainer",
-      reason: "the changes-requested review is still blocking after 24 hours with no reviewer response",
+      reason:
+        `the changes-requested review is still blocking after ${firstWindowLabel} with no reviewer response`,
     };
   }
   const escalationElapsedMs = Date.parse(input.now ?? "") - Date.parse(input.escalationCommentCreatedAt ?? "");
@@ -599,16 +607,34 @@ export function routeRejectedChangesRequestedReview(input) {
       reason: "the changes-requested review still needs maintainer escalation evidence before release",
     };
   }
-  if (escalationElapsedMs < 24 * 60 * 60 * 1000) {
+  if (escalationElapsedMs < postEscalationWindowMs) {
     return {
       route: "hold-after-escalation",
-      reason: "still within 24 hours of the maintainer escalation comment",
+      reason:
+        `still within ${formatDurationLabel(postEscalationWindowMs)} of the maintainer escalation comment`,
     };
   }
   return {
     route: "label-and-release",
-    reason: "the changes-requested review is still blocking after 48 hours with no escalation response",
+    reason:
+      `the changes-requested review is still blocking after ${totalWindowLabel} with no escalation response`,
   };
+}
+
+function formatDurationLabel(milliseconds) {
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
+    return "0 minutes";
+  }
+  if (milliseconds % (60 * 60 * 1000) === 0) {
+    const hours = milliseconds / (60 * 60 * 1000);
+    return `${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+  if (milliseconds % (60 * 1000) === 0) {
+    const minutes = milliseconds / (60 * 1000);
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  const seconds = milliseconds / 1000;
+  return `${seconds} second${seconds === 1 ? "" : "s"}`;
 }
 
 export function diffReviewSnapshot(snapshot, live) {
