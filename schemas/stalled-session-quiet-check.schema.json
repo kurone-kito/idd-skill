@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/stalled-session-quiet-check.schema.json",
+  "title": "Stalled Session Quiet Check",
+  "description": "Evidence snapshot for quiet-window detection (Resume/S2 stalled-session recovery)",
+  "type": "object",
+  "required": [
+    "isQuiet",
+    "evidence"
+  ],
+  "properties": {
+    "isQuiet": {
+      "type": "boolean",
+      "description": "Whether the quiet window is satisfied (all activity checks passed)"
+    },
+    "evidence": {
+      "type": "object",
+      "required": [
+        "windowMinutes",
+        "windowStartUtc",
+        "windowEndUtc",
+        "latestActivityUtc",
+        "reason",
+        "details",
+        "checkSummary"
+      ],
+      "properties": {
+        "windowMinutes": {
+          "type": "number",
+          "minimum": 1,
+          "description": "The quiet window duration in minutes"
+        },
+        "windowStartUtc": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+          "description": "The earliest timestamp within the quiet window"
+        },
+        "windowEndUtc": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+          "description": "The reference timestamp (end of the window)"
+        },
+        "latestActivityUtc": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z)?$",
+          "description": "The most recent activity timestamp across all sources, or null if no activity was found"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Human-readable summary of the outcome"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Array of specific findings (heartbeat, PR movement, etc.)"
+        },
+        "checkSummary": {
+          "type": "object",
+          "required": [
+            "heartbeatCheck",
+            "prHeadMovementCheck",
+            "branchTipMovementCheck",
+            "runningCiCheck",
+            "reviewActivityCheck",
+            "commentActivityCheck",
+            "ciCompletionCheck"
+          ],
+          "properties": {
+            "heartbeatCheck": {
+              "type": "string",
+              "enum": [
+                "PASSED",
+                "FAILED"
+              ],
+              "description": "Status of heartbeat (claimed-by markers) check"
+            },
+            "prHeadMovementCheck": {
+              "type": "string",
+              "enum": [
+                "PASSED",
+                "FAILED"
+              ],
+              "description": "Status of PR head SHA movement check"
+            },
+            "branchTipMovementCheck": {
+              "type": "string",
+              "enum": [
+                "PASSED",
+                "FAILED"
+              ],
+              "description": "Status of remote branch tip SHA change check"
+            },
+            "runningCiCheck": {
+              "type": "string",
+              "enum": [
+                "PASSED",
+                "FAILED"
+              ],
+              "description": "Status of running CI (queued/in_progress) check"
+            },
+            "reviewActivityCheck": {
+              "type": "string",
+              "enum": [
+                "PASSED",
+                "FAILED"
+              ],
+              "description": "Status of review submission activity check"
+            },
+            "commentActivityCheck": {
+              "type": "string",
+              "enum": [
+                "PASSED",
+                "FAILED"
+              ],
+              "description": "Status of comment activity check (excluding operational markers)"
+            },
+            "ciCompletionCheck": {
+              "type": "string",
+              "enum": [
+                "PASSED",
+                "FAILED"
+              ],
+              "description": "Status of CI completion (success/failure) check"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
