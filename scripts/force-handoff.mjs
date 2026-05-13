@@ -28,10 +28,17 @@ export async function runHandoff(options = {}) {
     fetchIssueComments,
     fetchLinkedPrs,
     postComment,
+    mode,
   } = options;
 
   if (!isTTY) {
     throw new Error(NON_TTY_ERROR);
+  }
+
+  if ((mode ?? readForcedHandoffMode()) !== "human-gated") {
+    throw new Error(
+      "forced-handoff mode is not human-gated; idd-force-handoff is only available when forcedHandoff.mode is 'human-gated'",
+    );
   }
 
   const ask = promptFn ?? makeReadlinePrompt();
@@ -194,12 +201,69 @@ function ghJson(args, slurp = false) {
 }
 
 function buildTrustedMarkerLogins(owner, repo, viewerLogin, issueComments) {
+  const configuredActors = readTrustedMarkerActorsFromConfig();
   const configured = [
     viewerLogin,
+    ...configuredActors,
     ...splitCsv(process.env.IDD_TRUSTED_MARKER_ACTORS),
   ];
   const trusted = new Set(configured.filter(Boolean).map((l) => l.toLowerCase()));
+
+  if (!readCollaboratorTrustEnabled()) {
+    return trusted;
+  }
+
+  const permissionCache = new Map();
+  const uniqueLogins = new Set(
+    issueComments
+      .map((comment) => String(comment.user?.login ?? comment.author?.login ?? "").toLowerCase())
+      .filter(Boolean),
+  );
+  for (const login of uniqueLogins) {
+    if (trusted.has(login)) {
+      continue;
+    }
+    const permission = permissionCache.get(login) ?? safeGhText([
+      "api",
+      `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
+      "--jq",
+      ".permission",
+    ]).toLowerCase();
+    permissionCache.set(login, permission);
+    if (permission === "admin" || permission === "maintain" || permission === "write") {
+      trusted.add(login);
+    }
+  }
   return trusted;
+}
+
+function readTrustedMarkerActorsFromConfig() {
+  try {
+    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    const actors = config?.trustedMarkerActors;
+    if (Array.isArray(actors)) {
+      return actors.map(String).filter(Boolean);
+    }
+  } catch {
+    // config absent or unreadable
+  }
+  return [];
+}
+
+function readCollaboratorTrustEnabled() {
+  try {
+    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    if (typeof config?.markerTrust?.allowCollaboratorMarkers === "boolean") {
+      return config.markerTrust.allowCollaboratorMarkers;
+    }
+  } catch {
+    // Fall through to env-var fallback.
+  }
+  return isTruthy(process.env.IDD_TRUST_COLLABORATOR_MARKERS);
+}
+
+function isTruthy(value) {
+  return /^(1|true|yes)$/i.test(String(value ?? "").trim());
 }
 
 function splitCsv(value) {

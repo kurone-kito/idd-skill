@@ -22,6 +22,7 @@ const TRUSTED_LOGINS = ["kurone-kito", "github-copilot-cli-old"];
 function makeCommonOpts(overrides = {}) {
   return {
     isTTY: true,
+    mode: "human-gated",
     repo: "kurone-kito/idd-skill",
     forcedBy: "kurone-kito",
     trustedMarkerLogins: TRUSTED_LOGINS,
