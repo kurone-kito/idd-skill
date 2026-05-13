@@ -1,10 +1,15 @@
 # cleanup-hygiene-report.mjs
 
-Helper script for generating auditable cleanup hygiene snapshots of merged pull requests. Produces metrics for trend reporting and continuous integration audit purposes.
+Helper script for generating auditable cleanup hygiene snapshots of
+merged pull requests. Produces metrics for trend reporting and continuous
+integration audit purposes.
 
 ## Overview
 
-The `cleanup-hygiene-report.mjs` helper generates a structured cleanup hygiene report in JSON or CSV format. It produces metrics about merged PRs, tracking how many have undergone post-merge cleanup verification and how many still require attention.
+The `cleanup-hygiene-report.mjs` helper generates a structured cleanup
+hygiene report in JSON or CSV format. It produces metrics about merged
+PRs, tracking how many have undergone post-merge cleanup verification and
+how many still require attention.
 
 ## Metrics Schema
 
@@ -80,15 +85,19 @@ The JSON output follows this schema:
   - `cleanPercentage`: percentage of clean PRs (clean / totalMergedPRs × 100)
 
 - **candidatesByClassifier**
-  - `thresholdMissing`: PRs that do not meet candidate criteria (too old, no IDD markers, etc.)
-  - `skippedWithReason`: PRs skipped due to specific conditions (unresolved threads, held by maintainer)
+  - `thresholdMissing`: PRs not meeting candidate criteria (too old, no
+    IDD markers, etc.)
+  - `skippedWithReason`: PRs skipped due to specific conditions
+    (unresolved threads, held by maintainer)
   - `applied`: PRs where cleanup has been attempted
   - `failed`: PRs where cleanup verification failed or encountered errors
 
-- **topSkipReasons**: ranked list of the most common reasons PRs were skipped
-  - `review-thread-unresolved`: PR has unresolved review threads or comments
-  - `operational-marker-present`: PR contains active operational markers (holds, blocks)
-  - `held-by-maintainer`: PR is held by maintainer decision or blocked status
+- **topSkipReasons**: ranked list of common reasons PRs were skipped
+  - `review-thread-unresolved`: PR has unresolved review threads or
+    comments
+  - `operational-marker-present`: PR contains active operational markers
+    (holds, blocks)
+  - `held-by-maintainer`: PR is held by maintainer decision or blocked
 
 - **trends.recent**: metrics for the last 7 days
 - **trends.historical**: metrics for periods before the recent window
@@ -151,7 +160,7 @@ node scripts/cleanup-hygiene-report.mjs --format json
 
 Human-readable CSV with summary metrics and repository information:
 
-```
+```csv
 Cleanup Hygiene Report
 Repository,owner/repo
 Timestamp,2024-05-13T11:00:00Z
@@ -165,11 +174,14 @@ Clean Percentage,90.48%
 
 ## Integration with CI/CD
 
-The JSON schema is designed for integration with CI/CD pipelines and metrics aggregation systems:
+The JSON schema is designed for integration with CI/CD pipelines and
+metrics aggregation systems:
 
 1. **Metric Collection**: Use `--format json` to collect structured data
-2. **Trend Tracking**: Parse `trends.recent` and `trends.historical` for trend analysis
-3. **Alerting**: Set thresholds on `cleanPercentage` to trigger alerts when cleanup hygiene degrades
+2. **Trend Tracking**: Parse `trends.recent` and `trends.historical` for
+   trend analysis
+3. **Alerting**: Set thresholds on `cleanPercentage` to trigger alerts
+   when cleanup hygiene degrades
 4. **Reporting**: Feed metrics into dashboards and audit reporting systems
 
 ## Error Handling
@@ -187,9 +199,12 @@ All errors output to stderr and exit with status code 1.
 
 ## Maintenance
 
-- **Schema versioning**: The `version` field tracks schema changes for future compatibility
-- **Timestamp accuracy**: All timestamps are server-reported ISO 8601 values
-- **Metric stability**: The top-level metric structure is stable; new fields may be added but existing fields are preserved
+- **Schema versioning**: The `version` field tracks schema changes for
+  future compatibility
+- **Timestamp accuracy**: All timestamps are server-reported ISO 8601
+  values
+- **Metric stability**: The top-level metric structure is stable; new
+  fields may be added but existing fields are preserved
 
 ## See Also
 
