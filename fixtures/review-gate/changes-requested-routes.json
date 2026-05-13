@@ -20,7 +20,7 @@
     },
     "expected": {
       "route": "hold-before-escalation",
-      "reason": "still within the first escalation window after the rejection reply"
+      "reason": "still within the first 24 hours after the rejection reply"
     }
   },
   {
@@ -32,7 +32,7 @@
     },
     "expected": {
       "route": "escalate-maintainer",
-      "reason": "the changes-requested review still needs maintainer escalation evidence before release"
+      "reason": "the changes-requested review is still blocking after 24 hours with no reviewer response"
     }
   },
   {
@@ -96,7 +96,7 @@
     },
     "expected": {
       "route": "escalate-maintainer",
-      "reason": "the changes-requested review still needs maintainer escalation evidence before release"
+      "reason": "the changes-requested review is still blocking after 24 hours with no reviewer response"
     }
   },
   {
@@ -109,7 +109,7 @@
     },
     "expected": {
       "route": "hold-after-escalation",
-      "reason": "still within the post-escalation hold window"
+      "reason": "still within 24 hours of the maintainer escalation comment"
     }
   },
   {
