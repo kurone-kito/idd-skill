@@ -559,7 +559,8 @@ copies.
 - CI already enforces canonical-source drift detection through
   `node scripts/audit-docs.mjs --check` in the lint workflow.
 - When drift is detected, follow the remediation shown by the audit output
-  (`pnpm run docs:sync` when available), then re-run the check.
+  (the `docs:sync` script via your package manager when available), then
+  re-run the check.
 - Contributor tooling should guide edits toward canonical sources instead of
   editing mirrors first.
 

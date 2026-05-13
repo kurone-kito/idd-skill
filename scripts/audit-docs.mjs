@@ -392,7 +392,7 @@ function docsSyncCommandByPackageManager(packageManager) {
     case "bun":
       return "bun run docs:sync";
     default:
-      return "npm run docs:sync";
+      return "";
   }
 }
 
