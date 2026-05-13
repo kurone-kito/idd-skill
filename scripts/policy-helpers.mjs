@@ -9,10 +9,15 @@ const ISSUE_SCOPES = new Set(["roadmap", "orphan-first"]);
 const ORPHAN_FIRST_POLICIES = new Set(["none", "maintainer-approved", "public-disabled"]);
 const APPROVAL_ACTOR_POLICIES = new Set(["owners-and-maintainers-only", "all-write-permission-actors"]);
 const FORCED_HANDOFF_MODES = new Set(["disabled", "human-gated"]);
-const ADVISORY_CAP_ROUTES = new Set(["phase-default", "strict-hold"]);
+const ADVISORY_CAP_ROUTES = new Set(["phase-specific", "hold"]);
+const LEGACY_ADVISORY_CAP_ROUTE_ALIASES = new Map([
+  ["phase-default", "phase-specific"],
+  ["strict-hold", "hold"],
+]);
 const CI_RERUN_POLICIES = new Set(["rerun-once"]);
 const LABEL_FRESHNESS_MODES = new Set(["presence-only", "event-freshness"]);
 const ISO_DURATION_RE = /^P(?=\d|T\d)(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$/;
+const ADVISORY_WHOLE_MINUTE_DURATION_RE = /^P(?=(?:\d+D|T\d+[HM]))(?=.*(?:[1-9]\d*[DHM]))(?:\d+D)?(?:T(?=\d+[HM])(?:\d+H)?(?:\d+M)?)?$/;
 
 export const POLICY_DEFAULTS = Object.freeze({
   issueScope: "roadmap",
@@ -34,7 +39,7 @@ export const POLICY_DEFAULTS = Object.freeze({
     pendingWindow: "PT30M",
     settledWindow: "PT10M",
     pollInterval: "PT2M",
-    capExhaustedRoute: "phase-default",
+    capExhaustedRoute: "phase-specific",
   }),
   ciWait: Object.freeze({
     runningTimeout: "PT30M",
@@ -167,21 +172,20 @@ export function normalizePolicyConfig(config) {
     },
     advisoryWait: {
       requestCap: parsePositiveInteger(config?.advisoryWait?.requestCap, POLICY_DEFAULTS.advisoryWait.requestCap),
-      pendingWindow: parseDuration(
+      pendingWindow: parseAdvisoryWholeMinuteDuration(
         config?.advisoryWait?.pendingWindow,
         POLICY_DEFAULTS.advisoryWait.pendingWindow,
       ),
-      settledWindow: parseDuration(
+      settledWindow: parseAdvisoryWholeMinuteDuration(
         config?.advisoryWait?.settledWindow,
         POLICY_DEFAULTS.advisoryWait.settledWindow,
       ),
-      pollInterval: parseDuration(
+      pollInterval: parseAdvisoryWholeMinuteDuration(
         config?.advisoryWait?.pollInterval,
         POLICY_DEFAULTS.advisoryWait.pollInterval,
       ),
-      capExhaustedRoute: parseEnum(
+      capExhaustedRoute: parseAdvisoryCapRoute(
         config?.advisoryWait?.capExhaustedRoute,
-        ADVISORY_CAP_ROUTES,
         POLICY_DEFAULTS.advisoryWait.capExhaustedRoute,
       ),
     },
@@ -293,6 +297,23 @@ function parseEnum(value, accepted, fallback) {
 function parseDuration(value, fallback) {
   if (typeof value === "string" && ISO_DURATION_RE.test(value)) {
     return value;
+  }
+  return fallback;
+}
+
+function parseAdvisoryWholeMinuteDuration(value, fallback) {
+  if (typeof value === "string" && ADVISORY_WHOLE_MINUTE_DURATION_RE.test(value)) {
+    return value;
+  }
+  return fallback;
+}
+
+function parseAdvisoryCapRoute(value, fallback) {
+  if (typeof value === "string") {
+    if (ADVISORY_CAP_ROUTES.has(value)) {
+      return value;
+    }
+    return LEGACY_ADVISORY_CAP_ROUTE_ALIASES.get(value) ?? fallback;
   }
   return fallback;
 }

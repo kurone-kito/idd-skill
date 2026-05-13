@@ -129,7 +129,7 @@ test("policy normalization provides default-safe values and supports aliases", (
       pendingWindow: "PT30M",
       settledWindow: "PT10M",
       pollInterval: "PT2M",
-      capExhaustedRoute: "phase-default",
+      capExhaustedRoute: "phase-specific",
     },
     ciWait: {
       runningTimeout: "PT30M",
@@ -175,7 +175,7 @@ test("policy normalization provides default-safe values and supports aliases", (
       pendingWindow: "PT40M",
       settledWindow: "PT11M",
       pollInterval: "PT3M",
-      capExhaustedRoute: "strict-hold",
+      capExhaustedRoute: "hold",
     },
     ciWait: {
       runningTimeout: "PT35M",
@@ -223,7 +223,7 @@ test("policy normalization provides default-safe values and supports aliases", (
       pendingWindow: "PT40M",
       settledWindow: "PT11M",
       pollInterval: "PT3M",
-      capExhaustedRoute: "strict-hold",
+      capExhaustedRoute: "hold",
     },
     ciWait: {
       runningTimeout: "PT35M",
@@ -275,6 +275,27 @@ test("policy normalization provides default-safe values and supports aliases", (
     mode: "human-gated",
     authorityPolicy: "all-write-permission-actors",
   });
+
+  assert.deepEqual(normalizePolicyConfig({
+    advisoryWait: {
+      pendingWindow: "PT60S",
+      settledWindow: "PT0M",
+      pollInterval: "PT90S",
+      capExhaustedRoute: "phase-default",
+    },
+  }).advisoryWait, {
+    requestCap: 30,
+    pendingWindow: "PT30M",
+    settledWindow: "PT10M",
+    pollInterval: "PT2M",
+    capExhaustedRoute: "phase-specific",
+  });
+
+  assert.deepEqual(normalizePolicyConfig({
+    advisoryWait: {
+      capExhaustedRoute: "strict-hold",
+    },
+  }).advisoryWait.capExhaustedRoute, "hold");
 });
 
 test("collaborator trust resolution honors aliases and env fallback", () => {
