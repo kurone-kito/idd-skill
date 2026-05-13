@@ -162,8 +162,9 @@ must align with every F2 condition below.
   a review OR when the request is manually cancelled — either counts as
   no longer pending for merge purposes.
 - **CI**: Current PR head SHA has all required CI checks generated and
-  all passing (→ run CI wait per `idd-ci.instructions.md`, on-success →
-  re-evaluate F2)
+  all passing (→ run CI wait per `idd-ci.instructions.md` using the
+  same resolved `ciWait.runningTimeout`, `ciWait.generationTimeout`, and
+  `ciWait.rerunPolicy` values; on-success → re-evaluate F2)
 - **Required reviews**: Required approvals count is satisfied and all
   CODEOWNER approvals are obtained. If approvals are absent but there
   are no open actionable review items (ReviewItems_snapshot is empty), do **not**

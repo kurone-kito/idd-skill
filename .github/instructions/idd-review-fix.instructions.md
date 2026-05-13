@@ -220,9 +220,12 @@ not advisory; they remain under the hold/escalation path above.
 
 ## E15 — Wait for CI
 
-Use `idd-ci.instructions.md` for the polling mechanics and timing. The
-outcome paths below are authoritative and override the shared helper's
-generic outcomes for this phase:
+Use `idd-ci.instructions.md` for the polling mechanics and timing. E15
+reuses the same resolved `ciWait.runningTimeout`,
+`ciWait.generationTimeout`, and `ciWait.rerunPolicy` values; omitted
+keys preserve the distributed defaults. The outcome paths below are
+authoritative and override the shared helper's generic outcomes for this
+phase:
 
 **While polling**: if new review threads or comments arrive during the
 CI wait, note them. After CI resolves (any outcome), return to E1 before
@@ -232,15 +235,20 @@ proceeding to F — do not skip triage.
 - **On failure / code-caused**: fix, run **fix-validate**, commit
   atomically, then return to E11
 - **On failure / infra-flaky or pre-existing** (failure also present on
-  `main`, unrelated to this branch): rerun once; if it persists, post a
-  hold comment on the PR documenting the pre-existing failure and stop.
-  A maintainer must resolve or bypass the failing check; do not
-  auto-continue or treat as passed without human confirmation.
+  `main`, unrelated to this branch): apply `ciWait.rerunPolicy`
+  (default `rerun-once`). If it authorizes the current rerun, rerun
+  once and resume polling. If the failure persists after that rerun, or
+  if the policy is `hold`, post a hold comment on the PR documenting the
+  pre-existing failure and stop. A maintainer must resolve or bypass the
+  failing check; do not auto-continue or treat as passed without human
+  confirmation.
 - **On cancelled / timed_out / code-caused**: fix, run **fix-validate**,
   commit, return to E11
-- **On cancelled / timed_out / infra**: re-push or rerun CI once; if it
-  cancels or times out again, post a hold comment and stop (do not
-  loop). On success after the rerun, **return to E1**.
+- **On cancelled / timed_out / infra**: apply `ciWait.rerunPolicy`.
+  Re-push or rerun CI only when the policy authorizes the current rerun;
+  if the route recurs after that rerun, or if the policy is `hold`,
+  post a hold comment and stop (do not loop). On success after the
+  rerun, **return to E1**.
 
 When E15 stops on a CI hold, re-validate the claim and then update the
 digest with `Phase: E15 hold`, the failing or missing checks in

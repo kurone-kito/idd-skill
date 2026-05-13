@@ -150,6 +150,16 @@ For claim ownership timing, treat `claim-stale-age` and
 discover, claim, resume, and resume-stall instruction files together so
 stale checks and heartbeat guidance stay consistent.
 
+For CI wait behavior, keep `.github/idd/config.json`
+`ciWait.runningTimeout`, `ciWait.generationTimeout`, and
+`ciWait.rerunPolicy` aligned with
+`.github/instructions/idd-ci.instructions.md`,
+`.github/instructions/idd-review-fix.instructions.md`, and
+`.github/instructions/idd-pre-merge.instructions.md`. The distributed
+default `rerun-once` preserves the current one-rerun recovery path;
+`hold` disables automatic reruns and turns the first eligible infra or
+stalled CI route into a hold.
+
 Changing a default is a workflow behavior change. Update every owning
 instruction file listed on the policy constants page, then record the
 repository's local decision in onboarding notes or project docs.

@@ -172,6 +172,10 @@ checks, confirm the detailed items below.
       customizations.
 - [ ] The operator's selected critique-loop profile is recorded, and any
       non-default profile has matching phase-file customizations.
+- [ ] The operator's selected CI wait policy values
+      (`ciWait.runningTimeout`, `ciWait.generationTimeout`,
+      `ciWait.rerunPolicy`) are explicitly recorded for the target
+      repository.
 - [ ] The operator's selected merge policy is recorded in repository
       documentation, the F3 handoff behavior matches that policy, and
       worker credentials match that boundary.
@@ -206,7 +210,8 @@ checks, confirm the detailed items below.
       match the prefix chosen for this project.
 - [ ] If `.github/idd/config.json` is used, it matches the recorded
       `iddVersion`, marker prefix, merge/review/thread policies,
-      claim timing values, `trustedMarkerActors`, and command values.
+      claim timing values, CI wait values, `trustedMarkerActors`, and
+      command values.
 
 ### Agent entry files
 

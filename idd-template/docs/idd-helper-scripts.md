@@ -35,6 +35,8 @@ In the idd-skill source repository, the following optional helpers were adopted:
   activity and CI snapshot metrics
 - `scripts/advisory-wait-state.mjs` for read-only advisory-wait evidence
   collection and AW outcome reporting
+- `scripts/ci-wait-policy.mjs` for read-only CI wait policy resolution
+  and rerun-budget decisions
 - `scripts/pre-merge-readiness.mjs` for read-only F2/F3 readiness
   evidence collection
 - `scripts/live-status-digest.mjs` for issue or PR live status digest
@@ -199,6 +201,13 @@ The adopted helper boundaries are intentionally narrow:
 - it does not replace the advisory-wait decision table; it only reduces
   command-copy variance when collecting canonical AW evidence
 
+- `ci-wait-policy.mjs` is read-only, resolves `ciWait.*` defaults from
+  `.github/idd/config.json`, and can evaluate whether the current rerun
+  count still permits an automatic rerun
+- it does not poll CI, rerun workflows, or replace the CI decision
+  table; it only reduces config-copy variance when callers need the
+  shared CI wait defaults
+
 - `pre-merge-readiness.mjs` is read-only, emits machine-readable F2/F3
   evidence including review currency, unresolved-thread state,
   unreplied comments, reviewer states, advisory state, CI, and claim
@@ -262,6 +271,23 @@ default `instructions-only` profile keep using the written shell /
   `pendingWindowMinutes`, `settledWindowMinutes`,
   `pollIntervalMinutes`, `capExhaustedRoute`, and
   `trustedMarkerSummary`
+
+### CI wait policy resolution
+
+- Source repo / vendored-node command:
+  `node scripts/ci-wait-policy.mjs`
+- Package-manager / ephemeral-npx command: use the
+  profile-selected `idd:ci-wait-policy` command from the helper runtime
+  manifest wiring above
+- Optional rerun-budget evaluation: append
+  `--rerun-count <count>` to the selected command
+- Stable fields consumed by instructions or helpers:
+  `policy.runningTimeout`, `policy.runningTimeoutMs`,
+  `policy.generationTimeout`, `policy.generationTimeoutMs`,
+  `policy.rerunPolicy`, and optional `rerunDecision.action` /
+  `rerunDecision.reason`
+- it remains read-only; the command does not poll CI, rerun workflows,
+  or post any GitHub comment
 
 ### Merge-gate evidence
 

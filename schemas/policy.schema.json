@@ -255,7 +255,7 @@
         },
         "rerunPolicy": {
           "type": "string",
-          "enum": ["rerun-once"]
+          "enum": ["rerun-once", "hold"]
         }
       }
     },

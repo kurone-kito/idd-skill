@@ -10,6 +10,7 @@
     "idd-advisory-wait-state": "./bin/idd-advisory-wait-state.mjs",
     "idd-audit-pr-cleanup": "./bin/idd-audit-pr-cleanup.mjs",
     "idd-claim-approval-gate": "./bin/idd-claim-approval-gate.mjs",
+    "idd-ci-wait-policy": "./bin/idd-ci-wait-policy.mjs",
     "idd-cleanup-hygiene-report": "./bin/idd-cleanup-hygiene-report.mjs",
     "idd-discover-readiness-check": "./bin/idd-discover-readiness-check.mjs",
     "idd-discover-orphan-filter": "./bin/idd-discover-orphan-filter.mjs",
@@ -23,9 +24,9 @@
     "idd-resume-claim-routing": "./bin/idd-resume-claim-routing.mjs",
     "idd-resume-route-selection": "./bin/idd-resume-route-selection.mjs",
     "idd-review-activity-snapshot": "./bin/idd-review-activity-snapshot.mjs",
+    "idd-review-disposition-verify": "./bin/idd-review-disposition-verify.mjs",
     "idd-stalled-session-quiet-check": "./bin/idd-stalled-session-quiet-check.mjs",
-    "idd-suitability-triage": "./bin/idd-suitability-triage.mjs",
-    "idd-review-disposition-verify": "./bin/idd-review-disposition-verify.mjs"
+    "idd-suitability-triage": "./bin/idd-suitability-triage.mjs"
   },
   "scripts": {
     "prepare": "husky",
