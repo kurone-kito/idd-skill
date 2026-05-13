@@ -8,7 +8,7 @@ body:
       value: |
         Thanks for taking the time to fill out this feature request!
 
-        Before you continue filling out this report, please take a moment to check that your feature request has not been [already reported on GitHub](https://github.com/kurone-kito/template/search?q=is%3Aissue&type=issues) 🙌
+        Before you continue filling out this report, please take a moment to check that your feature request has not been [already reported on GitHub](https://github.com/kurone-kito/idd-skill/issues?q=is%3Aissue) 🙌
 
   - type: textarea
     id: overview
