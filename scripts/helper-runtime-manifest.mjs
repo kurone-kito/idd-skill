@@ -154,6 +154,15 @@ const HELPER_COMMANDS = [
     vendoredCommand: "node scripts/phase-id-resolver.mjs",
     description: "Resolve canonical phase IDs with legacy alias compatibility.",
   },
+  {
+    id: "stalled-session-quiet-check",
+    scriptName: "idd:stalled-session-quiet-check",
+    binName: "idd-stalled-session-quiet-check",
+    entryPath: "scripts/stalled-session-quiet-check.mjs",
+    vendoredCommand: "node scripts/stalled-session-quiet-check.mjs",
+    description: "Detect quiet windows for Resume/S2 stalled-session recovery.",
+    contractPaths: ["schemas/stalled-session-quiet-check.schema.json"],
+  },
 ];
 
 if (isMainModule(import.meta.url)) {
