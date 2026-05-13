@@ -163,6 +163,14 @@ const HELPER_COMMANDS = [
     description: "Detect quiet windows for Resume/S2 stalled-session recovery.",
     contractPaths: ["schemas/stalled-session-quiet-check.schema.json"],
   },
+  {
+    id: "review-disposition-verify",
+    scriptName: "idd:review-disposition-verify",
+    binName: "idd-review-disposition-verify",
+    entryPath: "scripts/review-disposition-verify.mjs",
+    vendoredCommand: "node scripts/review-disposition-verify.mjs",
+    description: "Verify disposition marker presence on review items for E7 meta-check.",
+  },
 ];
 
 if (isMainModule(import.meta.url)) {

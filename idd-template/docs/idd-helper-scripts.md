@@ -332,6 +332,37 @@ default `instructions-only` profile keep using the written shell /
   of their timestamp; all other types are checked against
   `window_start = now - quiet_window_ms`
 
+### Review-disposition verification
+
+- Command: `node scripts/review-disposition-verify.mjs` or
+  `echo '<JSON array of review items>' | idd-review-disposition-verify`
+- Input format: JSON array of review items with schema:
+
+  ```json
+  [
+    {
+      "id": "unique-item-id",
+      "type": "REVIEW_THREAD|REVIEW_BODY|COMMENT",
+      "body": "comment body text",
+      "author": { "login": "github-username" },
+      "isThread": true,
+      "isResolved": false
+    }
+  ]
+  ```
+
+- Output format: Verification result with `isValid`, `missingMarkers`,
+  `errors`, and `summary` fields
+- Supported disposition markers: `**Accepted** —`, `**Rejected** —`,
+  `**Awaiting maintainer decision** —`
+- Classification rules:
+  - **PATH A (actionable feedback)**: Human reviewer threads, review
+    bodies, and comments (requires disposition marker)
+  - **PATH B (advisory feedback)**: Bot reviewer comments (should have
+    explicit marker)
+- Reference: E7 review-triage logic in
+  `.github/instructions/idd-review-triage.instructions.md`
+
 ## Friction Inventory
 
 The workflow areas most likely to benefit from optional helpers are:
