@@ -28,7 +28,13 @@ commands. **Adapt this section when applying this workflow to a
 different project.**
 
 If `.github/idd/config.json` exists and validates against the canonical
-schema, its `commands` object overrides the table below.
+schema at
+<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>, its `commands`
+object overrides the table below. Policy fields such as
+`skipIssueAuthorApprovalGate` and `maintainerApprovalActorPolicy` are
+the recorded machine-readable policy. Absent values keep the gate
+enabled and default approval actors to
+`owners-and-maintainers-only`.
 
 | Name                    | Commands                                                                                                                                     |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -38,3 +44,22 @@ schema, its `commands` object overrides the table below.
 | **install-deps**        | `true`                                                                                                                                       |
 | **issue-scope**         | `roadmap`                                                                                                                                    |
 | **orphan-first-policy** | `none`                                                                                                                                       |
+
+Non-shell rows such as **issue-scope** and **orphan-first-policy** are
+workflow settings. Read them literally, not as commands.
+
+`pre-push-validate` omits auto-fix. If lint fails, run
+**fix-validate**, commit, then re-run **pre-push-validate**.
+
+If **fix-validate** or **post-fix-validate** changes files, stage and
+commit them before any push, rebase, or step that requires a clean
+tree.
+
+`install-deps` must be idempotent. Re-running it in fresh, reused, or
+recreated worktrees must not require manual cleanup and should not leave
+unexpected tracked changes.
+
+**Tool availability**: run commands only when tools exist. For Node.js:
+prefer project scripts; use `npx <tool>` only when `npx` is available
+and no relevant script exists; else use `true`. For other tools, use
+`true` when absent.
