@@ -828,6 +828,14 @@ test("policy schema rejects advisoryWait.requestCap below 1", () => {
   assert.ok(errors.some((e) => e.includes("advisoryWait")), errors.join("\n"));
 });
 
+test("policy schema rejects advisoryWait.requestCap string values", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.advisoryWait = { requestCap: "1" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("advisoryWait")), errors.join("\n"));
+});
+
 test("policy schema rejects advisoryWait pending/settled/poll durations when malformed", () => {
   const schema = loadJson("schemas/policy.schema.json");
   const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
@@ -840,10 +848,26 @@ test("policy schema rejects advisoryWait pending/settled/poll durations when mal
   assert.ok(errors.some((e) => e.includes("advisoryWait")), errors.join("\n"));
 });
 
+test("policy schema rejects advisoryWait lowercase duration values", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.advisoryWait = { pendingWindow: "pt1m" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("advisoryWait")), errors.join("\n"));
+});
+
 test("policy schema rejects advisoryWait.capExhaustedRoute unknown value", () => {
   const schema = loadJson("schemas/policy.schema.json");
   const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
   instance.advisoryWait = { capExhaustedRoute: "merge-anyway" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("advisoryWait")), errors.join("\n"));
+});
+
+test("policy schema rejects advisoryWait.capExhaustedRoute padded values", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.advisoryWait = { capExhaustedRoute: " hold " };
   const errors = validate(instance, schema);
   assert.ok(errors.some((e) => e.includes("advisoryWait")), errors.join("\n"));
 });
