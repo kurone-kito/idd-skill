@@ -57,6 +57,19 @@ test("computeReportSummary reflects apply results after mutations", () => {
   assert.equal(report.summary.skipped, 1);
 });
 
+test("computeReportSummary emits clean when there are no candidates and no permission-blocked items", () => {
+  const report = createReport({
+    candidates: [],
+    skipped: [{ subjectId: "skip-1", isMinimized: true, viewerCanMinimize: true }],
+  });
+
+  computeReportSummary(report);
+
+  assert.equal(report.status, "clean");
+  assert.equal(report.summary.candidate, 0);
+  assert.equal(report.summary["viewer-cannot-minimize"], 0);
+});
+
 test("computeReportSummary emits permission-blocked when all items are viewer-cannot-minimize", () => {
   const report = createReport({
     candidates: [],

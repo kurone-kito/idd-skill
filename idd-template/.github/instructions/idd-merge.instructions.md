@@ -197,9 +197,12 @@ gate. The active claim must still use your current `{claim-id}`.
    node scripts/audit-pr-cleanup.mjs --pr <pr-number> --dry-run --format table
    ```
 
-   Evaluate the dry-run `status` field:
+   Evaluate the dry-run `status` field (this is a dry-run status; apply
+   mode emits different values and is never invoked unless dry-run
+   shows `needs-apply`):
 
-   - **`clean`**: no candidates detected. Proceed to step 3.
+   - **`clean`**: no candidates and no permission-blocked items.
+     Proceed to step 3.
 
    - **`needs-apply`**: eligible candidates exist and the viewer can
      minimize them. Apply is mandatory. Re-validate the active claim,
@@ -213,8 +216,8 @@ gate. The active claim must still use your current `{claim-id}`.
      After apply, post a cleanup evidence comment to the PR with the
      apply `status`, `applied`, `failed`, and `skipped` counts, and
      the reason for any skipped or failed items. If
-     `viewer-cannot-minimize > 0` alongside applied candidates, include
-     the permission-blocked count in the evidence comment. See
+     `viewer-cannot-minimize > 0` appears alongside applied candidates,
+     include the permission-blocked count in the evidence comment. See
      `docs/idd-comment-minimization.md` for the evidence comment
      format.
 
@@ -222,14 +225,15 @@ gate. The active claim must still use your current `{claim-id}`.
 
      If the apply `status` is `failed` or `incomplete`: post a
      cleanup-failure comment to the PR identifying the failed or
-     unapplied candidates and the reason. This is explicit evidence,
-     not a merge gate — the merge already succeeded. Proceed to step 3.
+     unapplied candidates and the reason; if `viewer-cannot-minimize > 0`
+     is also non-zero, include the blocked count in the same comment.
+     This is explicit evidence, not a merge gate — the merge already
+     succeeded. Proceed to step 3.
 
    - **`permission-blocked`**: skipped items exist with
      `viewerCanMinimize: false` and no apply-eligible candidates were
      found. Post a cleanup-permission-blocked comment to the PR listing
-     the blocked candidates and the count. Do not silently skip.
-     Proceed to step 3.
+     the blocked candidates and the count, then proceed to step 3.
 
    For the GraphQL fallback (when the helper is unavailable): check
    `viewerCanMinimize` and `isMinimized` before minimizing; skip
