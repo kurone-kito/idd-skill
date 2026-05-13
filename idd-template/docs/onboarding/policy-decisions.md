@@ -85,6 +85,22 @@ At minimum, record whether the repository uses the shipped guardrails or
 intentionally customizes the critique-loop behavior before unattended
 execution begins.
 
+### CI wait policy
+
+Confirm whether the repository keeps the distributed CI wait defaults or
+records a local override. The default profile is:
+
+- `ciWait.runningTimeout`: `PT30M` (30 min)
+- `ciWait.generationTimeout`: `PT10M` (10 min)
+- `ciWait.rerunPolicy`: `rerun-once`
+
+If the repository customizes any of these values, keep
+`.github/idd/config.json`,
+`.github/instructions/idd-ci.instructions.md`,
+`.github/instructions/idd-review-fix.instructions.md`, and
+`.github/instructions/idd-pre-merge.instructions.md` aligned in the
+same change.
+
 ### Issue-author approval gate
 
 Choose whether the repository keeps the distributed secure-by-default
@@ -182,6 +198,16 @@ keeps the distributed claim-timing defaults from `docs/policy-constants.md`:
 Record whether the repository keeps these defaults before unattended
 workers begin running.
 
+It should also confirm whether the repository keeps the distributed CI
+wait defaults:
+
+- `ciWait.runningTimeout`: `PT30M` (30 min)
+- `ciWait.generationTimeout`: `PT10M` (10 min)
+- `ciWait.rerunPolicy`: `rerun-once`
+
+Record whether the repository keeps these defaults before unattended
+workers begin running.
+
 ## Recording the selected policies
 
 Create a local policy section in repository documentation (for example
@@ -215,6 +241,12 @@ This repository uses the following IDD policies:
 
 - **claim-stale-age**: 24 h (or repository override)
 - **claim-heartbeat-interval**: 12 h (or repository override)
+
+### CI Wait Policy
+
+- **running timeout**: `PT30M` / 30 min (or repository override)
+- **generation timeout**: `PT10M` / 10 min (or repository override)
+- **rerun policy**: `{rerun-once | hold}`
 
 ### Credential Scope
 
@@ -254,7 +286,9 @@ policy decisions. When present and valid, its `commands` object
 overrides the command table values in
 `idd-overview.instructions.md`. The non-command policy fields are a
 machine-readable mirror that should stay aligned with the owning
-instruction files and human-readable policy notes.
+instruction files and human-readable policy notes, including
+`claimTiming.*` and `ciWait.*` when the repository records those
+settings explicitly.
 
 Keep these rules in mind:
 

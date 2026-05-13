@@ -707,8 +707,67 @@ test("phase-graph invalid fixture fails via graph validation (dangling ref)", ()
 });
 
 // ---------------------------------------------------------------------------
-// policy schema — new parameterization keys (#468)
+// policy schema — parameterization keys (#468, #470)
 // ---------------------------------------------------------------------------
+
+test("policy schema accepts ciWait.runningTimeout ISO 8601 duration", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.ciWait = { runningTimeout: "PT30M" };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts ciWait.generationTimeout ISO 8601 duration", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.ciWait = { generationTimeout: "PT10M" };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts ciWait.rerunPolicy values", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const rerunOnce = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  rerunOnce.ciWait = { rerunPolicy: "rerun-once" };
+  assert.deepEqual(validate(rerunOnce, schema), []);
+
+  const hold = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  hold.ciWait = { rerunPolicy: "hold" };
+  assert.deepEqual(validate(hold, schema), []);
+});
+
+test("policy schema accepts ciWait without nested keys", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.ciWait = {};
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects ciWait.runningTimeout non-duration string", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.ciWait = { runningTimeout: "30 minutes" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("ciWait")), errors.join("\n"));
+});
+
+test("policy schema rejects ciWait.generationTimeout empty duration (PT)", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.ciWait = { generationTimeout: "PT" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("ciWait")), errors.join("\n"));
+});
+
+test("policy schema rejects ciWait.rerunPolicy unknown value", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.ciWait = { rerunPolicy: "rerun-forever" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("ciWait")), errors.join("\n"));
+});
 
 test("policy schema accepts stallRecovery.quietWindow ISO 8601 duration", () => {
   const schema = loadJson("schemas/policy.schema.json");

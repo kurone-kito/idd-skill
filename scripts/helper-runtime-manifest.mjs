@@ -118,6 +118,14 @@ const HELPER_COMMANDS = [
     description: "Evaluate the A5(a) issue-author approval gate against issue state.",
   },
   {
+    id: "ci-wait-policy",
+    scriptName: "idd:ci-wait-policy",
+    binName: "idd-ci-wait-policy",
+    entryPath: "scripts/ci-wait-policy.mjs",
+    vendoredCommand: "node scripts/ci-wait-policy.mjs",
+    description: "Resolve shared ciWait defaults and deterministic rerun-budget decisions.",
+  },
+  {
     id: "discover-orphan-filter",
     scriptName: "idd:discover-orphan-filter",
     binName: "idd-discover-orphan-filter",

@@ -3,9 +3,28 @@
 Read this file when you need to wait for CI after a push. Callers must
 define their own **on-success** target before invoking this algorithm.
 
-The shared CI wait thresholds and retry defaults are listed in
-[IDD policy constants](../../docs/policy-constants.md). Use that inventory
-to find the current named values; this helper still owns the behavior.
+The shared CI wait defaults are listed in
+[IDD policy constants](../../docs/policy-constants.md). When
+`.github/idd/config.json` is present and valid, resolve this helper
+through `ciWait.runningTimeout`, `ciWait.generationTimeout`, and
+`ciWait.rerunPolicy`; otherwise keep the distributed defaults
+(`PT30M`, `PT10M`, `rerun-once`). When helper support is installed,
+`node scripts/ci-wait-policy.mjs` emits the same resolved values as
+read-only JSON.
+
+## Shared policy keys
+
+- `ciWait.runningTimeout`: maximum time to keep polling required checks
+  in a running state before the stalled-run recovery route begins.
+  Default: `PT30M` (30 min).
+- `ciWait.generationTimeout`: maximum time to wait for required checks
+  to appear at all. Default: `PT10M` (10 min).
+- `ciWait.rerunPolicy`: rerun budget for infra or stalled CI recovery.
+  Default: `rerun-once`.
+  `rerun-once` means the first eligible infra or stalled route reruns
+  exactly once, and the next recurrence posts a hold and stops. `hold`
+  means do not auto-rerun; post a hold comment at the first eligible
+  infra or stalled route.
 
 ## Inputs
 
@@ -79,7 +98,8 @@ The decision must be based on normalized required-check states.
 
 ## Rerun mechanics
 
-When this helper says rerun once, rerun the exact failed or stalled run:
+When the resolved `ciWait.rerunPolicy` says rerun, rerun the exact
+failed or stalled run:
 
 - rerun whole run: `gh run rerun <run-id>`
 - rerun failed jobs only: `gh run rerun --failed <run-id>`
@@ -94,10 +114,10 @@ for the same run before posting a hold.
 
 ## Interpretation
 
-| State (required checks only, normalized)                            | Action                                                                                                                                                                             |
-| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| All required checks are generated and pass-equivalent               | → **on-success** (caller-defined)                                                                                                                                                  |
-| Any required check is non-pass `failure`                            | Inspect the log. If infra/flaky: rerun once. If code-caused: fix, run **fix-validate**, commit atomically, then return to caller's pre-push step.                                  |
-| Any required check is non-pass `cancelled` or `timed_out`           | Investigate cause. If code-caused: fix, run **fix-validate**, commit atomically, then return to caller's pre-push step. If infra-caused: re-push or rerun CI, then resume polling. |
-| Any required check is running (`pending`/`requested`/`waiting`/...) | Continue waiting. After 30 min of no completion: rerun CI once. If still not complete: post a hold comment and stop.                                                               |
-| Required checks are not generated after 10 min                      | Treat as running. If the corresponding workflow run does not exist at all: post a hold comment and escalate to a maintainer, then stop.                                            |
+| State (required checks only, normalized)                            | Action                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| All required checks are generated and pass-equivalent               | → **on-success** (caller-defined)                                                                                                                                                                                                                                                                                           |
+| Any required check is non-pass `failure`                            | Inspect the log. If infra/flaky: apply `ciWait.rerunPolicy` (default `rerun-once`). If it resolves to rerun, rerun the exact failed run once and resume polling. If it resolves to hold, post a hold comment and stop. If code-caused: fix, run **fix-validate**, commit atomically, then return to caller's pre-push step. |
+| Any required check is non-pass `cancelled` or `timed_out`           | Investigate cause. If code-caused: fix, run **fix-validate**, commit atomically, then return to caller's pre-push step. If infra-caused: apply `ciWait.rerunPolicy`; rerun or re-push only when the current rerun budget allows it, otherwise post a hold comment and stop.                                                 |
+| Any required check is running (`pending`/`requested`/`waiting`/...) | Continue waiting. After `ciWait.runningTimeout` elapses with no completion (default: 30 min), apply `ciWait.rerunPolicy`. If it resolves to rerun, rerun CI once and resume polling. If the same route recurs after that rerun, or if the policy is `hold`, post a hold comment and stop.                                   |
+| Required checks are not generated after `ciWait.generationTimeout`  | Treat as running. Default: 10 min. If the corresponding workflow run does not exist at all when that window elapses, post a hold comment and escalate to a maintainer, then stop.                                                                                                                                           |

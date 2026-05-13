@@ -63,6 +63,24 @@
         }
       }
     },
+    "ciWait": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runningTimeout": {
+          "type": "string",
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+        },
+        "generationTimeout": {
+          "type": "string",
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+        },
+        "rerunPolicy": {
+          "type": "string",
+          "enum": ["rerun-once", "hold"]
+        }
+      }
+    },
     "trustedMarkerActors": {
       "type": "array",
       "minItems": 1,
