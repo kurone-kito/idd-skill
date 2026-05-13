@@ -14,5 +14,48 @@
     "fix-validate": "npx dprint fmt",
     "pre-push-validate": "npx dprint check",
     "post-fix-validate": "npx dprint fmt && npx markdownlint-cli2"
+  },
+  "stallRecovery": {
+    "quietWindow": "PT30M"
+  },
+  "forcedHandoff": {
+    "mode": "disabled",
+    "authorityPolicy": "owners-and-maintainers-only"
+  },
+  "markerTrust": {
+    "allowCollaboratorMarkers": false
+  },
+  "advisoryWait": {
+    "requestCap": 30,
+    "pendingWindow": "PT30M",
+    "settledWindow": "PT10M",
+    "pollInterval": "PT2M",
+    "capExhaustedRoute": "phase-default"
+  },
+  "ciWait": {
+    "runningTimeout": "PT30M",
+    "generationTimeout": "PT10M",
+    "rerunPolicy": "rerun-once"
+  },
+  "discover": {
+    "activeClaimPreScanBatchSize": 10
+  },
+  "claim": {
+    "verifySettleDelay": "PT5S"
+  },
+  "critiqueLoop": {
+    "cPhaseLowSeveritySkipAfter": 3,
+    "e10NoProgressHoldAfter": 3
+  },
+  "reviewEscalation": {
+    "changesRequestedFirstEscalation": "PT24H",
+    "changesRequestedSecondEscalation": "PT48H"
+  },
+  "approvalSignals": {
+    "readyLabelName": "idd:ready",
+    "labelFreshnessMode": "presence-only"
+  },
+  "issueAuthoring": {
+    "maxClarificationRounds": 3
   }
 }

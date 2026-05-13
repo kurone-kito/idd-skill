@@ -58,6 +58,18 @@ commands table where helper tooling supports it. For behavior encoded
 only in phase instructions, the instruction file governs until the
 instruction is updated too.
 
+## Policy Key Foundation Namespaces
+
+The policy schema now includes first-class foundation namespaces used by
+follow-up parameterization work. When omitted, runtime normalization
+falls back to distributed defaults so existing behavior remains
+unchanged.
+
+`stallRecovery`, `forcedHandoff`, `markerTrust`, `advisoryWait`,
+`ciWait`, `discover`, `claim`, `critiqueLoop`, `reviewEscalation`,
+`approvalSignals`, and `issueAuthoring` are now valid top-level policy
+objects in `.github/idd/config.json`.
+
 ## Ownership Defaults
 
 | Policy key                 | Policy default            | Distributed value                                                                                                                             | Owning surface                                                                                                                                                                                                                                                                                                                                                                                                         | Onboarding expectation                                                                    |

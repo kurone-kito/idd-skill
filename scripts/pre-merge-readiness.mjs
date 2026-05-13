@@ -10,14 +10,13 @@ import {
   operationalMarkerPrefix,
   selectCodeownersText,
 } from "./protocol-helpers.mjs";
+import { normalizePolicyConfig } from "./policy-helpers.mjs";
 
 const APPROVAL_ACTOR_POLICY = new Set([
   "owners-and-maintainers-only",
   "all-write-permission-actors",
 ]);
 const APPROVAL_ACTOR_POLICY_DEFAULT = "owners-and-maintainers-only";
-const FORCED_HANDOFF_MODES = new Set(["disabled", "human-gated"]);
-const FORCED_HANDOFF_MODE_DEFAULT = "disabled";
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.prNumber) {
@@ -522,36 +521,20 @@ function readCollaboratorTrustEnabled() {
 }
 
 function readForcedHandoffAuthorityPolicy() {
-  try {
-    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    const policy = String(
-      config?.forcedHandoff?.authorityPolicy ??
-        config?.forcedHandoffAuthority ??
-        config?.["forced-handoff-authority"] ??
-        "",
-    ).trim();
-    if (APPROVAL_ACTOR_POLICY.has(policy)) {
-      return policy;
-    }
-  } catch {
-    // Default policy remains owners-and-maintainers-only.
-  }
-  return APPROVAL_ACTOR_POLICY_DEFAULT;
+  const policy = readNormalizedPolicy().forcedHandoff.authorityPolicy;
+  return APPROVAL_ACTOR_POLICY.has(policy) ? policy : APPROVAL_ACTOR_POLICY_DEFAULT;
 }
 
 function readForcedHandoffMode() {
+  return readNormalizedPolicy().forcedHandoff.mode;
+}
+
+function readNormalizedPolicy() {
   try {
-    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    const mode = String(
-      config?.forcedHandoff?.mode ?? config?.forcedHandoff ?? config?.["forced-handoff"] ?? "",
-    ).trim();
-    if (FORCED_HANDOFF_MODES.has(mode)) {
-      return mode;
-    }
+    return normalizePolicyConfig(JSON.parse(readFileSync(".github/idd/config.json", "utf8")));
   } catch {
-    // Default mode remains disabled.
+    return normalizePolicyConfig({});
   }
-  return FORCED_HANDOFF_MODE_DEFAULT;
 }
 
 function isAuthorizedForcedHandoffActor(owner, repo, login, policy, cache) {

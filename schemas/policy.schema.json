@@ -170,12 +170,158 @@
         }
       }
     },
+    "forced-handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["disabled", "human-gated"]
+        },
+        "authorityPolicy": {
+          "type": "string",
+          "enum": ["owners-and-maintainers-only", "all-write-permission-actors"]
+        }
+      }
+    },
+    "forcedHandoffMode": {
+      "type": "string",
+      "enum": ["disabled", "human-gated"]
+    },
+    "forced-handoff-mode": {
+      "type": "string",
+      "enum": ["disabled", "human-gated"]
+    },
+    "forcedHandoffAuthority": {
+      "type": "string",
+      "enum": ["owners-and-maintainers-only", "all-write-permission-actors"]
+    },
+    "forced-handoff-authority": {
+      "type": "string",
+      "enum": ["owners-and-maintainers-only", "all-write-permission-actors"]
+    },
     "markerTrust": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "allowCollaboratorMarkers": {
           "type": "boolean"
+        }
+      }
+    },
+    "advisoryWait": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requestCap": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pendingWindow": {
+          "type": "string",
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+        },
+        "settledWindow": {
+          "type": "string",
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+        },
+        "pollInterval": {
+          "type": "string",
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+        },
+        "capExhaustedRoute": {
+          "type": "string",
+          "enum": ["phase-default", "strict-hold"]
+        }
+      }
+    },
+    "ciWait": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runningTimeout": {
+          "type": "string",
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+        },
+        "generationTimeout": {
+          "type": "string",
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+        },
+        "rerunPolicy": {
+          "type": "string",
+          "enum": ["rerun-once"]
+        }
+      }
+    },
+    "discover": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "activeClaimPreScanBatchSize": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "verifySettleDelay": {
+          "type": "string",
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+        }
+      }
+    },
+    "critiqueLoop": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cPhaseLowSeveritySkipAfter": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "e10NoProgressHoldAfter": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "reviewEscalation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "changesRequestedFirstEscalation": {
+          "type": "string",
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+        },
+        "changesRequestedSecondEscalation": {
+          "type": "string",
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+        }
+      }
+    },
+    "approvalSignals": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "readyLabelName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "labelFreshnessMode": {
+          "type": "string",
+          "enum": ["presence-only", "event-freshness"]
+        }
+      }
+    },
+    "issueAuthoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxClarificationRounds": {
+          "type": "integer",
+          "minimum": 1
         }
       }
     }

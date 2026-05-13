@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { computeReportSummary } from "./audit-pr-cleanup-summary.mjs";
+import { normalizePolicyConfig } from "./policy-helpers.mjs";
 import {
   classifyRegularBotComment,
   hasFreshDisposition,
@@ -17,19 +18,13 @@ import {
 } from "./protocol-helpers.mjs";
 
 const TRUSTED_MARKER_PERMISSIONS = new Set(["admin", "maintain", "write"]);
-const FORCED_HANDOFF_AUTHORITY_POLICIES = new Set([
-  "owners-and-maintainers-only",
-  "all-write-permission-actors",
-]);
-const FORCED_HANDOFF_AUTHORITY_POLICY_DEFAULT = "owners-and-maintainers-only";
-const FORCED_HANDOFF_MODES = new Set(["disabled", "human-gated"]);
-const FORCED_HANDOFF_MODE_DEFAULT = "disabled";
 const trustedMarkerAuthorCache = new Map();
 const collaboratorPermissionCache = new Map();
 let cachedConfiguredTrustedMarkerAuthors = null;
 let cachedCurrentViewerLogin = null;
 let cachedForcedHandoffAuthorityPolicy = null;
 let cachedForcedHandoffMode = null;
+let cachedNormalizedPolicy = null;
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -704,22 +699,7 @@ function forcedHandoffAuthorityPolicy() {
   if (cachedForcedHandoffAuthorityPolicy !== null) {
     return cachedForcedHandoffAuthorityPolicy;
   }
-  try {
-    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    const policy = String(
-      config?.forcedHandoff?.authorityPolicy ??
-        config?.forcedHandoffAuthority ??
-        config?.["forced-handoff-authority"] ??
-        "",
-    ).trim();
-    if (FORCED_HANDOFF_AUTHORITY_POLICIES.has(policy)) {
-      cachedForcedHandoffAuthorityPolicy = policy;
-      return cachedForcedHandoffAuthorityPolicy;
-    }
-  } catch {
-    // Default policy remains owners-and-maintainers-only.
-  }
-  cachedForcedHandoffAuthorityPolicy = FORCED_HANDOFF_AUTHORITY_POLICY_DEFAULT;
+  cachedForcedHandoffAuthorityPolicy = readNormalizedPolicy().forcedHandoff.authorityPolicy;
   return cachedForcedHandoffAuthorityPolicy;
 }
 
@@ -727,20 +707,23 @@ function readForcedHandoffMode() {
   if (cachedForcedHandoffMode !== null) {
     return cachedForcedHandoffMode;
   }
-  try {
-    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    const mode = String(
-      config?.forcedHandoff?.mode ?? config?.forcedHandoff ?? config?.["forced-handoff"] ?? "",
-    ).trim();
-    if (FORCED_HANDOFF_MODES.has(mode)) {
-      cachedForcedHandoffMode = mode;
-      return cachedForcedHandoffMode;
-    }
-  } catch {
-    // Default mode remains disabled.
-  }
-  cachedForcedHandoffMode = FORCED_HANDOFF_MODE_DEFAULT;
+  cachedForcedHandoffMode = readNormalizedPolicy().forcedHandoff.mode;
   return cachedForcedHandoffMode;
+}
+
+function readNormalizedPolicy() {
+  if (cachedNormalizedPolicy !== null) {
+    return cachedNormalizedPolicy;
+  }
+  try {
+    cachedNormalizedPolicy = normalizePolicyConfig(
+      JSON.parse(readFileSync(".github/idd/config.json", "utf8")),
+    );
+    return cachedNormalizedPolicy;
+  } catch {
+    cachedNormalizedPolicy = normalizePolicyConfig({});
+    return cachedNormalizedPolicy;
+  }
 }
 
 function isAuthorizedForcedHandoffActor(owner, repo, login, policy = forcedHandoffAuthorityPolicy()) {

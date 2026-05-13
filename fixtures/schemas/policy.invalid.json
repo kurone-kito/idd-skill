@@ -14,5 +14,8 @@
     "fix-validate": "npx dprint fmt",
     "pre-push-validate": "npx dprint check",
     "post-fix-validate": "npx dprint fmt && npx markdownlint-cli2"
+  },
+  "advisoryWait": {
+    "requestCap": 0
   }
 }
