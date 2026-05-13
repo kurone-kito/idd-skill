@@ -137,7 +137,7 @@ before starting Step 1A.
 
 Inspect the target repository and propose candidate values for all seven placeholders:
 `{{REPO_NAME}}`, `{{PROJECT_MARKER_PREFIX}}`,
-`{{TRUSTED_MARKER_ACTORS}}`, `{{FIX_VALIDATE_COMMANDS}}`,
+`{{TRUSTED_MARKER_ACTOR}}`, `{{FIX_VALIDATE_COMMANDS}}`,
 `{{PRE_PUSH_VALIDATE_COMMANDS}}`, `{{POST_FIX_VALIDATE_COMMANDS}}`,
 and `{{INSTALL_DEPS_COMMAND}}`.
 
@@ -189,7 +189,7 @@ placeholders:
 
 - `{{REPO_NAME}}`
 - `{{PROJECT_MARKER_PREFIX}}`
-- `{{TRUSTED_MARKER_ACTORS}}`
+- `{{TRUSTED_MARKER_ACTOR}}`
 - `{{FIX_VALIDATE_COMMANDS}}`
 - `{{PRE_PUSH_VALIDATE_COMMANDS}}`
 - `{{POST_FIX_VALIDATE_COMMANDS}}`
@@ -512,7 +512,7 @@ that mention IDD workflow.
 
 In the copied files, perform a global replacement for:
 `{{REPO_NAME}}`, `{{PROJECT_MARKER_PREFIX}}`,
-`{{TRUSTED_MARKER_ACTORS}}`, `{{FIX_VALIDATE_COMMANDS}}`,
+`{{TRUSTED_MARKER_ACTOR}}`, `{{FIX_VALIDATE_COMMANDS}}`,
 `{{PRE_PUSH_VALIDATE_COMMANDS}}`, `{{POST_FIX_VALIDATE_COMMANDS}}`,
 and `{{INSTALL_DEPS_COMMAND}}`.
 

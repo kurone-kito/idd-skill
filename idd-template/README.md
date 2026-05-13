@@ -82,7 +82,7 @@ strings). This JSON is optional and does not replace
 | -------------------------------- | ----------------------------------------------- |
 | `{{REPO_NAME}}`                  | Repository short name                           |
 | `{{PROJECT_MARKER_PREFIX}}`      | Marker prefix matching `^[a-z][a-z0-9-]{1,31}$` |
-| `{{TRUSTED_MARKER_ACTORS}}`      | JSON-escaped marker-author logins               |
+| `{{TRUSTED_MARKER_ACTOR}}`       | Single JSON-escaped trusted marker login        |
 | `{{FIX_VALIDATE_COMMANDS}}`      | Lint-fix + lint commands                        |
 | `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Lint + build + test (no auto-fix)               |
 | `{{POST_FIX_VALIDATE_COMMANDS}}` | Lint-fix + lint + build + test                  |

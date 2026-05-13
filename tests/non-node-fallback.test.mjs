@@ -35,26 +35,36 @@ test("onboarding links extracted placeholder guidance and keeps fallback wording
   );
   assert.match(
     onboarding,
-    /all seven placeholders:[\s\S]*`{{TRUSTED_MARKER_ACTORS}}`/,
-    "ONBOARDING must include the trusted marker actors placeholder in Step 1A",
+    /all seven placeholders:[\s\S]*`{{TRUSTED_MARKER_ACTOR}}`/,
+    "ONBOARDING must include the trusted marker actor placeholder in Step 1A",
   );
   assert.match(
     onboarding,
-    /perform a global replacement for:[\s\S]*`{{TRUSTED_MARKER_ACTORS}}`/,
-    "ONBOARDING Step 4 must replace the trusted marker actors placeholder",
+    /perform a global replacement for:[\s\S]*`{{TRUSTED_MARKER_ACTOR}}`/,
+    "ONBOARDING Step 4 must replace the trusted marker actor placeholder",
+  );
+  assert.doesNotMatch(
+    onboarding,
+    /{{TRUSTED_MARKER_ACTORS}}/,
+    "ONBOARDING must not refer to the legacy trusted marker actors placeholder",
   );
   const configText = readText("idd-template/.github/idd/config.json");
   assert.match(
     configText,
-    /"trustedMarkerActors": \["{{TRUSTED_MARKER_ACTORS}}"\]/,
+    /"trustedMarkerActors": \["{{TRUSTED_MARKER_ACTOR}}"\]/,
     "template config must keep trustedMarkerActors as a real placeholder token",
+  );
+  assert.doesNotMatch(
+    configText,
+    /{{TRUSTED_MARKER_ACTORS}}/,
+    "template config must not keep the legacy trusted marker actors placeholder",
   );
 
   const text = readText("idd-template/docs/onboarding/placeholders.md");
   assert.match(
     text,
-    /### `{{TRUSTED_MARKER_ACTORS}}`/,
-    "placeholder reference must document the trusted marker actors placeholder",
+    /### `{{TRUSTED_MARKER_ACTOR}}`/,
+    "placeholder reference must document the trusted marker actor placeholder",
   );
   assert.match(
     text,
@@ -74,8 +84,8 @@ test("onboarding links extracted placeholder guidance and keeps fallback wording
   const readme = readText("idd-template/README.md");
   assert.match(
     readme,
-    /\| `{{TRUSTED_MARKER_ACTORS}}` +\| JSON-escaped marker-author logins/,
-    "template README must list the trusted marker actors placeholder",
+    /\| `{{TRUSTED_MARKER_ACTOR}}` +\| Single JSON-escaped trusted marker login/,
+    "template README must list the trusted marker actor placeholder",
   );
   const fixValidateSection = extractSection(
     text,
