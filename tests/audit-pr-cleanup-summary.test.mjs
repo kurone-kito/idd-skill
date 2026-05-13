@@ -133,3 +133,19 @@ test("computeReportSummary emits incomplete when apply is partial", () => {
   assert.equal(report.summary.applied, 1);
   assert.equal(report.summary.failed, 0);
 });
+
+test("computeReportSummary emits failed when apply has both applied and failed candidates", () => {
+  const report = createReport({
+    mode: "apply",
+    candidates: [{ subjectId: "candidate-1" }, { subjectId: "candidate-2" }],
+    skipped: [],
+    applied: [{ subjectId: "candidate-1" }],
+    failed: [{ subjectId: "candidate-2", error: "GraphQL error" }],
+  });
+
+  computeReportSummary(report);
+
+  assert.equal(report.status, "failed");
+  assert.equal(report.summary.applied, 1);
+  assert.equal(report.summary.failed, 1);
+});

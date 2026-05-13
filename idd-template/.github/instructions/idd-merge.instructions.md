@@ -213,22 +213,20 @@ gate. The active claim must still use your current `{claim-id}`.
        --claim-issue <issue-number> --claim-id <claim-id> --format table
      ```
 
-     After apply, post a cleanup evidence comment to the PR with the
-     apply `status`, `applied`, `failed`, and `skipped` counts, and
-     the reason for any skipped or failed items. If
-     `viewer-cannot-minimize > 0` appears alongside applied candidates,
-     include the permission-blocked count in the evidence comment. See
+     After apply, post one evidence comment to the PR with the apply
+     `status`, `applied`, `failed`, and `skipped` counts, the reason
+     for any skipped or failed items, and the `viewer-cannot-minimize`
+     count whenever it is non-zero — regardless of whether apply
+     succeeded, partially succeeded, or failed. See
      `docs/idd-comment-minimization.md` for the evidence comment
-     format.
+     and cleanup-failure comment formats.
 
      If the apply `status` is `applied`: proceed to step 3.
 
-     If the apply `status` is `failed` or `incomplete`: post a
-     cleanup-failure comment to the PR identifying the failed or
-     unapplied candidates and the reason; if `viewer-cannot-minimize > 0`
-     is also non-zero, include the blocked count in the same comment.
-     This is explicit evidence, not a merge gate — the merge already
-     succeeded. Proceed to step 3.
+     If the apply `status` is `failed` or `incomplete`: use the
+     cleanup-failure comment format instead of the evidence comment
+     format. This is explicit evidence, not a merge gate — the merge
+     already succeeded. Proceed to step 3.
 
    - **`permission-blocked`**: skipped items exist with
      `viewerCanMinimize: false` and no apply-eligible candidates were
