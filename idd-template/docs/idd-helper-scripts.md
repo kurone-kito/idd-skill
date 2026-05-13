@@ -16,6 +16,8 @@ In the idd-skill source repository, the following optional helpers were adopted:
 - `scripts/discover-readiness-check.mjs` for A3 readiness criterion
   evaluation (referenced in
   [kurone-kito/idd-skill#391](https://github.com/kurone-kito/idd-skill/issues/391))
+- `scripts/discover-viability-gate.mjs` for A4 viability gate evaluation
+  across limited scope, clear verification, and autonomous completion criteria
 - `scripts/suitability-triage.mjs` for A4.5 seven-check suitability
   evaluation (referenced in
   [kurone-kito/idd-skill#392](https://github.com/kurone-kito/idd-skill/issues/392))
@@ -60,6 +62,22 @@ In the idd-skill source repository, the following optional helpers were adopted:
 - `scripts/cleanup-hygiene-report.mjs` for post-merge cleanup hygiene
   metrics aggregation and trend reporting (referenced in
   [kurone-kito/idd-skill#438](https://github.com/kurone-kito/idd-skill/issues/438))
+
+**Utility and Diagnostic Commands:**
+
+The following commands are shipped alongside the issue-loop helpers but are
+not phase helpers. They are support utilities and are distinguished here so
+future inventory reviews do not need to re-infer their role from code.
+
+- `scripts/idd-doctor.mjs` (`idd-doctor`) — onboarding and configuration
+  diagnostics; reads repository config and helper runtime wiring, reports
+  gaps without mutating any state.
+- `scripts/helper-runtime-manifest.mjs` (`idd-helper-bundle-manifest`) —
+  import helper and manifest inspector; emits machine-readable helper wiring
+  for `package-manager`, `vendored-node`, and `ephemeral-npx` profiles.
+- `scripts/phase-id-resolver.mjs` (`idd-phase-id-resolver`) — phase ID
+  normalization utility; resolves canonical phase IDs from aliases and
+  validates token format.
 
 ### Cleanup Hygiene Report Metrics
 
@@ -326,6 +344,34 @@ default `instructions-only` profile keep using the written shell /
 `gh` / `jq` procedures in the phase instructions and do not need a
 `scripts/` directory.
 
+### A4 viability gate
+
+- Command: `node scripts/discover-viability-gate.mjs --issue <number>`
+  (repeatable; or `--issues <n1,n2,...>`)
+- Optional CSV output: append `--csv` flag
+- Stable output schema (JSON mode):
+
+  ```json
+  {
+    "viable": [{ "number": 123, "title": "..." }],
+    "discarded": [
+      { "number": 124, "title": "...", "failedCriteria": ["limited_scope"] }
+    ],
+    "summary": {
+      "total": 2,
+      "viableCount": 1,
+      "discardedCount": 1,
+      "discardedByCriterion": { "limited_scope": 1 }
+    }
+  }
+  ```
+
+- Stable fields consumed by A4: `viable[].number`, `discarded[].number`,
+  `discarded[].failedCriteria`, and `summary.viableCount`
+- The helper evaluates the three A4 viability criteria (limited scope, clear
+  verification, autonomous completion) against fetched issue bodies; it does
+  not post claims or mutate any state
+
 ### Claim approval evidence
 
 - Source repo / vendored-node command:
@@ -497,6 +543,7 @@ The workflow areas most likely to benefit from optional helpers are:
 
 | Candidate                       | Status             | Helper level                       | Mutation risk | Canonical fallback path                                                | Drift risk                                                                               | Estimated payoff / byte reduction                                       |
 | ------------------------------- | ------------------ | ---------------------------------- | ------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| A4 viability gate               | Adopted helper     | Read-only evaluator                | Low           | A4 viability criteria table in `idd-discover.instructions.md`          | Low — criteria are deterministic pattern matches against issue body text                 | Low to medium — roughly 100 to 200 bytes of repeated A4 criterion prose |
 | Claim-state parsing             | Reserve candidate  | Read-only parser                   | Low           | Claim rules in `.github/instructions/idd-overview.instructions.md`     | High — claim parsing is subtle and any divergence would create false ownership decisions | Medium — roughly 200 to 400 bytes of repeated marker-parsing prose      |
 | Review activity snapshots       | Adopted helper     | Read-only evidence collector       | Low           | E1/F2/F3 activity-universe fetches via `gh` / GitHub API               | Medium — helper output must keep matching the review-currency rules exactly              | High — roughly 600 to 900 bytes of repeated multi-surface fetch prose   |
 | Live status digest edits        | Adopted helper     | Dry-run by default, explicit apply | Medium        | Phase-specific digest discovery and update flow                        | Medium — digest text must remain UI-only and never look authoritative                    | Medium — roughly 300 to 500 bytes of repeated digest-upsert prose       |
