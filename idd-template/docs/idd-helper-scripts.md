@@ -230,6 +230,21 @@ default `instructions-only` profile keep using the written shell /
 - Stable fields consumed at E7: `passed`, `items[].passed`,
   `items[].checks`, and `items[].issues`
 
+### S2 quiet-window evidence
+
+- Command: `node scripts/stalled-session-quiet-check.mjs --pr <pr-number>`
+  with optional `--now <ISO8601>`, `--quiet-window-ms <ms>`,
+  and `--claim-created-at <ISO8601>`
+- Stable fields consumed by the instructions: `quiet_window_met`,
+  `quiet_window_ms`, `window_start`, `now`, `latest_activity`,
+  `latest_activity_type`, `reason`, and `evidence`
+  (`activity_count_in_window`, `blocking_activities`,
+  `has_heartbeat_in_window`, `has_ci_running`,
+  `has_pr_head_movement`, `has_branch_tip_movement`)
+- `ci-running` activities always break the quiet window regardless
+  of their timestamp; all other types are checked against
+  `window_start = now - quiet_window_ms`
+
 ## Friction Inventory
 
 The workflow areas most likely to benefit from optional helpers are:
