@@ -269,7 +269,12 @@ function forcedHandoffAuthorityPolicy() {
 function readForcedHandoffAuthorityPolicy() {
   try {
     const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    const policy = String(config?.forcedHandoffAuthority ?? config?.["forced-handoff-authority"] ?? "").trim();
+    const policy = String(
+      config?.forcedHandoff?.authorityPolicy ??
+        config?.forcedHandoffAuthority ??
+        config?.["forced-handoff-authority"] ??
+        "",
+    ).trim();
     if (FORCED_HANDOFF_AUTHORITY_POLICIES.has(policy)) {
       return policy;
     }
@@ -285,7 +290,9 @@ function readForcedHandoffMode() {
   }
   try {
     const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    const mode = String(config?.forcedHandoff ?? config?.["forced-handoff"] ?? "").trim();
+    const mode = String(
+      config?.forcedHandoff?.mode ?? config?.forcedHandoff ?? config?.["forced-handoff"] ?? "",
+    ).trim();
     if (FORCED_HANDOFF_MODES.has(mode)) {
       cachedForcedHandoffMode = mode;
       return cachedForcedHandoffMode;
@@ -383,6 +390,14 @@ function configuredTrustedMarkerAuthors() {
 }
 
 function trustCollaboratorMarkers() {
+  try {
+    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    if (typeof config?.markerTrust?.allowCollaboratorMarkers === "boolean") {
+      return config.markerTrust.allowCollaboratorMarkers;
+    }
+  } catch {
+    // Fall through to env-var fallback.
+  }
   return /^(1|true|yes)$/i.test(process.env.IDD_TRUST_COLLABORATOR_MARKERS ?? "");
 }
 

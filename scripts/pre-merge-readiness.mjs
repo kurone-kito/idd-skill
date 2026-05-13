@@ -102,7 +102,7 @@ const changedFiles = ghApiJson(`repos/${owner}/${repo}/pulls/${args.prNumber}/fi
   .filter(Boolean);
 const codeownersText = fetchCodeownersText(owner, repo, baseRefName);
 
-const collaboratorTrustEnabled = isTruthy(process.env.IDD_TRUST_COLLABORATOR_MARKERS);
+const collaboratorTrustEnabled = readCollaboratorTrustEnabled();
 const trustedMarkerLogins = normalizeTrustedMarkerLogins([
   viewerLogin,
   ...configuredTrustedActors,
@@ -509,10 +509,27 @@ function isTruthy(value) {
   return /^(1|true|yes)$/i.test(String(value ?? "").trim());
 }
 
+function readCollaboratorTrustEnabled() {
+  try {
+    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    if (typeof config?.markerTrust?.allowCollaboratorMarkers === "boolean") {
+      return config.markerTrust.allowCollaboratorMarkers;
+    }
+  } catch {
+    // Fall through to env-var fallback.
+  }
+  return isTruthy(process.env.IDD_TRUST_COLLABORATOR_MARKERS);
+}
+
 function readForcedHandoffAuthorityPolicy() {
   try {
     const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    const policy = String(config?.forcedHandoffAuthority ?? config?.["forced-handoff-authority"] ?? "").trim();
+    const policy = String(
+      config?.forcedHandoff?.authorityPolicy ??
+        config?.forcedHandoffAuthority ??
+        config?.["forced-handoff-authority"] ??
+        "",
+    ).trim();
     if (APPROVAL_ACTOR_POLICY.has(policy)) {
       return policy;
     }
@@ -525,7 +542,9 @@ function readForcedHandoffAuthorityPolicy() {
 function readForcedHandoffMode() {
   try {
     const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    const mode = String(config?.forcedHandoff ?? config?.["forced-handoff"] ?? "").trim();
+    const mode = String(
+      config?.forcedHandoff?.mode ?? config?.forcedHandoff ?? config?.["forced-handoff"] ?? "",
+    ).trim();
     if (FORCED_HANDOFF_MODES.has(mode)) {
       return mode;
     }

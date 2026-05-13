@@ -145,6 +145,39 @@
         "type": "string",
         "minLength": 1
       }
+    },
+    "stallRecovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "quietWindow": {
+          "type": "string",
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+        }
+      }
+    },
+    "forcedHandoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["disabled", "human-gated"]
+        },
+        "authorityPolicy": {
+          "type": "string",
+          "enum": ["owners-and-maintainers-only", "all-write-permission-actors"]
+        }
+      }
+    },
+    "markerTrust": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowCollaboratorMarkers": {
+          "type": "boolean"
+        }
+      }
     }
   },
   "patternProperties": {

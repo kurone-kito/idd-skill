@@ -658,3 +658,103 @@ test("phase-graph invalid fixture fails via graph validation (dangling ref)", ()
   );
   assert.ok(ok, "Expected graph-invalid fixture to be caught by validateFixture");
 });
+
+// ---------------------------------------------------------------------------
+// policy schema — new parameterization keys (#468)
+// ---------------------------------------------------------------------------
+
+test("policy schema accepts stallRecovery.quietWindow ISO 8601 duration", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.stallRecovery = { quietWindow: "PT30M" };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts stallRecovery without quietWindow", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.stallRecovery = {};
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects stallRecovery.quietWindow non-duration string", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.stallRecovery = { quietWindow: "30 minutes" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("stallRecovery")), errors.join("\n"));
+});
+
+test("policy schema rejects stallRecovery.quietWindow empty duration (P)", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.stallRecovery = { quietWindow: "P" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("stallRecovery")), errors.join("\n"));
+});
+
+test("policy schema rejects stallRecovery.quietWindow empty time marker (PT)", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.stallRecovery = { quietWindow: "PT" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("stallRecovery")), errors.join("\n"));
+});
+
+test("policy schema accepts forcedHandoff.mode human-gated", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.forcedHandoff = { mode: "human-gated" };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts forcedHandoff.mode disabled", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.forcedHandoff = { mode: "disabled" };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts forcedHandoff.authorityPolicy", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.forcedHandoff = { authorityPolicy: "all-write-permission-actors" };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects forcedHandoff.mode unknown value", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.forcedHandoff = { mode: "semi-gated" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("forcedHandoff")), errors.join("\n"));
+});
+
+test("policy schema accepts markerTrust.allowCollaboratorMarkers true", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.markerTrust = { allowCollaboratorMarkers: true };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts markerTrust.allowCollaboratorMarkers false", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.markerTrust = { allowCollaboratorMarkers: false };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects markerTrust.allowCollaboratorMarkers non-boolean", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.markerTrust = { allowCollaboratorMarkers: "yes" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("markerTrust")), errors.join("\n"));
+});
