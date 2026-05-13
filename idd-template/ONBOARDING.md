@@ -260,6 +260,7 @@ docs/idd-workflow.md
 docs/idd-review-policy-profiles.md
 docs/idd-helper-scripts.md
 docs/idd-comment-minimization.md
+docs/idd-resume-detail.md
 docs/permissions.md
 docs/getting-started.md
 docs/concepts.md
@@ -336,6 +337,7 @@ for FILE in \
   "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \
   "docs/idd-comment-minimization.md" \
+  "docs/idd-resume-detail.md" \
   "docs/permissions.md" \
   "docs/getting-started.md" \
   "docs/concepts.md" \
@@ -420,6 +422,7 @@ for FILE in \
   "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \
   "docs/idd-comment-minimization.md" \
+  "docs/idd-resume-detail.md" \
   "docs/permissions.md" \
   "docs/getting-started.md" \
   "docs/concepts.md" \

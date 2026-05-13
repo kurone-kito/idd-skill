@@ -81,6 +81,7 @@
         "idd-template/docs/idd-review-policy-profiles.md",
         "idd-template/docs/idd-helper-scripts.md",
         "idd-template/docs/idd-comment-minimization.md",
+        "idd-template/docs/idd-resume-detail.md",
         "idd-template/docs/permissions.md",
         "idd-template/docs/getting-started.md",
         "idd-template/docs/concepts.md",
@@ -299,6 +300,12 @@
       "id": "idd-comment-minimization-doc",
       "source": "idd-template/docs/idd-comment-minimization.md",
       "target": "docs/idd-comment-minimization.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-resume-detail-doc",
+      "source": "idd-template/docs/idd-resume-detail.md",
+      "target": "docs/idd-resume-detail.md",
       "mode": "exact"
     },
     {
