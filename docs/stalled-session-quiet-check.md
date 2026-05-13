@@ -1,222 +1,191 @@
 # Stalled Session Quiet-Check Helper
 
-Detects quiet windows (no activity for a configurable period, default 30
-minutes) for the Resume/S2 stalled-session recovery specification.
+Detects quiet windows for the Resume/S2 stalled-session recovery path.
 
 ## Purpose
 
-This helper supports the Resume phase S2 (Quiet-Window Check) by detecting
-whether a stalled session has truly been inactive. The quiet window must be
-met before the S3 stale-threshold gate permits takeover of a non-owned claim.
+When helper runtime is enabled, `idd-stalled-session-quiet-check` is the
+canonical read-only evidence collector for Resume/S2 quiet-window checks.
+It helps gather externally observable activity for an open PR without
+changing claim state, review state, or CI state.
+
+The helper does not replace the written policy. Resume/S2-S4 still owns
+trusted-marker validation, stale-threshold gating, forced-handoff
+routing, advisory constraints, and A5 race-safe takeover checks.
 
 ## Specification Reference
 
-See `idd-resume-stall.instructions.md` for the full stalled-session recovery
-context and the decision rules that consume this helper's output.
+- `/.github/instructions/idd-resume-stall.instructions.md`
+- [`docs/idd-helper-scripts.md`](idd-helper-scripts.md)
+- [`schemas/stalled-session-quiet-check.schema.json`](../schemas/stalled-session-quiet-check.schema.json)
 
 ## Usage
 
 ### CLI
 
+Preferred helper-runtime command:
+
 ```bash
-node scripts/stalled-session-quiet-check.mjs \
-  --issue <number> \
+idd-stalled-session-quiet-check \
   --pr <number> \
-  --branch <name> \
   [--owner <owner>] \
   [--repo <repo>] \
-  [--window-minutes <minutes>] \
+  [--token <token>] \
   [--now <ISO8601>] \
-  [--previous-branch-tip-sha <sha>]
+  [--quiet-window-ms <ms>] \
+  [--claim-created-at <ISO8601>] \
+  [--policy <path>]
 ```
 
-#### Required Parameters
+Vendored equivalent:
 
-- `--issue <number>`: Issue number (for fetching claim comments)
-- `--pr <number>`: PR number (for fetching timeline and review state)
-- `--branch <name>`: Remote branch name (for fetching branch tip SHA)
+```bash
+node scripts/stalled-session-quiet-check.mjs \
+  --pr <number> \
+  [--owner <owner>] \
+  [--repo <repo>] \
+  [--token <token>] \
+  [--now <ISO8601>] \
+  [--quiet-window-ms <ms>] \
+  [--claim-created-at <ISO8601>] \
+  [--policy <path>]
+```
 
-#### Optional Parameters
+#### Required parameter
 
-- `--owner <owner>`: Repository owner; defaults to current repository
-- `--repo <repo>`: Repository name; defaults to current repository
-- `--window-minutes <minutes>`: Quiet window duration in minutes;
-  default: 30
+- `--pr <number>`: Pull request number used to gather activity evidence
+
+#### Optional parameters
+
+- `--owner <owner>`: Repository owner; defaults to the current repository
+- `--repo <repo>`: Repository name; defaults to the current repository
+- `--token <token>`: GitHub token override for `gh` API calls
 - `--now <ISO8601>`: Reference timestamp; defaults to current UTC time
-  (in format `YYYY-MM-DDTHH:MM:SSZ`)
-- `--previous-branch-tip-sha <sha>`: Previous branch tip SHA for movement
-  detection
+- `--quiet-window-ms <ms>`: Quiet-window duration in milliseconds;
+  defaults to the policy value or `1800000`
+- `--claim-created-at <ISO8601>`: Latest valid trusted `claimed-by`
+  `created_at` for the active non-owned claim; enables heartbeat
+  evidence in Resume/S2
+- `--policy <path>`: Alternate policy file used to resolve the default
+  quiet window
 - `--help`: Show help text
 
-### Node.js (Programmatic)
+`--claim-created-at` should come from the trusted active-claim parse that
+Resume already performs. If helper runtime is unavailable or the helper
+output is unusable, the written manual procedure in
+`idd-resume-stall.instructions.md` remains authoritative.
 
-```javascript
-import { execFileSync } from "node:child_process";
+## Stable output fields consumed by Resume/S2
 
-const result = JSON.parse(
-  execFileSync("node", [
-    "scripts/stalled-session-quiet-check.mjs",
-    "--issue", "123",
-    "--pr", "456",
-    "--branch", "issue/123-feature",
-    "--owner", "my-org",
-    "--repo", "my-repo",
-    "--window-minutes", "30",
-  ], { encoding: "utf8" })
-);
+Resume/S2 treats these fields as the stable contract:
 
-if (result.isQuiet) {
-  console.log("Quiet window confirmed; proceed with S3 check");
-} else {
-  console.log("Activity detected within window; abort takeover");
-  console.log("Details:", result.evidence.details);
-}
-```
+- `quiet_window_met`
+- `quiet_window_ms`
+- `window_start`
+- `now`
+- `latest_activity`
+- `latest_activity_type`
+- `reason`
+- `evidence.activity_count_in_window`
+- `evidence.blocking_activities`
+- `evidence.has_heartbeat_in_window`
+- `evidence.has_ci_running`
+- `evidence.has_pr_head_movement`
+- `evidence.has_branch_tip_movement`
 
-## Return Value Schema
+The CLI also includes `repository`, `pr`, and `policy` envelopes for
+operator context. Those fields are useful for logging and diagnostics but
+are not the gating fields Resume/S2 relies on.
+
+## Output schema
+
+The CLI returns JSON shaped like:
 
 ```json
 {
-  "isQuiet": boolean,
+  "repository": {
+    "owner": "kurone-kito",
+    "repo": "idd-skill"
+  },
+  "pr": {
+    "number": 526,
+    "title": "refactor(instructions): make resume-stall helper-first",
+    "head_sha": "9bf7bd353fe09a0514fcf3e36b3a323cb6c936fe",
+    "html_url": "https://github.com/kurone-kito/idd-skill/pull/526"
+  },
+  "policy": {
+    "quiet_window_ms": 1800000,
+    "claim_created_at": "2026-05-13T17:40:00Z"
+  },
+  "quiet_window_met": false,
+  "quiet_window_ms": 1800000,
+  "window_start": "2026-05-13T17:30:00Z",
+  "now": "2026-05-13T18:00:00Z",
+  "latest_activity": "2026-05-13T17:58:02Z",
+  "latest_activity_type": "ci-completed",
+  "reason": "activity-in-window: comment, ci-completed",
   "evidence": {
-    "windowMinutes": number,
-    "windowStartUtc": "ISO8601 timestamp",
-    "windowEndUtc": "ISO8601 timestamp",
-    "latestActivityUtc": "ISO8601 timestamp or null",
-    "reason": "string explanation",
-    "details": ["array of activity findings"],
-    "checkSummary": {
-      "heartbeatCheck": "PASSED" | "FAILED",
-      "prHeadMovementCheck": "PASSED" | "FAILED",
-      "branchTipMovementCheck": "PASSED" | "FAILED",
-      "runningCiCheck": "PASSED" | "FAILED",
-      "reviewActivityCheck": "PASSED" | "FAILED",
-      "commentActivityCheck": "PASSED" | "FAILED",
-      "ciCompletionCheck": "PASSED" | "FAILED"
-    }
+    "activity_count_in_window": 2,
+    "blocking_activities": [
+      {
+        "type": "comment",
+        "timestamp": "2026-05-13T17:52:41Z"
+      },
+      {
+        "type": "ci-completed",
+        "timestamp": "2026-05-13T17:58:02Z"
+      }
+    ],
+    "has_heartbeat_in_window": false,
+    "has_ci_running": false,
+    "has_pr_head_movement": false,
+    "has_branch_tip_movement": false
   }
 }
 ```
 
-### `isQuiet`
+`latest_activity_type` is descriptive evidence, not a standalone policy
+decision. Resume/S2 still interprets the full response together with the
+written instructions.
 
-Boolean flag indicating whether the quiet window is satisfied (all checks
-passed).
+## Live rechecks required before takeover
 
-### `evidence`
+Quiet-window evidence is only one gate in stalled-session recovery.
+Before takeover, Resume/S4 must still:
 
-Detailed evidence collected during the check:
+1. Re-parse the active claim from trusted markers and confirm it is the
+   same non-owned `{claim-id}` observed earlier.
+2. Re-run this helper against live GitHub state, or repeat the written
+   manual procedure when helper runtime is unavailable.
+3. Re-check the stale-threshold gate. `quiet_window_met = true` never
+   waives stale-age by itself.
+4. Re-check closed/merged guards and stop if the issue or PR closed in
+   the meantime.
+5. Use A5 race-safe claim verification after posting takeover.
 
-- **`windowMinutes`**: The quiet window duration used for the check
-- **`windowStartUtc`**: The earliest timestamp within the quiet window
-  (reference time minus window duration)
-- **`windowEndUtc`**: The reference timestamp (end of the window)
-- **`latestActivityUtc`**: The most recent activity timestamp across all
-  sources, or `null` if no activity was found
-- **`reason`**: Human-readable summary of the outcome
-- **`details`**: Array of specific findings (heartbeat, PR movement, etc.)
-- **`checkSummary`**: Per-check status showing which specific activity
-  types were detected
+If helper output is missing, contradictory, or no longer quiet, stop and
+restart Resume routing instead of taking over.
 
-## Quiet Window Checks
+## Return code
 
-The helper validates all five sources required by Resume/S2:
+Successful evaluations always exit with code `0`, including cases where
+`quiet_window_met` is `false`. Use the JSON output to decide whether the
+quiet window is satisfied.
 
-1. **Heartbeat Check**: Looks for trusted `<!-- claimed-by: ... -->`
-   markers within the window
-   - Detects ongoing claim activity that would indicate an active session
-
-2. **PR Head Movement Check**: Detects new commits in the PR timeline
-   within the window
-   - Indicates work is being pushed to the branch
-
-3. **Branch Tip Movement Check**: Compares current branch tip SHA against
-   previous snapshot
-   - Requires `--previous-branch-tip-sha` parameter
-   - Detects force-push or new commits on the remote branch
-
-4. **Running CI Check**: Detects `queued` or `in_progress` CI checks
-   - Indicates active workflow execution
-
-5. **Review Activity Check**: Detects new review submissions within the
-   window
-   - Includes formal code reviews and automated advisory reviews
-
-6. **Comment Activity Check**: Detects new comments (excluding claim
-   markers)
-   - Includes issue and PR comments from humans and bots
-
-7. **CI Completion Check**: Detects recently completed CI runs
-   - Indicates workflow activity that occurred within the window
-
-## Integration with Resume/S2
-
-In `idd-resume-stall.instructions.md`, use this helper to decide whether to
-proceed with takeover:
-
-```bash
-RESULT=$(node scripts/stalled-session-quiet-check.mjs \
-  --issue "$ISSUE_NUMBER" \
-  --pr "$PR_NUMBER" \
-  --branch "$BRANCH_NAME" \
-  --window-minutes 30)
-
-IS_QUIET=$(echo "$RESULT" | jq '.isQuiet')
-
-if [ "$IS_QUIET" = "true" ]; then
-  echo "Quiet window confirmed; continue to S3 check"
-else
-  echo "Activity detected; hold and stop"
-  echo "$RESULT" | jq '.evidence.details[]'
-fi
-```
-
-## Return Code
-
-Always exits with code 0 on success (regardless of `isQuiet` value). Use the
-JSON output to determine the result.
-
-## Error Handling
+## Error handling
 
 The helper throws an error if:
 
-- Required parameters are missing (--issue, --pr, or --branch)
+- `--pr` is missing or invalid
 - GitHub API calls fail
-- Invalid parameter values are provided
+- The helper cannot parse a provided argument value
 
-## Timestamp Handling
+## Timestamp handling
 
-- Uses GitHub server-provided timestamps (from API responses)
-- Never uses local wall-clock time
-- Assumes all timestamps are in UTC
-- ISO8601 format with `Z` suffix (e.g., `2024-05-13T12:00:00Z`)
-
-## Example Output
-
-```json
-{
-  "isQuiet": false,
-  "evidence": {
-    "windowMinutes": 30,
-    "windowStartUtc": "2024-05-13T11:30:00Z",
-    "windowEndUtc": "2024-05-13T12:00:00Z",
-    "latestActivityUtc": "2024-05-13T11:45:00Z",
-    "reason": "Activity detected within 30-minute window",
-    "details": [
-      "Comment activity detected: 1 comment(s) within window"
-    ],
-    "checkSummary": {
-      "heartbeatCheck": "PASSED",
-      "prHeadMovementCheck": "PASSED",
-      "branchTipMovementCheck": "PASSED",
-      "runningCiCheck": "PASSED",
-      "reviewActivityCheck": "PASSED",
-      "commentActivityCheck": "FAILED",
-      "ciCompletionCheck": "PASSED"
-    }
-  }
-}
-```
+- Uses GitHub server timestamps from API responses
+- Normalizes timestamps to ISO8601 UTC with a `Z` suffix
+- Treats `ci-running` as blocking even if its timestamp would otherwise
+  fall outside the window
 
 ## Dependencies
 

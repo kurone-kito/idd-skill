@@ -437,9 +437,12 @@ default `instructions-only` profile keep using the written shell /
 
 ### S2 quiet-window evidence
 
-- Command: `node scripts/stalled-session-quiet-check.mjs --pr <pr-number>`
-  with optional `--now <ISO8601>`, `--quiet-window-ms <ms>`,
-  and `--claim-created-at <ISO8601>`
+- When helper runtime is enabled, Resume/S2 should call the
+  profile-selected `idd-stalled-session-quiet-check --pr <pr-number>`
+  command first. `node scripts/stalled-session-quiet-check.mjs --pr
+  <pr-number>` is the vendored equivalent.
+- Optional parameters: `--now <ISO8601>`, `--quiet-window-ms <ms>`,
+  `--claim-created-at <ISO8601>`, and `--policy <path>`
 - Stable fields consumed by the instructions: `quiet_window_met`,
   `quiet_window_ms`, `window_start`, `now`, `latest_activity`,
   `latest_activity_type`, `reason`, and `evidence`
@@ -449,6 +452,10 @@ default `instructions-only` profile keep using the written shell /
 - `ci-running` activities always break the quiet window regardless
   of their timestamp; all other types are checked against
   `window_start = now - quiet_window_ms`
+- Before takeover, re-run the helper against live GitHub state and pair
+  it with the written Resume/S2-S4 checks for the same active claim,
+  stale-threshold gating, closed/merged guards, and A5 race-safe claim
+  verification. `quiet_window_met = true` alone is never sufficient.
 
 ### Review-disposition verification
 
