@@ -368,7 +368,10 @@ function detectSyncCommand() {
     try {
       const packageJson = JSON.parse(readText("package.json"));
       if (typeof packageJson.scripts?.["docs:sync"] === "string") {
-        return docsSyncCommandByPackageManager(packageJson.packageManager);
+        const command = docsSyncCommandByPackageManager(packageJson.packageManager);
+        if (command) {
+          return command;
+        }
       }
     } catch {
       // Keep fallback discovery if package.json is not parseable.
