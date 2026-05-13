@@ -6,6 +6,46 @@ explicit issue target (A0-T) — or after a successful re-claim decision
 in the resume phase. It covers the five pre-checks, claim execution, and
 claim verification.
 
+## Canonical A5(a) path (helper-first)
+
+When helper support is installed, use the profile-selected claim
+approval helper command as the canonical A5(a) evidence collector before
+evaluating the issue-author approval gate.
+
+```sh
+# source repo / vendored-node profile
+node scripts/claim-approval-gate.mjs --issue <issue-number>
+
+# package-manager / ephemeral-npx profile
+<profile-selected-claim-approval-command> --issue <issue-number>
+```
+
+Resolve `<profile-selected-claim-approval-command>` from the helper
+runtime manifest wiring in `docs/idd-helper-scripts.md`. Do not hardcode
+`node scripts/...` for profiles that do not vendor `scripts/`.
+
+Contract: `docs/idd-helper-scripts.md#claim-approval-evidence`
+
+Required helper fields:
+
+- `approved`
+- `reason`
+- `gateEnabled`
+- `policy.maintainerApprovalActorPolicy`
+- `policy.approvalSignals`
+- `checks`
+
+Do not proceed on helper output unless the command exits successfully,
+returns valid JSON, and includes every required field. If helper output
+is unavailable, malformed, incomplete, or inconsistent with live issue
+state in a way that affects approval, ignore it and use the written
+A5(a) fallback below. If fallback rechecks still cannot establish safe
+approval evidence, route the issue exactly as if approval were missing.
+
+There is currently no supported A5(d) helper. Open-PR conflict checks
+must continue to use the live GitHub queries and written decision rules
+below.
+
 ## Pre-checks (all five must pass)
 
 Re-fetch the issue immediately before running these checks.
@@ -15,6 +55,9 @@ issue itself.
 
 **(a) Issue-author approval gate** — Re-evaluate the repository-wide
 issue-author approval rule immediately before claim.
+
+Use the helper-first path above when helper runtime is enabled and the
+output is trustworthy. Otherwise apply the written rules below.
 
 - If `.github/idd/config.json` exists and is valid and
   `skipIssueAuthorApprovalGate` is `true`, skip this check.
@@ -79,9 +122,11 @@ Otherwise, use the latest trusted legacy `claimed-by` comment as a
 
 The migration claim uses a fresh `{claim-id}` and `supersedes: none`.
 
-**(d) Open PR** — No open PR may close or reference this issue, unless
-that PR's head branch matches the `branch` field in an inheritable claim
-comment. An inheritable claim comment is either:
+**(d) Open PR** — There is currently no supported A5(d) helper.
+Re-check live GitHub PR state with the written rules below. No open PR
+may close or reference this issue, unless that PR's head branch matches
+the `branch` field in an inheritable claim comment. An inheritable claim
+comment is either:
 
 - the already verified active claim for this current session, or
 - the currently active stale claim you are taking over, or

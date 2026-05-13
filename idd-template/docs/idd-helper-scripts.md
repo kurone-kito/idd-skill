@@ -20,7 +20,8 @@ In the idd-skill source repository, the following optional helpers were adopted:
   evaluation (referenced in
   [kurone-kito/idd-skill#392](https://github.com/kurone-kito/idd-skill/issues/392))
 - `scripts/claim-approval-gate.mjs` for A5(a) issue-author approval
-  verification (referenced in
+  verification; A5(d) open-PR conflict checks remain manual by design
+  (referenced in
   [kurone-kito/idd-skill#393](https://github.com/kurone-kito/idd-skill/issues/393))
 - `scripts/resume-claim-routing.mjs` for Resume Step 1 claim-state
   evaluation and takeover routing (referenced in
@@ -198,6 +199,17 @@ scripts to add or remove for that transition.
 
 The adopted helper boundaries are intentionally narrow:
 
+- `claim-approval-gate.mjs` is read-only, evaluates only the A5(a)
+  issue-author approval gate, and emits machine-readable approval
+  evidence
+- it resolves collaborator permission, ready-label freshness, and
+  approval-comment freshness under repository policy, then fails closed
+  when ambiguity remains
+- it does not claim issues, inspect A5(d) open-PR conflicts, or bypass
+  the written claim rules; live PR conflict checks remain manual until a
+  stable contract can cover inheritable-branch and linked-issue
+  exceptions
+
 - `force-handoff.mjs` is intentionally operator-facing and interactive;
   it asks for the issue number before any mutation, derives whether PR
   input is required from live open PR state on the active claim branch,
@@ -313,6 +325,28 @@ installs the matching helper scripts. Repositories that stay on the
 default `instructions-only` profile keep using the written shell /
 `gh` / `jq` procedures in the phase instructions and do not need a
 `scripts/` directory.
+
+### Claim approval evidence
+
+- Source repo / vendored-node command:
+  `node scripts/claim-approval-gate.mjs --issue <issue-number>`
+- Package-manager / ephemeral-npx command: use the
+  profile-selected `idd:claim-approval-gate` command from the helper
+  runtime manifest wiring above
+- Optional freshness override: append
+  `--generated-plan-updated-at <ISO8601>` when the caller already has
+  authoritative generated-plan freshness evidence to reuse
+- Stable fields consumed by the instructions: `approved`, `reason`,
+  `gateEnabled`, `policy.skipIssueAuthorApprovalGate`,
+  `policy.maintainerApprovalActorPolicy`, `policy.approvalSignals`,
+  `checks`, and `timelineAvailable`
+- `checks` remain stable by `id`: `gate_enabled`,
+  `author_self_authorized`, `ready_label_present`,
+  `ready_comment_fresh`, and `ambiguity_guard`
+- the helper is intentionally scoped to A5(a); A5(d) open-PR conflict
+  checks stay on the written live GitHub path because inheritable-branch
+  and linked-issue exceptions do not yet have a supported helper
+  contract
 
 ### Advisory-wait evidence
 
