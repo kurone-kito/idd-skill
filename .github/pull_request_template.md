@@ -15,6 +15,12 @@ https://github.com/kurone-kito/template/blob/main/.github/CONTRIBUTING.zh.md
 
 Closes #
 
+## Follow-up issues (if any)
+
+- [ ] none
+
+## Background / rationale (if material)
+
 ## IDD impact
 
 - [ ] Instruction files changed
@@ -27,6 +33,7 @@ Closes #
 
 - [ ] `pnpm lint`
 - [ ] `pnpm test`
+- [ ] `node scripts/audit-docs.mjs --check`
 - [ ] `pnpm run docs:sync:check`
 - [ ] `node scripts/idd-doctor.mjs` (if applicable)
 
