@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -14,6 +15,93 @@ const APPROVAL_ACTOR_POLICY_DEFAULT = "owners-and-maintainers-only";
 const FORCED_HANDOFF_MODES = new Set(["disabled", "human-gated"]);
 const FORCED_HANDOFF_MODE_DEFAULT = "disabled";
 
+export function generateSuccessorIds(baseAgentId) {
+  return {
+    newAgentId: String(baseAgentId || "idd-agent"),
+    newClaimId: `claim-${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+  };
+}
+
+export function planHandoff(issueComments, linkedPrs, options = {}) {
+  const {
+    newAgentId,
+    newClaimId,
+    prNumber,
+    forcedBy,
+    reason,
+    timestamp,
+    trustedMarkerLogins,
+    isAuthorizedForcedHandoff,
+  } = options;
+
+  const activeClaim = resolveHelperActiveClaim(
+    issueComments,
+    trustedMarkerLogins ?? [],
+    {
+      isAuthorizedForcedHandoff:
+        typeof isAuthorizedForcedHandoff === "function"
+          ? isAuthorizedForcedHandoff
+          : () => false,
+    },
+  );
+
+  if (!activeClaim) {
+    throw new Error("issue has no active trusted claim");
+  }
+
+  const matchingPrs = (linkedPrs ?? []).filter(
+    (pr) => String(pr.headRefName ?? "") === activeClaim.branch,
+  );
+  const contextScope = matchingPrs.length > 0 ? "issue-plus-pr" : "issue-only";
+  const prReferences = matchingPrs.map((pr) => String(pr.number));
+
+  if (prNumber !== undefined) {
+    const prRef = String(prNumber);
+    if (!prReferences.includes(prRef)) {
+      throw new Error(
+        `PR #${prNumber} does not match any open PR on claim branch ${activeClaim.branch}` +
+          (prReferences.length > 0 ? `; expected one of: ${prReferences.join(", ")}` : ""),
+      );
+    }
+  }
+
+  const generated = generateSuccessorIds(activeClaim.agentId);
+  const successorIds = {
+    newAgentId: newAgentId ?? generated.newAgentId,
+    newClaimId: newClaimId ?? generated.newClaimId,
+  };
+
+  let markerBody = null;
+  if (forcedBy && reason) {
+    const resolvedLinkedPr =
+      prNumber !== undefined ? String(prNumber) : prReferences[0];
+    const payload = {
+      oldAgentId: activeClaim.agentId,
+      oldClaimId: activeClaim.claimId,
+      newAgentId: successorIds.newAgentId,
+      newClaimId: successorIds.newClaimId,
+      branch: activeClaim.branch,
+      ...(contextScope === "issue-plus-pr" && resolvedLinkedPr
+        ? { linkedPr: resolvedLinkedPr }
+        : {}),
+      forcedBy,
+      reason,
+      timestamp: timestamp ?? currentIsoTimestamp(),
+      contextScope,
+    };
+    markerBody = renderForcedHandoffComment(payload);
+  }
+
+  return {
+    activeClaim,
+    branch: activeClaim.branch,
+    contextScope,
+    prReferences,
+    markerBody,
+    successorIds,
+  };
+}
+
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
 
@@ -25,17 +113,65 @@ export function main(argv = process.argv.slice(2)) {
   if (!args.issueNumber) {
     throw new Error("missing required --issue <number> argument");
   }
-  if (!args.newAgentId) {
-    throw new Error("missing required --new-agent-id <id> argument");
-  }
-  if (!args.newClaimId) {
-    throw new Error("missing required --new-claim-id <id> argument");
-  }
   if (!args.forcedBy) {
     throw new Error("missing required --forced-by <actor> argument");
   }
   if (!args.reason) {
     throw new Error("missing required --reason <text> argument");
+  }
+
+  if (args.plan) {
+    const repoRef = args.repo ?? ghText(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
+    const { owner, name } = parseOwnerRepo(repoRef);
+    const issueComments = ghJson(["api", "--paginate", `repos/${owner}/${name}/issues/${args.issueNumber}/comments`], true).flat();
+    const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
+    const trustedMarkerLogins = buildTrustedMarkerLogins(owner, name, viewerLogin, args.trustedMarkerLogins, issueComments);
+    const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
+    const permissionCache = new Map();
+
+    const tempClaim = resolveHelperActiveClaim(issueComments, trustedMarkerLogins, {
+      isAuthorizedForcedHandoff: (forcedBy) =>
+        isAuthorizedForcedHandoffActor(owner, name, forcedBy, forcedHandoffAuthorityPolicy, permissionCache),
+    });
+
+    let linkedPrs = [];
+    if (tempClaim) {
+      linkedPrs = ghJson([
+        "pr", "list",
+        "--repo", `${owner}/${name}`,
+        "--head", tempClaim.branch,
+        "--state", "open",
+        "--json", "number,headRefName",
+      ]);
+    }
+
+    const plan = planHandoff(issueComments, linkedPrs, {
+      newAgentId: args.newAgentId,
+      newClaimId: args.newClaimId,
+      prNumber: args.prNumber,
+      forcedBy: args.forcedBy,
+      reason: args.reason,
+      timestamp: args.timestamp,
+      trustedMarkerLogins,
+      isAuthorizedForcedHandoff: (forcedBy) =>
+        isAuthorizedForcedHandoffActor(owner, name, forcedBy, forcedHandoffAuthorityPolicy, permissionCache),
+    });
+
+    console.log(
+      JSON.stringify(
+        { repository: `${owner}/${name}`, issueNumber: args.issueNumber, ...plan },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  if (!args.newAgentId) {
+    throw new Error("missing required --new-agent-id <id> argument");
+  }
+  if (!args.newClaimId) {
+    throw new Error("missing required --new-claim-id <id> argument");
   }
 
   const repoRef = args.repo ?? ghText(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
@@ -202,6 +338,9 @@ function parseArgs(argv) {
         if (parsed.format !== "text" && parsed.format !== "json") {
           throw new Error(`unsupported --format value: ${parsed.format}`);
         }
+        break;
+      case "--plan":
+        parsed.plan = true;
         break;
       case "--help":
       case "-h":
@@ -397,15 +536,17 @@ function printUsage() {
   console.log(`usage: node scripts/forced-handoff-marker.mjs --issue <number> [options]
 
 Options:
+  --plan                           derive live PR context and emit a structured execution plan;
+                                   --new-agent-id and --new-claim-id become optional (auto-generated)
   --pr <number>                    optional PR number for issue-plus-pr context
-  --new-agent-id <id>              successor session agent id
-  --new-claim-id <id>              successor claim id
+  --new-agent-id <id>              successor session agent id (required without --plan)
+  --new-claim-id <id>              successor claim id (required without --plan)
   --forced-by <actor>              approving human actor recorded in the marker
   --reason <text>                  why the prior session is considered unavailable
   --timestamp <ISO8601>            override the marker payload timestamp (default: current UTC)
   --trusted-marker-logins <csv>    additional trusted marker authors for claim reconstruction
   --repo <owner/name>              repository override
-  --format <text|json>             output format (default: text)
+  --format <text|json>             output format for marker mode (default: text)
   --help                           show this help
 
 Environment:

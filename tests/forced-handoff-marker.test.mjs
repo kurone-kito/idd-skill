@@ -6,8 +6,10 @@ import { test } from "node:test";
 
 import {
   currentIsoTimestamp,
+  generateSuccessorIds,
   main,
   parsePositiveInteger,
+  planHandoff,
   resolveHelperActiveClaim,
 } from "../scripts/forced-handoff-marker.mjs";
 import {
@@ -606,6 +608,72 @@ test("nested forcedHandoff.mode=disabled refuses output", () => {
   } finally {
     process.chdir(originalCwd);
   }
+});
+
+test("planHandoff and generateSuccessorIds — integration fixture", () => {
+  const planClaimBody = [
+    "<!-- claimed-by: github-copilot-cli-old claim-plan-test-old supersedes: none 2026-05-13T10:00:00Z branch: issue/496-feat-force-handoff-derive-live-pr -->",
+    "",
+    "_github-copilot-cli-old: issue claim — IDD automation marker. Do not edit._",
+  ].join("\n");
+
+  const issueComments = [
+    {
+      body: planClaimBody,
+      created_at: "2026-05-13T10:00:00Z",
+      user: { login: "kurone-kito" },
+    },
+  ];
+
+  const trustedLogins = ["kurone-kito", "github-copilot-cli-old"];
+
+  const resultIssueOnly = planHandoff(issueComments, [], {
+    trustedMarkerLogins: trustedLogins,
+    forcedBy: "kurone-kito",
+    reason: "operator-approved-recovery",
+  });
+
+  assert.equal(resultIssueOnly.contextScope, "issue-only");
+  assert.deepEqual(resultIssueOnly.prReferences, []);
+  assert.equal(resultIssueOnly.branch, "issue/496-feat-force-handoff-derive-live-pr");
+  assert.ok(resultIssueOnly.markerBody.includes("issue-only"), "marker body should contain context scope");
+  assert.ok(resultIssueOnly.successorIds.newAgentId, "newAgentId should be non-empty");
+  assert.ok(resultIssueOnly.successorIds.newClaimId, "newClaimId should be non-empty");
+
+  const linkedPrs = [
+    { number: 501, headRefName: "issue/496-feat-force-handoff-derive-live-pr" },
+  ];
+
+  const resultWithPr = planHandoff(issueComments, linkedPrs, {
+    trustedMarkerLogins: trustedLogins,
+    forcedBy: "kurone-kito",
+    reason: "operator-approved-recovery",
+  });
+
+  assert.equal(resultWithPr.contextScope, "issue-plus-pr");
+  assert.deepEqual(resultWithPr.prReferences, ["501"]);
+  assert.ok(resultWithPr.markerBody.includes("issue-plus-pr"), "marker body should contain context scope");
+  assert.ok(resultWithPr.markerBody.includes('"linked-pr":"501"'), "marker body should contain linked PR");
+
+  assert.throws(
+    () =>
+      planHandoff(issueComments, linkedPrs, {
+        prNumber: 999,
+        trustedMarkerLogins: trustedLogins,
+        forcedBy: "kurone-kito",
+        reason: "operator-approved-recovery",
+      }),
+    /PR #999 does not match any open PR on claim branch issue\/496-feat-force-handoff-derive-live-pr/,
+  );
+
+  const ids1 = generateSuccessorIds("test-agent");
+  const ids2 = generateSuccessorIds("test-agent");
+
+  assert.ok(ids1.newAgentId, "newAgentId should be non-empty");
+  assert.ok(ids1.newClaimId, "newClaimId should be non-empty");
+  assert.notEqual(ids1.newClaimId, ids2.newClaimId, "claim IDs should differ across calls");
+  assert.equal(ids1.newAgentId, "test-agent");
+  assert.match(ids1.newClaimId, /^claim-[0-9a-f]{16}$/);
 });
 
 test("forcedHandoff.mode defaults to disabled when key is absent", () => {
