@@ -554,12 +554,15 @@ sources.
 ### Scope Note
 
 This map documents which files are canonical sources and which are synchronized
-copies. Downstream tasks (referenced by issue #481 and #482 in roadmap #483) will
-implement:
+copies.
 
-- CI checks to detect and prevent canonical-source drift
-- Contributor tooling to guide edits toward canonical sources
-- Integration with the contribution workflow
+- CI already enforces canonical-source drift detection through
+  `node scripts/audit-docs.mjs --check` in the lint workflow.
+- When drift is detected, follow the remediation shown by the audit output
+  (the `docs:sync` script via your package manager when available), then
+  re-run the check.
+- Contributor tooling should guide edits toward canonical sources instead of
+  editing mirrors first.
 
 ## Where to Edit
 
