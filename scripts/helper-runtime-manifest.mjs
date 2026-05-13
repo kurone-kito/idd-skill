@@ -56,6 +56,14 @@ const HELPER_COMMANDS = [
     description: "Collect read-only A3 readiness filtering evidence for candidate issues.",
   },
   {
+    id: "discover-viability-gate",
+    scriptName: "idd:discover-viability-gate",
+    binName: "idd-discover-viability-gate",
+    entryPath: "scripts/discover-viability-gate.mjs",
+    vendoredCommand: "node scripts/discover-viability-gate.mjs",
+    description: "Collect read-only A4 viability filtering evidence for candidate issues.",
+  },
+  {
     id: "advisory-wait-state",
     scriptName: "idd:advisory-wait-state",
     binName: "idd-advisory-wait-state",
