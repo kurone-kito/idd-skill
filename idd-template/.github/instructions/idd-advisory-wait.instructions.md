@@ -12,12 +12,24 @@ owns behavior.
 
 ## 1. Canonical path (helper-first)
 
-When helper support is installed, use the helper as the canonical
-evidence collector:
+When helper support is installed, use the profile-selected
+advisory-wait helper command as the canonical evidence collector.
 
 ```sh
-node scripts/advisory-wait-state.mjs --pr <pr-number>
+# source repo / vendored-node profile
+node scripts/advisory-wait-state.mjs \
+  --pr <pr-number> \
+  --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
+
+# package-manager / ephemeral-npx profile
+<profile-selected-advisory-wait-command> \
+  --pr <pr-number> \
+  --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
 ```
+
+Resolve `<profile-selected-advisory-wait-command>` from the helper
+runtime manifest wiring in `docs/idd-helper-scripts.md`. Do not hardcode
+`node scripts/...` for profiles that do not vendor `scripts/`.
 
 Contract: `docs/idd-helper-scripts.md#stable-helper-evidence-outputs`
 and `schemas/advisory-wait-state.schema.json`.
