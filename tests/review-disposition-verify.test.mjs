@@ -38,7 +38,7 @@ test("classifyMarker: null when no bold prefix", () => {
   assert.equal(classifyMarker("Accepted — some note"), null);
 });
 
-test("classifyMarker: null for unrecognised text", () => {
+test("classifyMarker: null for unrecognized text", () => {
   assert.equal(classifyMarker("LGTM"), null);
 });
 

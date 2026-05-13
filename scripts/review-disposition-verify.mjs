@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 
 const MARKER_ACCEPTED_RE = /^\*\*Accepted\*\*\s+—/;
@@ -24,6 +25,9 @@ if (isMainModule(import.meta.url)) {
     if (Array.isArray(parsed)) {
       rawItems = parsed;
     } else if (parsed !== null && typeof parsed === "object" && "items" in parsed) {
+      if (parsed.items === null) {
+        throw new Error("--items JSON object has 'items: null'; expected an array");
+      }
       rawItems = parsed.items ?? [];
     } else {
       throw new Error("--items JSON object must have an 'items' key");
@@ -375,6 +379,5 @@ function isMainModule(metaUrl) {
   if (!metaUrl || !process.argv[1]) {
     return false;
   }
-  const scriptUrl = new URL(`file://${resolve(process.argv[1])}`);
-  return metaUrl === scriptUrl.href;
+  return metaUrl === pathToFileURL(resolve(process.argv[1])).href;
 }
