@@ -41,6 +41,9 @@ Evaluate in order; take the first matching row.
 
 Autopilot and unattended agents must never invent, request, or broaden
 forced handoff; they may only consume already-recorded human-gated evidence.
+Use only externally observable evidence: trusted claim heartbeat timestamps,
+PR head movement, remote branch tip movement, review/comment activity, and CI
+timestamps.
 Quiet-window evidence does not bypass the shared stale threshold.
 If stalled-session routing returns hold/inconclusive, stop.
 
@@ -48,21 +51,23 @@ If stalled-session routing returns hold/inconclusive, stop.
 
 Evaluate in order; take the first matching row.
 
-| Claim state                                                     | Route                                                                                               |
-| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Issue closed or PR merged                                       | Clean up local worktree and branch; STOP                                                            |
-| Forced-handoff recovery confirmed (§FH)                         | Re-claim via A5 after GitHub reflects handoff; cite evidence in digest `Authoritative by`; → Step 2 |
-| Legacy `claimed-by` + later trusted `unclaimed-by` (same agent) | Treat as unclaimed → fresh A5 claim → Step 2                                                        |
-| Legacy `claimed-by`, age < 24 h                                 | STOP — not inheritable even if agent-id matches                                                     |
-| Legacy `claimed-by`, age ≥ 24 h                                 | Migrate via A5 with `supersedes: none`; → Step 2                                                    |
-| No active claim                                                 | Re-claim via A5; → Step 2                                                                           |
-| Active claim = this session's verified `{claim-id}`             | Continue with same `{claim-id}`; → Step 2                                                           |
-| Active non-stale claim (< 24 h, other session)                  | STOP — not inheritable even if agent-id matches                                                     |
-| Active stale claim (≥ 24 h, other session)                      | Takeover via A5 with `supersedes: <prior-id>`; → Step 2                                             |
-| Branch field starts with `roadmap-audit/`                       | Re-run A1.5; skip worktree creation; STOP after roadmap-side effects                                |
+| Claim state                                                                            | Route                                                                                                                               |
+| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Issue closed or PR merged                                                              | Clean up local worktree and branch; STOP                                                                                            |
+| Forced-handoff evidence names this session's already-verified `{claim-id}`             | STOP — current session is displaced; do not push, comment, resolve, request reviewers, or merge                                     |
+| Forced-handoff recovery confirmed (§FH)                                                | Re-claim via A5 after GitHub reflects handoff; cite evidence in digest `Authoritative by`; → Step 2                                 |
+| No new-format claims + legacy `claimed-by` + later trusted `unclaimed-by` (same agent) | Treat as unclaimed → fresh A5 claim → Step 2                                                                                        |
+| No new-format claims + legacy `claimed-by`, age < 24 h                                 | STOP — not inheritable even if agent-id matches                                                                                     |
+| No new-format claims + legacy `claimed-by`, age ≥ 24 h                                 | Migrate via A5 with `supersedes: none`; → Step 2                                                                                    |
+| No active claim                                                                        | Re-claim via A5; → Step 2                                                                                                           |
+| Active claim = this session's verified `{claim-id}`                                    | Continue with same `{claim-id}`; → Step 2                                                                                           |
+| Active non-stale claim (< 24 h, other session)                                         | STOP — not inheritable even if agent-id matches                                                                                     |
+| Active stale claim (≥ 24 h, other session)                                             | Takeover via A5 with `supersedes: <prior-id>`; → Step 2                                                                             |
+| Branch field starts with `roadmap-audit/`                                              | Re-run A1.5; skip worktree creation; STOP after roadmap-side effects. Coordination-only claim: does not lock child-issue execution. |
 
 All re-claims, migrations, and takeovers must use A5 race-safe verification
-from `idd-claim.instructions.md`.
+from `idd-claim.instructions.md`. Forced-handoff recovery never waives the
+normal A5 branch-collision and open-PR safety checks.
 
 A branch left by a stale or released claim is inheritable. An open PR or
 remote branch may be reused when it matches the branch in the stale active
