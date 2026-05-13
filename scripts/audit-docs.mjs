@@ -27,6 +27,7 @@ checkGeneratedBlocks(manifest.generatedBlocks ?? []);
 checkShellFileLists(manifest.shellFileLists ?? [], manifest.generatedBlocks ?? []);
 checkSyncPairs(manifest.syncPairs ?? []);
 checkInstructionSizeBudgets(manifest.instructionSizeBudgets ?? null);
+checkBundleBudgets(manifest.bundleBudgets ?? []);
 checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
 checkConfigInstructionDrift();
 
@@ -356,6 +357,28 @@ function checkInstructionSizeBudgets(config) {
         `${id}: ${file} is ${bytes} bytes (limit ${limit}; ${
           alwaysLoaded ? "always-loaded" : "phase"
         })`,
+      );
+    }
+  }
+}
+
+function checkBundleBudgets(budgets) {
+  for (const budget of budgets) {
+    const id = budget.id ?? "bundle-budget";
+    const files = budget.files ?? [];
+    const limitBytes = Number(budget.limitBytes);
+    if (!Number.isFinite(limitBytes) || limitBytes < 0) {
+      errors.push(`${id}: limitBytes must be a non-negative number`);
+      continue;
+    }
+    let totalBytes = 0;
+    for (const file of files) {
+      const text = readText(file);
+      totalBytes += Buffer.byteLength(text, "utf8");
+    }
+    if (totalBytes > limitBytes) {
+      errors.push(
+        `${id}: bundle total is ${totalBytes} bytes (limit ${limitBytes}); files: ${files.join(", ")}`,
       );
     }
   }

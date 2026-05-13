@@ -167,6 +167,28 @@ files are edited.
 | E10 repeated accepted finding guard     | Hold after 3 consecutive passes without meaningful progress                        | [Review fix](../.github/instructions/idd-review-fix.instructions.md)       | Keep unless maintainers want a different stop condition for non-converging fixes.                                            |
 | Rejected `CHANGES_REQUESTED` escalation | Escalate after 24 h; after 48 h consider `status:needs-decision` and claim release | [Review triage](../.github/instructions/idd-review-triage.instructions.md) | Keep unless the repository has an explicit reviewer escalation service-level expectation.                                    |
 
+## Runtime Instruction Size and Bundle Budgets
+
+CI enforces two layers of instruction file size limits via `audit/sync-manifest.json`.
+
+### Per-file limits
+
+| Limit type    | Value        | Applies to                                                                 |
+| ------------- | ------------ | -------------------------------------------------------------------------- |
+| Always-loaded | 20,000 bytes | Files with `applyTo: "**"` in `.github/instructions/idd-*.instructions.md` |
+| Phase         | 30,000 bytes | Other files in `.github/instructions/idd-*.instructions.md`                |
+
+### Bundle limits
+
+| Bundle ID          | Files included                                                                                   | Limit        |
+| ------------------ | ------------------------------------------------------------------------------------------------ | ------------ |
+| `bundle-discovery` | `idd-overview-core` + `idd-overview-appendix` + `idd-discover` + `idd-suitability` + `idd-claim` | 75,000 bytes |
+| `bundle-resume`    | `idd-overview-core` + `idd-overview-appendix` + `idd-resume`                                     | 46,000 bytes |
+
+Bundle checks run unconditionally (not filtered by changed files) and
+measure the combined byte length of all listed files. Adjust limits in
+`audit/sync-manifest.json` when deliberate growth is accepted.
+
 ## Changing A Default
 
 For now, this page records the defaults; it does not centralize them.
