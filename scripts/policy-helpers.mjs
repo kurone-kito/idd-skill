@@ -118,13 +118,15 @@ export function normalizePolicyConfig(config) {
     return clone(POLICY_DEFAULTS);
   }
 
-  const forcedHandoffAuthorityAlias = firstString(
+  const forcedHandoffAuthorityAlias = firstAcceptedString(
+    APPROVAL_ACTOR_POLICIES,
     config?.forcedHandoff?.authorityPolicy,
     config?.["forced-handoff"]?.authorityPolicy,
     config?.forcedHandoffAuthority,
     config?.["forced-handoff-authority"],
   );
-  const forcedHandoffModeAlias = firstString(
+  const forcedHandoffModeAlias = firstAcceptedString(
+    FORCED_HANDOFF_MODES,
     config?.forcedHandoff?.mode,
     config?.["forced-handoff"]?.mode,
     config?.forcedHandoffMode,
@@ -250,6 +252,15 @@ function clone(value) {
 function firstString(...values) {
   for (const value of values) {
     if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function firstAcceptedString(accepted, ...values) {
+  for (const value of values) {
+    if (typeof value === "string" && accepted.has(value)) {
       return value;
     }
   }

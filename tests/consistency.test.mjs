@@ -262,6 +262,18 @@ test("policy normalization provides default-safe values and supports aliases", (
     mode: "human-gated",
     authorityPolicy: "owners-and-maintainers-only",
   });
+
+  assert.deepEqual(normalizePolicyConfig({
+    forcedHandoff: {
+      mode: "human-gated-invalid",
+      authorityPolicy: "owners-and-maintainers-invalid",
+    },
+    forcedHandoffMode: "human-gated",
+    "forced-handoff-authority": "all-write-permission-actors",
+  }).forcedHandoff, {
+    mode: "human-gated",
+    authorityPolicy: "all-write-permission-actors",
+  });
 });
 
 test("A4.5 outcome fixtures match the documented check-to-outcome mapping", () => {
