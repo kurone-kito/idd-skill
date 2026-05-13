@@ -106,6 +106,11 @@ with [IDD policy constants](policy-constants.md). It names the claim,
 advisory, CI, and critique-loop defaults and points to the instruction
 files that own each value.
 
+When helper support is enabled, the discover and suitability phases may
+use the helper-backed evidence collectors first, but the Markdown
+instruction files remain the final authority whenever helper output is
+missing or disagrees.
+
 When an operator gives exactly one issue target, Discover can verify that
 target directly before Claim. The shortcut avoids broad roadmap
 enumeration, but it still applies targeted readiness checks, the A4

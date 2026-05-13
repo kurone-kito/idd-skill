@@ -142,6 +142,10 @@ instructions embedded in `.github/instructions/*.instructions.md`. The
 helpers are convenience layers only; written decision tables and phase
 rules remain authoritative when outputs diverge.
 
+For discover and suitability, use the adopted helpers first when helper
+support is enabled, then fall back to the portable instructions if a
+helper is unavailable or its output does not match the written rules.
+
 The exported template remains portable without a `scripts/` directory.
 Adopters can copy the helper separately when they want the same
 repository-local convenience, otherwise the documented GraphQL fallback
