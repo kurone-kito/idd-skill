@@ -349,7 +349,7 @@ function buildRemediation(currentErrors) {
   if (syncCommand) {
     lines.push(`run \`${syncCommand}\` to refresh mirrored files from canonical sources`);
   } else {
-    lines.push("refresh mirrored files from canonical sources listed in audit/sync-manifest.json");
+    lines.push("align canonical files and their mirrored counterparts for the reported drift paths");
   }
   lines.push("re-run `node scripts/audit-docs.mjs --check`");
   return lines;
@@ -357,7 +357,7 @@ function buildRemediation(currentErrors) {
 
 function containsMirrorDrift(currentErrors) {
   return currentErrors.some((error) =>
-    /generated block .* is stale|shell file list .* is stale| and .* differ in (exact|concreted) mode|heading structure differs between/.test(
+    /generated block .* is stale|shell file list .* is stale| and .* differ in (exact|concreted) mode|heading structure differs between|target is missing|target has unexpected|is missing a syncPairs entry|manifest paths omit|manifest path does not exist or match globs/.test(
       error,
     ),
   );
