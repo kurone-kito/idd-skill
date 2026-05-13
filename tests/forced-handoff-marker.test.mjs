@@ -6,8 +6,10 @@ import { test } from "node:test";
 
 import {
   currentIsoTimestamp,
+  generateSuccessorIds,
   main,
   parsePositiveInteger,
+  planHandoff,
   resolveHelperActiveClaim,
 } from "../scripts/forced-handoff-marker.mjs";
 import {
@@ -606,6 +608,148 @@ test("nested forcedHandoff.mode=disabled refuses output", () => {
   } finally {
     process.chdir(originalCwd);
   }
+});
+
+test("planHandoff and generateSuccessorIds — integration fixture", () => {
+  const planClaimBody = [
+    "<!-- claimed-by: github-copilot-cli-old claim-plan-test-old supersedes: none 2026-05-13T10:00:00Z branch: issue/496-feat-force-handoff-derive-live-pr -->",
+    "",
+    "_github-copilot-cli-old: issue claim — IDD automation marker. Do not edit._",
+  ].join("\n");
+
+  const issueComments = [
+    {
+      body: planClaimBody,
+      created_at: "2026-05-13T10:00:00Z",
+      user: { login: "kurone-kito" },
+    },
+  ];
+
+  const trustedLogins = ["kurone-kito", "github-copilot-cli-old"];
+
+  const resultIssueOnly = planHandoff(issueComments, [], {
+    trustedMarkerLogins: trustedLogins,
+    forcedBy: "kurone-kito",
+    reason: "operator-approved-recovery",
+  });
+
+  assert.equal(resultIssueOnly.contextScope, "issue-only");
+  assert.deepEqual(resultIssueOnly.prReferences, []);
+  assert.equal(resultIssueOnly.branch, "issue/496-feat-force-handoff-derive-live-pr");
+  assert.ok(resultIssueOnly.markerBody.includes("issue-only"), "marker body should contain context scope");
+  assert.ok(resultIssueOnly.successorIds.newAgentId, "newAgentId should be non-empty");
+  assert.ok(resultIssueOnly.successorIds.newClaimId, "newClaimId should be non-empty");
+
+  const linkedPrs = [
+    { number: 501, headRefName: "issue/496-feat-force-handoff-derive-live-pr" },
+  ];
+
+  const resultWithPr = planHandoff(issueComments, linkedPrs, {
+    trustedMarkerLogins: trustedLogins,
+    forcedBy: "kurone-kito",
+    reason: "operator-approved-recovery",
+  });
+
+  assert.equal(resultWithPr.contextScope, "issue-plus-pr");
+  assert.deepEqual(resultWithPr.prReferences, ["501"]);
+  assert.ok(resultWithPr.markerBody.includes("issue-plus-pr"), "marker body should contain context scope");
+  assert.ok(resultWithPr.markerBody.includes('"linked-pr":"501"'), "marker body should contain linked PR");
+
+  assert.throws(
+    () =>
+      planHandoff(issueComments, linkedPrs, {
+        prNumber: 999,
+        trustedMarkerLogins: trustedLogins,
+        forcedBy: "kurone-kito",
+        reason: "operator-approved-recovery",
+      }),
+    /PR #999 does not match any open PR on claim branch issue\/496-feat-force-handoff-derive-live-pr/,
+  );
+
+  const ids1 = generateSuccessorIds("test-agent");
+  const ids2 = generateSuccessorIds("test-agent");
+
+  assert.ok(ids1.newAgentId, "newAgentId should be non-empty");
+  assert.ok(ids1.newClaimId, "newClaimId should be non-empty");
+  assert.notEqual(ids1.newClaimId, ids2.newClaimId, "claim IDs should differ across calls");
+  assert.equal(ids1.newAgentId, "test-agent");
+  assert.match(ids1.newClaimId, /^claim-[0-9a-f]{16}$/);
+});
+
+test("planHandoff omits markerBody when forcedBy actor is not authorized", () => {
+  const planClaimBody = [
+    "<!-- claimed-by: github-copilot-cli-old claim-plan-test-old supersedes: none 2026-05-13T10:00:00Z branch: issue/496-feat-force-handoff-derive-live-pr -->",
+    "",
+    "_github-copilot-cli-old: issue claim — IDD automation marker. Do not edit._",
+  ].join("\n");
+
+  const issueComments = [
+    {
+      body: planClaimBody,
+      created_at: "2026-05-13T10:00:00Z",
+      user: { login: "kurone-kito" },
+    },
+  ];
+
+  const result = planHandoff(issueComments, [], {
+    trustedMarkerLogins: ["kurone-kito", "github-copilot-cli-old"],
+    forcedBy: "unauthorized-actor",
+    reason: "operator-approved-recovery",
+    isAuthorizedForcedHandoff: (actor) => actor === "kurone-kito",
+  });
+
+  assert.equal(result.markerBody, null, "markerBody should be null for unauthorized forcedBy");
+  assert.equal(result.contextScope, "issue-only");
+  assert.ok(result.successorIds.newAgentId, "successorIds should still be generated");
+});
+
+test("planHandoff rejects prior issue-only handoff when PR is present (PR-scoped claim replay)", () => {
+  const claimBody = [
+    "<!-- claimed-by: agent-a claim-a-original supersedes: none 2026-05-13T09:00:00Z branch: issue/496-feat-force-handoff-derive-live-pr -->",
+    "",
+    "_agent-a: issue claim — IDD automation marker. Do not edit._",
+  ].join("\n");
+  const issueOnlyHandoff = renderForcedHandoffComment({
+    oldAgentId: "agent-a",
+    oldClaimId: "claim-a-original",
+    newAgentId: "agent-b",
+    newClaimId: "claim-b-handoff",
+    branch: "issue/496-feat-force-handoff-derive-live-pr",
+    forcedBy: "kurone-kito",
+    reason: "operator-approved-recovery",
+    timestamp: "2026-05-13T11:00:00Z",
+    contextScope: "issue-only",
+  });
+
+  const issueComments = [
+    {
+      body: claimBody,
+      created_at: "2026-05-13T09:00:00Z",
+      user: { login: "kurone-kito" },
+    },
+    {
+      body: issueOnlyHandoff,
+      created_at: "2026-05-13T11:00:05Z",
+      user: { login: "kurone-kito" },
+    },
+  ];
+
+  const linkedPrs = [
+    { number: 501, headRefName: "issue/496-feat-force-handoff-derive-live-pr" },
+  ];
+
+  const result = planHandoff(issueComments, linkedPrs, {
+    trustedMarkerLogins: ["kurone-kito", "agent-a", "agent-b"],
+    isAuthorizedForcedHandoff: (actor) => actor === "kurone-kito",
+    forcedBy: "kurone-kito",
+    reason: "operator-approved-recovery",
+  });
+
+  assert.equal(result.contextScope, "issue-plus-pr");
+  // With PR-scoped second pass, the issue-only handoff is rejected and
+  // the original claim (agent-a) remains the active PR-scope authority.
+  assert.equal(result.activeClaim.agentId, "agent-a");
+  assert.equal(result.activeClaim.claimId, "claim-a-original");
 });
 
 test("forcedHandoff.mode defaults to disabled when key is absent", () => {
