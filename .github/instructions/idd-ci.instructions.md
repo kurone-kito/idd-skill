@@ -8,9 +8,25 @@ The shared CI wait defaults are listed in
 `.github/idd/config.json` is present and valid, resolve this helper
 through `ciWait.runningTimeout`, `ciWait.generationTimeout`, and
 `ciWait.rerunPolicy`; otherwise keep the distributed defaults
-(`PT30M`, `PT10M`, `rerun-once`). When helper support is installed,
-`node scripts/ci-wait-policy.mjs` emits the same resolved values as
-read-only JSON.
+(`PT30M`, `PT10M`, `rerun-once`).
+
+When helper support is installed, use the profile-selected ci-wait
+policy helper command as the canonical read-only policy resolver.
+
+```sh
+# source repo / vendored-node profile
+node scripts/ci-wait-policy.mjs
+
+# package-manager / ephemeral-npx profile
+<profile-selected-ci-wait-policy-command>
+```
+
+Append `--rerun-count <count>` when the caller needs the deterministic
+rerun-budget decision. Resolve
+`<profile-selected-ci-wait-policy-command>` from the helper runtime
+manifest wiring in `docs/idd-helper-scripts.md`. Do not hardcode
+`node scripts/ci-wait-policy.mjs` for profiles that do not vendor
+`scripts/`.
 
 ## Shared policy keys
 

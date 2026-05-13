@@ -274,9 +274,13 @@ default `instructions-only` profile keep using the written shell /
 
 ### CI wait policy resolution
 
-- Command: `node scripts/ci-wait-policy.mjs`
-- Optional rerun-budget evaluation:
-  `node scripts/ci-wait-policy.mjs --rerun-count <count>`
+- Source repo / vendored-node command:
+  `node scripts/ci-wait-policy.mjs`
+- Package-manager / ephemeral-npx command: use the
+  profile-selected `idd:ci-wait-policy` command from the helper runtime
+  manifest wiring above
+- Optional rerun-budget evaluation: append
+  `--rerun-count <count>` to the selected command
 - Stable fields consumed by instructions or helpers:
   `policy.runningTimeout`, `policy.runningTimeoutMs`,
   `policy.generationTimeout`, `policy.generationTimeoutMs`,

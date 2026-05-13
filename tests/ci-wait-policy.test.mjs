@@ -23,6 +23,12 @@ test("parseDurationToMs parses CI wait durations", () => {
   assert.equal(parseDurationToMs("invalid"), null);
 });
 
+test("parseDurationToMs rejects empty ISO duration tokens", () => {
+  assert.equal(parseDurationToMs("P"), null);
+  assert.equal(parseDurationToMs("PT"), null);
+  assert.equal(parseDurationToMs("P1DT"), null);
+});
+
 test("normalizeCiWaitPolicy preserves distributed defaults when keys are omitted", () => {
   assert.deepEqual(normalizeCiWaitPolicy(), { ...DEFAULT_CI_WAIT_POLICY });
 });
@@ -46,6 +52,13 @@ test("normalizeCiWaitPolicy falls back when override values are invalid", () => 
     runningTimeout: "45 minutes",
     generationTimeout: "soon",
     rerunPolicy: "rerun-forever",
+  }), { ...DEFAULT_CI_WAIT_POLICY });
+});
+
+test("normalizeCiWaitPolicy rejects empty ISO duration tokens", () => {
+  assert.deepEqual(normalizeCiWaitPolicy({
+    runningTimeout: "P",
+    generationTimeout: "PT",
   }), { ...DEFAULT_CI_WAIT_POLICY });
 });
 
@@ -83,6 +96,22 @@ test("readCiWaitPolicy reads nested ciWait config and CLI emits the same resolut
   writeFileSync(
     configPath,
     `${JSON.stringify({
+      iddVersion: "0.1.0",
+      markerPrefix: "idd-skill",
+      mergePolicy: "fully_autonomous_merge",
+      reviewPolicy: "copilot-advisory",
+      threadResolutionPolicy: "fast-agent-resolve",
+      claimTiming: {
+        staleAge: "PT24H",
+        heartbeatInterval: "PT12H",
+      },
+      trustedMarkerActors: ["kurone-kito"],
+      commands: {
+        "install-deps": "true",
+        "fix-validate": "true",
+        "pre-push-validate": "true",
+        "post-fix-validate": "true",
+      },
       ciWait: {
         runningTimeout: "PT40M",
         generationTimeout: "PT15M",
@@ -122,4 +151,41 @@ test("readCiWaitPolicy reads nested ciWait config and CLI emits the same resolut
       rerunCount: 0,
     },
   });
+});
+
+test("readCiWaitPolicy falls back when the policy config is schema-invalid", (t) => {
+  const sandbox = mkdtempSync(join(tmpdir(), "idd-ci-wait-policy-invalid-"));
+  t.after(() => rmSync(sandbox, { recursive: true, force: true }));
+
+  const configPath = join(sandbox, ".github", "idd", "config.json");
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(
+    configPath,
+    `${JSON.stringify({
+      iddVersion: "0.1.0",
+      markerPrefix: "idd-skill",
+      mergePolicy: "fully_autonomous_merge",
+      reviewPolicy: "copilot-advisory",
+      threadResolutionPolicy: "fast-agent-resolve",
+      claimTiming: {
+        staleAge: "PT24H",
+        heartbeatInterval: "PT12H",
+      },
+      trustedMarkerActors: ["kurone-kito"],
+      commands: {
+        "install-deps": "true",
+        "fix-validate": "true",
+        "pre-push-validate": "true",
+        "post-fix-validate": "true",
+      },
+      ciWait: {
+        runningTimeout: "PT40M",
+        generationTimeout: "PT15M",
+        rerunPolicy: "hold",
+      },
+      unsupportedTopLevelKey: true,
+    }, null, 2)}\n`,
+  );
+
+  assert.deepEqual(readCiWaitPolicy(configPath), { ...DEFAULT_CI_WAIT_POLICY });
 });

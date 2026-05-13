@@ -341,6 +341,42 @@ test("overview instructions document the npx-availability gate", () => {
   );
 });
 
+test("ci wait helper docs route non-vendored profiles through the selected command", () => {
+  for (const file of [
+    ".github/instructions/idd-ci.instructions.md",
+    "idd-template/.github/instructions/idd-ci.instructions.md",
+  ]) {
+    const text = readText(file);
+    assert.match(
+      text,
+      /<profile-selected-ci-wait-policy-command>/,
+      `${file} must document the manifest-selected ci-wait helper command`,
+    );
+    assert.match(
+      text,
+      /Do not hardcode[\s\S]*node scripts\/ci-wait-policy\.mjs/,
+      `${file} must warn against hardcoding vendored helper commands for non-vendored profiles`,
+    );
+  }
+
+  for (const file of [
+    "docs/idd-helper-scripts.md",
+    "idd-template/docs/idd-helper-scripts.md",
+  ]) {
+    const text = readText(file);
+    assert.match(
+      text,
+      /profile-selected `idd:ci-wait-policy` command/,
+      `${file} must document the manifest-selected ci-wait helper command`,
+    );
+    assert.match(
+      text,
+      /append\s+`--rerun-count <count>` to\s+the selected command/,
+      `${file} must describe rerun-count on the selected helper command`,
+    );
+  }
+});
+
 function readText(relativePath) {
   return readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8");
 }

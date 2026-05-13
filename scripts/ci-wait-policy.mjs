@@ -4,11 +4,15 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { loadJson, validate } from "./validate-schemas.mjs";
+
 const DEFAULT_RUNNING_TIMEOUT = "PT30M";
 const DEFAULT_GENERATION_TIMEOUT = "PT10M";
 const DEFAULT_RERUN_POLICY = "rerun-once";
 const DEFAULT_POLICY_PATH = ".github/idd/config.json";
 const RERUN_POLICIES = new Set(["rerun-once", "hold"]);
+const ISO_DURATION_PATTERN = /^P(?=\d|T\d)(?:(\d+)D)?(?:T(?=\d)(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/;
+const POLICY_SCHEMA = loadJson("schemas/policy.schema.json");
 
 export const DEFAULT_CI_WAIT_POLICY = Object.freeze({
   runningTimeout: DEFAULT_RUNNING_TIMEOUT,
@@ -25,7 +29,7 @@ if (isCliExecution()) {
 export function parseDurationToMs(value) {
   const text = String(value ?? "").trim();
   if (!text) return null;
-  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i.exec(text);
+  const match = ISO_DURATION_PATTERN.exec(text);
   if (!match) return null;
   const days = Number.parseInt(match[1] ?? "0", 10);
   const hours = Number.parseInt(match[2] ?? "0", 10);
@@ -55,6 +59,9 @@ export function readCiWaitPolicy(policyPath = DEFAULT_POLICY_PATH) {
 
   try {
     const config = JSON.parse(readFileSync(source, "utf8"));
+    if (validate(config, POLICY_SCHEMA).length > 0) {
+      return { ...DEFAULT_CI_WAIT_POLICY };
+    }
     return normalizeCiWaitPolicy(config?.ciWait);
   } catch {
     return { ...DEFAULT_CI_WAIT_POLICY };
