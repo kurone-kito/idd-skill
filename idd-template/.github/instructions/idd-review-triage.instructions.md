@@ -186,6 +186,21 @@ PATH B — Advisory items:
 
 ## E7 — Verify recorded dispositions
 
+When helper runtime is enabled, prefer the read-only verifier command:
+
+```sh
+idd-review-disposition-verify --items '<json>'
+```
+
+In the source repository, `node scripts/review-disposition-verify.mjs`
+is equivalent evidence collection. E7 consumes helper fields `passed`,
+`items[].passed`, `items[].checks`, and `items[].issues`.
+This helper never posts replies or resolves threads: all E6 mutations
+remain manual and authoritative. If helper execution fails, output is
+invalid JSON, required fields are missing, or helper output conflicts
+with observed review state, discard helper output and apply the written
+E7 checks below directly.
+
 Before leaving triage, verify that every ReviewItems_snapshot item has the evidence
 required by its path:
 
