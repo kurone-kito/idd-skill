@@ -1,321 +1,322 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const args = parseArgs(process.argv.slice(2));
+const DEFAULT_QUIET_WINDOW_MS = 30 * 60 * 1000;
 
-if (!args.issueNumber) {
-  throw new Error("missing required --issue <number> argument");
+if (isCliExecution()) {
+  runCli();
 }
 
-if (!args.prNumber) {
-  throw new Error("missing required --pr <number> argument");
-}
+/**
+ * Evaluate whether a quiet window has been met for stalled-session detection.
+ *
+ * A quiet window is met when no externally observable progress appears
+ * in the window `[now - quietWindowMs, now]`. Activities of type
+ * `ci-running` represent currently-running CI and always break the window
+ * regardless of timestamp.
+ *
+ * @param {Object} input
+ * @param {string} input.now - ISO8601 current timestamp
+ * @param {number} [input.quietWindowMs] - window size in ms (default 1800000)
+ * @param {Array<{type: string, timestamp: string}>} input.activities
+ * @returns {Object} evaluation result with quiet_window_met and evidence fields
+ */
+export function evaluateQuietWindow(input) {
+  const now = normalizeIso(input?.now);
+  if (!now) {
+    throw new TypeError("input.now must be a valid ISO8601 timestamp");
+  }
 
-if (!args.branchName) {
-  throw new Error("missing required --branch <name> argument");
-}
+  const quietWindowMs = resolveQuietWindowMs(input?.quietWindowMs);
+  const windowStart = new Date(Date.parse(now) - quietWindowMs).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const activities = normalizeActivities(input?.activities);
 
-const owner = args.owner || ghText(["repo", "view", "--json", "owner", "--jq", ".owner.login"]);
-const repo = args.repo || ghText(["repo", "view", "--json", "name", "--jq", ".name"]);
-const repoRef = `${owner}/${repo}`;
-const windowMinutes = args.windowMinutes || 30;
-const windowMs = windowMinutes * 60 * 1000;
-
-// Fetch all required GitHub state
-const now = new Date(args.now || new Date().toISOString());
-const issueComments = ghApiJson(
-  `repos/${owner}/${repo}/issues/${args.issueNumber}/comments`,
-  true,
-);
-const prData = ghApiJson(`repos/${owner}/${repo}/pulls/${args.prNumber}`, false);
-const prHeadSha = prData.head?.sha ?? "";
-const prTimeline = ghApiJson(
-  `repos/${owner}/${repo}/issues/${args.prNumber}/timeline`,
-  true,
-  ["-H", "Accept: application/vnd.github+json"],
-);
-const reviewThreads = ghApiJson(
-  `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
-  true,
-);
-
-const branchRef = ghApiJson(
-  `repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(args.branchName)}`,
-  false,
-);
-const branchTipSha = branchRef.object?.sha ?? "";
-
-const prChecks = ghApiJson(
-  `repos/${owner}/${repo}/commits/${prHeadSha}/check-runs`,
-  true,
-  ["-H", "Accept: application/vnd.github+json"],
-);
-
-const evidence = detectQuietWindow(
-  {
-    issueComments,
-    prHeadSha,
-    prTimeline,
-    reviewThreads,
-    branchTipSha,
-    prChecks,
-  },
-  {
-    now,
-    windowMs,
-    windowMinutes,
-  },
-);
-
-process.stdout.write(`${JSON.stringify(evidence, null, 2)}\n`);
-
-function detectQuietWindow(state, options) {
-  const {
-    issueComments,
-    prHeadSha,
-    prTimeline,
-    reviewThreads,
-    branchTipSha,
-    prChecks,
-  } = state;
-  const { now, windowMs, windowMinutes } = options;
-
-  const quietWindowStart = new Date(now.getTime() - windowMs);
-  const details = [];
-  let isQuiet = true;
-
-  // 1. Check for trusted heartbeat within window
-  const recentHeartbeat = issueComments.find((comment) => {
-    const claimedByMatch = comment.body?.match(
-      /<!-- claimed-by: \S+ (\S+) .*?(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)/,
-    );
-    if (!claimedByMatch) {
-      return false;
+  const blocking = [];
+  for (const activity of activities) {
+    if (activity.type === "ci-running") {
+      blocking.push(activity);
+      continue;
     }
-    const heartbeatTime = new Date(claimedByMatch[2]);
-    return heartbeatTime >= quietWindowStart;
-  });
-
-  if (recentHeartbeat) {
-    isQuiet = false;
-    details.push(
-      `Recent heartbeat found at ${recentHeartbeat.created_at}: claim activity within window`,
-    );
+    if (activity.timestamp && compareIso(activity.timestamp, windowStart) >= 0) {
+      blocking.push(activity);
+    }
   }
 
-  // 2. Check for PR head SHA changes (PR head movement)
-  const prHeadChanges = prTimeline.filter(
-    (event) =>
-      event.event === "committed" &&
-      event.sha &&
-      new Date(event.created_at ?? event.timestamp ?? "") >= quietWindowStart,
-  );
+  const latestBlocking = blocking.length > 0
+    ? blocking.reduce((latest, act) => {
+      if (!latest) return act;
+      if (act.type === "ci-running" && latest.type !== "ci-running") return act;
+      if (latest.type === "ci-running" && act.type !== "ci-running") return latest;
+      return compareIso(act.timestamp, latest.timestamp) > 0 ? act : latest;
+    }, null)
+    : null;
 
-  if (prHeadChanges.length > 0) {
-    isQuiet = false;
-    details.push(
-      `PR head movement detected: ${prHeadChanges.length} commit(s) within window`,
-    );
-  }
+  const quietWindowMet = blocking.length === 0;
 
-  // 3. Check for branch tip SHA changes (remote branch tip movement)
-  if (args.previousBranchTipSha && branchTipSha !== args.previousBranchTipSha) {
-    isQuiet = false;
-    details.push(
-      `Branch tip changed from ${args.previousBranchTipSha.slice(0, 7)} to ${branchTipSha.slice(0, 7)}`,
-    );
-  }
-
-  // 4. Check for running CI activity (queued/in_progress checks)
-  const runningChecks = prChecks.filter((check) => {
-    const status = check.status ?? "";
-    return status === "queued" || status === "in_progress";
-  });
-
-  if (runningChecks.length > 0) {
-    isQuiet = false;
-    details.push(
-      `Active CI runs detected: ${runningChecks.length} check(s) in progress`,
-    );
-  }
-
-  // 5. Check for new review/comment/CI completion activity
-  const recentReviewActivity = reviewThreads.filter((review) => {
-    const reviewTime = new Date(review.submitted_at ?? "");
-    return reviewTime >= quietWindowStart;
-  });
-
-  if (recentReviewActivity.length > 0) {
-    isQuiet = false;
-    details.push(
-      `Review activity detected: ${recentReviewActivity.length} review(s) within window`,
-    );
-  }
-
-  const recentComments = issueComments.filter((comment) => {
-    const commentTime = new Date(comment.created_at ?? "");
-    return (
-      commentTime >= quietWindowStart &&
-      !comment.body?.startsWith("<!-- claimed-by:") &&
-      !comment.body?.startsWith("<!-- unclaimed-by:")
-    );
-  });
-
-  if (recentComments.length > 0) {
-    isQuiet = false;
-    details.push(`Comment activity detected: ${recentComments.length} comment(s) within window`);
-  }
-
-  const recentChecksCompleted = prChecks.filter((check) => {
-    const completedTime = check.completed_at ? new Date(check.completed_at) : null;
-    return completedTime && completedTime >= quietWindowStart;
-  });
-
-  if (recentChecksCompleted.length > 0) {
-    isQuiet = false;
-    details.push(`CI completion detected: ${recentChecksCompleted.length} check(s) completed`);
-  }
-
-  const latestActivityTime = Math.max(
-    ...[
-      ...issueComments.map((c) => new Date(c.created_at ?? "").getTime()),
-      ...prTimeline.map((e) => new Date(e.created_at ?? e.timestamp ?? "").getTime()),
-      ...reviewThreads.map((r) => new Date(r.submitted_at ?? "").getTime()),
-      ...prChecks.map((c) => (c.completed_at ? new Date(c.completed_at).getTime() : 0)),
-    ].filter(Boolean),
-  );
+  const reason = quietWindowMet
+    ? "no-activity-in-window"
+    : buildReason(blocking);
 
   return {
-    isQuiet,
+    quiet_window_met: quietWindowMet,
+    quiet_window_ms: quietWindowMs,
+    window_start: windowStart,
+    now,
+    latest_activity: latestBlocking?.timestamp ?? null,
+    latest_activity_type: latestBlocking?.type ?? null,
+    reason,
     evidence: {
-      windowMinutes,
-      windowStartUtc: quietWindowStart.toISOString(),
-      windowEndUtc: now.toISOString(),
-      latestActivityUtc: Number.isFinite(latestActivityTime)
-        ? new Date(latestActivityTime).toISOString()
-        : null,
-      reason: isQuiet
-        ? "No activity detected within quiet window"
-        : `Activity detected within ${windowMinutes}-minute window`,
-      details,
-      checkSummary: {
-        heartbeatCheck: recentHeartbeat ? "FAILED" : "PASSED",
-        prHeadMovementCheck: prHeadChanges.length === 0 ? "PASSED" : "FAILED",
-        branchTipMovementCheck:
-          !args.previousBranchTipSha || branchTipSha === args.previousBranchTipSha
-            ? "PASSED"
-            : "FAILED",
-        runningCiCheck: runningChecks.length === 0 ? "PASSED" : "FAILED",
-        reviewActivityCheck: recentReviewActivity.length === 0 ? "PASSED" : "FAILED",
-        commentActivityCheck: recentComments.length === 0 ? "PASSED" : "FAILED",
-        ciCompletionCheck: recentChecksCompleted.length === 0 ? "PASSED" : "FAILED",
-      },
+      activity_count_in_window: blocking.length,
+      blocking_activities: blocking,
+      has_heartbeat_in_window: blocking.some((a) => a.type === "heartbeat"),
+      has_ci_running: blocking.some((a) => a.type === "ci-running"),
+      has_pr_head_movement: blocking.some((a) => a.type === "pr-head-movement"),
+      has_branch_tip_movement: blocking.some((a) => a.type === "branch-tip-movement"),
     },
   };
 }
 
+function buildReason(blocking) {
+  const types = [...new Set(blocking.map((a) => a.type))];
+  return `activity-in-window: ${types.join(", ")}`;
+}
+
+function resolveQuietWindowMs(value) {
+  if (value === null || value === undefined) {
+    return DEFAULT_QUIET_WINDOW_MS;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_QUIET_WINDOW_MS;
+  }
+  return Math.floor(parsed);
+}
+
+function normalizeActivities(raw) {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .map((item) => ({
+      type: String(item?.type ?? ""),
+      timestamp: normalizeIso(item?.timestamp),
+    }))
+    .filter((item) => {
+      if (!item.type) return false;
+      if (item.type === "ci-running") return true;
+      return item.timestamp !== null;
+    });
+}
+
+function runCli() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
+  if (!Number.isInteger(args.pr) || args.pr <= 0) {
+    throw new Error("--pr is required and must be a positive integer");
+  }
+  if (args.token) {
+    process.env.GH_TOKEN = args.token;
+    process.env.GITHUB_TOKEN = args.token;
+  }
+
+  const owner = args.owner || ghText(["repo", "view", "--json", "owner", "--jq", ".owner.login"]);
+  const repo = args.repo || ghText(["repo", "view", "--json", "name", "--jq", ".name"]);
+  const repository = `${owner}/${repo}`;
+  const now = args.now || new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const quietWindowMs = args.quietWindowMs > 0 ? args.quietWindowMs : resolveWindowFromPolicy(args.policy);
+  const claimCreatedAt = args.claimCreatedAt || null;
+
+  const activities = collectActivities({ repository, pr: args.pr, now, claimCreatedAt });
+
+  const input = { now, quietWindowMs, activities };
+  const result = evaluateQuietWindow(input);
+
+  const pr = ghJson(["api", `repos/${repository}/pulls/${args.pr}`, "--jq", "{number: .number, title: .title, head_sha: .head.sha, html_url: .html_url}"]);
+
+  const output = {
+    repository: { owner, repo },
+    pr: {
+      number: Number(pr.number),
+      title: String(pr.title ?? ""),
+      head_sha: String(pr.head_sha ?? ""),
+      html_url: String(pr.html_url ?? ""),
+    },
+    policy: {
+      quiet_window_ms: quietWindowMs,
+      claim_created_at: claimCreatedAt,
+    },
+    ...result,
+  };
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+}
+
+function collectActivities({ repository, pr, now, claimCreatedAt }) {
+  const activities = [];
+
+  const prData = ghJson(["api", `repos/${repository}/pulls/${pr}`, "--jq",
+    "{head_sha: .head.sha, merged_at: .merged_at}"]);
+
+  const headSha = prData.head_sha;
+  if (headSha) {
+    // Fetch head commit timestamp for branch-tip-movement
+    const headCommit = ghJson(["api", `repos/${repository}/commits/${headSha}`, "--jq",
+      "{commit_timestamp: .commit.author.date}"]);
+    if (headCommit.commit_timestamp) {
+      activities.push({ type: "branch-tip-movement", timestamp: headCommit.commit_timestamp });
+    }
+  }
+
+  // Paginate issue comments (includes PR comments)
+  const prComments = ghJson(["api", `repos/${repository}/issues/${pr}/comments`, "--paginate", "--jq", "[.[] | {timestamp: .created_at}]"]);
+  for (const c of prComments) {
+    activities.push({ type: "comment", timestamp: c.timestamp });
+  }
+
+  // Paginate PR reviews
+  const reviews = ghJson(["api", `repos/${repository}/pulls/${pr}/reviews`, "--paginate", "--jq", "[.[] | {timestamp: .submitted_at}]"]);
+  for (const r of reviews) {
+    activities.push({ type: "review", timestamp: r.timestamp });
+  }
+
+  // Paginate PR review comments
+  const reviewComments = ghJson(["api", `repos/${repository}/pulls/${pr}/comments`, "--paginate", "--jq", "[.[] | {timestamp: .created_at}]"]);
+  for (const rc of reviewComments) {
+    activities.push({ type: "comment", timestamp: rc.timestamp });
+  }
+
+  if (headSha) {
+    // Paginate check-runs for CI activity
+    const checkRuns = ghJson(["api", `repos/${repository}/commits/${headSha}/check-runs`, "--paginate", "--jq",
+      "[.check_runs[] | {status: .status, started_at: .started_at, completed_at: .completed_at}]"]);
+    for (const run of checkRuns) {
+      if (run.status === "queued" || run.status === "in_progress") {
+        activities.push({ type: "ci-running", timestamp: now });
+      } else if (run.completed_at) {
+        activities.push({ type: "ci-completed", timestamp: run.completed_at });
+      }
+    }
+  }
+
+  if (claimCreatedAt) {
+    activities.push({ type: "heartbeat", timestamp: claimCreatedAt });
+  }
+
+  return activities;
+}
+
+function resolveWindowFromPolicy(policyPath) {
+  const source = policyPath
+    ? resolve(process.cwd(), policyPath)
+    : resolve(process.cwd(), ".github/idd/config.json");
+  try {
+    const config = JSON.parse(readFileSync(source, "utf8"));
+    return parseDurationToMs(config?.claimTiming?.staleAge) ?? DEFAULT_QUIET_WINDOW_MS;
+  } catch {
+    return DEFAULT_QUIET_WINDOW_MS;
+  }
+}
+
+function parseDurationToMs(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i.exec(text);
+  if (!match) return null;
+  const days = Number.parseInt(match[1] ?? "0", 10);
+  const hours = Number.parseInt(match[2] ?? "0", 10);
+  const minutes = Number.parseInt(match[3] ?? "0", 10);
+  const seconds = Number.parseInt(match[4] ?? "0", 10);
+  return ((((days * 24) + hours) * 60 + minutes) * 60 + seconds) * 1000;
+}
+
 function parseArgs(argv) {
   const parsed = {
-    issueNumber: null,
-    prNumber: null,
-    branchName: "",
+    pr: null,
     owner: "",
     repo: "",
-    windowMinutes: 30,
+    token: "",
     now: "",
-    previousBranchTipSha: "",
+    quietWindowMs: 0,
+    claimCreatedAt: "",
+    policy: "",
+    help: false,
   };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-
-    if (token === "--issue") {
-      parsed.issueNumber = Number.parseInt(value ?? "", 10);
-      index += 1;
-      continue;
-    }
-    if (token === "--pr") {
-      parsed.prNumber = Number.parseInt(value ?? "", 10);
-      index += 1;
-      continue;
-    }
-    if (token === "--branch") {
-      parsed.branchName = value ?? "";
-      index += 1;
-      continue;
-    }
-    if (token === "--owner") {
-      parsed.owner = value ?? "";
-      index += 1;
-      continue;
-    }
-    if (token === "--repo") {
-      parsed.repo = value ?? "";
-      index += 1;
-      continue;
-    }
-    if (token === "--window-minutes") {
-      parsed.windowMinutes = Number.parseInt(value ?? "", 10) || 30;
-      index += 1;
-      continue;
-    }
-    if (token === "--now") {
-      parsed.now = value ?? "";
-      index += 1;
-      continue;
-    }
-    if (token === "--previous-branch-tip-sha") {
-      parsed.previousBranchTipSha = value ?? "";
-      index += 1;
-      continue;
-    }
-    if (token === "--help" || token === "-h") {
-      printHelp();
-      process.exit(0);
-    }
-    throw new Error(`unknown argument: ${token}`);
+  for (let i = 0; i < argv.length; i += 1) {
+    const flag = argv[i];
+    const value = argv[i + 1];
+    const requireValue = () => {
+      if (value === undefined || String(value).startsWith("--")) {
+        throw new Error(`missing value for argument: ${flag}`);
+      }
+      return value;
+    };
+    if (flag === "--pr") { parsed.pr = Number.parseInt(String(requireValue()), 10); i += 1; continue; }
+    if (flag === "--owner") { parsed.owner = requireValue(); i += 1; continue; }
+    if (flag === "--repo") { parsed.repo = requireValue(); i += 1; continue; }
+    if (flag === "--token") { parsed.token = requireValue(); i += 1; continue; }
+    if (flag === "--now") { parsed.now = requireValue(); i += 1; continue; }
+    if (flag === "--quiet-window-ms") { parsed.quietWindowMs = Number.parseInt(String(requireValue()), 10); i += 1; continue; }
+    if (flag === "--claim-created-at") { parsed.claimCreatedAt = requireValue(); i += 1; continue; }
+    if (flag === "--policy") { parsed.policy = requireValue(); i += 1; continue; }
+    if (flag === "--help" || flag === "-h") { parsed.help = true; continue; }
+    throw new Error(`unknown argument: ${flag}`);
   }
-
-  if (!Number.isInteger(parsed.issueNumber) || parsed.issueNumber < 1) {
-    parsed.issueNumber = null;
-  }
-  if (!Number.isInteger(parsed.prNumber) || parsed.prNumber < 1) {
-    parsed.prNumber = null;
-  }
-
   return parsed;
 }
 
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/stalled-session-quiet-check.mjs --issue <number> --pr <number> --branch <name> [--owner <owner>] [--repo <repo>] [--window-minutes <minutes>] [--now <ISO8601>] [--previous-branch-tip-sha <sha>]
+  node scripts/stalled-session-quiet-check.mjs --pr <number> [--owner <owner>] [--repo <repo>]
+    [--token <token>] [--now <ISO8601>] [--quiet-window-ms <ms>]
+    [--claim-created-at <ISO8601>] [--policy <path>]
 
-  Detects quiet windows (no activity) for stalled session recovery per Resume/S2 specification.
-
-  Options:
-    --issue <number>              Issue number (required)
-    --pr <number>                 PR number (required)
-    --branch <name>               Branch name (required)
-    --owner <owner>               Repository owner (defaults to current repo)
-    --repo <repo>                 Repository name (defaults to current repo)
-    --window-minutes <minutes>    Quiet window duration in minutes (default: 30)
-    --now <ISO8601>               Reference timestamp (defaults to current time)
-    --previous-branch-tip-sha     Previous branch tip SHA for movement detection
-    --help                        Show this help message
+Evaluates the S2 quiet-window check for stalled-session detection.
+Outputs JSON with quiet_window_met and evidence fields.
 `);
 }
 
-function ghText(args) {
-  return execFileSync("gh", args, { encoding: "utf8" }).trim();
+function normalizeIso(value) {
+  if (!value) return null;
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
-function ghApiJson(path, paginate = false, extraArgs = []) {
-  const args = ["api", path, ...extraArgs];
-  if (paginate) {
-    args.splice(1, 0, "--paginate", "--slurp");
-    return JSON.parse(execFileSync("gh", args, { encoding: "utf8" })).flat();
+function compareIso(left, right) {
+  const leftTime = Date.parse(String(left ?? ""));
+  const rightTime = Date.parse(String(right ?? ""));
+  if (!Number.isFinite(leftTime) || !Number.isFinite(rightTime)) return 0;
+  return leftTime - rightTime;
+}
+
+function ghJson(args) {
+  return JSON.parse(runGh(args).trim() || "null") ?? [];
+}
+
+function ghText(args) {
+  return runGh(args).trim();
+}
+
+function runGh(args) {
+  try {
+    return execFileSync("gh", args, {
+      encoding: "utf8",
+      timeout: 30_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    const stderr = String(error?.stderr ?? "").trim();
+    if (stderr) throw new Error(`gh command failed: ${stderr}`);
+    throw error;
   }
-  return JSON.parse(execFileSync("gh", args, { encoding: "utf8" }));
+}
+
+function isCliExecution() {
+  return process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 }
