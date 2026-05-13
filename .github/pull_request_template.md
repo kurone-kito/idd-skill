@@ -28,7 +28,7 @@ Closes #
 - [ ] `pnpm lint`
 - [ ] `pnpm test`
 - [ ] `pnpm run docs:sync:check`
-- [ ] `pnpm exec idd-doctor` (if applicable)
+- [ ] `node scripts/idd-doctor.mjs` (if applicable)
 
 ## Safety
 
