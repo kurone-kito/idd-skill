@@ -157,6 +157,7 @@
       }
     },
     "forcedHandoff": {
+      "type": "object",
       "additionalProperties": false,
       "properties": {
         "mode": {
@@ -170,6 +171,7 @@
       }
     },
     "forced-handoff": {
+      "type": "object",
       "additionalProperties": false,
       "properties": {
         "mode": {
@@ -206,6 +208,12 @@
           "type": "boolean"
         }
       }
+    },
+    "markerTrustAllowCollaboratorMarkers": {
+      "type": "boolean"
+    },
+    "allowCollaboratorMarkers": {
+      "type": "boolean"
     },
     "advisoryWait": {
       "type": "object",

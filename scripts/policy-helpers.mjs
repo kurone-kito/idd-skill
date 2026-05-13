@@ -129,8 +129,6 @@ export function normalizePolicyConfig(config) {
     config?.["forced-handoff"]?.mode,
     config?.forcedHandoffMode,
     config?.["forced-handoff-mode"],
-    typeof config?.forcedHandoff === "string" ? config.forcedHandoff : "",
-    typeof config?.["forced-handoff"] === "string" ? config["forced-handoff"] : "",
   );
   const markerTrustAlias = firstBoolean(
     config?.markerTrust?.allowCollaboratorMarkers,

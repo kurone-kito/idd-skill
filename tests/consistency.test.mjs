@@ -166,7 +166,7 @@ test("policy normalization provides default-safe values and supports aliases", (
     stallRecovery: {
       quietWindow: "PT45M",
     },
-    forcedHandoff: "human-gated",
+    forcedHandoffMode: "human-gated",
     "forced-handoff-authority": "all-write-permission-actors",
     markerTrustAllowCollaboratorMarkers: true,
     advisoryWait: {
