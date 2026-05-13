@@ -7,7 +7,7 @@ body:
       value: |
         Thanks for taking the time to fill out this bug report!
 
-        Before you continue filling out this report, please take a moment to check that your bug has not been [already reported on GitHub](https://github.com/kurone-kito/template/search?q=is%3Aissue&type=issues) 🙌
+        Before you continue filling out this report, please take a moment to check that your bug has not been [already reported on GitHub](https://github.com/kurone-kito/idd-skill/issues?q=is%3Aissue) 🙌
 
   - type: textarea
     id: overview
@@ -39,13 +39,23 @@ body:
   - type: textarea
     id: environment
     attributes:
-      label: Environment Details
-      description: Please provide details about your environment.
+      label: IDD Environment Details
+      description: Please provide the IDD runtime context for this issue.
       value: |
-        - Target deployment platform: [e.g. AWS/GCP/local cluster/etc...]
-        - Target OS: [e.g. RHEL 9/Ubuntu 24.04/etc...]
-        - Version of this project or specific commit: [e.g. 1.4.3/commit hash]
-        - Version of any relevant project languages: [e.g. Kubernetes 1.30/Python 3.9.7/etc...]
+        - idd-skill version / commit:
+        - imported from main or tag:
+        - target agent: [Copilot/Codex/Claude Code/Gemini/other]
+        - target repo visibility: [public/private]
+        - merge policy:
+        - review policy:
+        - thread resolution policy:
+        - gh version:
+        - jq version:
+        - Node / pnpm version:
+        - branch protection enabled:
+        - required checks:
+        - affected phase:
+        - relevant marker / digest snippet:
     validations:
       required: true
 
