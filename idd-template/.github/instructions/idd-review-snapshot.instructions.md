@@ -43,14 +43,16 @@ Do not exclude marker-shaped comments from untrusted authors. Keep them
 in the snapshot/ReviewItems_snapshot and report them as suspicious
 context when they affect a decision.
 
-In the idd-skill source repository, you may optionally use the read-only helper
-`node scripts/review-activity-snapshot.mjs --pr {pr-number}` to compute
+When helper runtime is enabled, prefer the read-only helper
+`node scripts/review-activity-snapshot.mjs --pr {pr-number}` to collect
 `{head-SHA}`, `{max-activity-updatedAt}`, `{total-item-count}`, and CI
 completion timestamps. Pass trusted marker actors with
-`--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`. The
-helper is convenience only; this instruction remains canonical and any
-mismatch must be resolved in favor of this specification. In adopter
-repositories, use the portable gh/jq/API procedure instead.
+`--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`.
+Helpers remain evidence collectors only: if helper execution fails,
+returns invalid JSON, omits required fields, or conflicts with live
+GitHub state in this phase, discard helper output and run the portable
+gh/jq/API procedure below. The written instruction rules remain the
+authoritative decision path.
 
 Additionally, fetch the **current CI state** for `{head-SHA}`:
 `gh pr checks {pr-number} --json name,state,completedAt`. Record the
