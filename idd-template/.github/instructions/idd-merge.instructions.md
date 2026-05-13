@@ -189,9 +189,9 @@ gate. The active claim must still use your current `{claim-id}`.
    **Mandatory apply decision tree** — follow this sequence; no path
    may exit without a recorded reason when cleanup candidates exist:
 
-   In the `{{REPO_NAME}}` source repository, run the helper in dry-run
-   mode first. In adopter repositories, skip to the GraphQL fallback
-   below unless the helper scripts were explicitly installed.
+   In the idd-skill source repository, run the helper in dry-run mode
+   first. In adopter repositories, skip to the GraphQL fallback below
+   unless the helper scripts were explicitly installed.
 
    ```sh
    node scripts/audit-pr-cleanup.mjs --pr <pr-number> --dry-run --format table
