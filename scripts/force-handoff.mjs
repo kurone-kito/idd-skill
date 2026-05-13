@@ -12,6 +12,8 @@ const APPROVAL_ACTOR_POLICIES = new Set([
   "all-write-permission-actors",
 ]);
 const APPROVAL_ACTOR_POLICY_DEFAULT = "owners-and-maintainers-only";
+const FORCED_HANDOFF_MODES = new Set(["disabled", "human-gated"]);
+const FORCED_HANDOFF_MODE_DEFAULT = "disabled";
 
 export const NON_TTY_ERROR =
   "operator interaction is required; run idd-force-handoff in an interactive TTY";
@@ -264,6 +266,21 @@ function readCollaboratorTrustEnabled() {
 
 function isTruthy(value) {
   return /^(1|true|yes)$/i.test(String(value ?? "").trim());
+}
+
+function readForcedHandoffMode() {
+  try {
+    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    const mode = String(
+      config?.forcedHandoff?.mode ?? config?.forcedHandoff ?? config?.["forced-handoff"] ?? "",
+    ).trim();
+    if (FORCED_HANDOFF_MODES.has(mode)) {
+      return mode;
+    }
+  } catch {
+    // Default mode remains disabled.
+  }
+  return FORCED_HANDOFF_MODE_DEFAULT;
 }
 
 function splitCsv(value) {
