@@ -73,7 +73,8 @@ The secondary critique pass must be agent-neutral:
 Clarification must converge. The skill should:
 
 - use a bounded number of clarification rounds, with a default maximum
-  of 3
+  of 3 or the repository-local `issueAuthoring.maxClarificationRounds`
+  value when the target repository records one
 - avoid asking questions that are merely nice to know
 - prefer explicit assumptions when issue drafting is still safe without
   immediate user input
@@ -191,11 +192,14 @@ shape, but state clearly that:
 - the issue author is self-authorizing only when they satisfy the
   repository's `maintainer-approval-actors` policy
 - otherwise an explicit approval signal is still required after the
-  final issue content and generated-plan update are stable: the distributed
-  `idd:ready` label is accepted by presence, and standalone `IDD ready`
-  comments from a maintainer approval actor must stay fresh against the
-  latest issue edits and generated-plan update (or an equivalent
-  draft-stability signal)
+  final issue content and generated-plan update are stable: the
+  configured ready label from `approvalSignals.readyLabelName`
+  (default: `idd:ready`) is accepted according to
+  `approvalSignals.labelFreshnessMode` (`presence-only` by default,
+  optional `event-freshness`), and standalone `IDD ready` comments from
+  a maintainer approval actor must stay fresh against the latest issue
+  edits and generated-plan update (or an equivalent draft-stability
+  signal)
 - until that approval exists, later discovery should treat the issue as
   part of the approval-needed fallback bucket rather than the normal
   ready-to-start set

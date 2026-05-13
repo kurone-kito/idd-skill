@@ -136,8 +136,8 @@ for labels, comment-and-stop defaults, and close boundaries:
 - high-confidence `duplicate`, `invalid`, and `out-of-scope` outcomes
   are read-only by default and require explicit A4.5 mutation-policy
   customization before close/label side effects;
-- `idd:ready` approval ownership is separate from trusted marker actor
-  authority for operational claim/review markers.
+- configured ready-label approval ownership is separate from trusted
+  marker actor authority for operational claim/review markers.
 
 ## Roadmap completion audits
 

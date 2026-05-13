@@ -5,12 +5,13 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
+import { normalizePolicyConfig } from "./policy-helpers.mjs";
+
 const APPROVAL_POLICIES = new Set([
   "owners-and-maintainers-only",
   "all-write-permission-actors",
 ]);
 const APPROVAL_POLICY_DEFAULT = "owners-and-maintainers-only";
-const READY_LABEL = "idd:ready";
 
 if (isCliExecution()) {
   runCli();
@@ -48,6 +49,7 @@ export function evaluateClaimApprovalGate(input, options = {}) {
       policy: {
         skipIssueAuthorApprovalGate: true,
         maintainerApprovalActorPolicy: policyState.maintainerApprovalActorPolicy,
+        approvalSignals: policyState.approvalSignals,
         source: policyState.source,
       },
       checks,
@@ -77,14 +79,24 @@ export function evaluateClaimApprovalGate(input, options = {}) {
       : `Issue author ${issueAuthor || "(missing)"} does not satisfy policy ${policyState.maintainerApprovalActorPolicy}.`,
   });
 
-  const hasReadyLabel = issue.labels.includes(READY_LABEL);
+  const latestSubstantiveEditAt = resolveLatestSubstantiveEditAt(issue, timelineState);
+  const freshnessAnchor = maxTimestamp(latestSubstantiveEditAt, generatedPlanState.updatedAt);
+  const freshnessDeterminable = latestSubstantiveEditAt !== null && generatedPlanState.known;
+  const readyLabelState = resolveReadyLabelApproval({
+    issue,
+    timelineState,
+    policy: policyState,
+    freshnessAnchor,
+    freshnessDeterminable,
+  });
+  if (readyLabelState.freshnessUnknown) {
+    ambiguity.push("ready-label-freshness-unavailable");
+  }
   checks.push({
     id: "ready_label_present",
-    name: "Reserved ready label present",
-    result: hasReadyLabel ? "pass" : "fail",
-    evidence: hasReadyLabel
-      ? "Reserved idd:ready label is present."
-      : "Reserved idd:ready label is absent.",
+    name: "Configured ready label approval",
+    result: readyLabelState.approved ? "pass" : "fail",
+    evidence: readyLabelState.evidence,
   });
 
   const approvalCommentState = findLatestReadyApprovalComment({
@@ -96,10 +108,6 @@ export function evaluateClaimApprovalGate(input, options = {}) {
     ambiguity.push("approval-comment-permission-unavailable");
     permissionAmbiguity = true;
   }
-
-  const latestSubstantiveEditAt = resolveLatestSubstantiveEditAt(issue, timelineState);
-  const freshnessAnchor = maxTimestamp(latestSubstantiveEditAt, generatedPlanState.updatedAt);
-  const freshnessDeterminable = latestSubstantiveEditAt !== null && generatedPlanState.known;
 
   let readyCommentFresh = false;
   if (approvalCommentState.comment && freshnessDeterminable && freshnessAnchor) {
@@ -124,25 +132,29 @@ export function evaluateClaimApprovalGate(input, options = {}) {
     ambiguity.push("generated-plan-freshness-unavailable");
   }
 
-  const ambiguityBlocking = ambiguity.length > 0 && !authorSelfAuthorized && !hasReadyLabel;
+  const ambiguityBlocking = ambiguity.length > 0
+    && !authorSelfAuthorized
+    && !readyLabelState.approved
+    && !readyCommentFresh;
   checks.push({
     id: "ambiguity_guard",
     name: "Fail-closed ambiguity guard",
     result: ambiguityBlocking ? "fail" : "pass",
     evidence: ambiguityBlocking
-      ? `Approval state is ambiguous: ${ambiguity.join(", ")}`
-      : ambiguity.length > 0
-        ? `Ambiguity present but bypassed by explicit/author approval: ${ambiguity.join(", ")}`
-        : "No ambiguity detected.",
+        ? `Approval state is ambiguous: ${ambiguity.join(", ")}`
+        : ambiguity.length > 0
+          ? `Ambiguity present but bypassed by explicit/author approval: ${ambiguity.join(", ")}`
+          : "No ambiguity detected.",
   });
 
-  const approved = authorSelfAuthorized || hasReadyLabel || (readyCommentFresh && !ambiguityBlocking);
+  const approved = authorSelfAuthorized || readyLabelState.approved || (readyCommentFresh && !ambiguityBlocking);
   return {
     approved,
     reason: deriveReason({
       approved,
       authorSelfAuthorized,
-      hasReadyLabel,
+      readyLabelApproved: readyLabelState.approved,
+      readyLabelFreshnessUnknown: readyLabelState.freshnessUnknown,
       readyCommentFresh,
       hasAuthorizedReadyComment: Boolean(approvalCommentState.comment),
       ambiguityBlocking,
@@ -153,6 +165,7 @@ export function evaluateClaimApprovalGate(input, options = {}) {
     policy: {
       skipIssueAuthorApprovalGate: false,
       maintainerApprovalActorPolicy: policyState.maintainerApprovalActorPolicy,
+      approvalSignals: policyState.approvalSignals,
       source: policyState.source,
     },
     checks,
@@ -300,7 +313,7 @@ Output schema:
   "approved": true,
   "reason": "gate-disabled|author-self-authorized|ready-label-present|ready-comment-fresh|approval-missing|approval-ambiguous|approval-comment-stale|freshness-undetermined",
   "gateEnabled": true,
-  "policy": {"skipIssueAuthorApprovalGate": false, "maintainerApprovalActorPolicy": "owners-and-maintainers-only", "source": ".github/idd/config.json"},
+  "policy": {"skipIssueAuthorApprovalGate": false, "maintainerApprovalActorPolicy": "owners-and-maintainers-only", "approvalSignals": {"readyLabelName": "idd:ready", "labelFreshnessMode": "presence-only"}, "source": ".github/idd/config.json"},
   "checks": [{"id":"gate_enabled","name":"Issue-author gate enabled","result":"pass|fail","evidence":"..."}],
   "timelineAvailable": true
 }
@@ -345,14 +358,77 @@ function normalizeTimeline(timeline) {
 }
 
 function normalizePolicy(policy) {
-  const skip = policy?.skipIssueAuthorApprovalGate === true;
-  const actorPolicy = APPROVAL_POLICIES.has(policy?.maintainerApprovalActorPolicy)
-    ? policy.maintainerApprovalActorPolicy
-    : APPROVAL_POLICY_DEFAULT;
+  const normalized = normalizePolicyConfig(policy);
   return {
-    skipIssueAuthorApprovalGate: skip,
-    maintainerApprovalActorPolicy: actorPolicy,
+    skipIssueAuthorApprovalGate: normalized.skipIssueAuthorApprovalGate,
+    maintainerApprovalActorPolicy: APPROVAL_POLICIES.has(normalized.maintainerApprovalActorPolicy)
+      ? normalized.maintainerApprovalActorPolicy
+      : APPROVAL_POLICY_DEFAULT,
+    approvalSignals: {
+      readyLabelName: String(normalized.approvalSignals.readyLabelName ?? "").trim().toLowerCase(),
+      labelFreshnessMode: String(normalized.approvalSignals.labelFreshnessMode ?? "presence-only"),
+    },
     source: String(policy?.source ?? ".github/idd/config.json"),
+  };
+}
+
+function resolveReadyLabelApproval({ issue, timelineState, policy, freshnessAnchor, freshnessDeterminable }) {
+  const readyLabelName = policy.approvalSignals.readyLabelName;
+  const labelDisplayName = readyLabelName || "idd:ready";
+  const hasReadyLabel = issue.labels.includes(readyLabelName);
+
+  if (!hasReadyLabel) {
+    return {
+      approved: false,
+      present: false,
+      freshnessUnknown: false,
+      evidence: `Configured ready label ${labelDisplayName} is absent.`,
+    };
+  }
+
+  if (policy.approvalSignals.labelFreshnessMode !== "event-freshness") {
+    return {
+      approved: true,
+      present: true,
+      freshnessUnknown: false,
+      evidence: `Configured ready label ${labelDisplayName} is present; labelFreshnessMode=presence-only.`,
+    };
+  }
+
+  if (!timelineState.known) {
+    return {
+      approved: false,
+      present: true,
+      freshnessUnknown: true,
+      evidence: `Configured ready label ${labelDisplayName} is present, but the issue timeline is unavailable for label freshness checks.`,
+    };
+  }
+
+  if (!freshnessDeterminable || !freshnessAnchor) {
+    return {
+      approved: false,
+      present: true,
+      freshnessUnknown: true,
+      evidence: `Configured ready label ${labelDisplayName} is present, but the freshness anchor could not be determined.`,
+    };
+  }
+
+  const latestLabelEvent = findLatestReadyLabelEvent(timelineState.events, readyLabelName);
+  if (!latestLabelEvent || latestLabelEvent.event !== "labeled") {
+    return {
+      approved: false,
+      present: true,
+      freshnessUnknown: true,
+      evidence: `Configured ready label ${labelDisplayName} is present, but no matching label application event was found in the issue timeline.`,
+    };
+  }
+
+  const fresh = compareIso(latestLabelEvent.createdAt, freshnessAnchor) > 0;
+  return {
+    approved: fresh,
+    present: true,
+    freshnessUnknown: false,
+    evidence: `Configured ready label ${labelDisplayName} was last applied at ${latestLabelEvent.createdAt}; freshness anchor is ${freshnessAnchor}.`,
   };
 }
 
@@ -384,6 +460,30 @@ function resolveLatestSubstantiveEditAt(issue, timelineState) {
     .map((event) => normalizeIso(event?.created_at))
     .filter(Boolean);
   return maxTimestamp(issue.createdAt, ...editedAt);
+}
+
+function findLatestReadyLabelEvent(events, readyLabelName) {
+  if (!Array.isArray(events)) {
+    return null;
+  }
+  const relevant = events
+    .map((event) => ({
+      event: String(event?.event ?? "").trim().toLowerCase(),
+      labelName: normalizeLabelName(event?.label),
+      createdAt: normalizeIso(event?.created_at),
+    }))
+    .filter((event) => event.createdAt !== null)
+    .filter((event) => (event.event === "labeled" || event.event === "unlabeled"))
+    .filter((event) => event.labelName === readyLabelName)
+    .sort((left, right) => compareIso(left.createdAt, right.createdAt));
+  return relevant.length > 0 ? relevant[relevant.length - 1] : null;
+}
+
+function normalizeLabelName(value) {
+  if (typeof value === "string") {
+    return value.trim().toLowerCase();
+  }
+  return String(value?.name ?? "").trim().toLowerCase();
 }
 
 function findLatestReadyApprovalComment({ comments, policy, resolvePermission }) {
@@ -437,6 +537,9 @@ function deriveReason(state) {
     if (state.permissionAmbiguity) {
       return "approval-ambiguous";
     }
+    if (state.readyLabelFreshnessUnknown) {
+      return "freshness-undetermined";
+    }
     if (!state.freshnessDeterminable) {
       return "freshness-undetermined";
     }
@@ -451,7 +554,7 @@ function deriveReason(state) {
   if (state.authorSelfAuthorized) {
     return "author-self-authorized";
   }
-  if (state.hasReadyLabel) {
+  if (state.readyLabelApproved) {
     return "ready-label-present";
   }
   if (state.readyCommentFresh) {
@@ -553,13 +656,11 @@ function loadPolicy(policyPath) {
   const source = policyPath || ".github/idd/config.json";
   try {
     const raw = JSON.parse(readFileSync(source, "utf8"));
+    const normalized = normalizePolicyConfig(raw);
     return {
       source,
       config: {
-        skipIssueAuthorApprovalGate: raw?.skipIssueAuthorApprovalGate === true,
-        maintainerApprovalActorPolicy: APPROVAL_POLICIES.has(raw?.maintainerApprovalActorPolicy)
-          ? raw.maintainerApprovalActorPolicy
-          : APPROVAL_POLICY_DEFAULT,
+        ...normalized,
         source,
       },
     };

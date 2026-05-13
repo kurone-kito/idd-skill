@@ -31,6 +31,10 @@ function permissionResolver(map) {
   };
 }
 
+function findCheck(result, id) {
+  return result.checks.find((check) => check.id === id);
+}
+
 test("disables gate only when skipIssueAuthorApprovalGate is true", () => {
   const result = evaluateClaimApprovalGate(
     {
@@ -92,6 +96,136 @@ test("ready label grants approval by presence", () => {
   );
   assert.equal(result.approved, true);
   assert.equal(result.reason, "ready-label-present");
+});
+
+test("custom configured ready label grants approval by presence", () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: "custom:ready" }] },
+      policy: {
+        approvalSignals: {
+          readyLabelName: "custom:ready",
+          labelFreshnessMode: "presence-only",
+        },
+      },
+      timeline: BASE_TIMELINE,
+      comments: [],
+    },
+    { resolvePermission: permissionResolver({ author: { known: true, permission: "none" } }) },
+  );
+  assert.equal(result.approved, true);
+  assert.equal(result.reason, "ready-label-present");
+  assert.deepEqual(result.policy.approvalSignals, {
+    readyLabelName: "custom:ready",
+    labelFreshnessMode: "presence-only",
+  });
+});
+
+test("event-freshness label approval requires a fresh matching label event", () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: "custom:ready" }] },
+      policy: {
+        approvalSignals: {
+          readyLabelName: "custom:ready",
+          labelFreshnessMode: "event-freshness",
+        },
+      },
+      timeline: [
+        ...BASE_TIMELINE,
+        {
+          event: "labeled",
+          created_at: "2026-05-10T12:00:00Z",
+          label: { name: "custom:ready" },
+        },
+      ],
+      comments: [],
+    },
+    { resolvePermission: permissionResolver({ author: { known: true, permission: "none" } }) },
+  );
+  assert.equal(result.approved, true);
+  assert.equal(result.reason, "ready-label-present");
+});
+
+test("event-freshness label approval becomes stale after later issue edits", () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: "custom:ready" }] },
+      policy: {
+        approvalSignals: {
+          readyLabelName: "custom:ready",
+          labelFreshnessMode: "event-freshness",
+        },
+      },
+      timeline: [
+        {
+          event: "labeled",
+          created_at: "2026-05-10T09:00:00Z",
+          label: { name: "custom:ready" },
+        },
+        ...BASE_TIMELINE,
+      ],
+      comments: [],
+    },
+    { resolvePermission: permissionResolver({ author: { known: true, permission: "none" } }) },
+  );
+  assert.equal(result.approved, false);
+  assert.equal(result.reason, "approval-missing");
+  assert.equal(findCheck(result, "ready_label_present")?.result, "fail");
+  assert.match(
+    findCheck(result, "ready_label_present")?.evidence ?? "",
+    /last applied at 2026-05-10T09:00:00Z; freshness anchor is 2026-05-10T10:00:00Z/,
+  );
+});
+
+test("event-freshness label approval is invalidated by generated-plan updates", () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: "custom:ready" }] },
+      policy: {
+        approvalSignals: {
+          readyLabelName: "custom:ready",
+          labelFreshnessMode: "event-freshness",
+        },
+      },
+      timeline: [
+        ...BASE_TIMELINE,
+        {
+          event: "labeled",
+          created_at: "2026-05-10T11:00:00Z",
+          label: { name: "custom:ready" },
+        },
+      ],
+      comments: [],
+      generatedPlanUpdatedAt: "2026-05-10T11:30:00Z",
+    },
+    { resolvePermission: permissionResolver({ author: { known: true, permission: "none" } }) },
+  );
+  assert.equal(result.approved, false);
+  assert.equal(result.reason, "approval-missing");
+  assert.match(
+    findCheck(result, "ready_label_present")?.evidence ?? "",
+    /last applied at 2026-05-10T11:00:00Z; freshness anchor is 2026-05-10T11:30:00Z/,
+  );
+});
+
+test("event-freshness label approval fails closed when label events are unavailable", () => {
+  const result = evaluateClaimApprovalGate(
+    {
+      issue: { ...BASE_ISSUE, labels: [{ name: "custom:ready" }] },
+      policy: {
+        approvalSignals: {
+          readyLabelName: "custom:ready",
+          labelFreshnessMode: "event-freshness",
+        },
+      },
+      comments: [],
+    },
+    { resolvePermission: permissionResolver({ author: { known: true, permission: "none" } }) },
+  );
+  assert.equal(result.approved, false);
+  assert.equal(result.reason, "freshness-undetermined");
+  assert.equal(findCheck(result, "ambiguity_guard")?.result, "fail");
 });
 
 test("ready comment must be exact or standalone line and fresh", () => {

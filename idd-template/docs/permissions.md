@@ -163,8 +163,9 @@ During a run:
 Treat issue-author approval as a pre-start control, not as a PR review
 or merge control. The distributed discover and claim instructions
 already enforce this gate through `skipIssueAuthorApprovalGate`,
-`maintainerApprovalActorPolicy`, the reserved `idd:ready` label, and
-fresh standalone `IDD ready` comments.
+`maintainerApprovalActorPolicy`, `approvalSignals.readyLabelName`,
+`approvalSignals.labelFreshnessMode`, and fresh standalone `IDD ready`
+comments.
 
 - When a repository keeps the secure-by-default issue-author approval
   gate, a self-authorizing issue author must satisfy the documented
@@ -173,12 +174,15 @@ fresh standalone `IDD ready` comments.
   because it does not prove repository-specific write authority or local
   approval policy.
 - If the author is not self-authorizing, unattended execution should
-  require a fresh explicit approval signal such as a reserved
-  `idd:ready` label or a standalone `IDD ready` comment from a
-  maintainer approval actor.
+  require a fresh explicit approval signal such as the configured ready
+  label from `approvalSignals.readyLabelName` (default: `idd:ready`) or
+  a standalone `IDD ready` comment from a maintainer approval actor.
 - Treat approval freshness separately from author association. A stale
   approval comment that predates the latest issue edit or generated-plan
-  update should not be reused silently.
+  update should not be reused silently. When
+  `approvalSignals.labelFreshnessMode` is `event-freshness`, the same
+  freshness rule applies to the latest matching ready-label application
+  event.
 
 CODEOWNERS mismatch is not the pre-start gate for this feature.
 CODEOWNERS affect later review and merge policy, not whether an issue is
@@ -190,10 +194,10 @@ CODEOWNERS coverage.
 
 Keep approval labels and operational marker trust as separate controls:
 
-- `idd:ready` is the distributed issue-selection approval signal for
-  orphan-first policy and should be restricted to maintainer approval
-  actors. If a repository wants a different label name, it must patch
-  the discover/claim instruction files in the same change.
+- The configured ready label from `approvalSignals.readyLabelName`
+  (default: `idd:ready`) is the distributed issue-selection approval
+  signal for orphan-first policy and should be restricted to maintainer
+  approval actors.
 - Trusted marker actors govern operational marker authority
   (`claimed-by`, `unclaimed-by`, `review-watermark`,
   `review-baseline`, `advisory-wait`) and may include different actors.
