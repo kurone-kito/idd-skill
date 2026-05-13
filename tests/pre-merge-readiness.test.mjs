@@ -11,6 +11,7 @@ import {
   indexLatestGatingReviewsByAuthor,
   resolveCodeownersForFiles,
   selectCodeownersText,
+  summarizeDispositionEvidenceForGate,
   summarizeAdvisoryWaitMarkers,
   summarizeClaimValidation,
   summarizeRegularCommentsForGate,
@@ -62,6 +63,18 @@ test("pre-merge readiness schema keeps UTC timestamps strict", () => {
   const invalidReviewerTime = JSON.parse(JSON.stringify(cleanSummary));
   invalidReviewerTime.reviewerStates.latestByAuthor[0].submittedAt = "2026-05-12T00:14:04+09:00";
   assert.ok(validate(invalidReviewerTime, readinessSchema).length > 0);
+});
+
+test("pre-merge readiness optionally emits disposition evidence", () => {
+  const fixture = readJson("fixtures/pre-merge-readiness/clean.json");
+  const summary = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+  });
+
+  assert.equal(summary.dispositionEvidence?.route, "proceed");
+  assert.equal(summary.dispositionEvidence?.blockingCount, 0);
+  assert.deepEqual(validate(summary, readinessSchema), []);
 });
 
 test("required check summaries block when no merge-gate policy evidence exists", () => {
@@ -610,6 +623,127 @@ test("regular comment gate keeps forced-handoff markers visible without explicit
 
   assert.equal(summary.count, 1);
   assert.deepEqual(summary.items.map((item) => item.id), ["1"]);
+});
+
+test("disposition evidence blocks when a regular comment has no disposition marker reply", () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        { id: 1, createdAt: "2026-05-12T00:00:00Z", body: "please address", author: { login: "reviewer-a" } },
+        { id: 2, createdAt: "2026-05-12T00:00:01Z", body: "Thanks, updating now.", author: { login: "idd-bot" } },
+      ],
+      threads: [],
+    },
+    { iddAgentLogins: ["idd-bot"] },
+  );
+
+  assert.equal(summary.route, "return-to-e1");
+  assert.equal(summary.blockingCount, 1);
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.equal(summary.missingThreadCount, 0);
+});
+
+test("disposition evidence treats PATH A and PATH B as complete when both have markers", () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        { id: 1, createdAt: "2026-05-12T00:00:00Z", body: "human feedback", author: { login: "reviewer-a" } },
+        { id: 2, createdAt: "2026-05-12T00:00:01Z", body: "**Accepted** — fixed in abc123", author: { login: "idd-bot" } },
+        { id: 3, createdAt: "2026-05-12T00:00:02Z", body: "advisory note", author: { login: "chatgpt-codex-connector[bot]" } },
+        { id: 4, createdAt: "2026-05-12T00:00:03Z", body: "**Rejected** — advisory acknowledged", author: { login: "idd-bot" } },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ["idd-bot"],
+      advisoryBotLogins: ["chatgpt-codex-connector[bot]"],
+    },
+  );
+
+  assert.equal(summary.route, "proceed");
+  assert.equal(summary.blockingCount, 0);
+  assert.equal(summary.missingRegularCommentCount, 0);
+  assert.equal(summary.missingThreadCount, 0);
+});
+
+test("disposition evidence blocks unresolved threads without fresh disposition markers", () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: "thread-1",
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              { author: { login: "reviewer-a" }, createdAt: "2026-05-12T00:00:00Z", body: "need change" },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ["idd-bot"] },
+  );
+
+  assert.equal(summary.route, "return-to-e1");
+  assert.equal(summary.blockingCount, 1);
+  assert.equal(summary.missingRegularCommentCount, 0);
+  assert.equal(summary.missingThreadCount, 1);
+  assert.equal(summary.missingThreads[0].reason, "unresolved-without-fresh-disposition");
+});
+
+test("disposition evidence rejects reviewer-authored Accepted marker in threads", () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: "thread-2",
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              { author: { login: "reviewer-a" }, createdAt: "2026-05-12T00:00:00Z", body: "please fix" },
+              { author: { login: "reviewer-a" }, createdAt: "2026-05-12T00:00:01Z", body: "**Accepted** — looks good now" },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ["idd-bot"] },
+  );
+
+  assert.equal(summary.route, "return-to-e1");
+  assert.equal(summary.missingThreadCount, 1);
+  assert.equal(summary.missingThreads[0].reason, "missing-fresh-disposition");
+});
+
+test("disposition evidence accepts edited IDD disposition comments as fresh replies", () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: "2026-05-12T00:01:00Z",
+          body: "please address this",
+          author: { login: "reviewer-a" },
+        },
+        {
+          id: 2,
+          createdAt: "2026-05-12T00:00:30Z",
+          updatedAt: "2026-05-12T00:02:00Z",
+          body: "**Accepted** — updated after latest feedback",
+          author: { login: "idd-bot" },
+        },
+      ],
+      threads: [],
+    },
+    { iddAgentLogins: ["idd-bot"] },
+  );
+
+  assert.equal(summary.route, "proceed");
+  assert.equal(summary.blockingCount, 0);
 });
 
 test("deriveIddAgentLogins keeps prior trusted operational actors but not generic maintainer comments", () => {
