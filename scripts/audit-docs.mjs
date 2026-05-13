@@ -36,6 +36,14 @@ if (errors.length > 0) {
   for (const error of errors) {
     console.error(`- ${error}`);
   }
+  const remediation = buildRemediation(errors);
+  if (remediation.length > 0) {
+    console.error("");
+    console.error("remediation:");
+    for (const line of remediation) {
+      console.error(`- ${line}`);
+    }
+  }
   process.exit(1);
 }
 
@@ -330,6 +338,46 @@ function checkConfigInstructionDrift() {
 
     notices.push(`${pair.configPath} matches ${pair.overviewPath} command and scope defaults`);
   }
+}
+
+function buildRemediation(currentErrors) {
+  if (!containsMirrorDrift(currentErrors)) {
+    return [];
+  }
+  const syncCommand = detectSyncCommand();
+  const lines = [];
+  if (syncCommand) {
+    lines.push(`run \`${syncCommand}\` to refresh mirrored files from canonical sources`);
+  } else {
+    lines.push("refresh mirrored files from canonical sources listed in audit/sync-manifest.json");
+  }
+  lines.push("re-run `node scripts/audit-docs.mjs --check`");
+  return lines;
+}
+
+function containsMirrorDrift(currentErrors) {
+  return currentErrors.some((error) =>
+    /generated block .* is stale|shell file list .* is stale| and .* differ in (exact|concreted) mode/.test(
+      error,
+    ),
+  );
+}
+
+function detectSyncCommand() {
+  if (repoFiles.includes("package.json")) {
+    try {
+      const packageJson = JSON.parse(readText("package.json"));
+      if (typeof packageJson.scripts?.["docs:sync"] === "string") {
+        return "pnpm run docs:sync";
+      }
+    } catch {
+      // Keep fallback discovery if package.json is not parseable.
+    }
+  }
+  if (repoFiles.includes("scripts/sync-docs.mjs")) {
+    return "node scripts/sync-docs.mjs --apply";
+  }
+  return "";
 }
 
 function checkInstructionSizeBudgets(config) {
