@@ -13,6 +13,9 @@ A0-O, A3, A3.5, and A4.5. The written decision tables still own the final
 routing, and they remain authoritative when helper output is missing or
 disagrees.
 
+In particular, use `scripts/discover-viability-gate.mjs` for the A4
+viability gate before falling back to the manual criteria in this file.
+
 **Abort conditions**: A0-T, A1, A3 (default; see decision tree).
 **Early stop condition**: A0-T, A4, or A4.5 (no claim made — see below).
 

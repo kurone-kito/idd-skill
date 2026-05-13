@@ -17,7 +17,9 @@ In the idd-skill source repository, the following optional helpers were adopted:
   evaluation (referenced in
   [kurone-kito/idd-skill#391](https://github.com/kurone-kito/idd-skill/issues/391))
 - `scripts/discover-viability-gate.mjs` for A4 viability gate evaluation
-  across limited scope, clear verification, and autonomous completion criteria
+  across limited scope, clear verification, and autonomous completion
+  criteria (referenced in
+  [kurone-kito/idd-skill#505](https://github.com/kurone-kito/idd-skill/issues/505))
 - `scripts/suitability-triage.mjs` for A4.5 seven-check suitability
   evaluation (referenced in
   [kurone-kito/idd-skill#392](https://github.com/kurone-kito/idd-skill/issues/392))

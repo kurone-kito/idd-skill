@@ -118,6 +118,12 @@ use the helper-backed evidence collectors first, but the Markdown
 instruction files remain the final authority whenever helper output is
 missing or disagrees.
 
+During onboarding, create or update `CLAUDE.md`, `AGENTS.md`, and
+`GEMINI.md` so each non-Copilot agent listed above has a stable first
+file to read. GitHub Copilot remains an update-if-present surface via
+`.github/copilot-instructions.md`. Skipping creation of a missing root
+entry file should be an explicit operator choice, not the default.
+
 When an operator gives exactly one issue target, Discover can verify that
 target directly before Claim. The shortcut avoids broad roadmap
 enumeration, but it still applies targeted readiness checks, the A4

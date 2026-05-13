@@ -30,6 +30,17 @@ test("IDD file map keeps canonical phase-ID anchors", () => {
   }
 });
 
+test("workflow onboarding guidance stays synced between docs and template", () => {
+  const canonicalText = readText(CANONICAL_DOC);
+  const templateText = readText(TEMPLATE_DOC);
+
+  assert.match(canonicalText, /During onboarding, create or update `CLAUDE\.md`, `AGENTS\.md`, and\s+`GEMINI\.md`/);
+  assert.equal(
+    canonicalText.includes("helper-backed evidence collectors first"),
+    templateText.includes("helper-backed evidence collectors first"),
+  );
+});
+
 function readText(relativePath) {
   return readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8");
 }

@@ -18,6 +18,10 @@ When helper support is enabled, prefer the helper script catalog in
 The written check list and decision flow still own the outcome, and they
 remain authoritative when helper output is missing or disagrees.
 
+Use `scripts/suitability-triage.mjs` first when you need A4.5 evidence,
+then fall back to the manual seven-check triage if the helper is absent
+or disagrees.
+
 Issue-author approval is a separate pre-claim gate. Candidates that fail
 the repository's issue-author approval evaluation are routed by
 `idd-discover.instructions.md` and re-checked in

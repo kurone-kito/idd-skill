@@ -248,6 +248,18 @@ test("idd-doctor warns when config and overview concrete commands differ", (t) =
   );
 });
 
+test("helper script docs keep the discover viability gate helper in sync", () => {
+  const live = readFileSync(new URL("../docs/idd-helper-scripts.md", import.meta.url), "utf8");
+  const template = readFileSync(
+    new URL("../idd-template/docs/idd-helper-scripts.md", import.meta.url),
+    "utf8",
+  );
+
+  assert.equal(template, live);
+  assert.match(live, /discover-viability-gate\.mjs/);
+  assert.match(live, /suitability-triage\.mjs/);
+});
+
 function createDoctorFixtureRepo(configFixtureName, { packageJson = null } = {}) {
   const configText = readFileSync(new URL(configFixtureName, FIXTURE_ROOT), "utf8");
   return createDoctorFixtureRepoFromConfig(configText, { packageJson });
