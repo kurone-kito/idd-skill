@@ -763,6 +763,12 @@ function inferReviewerReopenedAt(thread) {
 }
 
 export function hasFreshDisposition(thread, options = {}) {
+  // IMPORTANT: The default disposition-author predicate rejects known bots but accepts any human.
+  // For F2/F3 merge-gate contexts (E7 disposition evidence), callers MUST pass
+  // options.isDispositionAuthor with an IDD-scoped predicate (e.g., via summarizeDispositionEvidenceForGate).
+  // Callers that require IDD-only dispositions (e.g., audit-pr-cleanup) should pass:
+  //   { isDispositionAuthor: (login) => iddAgentLogins.has(login) }
+  // This design trades stricter default behavior for backward compatibility with utility functions.
   const dispositionAuthorPredicate =
     typeof options.isDispositionAuthor === "function"
       ? options.isDispositionAuthor
