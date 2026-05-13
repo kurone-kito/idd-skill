@@ -275,7 +275,11 @@ function readForcedHandoffMode() {
   try {
     const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
     const mode = String(
-      config?.forcedHandoff?.mode ?? config?.forcedHandoff ?? config?.["forced-handoff"] ?? "",
+      config?.forcedHandoff?.mode ??
+        config?.["forced-handoff"]?.mode ??
+        config?.forcedHandoffMode ??
+        config?.["forced-handoff-mode"] ??
+        "",
     ).trim();
     if (FORCED_HANDOFF_MODES.has(mode)) {
       return mode;
