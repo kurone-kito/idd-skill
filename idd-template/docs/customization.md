@@ -506,6 +506,94 @@ changing merge gates, changing discovery scope, or altering validation
 commands. Keep live instruction files and the exported template in sync
 when the repository is the source of a reusable IDD distribution.
 
+## Canonical Asset Map
+
+IDD distributes documentation, instruction files, and policy guidance in
+multiple locations. This section identifies which copies are canonical
+(authored directly) and which are generated or synchronized from other
+sources.
+
+### Canonical Sources (Authored Directly)
+
+**Documentation**:
+
+- `docs/customization.md` → canonical source for IDD customization guidance
+- `docs/idd-workflow.md` → canonical source for workflow description
+- `docs/policy-constants.md` → canonical source for distributed timing and
+  gate defaults
+
+**Instruction Files**:
+
+- `.github/instructions/idd-*.md` → canonical source for IDD phase files and
+  shared definitions
+
+### Generated/Synchronized Assets
+
+**Template Distribution**:
+
+- `idd-template/docs/*.md` → synchronized copies of canonical docs/
+- `idd-template/.github/instructions/*.md` → synchronized copies with
+  placeholder substitution
+
+**Synchronization Mechanics**:
+
+- `audit-docs.mjs` enforces synchronization rules defined in
+  `sync-manifest.json`
+- Template copies use placeholders like `{{REPO_NAME}}` to support
+  repository-specific values during import
+- The `sync-manifest.json` defines source→target mappings and sync modes
+  (exact copy vs placeholder substitution)
+
+**Why This Structure**:
+
+- Canonical sources remain authoritative and avoid drift
+- Template copies can be independently imported and customized
+- Synchronization is automated and verifiable via CI
+- Contributors have one source of truth for each piece of guidance
+
+### Scope Note
+
+This map documents which files are canonical sources and which are synchronized
+copies. Downstream tasks (referenced by issue #481 and #482 in roadmap #483) will
+implement:
+
+- CI checks to detect and prevent canonical-source drift
+- Contributor tooling to guide edits toward canonical sources
+- Integration with the contribution workflow
+
+## Where to Edit
+
+**Always edit canonical sources** in `docs/` and `.github/instructions/`, not the
+template copies.
+
+**When editing canonical sources**:
+
+1. Update the file in its canonical location:
+   - Policy guidance → `docs/customization.md`, `docs/policy-constants.md`, etc.
+   - Instruction files → `.github/instructions/idd-*.md`
+
+2. If the repository distributes IDD as a template (source of a reusable IDD
+   distribution), run the documentation audit check:
+
+   ```sh
+   node scripts/audit-docs.mjs --check
+   ```
+
+   This verifies canonical/template pairs and placeholder substitutions stay
+   consistent.
+
+3. Do **not** edit files in `idd-template/` first. Update canonical sources
+   before mirroring equivalent template changes in the same commit.
+
+**When working with template imports** (external repositories importing IDD):
+
+- When the repository **imports** IDD from a template:
+  - The imported files start as copies of the template
+  - Apply local customization to `.github/idd/config.json` or to
+    canonical sources only
+  - Never manually edit idd-template/ files — they represent the source
+    template and may be re-imported
+
 ## Repository-local IDD policy
 
 The trusted marker actors definition is abstract to support diverse
