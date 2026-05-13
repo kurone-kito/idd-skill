@@ -348,6 +348,25 @@ default `instructions-only` profile keep using the written shell /
   and linked-issue exceptions do not yet have a supported helper
   contract
 
+### Resume claim and route evidence
+
+- Claim routing command:
+  `node scripts/resume-claim-routing.mjs --issue <issue-number>`
+- Stable fields consumed by resume instructions: `state`, `action`,
+  `reason`, `active_claim`, `claim_id_checked`, `stale_age_ms`, `now`,
+  `warnings`, and `evidence`
+- Stable enums:
+  - `state`:
+    `unclaimed|already_owned|stale|non_inheritable|disputed`
+  - `action`: `re_claim|takeover|keep|stop`
+
+- Step 3 route command:
+  `node scripts/resume-route-selection.mjs --issue <issue-number>`
+- Stable fields consumed by resume instructions: `route`, `reason`,
+  `state`, and `evidence`
+- Stable enum:
+  - `route`: `D1|D4|E1|E15|F1|F2|stop`
+
 ### Advisory-wait evidence
 
 - Command: `node scripts/advisory-wait-state.mjs --pr <pr-number>`

@@ -311,6 +311,10 @@ reviewer because that is part of this repository's current PR policy.
 The idd-skill source repository that ships this template currently includes the
 following optional helper scripts:
 
+- `scripts/resume-claim-routing.mjs` (read-only Resume Step 1 claim
+  routing evidence)
+- `scripts/resume-route-selection.mjs` (read-only Resume Step 3 route
+  selection evidence)
 - `scripts/review-activity-snapshot.mjs` (read-only E/F activity and CI
   snapshot metrics)
 - `scripts/advisory-wait-state.mjs` (read-only advisory-wait evidence

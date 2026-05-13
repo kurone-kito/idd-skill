@@ -50,6 +50,27 @@ If stalled-session routing returns hold/inconclusive, stop.
 
 ## Step 1 — Identify claim state
 
+When helper runtime is enabled, you may collect Step 1 evidence with:
+
+```sh
+node scripts/resume-claim-routing.mjs --issue {issue-number}
+```
+
+Use helper output as evidence mapped to this table, not as an
+authoritative replacement:
+
+- `state: already_owned` + `action: keep` → continue with the same
+  `{claim-id}` route.
+- `state: unclaimed` + `action: re_claim` → no-active-claim route.
+- `state: stale` + `action: takeover` → stale-claim takeover route.
+- `state: non_inheritable` + `action: stop` → active non-stale claim
+  stop route.
+- `state: disputed` + `action: stop` → contested-claim stop route.
+
+If helper runtime is absent, helper output is invalid, or helper evidence
+disagrees with live GitHub state, use the written table below and treat
+it as authoritative.
+
 Evaluate in order; take the first matching row.
 
 | Claim state                                                                                     | Route                                                                                                                         |
@@ -111,6 +132,23 @@ a human should expect next (e.g., `Phase: resume → B3`, `Phase: resume → D1`
 and review evidence used for the routing decision.
 
 ## Step 3 — Determine PR and CI/review state
+
+When helper runtime is enabled, you may collect Step 3 routing evidence
+with:
+
+```sh
+node scripts/resume-route-selection.mjs --issue {issue-number}
+```
+
+Map helper `route` to the Step 3 table outcomes:
+
+- `D1`, `D4`, `E1`, `E15`, `F1`, `F2` → matching row outcome.
+- `stop` → stop and report the helper reason; do not mutate state.
+
+Before any mutation after helper-assisted routing, still re-check live
+claim ownership, current PR HEAD, and current CI/review state in this
+phase's authoritative tables. If helper runtime is absent or helper
+output is invalid, use the written table below directly.
 
 | CI state                              | Reviews                                                              | Action                                             |
 | ------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------- |
