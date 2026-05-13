@@ -116,9 +116,14 @@ None. All 18 PRs with candidates completed without errors.
 
 ## Remaining Backlog
 
-Next batch boundary starts at PR #41. The full merged-PR backlog
-contains 201 PRs as of 2026-05-13. Subsequent runs should continue
+Next batch boundary starts at PR #41. Subsequent runs should continue
 from the next PR after the highest number processed in this batch.
+
+To get the current merged-PR count before starting the next batch:
+
+```sh
+gh pr list --state merged --json number --limit 500 | jq 'length'
+```
 
 ### Continuing from this State
 
