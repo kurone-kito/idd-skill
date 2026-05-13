@@ -59,6 +59,26 @@ test("onboarding links extracted placeholder guidance and keeps fallback wording
     /{{TRUSTED_MARKER_ACTORS}}/,
     "template config must not keep the legacy trusted marker actors placeholder",
   );
+  assert.match(
+    configText,
+    /"install-deps": "{{INSTALL_DEPS_COMMAND}}"/,
+    "template config must keep install-deps as a placeholder token",
+  );
+  assert.match(
+    configText,
+    /"fix-validate": "{{FIX_VALIDATE_COMMANDS}}"/,
+    "template config must keep fix-validate as a placeholder token",
+  );
+  assert.match(
+    configText,
+    /"pre-push-validate": "{{PRE_PUSH_VALIDATE_COMMANDS}}"/,
+    "template config must keep pre-push-validate as a placeholder token",
+  );
+  assert.match(
+    configText,
+    /"post-fix-validate": "{{POST_FIX_VALIDATE_COMMANDS}}"/,
+    "template config must keep post-fix-validate as a placeholder token",
+  );
 
   const text = readText("idd-template/docs/onboarding/placeholders.md");
   assert.match(
@@ -338,6 +358,26 @@ test("overview instructions document the npx-availability gate", () => {
   assert.ok(
     template.includes("`npx <tool>` if Node.js and `npx` are available"),
     "template overview must keep the npx-availability gate for Node.js fallback",
+  );
+  assert.match(
+    template,
+    /\| \*\*fix-validate\*\* +\| `{{FIX_VALIDATE_COMMANDS}}` +\|/,
+    "template overview must keep fix-validate as a placeholder row",
+  );
+  assert.match(
+    template,
+    /\| \*\*pre-push-validate\*\* +\| `{{PRE_PUSH_VALIDATE_COMMANDS}}` +\|/,
+    "template overview must keep pre-push-validate as a placeholder row",
+  );
+  assert.match(
+    template,
+    /\| \*\*post-fix-validate\*\* +\| `{{POST_FIX_VALIDATE_COMMANDS}}` +\|/,
+    "template overview must keep post-fix-validate as a placeholder row",
+  );
+  assert.match(
+    template,
+    /\| \*\*install-deps\*\* +\| `{{INSTALL_DEPS_COMMAND}}` +\|/,
+    "template overview must keep install-deps as a placeholder row",
   );
 });
 
