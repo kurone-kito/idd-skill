@@ -77,6 +77,7 @@ test("vendored-node managed files match the canonical helper import closure", ()
   assert.ok(managedFiles.includes("schemas/forced-handoff-marker.schema.json"));
   assert.ok(managedFiles.includes("schemas/pre-merge-readiness.schema.json"));
   assert.ok(managedFiles.includes("schemas/advisory-wait-state.schema.json"));
+  assert.ok(managedFiles.includes("schemas/policy.schema.json"));
   for (const relativePath of managedFiles) {
     assert.equal(existsSync(join(REPO_ROOT, relativePath)), true, relativePath);
   }

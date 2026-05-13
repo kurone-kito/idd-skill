@@ -77,6 +77,25 @@ test("pre-merge readiness optionally emits disposition evidence", () => {
   assert.deepEqual(validate(summary, readinessSchema), []);
 });
 
+test("pre-merge readiness exposes effective advisory policy", () => {
+  const fixture = readJson("fixtures/pre-merge-readiness/clean.json");
+  const summary = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    requestCap: 12,
+    pendingWindowMinutes: 45,
+    settledWindowMinutes: 15,
+    pollIntervalMinutes: 3,
+    capExhaustedRoute: "hold",
+  });
+
+  assert.equal(summary.advisoryWait.requestCap, 12);
+  assert.equal(summary.advisoryWait.pendingWindowMinutes, 45);
+  assert.equal(summary.advisoryWait.settledWindowMinutes, 15);
+  assert.equal(summary.advisoryWait.pollIntervalMinutes, 3);
+  assert.equal(summary.advisoryWait.capExhaustedRoute, "hold");
+  assert.deepEqual(validate(summary, readinessSchema), []);
+});
+
 test("required check summaries block when no merge-gate policy evidence exists", () => {
   assert.deepEqual(summarizeRequiredChecks([], [], {}), {
     status: "unknown",

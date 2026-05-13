@@ -1,5 +1,8 @@
 import { readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import {
@@ -8,6 +11,10 @@ import {
   operationalMarkerPrefix,
   unsafeTextReason,
 } from "../scripts/protocol-helpers.mjs";
+import {
+  readAdvisoryWaitPolicy,
+  resolveAdvisoryWaitPolicy,
+} from "../scripts/advisory-wait-policy.mjs";
 import { loadJson, validate } from "../scripts/validate-schemas.mjs";
 
 const ciSuccess = readJson("fixtures/ci/success.json");
@@ -90,6 +97,11 @@ for (const fixtureName of [
     assert.equal(summary.sameHeadMarkerPresent, expected.sameHeadMarkerPresent);
     assert.equal(summary.sameHeadMarkerCount, expected.sameHeadMarkerCount);
     assert.equal(summary.requestMarkerCount, expected.requestMarkerCount);
+    assert.equal(summary.requestCap, input.requestCap ?? 30);
+    assert.equal(summary.pendingWindowMinutes, input.pendingWindowMinutes ?? 30);
+    assert.equal(summary.settledWindowMinutes, input.settledWindowMinutes ?? 10);
+    assert.equal(summary.pollIntervalMinutes, 2);
+    assert.equal(summary.capExhaustedRoute, "phase-specific");
     assert.equal(summary.earliestSameHeadAt, expected.earliestSameHeadAt);
     assert.equal(summary.elapsedMinutes, expected.elapsedMinutes);
     assert.equal(
@@ -111,6 +123,162 @@ for (const fixtureName of [
     assert.deepEqual(validate(summary, advisoryWaitSchema), []);
   });
 }
+
+test("advisory wait policy resolves defaults, explicit values, and fail-safe fallbacks", () => {
+  assert.deepEqual(resolveAdvisoryWaitPolicy({}), {
+    requestCap: 30,
+    pendingWindowMinutes: 30,
+    settledWindowMinutes: 10,
+    pollIntervalMinutes: 2,
+    capExhaustedRoute: "phase-specific",
+  });
+
+  assert.deepEqual(resolveAdvisoryWaitPolicy({
+    advisoryWait: {
+      requestCap: 12,
+      pendingWindow: "PT45M",
+      settledWindow: "PT15M",
+      pollInterval: "PT3M",
+      capExhaustedRoute: "hold",
+    },
+  }), {
+    requestCap: 12,
+    pendingWindowMinutes: 45,
+    settledWindowMinutes: 15,
+    pollIntervalMinutes: 3,
+    capExhaustedRoute: "hold",
+  });
+
+  assert.deepEqual(resolveAdvisoryWaitPolicy({
+    advisoryWait: {
+      requestCap: 0,
+      pendingWindow: "P1DT",
+      settledWindow: "PT",
+      pollInterval: "P",
+      capExhaustedRoute: "merge-anyway",
+    },
+  }), {
+    requestCap: 30,
+    pendingWindowMinutes: 30,
+    settledWindowMinutes: 10,
+    pollIntervalMinutes: 2,
+    capExhaustedRoute: "phase-specific",
+  });
+
+  assert.deepEqual(resolveAdvisoryWaitPolicy({
+    advisoryWait: {
+      requestCap: "1",
+      pendingWindow: "pt1m",
+      settledWindow: " PT5M ",
+      pollInterval: "pt3m",
+      capExhaustedRoute: " hold ",
+    },
+  }), {
+    requestCap: 30,
+    pendingWindowMinutes: 30,
+    settledWindowMinutes: 10,
+    pollIntervalMinutes: 2,
+    capExhaustedRoute: "phase-specific",
+  });
+
+  assert.deepEqual(resolveAdvisoryWaitPolicy({
+    advisoryWait: {
+      pendingWindow: "PT0M",
+      settledWindow: "PT60S",
+      pollInterval: "PT90S",
+    },
+  }), {
+    requestCap: 30,
+    pendingWindowMinutes: 30,
+    settledWindowMinutes: 10,
+    pollIntervalMinutes: 2,
+    capExhaustedRoute: "phase-specific",
+  });
+
+  assert.deepEqual(resolveAdvisoryWaitPolicy({
+    advisoryWait: {
+      pendingWindow: "PT30S",
+      settledWindow: "PT30S",
+      pollInterval: "PT90S",
+    },
+  }), {
+    requestCap: 30,
+    pendingWindowMinutes: 30,
+    settledWindowMinutes: 10,
+    pollIntervalMinutes: 2,
+    capExhaustedRoute: "phase-specific",
+  });
+});
+
+test("advisory wait policy only applies file overrides from schema-valid policy config", () => {
+  const root = mkdtempSync(join(tmpdir(), "idd-advisory-policy-"));
+  const validPath = join(root, "policy.valid.json");
+  const invalidPath = join(root, "policy.invalid.json");
+  const validConfig = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+
+  validConfig.advisoryWait = {
+    requestCap: 12,
+    pendingWindow: "PT45M",
+    settledWindow: "PT15M",
+    pollInterval: "PT3M",
+    capExhaustedRoute: "hold",
+  };
+
+  writeFileSync(validPath, JSON.stringify(validConfig), "utf8");
+  writeFileSync(
+    invalidPath,
+    JSON.stringify({
+      advisoryWait: {
+        pendingWindow: "PT1M",
+      },
+    }),
+    "utf8",
+  );
+
+  assert.deepEqual(readAdvisoryWaitPolicy(validPath), {
+    requestCap: 12,
+    pendingWindowMinutes: 45,
+    settledWindowMinutes: 15,
+    pollIntervalMinutes: 3,
+    capExhaustedRoute: "hold",
+  });
+
+  assert.deepEqual(readAdvisoryWaitPolicy(invalidPath), {
+    requestCap: 30,
+    pendingWindowMinutes: 30,
+    settledWindowMinutes: 10,
+    pollIntervalMinutes: 2,
+    capExhaustedRoute: "phase-specific",
+  });
+});
+
+test("advisory wait summary normalizes invalid direct options to defaults", () => {
+  const fixture = readJson("fixtures/advisory-wait/request-needed.json");
+  const summary = buildAdvisoryWaitSummary({
+    prHeadSha: fixture.input.prHeadSha,
+    reviews: fixture.input.reviews,
+    requestedReviewers: fixture.input.requestedReviewers,
+    timelineEvents: fixture.input.timelineEvents,
+    comments: fixture.input.comments,
+  }, {
+    now: fixture.input.now,
+    requestCap: 0,
+    pendingWindowMinutes: -45,
+    settledWindowMinutes: 0,
+    pollIntervalMinutes: -3,
+    capExhaustedRoute: "merge-anyway",
+    trustedMarkerLogins: fixture.input.trustedMarkerLogins,
+    viewerLogin: fixture.input.viewerLogin,
+    configuredTrustedActors: fixture.input.configuredTrustedActors,
+    collaboratorTrustEnabled: fixture.input.collaboratorTrustEnabled,
+  });
+
+  assert.equal(summary.requestCap, 30);
+  assert.equal(summary.pendingWindowMinutes, 30);
+  assert.equal(summary.settledWindowMinutes, 10);
+  assert.equal(summary.pollIntervalMinutes, 2);
+  assert.equal(summary.capExhaustedRoute, "phase-specific");
+});
 
 function readJson(relativePath) {
   return JSON.parse(readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8"));

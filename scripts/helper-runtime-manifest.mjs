@@ -12,6 +12,9 @@ const SOURCE_REPOSITORY = "github:kurone-kito/idd-skill";
 const PACKAGE_SPEC_PIN_HINT = "Pass --package-spec with a pinned tarball URL or reviewed commit archive when you need reproducible helper imports.";
 const NODE_ENGINES = "^22.22.2 || >=24";
 const SCRIPT_FILE_EXTENSIONS = [".mjs", ".js", ".json"];
+const EXTRA_RUNTIME_FILES = new Map([
+  ["scripts/advisory-wait-policy.mjs", ["schemas/policy.schema.json"]],
+]);
 
 const HELPER_COMMANDS = [
   {
@@ -256,7 +259,11 @@ export function collectVendoredFiles(packageRoot = resolve(dirname(fileURLToPath
       continue;
     }
     visited.add(current);
-    managedFiles.add(relativePath(packageRoot, current));
+    const currentPath = relativePath(packageRoot, current);
+    managedFiles.add(currentPath);
+    for (const extraFile of EXTRA_RUNTIME_FILES.get(currentPath) ?? []) {
+      managedFiles.add(relativePath(packageRoot, resolve(packageRoot, extraFile)));
+    }
 
     const source = readFileSync(current, "utf8");
     for (const specifier of findRelativeImports(source)) {

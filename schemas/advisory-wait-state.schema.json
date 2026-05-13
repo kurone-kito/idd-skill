@@ -16,6 +16,8 @@
     "requestCap",
     "pendingWindowMinutes",
     "settledWindowMinutes",
+    "pollIntervalMinutes",
+    "capExhaustedRoute",
     "elapsedMinutes",
     "sameHeadMarkerPresent",
     "earliestSameHeadAt",
@@ -67,13 +69,24 @@
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
     },
     "requestCap": {
-      "type": "number"
+      "type": "integer",
+      "minimum": 1
     },
     "pendingWindowMinutes": {
-      "type": "number"
+      "type": "number",
+      "exclusiveMinimum": 0
     },
     "settledWindowMinutes": {
-      "type": "number"
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "pollIntervalMinutes": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "capExhaustedRoute": {
+      "type": "string",
+      "enum": ["phase-specific", "hold"]
     },
     "elapsedMinutes": {
       "type": "number"

@@ -2,6 +2,7 @@
 
 import { execFileSync } from "node:child_process";
 
+import { readAdvisoryWaitPolicy } from "./advisory-wait-policy.mjs";
 import {
   buildAdvisoryWaitSummary,
   normalizeTrustedMarkerLogins,
@@ -56,6 +57,7 @@ const trustedMarkerLogins = normalizeTrustedMarkerLogins([
     ? resolveTrustedCollaboratorMarkerLogins(owner, repo, comments)
     : []),
 ]);
+const advisoryWaitPolicy = readAdvisoryWaitPolicy();
 
 const summary = buildAdvisoryWaitSummary(
   {
@@ -67,9 +69,11 @@ const summary = buildAdvisoryWaitSummary(
   },
   {
     now: args.now || new Date().toISOString().replace(".000Z", "Z"),
-    requestCap: 30,
-    pendingWindowMinutes: 30,
-    settledWindowMinutes: 10,
+    requestCap: advisoryWaitPolicy.requestCap,
+    pendingWindowMinutes: advisoryWaitPolicy.pendingWindowMinutes,
+    settledWindowMinutes: advisoryWaitPolicy.settledWindowMinutes,
+    pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
+    capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
     viewerLogin,
     configuredTrustedActors,
     collaboratorTrustEnabled,

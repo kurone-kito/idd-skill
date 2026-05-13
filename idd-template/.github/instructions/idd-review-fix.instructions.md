@@ -105,8 +105,10 @@ gh pr edit {pr-number} --add-reviewer {reviewer-login}
 
 **Copilot**: after every push, regardless of any reviewer's state,
 request a Copilot re-review if Copilot has not yet reviewed the current
-HEAD SHA. Subject to a **workflow cap of 30 Copilot re-review requests
-per PR** (this is a process limit, not a GitHub-enforced constraint).
+HEAD SHA. Subject to the configured Copilot re-review request cap
+(`REQUEST_CAP` from helper output or `.github/idd/config.json`
+`advisoryWait.requestCap`; default 30). This is a process limit, not a
+GitHub-enforced constraint.
 
 1. Fetch `PR_HEAD_SHA`:
 
@@ -123,14 +125,17 @@ per PR** (this is a process limit, not a GitHub-enforced constraint).
    - **RECOVERY_NEEDED** (`COPILOT_PENDING` is `"true"`, no same-head
      marker): post the recovery marker from **AW3-R**. Do not request
      another Copilot review.
-   - **CAP_EXHAUSTED** (`REQUEST_MARKER_COUNT` ≥ 30, no same-head
-     marker) →
-     skip the advisory wait entirely; proceed directly to E15.
+   - **CAP_EXHAUSTED** (`REQUEST_MARKER_COUNT` ≥ `REQUEST_CAP`, no
+     same-head marker) →
+     if `CAP_EXHAUSTED_ROUTE` is `hold`, post the hold comment from
+     **AW4** and stop. Otherwise (`phase-specific`, the default), skip
+     the advisory wait entirely and proceed directly to E15.
    - **REQUEST_NEEDED** (`COPILOT_PENDING` is `"false"`, or
      `COPILOT_PENDING` is `"true"` but current-head coverage is not
-     proven; request cap < 30): request Copilot review and immediately
-     post a plain-text marker. If `COPILOT_PENDING` is `"true"` in this
-     branch, first remove the stale/unproven pending reviewer request:
+     proven; request cap < `REQUEST_CAP`): request Copilot review and
+     immediately post a plain-text marker. If `COPILOT_PENDING` is
+     `"true"` in this branch, first remove the stale/unproven pending
+     reviewer request:
 
      ```sh
      gh pr edit {pr-number} --remove-reviewer "@copilot"
@@ -183,7 +188,7 @@ the `createdAt` of the latest
 a trusted marker actor. If no trusted same-claim watermark exists, stop
 and return to E1 to create one.
 
-Poll every 2 minutes:
+Poll every `POLL_INTERVAL_MINUTES` minutes:
 
 1. Re-fetch `PR_HEAD_SHA`:
 

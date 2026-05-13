@@ -3,6 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
+import { readAdvisoryWaitPolicy } from "./advisory-wait-policy.mjs";
 import {
   buildPreMergeReadinessSummary,
   deriveIddAgentLogins,
@@ -115,6 +116,7 @@ const iddAgentLogins = deriveIddAgentLogins({
   trustedMarkerLogins,
   operationalComments: [...comments, ...claimComments],
 });
+const advisoryWaitPolicy = readAdvisoryWaitPolicy();
 const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
 const forcedHandoffEnabled = readForcedHandoffMode() === "human-gated";
 const forcedHandoffPermissionCache = new Map();
@@ -144,9 +146,11 @@ const summary = buildPreMergeReadinessSummary(
     expectedClaimId: args.expectedClaimId,
     expectedAgentId: args.expectedAgentId,
     includeDispositionEvidence: true,
-    requestCap: 30,
-    pendingWindowMinutes: 30,
-    settledWindowMinutes: 10,
+    requestCap: advisoryWaitPolicy.requestCap,
+    pendingWindowMinutes: advisoryWaitPolicy.pendingWindowMinutes,
+    settledWindowMinutes: advisoryWaitPolicy.settledWindowMinutes,
+    pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
+    capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
     forcedHandoffEnabled,
     expectedLinkedPrs: [String(args.prNumber), prUrl].filter(Boolean),
     isAuthorizedForcedHandoff:

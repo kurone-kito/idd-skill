@@ -191,6 +191,11 @@
       "earliestSameHeadAt": "",
       "sameHeadMarkerCount": 0,
       "requestMarkerCount": 0,
+      "requestCap": 30,
+      "pendingWindowMinutes": 30,
+      "settledWindowMinutes": 10,
+      "pollIntervalMinutes": 2,
+      "capExhaustedRoute": "phase-specific",
       "elapsedMinutes": 0
     },
     "ci": {

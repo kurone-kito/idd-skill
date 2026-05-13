@@ -137,6 +137,13 @@ The distributed PR policy is `copilot-advisory`. These values apply to
 that profile and remain policy defaults until the relevant instruction
 files are edited.
 
+The current policy schema and helper runtime now support
+`.github/idd/config.json` `advisoryWait.requestCap`,
+`advisoryWait.pendingWindow`, `advisoryWait.settledWindow`,
+`advisoryWait.pollInterval`, and `advisoryWait.capExhaustedRoute`.
+Omitted keys keep the distributed defaults below. The three duration
+keys accept positive whole-minute ISO 8601 durations only.
+
 | Policy default                          | Distributed value                                                           | Owning surface                                                                                                                                                                                                       | Onboarding expectation                                                                       |
 | --------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | Copilot re-review request cap           | 30 requests per PR                                                          | [Review fix](../.github/instructions/idd-review-fix.instructions.md), [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md)                                                                     | Confirm that the repository accepts this process cap before using the default advisory flow. |

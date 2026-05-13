@@ -165,6 +165,20 @@ for parameterized follow-up work: `stallRecovery`, `forcedHandoff`,
 `critiqueLoop`, `reviewEscalation`, `approvalSignals`, and
 `issueAuthoring`. Leaving these keys unset keeps distributed behavior.
 
+For advisory review timing, repositories may now customize
+`advisoryWait.requestCap`, `advisoryWait.pendingWindow`,
+`advisoryWait.settledWindow`, and `advisoryWait.pollInterval` in
+`.github/idd/config.json`. Keep those keys aligned with the helper
+contracts and any instruction text that references the effective wait
+values. The three duration keys accept positive whole-minute ISO 8601
+durations only; zero-length values and second-based values are invalid.
+
+`advisoryWait.capExhaustedRoute` is intentionally fail-closed. The
+default `phase-specific` behavior keeps the current E14 skip / F2-F3
+hold split, while `hold` is a stricter override that also stops E14 on
+cap exhaustion. Do not introduce an override that weakens the F2/F3
+merge hold.
+
 ## Phase ID Compatibility Contract
 
 Treat phase IDs as a compatibility surface, not as presentation text.
