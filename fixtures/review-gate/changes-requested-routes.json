@@ -96,7 +96,7 @@
     },
     "expected": {
       "route": "escalate-maintainer",
-      "reason": "the changes-requested review still needs maintainer escalation evidence before release"
+      "reason": "the changes-requested review is still blocking after 24 hours with no reviewer response"
     }
   },
   {
@@ -123,6 +123,62 @@
     "expected": {
       "route": "label-and-release",
       "reason": "the changes-requested review is still blocking after 48 hours with no escalation response"
+    }
+  },
+  {
+    "name": "custom escalation policy waits for configured first window",
+    "input": {
+      "reviewState": "CHANGES_REQUESTED",
+      "rejectionCommentCreatedAt": "2026-05-11T00:00:00Z",
+      "now": "2026-05-11T01:30:00Z",
+      "policyConfig": {
+        "reviewEscalation": {
+          "changesRequestedFirstEscalation": "PT2H",
+          "changesRequestedSecondEscalation": "PT6H"
+        }
+      }
+    },
+    "expected": {
+      "route": "hold-before-escalation",
+      "reason": "still within the first 2 hours after the rejection reply"
+    }
+  },
+  {
+    "name": "custom policy does not re-escalate when escalation evidence exists",
+    "input": {
+      "reviewState": "CHANGES_REQUESTED",
+      "rejectionCommentCreatedAt": "2026-05-10T00:00:00Z",
+      "escalationCommentCreatedAt": "2026-05-10T02:00:00Z",
+      "now": "2026-05-11T01:00:00Z",
+      "policyConfig": {
+        "reviewEscalation": {
+          "changesRequestedFirstEscalation": "PT2H",
+          "changesRequestedSecondEscalation": "PT26H"
+        }
+      }
+    },
+    "expected": {
+      "route": "hold-after-escalation",
+      "reason": "still within 24 hours of the maintainer escalation comment"
+    }
+  },
+  {
+    "name": "custom escalation policy uses combined release window",
+    "input": {
+      "reviewState": "CHANGES_REQUESTED",
+      "rejectionCommentCreatedAt": "2026-05-11T00:00:00Z",
+      "escalationCommentCreatedAt": "2026-05-11T03:00:00Z",
+      "now": "2026-05-11T07:30:00Z",
+      "policyConfig": {
+        "reviewEscalation": {
+          "changesRequestedFirstEscalation": "PT2H",
+          "changesRequestedSecondEscalation": "PT6H"
+        }
+      }
+    },
+    "expected": {
+      "route": "label-and-release",
+      "reason": "the changes-requested review is still blocking after 6 hours with no escalation response"
     }
   }
 ]

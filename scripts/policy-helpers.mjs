@@ -18,6 +18,12 @@ const CI_RERUN_POLICIES = new Set(["rerun-once"]);
 const LABEL_FRESHNESS_MODES = new Set(["presence-only", "event-freshness"]);
 const ISO_DURATION_RE = /^P(?=\d|T\d)(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$/;
 const ADVISORY_WHOLE_MINUTE_DURATION_RE = /^P(?=(?:\d+D|T\d+[HM]))(?=.*(?:[1-9]\d*[DHM]))(?:\d+D)?(?:T(?=\d+[HM])(?:\d+H)?(?:\d+M)?)?$/;
+const DURATION_RE =
+  /^P(?:(?<days>\d+)D)?(?:T(?:(?<hours>\d+)H)?(?:(?<minutes>\d+)M)?(?:(?<seconds>\d+)S)?)?$/;
+const SECOND_MS = 1000;
+const MINUTE_MS = 60 * SECOND_MS;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
 
 export const POLICY_DEFAULTS = Object.freeze({
   issueScope: "roadmap",
@@ -254,6 +260,53 @@ export function resolveCollaboratorMarkerTrust(config, envValue = "") {
     return normalizePolicyConfig(config).markerTrust.allowCollaboratorMarkers;
   }
   return isTruthy(envValue);
+}
+
+export function parseIsoDurationToMs(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const match = DURATION_RE.exec(value.trim());
+  if (!match) {
+    return null;
+  }
+  const days = Number.parseInt(match.groups.days ?? "0", 10);
+  const hours = Number.parseInt(match.groups.hours ?? "0", 10);
+  const minutes = Number.parseInt(match.groups.minutes ?? "0", 10);
+  const seconds = Number.parseInt(match.groups.seconds ?? "0", 10);
+  const totalMs = (days * DAY_MS) + (hours * HOUR_MS) + (minutes * MINUTE_MS) + (seconds * SECOND_MS);
+  return totalMs > 0 ? totalMs : null;
+}
+
+export function getReviewEscalationChangesRequestedPolicy(config = {}) {
+  const normalized = normalizePolicyConfig(config);
+  const firstEscalationMs = parseIsoDurationToMs(
+    normalized.reviewEscalation.changesRequestedFirstEscalation,
+  );
+  const secondEscalationMs = parseIsoDurationToMs(
+    normalized.reviewEscalation.changesRequestedSecondEscalation,
+  );
+  const defaultFirstEscalationMs = parseIsoDurationToMs(
+    POLICY_DEFAULTS.reviewEscalation.changesRequestedFirstEscalation,
+  );
+  const defaultSecondEscalationMs = parseIsoDurationToMs(
+    POLICY_DEFAULTS.reviewEscalation.changesRequestedSecondEscalation,
+  );
+  const resolvedFirstEscalationMs = Number.isFinite(firstEscalationMs)
+    ? firstEscalationMs
+    : defaultFirstEscalationMs;
+  const resolvedSecondEscalationMs = Number.isFinite(secondEscalationMs)
+    ? secondEscalationMs
+    : defaultSecondEscalationMs;
+  const defaultPostEscalationMs = defaultSecondEscalationMs - defaultFirstEscalationMs;
+  const resolvedPostEscalationMs = resolvedSecondEscalationMs > resolvedFirstEscalationMs
+    ? resolvedSecondEscalationMs - resolvedFirstEscalationMs
+    : defaultPostEscalationMs;
+
+  return {
+    escalateAfterMs: resolvedFirstEscalationMs,
+    releaseAfterEscalationMs: resolvedPostEscalationMs,
+  };
 }
 
 function clone(value) {

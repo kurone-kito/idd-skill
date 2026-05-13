@@ -218,10 +218,12 @@ this file's Claim-state parsing section).
 
 ## Claim verification
 
-After posting `claimed-by`, wait 5–10 seconds to let GitHub eventual
-consistency settle. Then re-read the full issue comment stream and parse
-the active claim in chronological order using the shared claim-state
-rules. Apply all race-safe checks below:
+After posting `claimed-by`, wait for the configured settle delay to let
+GitHub eventual consistency settle. Use `.github/idd/config.json`
+`claim.verifySettleDelay` (distributed default: `PT5S`), then re-read
+the full issue comment stream and parse the active claim in
+chronological order using the shared claim-state rules. Apply all
+race-safe checks below:
 
 1. Build the same-second contender set from trusted `claimed-by` markers
    that share your claim event's `created_at` second and have different

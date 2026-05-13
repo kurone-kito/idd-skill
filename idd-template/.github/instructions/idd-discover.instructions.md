@@ -414,8 +414,10 @@ Before selecting from the surviving viable issues, perform an
 **active-claim pre-scan** to eliminate candidates with concurrent claims:
 
 1. **Identify scan scope**: From the viable survivors (ordered by ascending
-   issue number), define the scan set as the **top 10 candidates** (or fewer
-   if fewer than 10 viable candidates exist).
+   issue number), define the scan set as the **top N candidates** (or fewer if
+   fewer than N viable candidates exist). `N` comes from
+   `.github/idd/config.json` `discover.activeClaimPreScanBatchSize`
+   (distributed default: `10`).
 
 2. **Scan each candidate for active claims**: For each issue in the scan set,
    in ascending issue number order:
@@ -439,16 +441,17 @@ Before selecting from the surviving viable issues, perform an
      comment is stale (≥ 24 h old) or no claim exists, this candidate
      **remains eligible**.
 
-3. **Determine selection candidate**: After scanning the top 10:
+3. **Determine selection candidate**: After scanning the top N:
 
    - **If at least one eligible (unclaimed) candidate remains** in the scan
      set: proceed to **Step 2** and select the lowest-numbered eligible
      candidate.
 
-   - **If all top 10 are claimed**: the scan set is fully saturated with
+   - **If all top N are claimed**: the scan set is fully saturated with
      concurrent work. Proceed to **Step 2** with the **next batch**: scan
-     candidates 11–20, then 21–30, and so on, until an unclaimed candidate
-     is found or the viable candidate set is exhausted.
+     candidates `N+1`–`2N`, then `2N+1`–`3N`, and so on, until an
+     unclaimed candidate is found or the viable candidate set is
+     exhausted.
 
    - **If the entire viable candidate set is exhausted** (all issues up to the
      highest viable candidate are claimed): report that all viable issues are

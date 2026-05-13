@@ -40,10 +40,12 @@ Convergence guardrails:
   finding, narrows a remaining finding's root cause or scope, or yields
   a materially new fix direction. Reworded duplicate findings do not
   count.
-- If the same Accepted findings recur for 3 consecutive E10 passes
-  without meaningful progress, stop the auto-loop. Post a hold comment
-  on the PR summarizing the repeated findings and attempted fixes, and
-  wait for a maintainer decision before more E10 iterations.
+- If the same Accepted findings recur for
+  `critiqueLoop.e10NoProgressHoldAfter` consecutive E10 passes
+  (distributed default: `3`) without meaningful progress, stop the
+  auto-loop. Post a hold comment on the PR summarizing the repeated
+  findings and attempted fixes, and wait for a maintainer decision
+  before more E10 iterations.
 - Do not use this stop condition to bypass serious issues: unresolved
   High or Medium findings remain blockers until fixed or explicitly
   redirected by a maintainer.
