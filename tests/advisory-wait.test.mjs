@@ -8,6 +8,7 @@ import {
   operationalMarkerPrefix,
   unsafeTextReason,
 } from "../scripts/protocol-helpers.mjs";
+import { resolveAdvisoryWaitPolicy } from "../scripts/advisory-wait-policy.mjs";
 import { loadJson, validate } from "../scripts/validate-schemas.mjs";
 
 const ciSuccess = readJson("fixtures/ci/success.json");
@@ -90,6 +91,11 @@ for (const fixtureName of [
     assert.equal(summary.sameHeadMarkerPresent, expected.sameHeadMarkerPresent);
     assert.equal(summary.sameHeadMarkerCount, expected.sameHeadMarkerCount);
     assert.equal(summary.requestMarkerCount, expected.requestMarkerCount);
+    assert.equal(summary.requestCap, input.requestCap ?? 30);
+    assert.equal(summary.pendingWindowMinutes, input.pendingWindowMinutes ?? 30);
+    assert.equal(summary.settledWindowMinutes, input.settledWindowMinutes ?? 10);
+    assert.equal(summary.pollIntervalMinutes, 2);
+    assert.equal(summary.capExhaustedRoute, "phase-specific");
     assert.equal(summary.earliestSameHeadAt, expected.earliestSameHeadAt);
     assert.equal(summary.elapsedMinutes, expected.elapsedMinutes);
     assert.equal(
@@ -111,6 +117,48 @@ for (const fixtureName of [
     assert.deepEqual(validate(summary, advisoryWaitSchema), []);
   });
 }
+
+test("advisory wait policy resolves defaults, explicit values, and fail-safe fallbacks", () => {
+  assert.deepEqual(resolveAdvisoryWaitPolicy({}), {
+    requestCap: 30,
+    pendingWindowMinutes: 30,
+    settledWindowMinutes: 10,
+    pollIntervalMinutes: 2,
+    capExhaustedRoute: "phase-specific",
+  });
+
+  assert.deepEqual(resolveAdvisoryWaitPolicy({
+    advisoryWait: {
+      requestCap: 12,
+      pendingWindow: "PT45M",
+      settledWindow: "PT15M",
+      pollInterval: "PT3M",
+      capExhaustedRoute: "hold",
+    },
+  }), {
+    requestCap: 12,
+    pendingWindowMinutes: 45,
+    settledWindowMinutes: 15,
+    pollIntervalMinutes: 3,
+    capExhaustedRoute: "hold",
+  });
+
+  assert.deepEqual(resolveAdvisoryWaitPolicy({
+    advisoryWait: {
+      requestCap: 0,
+      pendingWindow: "forty-five minutes",
+      settledWindow: "PT",
+      pollInterval: "P",
+      capExhaustedRoute: "merge-anyway",
+    },
+  }), {
+    requestCap: 30,
+    pendingWindowMinutes: 30,
+    settledWindowMinutes: 10,
+    pollIntervalMinutes: 2,
+    capExhaustedRoute: "phase-specific",
+  });
+});
 
 function readJson(relativePath) {
   return JSON.parse(readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8"));

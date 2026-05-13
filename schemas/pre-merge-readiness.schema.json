@@ -307,6 +307,11 @@
         "earliestSameHeadAt",
         "sameHeadMarkerCount",
         "requestMarkerCount",
+        "requestCap",
+        "pendingWindowMinutes",
+        "settledWindowMinutes",
+        "pollIntervalMinutes",
+        "capExhaustedRoute",
         "elapsedMinutes"
       ],
       "additionalProperties": false,
@@ -344,6 +349,14 @@
         },
         "sameHeadMarkerCount": { "type": "integer", "minimum": 0 },
         "requestMarkerCount": { "type": "integer", "minimum": 0 },
+        "requestCap": { "type": "integer", "minimum": 1 },
+        "pendingWindowMinutes": { "type": "number" },
+        "settledWindowMinutes": { "type": "number" },
+        "pollIntervalMinutes": { "type": "number" },
+        "capExhaustedRoute": {
+          "type": "string",
+          "enum": ["phase-specific", "hold"]
+        },
         "elapsedMinutes": { "type": "integer", "minimum": 0 }
       }
     },

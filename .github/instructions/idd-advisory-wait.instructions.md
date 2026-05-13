@@ -44,6 +44,11 @@ Required helper fields:
 - `f3Outcome`
 - `earliestSameHeadAt`
 - `requestMarkerCount`
+- `requestCap`
+- `pendingWindowMinutes`
+- `settledWindowMinutes`
+- `pollIntervalMinutes`
+- `capExhaustedRoute`
 - `trustedMarkerSummary`
 
 Allowed `outcome` / `f3Outcome` values:
@@ -57,16 +62,31 @@ Allowed `outcome` / `f3Outcome` values:
 `HOLD` remains a protocol-level routing state for AW4/AW5 fail-closed
 stops. It is caller-derived and not emitted by helper enums.
 
+Resolve the effective advisory policy from helper output when available;
+otherwise read `.github/idd/config.json` `advisoryWait.*`, falling back
+to the distributed defaults named in `docs/policy-constants.md`:
+
+- `REQUEST_CAP`
+- `PENDING_WINDOW_MINUTES`
+- `SETTLED_WINDOW_MINUTES`
+- `POLL_INTERVAL_MINUTES`
+- `CAP_EXHAUSTED_ROUTE`
+
+`CAP_EXHAUSTED_ROUTE` must remain fail-closed. Supported values are:
+
+- `phase-specific` (default): E14 skips to E15; F2 and F3 hold.
+- `hold`: E14, F2, and F3 all hold on `CAP_EXHAUSTED`.
+
 ### Caller mapping
 
-| Outcome           | E14                                | F2                               | F3                                    |
-| ----------------- | ---------------------------------- | -------------------------------- | ------------------------------------- |
-| `SATISFIED`       | proceed to E15                     | continue to CI check             | proceed with merge                    |
-| `REQUEST_NEEDED`  | request Copilot + marker + poll    | return to E14                    | return to E14                         |
-| `RECOVERY_NEEDED` | post recovery marker + poll        | post recovery marker + poll      | post recovery marker and return to F2 |
-| `CAP_EXHAUSTED`   | skip advisory wait; proceed to E15 | post cap-exhausted hold and stop | post cap-exhausted hold and stop      |
-| `WAIT`            | continue polling                   | poll then restart F2 from top    | do not merge; return to F2            |
-| `HOLD`            | post hold and stop                 | post hold and stop               | post hold and stop                    |
+| Outcome           | E14                             | F2                               | F3                                    |
+| ----------------- | ------------------------------- | -------------------------------- | ------------------------------------- |
+| `SATISFIED`       | proceed to E15                  | continue to CI check             | proceed with merge                    |
+| `REQUEST_NEEDED`  | request Copilot + marker + poll | return to E14                    | return to E14                         |
+| `RECOVERY_NEEDED` | post recovery marker + poll     | post recovery marker + poll      | post recovery marker and return to F2 |
+| `CAP_EXHAUSTED`   | use `CAP_EXHAUSTED_ROUTE`       | post cap-exhausted hold and stop | post cap-exhausted hold and stop      |
+| `WAIT`            | continue polling                | poll then restart F2 from top    | do not merge; return to F2            |
+| `HOLD`            | post hold and stop              | post hold and stop               | post hold and stop                    |
 
 ### F3-specific interpretation
 
@@ -224,18 +244,18 @@ Rules:
 
 Evaluate top-to-bottom; first match wins.
 
-| `LAST_COPILOT_COMMIT` | `COPILOT_PENDING` | Marker state        | Head proof / cap                   | Elapsed   | Outcome           |
-| --------------------- | ----------------- | ------------------- | ---------------------------------- | --------- | ----------------- |
-| `== PR_HEAD_SHA`      | any               | any                 | any                                | any       | `SATISFIED`       |
-| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | `COPILOT_PENDING_COVERS_HEAD=true` | —         | `RECOVERY_NEEDED` |
-| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | not proven; request cap < 30       | —         | `REQUEST_NEEDED`  |
-| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | not proven; request cap >= 30      | —         | `CAP_EXHAUSTED`   |
-| `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | any                                | >= 30 min | `SATISFIED`       |
-| `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | any                                | < 30 min  | `WAIT`            |
-| `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | any                                | >= 10 min | `SATISFIED`       |
-| `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | any                                | < 10 min  | `WAIT`            |
-| `!= PR_HEAD_SHA`      | `"false"`         | no same-head marker | request cap >= 30                  | —         | `CAP_EXHAUSTED`   |
-| `!= PR_HEAD_SHA`      | `"false"`         | no same-head marker | request cap < 30                   | —         | `REQUEST_NEEDED`  |
+| `LAST_COPILOT_COMMIT` | `COPILOT_PENDING` | Marker state        | Head proof / cap                         | Elapsed                         | Outcome           |
+| --------------------- | ----------------- | ------------------- | ---------------------------------------- | ------------------------------- | ----------------- |
+| `== PR_HEAD_SHA`      | any               | any                 | any                                      | any                             | `SATISFIED`       |
+| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | `COPILOT_PENDING_COVERS_HEAD=true`       | —                               | `RECOVERY_NEEDED` |
+| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | not proven; request cap < `REQUEST_CAP`  | —                               | `REQUEST_NEEDED`  |
+| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | not proven; request cap >= `REQUEST_CAP` | —                               | `CAP_EXHAUSTED`   |
+| `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | any                                      | >= `PENDING_WINDOW_MINUTES` min | `SATISFIED`       |
+| `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | any                                      | < `PENDING_WINDOW_MINUTES` min  | `WAIT`            |
+| `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | any                                      | >= `SETTLED_WINDOW_MINUTES` min | `SATISFIED`       |
+| `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | any                                      | < `SETTLED_WINDOW_MINUTES` min  | `WAIT`            |
+| `!= PR_HEAD_SHA`      | `"false"`         | no same-head marker | request cap >= `REQUEST_CAP`             | —                               | `CAP_EXHAUSTED`   |
+| `!= PR_HEAD_SHA`      | `"false"`         | no same-head marker | request cap < `REQUEST_CAP`              | —                               | `REQUEST_NEEDED`  |
 
 ### AW3-R — Recovery marker
 
@@ -270,7 +290,7 @@ Rules:
 
 #### Cap exhausted
 
-> The 30-per-PR Copilot re-review cap is exhausted. A maintainer must
+> The configured per-PR Copilot re-review cap is exhausted. A maintainer must
 > manually request and evaluate a Copilot review before merge.
 
 ### AW5 — Missing-marker recovery during polling

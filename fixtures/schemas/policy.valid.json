@@ -30,7 +30,7 @@
     "pendingWindow": "PT30M",
     "settledWindow": "PT10M",
     "pollInterval": "PT2M",
-    "capExhaustedRoute": "phase-default"
+    "capExhaustedRoute": "phase-specific"
   },
   "ciWait": {
     "runningTimeout": "PT30M",

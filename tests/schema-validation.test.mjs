@@ -801,3 +801,45 @@ test("policy schema rejects markerTrust.allowCollaboratorMarkers non-boolean", (
   const errors = validate(instance, schema);
   assert.ok(errors.some((e) => e.includes("markerTrust")), errors.join("\n"));
 });
+
+test("policy schema accepts advisoryWait request cap and duration keys", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.advisoryWait = {
+    requestCap: 12,
+    pendingWindow: "PT45M",
+    settledWindow: "PT15M",
+    pollInterval: "PT3M",
+    capExhaustedRoute: "hold",
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects advisoryWait.requestCap below 1", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.advisoryWait = { requestCap: 0 };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("advisoryWait")), errors.join("\n"));
+});
+
+test("policy schema rejects advisoryWait pending/settled/poll durations when malformed", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.advisoryWait = {
+    pendingWindow: "forty-five minutes",
+    settledWindow: "PT",
+    pollInterval: "P",
+  };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("advisoryWait")), errors.join("\n"));
+});
+
+test("policy schema rejects advisoryWait.capExhaustedRoute unknown value", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.advisoryWait = { capExhaustedRoute: "merge-anyway" };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("advisoryWait")), errors.join("\n"));
+});

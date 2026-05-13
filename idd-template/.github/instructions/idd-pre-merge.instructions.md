@@ -146,15 +146,17 @@ must align with every F2 condition below.
        **AW4** and stop.
      - **REQUEST_NEEDED** → return to E14 to request Copilot review and
        post a fresh marker. Do not post a new request in F2.
-     - **WAIT** (`COPILOT_PENDING` is `"true"`, elapsed < 30 min) →
-       wait for the remainder of the applicable window (poll every 2
-       min), refreshing `EARLIEST_SAME_HEAD_AT` per **AW2** at each
-       iteration and applying **AW5** if the marker disappears. Then
-       **go back to the first condition in F2** (the 'Review currency'
-       check) to re-evaluate all conditions.
-     - **WAIT** (`COPILOT_PENDING` is `"false"`, elapsed < 10 min) →
-       wait for the remainder of the 10-minute window (same polling
-       rules). Then **go back to the first condition in F2**.
+     - **WAIT** (`COPILOT_PENDING` is `"true"`, elapsed <
+       `PENDING_WINDOW_MINUTES` min) → wait for the remainder of the
+       applicable window (poll every `POLL_INTERVAL_MINUTES` min),
+       refreshing `EARLIEST_SAME_HEAD_AT` per **AW2** at each iteration
+       and applying **AW5** if the marker disappears. Then **go back to
+       the first condition in F2** (the 'Review currency' check) to
+       re-evaluate all conditions.
+     - **WAIT** (`COPILOT_PENDING` is `"false"`, elapsed <
+       `SETTLED_WINDOW_MINUTES` min) → wait for the remainder of the
+       settled window (same polling rules). Then **go back to the first
+       condition in F2**.
 
   GitHub removes a reviewer from `requested_reviewers` when they submit
   a review OR when the request is manually cancelled — either counts as

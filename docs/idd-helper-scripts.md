@@ -258,7 +258,9 @@ default `instructions-only` profile keep using the written shell /
 - Stable fields consumed by the instructions: `prHeadSha`,
   `lastCopilotCommit`, `copilotPending`,
   `copilotPendingCoversHead`, `outcome`, `f3Outcome`,
-  `earliestSameHeadAt`, `requestMarkerCount`, and
+  `earliestSameHeadAt`, `requestMarkerCount`, `requestCap`,
+  `pendingWindowMinutes`, `settledWindowMinutes`,
+  `pollIntervalMinutes`, `capExhaustedRoute`, and
   `trustedMarkerSummary`
 
 ### Merge-gate evidence
@@ -280,7 +282,8 @@ default `instructions-only` profile keep using the written shell /
   [`pre-merge-readiness.schema.json`][pre-merge-readiness-schema]
 - Stable sections consumed by the instructions: `reviewCurrency`,
   `threads`, `unrepliedComments`, `reviewerStates`,
-  `advisoryWait`, `ci`, `claim`, and optional
+  `advisoryWait` (including the effective advisory policy fields), `ci`,
+  `claim`, and optional
   `dispositionEvidence`
 
 ### E7 disposition verification
