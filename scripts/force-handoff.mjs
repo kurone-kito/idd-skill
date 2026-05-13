@@ -255,8 +255,11 @@ function readTrustedMarkerActorsFromConfig() {
 function readCollaboratorTrustEnabled() {
   try {
     const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    if (typeof config?.markerTrust?.allowCollaboratorMarkers === "boolean") {
-      return config.markerTrust.allowCollaboratorMarkers;
+    const nested = config?.markerTrust?.allowCollaboratorMarkers;
+    const topLevel = config?.markerTrustAllowCollaboratorMarkers ?? config?.allowCollaboratorMarkers;
+    const value = nested ?? topLevel;
+    if (typeof value === "boolean") {
+      return value;
     }
   } catch {
     // Fall through to env-var fallback.
@@ -292,6 +295,7 @@ function readForcedHandoffAuthorityPolicy() {
     const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
     const policy = String(
       config?.forcedHandoff?.authorityPolicy ??
+        config?.["forced-handoff"]?.authorityPolicy ??
         config?.forcedHandoffAuthority ??
         config?.["forced-handoff-authority"] ??
         "",
