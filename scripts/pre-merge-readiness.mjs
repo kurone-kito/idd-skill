@@ -144,6 +144,7 @@ const summary = buildPreMergeReadinessSummary(
     prAuthorLogin,
     expectedClaimId: args.expectedClaimId,
     expectedAgentId: args.expectedAgentId,
+    includeDispositionEvidence: true,
     requestCap: 30,
     pendingWindowMinutes: 30,
     settledWindowMinutes: 10,

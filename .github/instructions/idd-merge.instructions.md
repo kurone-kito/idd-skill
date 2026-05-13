@@ -63,6 +63,13 @@ gate. The active claim must still use your current `{claim-id}`.
    `F3_UNRESOLVED_ACTIONABLE_COUNT > 0`, stop and return to E1. Do not
    execute `gh pr merge` in this pass.
 
+   If the carried F2 evidence includes helper-side
+   `dispositionEvidence`, require
+   `dispositionEvidence.route == "proceed"` and
+   `dispositionEvidence.blockingCount == 0` before merge. If either
+   check fails, stop and return to E1/E4 with the reported missing
+   thread/comment disposition items.
+
    Execute the merge immediately after this final fetch **and the claim
    re-validation and advisory state revalidation below**, with no other
    actions in between. Re-validate claim: re-read the issue and confirm

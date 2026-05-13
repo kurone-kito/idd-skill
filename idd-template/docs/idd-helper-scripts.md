@@ -176,7 +176,8 @@ default `instructions-only` profile keep using the written shell /
   [`pre-merge-readiness.schema.json`][pre-merge-readiness-schema]
 - Stable sections consumed by the instructions: `reviewCurrency`,
   `threads`, `unrepliedComments`, `reviewerStates`,
-  `advisoryWait`, `ci`, and `claim`
+  `advisoryWait`, `ci`, `claim`, and optional
+  `dispositionEvidence`
 
 ## Friction Inventory
 

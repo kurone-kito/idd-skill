@@ -762,19 +762,32 @@ function inferReviewerReopenedAt(thread) {
   return "";
 }
 
-export function hasFreshDisposition(thread) {
+export function hasFreshDisposition(thread, options = {}) {
+  const dispositionAuthorPredicate =
+    typeof options.isDispositionAuthor === "function"
+      ? options.isDispositionAuthor
+      : (login) => !isKnownReviewBot(login);
   const comments = thread.comments?.nodes ?? [];
   const latestFeedbackAt = maxIsoTimestamp(
     comments
-    .filter((comment) => !isIddDispositionComment(comment))
-    .map((comment) => comment.createdAt),
+      .filter((comment) => {
+        const authorLogin = String(comment.author?.login ?? "").trim().toLowerCase();
+        return !(isDispositionComment(comment) && dispositionAuthorPredicate(authorLogin));
+      })
+      .map((comment) => effectiveThreadCommentActivityAt(comment))
+      .filter(isValidIsoTimestamp),
   );
 
   return comments.some((comment) => {
-    if (!isIddDispositionComment(comment)) {
+    const authorLogin = String(comment.author?.login ?? "").trim().toLowerCase();
+    if (!(isDispositionComment(comment) && dispositionAuthorPredicate(authorLogin))) {
       return false;
     }
-    return !latestFeedbackAt || compareIsoTimestamps(comment.createdAt, latestFeedbackAt) > 0;
+    const dispositionActivityAt = effectiveThreadCommentActivityAt(comment);
+    if (!isValidIsoTimestamp(dispositionActivityAt)) {
+      return false;
+    }
+    return !latestFeedbackAt || compareIsoTimestamps(dispositionActivityAt, latestFeedbackAt) > 0;
   });
 }
 
@@ -1271,6 +1284,120 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
   };
 }
 
+export function summarizeDispositionEvidenceForGate(
+  { comments = [], threads = [] },
+  options = {},
+) {
+  const iddAgentLogins = new Set(normalizeTrustedMarkerLogins(options.iddAgentLogins ?? []));
+  const advisoryBotLogins = new Set(normalizeTrustedMarkerLogins(options.advisoryBotLogins ?? []));
+  const trustedMarkerLogins = new Set(normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []));
+  const prAuthorLogin = String(options.prAuthorLogin ?? "").trim().toLowerCase();
+
+  const normalizedComments = comments
+    .map((comment, inputIndex) => ({
+      id: String(comment.id ?? ""),
+      authorLogin: String(comment.author?.login ?? comment.user?.login ?? "").trim().toLowerCase(),
+      body: String(comment.body ?? ""),
+      createdAt: String(comment.createdAt ?? comment.created_at ?? ""),
+      updatedAt: String(comment.updatedAt ?? comment.updated_at ?? ""),
+      inputIndex,
+    }))
+    .filter((comment) => isValidIsoTimestamp(comment.createdAt))
+    .map((comment) => ({
+      ...comment,
+      activityAt: effectiveRegularCommentActivityAt(comment),
+    }))
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.activityAt);
+      const rightTime = Date.parse(right.activityAt);
+      if (leftTime !== rightTime) {
+        return leftTime - rightTime;
+      }
+      return left.inputIndex - right.inputIndex;
+    })
+    .map((comment, sortedIndex) => ({ ...comment, sortedIndex }));
+
+  const classificationComments = normalizedComments.map((comment) => ({
+    author: { login: comment.authorLogin },
+    body: comment.body,
+    createdAt: comment.createdAt,
+  }));
+
+  const missingRegularComments = normalizedComments
+    .filter((comment) => !isOperationalOrDigestCommentForGate(comment.body, comment.authorLogin, trustedMarkerLogins))
+    .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
+    .filter((comment) => {
+      if (!isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins)) {
+        return true;
+      }
+      return classifyRegularBotComment(
+        {
+          author: { login: comment.authorLogin },
+          body: comment.body,
+          createdAt: comment.createdAt,
+        },
+        classificationComments,
+        threads,
+      ) === null;
+    })
+    .filter((comment) => {
+      return !normalizedComments.some((reply) => {
+        return iddAgentLogins.has(reply.authorLogin)
+          && isDispositionComment({ body: reply.body })
+          && compareIsoTimestamps(reply.activityAt, comment.activityAt) > 0;
+      });
+    })
+    .map((comment) => ({
+      id: comment.id || `comment-${comment.sortedIndex + 1}`,
+      authorLogin: comment.authorLogin || "unknown",
+      createdAt: comment.createdAt,
+      bodyPreview: buildBodyPreview(comment.body),
+    }));
+
+  const missingThreads = (threads ?? [])
+    .map((thread, index) => {
+      const commentsInThread = thread.comments?.nodes ?? [];
+      const hasExternalFeedback = commentsInThread.some((comment) => {
+        const authorLogin = String(comment.author?.login ?? "").trim().toLowerCase();
+        return authorLogin && !iddAgentLogins.has(authorLogin) && authorLogin !== prAuthorLogin;
+      });
+      if (!hasExternalFeedback) {
+        return null;
+      }
+      if (thread.comments?.pageInfo?.hasNextPage) {
+        return {
+          id: String(thread.id ?? "") || `thread-${index + 1}`,
+          isResolved: Boolean(thread.isResolved),
+          reason: "incomplete-thread-comments",
+        };
+      }
+      if (hasFreshDisposition(thread, {
+        isDispositionAuthor: (login) => iddAgentLogins.has(String(login ?? "").trim().toLowerCase()),
+      })) {
+        return null;
+      }
+      return {
+        id: String(thread.id ?? "") || `thread-${index + 1}`,
+        isResolved: Boolean(thread.isResolved),
+        reason: thread.isResolved
+          ? "missing-fresh-disposition"
+          : "unresolved-without-fresh-disposition",
+      };
+    })
+    .filter(Boolean);
+
+  const blockingCount = missingRegularComments.length + missingThreads.length;
+  return {
+    route: blockingCount > 0 ? "return-to-e1" : "proceed",
+    reason: blockingCount > 0 ? "missing-disposition-evidence" : "complete",
+    blockingCount,
+    missingRegularCommentCount: missingRegularComments.length,
+    missingThreadCount: missingThreads.length,
+    missingRegularComments,
+    missingThreads,
+  };
+}
+
 export function summarizeBranchReviewRequirements(branchRules = [], branchProtection = {}) {
   const requiredCheckNames = new Set();
   const requiredReviewerLogins = new Set();
@@ -1751,7 +1878,19 @@ export function buildPreMergeReadinessSummary(
     expectedAgentId: options.expectedAgentId,
   });
 
-  return {
+  const dispositionEvidence = options.includeDispositionEvidence
+    ? summarizeDispositionEvidenceForGate(
+      { comments, threads },
+      {
+        iddAgentLogins,
+        advisoryBotLogins,
+        trustedMarkerLogins,
+        prAuthorLogin,
+      },
+    )
+    : null;
+
+  const summary = {
     protocolVersion: "1",
     decisionAuthority: "instructions",
     prHeadSha,
@@ -1803,6 +1942,12 @@ export function buildPreMergeReadinessSummary(
     ci,
     claim,
   };
+
+  if (dispositionEvidence) {
+    summary.dispositionEvidence = dispositionEvidence;
+  }
+
+  return summary;
 }
 
 function normalizeLiveStatusDigestFields(fields) {
@@ -2557,6 +2702,18 @@ function threadActivityAt(thread) {
     .filter(isValidIsoTimestamp);
 
   return maxIsoTimestamp(commentTimes);
+}
+
+function effectiveThreadCommentActivityAt(comment) {
+  const updatedAt = String(comment?.updatedAt ?? "");
+  if (isValidIsoTimestamp(updatedAt)) {
+    return updatedAt;
+  }
+  const createdAt = String(comment?.createdAt ?? "");
+  if (isValidIsoTimestamp(createdAt)) {
+    return createdAt;
+  }
+  return "";
 }
 
 function hasCompletedBotThreadDispositions(threads, loginPredicate) {

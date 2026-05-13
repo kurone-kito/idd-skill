@@ -434,6 +434,70 @@
           "enum": ["match", "missing-active-claim", "claim-id-mismatch", "agent-id-mismatch"]
         }
       }
+    },
+    "dispositionEvidence": {
+      "type": "object",
+      "required": [
+        "route",
+        "reason",
+        "blockingCount",
+        "missingRegularCommentCount",
+        "missingThreadCount",
+        "missingRegularComments",
+        "missingThreads"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "route": {
+          "type": "string",
+          "enum": ["proceed", "return-to-e1"]
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["complete", "missing-disposition-evidence"]
+        },
+        "blockingCount": { "type": "integer", "minimum": 0 },
+        "missingRegularCommentCount": { "type": "integer", "minimum": 0 },
+        "missingThreadCount": { "type": "integer", "minimum": 0 },
+        "missingRegularComments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "authorLogin", "createdAt", "bodyPreview"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "authorLogin": { "type": "string", "minLength": 1 },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+              },
+              "bodyPreview": { "type": "string" }
+            }
+          }
+        },
+        "missingThreads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "isResolved", "reason"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "isResolved": { "type": "boolean" },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "incomplete-thread-comments",
+                  "missing-fresh-disposition",
+                  "unresolved-without-fresh-disposition"
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

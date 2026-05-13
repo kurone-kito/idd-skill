@@ -74,6 +74,10 @@ minimum, capture:
    state satisfies the advisory gate for merge.
 6. CI evidence: required-check generation state and pass/fail status for
    all required checks on the current PR HEAD.
+7. E7 disposition evidence: whether each actionable PATH A item and
+   advisory PATH B item has a fresh `**Accepted**`/`**Rejected**`
+   disposition marker, plus the exact missing-thread and
+   missing-regular-comment blocker items when incomplete.
 
 Do not treat "one bot says clean" as sufficient evidence. The checklist
 must cover the full activity universe (human reviewers plus advisory bot
@@ -211,6 +215,12 @@ must align with every F2 condition below.
   E1's regular-comment filter for non-advisory discussion. Copilot and
   CI advisory bot comments are handled earlier in the PATH B triage flow
   (E4-E7) and are excluded from this gate.
+- **E7 disposition evidence complete**: If helper evidence includes a
+  `dispositionEvidence` section, require
+  `dispositionEvidence.route == "proceed"` and
+  `dispositionEvidence.blockingCount == 0`. If either check fails, route
+  to E1/E4 with the missing-thread or missing-comment evidence reported
+  from that section.
 
 When any F2 condition routes to a hold/stop or back to E1/E14, update
 the PR live status digest after the blocking evidence is recorded and
