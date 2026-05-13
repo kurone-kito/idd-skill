@@ -17,6 +17,8 @@ In the idd-skill source repository, the following optional helpers were adopted:
 - `scripts/live-status-digest.mjs` for issue or PR live status digest
   discovery, rendering, dry-run, and claim-checked upsert
 - `scripts/audit-pr-cleanup.mjs` for post-merge comment cleanup auditing
+- `scripts/review-disposition-verify.mjs` for read-only E7 disposition
+  marker presence verification across PATH A and PATH B items
 
 The canonical workflow remains the portable shell / `gh` / `jq`
 instructions embedded in `.github/instructions/*.instructions.md`. The
@@ -138,6 +140,21 @@ The adopted helper boundaries are intentionally narrow:
 - direct GraphQL fallback commands remain documented in
   `docs/idd-comment-minimization.md`
 
+- `review-disposition-verify.mjs` is read-only, takes a JSON array of
+  ReviewItems_snapshot items, and emits per-item verification evidence
+- it checks E7 disposition requirements: decision recorded, marker
+  present and matching, and thread resolution correct per path and type
+- it never posts replies, resolves threads, or mutates any GitHub state
+- thread-resolution checks are gated on `type === "review_thread"`;
+  non-thread items must have `threadResolved: null`, not `true`/`false`
+- PATH A AMD items must have the thread unresolved; PATH A Rejected and
+  PATH B items must have review threads resolved
+- PATH A Accepted items pass without a marker (reply is handled in
+  review-fix, not triage)
+- written E7 rules in `idd-review-triage.instructions.md` remain
+  authoritative; this helper only reduces command-copy variance when
+  confirming marker presence before triage exits
+
 ## Stable Helper Evidence Outputs
 
 The references in this section apply only when a repository explicitly
@@ -179,6 +196,40 @@ default `instructions-only` profile keep using the written shell /
   `advisoryWait`, `ci`, `claim`, and optional
   `dispositionEvidence`
 
+### E7 disposition verification
+
+- Command:
+  `node scripts/review-disposition-verify.mjs --items '<json>'`
+- Input: JSON array of ReviewItems_snapshot items, each with `id`,
+  `path` (`"A"` or `"B"`), `type`, `decision`, `markerReply`, and
+  `threadResolved`
+- Output schema (stable fields):
+
+  ```json
+  {
+    "passed": true,
+    "summary": "All 3 items verified.",
+    "totalCount": 3,
+    "passedCount": 3,
+    "failedCount": 0,
+    "items": [{
+      "id": "...",
+      "path": "A",
+      "checks": {
+        "decisionRecorded": true,
+        "markerPresent": true,
+        "markerMatchesDecision": true,
+        "threadResolutionCorrect": true
+      },
+      "passed": true,
+      "issues": []
+    }]
+  }
+  ```
+
+- Stable fields consumed at E7: `passed`, `items[].passed`,
+  `items[].checks`, and `items[].issues`
+
 ## Friction Inventory
 
 The workflow areas most likely to benefit from optional helpers are:
@@ -191,6 +242,7 @@ The workflow areas most likely to benefit from optional helpers are:
 | Advisory-wait state             | Adopted helper     | Read-only evidence collector       | Low           | `.github/instructions/idd-advisory-wait.instructions.md`               | Medium — helper must expose evidence without hiding the canonical decision table         | Very high — roughly 900 to 1400 bytes of repeated AW command prose      |
 | Pre-merge readiness             | Adopted helper     | Read-only evidence collector       | Low           | `.github/instructions/idd-pre-merge.instructions.md` and F3 live fetch | Medium — helper must stay evidence-only and preserve the written merge gates             | Very high — roughly 1200 to 1800 bytes of repeated merge-evidence prose |
 | Post-merge cleanup candidates   | Adopted helper     | Dry-run by default, explicit apply | High          | GraphQL minimize-comment fallback flow                                 | Medium — minimization safety still depends on exact review/marker rules                  | Medium — roughly 400 to 700 bytes of repeated GraphQL audit prose       |
+| E7 disposition verification     | Adopted helper     | Read-only evidence verifier        | Low           | E7 verification steps in `idd-review-triage.instructions.md`           | Low — verification logic is deterministic and path/type rules are stable                 | Low to medium — roughly 150 to 300 bytes of repeated E7 pre-exit checks |
 | Branch protection/ruleset reads | Deferred candidate | Read-only API adapter              | Low           | Direct ruleset / branch-protection API reads                           | Medium — repository support varies and incomplete coverage could create false confidence | Low to medium — roughly 150 to 300 bytes of repeated ruleset prose      |
 
 ### Ranked roadmap candidate list for the source roadmap
