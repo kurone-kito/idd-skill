@@ -2,7 +2,9 @@ export function computeReportSummary(report) {
   const alreadyMinimized = report.skipped.filter((skip) => skip.isMinimized).length;
   const viewerCanMinimize = report.candidates.length
     + report.skipped.filter((skip) => skip.viewerCanMinimize).length;
-  const viewerCannotMinimize = report.skipped.filter((skip) => !skip.viewerCanMinimize).length;
+  const viewerCannotMinimize = report.skipped.filter(
+    (skip) => !skip.isMinimized && !skip.viewerCanMinimize,
+  ).length;
 
   report.summary = {
     candidate: report.candidates.length,

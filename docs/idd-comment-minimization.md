@@ -327,7 +327,7 @@ marker so a resuming agent can detect whether the evidence was already
 posted:
 
 ```markdown
-<!-- idd-cleanup-evidence: {status} applied:{N} failed:{N} skipped:{N} permission-blocked:{N} -->
+<!-- idd-cleanup-evidence: {status} applied:{N} failed:{N} skipped:{N} viewer-cannot-minimize:{N} -->
 
 **F4 Cleanup Evidence**
 
@@ -349,7 +349,7 @@ in the same comment rather than posting a separate permission-blocked
 comment:
 
 ```markdown
-<!-- idd-cleanup-evidence: {status} applied:{N} failed:{N} skipped:{N} permission-blocked:{N} -->
+<!-- idd-cleanup-evidence: {status} applied:{N} failed:{N} skipped:{N} viewer-cannot-minimize:{N} -->
 
 **F4 Cleanup Failure**
 
@@ -372,7 +372,7 @@ This status is only emitted in dry-run mode; it is never emitted during
 apply (apply failures use `failed` or `incomplete` instead):
 
 ```markdown
-<!-- idd-cleanup-evidence: permission-blocked applied:0 failed:0 skipped:N permission-blocked:{N} -->
+<!-- idd-cleanup-evidence: permission-blocked applied:0 failed:0 skipped:N viewer-cannot-minimize:{N} -->
 
 **F4 Cleanup Permission Blocked**
 

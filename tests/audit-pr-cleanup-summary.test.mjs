@@ -70,6 +70,20 @@ test("computeReportSummary emits clean when there are no candidates and no permi
   assert.equal(report.summary["viewer-cannot-minimize"], 0);
 });
 
+test("computeReportSummary emits clean when already-minimized items have viewerCanMinimize false", () => {
+  const report = createReport({
+    candidates: [],
+    skipped: [
+      { subjectId: "skip-1", isMinimized: true, viewerCanMinimize: false },
+    ],
+  });
+
+  computeReportSummary(report);
+
+  assert.equal(report.status, "clean");
+  assert.equal(report.summary["viewer-cannot-minimize"], 0);
+});
+
 test("computeReportSummary emits permission-blocked when all items are viewer-cannot-minimize", () => {
   const report = createReport({
     candidates: [],
