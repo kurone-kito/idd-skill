@@ -8,6 +8,29 @@ directly instead of re-evaluating the same suggestion from scratch.
 
 In the idd-skill source repository, the following optional helpers were adopted:
 
+**Discover & Claim Phase Helpers (Phase 1):**
+
+- `scripts/discover-orphan-filter.mjs` for A0-O orphan issue detection and
+  filtering (referenced in
+  [kurone-kito/idd-skill#390](https://github.com/kurone-kito/idd-skill/issues/390))
+- `scripts/discover-readiness-check.mjs` for A3 readiness criterion
+  evaluation (referenced in
+  [kurone-kito/idd-skill#391](https://github.com/kurone-kito/idd-skill/issues/391))
+- `scripts/suitability-triage.mjs` for A4.5 seven-check suitability
+  evaluation (referenced in
+  [kurone-kito/idd-skill#392](https://github.com/kurone-kito/idd-skill/issues/392))
+- `scripts/claim-approval-gate.mjs` for A5(a) issue-author approval
+  verification (referenced in
+  [kurone-kito/idd-skill#393](https://github.com/kurone-kito/idd-skill/issues/393))
+- `scripts/resume-claim-routing.mjs` for Resume Step 1 claim-state
+  evaluation and takeover routing (referenced in
+  [kurone-kito/idd-skill#394](https://github.com/kurone-kito/idd-skill/issues/394))
+- `scripts/resume-route-selection.mjs` for Resume Step 3 PR/CI/review
+  state routing (referenced in
+  [kurone-kito/idd-skill#395](https://github.com/kurone-kito/idd-skill/issues/395))
+
+**Review & Merge Phase Helpers:**
+
 - `scripts/review-activity-snapshot.mjs` for read-only E/F review
   activity and CI snapshot metrics
 - `scripts/advisory-wait-state.mjs` for read-only advisory-wait evidence
