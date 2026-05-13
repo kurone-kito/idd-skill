@@ -7,6 +7,7 @@ import {
   DEFAULT_ADVISORY_POLL_INTERVAL_MINUTES,
   DEFAULT_ADVISORY_REQUEST_CAP,
   DEFAULT_ADVISORY_SETTLED_WINDOW_MINUTES,
+  normalizeAdvisoryWaitRuntimeOptions,
 } from "./advisory-wait-policy.mjs";
 
 const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
@@ -992,15 +993,11 @@ export function summarizeAdvisoryWaitMarkers(comments, prHeadSha, trustedMarkerL
 }
 
 export function evaluateAdvisoryWaitOutcome(input) {
-  const requestCap = Number.isFinite(input.requestCap)
-    ? input.requestCap
-    : DEFAULT_ADVISORY_REQUEST_CAP;
-  const pendingWindowMinutes = Number.isFinite(input.pendingWindowMinutes)
-    ? input.pendingWindowMinutes
-    : DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES;
-  const settledWindowMinutes = Number.isFinite(input.settledWindowMinutes)
-    ? input.settledWindowMinutes
-    : DEFAULT_ADVISORY_SETTLED_WINDOW_MINUTES;
+  const {
+    requestCap,
+    pendingWindowMinutes,
+    settledWindowMinutes,
+  } = normalizeAdvisoryWaitRuntimeOptions(input);
 
   if (input.lastCopilotCommit === input.prHeadSha) {
     return "SATISFIED";
@@ -1056,21 +1053,13 @@ export function buildAdvisoryWaitSummary(
   const lastCopilotCommit = findLastCopilotReviewCommit(reviews);
   const copilotPending = isCopilotPending(requestedReviewers);
   const copilotPendingCoversHead = computeCopilotPendingCoversHead(timelineEvents, prHeadSha);
-  const requestCap = Number.isFinite(options.requestCap)
-    ? options.requestCap
-    : DEFAULT_ADVISORY_REQUEST_CAP;
-  const pendingWindowMinutes = Number.isFinite(options.pendingWindowMinutes)
-    ? options.pendingWindowMinutes
-    : DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES;
-  const settledWindowMinutes = Number.isFinite(options.settledWindowMinutes)
-    ? options.settledWindowMinutes
-    : DEFAULT_ADVISORY_SETTLED_WINDOW_MINUTES;
-  const pollIntervalMinutes = Number.isFinite(options.pollIntervalMinutes)
-    ? options.pollIntervalMinutes
-    : DEFAULT_ADVISORY_POLL_INTERVAL_MINUTES;
-  const capExhaustedRoute = ADVISORY_CAP_EXHAUSTED_ROUTES.has(options.capExhaustedRoute)
-    ? options.capExhaustedRoute
-    : ADVISORY_CAP_EXHAUSTED_ROUTE_DEFAULT;
+  const {
+    requestCap,
+    pendingWindowMinutes,
+    settledWindowMinutes,
+    pollIntervalMinutes,
+    capExhaustedRoute,
+  } = normalizeAdvisoryWaitRuntimeOptions(options);
 
   return {
     protocolVersion: "1",
@@ -1871,6 +1860,7 @@ export function buildPreMergeReadinessSummary(
     advisoryBotLogins,
   });
   const ci = summarizeRequiredChecks(checks, branchRules, branchProtection);
+  const advisoryWaitOptions = normalizeAdvisoryWaitRuntimeOptions(options);
   const advisoryWait = buildAdvisoryWaitSummary(
     {
       prHeadSha,
@@ -1881,21 +1871,7 @@ export function buildPreMergeReadinessSummary(
     },
     {
       now,
-      requestCap: Number.isFinite(options.requestCap)
-        ? options.requestCap
-        : DEFAULT_ADVISORY_REQUEST_CAP,
-      pendingWindowMinutes: Number.isFinite(options.pendingWindowMinutes)
-        ? options.pendingWindowMinutes
-        : DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES,
-      settledWindowMinutes: Number.isFinite(options.settledWindowMinutes)
-        ? options.settledWindowMinutes
-        : DEFAULT_ADVISORY_SETTLED_WINDOW_MINUTES,
-      pollIntervalMinutes: Number.isFinite(options.pollIntervalMinutes)
-        ? options.pollIntervalMinutes
-        : DEFAULT_ADVISORY_POLL_INTERVAL_MINUTES,
-      capExhaustedRoute: ADVISORY_CAP_EXHAUSTED_ROUTES.has(options.capExhaustedRoute)
-        ? options.capExhaustedRoute
-        : ADVISORY_CAP_EXHAUSTED_ROUTE_DEFAULT,
+      ...advisoryWaitOptions,
       viewerLogin: options.viewerLogin,
       configuredTrustedActors: options.configuredTrustedActors,
       collaboratorTrustEnabled: options.collaboratorTrustEnabled,

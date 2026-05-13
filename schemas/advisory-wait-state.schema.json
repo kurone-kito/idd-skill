@@ -73,13 +73,16 @@
       "minimum": 1
     },
     "pendingWindowMinutes": {
-      "type": "number"
+      "type": "number",
+      "exclusiveMinimum": 0
     },
     "settledWindowMinutes": {
-      "type": "number"
+      "type": "number",
+      "exclusiveMinimum": 0
     },
     "pollIntervalMinutes": {
-      "type": "number"
+      "type": "number",
+      "exclusiveMinimum": 0
     },
     "capExhaustedRoute": {
       "type": "string",

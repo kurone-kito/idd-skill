@@ -146,7 +146,7 @@ test("advisory wait policy resolves defaults, explicit values, and fail-safe fal
   assert.deepEqual(resolveAdvisoryWaitPolicy({
     advisoryWait: {
       requestCap: 0,
-      pendingWindow: "forty-five minutes",
+      pendingWindow: "P1DT",
       settledWindow: "PT",
       pollInterval: "P",
       capExhaustedRoute: "merge-anyway",
@@ -158,6 +158,34 @@ test("advisory wait policy resolves defaults, explicit values, and fail-safe fal
     pollIntervalMinutes: 2,
     capExhaustedRoute: "phase-specific",
   });
+});
+
+test("advisory wait summary normalizes invalid direct options to defaults", () => {
+  const fixture = readJson("fixtures/advisory-wait/request-needed.json");
+  const summary = buildAdvisoryWaitSummary({
+    prHeadSha: fixture.input.prHeadSha,
+    reviews: fixture.input.reviews,
+    requestedReviewers: fixture.input.requestedReviewers,
+    timelineEvents: fixture.input.timelineEvents,
+    comments: fixture.input.comments,
+  }, {
+    now: fixture.input.now,
+    requestCap: 0,
+    pendingWindowMinutes: -45,
+    settledWindowMinutes: 0,
+    pollIntervalMinutes: -3,
+    capExhaustedRoute: "merge-anyway",
+    trustedMarkerLogins: fixture.input.trustedMarkerLogins,
+    viewerLogin: fixture.input.viewerLogin,
+    configuredTrustedActors: fixture.input.configuredTrustedActors,
+    collaboratorTrustEnabled: fixture.input.collaboratorTrustEnabled,
+  });
+
+  assert.equal(summary.requestCap, 30);
+  assert.equal(summary.pendingWindowMinutes, 30);
+  assert.equal(summary.settledWindowMinutes, 10);
+  assert.equal(summary.pollIntervalMinutes, 2);
+  assert.equal(summary.capExhaustedRoute, "phase-specific");
 });
 
 function readJson(relativePath) {

@@ -350,9 +350,9 @@
         "sameHeadMarkerCount": { "type": "integer", "minimum": 0 },
         "requestMarkerCount": { "type": "integer", "minimum": 0 },
         "requestCap": { "type": "integer", "minimum": 1 },
-        "pendingWindowMinutes": { "type": "number" },
-        "settledWindowMinutes": { "type": "number" },
-        "pollIntervalMinutes": { "type": "number" },
+        "pendingWindowMinutes": { "type": "number", "exclusiveMinimum": 0 },
+        "settledWindowMinutes": { "type": "number", "exclusiveMinimum": 0 },
+        "pollIntervalMinutes": { "type": "number", "exclusiveMinimum": 0 },
         "capExhaustedRoute": {
           "type": "string",
           "enum": ["phase-specific", "hold"]

@@ -6,7 +6,7 @@
  *
  * Supported enforcement keywords:
  *   type, required, properties, patternProperties, additionalProperties,
- *   minLength, minimum, pattern, format (date-time only),
+ *   minLength, minimum, exclusiveMinimum, pattern, format (date-time only),
  *   minItems, items, enum
  *
  * Any other keyword in a schema triggers an error, preventing false
@@ -31,6 +31,7 @@ const ENFORCED_KEYWORDS = new Set([
   "additionalProperties",
   "minLength",
   "minimum",
+  "exclusiveMinimum",
   "pattern",
   "format",
   "minItems",
@@ -131,6 +132,9 @@ export function validate(data, schema, path = "$") {
 
   if (actualType === "number" && schema.minimum !== undefined && data < schema.minimum) {
     errors.push(`${path}: ${data} < minimum ${schema.minimum}`);
+  }
+  if (actualType === "number" && schema.exclusiveMinimum !== undefined && data <= schema.exclusiveMinimum) {
+    errors.push(`${path}: ${data} <= exclusiveMinimum ${schema.exclusiveMinimum}`);
   }
 
   if (actualType === "array") {

@@ -71,6 +71,10 @@ test("checkSchemaKeywords reports unsupported keywords", () => {
   assert.ok(errors.some((e) => e.includes("anyOf")), `Expected 'anyOf' in errors: ${errors}`);
 });
 
+test("checkSchemaKeywords accepts exclusiveMinimum", () => {
+  assert.deepEqual(checkSchemaKeywords({ type: "number", exclusiveMinimum: 0 }), []);
+});
+
 // ---------------------------------------------------------------------------
 // Fixture validation — valid fixtures must pass, invalid must fail
 // ---------------------------------------------------------------------------
@@ -828,7 +832,7 @@ test("policy schema rejects advisoryWait pending/settled/poll durations when mal
   const schema = loadJson("schemas/policy.schema.json");
   const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
   instance.advisoryWait = {
-    pendingWindow: "forty-five minutes",
+    pendingWindow: "P1DT",
     settledWindow: "PT",
     pollInterval: "P",
   };
@@ -842,4 +846,30 @@ test("policy schema rejects advisoryWait.capExhaustedRoute unknown value", () =>
   instance.advisoryWait = { capExhaustedRoute: "merge-anyway" };
   const errors = validate(instance, schema);
   assert.ok(errors.some((e) => e.includes("advisoryWait")), errors.join("\n"));
+});
+
+test("validator enforces exclusiveMinimum for numbers", () => {
+  assert.ok(validate(0, { type: "number", exclusiveMinimum: 0 }).length > 0);
+  assert.ok(validate(-1, { type: "number", exclusiveMinimum: 0 }).length > 0);
+  assert.deepEqual(validate(0.5, { type: "number", exclusiveMinimum: 0 }), []);
+});
+
+test("advisory wait state schema rejects non-positive minute values", () => {
+  const schema = loadJson("schemas/advisory-wait-state.schema.json");
+  const fixture = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/advisory-wait-state.valid.json")));
+  fixture.pendingWindowMinutes = 0;
+  fixture.settledWindowMinutes = -1;
+  fixture.pollIntervalMinutes = 0;
+  const errors = validate(fixture, schema);
+  assert.ok(errors.some((e) => e.includes("exclusiveMinimum")), errors.join("\n"));
+});
+
+test("pre-merge readiness schema rejects non-positive advisory wait minute values", () => {
+  const schema = loadJson("schemas/pre-merge-readiness.schema.json");
+  const fixture = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/pre-merge-readiness.valid.json")));
+  fixture.advisoryWait.pendingWindowMinutes = 0;
+  fixture.advisoryWait.settledWindowMinutes = -1;
+  fixture.advisoryWait.pollIntervalMinutes = 0;
+  const errors = validate(fixture, schema);
+  assert.ok(errors.some((e) => e.includes("exclusiveMinimum")), errors.join("\n"));
 });
