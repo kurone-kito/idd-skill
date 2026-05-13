@@ -367,6 +367,15 @@ test("policy schema accepts foundation policy namespaces", () => {
   assert.deepEqual(errors, []);
 });
 
+test("policy schema accepts legacy scalar forced-handoff aliases", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = loadJson("fixtures/schemas/policy.valid.json");
+  instance.forcedHandoff = "human-gated";
+  instance["forced-handoff"] = "disabled";
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
 test("policy schema rejects non-positive advisory wait request cap", () => {
   const schema = loadJson("schemas/policy.schema.json");
   const instance = loadJson("fixtures/schemas/policy.valid.json");

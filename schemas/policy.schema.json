@@ -157,7 +157,6 @@
       }
     },
     "forcedHandoff": {
-      "type": "object",
       "additionalProperties": false,
       "properties": {
         "mode": {
@@ -171,7 +170,6 @@
       }
     },
     "forced-handoff": {
-      "type": "object",
       "additionalProperties": false,
       "properties": {
         "mode": {
