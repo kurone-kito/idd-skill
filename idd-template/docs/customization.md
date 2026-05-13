@@ -526,7 +526,7 @@ This repository uses the following IDD configuration:
 - **issue-author-approval-gate**: `enabled-by-default`
 - **issue-author-approval-opt-out**: `skipIssueAuthorApprovalGate: true` only when the repository intentionally skips the gate
 - **collaborator-authored-markers**: `false`
-- **forced-handoff**: `human-gated`
+- **forced-handoff**: `disabled`
 - **forced-handoff-authority**: `owners-and-maintainers-only`
 ```
 
