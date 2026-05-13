@@ -148,6 +148,34 @@ For discover and suitability, use the adopted helpers first when helper
 support is enabled, then fall back to the portable instructions if a
 helper is unavailable or its output does not match the written rules.
 
+### Discover Viability Gate Contract
+
+`scripts/discover-viability-gate.mjs` evaluates the A4 viability gate for
+one or more issues.
+
+- **Inputs**: `--issue <number>` (repeatable) or `--issues <n1,n2,...>`,
+  with optional `--csv`, `--owner <owner>`, and `--repo <repo>`.
+- **JSON output**:
+  - `viable`: `[{ number: number, title: string }]`
+  - `discarded`: `[{ number: number, title: string,`
+    `failedCriteria: string[], criteria?: [{ id: string, name: string,`
+    `result: "pass" | "fail", evidence: string }] }]`
+  - `summary`: `{ total: number, viableCount: number,`
+    `discardedCount: number, discardedByCriterion: Record<string, number> }`
+- **Error conditions**: missing issue arguments or unknown flags throw;
+  loader or GitHub failures surface as errors; not-found or non-open
+  issues are reported in `discarded` with `failedCriteria` instead of
+  crashing.
+- **Example**:
+
+  ```json
+  {
+    "viable": [{ "number": 123, "title": "trim helper docs" }],
+    "discarded": [{ "number": 124, "title": "rewrite workflow", "failedCriteria": ["limited_scope", "autonomous_completion"] }],
+    "summary": { "total": 2, "viableCount": 1, "discardedCount": 1, "discardedByCriterion": { "limited_scope": 1, "autonomous_completion": 1 } }
+  }
+  ```
+
 The exported template remains portable without a `scripts/` directory.
 Adopters can copy the helper separately when they want the same
 repository-local convenience, otherwise the documented GraphQL fallback

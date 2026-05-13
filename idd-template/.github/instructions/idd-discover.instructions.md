@@ -9,9 +9,9 @@ and claim. After selecting a viable candidate (A4), run suitability triage via
 
 When helper support is enabled, prefer the helper scripts cataloged in
 `docs/idd-helper-scripts.md` for the read-only evidence collection used by
-A0-O, A3, A3.5, and A4.5. The written decision tables still own the final
-routing, and they remain authoritative when helper output is missing or
-disagrees.
+A0-O, A3, A3.5, A4, and A4.5. The written decision tables still own the
+final routing, and they remain authoritative when helper output is
+missing or disagrees.
 
 In particular, use `scripts/discover-viability-gate.mjs` for the A4
 viability gate before falling back to the manual criteria in this file.
