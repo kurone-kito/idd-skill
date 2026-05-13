@@ -20,7 +20,7 @@
     },
     "expected": {
       "route": "hold-before-escalation",
-      "reason": "still within the first 24 hours after the rejection reply"
+      "reason": "still within the first escalation window after the rejection reply"
     }
   },
   {
@@ -32,7 +32,7 @@
     },
     "expected": {
       "route": "escalate-maintainer",
-      "reason": "the changes-requested review is still blocking after 24 hours with no reviewer response"
+      "reason": "the changes-requested review still needs maintainer escalation evidence before release"
     }
   },
   {
@@ -109,7 +109,7 @@
     },
     "expected": {
       "route": "hold-after-escalation",
-      "reason": "still within 24 hours of the maintainer escalation comment"
+      "reason": "still within the post-escalation hold window"
     }
   },
   {
@@ -141,6 +141,25 @@
     "expected": {
       "route": "hold-before-escalation",
       "reason": "still within the first 2 hours after the rejection reply"
+    }
+  },
+  {
+    "name": "custom policy does not re-escalate when escalation evidence exists",
+    "input": {
+      "reviewState": "CHANGES_REQUESTED",
+      "rejectionCommentCreatedAt": "2026-05-10T00:00:00Z",
+      "escalationCommentCreatedAt": "2026-05-10T02:00:00Z",
+      "now": "2026-05-11T01:00:00Z",
+      "policyConfig": {
+        "reviewEscalation": {
+          "changesRequestedFirstEscalation": "PT2H",
+          "changesRequestedSecondEscalation": "PT26H"
+        }
+      }
+    },
+    "expected": {
+      "route": "hold-after-escalation",
+      "reason": "still within 24 hours of the maintainer escalation comment"
     }
   },
   {

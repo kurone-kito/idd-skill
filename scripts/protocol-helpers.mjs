@@ -593,18 +593,13 @@ export function routeRejectedChangesRequestedReview(input) {
       reason: `still within the first ${firstWindowLabel} after the rejection reply`,
     };
   }
-  if (elapsedMs < firstEscalationWindowMs + postEscalationWindowMs) {
-    return {
-      route: "escalate-maintainer",
-      reason:
-        `the changes-requested review is still blocking after ${firstWindowLabel} with no reviewer response`,
-    };
-  }
+
   const escalationElapsedMs = Date.parse(input.now ?? "") - Date.parse(input.escalationCommentCreatedAt ?? "");
   if (!Number.isFinite(escalationElapsedMs)) {
     return {
       route: "escalate-maintainer",
-      reason: "the changes-requested review still needs maintainer escalation evidence before release",
+      reason:
+        `the changes-requested review is still blocking after ${firstWindowLabel} with no reviewer response`,
     };
   }
   if (escalationElapsedMs < postEscalationWindowMs) {

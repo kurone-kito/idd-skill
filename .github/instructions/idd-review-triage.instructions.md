@@ -140,9 +140,11 @@ For each Rejected PATH A item whose source is reviewer feedback:
   - If the reviewer does not respond and the state does not change: post
     a hold comment (keep the claim) and stop. On the next agent
     heartbeat or resume, check elapsed time:
-  - After 24 h of no response: escalate to a maintainer via issue or PR
-    comment.
-  - After 48 h of no escalation response: consider adding a
+  - After `reviewEscalation.changesRequestedFirstEscalation`
+    (distributed default: `PT24H`) of no response: escalate to a
+    maintainer via issue or PR comment.
+  - After `reviewEscalation.changesRequestedSecondEscalation`
+    (distributed default: `PT48H`) of no escalation response: consider adding a
     `status:needs-decision` label and releasing the claim. The label may
     be removed and the issue re-claimed once the blocker is resolved.
   - If a maintainer or admin (other than the original reviewer) agrees

@@ -155,7 +155,9 @@ For each issue reported, assess severity and relevance to PR intent:
 Decide Accept or Reject for each issue. Then check:
 
 - Accept count = 0 → skip to `idd-pr-submit.instructions.md`
-- Loop count > 3 and all remaining Accepts are Low → skip to
+- Loop count >
+  `critiqueLoop.cPhaseLowSeveritySkipAfter` (distributed default: `3`)
+  and all remaining Accepts are Low → skip to
   `idd-pr-submit.instructions.md`
 
 Otherwise continue to C5.
