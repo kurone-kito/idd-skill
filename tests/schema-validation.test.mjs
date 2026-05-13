@@ -56,6 +56,12 @@ test("policy schema uses only allowed keywords", () => {
   assert.deepEqual(checkSchemaKeywords(schema), []);
 });
 
+test("policy schema declares ciWait only once at the top level", () => {
+  const schemaText = readFileSync(new URL("../schemas/policy.schema.json", import.meta.url), "utf8");
+  const ciWaitMatches = [...schemaText.matchAll(/^\s{4}"ciWait": \{$/gm)];
+  assert.equal(ciWaitMatches.length, 1);
+});
+
 test("phase-graph schema uses only allowed keywords", () => {
   const schema = loadJson("schemas/phase-graph.schema.json");
   assert.deepEqual(checkSchemaKeywords(schema), []);
