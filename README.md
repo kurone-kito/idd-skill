@@ -15,6 +15,18 @@ branch, open a PR, handle review feedback, wait for CI, merge, and clean
 up according to the repository's selected merge policy. The whole loop
 lives in your repo as Markdown instruction files.
 
+## Start here (persona navigation)
+
+If this is your first visit, choose the path that matches your goal:
+
+| Goal                            | Start here                                                                                                                                             |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Understand the concept first    | [`docs/concepts.md`](docs/concepts.md)                                                                                                                 |
+| Adopt IDD in my repository      | [`idd-template/ONBOARDING.md`](idd-template/ONBOARDING.md)                                                                                             |
+| Run an agent on this repository | [`AGENTS.md`](AGENTS.md), [`CLAUDE.md`](CLAUDE.md), [`GEMINI.md`](GEMINI.md), and [`.github/copilot-instructions.md`](.github/copilot-instructions.md) |
+| Customize policy                | [`docs/customization.md`](docs/customization.md)                                                                                                       |
+| Author AI-ready issues          | [`skills/issue-authoring/SKILL.md`](skills/issue-authoring/SKILL.md)                                                                                   |
+
 ## Why Teams Use IDD
 
 AI coding agents are powerful, but team workflows get messy fast:
@@ -173,23 +185,6 @@ hook enforces Conventional Commits through commitlint.
 
 When you edit canonical source files in `idd-template/`, run
 `pnpm run docs:sync` to propagate the changes to all mirrored artifacts.
-
-### 5-Minute Reading Path
-
-Use the focused docs in this order when you are evaluating or adopting
-IDD:
-
-1. [Getting started](docs/getting-started.md) — import the template and
-   run the first loop.
-2. [Core concepts](docs/concepts.md) — learn the claim, review, merge,
-   and cleanup vocabulary.
-3. [Customization](docs/customization.md) — choose policy surfaces
-   without forking the whole workflow.
-4. [Permissions and threat model](docs/permissions.md) — decide which
-   credentials each agent profile should receive.
-5. [Reference manual](docs/index.md) and
-   [detailed reference](docs/reference.md) — jump from the landing page
-   into phase files, policies, and maintenance notes.
 
 ## What IDD Automates
 

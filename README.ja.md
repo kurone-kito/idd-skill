@@ -15,6 +15,18 @@ IDD Skill は、リポジトリへ移植できる Issue-Driven Development
 選択したマージポリシーに従ってマージと後片づけまで進めます。ループ全体は、
 リポジトリ内の Markdown で書かれた指示ファイルとして管理されます。
 
+## 最初の入口（ペルソナ別ナビゲーション）
+
+初見の場合は、目的に合う入口から始めてください:
+
+| 目的                                     | まず読む場所                                                                                                                                       |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 概念を先に理解したい                     | [`docs/concepts.md`](docs/concepts.md)                                                                                                             |
+| 自分のリポジトリに IDD を導入したい      | [`idd-template/ONBOARDING.md`](idd-template/ONBOARDING.md)                                                                                         |
+| このリポジトリでエージェントを動かしたい | [`AGENTS.md`](AGENTS.md)、[`CLAUDE.md`](CLAUDE.md)、[`GEMINI.md`](GEMINI.md)、[`.github/copilot-instructions.md`](.github/copilot-instructions.md) |
+| ポリシーを調整したい                     | [`docs/customization.md`](docs/customization.md)                                                                                                   |
+| AI 向けに issue を整備したい             | [`skills/issue-authoring/SKILL.md`](skills/issue-authoring/SKILL.md)                                                                               |
+
 ## IDD が選ばれる理由
 
 AI コーディングエージェントは強力です。ただ、チームの開発フローに入れると、
@@ -166,22 +178,6 @@ commitlint により Conventional Commits を検証します。
 
 `idd-template/` 配下の正規ソースファイルを編集したときは、`pnpm run docs:sync`
 を実行して、すべてのミラーアーティファクトに変更を伝播してください。
-
-### 5 分で読む導線
-
-IDD を評価または導入するときは、focused docs を次の順に読んでください:
-
-1. [Getting started](docs/getting-started.md) — テンプレートを取り込み、
-   最初のループを実行する。
-2. [Core concepts](docs/concepts.md) — claim、review、merge、cleanup の
-   語彙を把握する。
-3. [Customization](docs/customization.md) — ワークフロー全体を fork せずに
-   policy surface を選ぶ。
-4. [Permissions and threat model](docs/permissions.md) — agent profile ごとに
-   渡す認証情報を決める。
-5. [リファレンスマニュアル](docs/index.md) と
-   [detailed reference](docs/reference.md) — landing page から phase file、
-   policy、maintenance note へ進む。
 
 ## IDD が自動化すること
 
