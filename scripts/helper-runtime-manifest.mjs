@@ -26,6 +26,14 @@ const HELPER_COMMANDS = [
     description: "Run IDD onboarding drift checks against the local repository.",
   },
   {
+    id: "force-handoff",
+    scriptName: "idd:force-handoff",
+    binName: "idd-force-handoff",
+    entryPath: "scripts/force-handoff.mjs",
+    vendoredCommand: "node scripts/force-handoff.mjs",
+    description: "Interactive TTY-only operator facade for forced handoff: issue → optional PR → y/N confirmation.",
+  },
+  {
     id: "forced-handoff-marker",
     scriptName: "idd:forced-handoff-marker",
     binName: "idd-forced-handoff-marker",
