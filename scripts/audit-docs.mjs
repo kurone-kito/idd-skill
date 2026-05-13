@@ -368,7 +368,7 @@ function detectSyncCommand() {
     try {
       const packageJson = JSON.parse(readText("package.json"));
       if (typeof packageJson.scripts?.["docs:sync"] === "string") {
-        return "pnpm run docs:sync";
+        return docsSyncCommandByPackageManager(packageJson.packageManager);
       }
     } catch {
       // Keep fallback discovery if package.json is not parseable.
@@ -378,6 +378,22 @@ function detectSyncCommand() {
     return "node scripts/sync-docs.mjs --apply";
   }
   return "";
+}
+
+function docsSyncCommandByPackageManager(packageManager) {
+  const name = typeof packageManager === "string" ? packageManager.split("@")[0] : "";
+  switch (name) {
+    case "pnpm":
+      return "pnpm run docs:sync";
+    case "npm":
+      return "npm run docs:sync";
+    case "yarn":
+      return "yarn docs:sync";
+    case "bun":
+      return "bun run docs:sync";
+    default:
+      return "npm run docs:sync";
+  }
 }
 
 function checkInstructionSizeBudgets(config) {
