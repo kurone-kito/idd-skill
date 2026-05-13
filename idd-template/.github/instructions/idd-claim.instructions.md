@@ -6,6 +6,36 @@ explicit issue target (A0-T) — or after a successful re-claim decision
 in the resume phase. It covers the five pre-checks, claim execution, and
 claim verification.
 
+## Canonical A5(a) path (helper-first)
+
+When helper runtime is enabled, use the profile-selected claim approval
+helper as the canonical A5(a) evidence collector.
+
+```sh
+# source repo / vendored-node
+node scripts/claim-approval-gate.mjs --issue <issue-number>
+
+# package-manager / ephemeral-npx
+<profile-selected-claim-approval-command> --issue <issue-number>
+```
+
+Resolve `<profile-selected-claim-approval-command>` from
+`docs/idd-helper-scripts.md`; do not hardcode `node scripts/...` for
+non-vendored profiles.
+
+Contract: `docs/idd-helper-scripts.md#claim-approval-evidence`
+
+Required fields: `approved`, `reason`, `gateEnabled`,
+`policy.maintainerApprovalActorPolicy`, `policy.approvalSignals`, and
+`checks`.
+
+If the helper exits non-zero, returns invalid or incomplete JSON, or
+conflicts with live approval state, ignore it and use the written A5(a)
+path below. If fallback still cannot prove safe approval, treat
+approval as missing.
+
+A5(d) has no supported helper; keep using live GitHub PR checks below.
+
 ## Pre-checks (all five must pass)
 
 Re-fetch the issue immediately before running these checks.
@@ -79,9 +109,11 @@ Otherwise, use the latest trusted legacy `claimed-by` comment as a
 
 The migration claim uses a fresh `{claim-id}` and `supersedes: none`.
 
-**(d) Open PR** — No open PR may close or reference this issue, unless
-that PR's head branch matches the `branch` field in an inheritable claim
-comment. An inheritable claim comment is either:
+**(d) Open PR** — A5(d) has no supported helper. Re-check live GitHub
+PR state with the written rules below. No open PR may close or
+reference this issue, unless that PR's head branch matches the `branch`
+field in an inheritable claim comment. An inheritable claim comment is
+either:
 
 - the already verified active claim for this current session, or
 - the currently active stale claim you are taking over, or
