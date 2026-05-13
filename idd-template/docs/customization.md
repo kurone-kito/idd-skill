@@ -25,6 +25,28 @@ behavior change too.
 | Orphan-first approval   | No extra gate beyond orphan readiness checks                                                                                                 | Keep `orphan-first-policy` as `none`, or opt in to `maintainer-approved` or `public-disabled` when public or community-submitted issues need an explicit maintainer approval layer before A0-O can select them.                                                                                                                                                                                                                   |
 | Issue-author approval   | Secure-by-default target contract; unattended work needs a self-authorizing issue author or explicit approval unless the repository opts out | Record the gate decision, approval actors, freshness rule, approval signals, and opt-out semantics in repository-local policy docs and onboarding. Keep this contract aligned with the discovery/claim behavior that already ships, and update both surfaces together if local policy changes later.                                                                                                                              |
 
+## Non-Configurable Safety Invariants
+
+Some IDD rules stay fixed even when `.github/idd/config.json` gains new
+policy knobs. Treat these as hard gates, not local preferences.
+
+- Claim revalidation still runs before every mutating side effect. If the
+  revalidation points ever change, update the owning phase instructions
+  and the policy constants inventory together.
+- Marker-shaped comments from untrusted authors never gain authority.
+  Marker-trust settings only decide which authors count as trusted; they
+  do not make untrusted markers authoritative.
+- Forced handoff remains human-gated only. Autopilot and unattended
+  agents must not initiate it, and the human approval authority stays
+  separate from trusted marker lists.
+- Approval-needed fallback issues remain a stop condition for unattended
+  discovery. They may not be auto-claimed just because other configurable
+  approval signals exist.
+
+Use the always-loaded overview and the policy constants page as the
+source of truth for these rules. Configuration can tune defaults, but it
+cannot disable the gates above.
+
 ## Helper Runtime Profile
 
 Keep helper support optional. During onboarding, start from

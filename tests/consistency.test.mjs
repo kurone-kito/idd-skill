@@ -159,6 +159,16 @@ test("policy normalization provides default-safe values and supports aliases", (
     },
   });
 
+  const defaultPolicy = normalizePolicyConfig(null);
+  for (const key of [
+    "claimRevalidationGate",
+    "untrustedMarkerAuthority",
+    "forcedHandoffInitiator",
+    "approvalNeededFallbackAutoClaim",
+  ]) {
+    assert.equal(Object.hasOwn(defaultPolicy, key), false, `${key} must stay non-configurable`);
+  }
+
   assert.deepEqual(normalizePolicyConfig({
     issueScope: "orphan-first",
     orphanFirstPolicy: "maintainer-approved",

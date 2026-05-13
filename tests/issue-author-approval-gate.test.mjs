@@ -88,3 +88,43 @@ test("repository config keeps the issue-author approval gate enabled by default"
     "gate must stay enabled unless explicitly opted out with true",
   );
 });
+
+test("customization and policy docs record the non-configurable safety invariants", () => {
+  const liveCustomization = extractSection(
+    read("docs/customization.md"),
+    "## Non-Configurable Safety Invariants",
+    "## Helper Runtime Profile",
+  );
+  const templateCustomization = extractSection(
+    read("idd-template/docs/customization.md"),
+    "## Non-Configurable Safety Invariants",
+    "## Helper Runtime Profile",
+  );
+
+  assert.match(liveCustomization, /Claim revalidation still runs before every mutating side effect\./);
+  assert.match(liveCustomization, /Marker-shaped comments from untrusted authors never gain authority\./);
+  assert.match(liveCustomization, /Forced handoff remains human-gated only\./);
+  assert.match(
+    liveCustomization,
+    /Approval-needed fallback issues remain a stop condition for unattended[\s\S]*discovery\./,
+  );
+  assert.equal(templateCustomization, liveCustomization);
+
+  const livePolicy = extractSection(
+    read("docs/policy-constants.md"),
+    "## Non-Configurable Safety Invariants",
+    "## Forced Handoff Defaults",
+  );
+  const templatePolicy = extractSection(
+    read("idd-template/docs/policy-constants.md"),
+    "## Non-Configurable Safety Invariants",
+    "## Forced Handoff Defaults",
+  );
+
+  assert.match(livePolicy, /These rules are fixed gates, not policy knobs/);
+  assert.match(livePolicy, /Claim revalidation gate/);
+  assert.match(livePolicy, /Marker trust \/ authority/);
+  assert.match(livePolicy, /Forced handoff initiator/);
+  assert.match(livePolicy, /Approval-needed fallback/);
+  assert.equal(templatePolicy, livePolicy);
+});
