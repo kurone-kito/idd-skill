@@ -13,14 +13,10 @@ This gate evaluates whether an issue is **suitable for autonomous
 execution** independent of the current run's context. Where A4 asks "can
 we do this NOW?", A4.5 asks "SHOULD we do this at all?"
 
-When helper support is enabled, prefer the helper script catalog in
-`docs/idd-helper-scripts.md` for the read-only A4.5 evidence collection.
-The written check list and decision flow still own the outcome, and they
-remain authoritative when helper output is missing or disagrees.
-
-Use `scripts/suitability-triage.mjs` first when you need A4.5 evidence,
-then fall back to the manual seven-check triage if the helper is absent
-or disagrees.
+When helper support is enabled, use helper scripts from
+`docs/idd-helper-scripts.md` first for A4.5 evidence.
+Written checks and decision flow remain authoritative when helper output
+is missing or disagrees.
 
 Issue-author approval is a separate pre-claim gate. Candidates that fail
 the repository's issue-author approval evaluation are routed by

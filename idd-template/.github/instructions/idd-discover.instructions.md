@@ -7,14 +7,10 @@ and claim. After selecting a viable candidate (A4), run suitability triage via
 `idd-suitability.instructions.md` (A4.5), then proceed to
 `idd-claim.instructions.md` to claim it.
 
-When helper support is enabled, prefer the helper scripts cataloged in
-`docs/idd-helper-scripts.md` for the read-only evidence collection used by
-A0-O, A3, A3.5, A4, and A4.5. The written decision tables still own the
-final routing, and they remain authoritative when helper output is
+When helper support is enabled, use helper scripts from
+`docs/idd-helper-scripts.md` first for A0-O/A3/A3.5/A4/A4.5 evidence.
+Written decision tables remain authoritative when helper output is
 missing or disagrees.
-
-In particular, use `scripts/discover-viability-gate.mjs` for the A4
-viability gate before falling back to the manual criteria in this file.
 
 **Abort conditions**: A0-T, A1, A3 (default; see decision tree).
 **Early stop condition**: A0-T, A4, or A4.5 (no claim made — see below).
