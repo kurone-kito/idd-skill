@@ -11,9 +11,15 @@
   },
   "trustedMarkerActors": ["{{TRUSTED_MARKER_ACTORS}}"],
   "commands": {
-    "install-deps": "{{INSTALL_DEPS_COMMAND}}",
-    "fix-validate": "{{FIX_VALIDATE_COMMANDS}}",
-    "pre-push-validate": "{{PRE_PUSH_VALIDATE_COMMANDS}}",
-    "post-fix-validate": "{{POST_FIX_VALIDATE_COMMANDS}}"
-  }
+    "install-deps": "true",
+    "fix-validate": "npx dprint fmt \"**/*.md\" && npx markdownlint-cli2 --fix \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\"",
+    "pre-push-validate": "npx dprint check \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress",
+    "post-fix-validate": "npx dprint fmt \"**/*.md\" && npx markdownlint-cli2 --fix \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress"
+  },
+  "helperRuntime": {
+    "profile": "package-manager"
+  },
+  "issueScope": "roadmap",
+  "orphanFirstPolicy": "none"
 }
+

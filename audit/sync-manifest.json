@@ -204,6 +204,18 @@
       "mode": "structure"
     },
     {
+      "id": "idd-overview-core-instructions",
+      "source": "idd-template/.github/instructions/idd-overview-core.instructions.md",
+      "target": ".github/instructions/idd-overview-core.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-overview-appendix-instructions",
+      "source": "idd-template/.github/instructions/idd-overview-appendix.instructions.md",
+      "target": ".github/instructions/idd-overview-appendix.instructions.md",
+      "mode": "exact"
+    },
+    {
       "id": "idd-pr-submit-instructions",
       "source": "idd-template/.github/instructions/idd-pr-submit.instructions.md",
       "target": ".github/instructions/idd-pr-submit.instructions.md",
