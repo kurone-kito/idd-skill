@@ -225,6 +225,7 @@ export function buildHelperRuntimeManifest({
   const normalizedFromProfile = normalizeOptionalProfile(fromProfile);
   const normalizedTargetRoot = targetRoot || process.cwd();
   const normalizedPackageSpec = normalizePackageSpec(packageSpec);
+  const recommendation = recommendHelperRuntimeProfile(normalizedTargetRoot);
   const normalizedPackageManager = normalizePackageManager(
     packageManager || detectPackageManager(normalizedTargetRoot),
     normalizedProfile,
@@ -250,6 +251,7 @@ export function buildHelperRuntimeManifest({
     packageSpecPinHint: PACKAGE_SPEC_PIN_HINT,
     nodeEngines: packageMetadata.nodeEngines,
     packageManager: normalizedPackageManager,
+    recommendation,
     availableProfiles: [...PROFILE_NAMES],
     commandCatalog,
     profiles: selectedProfiles,
@@ -305,14 +307,22 @@ export function collectVendoredFiles(packageRoot = resolve(dirname(fileURLToPath
 }
 
 export function detectPackageManager(root = process.cwd()) {
+  return collectHelperRuntimeEvidence(root).detectedPackageManager;
+}
+
+export function collectHelperRuntimeEvidence(root = process.cwd()) {
   const packageJsonPath = resolve(root, "package.json");
+  let declaredPackageManager = "";
+  let hasPackageJson = false;
   if (existsSync(packageJsonPath)) {
+    hasPackageJson = true;
     try {
       const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
       const declared = String(packageJson.packageManager ?? "");
       for (const manager of PACKAGE_MANAGERS) {
         if (declared.startsWith(`${manager}@`)) {
-          return manager;
+          declaredPackageManager = manager;
+          break;
         }
       }
     } catch {
@@ -321,15 +331,56 @@ export function detectPackageManager(root = process.cwd()) {
   }
 
   const lockfileMatches = [
-    ["pnpm-lock.yaml", "pnpm"],
-    ["package-lock.json", "npm"],
-    ["yarn.lock", "yarn"],
-  ].filter(([filename]) => existsSync(resolve(root, filename)));
-  if (lockfileMatches.length === 1) {
-    return lockfileMatches[0][1];
+    { filename: "pnpm-lock.yaml", manager: "pnpm" },
+    { filename: "package-lock.json", manager: "npm" },
+    { filename: "yarn.lock", manager: "yarn" },
+  ].filter(({ filename }) => existsSync(resolve(root, filename)));
+  const detectedPackageManager = declaredPackageManager
+    || (lockfileMatches.length === 1 ? lockfileMatches[0].manager : "");
+
+  return {
+    hasPackageJson,
+    declaredPackageManager,
+    lockfileMatches,
+    detectedPackageManager,
+    packageJsonOnly: hasPackageJson && !declaredPackageManager && lockfileMatches.length === 0,
+    ambiguousPackageManager: !declaredPackageManager && lockfileMatches.length > 1,
+  };
+}
+
+export function recommendHelperRuntimeProfile(root = process.cwd()) {
+  const evidence = collectHelperRuntimeEvidence(root);
+  if (evidence.detectedPackageManager) {
+    return {
+      profile: "package-manager",
+      packageManager: evidence.detectedPackageManager,
+      reason: evidence.declaredPackageManager
+        ? "Detected supported packageManager metadata."
+        : "Detected exactly one supported package-manager lockfile.",
+      evidence,
+    };
   }
 
-  return "";
+  if (evidence.ambiguousPackageManager) {
+    return {
+      profile: "vendored-node",
+      packageManager: "",
+      reason: "Multiple supported package-manager signals were detected; do not guess an install path. Prefer vendored-node before ephemeral-npx when helper support is still desired.",
+      evidence,
+    };
+  }
+
+  let reason = "No supported package-manager evidence was detected.";
+  if (evidence.packageJsonOnly) {
+    reason = "package.json alone is not enough evidence to assume npm, another package manager, or a real Node.js helper path.";
+  }
+
+  return {
+    profile: "instructions-only",
+    packageManager: "",
+    reason: `${reason} Keep instructions-only unless separate repository evidence confirms a real Node.js helper path; if helper support is still desired then, prefer vendored-node before ephemeral-npx.`,
+    evidence,
+  };
 }
 
 function buildCommandCatalog() {

@@ -157,16 +157,20 @@ own.
 
 ### Helper runtime profile
 
-Keep `instructions-only` unless helper support was explicitly
-requested. When helper support is requested, choose the runtime profile
-in this order:
+Auto-propose a helper runtime profile only when repository evidence
+shows a supported package-manager path or another real Node.js helper
+path, but require explicit operator confirmation before recording
+anything other than `instructions-only`. Choose the runtime profile in
+this order:
 
-1. `package-manager` when the target repository already uses pnpm, npm,
-   or yarn
+1. `package-manager` when the target repository declares supported
+   `packageManager` metadata or has exactly one supported pnpm, npm, or
+   yarn lockfile
 2. `vendored-node` when Node.js is available and helper files may be
-   copied into the repository
-3. `ephemeral-npx` only when a resolvable one-shot helper command
-   already exists
+   copied into the repository, but package-manager evidence is missing
+   or ambiguous
+3. `ephemeral-npx` only when vendoring is not preferred and a
+   resolvable one-shot helper command already exists
 4. `instructions-only` fallback when none of the above applies
 
 Repositories without Node.js remain fully supported through

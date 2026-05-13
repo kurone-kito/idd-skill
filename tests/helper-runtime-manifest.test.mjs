@@ -8,8 +8,10 @@ import { test } from "node:test";
 
 import {
   buildHelperRuntimeManifest,
+  collectHelperRuntimeEvidence,
   collectVendoredFiles,
   detectPackageManager,
+  recommendHelperRuntimeProfile,
   resolveSourcePackageMetadata,
 } from "../scripts/helper-runtime-manifest.mjs";
 
@@ -96,6 +98,99 @@ test("detectPackageManager respects package metadata and lockfiles", () => {
   writeFileSync(join(ambiguousRoot, "package-lock.json"), "{}");
   writeFileSync(join(ambiguousRoot, "yarn.lock"), "# lockfile");
   assert.equal(detectPackageManager(ambiguousRoot), "");
+});
+
+test("helper runtime evidence and recommendation stay fail-closed around package-manager detection", () => {
+  const packageJsonRoot = mkdtempSync(join(tmpdir(), "idd-helper-runtime-recommend-package-json-"));
+  writeFileSync(join(packageJsonRoot, "package.json"), JSON.stringify({ packageManager: "npm@10.9.0" }));
+  assert.deepEqual(recommendHelperRuntimeProfile(packageJsonRoot), {
+    profile: "package-manager",
+    packageManager: "npm",
+    reason: "Detected supported packageManager metadata.",
+    evidence: {
+      hasPackageJson: true,
+      declaredPackageManager: "npm",
+      lockfileMatches: [],
+      detectedPackageManager: "npm",
+      packageJsonOnly: false,
+      ambiguousPackageManager: false,
+    },
+  });
+
+  const lockfileRoot = mkdtempSync(join(tmpdir(), "idd-helper-runtime-recommend-lockfile-"));
+  writeFileSync(join(lockfileRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'");
+  assert.deepEqual(recommendHelperRuntimeProfile(lockfileRoot), {
+    profile: "package-manager",
+    packageManager: "pnpm",
+    reason: "Detected exactly one supported package-manager lockfile.",
+    evidence: {
+      hasPackageJson: false,
+      declaredPackageManager: "",
+      lockfileMatches: [{ filename: "pnpm-lock.yaml", manager: "pnpm" }],
+      detectedPackageManager: "pnpm",
+      packageJsonOnly: false,
+      ambiguousPackageManager: false,
+    },
+  });
+
+  const packageJsonOnlyRoot = mkdtempSync(join(tmpdir(), "idd-helper-runtime-recommend-package-json-only-"));
+  writeFileSync(join(packageJsonOnlyRoot, "package.json"), JSON.stringify({ name: "target-app" }));
+  assert.deepEqual(collectHelperRuntimeEvidence(packageJsonOnlyRoot), {
+    hasPackageJson: true,
+    declaredPackageManager: "",
+    lockfileMatches: [],
+    detectedPackageManager: "",
+    packageJsonOnly: true,
+    ambiguousPackageManager: false,
+  });
+  assert.deepEqual(recommendHelperRuntimeProfile(packageJsonOnlyRoot), {
+    profile: "instructions-only",
+    packageManager: "",
+    reason: "package.json alone is not enough evidence to assume npm, another package manager, or a real Node.js helper path. Keep instructions-only unless separate repository evidence confirms a real Node.js helper path; if helper support is still desired then, prefer vendored-node before ephemeral-npx.",
+    evidence: {
+      hasPackageJson: true,
+      declaredPackageManager: "",
+      lockfileMatches: [],
+      detectedPackageManager: "",
+      packageJsonOnly: true,
+      ambiguousPackageManager: false,
+    },
+  });
+
+  const ambiguousRoot = mkdtempSync(join(tmpdir(), "idd-helper-runtime-recommend-ambiguous-"));
+  writeFileSync(join(ambiguousRoot, "package-lock.json"), "{}");
+  writeFileSync(join(ambiguousRoot, "yarn.lock"), "# lockfile");
+  assert.deepEqual(recommendHelperRuntimeProfile(ambiguousRoot), {
+    profile: "vendored-node",
+    packageManager: "",
+    reason: "Multiple supported package-manager signals were detected; do not guess an install path. Prefer vendored-node before ephemeral-npx when helper support is still desired.",
+    evidence: {
+      hasPackageJson: false,
+      declaredPackageManager: "",
+      lockfileMatches: [
+        { filename: "package-lock.json", manager: "npm" },
+        { filename: "yarn.lock", manager: "yarn" },
+      ],
+      detectedPackageManager: "",
+      packageJsonOnly: false,
+      ambiguousPackageManager: true,
+    },
+  });
+
+  const emptyRoot = mkdtempSync(join(tmpdir(), "idd-helper-runtime-recommend-empty-"));
+  assert.deepEqual(recommendHelperRuntimeProfile(emptyRoot), {
+    profile: "instructions-only",
+    packageManager: "",
+    reason: "No supported package-manager evidence was detected. Keep instructions-only unless separate repository evidence confirms a real Node.js helper path; if helper support is still desired then, prefer vendored-node before ephemeral-npx.",
+    evidence: {
+      hasPackageJson: false,
+      declaredPackageManager: "",
+      lockfileMatches: [],
+      detectedPackageManager: "",
+      packageJsonOnly: false,
+      ambiguousPackageManager: false,
+    },
+  });
 });
 
 test("source package metadata falls back when vendored into another repository", () => {
