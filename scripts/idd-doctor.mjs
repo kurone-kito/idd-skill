@@ -43,8 +43,9 @@ export function runDoctor({ root, requireGithub }) {
 
   checkRequiredFiles(files, report)
   checkPlaceholders(root, textFiles, report)
-  checkMarkerPrefixes(root, report)
-  checkProjectCommands(root, report)
+  const markerPrefix = checkMarkerPrefixes(root, report)
+  const projectCommands = checkProjectCommands(root, report)
+  checkCommandResidueAndConsistency(root, markerPrefix, projectCommands, report)
   checkPolicySignals(root, report)
   checkHelperRuntimeConfig(root, report)
   checkAgentEntryFiles(root, report)
@@ -175,7 +176,7 @@ function checkMarkerPrefixes(root, report) {
     overview = readFileSync(overviewPath, "utf8")
   } catch {
     report.warnings.push("marker-prefix checks skipped because discover/overview files are missing")
-    return
+    return null
   }
 
   const discoverPrefixes = extractMarkerPrefixes(discover)
@@ -189,32 +190,33 @@ function checkMarkerPrefixes(root, report) {
 
   if (allPrefixes.length === 0) {
     report.warnings.push("marker-prefix checks skipped because no resolved marker prefixes were found")
-    return
+    return null
   }
 
   const invalid = allPrefixes.filter((prefix) => !/^[a-z][a-z0-9-]{1,31}$/.test(prefix))
   if (invalid.length > 0) {
     report.errors.push(`invalid marker prefixes: ${invalid.join(", ")}`)
-    return
+    return null
   }
 
   if (!sameMembers(discoverPrefixes.roadmap, discoverPrefixes.blockedBy)) {
     report.errors.push("discover marker prefixes differ between roadmap-id and blocked-by")
-    return
+    return null
   }
   if (!sameMembers(overviewPrefixes.roadmap, overviewPrefixes.blockedBy)) {
     report.errors.push("overview marker prefixes differ between roadmap-id and blocked-by")
-    return
+    return null
   }
   if (
     !sameMembers(discoverPrefixes.roadmap, overviewPrefixes.roadmap) ||
     !sameMembers(discoverPrefixes.blockedBy, overviewPrefixes.blockedBy)
   ) {
     report.errors.push("marker prefixes differ between discover and overview instructions")
-    return
+    return null
   }
 
   report.passes.push(`marker prefix is valid and consistent (${allPrefixes[0]})`)
+  return allPrefixes[0]
 }
 
 function checkProjectCommands(root, report) {
@@ -224,7 +226,7 @@ function checkProjectCommands(root, report) {
     text = readFileSync(path, "utf8")
   } catch {
     report.errors.push("cannot read .github/instructions/idd-overview.instructions.md")
-    return
+    return null
   }
 
   const commands = parseProjectCommandRows(text)
@@ -232,7 +234,7 @@ function checkProjectCommands(root, report) {
   const missingRows = requiredRows.filter((row) => !commands.has(row))
   if (missingRows.length > 0) {
     report.errors.push(`project commands table is missing rows: ${missingRows.join(", ")}`)
-    return
+    return null
   }
 
   const noOps = requiredRows.filter((row) => commands.get(row) === "true")
@@ -241,6 +243,111 @@ function checkProjectCommands(root, report) {
   } else {
     report.passes.push("project commands table has non-empty command values")
   }
+  return commands
+}
+
+function checkCommandResidueAndConsistency(root, markerPrefix, projectCommands, report) {
+  if (!(projectCommands instanceof Map)) {
+    return
+  }
+
+  const policyCommands = loadPolicyCommands(root)
+  const policyCommandMap = policyCommands instanceof Map ? policyCommands : new Map()
+
+  const sharedKeys = unique([...policyCommandMap.keys()].filter((key) => projectCommands.has(key))).sort()
+  for (const key of sharedKeys) {
+    const configValue = normalizeCommandValue(policyCommandMap.get(key))
+    const overviewValue = normalizeCommandValue(projectCommands.get(key))
+    if (!isConcreteCommandValue(configValue) || !isConcreteCommandValue(overviewValue)) {
+      continue
+    }
+    if (configValue !== overviewValue) {
+      report.warnings.push(
+        `command mismatch between .github/idd/config.json and overview table for "${key}": config="${configValue}" overview="${overviewValue}"`,
+      )
+    }
+  }
+
+  if (typeof markerPrefix !== "string" || markerPrefix.length === 0) {
+    report.warnings.push("toolchain residue checks skipped because marker prefix could not be resolved")
+    return
+  }
+  if (markerPrefix === "idd-skill") {
+    return
+  }
+
+  const residueMessages = new Set()
+  for (const [source, commands] of [
+    [".github/idd/config.json", policyCommandMap],
+    ["overview project commands table", projectCommands],
+  ]) {
+    for (const [key, value] of commands.entries()) {
+      const normalized = normalizeCommandValue(value)
+      if (normalized === null) {
+        continue
+      }
+      const token = findToolchainResidueToken(normalized)
+      if (!token) {
+        continue
+      }
+      residueMessages.add(
+        `toolchain residue detected for marker prefix "${markerPrefix}": ${source} "${key}" contains "${token}"`,
+      )
+    }
+  }
+  for (const message of residueMessages) {
+    report.warnings.push(message)
+  }
+}
+
+function loadPolicyCommands(root) {
+  const configPath = join(root, ".github/idd/config.json")
+  if (!exists(configPath)) {
+    return null
+  }
+
+  let parsed
+  try {
+    parsed = JSON.parse(readFileSync(configPath, "utf8"))
+  } catch {
+    return null
+  }
+  const commands = parsed?.commands
+  if (!commands || typeof commands !== "object" || Array.isArray(commands)) {
+    return null
+  }
+
+  return new Map(Object.entries(commands).filter(([, value]) => typeof value === "string"))
+}
+
+function normalizeCommandValue(value) {
+  if (typeof value !== "string") {
+    return null
+  }
+  return value.trim()
+}
+
+function isConcreteCommandValue(value) {
+  if (typeof value !== "string" || value.length === 0) {
+    return false
+  }
+  if (value.toLowerCase() === "true") {
+    return false
+  }
+  return !/\{\{\s*[A-Za-z0-9_-]+\s*\}\}/.test(value)
+}
+
+function findToolchainResidueToken(value) {
+  for (const token of ["dprint", "markdownlint-cli2", "cspell"]) {
+    if (new RegExp(`\\b${escapeRegex(token)}\\b`, "i").test(value)) {
+      return token
+    }
+  }
+  return null
+}
+
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
 function checkPolicySignals(root, report) {
