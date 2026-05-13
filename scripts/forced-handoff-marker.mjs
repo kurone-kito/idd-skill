@@ -34,23 +34,26 @@ export function planHandoff(issueComments, linkedPrs, options = {}) {
     isAuthorizedForcedHandoff,
   } = options;
 
-  const activeClaim = resolveHelperActiveClaim(
+  const resolveOpts = {
+    isAuthorizedForcedHandoff:
+      typeof isAuthorizedForcedHandoff === "function"
+        ? isAuthorizedForcedHandoff
+        : () => false,
+  };
+
+  // First pass: resolve without PR filter to obtain the claim branch.
+  const firstPassClaim = resolveHelperActiveClaim(
     issueComments,
     trustedMarkerLogins ?? [],
-    {
-      isAuthorizedForcedHandoff:
-        typeof isAuthorizedForcedHandoff === "function"
-          ? isAuthorizedForcedHandoff
-          : () => false,
-    },
+    resolveOpts,
   );
 
-  if (!activeClaim) {
+  if (!firstPassClaim) {
     throw new Error("issue has no active trusted claim");
   }
 
   const matchingPrs = (linkedPrs ?? []).filter(
-    (pr) => String(pr.headRefName ?? "") === activeClaim.branch,
+    (pr) => String(pr.headRefName ?? "") === firstPassClaim.branch,
   );
   const contextScope = matchingPrs.length > 0 ? "issue-plus-pr" : "issue-only";
   const prReferences = matchingPrs.map((pr) => String(pr.number));
@@ -59,9 +62,26 @@ export function planHandoff(issueComments, linkedPrs, options = {}) {
     const prRef = String(prNumber);
     if (!prReferences.includes(prRef)) {
       throw new Error(
-        `PR #${prNumber} does not match any open PR on claim branch ${activeClaim.branch}` +
+        `PR #${prNumber} does not match any open PR on claim branch ${firstPassClaim.branch}` +
           (prReferences.length > 0 ? `; expected one of: ${prReferences.join(", ")}` : ""),
       );
+    }
+  }
+
+  // Second pass: when an open PR is part of the plan, re-resolve with an
+  // expectedLinkedPrs filter so that prior issue-only forced-handoff markers
+  // are correctly rejected for PR-scoped claim replay.
+  let activeClaim = firstPassClaim;
+  if (contextScope === "issue-plus-pr") {
+    const expectedLinkedPrs =
+      prNumber !== undefined ? [String(prNumber)] : prReferences;
+    const filteredClaim = resolveHelperActiveClaim(
+      issueComments,
+      trustedMarkerLogins ?? [],
+      { ...resolveOpts, expectedLinkedPrs },
+    );
+    if (filteredClaim) {
+      activeClaim = filteredClaim;
     }
   }
 
@@ -73,23 +93,30 @@ export function planHandoff(issueComments, linkedPrs, options = {}) {
 
   let markerBody = null;
   if (forcedBy && reason) {
-    const resolvedLinkedPr =
-      prNumber !== undefined ? String(prNumber) : prReferences[0];
-    const payload = {
-      oldAgentId: activeClaim.agentId,
-      oldClaimId: activeClaim.claimId,
-      newAgentId: successorIds.newAgentId,
-      newClaimId: successorIds.newClaimId,
-      branch: activeClaim.branch,
-      ...(contextScope === "issue-plus-pr" && resolvedLinkedPr
-        ? { linkedPr: resolvedLinkedPr }
-        : {}),
-      forcedBy,
-      reason,
-      timestamp: timestamp ?? currentIsoTimestamp(),
-      contextScope,
-    };
-    markerBody = renderForcedHandoffComment(payload);
+    // Validate the approving actor before rendering the marker body so that
+    // plan output cannot preview a marker that claim resolution would reject.
+    const authorized =
+      typeof isAuthorizedForcedHandoff !== "function" ||
+      isAuthorizedForcedHandoff(forcedBy);
+    if (authorized) {
+      const resolvedLinkedPr =
+        prNumber !== undefined ? String(prNumber) : prReferences[0];
+      const payload = {
+        oldAgentId: activeClaim.agentId,
+        oldClaimId: activeClaim.claimId,
+        newAgentId: successorIds.newAgentId,
+        newClaimId: successorIds.newClaimId,
+        branch: activeClaim.branch,
+        ...(contextScope === "issue-plus-pr" && resolvedLinkedPr
+          ? { linkedPr: resolvedLinkedPr }
+          : {}),
+        forcedBy,
+        reason,
+        timestamp: timestamp ?? currentIsoTimestamp(),
+        contextScope,
+      };
+      markerBody = renderForcedHandoffComment(payload);
+    }
   }
 
   return {
@@ -145,12 +172,13 @@ export function main(argv = process.argv.slice(2)) {
       ]);
     }
 
+    const modeEnabled = readForcedHandoffMode() === "human-gated";
     const plan = planHandoff(issueComments, linkedPrs, {
       newAgentId: args.newAgentId,
       newClaimId: args.newClaimId,
       prNumber: args.prNumber,
-      forcedBy: args.forcedBy,
-      reason: args.reason,
+      forcedBy: modeEnabled ? args.forcedBy : undefined,
+      reason: modeEnabled ? args.reason : undefined,
       timestamp: args.timestamp,
       trustedMarkerLogins,
       isAuthorizedForcedHandoff: (forcedBy) =>
@@ -159,7 +187,7 @@ export function main(argv = process.argv.slice(2)) {
 
     console.log(
       JSON.stringify(
-        { repository: `${owner}/${name}`, issueNumber: args.issueNumber, ...plan },
+        { repository: `${owner}/${name}`, issueNumber: args.issueNumber, modeEnabled, ...plan },
         null,
         2,
       ),
