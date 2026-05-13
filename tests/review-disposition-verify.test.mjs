@@ -321,6 +321,19 @@ test("checkPathBItem: awaiting_maintainer decision → fail (invalid for PATH B)
   assert.equal(result.checks.decisionRecorded, false);
 });
 
+test("checkPathBItem: regular_comment with non-null threadResolved → fail", () => {
+  const result = checkPathBItem({
+    id: "b10",
+    path: "B",
+    type: "regular_comment",
+    decision: "accepted",
+    markerReply: "**Accepted** — confirmed",
+    threadResolved: true,
+  });
+  assert.equal(result.passed, false);
+  assert.ok(result.issues.some((msg) => msg.includes("non-null threadResolved")));
+});
+
 test("checkPathBItem: null decision → fail", () => {
   const result = checkPathBItem({
     id: "b9",

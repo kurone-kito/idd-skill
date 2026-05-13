@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
 const MARKER_ACCEPTED_RE = /^\*\*Accepted\*\*\s+—/;
@@ -12,6 +11,10 @@ if (isMainModule(import.meta.url)) {
   if (args.help) {
     printHelp();
     process.exit(0);
+  }
+
+  if (args.items === null) {
+    throw new Error("--items is required");
   }
 
   let rawItems;
@@ -298,17 +301,13 @@ function normalizeItem(item) {
 }
 
 function parseArgs(argv) {
-  const parsed = { items: "[]", verbose: false, help: false };
+  const parsed = { items: null, help: false };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
     if (token === "--items") {
       parsed.items = value ?? "[]";
       index += 1;
-      continue;
-    }
-    if (token === "--verbose") {
-      parsed.verbose = true;
       continue;
     }
     if (token === "--help" || token === "-h") {
@@ -322,7 +321,7 @@ function parseArgs(argv) {
 
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/review-disposition-verify.mjs --items '<json>' [--verbose] [--help]
+  node scripts/review-disposition-verify.mjs --items '<json>' [--help]
 
 Input: JSON array of items or object with an 'items' key.
 
