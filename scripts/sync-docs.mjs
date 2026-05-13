@@ -31,9 +31,14 @@ const shellFileLists = manifest.shellFileLists ?? [];
 
 const diffs = [];
 const skippedPairs = [];
+let nonZeroExit = false;
 
 processSyncPairs(manifest.syncPairs ?? []);
 processGeneratedBlocksAndShellFileLists(generatedBlocks, shellFileLists);
+
+if (nonZeroExit) {
+  process.exit(1);
+}
 
 if (diffs.length === 0) {
   console.log("All mirrored artifacts are up to date.");
@@ -104,9 +109,13 @@ function processSyncPairs(pairs) {
       if (current === null || normalizeText(current) !== generated) {
         diffs.push({ target, content: generated });
       }
-    } else {
-      // structure / contains — no auto-generation possible
+    } else if (mode === "structure" || mode === "contains") {
+      // No auto-generation possible for these modes
       skippedPairs.push({ id, mode });
+    } else {
+      throw new Error(
+        `sync-docs: unrecognized syncPair mode "${mode}" in pair "${id}"`
+      );
     }
   }
 }
@@ -139,6 +148,7 @@ function processGeneratedBlocksAndShellFileLists(blocks, lists) {
       console.error(
         `sync-docs: shellFileList "${list.id}" references unknown generatedBlock "${list.generatedBlock}"`
       );
+      nonZeroExit = true;
       continue;
     }
     addToFile(list.file, { kind: "shell", list, sourceBlock });
@@ -152,6 +162,7 @@ function processGeneratedBlocksAndShellFileLists(blocks, lists) {
     const rawText = queued ? queued.content : tryReadText(file);
     if (rawText === null) {
       console.error(`sync-docs: file not found: ${file}`);
+      nonZeroExit = true;
       continue;
     }
 
@@ -161,13 +172,17 @@ function processGeneratedBlocksAndShellFileLists(blocks, lists) {
     for (const update of updates) {
       if (update.kind === "generated") {
         const result = applyGeneratedBlock(text, update.block);
-        if (result !== null && result !== text) {
+        if (result === null) {
+          nonZeroExit = true;
+        } else if (result !== text) {
           text = result;
           changed = true;
         }
       } else {
         const result = applyShellFileList(text, update.list, update.sourceBlock);
-        if (result !== null && result !== text) {
+        if (result === null) {
+          nonZeroExit = true;
+        } else if (result !== text) {
           text = result;
           changed = true;
         }
@@ -329,6 +344,10 @@ function normalizeText(text) {
 function doStripPrefix(file, prefix) {
   if (!prefix) return file;
   if (file.startsWith(prefix)) return file.slice(prefix.length);
+  console.error(
+    `sync-docs: file "${file}" does not start with expected prefix "${prefix}"`
+  );
+  nonZeroExit = true;
   return file;
 }
 
