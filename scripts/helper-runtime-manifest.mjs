@@ -124,6 +124,7 @@ const HELPER_COMMANDS = [
     entryPath: "scripts/ci-wait-policy.mjs",
     vendoredCommand: "node scripts/ci-wait-policy.mjs",
     description: "Resolve shared ciWait defaults and deterministic rerun-budget decisions.",
+    contractPaths: ["schemas/policy.schema.json"],
   },
   {
     id: "discover-orphan-filter",
