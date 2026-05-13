@@ -244,18 +244,18 @@ Rules:
 
 Evaluate top-to-bottom; first match wins.
 
-| `LAST_COPILOT_COMMIT` | `COPILOT_PENDING` | Marker state        | Head proof / cap                         | Elapsed                         | Outcome           |
-| --------------------- | ----------------- | ------------------- | ---------------------------------------- | ------------------------------- | ----------------- |
-| `== PR_HEAD_SHA`      | any               | any                 | any                                      | any                             | `SATISFIED`       |
-| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | `COPILOT_PENDING_COVERS_HEAD=true`       | —                               | `RECOVERY_NEEDED` |
-| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | not proven; request cap < `REQUEST_CAP`  | —                               | `REQUEST_NEEDED`  |
-| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | not proven; request cap >= `REQUEST_CAP` | —                               | `CAP_EXHAUSTED`   |
-| `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | any                                      | >= `PENDING_WINDOW_MINUTES` min | `SATISFIED`       |
-| `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | any                                      | < `PENDING_WINDOW_MINUTES` min  | `WAIT`            |
-| `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | any                                      | >= `SETTLED_WINDOW_MINUTES` min | `SATISFIED`       |
-| `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | any                                      | < `SETTLED_WINDOW_MINUTES` min  | `WAIT`            |
-| `!= PR_HEAD_SHA`      | `"false"`         | no same-head marker | request cap >= `REQUEST_CAP`             | —                               | `CAP_EXHAUSTED`   |
-| `!= PR_HEAD_SHA`      | `"false"`         | no same-head marker | request cap < `REQUEST_CAP`              | —                               | `REQUEST_NEEDED`  |
+| `LAST_COPILOT_COMMIT` | `COPILOT_PENDING` | Marker state        | Head proof / cap                                    | Elapsed                         | Outcome           |
+| --------------------- | ----------------- | ------------------- | --------------------------------------------------- | ------------------------------- | ----------------- |
+| `== PR_HEAD_SHA`      | any               | any                 | any                                                 | any                             | `SATISFIED`       |
+| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | `COPILOT_PENDING_COVERS_HEAD=true`                  | —                               | `RECOVERY_NEEDED` |
+| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | not proven; `REQUEST_MARKER_COUNT` < `REQUEST_CAP`  | —                               | `REQUEST_NEEDED`  |
+| `!= PR_HEAD_SHA`      | `"true"`          | no same-head marker | not proven; `REQUEST_MARKER_COUNT` >= `REQUEST_CAP` | —                               | `CAP_EXHAUSTED`   |
+| `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | any                                                 | >= `PENDING_WINDOW_MINUTES` min | `SATISFIED`       |
+| `!= PR_HEAD_SHA`      | `"true"`          | marker exists       | any                                                 | < `PENDING_WINDOW_MINUTES` min  | `WAIT`            |
+| `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | any                                                 | >= `SETTLED_WINDOW_MINUTES` min | `SATISFIED`       |
+| `!= PR_HEAD_SHA`      | `"false"`         | marker exists       | any                                                 | < `SETTLED_WINDOW_MINUTES` min  | `WAIT`            |
+| `!= PR_HEAD_SHA`      | `"false"`         | no same-head marker | `REQUEST_MARKER_COUNT` >= `REQUEST_CAP`             | —                               | `CAP_EXHAUSTED`   |
+| `!= PR_HEAD_SHA`      | `"false"`         | no same-head marker | `REQUEST_MARKER_COUNT` < `REQUEST_CAP`              | —                               | `REQUEST_NEEDED`  |
 
 ### AW3-R — Recovery marker
 
