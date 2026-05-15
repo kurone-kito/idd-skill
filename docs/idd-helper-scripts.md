@@ -512,7 +512,10 @@ default `instructions-only` profile keep using the written shell /
   approval can be satisfied by an eligible non-author owner or an
   applicable pull-request-only ruleset bypass. `deadlock` and
   `possible_deadlock` statuses should be surfaced in F2 evidence and
-  hold comments, but they do not grant bypass permission.
+  hold comments, but they do not grant bypass permission. The
+  `currentUserCanBypass` token records the known GitHub ruleset value
+  (`unknown`, `never`, `always`, `pull_requests_only`, `exempt`, or
+  `mixed`).
 - `reviewCurrency.comparisonRoute` remains advisory evidence only. Agents
   must still apply written instruction checks against live GitHub state.
 - Fail closed: if helper execution fails, output is invalid JSON,

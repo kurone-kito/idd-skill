@@ -328,7 +328,7 @@
             },
             "currentUserCanBypass": {
               "type": "string",
-              "enum": ["unknown", "never", "always", "pull_requests_only", "mixed"]
+              "enum": ["unknown", "never", "always", "pull_requests_only", "exempt", "mixed"]
             }
           }
         },

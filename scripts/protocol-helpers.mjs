@@ -1443,6 +1443,7 @@ export function summarizeBranchReviewRequirements(branchRules = [], branchProtec
 
   let requiredApprovingReviewCount = 0;
   let requireCodeOwnerReview = false;
+  let classicRequireCodeOwnerReview = false;
   let requiresConversationResolution = false;
   let requiredCheckSourcePinned = false;
 
@@ -1487,13 +1488,13 @@ export function summarizeBranchReviewRequirements(branchRules = [], branchProtec
   }
 
   const protectionReviews = branchProtection.required_pull_request_reviews ?? {};
+  classicRequireCodeOwnerReview = Boolean(protectionReviews.require_code_owner_reviews)
+    || Boolean(protectionReviews.require_code_owner_review);
   requiredApprovingReviewCount = Math.max(
     requiredApprovingReviewCount,
     Number(protectionReviews.required_approving_review_count ?? 0) || 0,
   );
-  requireCodeOwnerReview = requireCodeOwnerReview
-    || Boolean(protectionReviews.require_code_owner_reviews)
-    || Boolean(protectionReviews.require_code_owner_review);
+  requireCodeOwnerReview = requireCodeOwnerReview || classicRequireCodeOwnerReview;
   requiresConversationResolution = requiresConversationResolution
     || Boolean(branchProtection.required_conversation_resolution?.enabled);
 
@@ -1508,6 +1509,7 @@ export function summarizeBranchReviewRequirements(branchRules = [], branchProtec
   return {
     requiredApprovingReviewCount,
     requireCodeOwnerReview,
+    classicRequireCodeOwnerReview,
     requiresConversationResolution,
     requiredCheckSourcePinned,
     requiredReviewerLogins: [...requiredReviewerLogins].sort(),
@@ -1706,6 +1708,7 @@ export function summarizeReviewerStates(
     prAuthorLogin,
     branchRules,
     branchRulesets,
+    classicRequireCodeOwnerReview: branchReviewRequirements.classicRequireCodeOwnerReview,
   });
 
   return {
@@ -1752,11 +1755,13 @@ function summarizeCodeownerSelfApproval({
   prAuthorLogin = "",
   branchRules = [],
   branchRulesets = [],
+  classicRequireCodeOwnerReview = false,
 }) {
   const normalizedAuthor = String(prAuthorLogin ?? "").trim().toLowerCase();
   const directCodeownerUserLogins = normalizeTrustedMarkerLogins(codeownerUserLogins);
   const normalizedCodeownerTeamSlugs = normalizeTrustedMarkerLogins(codeownerTeamSlugs);
   const bypass = summarizeRulesetPullRequestBypass(branchRulesets, branchRules);
+  const applicableBypassDetected = bypass.detected && !classicRequireCodeOwnerReview;
   const base = {
     status: "not_applicable",
     reason: "codeowner-review-not-required",
@@ -1765,8 +1770,8 @@ function summarizeCodeownerSelfApproval({
     codeownerTeamSlugs: normalizedCodeownerTeamSlugs,
     requireCodeOwnerReview: Boolean(requireCodeOwnerReview),
     codeownerApprovalSatisfied: Boolean(codeownerApprovalSatisfied),
-    bypassDetected: bypass.detected,
-    bypassMode: bypass.mode,
+    bypassDetected: applicableBypassDetected,
+    bypassMode: applicableBypassDetected ? bypass.mode : "none",
     currentUserCanBypass: bypass.currentUserCanBypass,
   };
 
@@ -1785,7 +1790,7 @@ function summarizeCodeownerSelfApproval({
       reason: "codeowner-approval-satisfied",
     };
   }
-  if (bypass.detected) {
+  if (applicableBypassDetected) {
     return {
       ...base,
       status: "clear",
@@ -1850,18 +1855,23 @@ function summarizeRulesetPullRequestBypass(branchRulesets = [], branchRules = []
     });
   const values = relevantRulesets
     .map((ruleset) => String(ruleset?.current_user_can_bypass ?? "").trim())
+    .map((value) => {
+      return ["always", "exempt", "never", "pull_requests_only"].includes(value)
+        ? value
+        : "unknown";
+    })
     .filter(Boolean);
   let currentUserCanBypass = "unknown";
   if (values.length > 1 && new Set(values).size > 1) {
     currentUserCanBypass = "mixed";
+  } else if (values.includes("exempt")) {
+    currentUserCanBypass = "exempt";
   } else if (values.includes("pull_requests_only")) {
     currentUserCanBypass = "pull_requests_only";
   } else if (values.includes("always")) {
     currentUserCanBypass = "always";
   } else if (values.includes("never")) {
     currentUserCanBypass = "never";
-  } else if (values.length > 0) {
-    currentUserCanBypass = values.sort()[0];
   }
   const detected = relevantRulesets.length > 0
     && values.length === relevantRulesets.length
