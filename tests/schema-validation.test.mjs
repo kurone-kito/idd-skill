@@ -827,6 +827,47 @@ test("policy schema accepts issueAuthoring authoring label and stale age", () =>
   assert.deepEqual(errors, []);
 });
 
+test("policy schema accepts missing issueAuthoring object", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  delete instance.issueAuthoring;
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts issueAuthoring without maxClarificationRounds", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.issueAuthoring = {
+    authoringLabelName: "status:authoring",
+    authoringStaleAge: "PT4H",
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts issueAuthoring without authoringLabelName", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.issueAuthoring = {
+    maxClarificationRounds: 3,
+    authoringStaleAge: "PT4H",
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts issueAuthoring without authoringStaleAge", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.issueAuthoring = {
+    maxClarificationRounds: 3,
+    authoringLabelName: "status:authoring",
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
 test("policy schema rejects issueAuthoring authoringLabelName empty string", () => {
   const schema = loadJson("schemas/policy.schema.json");
   const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
