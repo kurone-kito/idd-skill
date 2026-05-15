@@ -24,6 +24,7 @@ behavior change too.
 | Issue scope             | Roadmap-first discovery                                                                                                                          | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues to be considered before roadmap traversal.                                                                                                                                                                                                                                                                                                                                               |
 | Orphan-first approval   | No extra gate beyond orphan readiness checks                                                                                                     | Keep `orphan-first-policy` as `none`, or opt in to `maintainer-approved` or `public-disabled` when public or community-submitted issues need an explicit maintainer approval layer before A0-O can select them.                                                                                                                                                                                                                                                                                                                           |
 | Issue-author approval   | Secure-by-default target contract; unattended work needs a self-authorizing issue author or explicit approval unless the repository opts out     | Record the gate decision, approval actors, freshness rule, approval signals, and opt-out semantics in repository-local policy docs and onboarding. Keep this contract aligned with the discovery/claim behavior that already ships, and update both surfaces together if local policy changes later.                                                                                                                                                                                                                                      |
+| Issue authoring guard   | Discover skips issues carrying the configured authoring label and warns when that label appears stale                                            | Configure `issueAuthoring.authoringLabelName` and `issueAuthoring.authoringStaleAge` in `.github/idd/config.json` when local label naming or timing differs from the distributed defaults. Keep the label available in the target repository and keep `authoringStaleAge` less than `claimTiming.staleAge`; see [IDD policy constants](policy-constants.md#issue-authoring-defaults).                                                                                                                                                     |
 
 ## Non-Configurable Safety Invariants
 
@@ -490,6 +491,8 @@ approval-signal and issue-authoring knobs directly:
     "labelFreshnessMode": "event-freshness"
   },
   "issueAuthoring": {
+    "authoringLabelName": "status:authoring",
+    "authoringStaleAge": "PT4H",
     "maxClarificationRounds": 5
   }
 }
@@ -499,13 +502,22 @@ Migration notes:
 
 - omit `approvalSignals.readyLabelName`,
   `approvalSignals.labelFreshnessMode`, and
+  `issueAuthoring.authoringLabelName`,
+  `issueAuthoring.authoringStaleAge`, and
   `issueAuthoring.maxClarificationRounds` to keep the distributed
-  defaults (`idd:ready`, `presence-only`, and 3 clarification rounds)
+  defaults (`idd:ready`, `presence-only`, `status:authoring`, `PT4H`,
+  and 3 clarification rounds)
 - when changing `readyLabelName`, update onboarding notes, label
   automation, and any repository guidance that still mentions the old
   label explicitly
 - when enabling `event-freshness`, expect maintainers to re-apply the
   ready label after substantive issue edits or generated-plan updates
+- when changing `issueAuthoring.authoringLabelName`, update label
+  automation and issue-authoring guidance so the target label exists
+  before Discover relies on it
+- when changing `issueAuthoring.authoringStaleAge`, keep it less than
+  `claimTiming.staleAge` (`PT24H` by default) and update both timing
+  decisions together when necessary
 - when increasing `issueAuthoring.maxClarificationRounds`, keep the
   bound finite so issue drafting still converges instead of looping
 
