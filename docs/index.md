@@ -1,5 +1,7 @@
 # IDD Reference Manual
 
+<!-- cspell:words VRC VRChat -->
+
 This directory is the deeper reference manual for idd-skill. The root
 README is the adopter landing page; use this page when you need the
 operational details, maintenance notes, or background material behind
@@ -10,19 +12,20 @@ also serve as the source for a future GitHub Pages site.
 
 ## Start Here
 
-| Need                      | Read first                                              | Why it helps                                                    |
-| ------------------------- | ------------------------------------------------------- | --------------------------------------------------------------- |
-| Start adopting IDD        | [Getting started](getting-started.md)                   | Gives the shortest safe path from import to first loop.         |
-| Learn IDD vocabulary      | [Core concepts](concepts.md)                            | Explains the loop's claims, review, merge, and cleanup terms.   |
-| Customize IDD safely      | [Customization](customization.md)                       | Names the adopter policy surfaces and workflow edit points.     |
-| Inspect policy defaults   | [Policy constants](policy-constants.md)                 | Inventories distributed timing, wait, and loop defaults.        |
-| Run the IDD loop          | [IDD workflow guide](idd-workflow.md)                   | Maps agent entry points, phase files, and Copilot advisory use. |
-| Find detailed references  | [Detailed reference](reference.md)                      | Lists phase files and policy pages without duplicating rules.   |
-| Import IDD into a repo    | [Template onboarding][template-onboarding]              | Explains the portable template copy and placeholder flow.       |
-| Grant agent credentials   | [Permissions](permissions.md)                           | Defines access profiles, forbidden scopes, and threat controls. |
-| Choose PR review policy   | [Review policy profiles](idd-review-policy-profiles.md) | Names the default Copilot advisory policy and alternatives.     |
-| Understand the value prop | [Positioning](positioning.md)                           | Summarizes where idd-skill fits among adjacent tools.           |
-| Plan future publication   | [Pages strategy](pages-strategy.md)                     | Records the low-cost path toward GitHub Pages.                  |
+| Need                      | Read first                                                           | Why it helps                                                                |
+| ------------------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Follow a complete example | [Build a VRC Event Calendar with IDD (Workshop)](workshop/README.md) | Demonstrates the IDD loop by building a VRChat event calendar from scratch. |
+| Start adopting IDD        | [Getting started](getting-started.md)                                | Gives the shortest safe path from import to first loop.                     |
+| Learn IDD vocabulary      | [Core concepts](concepts.md)                                         | Explains the loop's claims, review, merge, and cleanup terms.               |
+| Customize IDD safely      | [Customization](customization.md)                                    | Names the adopter policy surfaces and workflow edit points.                 |
+| Inspect policy defaults   | [Policy constants](policy-constants.md)                              | Inventories distributed timing, wait, and loop defaults.                    |
+| Run the IDD loop          | [IDD workflow guide](idd-workflow.md)                                | Maps agent entry points, phase files, and Copilot advisory use.             |
+| Find detailed references  | [Detailed reference](reference.md)                                   | Lists phase files and policy pages without duplicating rules.               |
+| Import IDD into a repo    | [Template onboarding][template-onboarding]                           | Explains the portable template copy and placeholder flow.                   |
+| Grant agent credentials   | [Permissions](permissions.md)                                        | Defines access profiles, forbidden scopes, and threat controls.             |
+| Choose PR review policy   | [Review policy profiles](idd-review-policy-profiles.md)              | Names the default Copilot advisory policy and alternatives.                 |
+| Understand the value prop | [Positioning](positioning.md)                                        | Summarizes where idd-skill fits among adjacent tools.                       |
+| Plan future publication   | [Pages strategy](pages-strategy.md)                                  | Records the low-cost path toward GitHub Pages.                              |
 
 ## Reference Map
 
