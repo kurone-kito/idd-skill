@@ -1171,7 +1171,7 @@ export function buildActivitySnapshotSummary(
   const latestCiCompletedAt = maxIsoTimestamp(
     checks
       .map((check) => check.completedAt)
-      .filter(isValidIsoTimestamp),
+      .filter(isCompletedCiTimestamp),
   ) ?? "none";
 
   const latestPassingCiCompletedAt = maxIsoTimestamp(
@@ -1186,7 +1186,7 @@ export function buildActivitySnapshotSummary(
         ].includes(state);
       })
       .map((check) => check.completedAt)
-      .filter(isValidIsoTimestamp),
+      .filter(isCompletedCiTimestamp),
   ) ?? "none";
 
   const maxActivityUpdatedAt = maxIsoTimestamp([
@@ -3084,6 +3084,11 @@ function isValidIsoTimestamp(value) {
   if (!Number.isFinite(time)) return false;
   const normalize = (ts) => ts.replace(".000Z", "Z");
   return normalize(new Date(time).toISOString()) === normalize(value);
+}
+
+function isCompletedCiTimestamp(value) {
+  const timestamp = String(value ?? "");
+  return timestamp !== "0001-01-01T00:00:00Z" && isValidIsoTimestamp(timestamp);
 }
 
 function normalizeComparableTimestamp(value) {
