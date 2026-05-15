@@ -367,17 +367,26 @@ function fetchCodeownersText(owner, repo, ref) {
 }
 
 function fetchBranchRulesets(owner, repo, branchRules) {
-  const rulesetIds = [...new Set(
-    (branchRules ?? [])
-      .map((rule) => Number.parseInt(String(rule?.ruleset_id ?? ""), 10))
-      .filter(Number.isInteger),
-  )];
+  const rulesetPaths = [];
+  const seenPaths = new Set();
+  for (const rule of branchRules ?? []) {
+    const rulesetId = Number.parseInt(String(rule?.ruleset_id ?? ""), 10);
+    if (!Number.isInteger(rulesetId)) {
+      continue;
+    }
+    const path = resolveRulesetDetailPath(owner, repo, rule, rulesetId);
+    if (seenPaths.has(path)) {
+      continue;
+    }
+    seenPaths.add(path);
+    rulesetPaths.push(path);
+  }
 
-  return rulesetIds
-    .map((rulesetId) => {
+  return rulesetPaths
+    .map((path) => {
       try {
         return ghApiJson(
-          `repos/${owner}/${repo}/rulesets/${rulesetId}`,
+          path,
           false,
           ["-H", "Accept: application/vnd.github+json"],
           { allowHttpStatuses: [404] },
@@ -387,6 +396,18 @@ function fetchBranchRulesets(owner, repo, branchRules) {
       }
     })
     .filter((ruleset) => Object.keys(ruleset).length > 0);
+}
+
+function resolveRulesetDetailPath(owner, repo, rule, rulesetId) {
+  const sourceType = String(rule?.ruleset_source_type ?? rule?.source_type ?? "")
+    .trim()
+    .toLowerCase();
+  if (sourceType === "organization") {
+    const source = String(rule?.ruleset_source ?? rule?.source ?? owner).trim();
+    const org = source.split("/")[0] || owner;
+    return `orgs/${encodeURIComponent(org)}/rulesets/${rulesetId}`;
+  }
+  return `repos/${owner}/${repo}/rulesets/${rulesetId}`;
 }
 
 function fetchReviewThreads(owner, repo, prNumber) {

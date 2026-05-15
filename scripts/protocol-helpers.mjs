@@ -1907,6 +1907,7 @@ function summarizeRulesetPullRequestBypass(branchRulesets = [], branchRules = []
       .map((rule) => Number.parseInt(String(rule?.ruleset_id ?? ""), 10))
       .filter(Number.isInteger),
   );
+  const expectedRulesetCount = codeownerRulesetIds.size;
   const relevantRulesets = (branchRulesets ?? [])
     .filter((ruleset) => {
       const rulesetId = Number.parseInt(String(ruleset?.id ?? ruleset?.ruleset_id ?? ""), 10);
@@ -1933,7 +1934,8 @@ function summarizeRulesetPullRequestBypass(branchRulesets = [], branchRules = []
     currentUserCanBypass = "never";
   }
   const bypassValues = new Set(["always", "exempt", "pull_requests_only"]);
-  const detected = relevantRulesets.length > 0
+  const detected = expectedRulesetCount > 0
+    && relevantRulesets.length === expectedRulesetCount
     && values.length === relevantRulesets.length
     && values.every((value) => bypassValues.has(value));
   let mode = "none";
@@ -1952,7 +1954,7 @@ function summarizeRulesetPullRequestBypass(branchRulesets = [], branchRules = []
     detected,
     mode,
     currentUserCanBypass,
-    relevantRulesetCount: relevantRulesets.length,
+    relevantRulesetCount: expectedRulesetCount,
   };
 }
 

@@ -643,6 +643,59 @@ test("self-CODEOWNER diagnostic honors classic pull request bypass allowances", 
   assert.equal(summary.codeownerSelfApproval.bypassMode, "pull_request");
 });
 
+test("self-CODEOWNER diagnostic honors classic bypass without ruleset gates", () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [{
+      type: "pull_request",
+      parameters: { require_code_owner_review: true },
+    }],
+    branchProtection: {
+      required_pull_request_reviews: {
+        require_code_owner_reviews: true,
+        bypass_pull_request_allowances: {
+          users: [{ login: "author" }],
+        },
+      },
+    },
+    codeownersText: "* @author\n",
+    changedFiles: ["README.md"],
+    prAuthorLogin: "author",
+    viewerLogin: "author",
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, "clear");
+  assert.equal(summary.codeownerSelfApproval.reason, "pull-request-bypass-available");
+  assert.equal(summary.codeownerSelfApproval.bypassDetected, true);
+  assert.equal(summary.codeownerSelfApproval.bypassMode, "pull_request");
+});
+
+test("self-CODEOWNER diagnostic fails closed when ruleset details are missing", () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [{
+      type: "pull_request",
+      ruleset_id: 1,
+      parameters: { require_code_owner_review: true },
+    }],
+    branchProtection: {
+      required_pull_request_reviews: {
+        require_code_owner_reviews: true,
+        bypass_pull_request_allowances: {
+          users: [{ login: "author" }],
+        },
+      },
+    },
+    codeownersText: "* @author\n",
+    changedFiles: ["README.md"],
+    prAuthorLogin: "author",
+    viewerLogin: "author",
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, "deadlock");
+  assert.equal(summary.codeownerSelfApproval.reason, "pr-author-is-only-direct-codeowner");
+  assert.equal(summary.codeownerSelfApproval.bypassDetected, false);
+  assert.equal(summary.codeownerSelfApproval.bypassMode, "none");
+});
+
 test("self-CODEOWNER diagnostic ignores unrelated ruleset bypasses", () => {
   const summary = summarizeReviewerStates([], {
     branchRules: [{
