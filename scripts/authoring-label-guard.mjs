@@ -94,7 +94,7 @@ export function formatElapsedDuration(durationMs) {
 }
 
 function isMatchingLabeledEvent(event, labelName) {
-  if (!event || (event.event ?? "labeled") !== "labeled") {
+  if (!event || event.event !== "labeled") {
     return false;
   }
   const eventLabel = typeof event.label === "string" ? event.label : event.label?.name;
