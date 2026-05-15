@@ -576,7 +576,7 @@ function ghApiJson(path, paginate = false, extraArgs = [], options = {}) {
 
 function runGh(args, options = {}) {
   try {
-    return execFileSync("gh", args, { encoding: "utf8" });
+    return execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   } catch (error) {
     const status = Number(error?.status ?? -1);
     if ((options.allowStatuses ?? []).includes(status)) {
