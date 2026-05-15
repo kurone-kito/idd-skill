@@ -56,6 +56,8 @@
     "labelFreshnessMode": "presence-only"
   },
   "issueAuthoring": {
-    "maxClarificationRounds": 3
+    "maxClarificationRounds": 3,
+    "authoringLabelName": "status:authoring",
+    "authoringStaleAge": "PT4H"
   }
 }

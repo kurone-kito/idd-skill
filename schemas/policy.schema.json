@@ -328,6 +328,14 @@
         "maxClarificationRounds": {
           "type": "integer",
           "minimum": 1
+        },
+        "authoringLabelName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authoringStaleAge": {
+          "type": "string",
+          "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
         }
       }
     }
