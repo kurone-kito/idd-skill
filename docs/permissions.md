@@ -49,6 +49,46 @@ dedicated merge-capable session. If a recorded merge policy value is
 unknown, the merge phase must stop with a maintainer hold until the
 policy is corrected.
 
+## Merge Topology Requirements
+
+The merge policy records who IDD may trust to request or execute the
+final merge. It does not by itself make GitHub's required review,
+CODEOWNER, branch protection, or ruleset gates satisfiable. Before
+allowing unattended F3 execution, verify that the repository has a
+merge topology that GitHub can actually accept.
+
+GitHub required reviews need approving reviews from reviewers with
+write or admin permission, and pull request authors cannot approve their
+own pull requests. CODEOWNERS add another topology constraint: code
+owners must have write access, and when code-owner review is required,
+an affected pull request must be approved by an eligible code owner.
+
+A solo-maintainer repository can deadlock if the same account opens the
+PR, is the only wildcard CODEOWNER, and required CODEOWNER review is
+enabled. `fully_autonomous_merge` combines IDD worker and merge-capable
+authority, but it does not create a second eligible reviewer and it does
+not override GitHub's self-approval rule.
+
+Choose one of these merge topologies before relying on autonomous
+merges:
+
+- **Eligible non-author review**: list at least one non-author user or
+  team with write access as the relevant CODEOWNER or required reviewer,
+  and expect IDD to wait or hand off when that approval is missing.
+- **Pull-request-only ruleset bypass**: grant the trusted merge-capable
+  actor ruleset bypass for pull requests only. This preserves the PR
+  audit trail and should be used only after IDD's branch freshness, CI,
+  review, advisory, unresolved-thread, and claim gates pass. Prefer this
+  over broad `always` or `exempt` bypass unless a maintainer explicitly
+  accepts the wider risk.
+- **Deliberate CODEOWNERS policy change**: narrow CODEOWNERS coverage,
+  add another eligible owner, or move a repository to `human_merge` when
+  human review is the intended gate. Treat this as a repository policy
+  change, not a per-run workaround.
+
+Do not use issue-author approval, trusted operational markers, or
+CODEOWNERS mismatch as substitutes for a satisfiable GitHub merge gate.
+
 ## Phase Permissions
 
 Each IDD phase needs a different subset of access:
@@ -209,3 +249,7 @@ Keep approval labels and operational marker trust as separate controls:
 - [GitHub REST API permissions for fine-grained personal access tokens](https://docs.github.com/en/rest/overview/permissions-required-for-fine-grained-personal-access-tokens)
 - [GitHub `GITHUB_TOKEN` security model](https://docs.github.com/actions/concepts/security/github_token)
 - [GitHub Copilot agent skills guidance](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/coding-agent/create-skills)
+- [GitHub required pull request reviews](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/reviewing-changes-in-pull-requests/approving-a-pull-request-with-required-reviews)
+- [GitHub CODEOWNERS](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners)
+- [GitHub ruleset bypass permissions](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/creating-rulesets-for-a-repository#granting-bypass-permissions-for-your-branch-or-tag-ruleset)
+- [GitHub ruleset bypass modes API](https://docs.github.com/en/rest/repos/rules)

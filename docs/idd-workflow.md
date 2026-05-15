@@ -148,6 +148,23 @@ repository-local policy choice and remain distinct from trusted
 operational marker actors; CODEOWNERS mismatch does not replace this
 pre-start gate.
 
+## CODEOWNERS and Merge Gates
+
+CODEOWNERS are evaluated after work reaches the pull request, not during
+Discover or Claim. They become part of the PR review and merge gates in
+E and F phases: review snapshots must report required approval and
+CODEOWNER satisfaction, and F2/F3 must prove that unresolved review
+state, advisory state, CI, and branch freshness are all current for the
+same head.
+
+Autonomous operation therefore requires a satisfiable GitHub merge
+topology in addition to a recorded IDD merge policy. If the PR author is
+also the only matching CODEOWNER, GitHub's self-approval limit can make
+required CODEOWNER review impossible to satisfy. In that topology, IDD
+must wait for an eligible non-author reviewer, use a deliberately
+configured pull-request-only ruleset bypass for the trusted merge actor,
+or stop for a repository policy change.
+
 ## Suitability policy handoff
 
 A4.5 outcomes should map to explicit repository policy, not ad hoc

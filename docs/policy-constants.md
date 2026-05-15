@@ -208,6 +208,12 @@ keys accept positive whole-minute ISO 8601 durations only.
 | Merge method                 | Merge commits (squash and rebase merge are disabled in repository settings) | [Merge](../.github/instructions/idd-merge.instructions.md), [GitHub Flow rules](./../.github/copilot-instructions.md)                                                                                    | Keep unless the repository has a different merge strategy; customize only with branch protection changes.                                           |
 | Post-merge comment cleanup   | Minimize operational markers and resolved feedback after merge succeeds     | [Merge](../.github/instructions/idd-merge.instructions.md), audit scripts, and helper tooling                                                                                                            | Keep as best-effort; safe cleanup candidates are enumerated in [comment minimization](idd-comment-minimization.md).                                 |
 
+Merge policy constants describe IDD authority and phase routing. They do
+not change GitHub's required-review, CODEOWNER, branch protection, or
+ruleset topology. A repository using `fully_autonomous_merge` still
+needs either an eligible non-author review path or an intentional
+pull-request-only bypass actor that can satisfy GitHub at F3.
+
 ## Critique And Review Loop Defaults
 
 | Policy default                          | Distributed value                                                                                                              | Owning surface                                                             | Onboarding expectation                                                                                                       |
