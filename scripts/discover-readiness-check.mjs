@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+import {
+  buildAuthoringLabelWarning,
+  resolveAuthoringGuardPolicy,
+} from "./authoring-label-guard.mjs";
 
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({ __iddLookupStatus: "inaccessible" });
 const INACCESSIBLE_HTTP_STATUSES = new Set([403, 410, 451]);
@@ -13,11 +20,16 @@ if (isMainModule(import.meta.url)) {
 
   const owner = args.owner || ghText(["repo", "view", "--json", "owner", "--jq", ".owner.login"]);
   const repo = args.repo || ghText(["repo", "view", "--json", "name", "--jq", ".name"]);
+  const authoringPolicy = resolveAuthoringGuardPolicy(loadPolicy(args.policy));
 
   const summary = await evaluateDiscoverReadiness(args.issueNumbers, {
     includeUnresolvable: args.includeUnresolvable,
     loadIssue: buildIssueLoader(owner, repo),
+    loadIssueLabelEvents: buildIssueLabelEventsLoader(owner, repo),
     findRoadmapsByMarker: buildRoadmapMarkerResolver(owner, repo),
+    authoringLabelName: authoringPolicy.labelName,
+    authoringStaleAgeMs: authoringPolicy.staleAgeMs,
+    now: args.now || new Date(),
   });
 
   if (args.csv) {
@@ -32,6 +44,10 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     includeUnresolvable = false,
     loadIssue,
     findRoadmapsByMarker,
+    loadIssueLabelEvents,
+    authoringLabelName = "status:authoring",
+    authoringStaleAgeMs = 4 * 60 * 60 * 1000,
+    now = new Date(),
   } = options ?? {};
   if (typeof loadIssue !== "function") {
     throw new Error("evaluateDiscoverReadiness requires loadIssue(issueNumber)");
@@ -43,6 +59,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
   const ready = [];
   const filteredOut = [];
   const unresolvable = [];
+  const warnings = [];
   const issueCache = new Map();
   const markerCache = new Map();
 
@@ -79,6 +96,19 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     }
     if (labels.has("status:needs-decision")) {
       reasons.add("label:status:needs-decision");
+    }
+    if (labels.has(authoringLabelName)) {
+      reasons.add(`label:${authoringLabelName}`);
+      const warning = buildAuthoringLabelWarning({
+        issueNumber: issue.number,
+        labelName: authoringLabelName,
+        labelEvents: await resolveLabelEvents(issue, loadIssueLabelEvents),
+        now,
+        staleAgeMs: authoringStaleAgeMs,
+      });
+      if (warning) {
+        warnings.push(warning);
+      }
     }
 
     for (const dependencyNumber of extractDependencyIssueNumbers(issue.body)) {
@@ -160,6 +190,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     ready,
     filteredOut,
     unresolvable: includeUnresolvable ? unresolvable : [],
+    warnings,
     summary: {
       total: ready.length + filteredOut.length,
       readyCount: ready.length,
@@ -196,6 +227,8 @@ function parseArgs(argv) {
     csv: false,
     owner: "",
     repo: "",
+    policy: "",
+    now: "",
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -218,6 +251,16 @@ function parseArgs(argv) {
     }
     if (token === "--repo") {
       parsed.repo = value ?? "";
+      index += 1;
+      continue;
+    }
+    if (token === "--policy") {
+      parsed.policy = value ?? "";
+      index += 1;
+      continue;
+    }
+    if (token === "--now") {
+      parsed.now = value ?? "";
       index += 1;
       continue;
     }
@@ -244,13 +287,14 @@ function printHelp() {
   process.stdout.write(`Usage:
   node scripts/discover-readiness-check.mjs --issue <number> [--issue <number> ...]
   node scripts/discover-readiness-check.mjs --issues <n1,n2,...>
-    [--include-unresolvable] [--csv] [--owner <owner>] [--repo <repo>]
+    [--include-unresolvable] [--csv] [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>]
 
 Output schema (JSON mode):
   {
     "ready": [{ "number": 123, "title": "..." }],
     "filteredOut": [{ "number": 124, "title": "...", "reasons": ["..."] }],
     "unresolvable": [{ "issueNumber": 124, "kind": "...", "reference": "...", "reason": "..." }],
+    "warnings": [{ "issueNumber": 124, "message": "Warning: ..." }],
     "summary": { "total": 2, "readyCount": 1, "filteredCount": 1, "unresolvableCount": 0, "filteredByReason": { "...": 1 } }
   }
 `);
@@ -274,6 +318,7 @@ function normalizeIssue(issue) {
     state: String(issue.state ?? "").toUpperCase(),
     body: String(issue.body ?? ""),
     labels: normalizeLabels(issue.labels),
+    labelEvents: Array.isArray(issue.labelEvents) ? issue.labelEvents : [],
     url: String(issue.url ?? ""),
   };
 }
@@ -325,6 +370,17 @@ async function getRoadmapsByMarker(marker, cache, findRoadmapsByMarker) {
     .filter((issue) => Number.isInteger(issue.number) && issue.number > 0);
   cache.set(marker, matches);
   return matches;
+}
+
+async function resolveLabelEvents(issue, loadIssueLabelEvents) {
+  if (issue.labelEvents.length > 0 || typeof loadIssueLabelEvents !== "function") {
+    return issue.labelEvents;
+  }
+  try {
+    return await loadIssueLabelEvents(issue.number);
+  } catch {
+    return [];
+  }
 }
 
 function countReasons(filteredOut) {
@@ -379,6 +435,30 @@ function buildIssueLoader(owner, repo) {
   };
 }
 
+function buildIssueLabelEventsLoader(owner, repo) {
+  return async (issueNumber) => {
+    const repoRef = `${owner}/${repo}`;
+    return fetchIssueLabelEvents(repoRef, issueNumber);
+  };
+}
+
+function fetchIssueLabelEvents(repoRef, issueNumber) {
+  const events = [];
+  const pageSize = 100;
+  for (let page = 1; ; page += 1) {
+    const rawPage = JSON.parse(runGh([
+      "api",
+      `repos/${repoRef}/issues/${issueNumber}/timeline?per_page=${pageSize}&page=${page}`,
+    ]).trim() || "[]");
+    const labeled = rawPage.filter((event) => event?.event === "labeled");
+    events.push(...labeled);
+    if (rawPage.length < pageSize) {
+      break;
+    }
+  }
+  return events;
+}
+
 function buildRoadmapMarkerResolver(owner, repo) {
   return async (marker) => {
     const query = `repo:${owner}/${repo} is:issue in:body "<!-- idd-skill-roadmap-id: ${marker} -->"`;
@@ -395,6 +475,15 @@ function buildRoadmapMarkerResolver(owner, repo) {
 
 function ghText(args) {
   return runGh(args).trim();
+}
+
+function loadPolicy(policyPath) {
+  const targetPath = policyPath ? resolve(process.cwd(), policyPath) : resolve(process.cwd(), ".github/idd/config.json");
+  try {
+    return JSON.parse(readFileSync(targetPath, "utf8"));
+  } catch {
+    return {};
+  }
 }
 
 function runGh(args, options = {}) {

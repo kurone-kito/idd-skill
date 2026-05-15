@@ -156,6 +156,8 @@ test("policy normalization provides default-safe values and supports aliases", (
     },
     issueAuthoring: {
       maxClarificationRounds: 3,
+      authoringLabelName: "status:authoring",
+      authoringStaleAge: "PT4H",
     },
   });
 
@@ -212,6 +214,8 @@ test("policy normalization provides default-safe values and supports aliases", (
     },
     issueAuthoring: {
       maxClarificationRounds: 4,
+      authoringLabelName: "status:drafting",
+      authoringStaleAge: "PT3H",
     },
   }), {
     issueScope: "orphan-first",
@@ -260,6 +264,8 @@ test("policy normalization provides default-safe values and supports aliases", (
     },
     issueAuthoring: {
       maxClarificationRounds: 4,
+      authoringLabelName: "status:drafting",
+      authoringStaleAge: "PT3H",
     },
   });
 

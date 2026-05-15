@@ -149,6 +149,38 @@ test("filterOrphanIssues excludes blocked labels and open blockers", () => {
   assert.equal(result.filtered.blocked_label.length, 1);
 });
 
+test("filterOrphanIssues excludes custom authoring label and warns when stale", () => {
+  const issues = [
+    {
+      number: 21,
+      title: "being drafted",
+      state: "OPEN",
+      labels: [{ name: "status:drafting" }],
+      labelEvents: [{
+        event: "labeled",
+        label: { name: "status:drafting" },
+        created_at: "2026-05-15T07:00:00Z",
+      }],
+      body: "",
+      url: "https://example.com/21",
+    },
+  ];
+
+  const result = filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => "UNRESOLVABLE",
+    authoringLabelName: "status:drafting",
+    authoringStaleAgeMs: 4 * 60 * 60 * 1000,
+    now: "2026-05-15T12:00:00Z",
+  });
+
+  assert.equal(result.orphans.length, 0);
+  assert.equal(result.filtered.authoring_label.length, 1);
+  assert.equal(result.filtered.authoring_label[0].details, "status:drafting");
+  assert.equal(result.warnings[0].status, "stale");
+  assert.match(result.warnings[0].message, /Issue #21 has carried the authoring label for 5h/);
+});
+
 test("filterOrphanIssues keeps closed-blocker issues as orphan candidates", () => {
   const issues = [
     {

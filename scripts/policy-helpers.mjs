@@ -72,6 +72,8 @@ export const POLICY_DEFAULTS = Object.freeze({
   }),
   issueAuthoring: Object.freeze({
     maxClarificationRounds: 3,
+    authoringLabelName: "status:authoring",
+    authoringStaleAge: "PT4H",
   }),
 });
 
@@ -250,6 +252,14 @@ export function normalizePolicyConfig(config) {
       maxClarificationRounds: parsePositiveInteger(
         config?.issueAuthoring?.maxClarificationRounds,
         POLICY_DEFAULTS.issueAuthoring.maxClarificationRounds,
+      ),
+      authoringLabelName: parseNonEmptyString(
+        config?.issueAuthoring?.authoringLabelName,
+        POLICY_DEFAULTS.issueAuthoring.authoringLabelName,
+      ),
+      authoringStaleAge: parseDuration(
+        config?.issueAuthoring?.authoringStaleAge,
+        POLICY_DEFAULTS.issueAuthoring.authoringStaleAge,
       ),
     },
   };
