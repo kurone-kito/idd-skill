@@ -252,6 +252,31 @@ during drafting:
 it will not fail A4.5 for coherence, safety, or uniqueness. If it would,
 resolve the issue during drafting instead of publishing it.
 
+## Authoring label lifecycle
+
+The issue authoring skill must use the configured authoring label as a
+publication guard while it creates or updates issues. The label name
+comes from `issueAuthoring.authoringLabelName`, with `status:authoring`
+as the distributed default.
+
+During Phase 2 publishing, the skill should ensure the label exists in
+the target repository before first use. For the bundled GitHub CLI
+publication flow, create a missing label with `gh label create` before
+applying it. Failure to create or apply the label is a publishing
+blocker, not a warning.
+
+Apply the authoring label immediately after each issue is created or
+updated. This keeps partially published issue sets visible to the IDD
+discover guard while the full set is still being authored. Remove the
+label from all published issues only after the complete issue set is
+published and the user confirms the published result. If publishing is
+interrupted before that confirmation, leave the label in place so later
+discover passes continue to treat the issue as actively authored.
+
+Removing the authoring label after publication confirmation does not
+start the IDD execution loop. Starting Discover, Claim, and Work still
+requires a separate explicit user request.
+
 ## Reuse-first issue policy
 
 Before creating any new issue, the skill should check whether the work

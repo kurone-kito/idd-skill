@@ -16,8 +16,19 @@ The issue-authoring bundle fits into a three-phase handoff:
 ### Phase 2: Publishing (user-authorized handoff)
 
 - User explicitly asks for publication
+- Bundled skill resolves the authoring label from
+  `issueAuthoring.authoringLabelName`, defaulting to `status:authoring`
+- If the label does not exist in the target repository, bundled skill
+  creates it with `gh label create` before first use; label creation or
+  application failure blocks publishing
 - Bundled skill creates or updates issues in the target repository
+- Bundled skill applies the authoring label immediately after each issue
+  create/update
 - User verifies the published issues look correct
+- Bundled skill removes the authoring label from all published issues only
+  after the full issue set is published and the user confirms the result
+- If publishing is interrupted before confirmation, the authoring label
+  remains in place as the IDD discover guard signal
 - Published issues remain on hold until user explicitly requests IDD execution
 
 ### Phase 3: Execution (separate IDD loop)
