@@ -28,5 +28,9 @@ The command writes `test.gif` next to `test.tape`. The generated GIF is
 ignored by git because recordings are build artifacts; only the tape
 source should be committed.
 
+The first VHS run on a new machine may take longer while it prepares a
+browser cache. After that one-time setup, the smoke test should render
+in a few seconds.
+
 Use this smoke test before creating longer workshop animations so local
 font, terminal, and encoder settings are known to work.
