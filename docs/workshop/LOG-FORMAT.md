@@ -53,7 +53,7 @@ Example:
 
 ````markdown
 ```shell
-$ git status --short
+$ git status --short --branch
 ## issue/582-define-workshop-log-format-capture
 ```
 ````
