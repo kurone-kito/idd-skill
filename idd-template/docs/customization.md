@@ -278,6 +278,25 @@ profile that lets the same agent session continue through F3 after the
 normal freshness, CI, review, advisory, unresolved-thread, and claim
 gates pass.
 
+Merge policy is not the same as merge topology. Before selecting or
+keeping `fully_autonomous_merge`, confirm that GitHub can satisfy the
+repository's required-review and CODEOWNER rules for PRs authored by the
+merge-capable actor. A solo account that authors the PR and is also the
+only matching CODEOWNER cannot approve its own PR, so required
+CODEOWNER review can block an otherwise valid IDD run.
+
+Choose the topology intentionally:
+
+- Use a non-author CODEOWNER or required reviewer when human or team
+  review is the intended safety gate.
+- Use a pull-request-only ruleset bypass for the trusted merge-capable
+  actor when the repository intentionally permits autonomous merge after
+  all IDD gates pass. This bypass must not be treated as permission to
+  skip branch freshness, CI, review, advisory, unresolved-thread, or
+  claim checks.
+- Change CODEOWNERS coverage or move to `human_merge` when the
+  repository wants CODEOWNER review to remain a human-owned policy gate.
+
 The distributed workflow expects merge commits. Changing the merge
 method, required review policy, or branch protection behavior is a
 repository policy change, not a copy edit.

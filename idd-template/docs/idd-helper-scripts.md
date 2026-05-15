@@ -516,6 +516,11 @@ default `instructions-only` profile keep using the written shell /
   `currentUserCanBypass` token records the known GitHub ruleset value
   (`unknown`, `never`, `always`, `pull_requests_only`, `exempt`, or
   `mixed`).
+- A `clear` diagnostic means the helper found a GitHub topology that
+  appears satisfiable for the current actor; it is still evidence for
+  the written F2/F3 gates, not an IDD policy override or permission to
+  skip review, CI, freshness, advisory, unresolved-thread, or claim
+  checks.
 - `reviewCurrency.comparisonRoute` remains advisory evidence only. Agents
   must still apply written instruction checks against live GitHub state.
 - Fail closed: if helper execution fails, output is invalid JSON,
