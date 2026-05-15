@@ -265,18 +265,26 @@ publication flow, create a missing label with `gh label create` before
 applying it. Failure to create or apply the label is a publishing
 blocker, not a warning.
 
-Apply the authoring label immediately after each issue is created or
-updated. This keeps partially published issue sets visible to the IDD
+For existing issues, apply the authoring label before updating issue
+content. For new issues, prefer creating the issue with the authoring
+label in the same publication command, such as `gh issue create --label`
+when the bundled GitHub CLI flow can use it. If the flow cannot label
+the issue atomically, apply the label immediately after creation. If
+post-create label application fails, close, delete, or otherwise make
+the created issue undiscoverable before stopping.
+
+These guards keep partially published issue sets visible to the IDD
 discover guard while the full set is still being authored. Remove the
 label from all published issues only after the complete issue set is
-published and the user confirms the published result. If publishing is
-interrupted before that confirmation, leave the label in place so later
-discover passes route the issue through authoring-label handling instead
-of normal ready-work discovery.
+published, the user confirms the published result, and the user
+explicitly requests release from the authoring hold for IDD execution.
+If publishing is interrupted before that release, leave the label in
+place so later discover passes route the issue through authoring-label
+handling instead of normal ready-work discovery.
 
-Removing the authoring label after publication confirmation does not
-start the IDD execution loop. Starting Discover, Claim, and Work still
-requires a separate explicit user request.
+Removing the authoring label releases the discover guard. Do it only as
+part of the explicit execution handoff; publication confirmation alone
+does not start Discover, Claim, and Work.
 
 ## Reuse-first issue policy
 
