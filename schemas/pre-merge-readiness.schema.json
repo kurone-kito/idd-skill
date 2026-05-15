@@ -326,7 +326,10 @@
               "type": "string",
               "enum": ["none", "pull_request"]
             },
-            "currentUserCanBypass": { "type": "string", "minLength": 1 }
+            "currentUserCanBypass": {
+              "type": "string",
+              "enum": ["unknown", "never", "always", "pull_requests_only", "mixed"]
+            }
           }
         },
         "humanChangesRequestedCount": { "type": "integer", "minimum": 0 },

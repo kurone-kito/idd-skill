@@ -354,12 +354,16 @@ function fetchBranchRulesets(owner, repo, branchRules) {
 
   return rulesetIds
     .map((rulesetId) => {
-      return ghApiJson(
-        `repos/${owner}/${repo}/rulesets/${rulesetId}`,
-        false,
-        ["-H", "Accept: application/vnd.github+json"],
-        { allowHttpStatuses: [404] },
-      );
+      try {
+        return ghApiJson(
+          `repos/${owner}/${repo}/rulesets/${rulesetId}`,
+          false,
+          ["-H", "Accept: application/vnd.github+json"],
+          { allowHttpStatuses: [404] },
+        );
+      } catch {
+        return {};
+      }
     })
     .filter((ruleset) => Object.keys(ruleset).length > 0);
 }
