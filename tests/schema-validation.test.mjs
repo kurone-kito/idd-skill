@@ -815,6 +815,56 @@ test("policy schema rejects stallRecovery.quietWindow empty time marker (PT)", (
   assert.ok(errors.some((e) => e.includes("stallRecovery")), errors.join("\n"));
 });
 
+test("policy schema accepts issueAuthoring authoring label and stale age", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.issueAuthoring = {
+    maxClarificationRounds: 3,
+    authoringLabelName: "status:authoring",
+    authoringStaleAge: "PT4H",
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects issueAuthoring authoringLabelName empty string", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.issueAuthoring = {
+    maxClarificationRounds: 3,
+    authoringLabelName: "",
+  };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("issueAuthoring.authoringLabelName")), errors.join("\n"));
+});
+
+test("policy schema rejects issueAuthoring authoringStaleAge non-duration string", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.issueAuthoring = {
+    maxClarificationRounds: 3,
+    authoringStaleAge: "not-a-duration",
+  };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("issueAuthoring.authoringStaleAge")), errors.join("\n"));
+});
+
+test("policy schema rejects issueAuthoring unexpected extra keys", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.issueAuthoring = {
+    maxClarificationRounds: 3,
+    authoringLabelName: "status:authoring",
+    authoringStaleAge: "PT4H",
+    unexpectedKey: true,
+  };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((e) => e.includes("$.issueAuthoring") && e.includes("\"unexpectedKey\"")),
+    errors.join("\n"),
+  );
+});
+
 test("policy schema accepts forcedHandoff.mode human-gated", () => {
   const schema = loadJson("schemas/policy.schema.json");
   const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));

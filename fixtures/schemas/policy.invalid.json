@@ -15,6 +15,10 @@
     "pre-push-validate": "npx dprint check",
     "post-fix-validate": "npx dprint fmt && npx markdownlint-cli2"
   },
+  "issueAuthoring": {
+    "maxClarificationRounds": 3,
+    "authoringLabelName": ""
+  },
   "advisoryWait": {
     "requestCap": 0
   }
