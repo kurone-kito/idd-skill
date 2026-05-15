@@ -58,7 +58,23 @@ needs-decision, blocked-by-human, and out-of-scope.
    - keep independent sibling work in roadmap task lists unless a true
      correctness, availability, or ordering constraint requires a
      dependency edge
-6. Stop at the approval boundary. Drafting issues does not authorize
+6. When the user explicitly authorizes publication, manage the authoring
+   label for each created or updated issue:
+   - resolve `issueAuthoring.authoringLabelName`, defaulting to
+     `status:authoring`
+   - create the label with `gh label create` before first use when the
+     target repository does not already have it
+   - treat label creation or application failure as a publishing blocker
+   - apply the label before updating an existing issue
+   - create new issues with the label when supported, or apply the label
+     immediately after creation
+   - if post-create label application fails, close, delete, or otherwise
+     make the created issue undiscoverable before stopping
+   - remove the label from all published issues only after the full set is
+     published, the user confirms the result, and the user explicitly
+     requests release from the authoring hold for IDD execution
+   - leave the label in place if publishing is interrupted before release
+7. Stop at the approval boundary. Drafting issues does not authorize
    publishing them or starting the IDD execution loop unless the user
    explicitly asked for that.
 
