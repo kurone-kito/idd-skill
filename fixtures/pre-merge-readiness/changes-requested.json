@@ -154,6 +154,18 @@
       "humanApprovedCount": 0,
       "requiredApprovalsSatisfied": false,
       "codeownerApprovalSatisfied": false,
+      "codeownerSelfApproval": {
+        "status": "clear",
+        "reason": "non-author-codeowner-available",
+        "prAuthorLogin": "contributor",
+        "directCodeownerUserLogins": ["owner-reviewer"],
+        "codeownerTeamSlugs": [],
+        "requireCodeOwnerReview": true,
+        "codeownerApprovalSatisfied": false,
+        "bypassDetected": false,
+        "bypassMode": "none",
+        "currentUserCanBypass": "unknown"
+      },
       "humanChangesRequestedCount": 1,
       "blockingChangesRequestedLogins": ["owner-reviewer"]
     },

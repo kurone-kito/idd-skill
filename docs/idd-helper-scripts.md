@@ -508,6 +508,11 @@ default `instructions-only` profile keep using the written shell /
   `threads`, `unrepliedComments`, `reviewerStates`,
   `advisoryWait` (including the effective advisory policy fields), `ci`,
   `claim`, and optional `dispositionEvidence`
+- `reviewerStates.codeownerSelfApproval` diagnoses whether CODEOWNER
+  approval can be satisfied by an eligible non-author owner or an
+  applicable pull-request-only ruleset bypass. `deadlock` and
+  `possible_deadlock` statuses should be surfaced in F2 evidence and
+  hold comments, but they do not grant bypass permission.
 - `reviewCurrency.comparisonRoute` remains advisory evidence only. Agents
   must still apply written instruction checks against live GitHub state.
 - Fail closed: if helper execution fails, output is invalid JSON,

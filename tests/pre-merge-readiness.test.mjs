@@ -392,6 +392,128 @@ test("email-only CODEOWNERS rules still block codeowner approval", () => {
   assert.deepEqual(summary.unmatchedCodeownerFiles, []);
 });
 
+test("self-CODEOWNER diagnostic reports deadlock without bypass", () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [{
+      type: "pull_request",
+      ruleset_id: 1,
+      parameters: { require_code_owner_review: true },
+    }],
+    branchRulesets: [{ id: 1, current_user_can_bypass: "never", bypass_actors: [] }],
+    codeownersText: "* @author\n",
+    changedFiles: ["README.md"],
+    prAuthorLogin: "author",
+  });
+
+  assert.deepEqual(summary.codeownerSelfApproval, {
+    status: "deadlock",
+    reason: "pr-author-is-only-direct-codeowner",
+    prAuthorLogin: "author",
+    directCodeownerUserLogins: ["author"],
+    codeownerTeamSlugs: [],
+    requireCodeOwnerReview: true,
+    codeownerApprovalSatisfied: false,
+    bypassDetected: false,
+    bypassMode: "none",
+    currentUserCanBypass: "never",
+  });
+});
+
+test("self-CODEOWNER diagnostic clears when another direct owner exists", () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [{
+      type: "pull_request",
+      parameters: { require_code_owner_review: true },
+    }],
+    branchRulesets: [{ current_user_can_bypass: "never", bypass_actors: [] }],
+    codeownersText: "* @author @reviewer\n",
+    changedFiles: ["README.md"],
+    prAuthorLogin: "author",
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, "clear");
+  assert.equal(summary.codeownerSelfApproval.reason, "non-author-codeowner-available");
+  assert.deepEqual(summary.codeownerSelfApproval.directCodeownerUserLogins, ["author", "reviewer"]);
+});
+
+test("self-CODEOWNER diagnostic stays conservative when a team owner is present", () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [{
+      type: "pull_request",
+      parameters: { require_code_owner_review: true },
+    }],
+    branchRulesets: [{ current_user_can_bypass: "never", bypass_actors: [] }],
+    codeownersText: "* @author @org/reviewers\n",
+    changedFiles: ["README.md"],
+    prAuthorLogin: "author",
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, "possible_deadlock");
+  assert.equal(summary.codeownerSelfApproval.reason, "team-codeowner-ambiguous");
+  assert.deepEqual(summary.codeownerSelfApproval.codeownerTeamSlugs, ["org/reviewers"]);
+});
+
+test("self-CODEOWNER diagnostic is not applicable when CODEOWNER review is disabled", () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [{
+      type: "pull_request",
+      parameters: { require_code_owner_review: false },
+    }],
+    codeownersText: "* @author\n",
+    changedFiles: ["README.md"],
+    prAuthorLogin: "author",
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, "not_applicable");
+  assert.equal(summary.codeownerSelfApproval.reason, "codeowner-review-not-required");
+});
+
+test("self-CODEOWNER diagnostic clears when pull-request bypass is available", () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [{
+      type: "pull_request",
+      ruleset_id: 1,
+      parameters: { require_code_owner_review: true },
+    }],
+    branchRulesets: [{
+      id: 1,
+      current_user_can_bypass: "pull_requests_only",
+      bypass_actors: [{ actor_id: 44661432, actor_type: "User", bypass_mode: "pull_request" }],
+    }],
+    codeownersText: "* @author\n",
+    changedFiles: ["README.md"],
+    prAuthorLogin: "author",
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, "clear");
+  assert.equal(summary.codeownerSelfApproval.reason, "pull-request-bypass-available");
+  assert.equal(summary.codeownerSelfApproval.bypassDetected, true);
+  assert.equal(summary.codeownerSelfApproval.bypassMode, "pull_request");
+});
+
+test("self-CODEOWNER diagnostic ignores unrelated ruleset bypasses", () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [{
+      type: "pull_request",
+      ruleset_id: 1,
+      parameters: { require_code_owner_review: true },
+    }],
+    branchRulesets: [{
+      id: 2,
+      current_user_can_bypass: "pull_requests_only",
+      bypass_actors: [{ actor_id: 44661432, actor_type: "User", bypass_mode: "pull_request" }],
+    }],
+    codeownersText: "* @author\n",
+    changedFiles: ["README.md"],
+    prAuthorLogin: "author",
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, "deadlock");
+  assert.equal(summary.codeownerSelfApproval.reason, "pr-author-is-only-direct-codeowner");
+  assert.equal(summary.codeownerSelfApproval.bypassDetected, false);
+  assert.equal(summary.codeownerSelfApproval.currentUserCanBypass, "unknown");
+});
+
 test("mixed-precision timestamps compare by time instead of string order", () => {
   const headSha = "a".repeat(40);
   assert.equal(

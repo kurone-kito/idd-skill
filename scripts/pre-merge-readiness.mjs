@@ -75,6 +75,7 @@ const branchRules = ghApiJson(
   [],
   { allowHttpStatuses: [404] },
 );
+const branchRulesets = fetchBranchRulesets(owner, repo, branchRules);
 const branchProtection = ghApiJson(
   `repos/${owner}/${repo}/branches/${encodedBaseRefName}/protection`,
   false,
@@ -129,6 +130,7 @@ const summary = buildPreMergeReadinessSummary(
     threads: threads.map(normalizeThread),
     checks,
     branchRules,
+    branchRulesets,
     branchProtection,
     requestedReviewers: requestedReviewers.users ?? [],
     timelineEvents,
@@ -341,6 +343,25 @@ function fetchCodeownersText(owner, repo, ref) {
     );
   });
   return selectCodeownersText(payloads);
+}
+
+function fetchBranchRulesets(owner, repo, branchRules) {
+  const rulesetIds = [...new Set(
+    (branchRules ?? [])
+      .map((rule) => Number.parseInt(String(rule?.ruleset_id ?? ""), 10))
+      .filter(Number.isInteger),
+  )];
+
+  return rulesetIds
+    .map((rulesetId) => {
+      return ghApiJson(
+        `repos/${owner}/${repo}/rulesets/${rulesetId}`,
+        false,
+        ["-H", "Accept: application/vnd.github+json"],
+        { allowHttpStatuses: [404] },
+      );
+    })
+    .filter((ruleset) => Object.keys(ruleset).length > 0);
 }
 
 function fetchReviewThreads(owner, repo, prNumber) {
