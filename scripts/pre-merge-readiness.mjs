@@ -10,6 +10,7 @@ import {
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   resolveCodeownersForFiles,
+  resolveRulesetDetailPath,
   selectCodeownersText,
 } from "./protocol-helpers.mjs";
 import { normalizePolicyConfig, resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
@@ -32,6 +33,7 @@ const owner = args.owner || ghText(["repo", "view", "--json", "owner", "--jq", "
 const repo = args.repo || ghText(["repo", "view", "--json", "name", "--jq", ".name"]);
 const repoRef = `${owner}/${repo}`;
 const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
+const viewerAppSlug = safeGhText(["api", "app", "--jq", ".slug // .app_slug // empty"]).toLowerCase();
 const configuredTrustedActors = normalizeTrustedMarkerLogins([
   ...splitCsv(args.trustedMarkerLogins),
   ...splitCsv(process.env.IDD_TRUSTED_MARKER_ACTORS),
@@ -108,6 +110,7 @@ const eligibleCodeownerUserLogins = resolveEligibleCodeownerUserLogins(
   repo,
   resolveCodeownersForFiles(codeownersText, changedFiles).codeownerUserLogins,
 );
+const viewerTeamSlugs = resolveViewerClassicBypassTeamSlugs(owner, viewerLogin, branchProtection);
 
 const collaboratorTrustEnabled = readCollaboratorTrustEnabled();
 const trustedMarkerLogins = normalizeTrustedMarkerLogins([
@@ -171,6 +174,8 @@ const summary = buildPreMergeReadinessSummary(
         forcedHandoffPermissionCache,
       ),
     viewerLogin,
+    viewerTeamSlugs,
+    viewerAppSlug,
     configuredTrustedActors,
     collaboratorTrustEnabled,
   },
@@ -398,16 +403,37 @@ function fetchBranchRulesets(owner, repo, branchRules) {
     .filter((ruleset) => Object.keys(ruleset).length > 0);
 }
 
-function resolveRulesetDetailPath(owner, repo, rule, rulesetId) {
-  const sourceType = String(rule?.ruleset_source_type ?? rule?.source_type ?? "")
-    .trim()
-    .toLowerCase();
-  if (sourceType === "organization") {
-    const source = String(rule?.ruleset_source ?? rule?.source ?? owner).trim();
-    const org = source.split("/")[0] || owner;
-    return `orgs/${encodeURIComponent(org)}/rulesets/${rulesetId}`;
+function resolveViewerClassicBypassTeamSlugs(owner, viewerLogin, branchProtection) {
+  if (!viewerLogin) {
+    return [];
   }
-  return `repos/${owner}/${repo}/rulesets/${rulesetId}`;
+  const teams = branchProtection.required_pull_request_reviews?.bypass_pull_request_allowances?.teams ?? [];
+  const viewerTeams = new Set();
+  for (const team of teams) {
+    const slug = String(team?.slug ?? "").trim().toLowerCase();
+    if (!slug) {
+      continue;
+    }
+    const org = String(team?.organization?.login ?? extractTeamOrgFromHtmlUrl(team?.html_url) ?? owner)
+      .trim();
+    const state = safeGhText([
+      "api",
+      `orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(slug)}/memberships/${
+        encodeURIComponent(viewerLogin)
+      }`,
+      "--jq",
+      ".state",
+    ]).toLowerCase();
+    if (state === "active") {
+      viewerTeams.add(slug);
+    }
+  }
+  return [...viewerTeams].sort();
+}
+
+function extractTeamOrgFromHtmlUrl(htmlUrl) {
+  const match = String(htmlUrl ?? "").match(/\/orgs\/([^/]+)\/teams\//);
+  return match?.[1] ?? "";
 }
 
 function fetchReviewThreads(owner, repo, prNumber) {

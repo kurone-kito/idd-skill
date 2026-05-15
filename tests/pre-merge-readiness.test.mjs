@@ -10,6 +10,7 @@ import {
   findLastCopilotReviewCommit,
   indexLatestGatingReviewsByAuthor,
   resolveCodeownersForFiles,
+  resolveRulesetDetailPath,
   selectCodeownersText,
   summarizeDispositionEvidenceForGate,
   summarizeAdvisoryWaitMarkers,
@@ -667,6 +668,81 @@ test("self-CODEOWNER diagnostic honors classic bypass without ruleset gates", ()
   assert.equal(summary.codeownerSelfApproval.reason, "pull-request-bypass-available");
   assert.equal(summary.codeownerSelfApproval.bypassDetected, true);
   assert.equal(summary.codeownerSelfApproval.bypassMode, "pull_request");
+});
+
+test("self-CODEOWNER diagnostic honors classic team bypass allowances", () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [{
+      type: "pull_request",
+      parameters: { require_code_owner_review: true },
+    }],
+    branchProtection: {
+      required_pull_request_reviews: {
+        require_code_owner_reviews: true,
+        bypass_pull_request_allowances: {
+          teams: [{ slug: "release-engineers" }],
+        },
+      },
+    },
+    codeownersText: "* @author\n",
+    changedFiles: ["README.md"],
+    prAuthorLogin: "author",
+    viewerTeamSlugs: ["release-engineers"],
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, "clear");
+  assert.equal(summary.codeownerSelfApproval.reason, "pull-request-bypass-available");
+  assert.equal(summary.codeownerSelfApproval.bypassDetected, true);
+  assert.equal(summary.codeownerSelfApproval.bypassMode, "pull_request");
+});
+
+test("self-CODEOWNER diagnostic honors classic app bypass allowances", () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [{
+      type: "pull_request",
+      parameters: { require_code_owner_review: true },
+    }],
+    branchProtection: {
+      required_pull_request_reviews: {
+        require_code_owner_reviews: true,
+        bypass_pull_request_allowances: {
+          apps: [{ slug: "idd-helper" }],
+        },
+      },
+    },
+    codeownersText: "* @author\n",
+    changedFiles: ["README.md"],
+    prAuthorLogin: "author",
+    viewerAppSlug: "idd-helper",
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, "clear");
+  assert.equal(summary.codeownerSelfApproval.reason, "pull-request-bypass-available");
+  assert.equal(summary.codeownerSelfApproval.bypassDetected, true);
+  assert.equal(summary.codeownerSelfApproval.bypassMode, "pull_request");
+});
+
+test("ruleset detail path uses the source-specific endpoint", () => {
+  assert.equal(
+    resolveRulesetDetailPath("repo-owner", "example", {
+      ruleset_source_type: "Repository",
+    }, 101),
+    "repos/repo-owner/example/rulesets/101",
+  );
+  assert.equal(
+    resolveRulesetDetailPath("repo-owner", "example", {
+      ruleset_source_type: "Organization",
+      ruleset_source: "platform-org",
+    }, 102),
+    "orgs/platform-org/rulesets/102",
+  );
+  assert.equal(
+    resolveRulesetDetailPath("repo-owner", "example", {
+      ruleset_source_type: "Enterprise",
+      ruleset_source: "platform-enterprise",
+    }, 103),
+    "enterprises/platform-enterprise/rulesets/103",
+  );
 });
 
 test("self-CODEOWNER diagnostic fails closed when ruleset details are missing", () => {

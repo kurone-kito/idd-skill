@@ -1441,6 +1441,8 @@ export function summarizeBranchReviewRequirements(branchRules = [], branchProtec
   const requiredReviewerTeams = new Set();
   const requiredReviewerRequirements = [];
   const classicBypassPullRequestUserLogins = new Set();
+  const classicBypassPullRequestTeamSlugs = new Set();
+  const classicBypassPullRequestAppSlugs = new Set();
 
   let requiredApprovingReviewCount = 0;
   let requireCodeOwnerReview = false;
@@ -1497,6 +1499,18 @@ export function summarizeBranchReviewRequirements(branchRules = [], branchProtec
       classicBypassPullRequestUserLogins.add(normalizedLogin);
     }
   }
+  for (const team of protectionReviews.bypass_pull_request_allowances?.teams ?? []) {
+    const slug = typeof team === "string" ? team : team?.slug;
+    for (const normalizedSlug of normalizeTrustedMarkerLogins([slug])) {
+      classicBypassPullRequestTeamSlugs.add(normalizedSlug);
+    }
+  }
+  for (const app of protectionReviews.bypass_pull_request_allowances?.apps ?? []) {
+    const slug = typeof app === "string" ? app : app?.slug ?? app?.app_slug;
+    for (const normalizedSlug of normalizeTrustedMarkerLogins([slug])) {
+      classicBypassPullRequestAppSlugs.add(normalizedSlug);
+    }
+  }
   requiredApprovingReviewCount = Math.max(
     requiredApprovingReviewCount,
     Number(protectionReviews.required_approving_review_count ?? 0) || 0,
@@ -1518,6 +1532,8 @@ export function summarizeBranchReviewRequirements(branchRules = [], branchProtec
     requireCodeOwnerReview,
     classicRequireCodeOwnerReview,
     classicBypassPullRequestUserLogins: [...classicBypassPullRequestUserLogins].sort(),
+    classicBypassPullRequestTeamSlugs: [...classicBypassPullRequestTeamSlugs].sort(),
+    classicBypassPullRequestAppSlugs: [...classicBypassPullRequestAppSlugs].sort(),
     requiresConversationResolution,
     requiredCheckSourcePinned,
     requiredReviewerLogins: [...requiredReviewerLogins].sort(),
@@ -1639,6 +1655,8 @@ export function summarizeReviewerStates(
     advisoryBotLogins = [],
     prAuthorLogin = "",
     viewerLogin = "",
+    viewerTeamSlugs = [],
+    viewerAppSlug = "",
   } = {},
 ) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(branchRules, branchProtection);
@@ -1731,10 +1749,14 @@ export function summarizeReviewerStates(
     codeownerEmailAddresses: codeowners.codeownerEmailAddresses,
     prAuthorLogin,
     viewerLogin,
+    viewerTeamSlugs,
+    viewerAppSlug,
     branchRules,
     branchRulesets,
     classicRequireCodeOwnerReview: branchReviewRequirements.classicRequireCodeOwnerReview,
     classicBypassPullRequestUserLogins: branchReviewRequirements.classicBypassPullRequestUserLogins,
+    classicBypassPullRequestTeamSlugs: branchReviewRequirements.classicBypassPullRequestTeamSlugs,
+    classicBypassPullRequestAppSlugs: branchReviewRequirements.classicBypassPullRequestAppSlugs,
   });
 
   return {
@@ -1782,13 +1804,19 @@ function summarizeCodeownerSelfApproval({
   codeownerEmailAddresses = [],
   prAuthorLogin = "",
   viewerLogin = "",
+  viewerTeamSlugs = [],
+  viewerAppSlug = "",
   branchRules = [],
   branchRulesets = [],
   classicRequireCodeOwnerReview = false,
   classicBypassPullRequestUserLogins = [],
+  classicBypassPullRequestTeamSlugs = [],
+  classicBypassPullRequestAppSlugs = [],
 }) {
   const normalizedAuthor = String(prAuthorLogin ?? "").trim().toLowerCase();
   const normalizedViewer = String(viewerLogin ?? "").trim().toLowerCase();
+  const normalizedViewerAppSlug = String(viewerAppSlug ?? "").trim().toLowerCase();
+  const normalizedViewerTeamSlugs = normalizeTrustedMarkerLogins(viewerTeamSlugs);
   const directCodeownerUserLogins = normalizeTrustedMarkerLogins(codeownerUserLogins);
   const eligibleDirectCodeownerUserLogins = eligibleCodeownerUserLogins === null
     ? directCodeownerUserLogins
@@ -1798,8 +1826,19 @@ function summarizeCodeownerSelfApproval({
   const normalizedCodeownerEmailAddresses = normalizeTrustedMarkerLogins(codeownerEmailAddresses);
   const classicBypassDetected = Boolean(
     Boolean(classicRequireCodeOwnerReview)
-    && normalizedViewer
-    && normalizeTrustedMarkerLogins(classicBypassPullRequestUserLogins).includes(normalizedViewer),
+    && (
+      (
+        normalizedViewer
+        && normalizeTrustedMarkerLogins(classicBypassPullRequestUserLogins).includes(normalizedViewer)
+      )
+      || normalizedViewerTeamSlugs.some((slug) => {
+        return normalizeTrustedMarkerLogins(classicBypassPullRequestTeamSlugs).includes(slug);
+      })
+      || (
+        normalizedViewerAppSlug
+        && normalizeTrustedMarkerLogins(classicBypassPullRequestAppSlugs).includes(normalizedViewerAppSlug)
+      )
+    ),
   );
   const bypass = summarizeRulesetPullRequestBypass(branchRulesets, branchRules);
   const rulesetGateSatisfiedByBypass = bypass.relevantRulesetCount === 0 || bypass.detected;
@@ -1956,6 +1995,25 @@ function summarizeRulesetPullRequestBypass(branchRulesets = [], branchRules = []
     currentUserCanBypass,
     relevantRulesetCount: expectedRulesetCount,
   };
+}
+
+export function resolveRulesetDetailPath(owner, repo, rule, rulesetId) {
+  const sourceType = String(rule?.ruleset_source_type ?? rule?.source_type ?? "")
+    .trim()
+    .toLowerCase();
+  if (sourceType === "organization") {
+    const source = String(rule?.ruleset_source ?? rule?.source ?? owner).trim();
+    const org = source.split("/")[0] || owner;
+    return `orgs/${encodeURIComponent(org)}/rulesets/${rulesetId}`;
+  }
+  if (sourceType === "enterprise") {
+    const source = String(rule?.ruleset_source ?? rule?.source ?? "").trim();
+    const enterprise = source.split("/")[0];
+    if (enterprise) {
+      return `enterprises/${encodeURIComponent(enterprise)}/rulesets/${rulesetId}`;
+    }
+  }
+  return `repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/rulesets/${rulesetId}`;
 }
 
 export function summarizeClaimValidation(claimEvents = [], options = {}) {
@@ -2117,6 +2175,8 @@ export function buildPreMergeReadinessSummary(
     advisoryBotLogins,
     prAuthorLogin,
     viewerLogin: options.viewerLogin,
+    viewerTeamSlugs: options.viewerTeamSlugs,
+    viewerAppSlug: options.viewerAppSlug,
   });
   const ci = summarizeRequiredChecks(checks, branchRules, branchProtection);
   const advisoryWaitOptions = normalizeAdvisoryWaitRuntimeOptions(options);
