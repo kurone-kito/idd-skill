@@ -133,6 +133,9 @@ pnpm-lock.yaml.*
 # OpenAI Codex sandbox
 .codex/
 
+### Workshop recording outputs ###
+docs/workshop/assets/recordings/*.gif
+
 ### NeoVim ###
 # Project-local NeoVim config
 .nvim.lua
