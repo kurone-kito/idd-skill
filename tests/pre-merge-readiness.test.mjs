@@ -436,6 +436,49 @@ test("self-CODEOWNER diagnostic clears when another direct owner exists", () => 
   assert.deepEqual(summary.codeownerSelfApproval.directCodeownerUserLogins, ["author", "reviewer"]);
 });
 
+test("self-CODEOWNER diagnostic requires eligible non-author direct owners when provided", () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [{
+      type: "pull_request",
+      parameters: { require_code_owner_review: true },
+    }],
+    branchRulesets: [{ current_user_can_bypass: "never", bypass_actors: [] }],
+    codeownersText: "* @author @outside-user\n",
+    changedFiles: ["README.md"],
+    eligibleCodeownerUserLogins: ["author"],
+    prAuthorLogin: "author",
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, "deadlock");
+  assert.equal(summary.codeownerSelfApproval.reason, "pr-author-is-only-eligible-direct-codeowner");
+  assert.deepEqual(summary.codeownerSelfApproval.directCodeownerUserLogins, ["author", "outside-user"]);
+  assert.equal(summary.latestByAuthor.length, 0);
+});
+
+test("self-CODEOWNER diagnostic counts only eligible codeowner approvals when provided", () => {
+  const summary = summarizeReviewerStates(
+    [{
+      author: { login: "outside-user" },
+      state: "APPROVED",
+      submittedAt: "2026-05-12T00:00:00Z",
+    }],
+    {
+      branchRules: [{
+        type: "pull_request",
+        parameters: { require_code_owner_review: true },
+      }],
+      codeownersText: "* @author @outside-user\n",
+      changedFiles: ["README.md"],
+      eligibleCodeownerUserLogins: ["author"],
+      prAuthorLogin: "author",
+    },
+  );
+
+  assert.equal(summary.latestByAuthor[0].isCodeowner, false);
+  assert.equal(summary.codeownerApprovalSatisfied, false);
+  assert.equal(summary.codeownerSelfApproval.status, "deadlock");
+});
+
 test("self-CODEOWNER diagnostic stays conservative when a team owner is present", () => {
   const summary = summarizeReviewerStates([], {
     branchRules: [{

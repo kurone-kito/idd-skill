@@ -9,6 +9,7 @@ import {
   deriveIddAgentLogins,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
+  resolveCodeownersForFiles,
   selectCodeownersText,
 } from "./protocol-helpers.mjs";
 import { normalizePolicyConfig, resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
@@ -102,6 +103,11 @@ const changedFiles = ghApiJson(`repos/${owner}/${repo}/pulls/${args.prNumber}/fi
   .map((file) => String(file.filename ?? ""))
   .filter(Boolean);
 const codeownersText = fetchCodeownersText(owner, repo, baseRefName);
+const eligibleCodeownerUserLogins = resolveEligibleCodeownerUserLogins(
+  owner,
+  repo,
+  resolveCodeownersForFiles(codeownersText, changedFiles).codeownerUserLogins,
+);
 
 const collaboratorTrustEnabled = readCollaboratorTrustEnabled();
 const trustedMarkerLogins = normalizeTrustedMarkerLogins([
@@ -137,6 +143,7 @@ const summary = buildPreMergeReadinessSummary(
     claimEvents: claimComments.map(normalizeClaimComment),
     changedFiles,
     codeownersText,
+    eligibleCodeownerUserLogins,
     reviewDecision,
   },
   {
@@ -331,6 +338,20 @@ function resolveTrustedCollaboratorMarkerLogins(owner, repo, comments) {
 
     return permission === "admin" || permission === "maintain" || permission === "write";
   });
+}
+
+function resolveEligibleCodeownerUserLogins(owner, repo, logins) {
+  return normalizeTrustedMarkerLogins(logins)
+    .filter((login) => {
+      const permission = safeGhText([
+        "api",
+        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
+        "--jq",
+        ".permission",
+      ]).toLowerCase();
+
+      return permission === "admin" || permission === "maintain" || permission === "write";
+    });
 }
 
 function fetchCodeownersText(owner, repo, ref) {

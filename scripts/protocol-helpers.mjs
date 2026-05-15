@@ -1622,6 +1622,7 @@ export function summarizeReviewerStates(
     branchProtection = {},
     codeownersText = "",
     changedFiles = [],
+    eligibleCodeownerUserLogins = null,
     advisoryBotLogins = [],
     prAuthorLogin = "",
   } = {},
@@ -1632,13 +1633,19 @@ export function summarizeReviewerStates(
   const codeownerRules = parseCodeownersRules(codeownersText);
   const codeowners = collectCodeownersForFiles(codeownerRules, changedFiles);
   const codeownerUsers = new Set(codeowners.codeownerUserLogins);
+  const eligibleCodeownerUsers = eligibleCodeownerUserLogins === null
+    ? codeownerUsers
+    : new Set(
+      normalizeTrustedMarkerLogins(eligibleCodeownerUserLogins)
+        .filter((login) => codeownerUsers.has(login)),
+    );
   const normalizedReviewDecision = String(reviewDecision ?? "");
 
   const latestByAuthor = [...indexLatestGatingReviewsByAuthor(reviews).values()]
     .map((review) => {
       const login = String(review.author?.login ?? "").trim().toLowerCase();
       const isAdvisoryBot = isGateAdvisoryBotLogin(login, advisoryBotLoginSet);
-      const isCodeowner = codeownerUsers.has(login);
+      const isCodeowner = eligibleCodeownerUsers.has(login);
       const isRequiredReviewer = requiredReviewerLogins.has(login);
       return {
         login,
@@ -1704,6 +1711,8 @@ export function summarizeReviewerStates(
         || normalizedReviewDecision === "APPROVED",
     hasExplicitCodeownerMatches,
     codeownerUserLogins: codeowners.codeownerUserLogins,
+    eligibleCodeownerUserLogins:
+      eligibleCodeownerUserLogins === null ? null : [...eligibleCodeownerUsers].sort(),
     codeownerTeamSlugs: codeowners.codeownerTeamSlugs,
     prAuthorLogin,
     branchRules,
@@ -1751,6 +1760,7 @@ function summarizeCodeownerSelfApproval({
   codeownerApprovalSatisfied,
   hasExplicitCodeownerMatches,
   codeownerUserLogins = [],
+  eligibleCodeownerUserLogins = null,
   codeownerTeamSlugs = [],
   prAuthorLogin = "",
   branchRules = [],
@@ -1759,6 +1769,10 @@ function summarizeCodeownerSelfApproval({
 }) {
   const normalizedAuthor = String(prAuthorLogin ?? "").trim().toLowerCase();
   const directCodeownerUserLogins = normalizeTrustedMarkerLogins(codeownerUserLogins);
+  const eligibleDirectCodeownerUserLogins = eligibleCodeownerUserLogins === null
+    ? directCodeownerUserLogins
+    : normalizeTrustedMarkerLogins(eligibleCodeownerUserLogins)
+      .filter((login) => directCodeownerUserLogins.includes(login));
   const normalizedCodeownerTeamSlugs = normalizeTrustedMarkerLogins(codeownerTeamSlugs);
   const bypass = summarizeRulesetPullRequestBypass(branchRulesets, branchRules);
   const applicableBypassDetected = bypass.detected && !classicRequireCodeOwnerReview;
@@ -1805,9 +1819,9 @@ function summarizeCodeownerSelfApproval({
     };
   }
 
-  const allDirectUsersAreAuthor = directCodeownerUserLogins.length > 0
-    && directCodeownerUserLogins.every((login) => login === normalizedAuthor);
-  const hasNonAuthorDirectUser = directCodeownerUserLogins.some((login) => login !== normalizedAuthor);
+  const allDirectUsersAreAuthor = eligibleDirectCodeownerUserLogins.length > 0
+    && eligibleDirectCodeownerUserLogins.every((login) => login === normalizedAuthor);
+  const hasNonAuthorDirectUser = eligibleDirectCodeownerUserLogins.some((login) => login !== normalizedAuthor);
 
   if (hasNonAuthorDirectUser) {
     return {
@@ -1827,7 +1841,9 @@ function summarizeCodeownerSelfApproval({
     return {
       ...base,
       status: "deadlock",
-      reason: "pr-author-is-only-direct-codeowner",
+      reason: eligibleCodeownerUserLogins === null
+        ? "pr-author-is-only-direct-codeowner"
+        : "pr-author-is-only-eligible-direct-codeowner",
     };
   }
 
@@ -1972,6 +1988,7 @@ export function buildPreMergeReadinessSummary(
     claimEvents = [],
     changedFiles = [],
     codeownersText = "",
+    eligibleCodeownerUserLogins = null,
     reviewDecision = "",
   },
   options = {},
@@ -2037,6 +2054,7 @@ export function buildPreMergeReadinessSummary(
     branchProtection,
     codeownersText,
     changedFiles,
+    eligibleCodeownerUserLogins,
     advisoryBotLogins,
     prAuthorLogin,
   });
