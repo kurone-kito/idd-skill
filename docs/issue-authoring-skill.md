@@ -259,7 +259,7 @@ publication guard while it creates or updates issues. The label name
 comes from `issueAuthoring.authoringLabelName`, with `status:authoring`
 as the distributed default.
 
-During Phase 2 publishing, the skill should ensure the label exists in
+During Phase 2 publishing, the skill must ensure the label exists in
 the target repository before first use. For the bundled GitHub CLI
 publication flow, create a missing label with `gh label create` before
 applying it. Failure to create or apply the label is a publishing
@@ -282,7 +282,7 @@ If publishing is interrupted before that release, leave the label in
 place so later discover passes route the issue through authoring-label
 handling instead of normal ready-work discovery.
 
-Removing the authoring label releases the discover guard. Do it only as
+Removing the authoring label releases the Discover guard. Do it only as
 part of the explicit execution handoff; publication confirmation alone
 does not start Discover, Claim, and Work.
 
