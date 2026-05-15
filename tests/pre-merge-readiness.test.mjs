@@ -151,6 +151,7 @@ test("CODEOWNERS patterns with slashes stay root anchored", () => {
       unmatchedFiles: ["src/docs/file.md"],
       codeownerUserLogins: [],
       codeownerTeamSlugs: ["org/docs"],
+      codeownerEmailAddresses: [],
     },
   );
 });
@@ -164,6 +165,7 @@ test("CODEOWNERS **/ patterns match both root and nested files", () => {
       unmatchedFiles: [],
       codeownerUserLogins: [],
       codeownerTeamSlugs: ["org/docs"],
+      codeownerEmailAddresses: [],
     },
   );
 });
@@ -177,6 +179,7 @@ test("CODEOWNERS middle **/ segments match zero or more directories", () => {
       unmatchedFiles: [],
       codeownerUserLogins: [],
       codeownerTeamSlugs: ["org/docs"],
+      codeownerEmailAddresses: [],
     },
   );
 });
@@ -190,6 +193,7 @@ test("CODEOWNERS trailing slash patterns match directories at any depth", () => 
       unmatchedFiles: [],
       codeownerUserLogins: [],
       codeownerTeamSlugs: ["org/apps"],
+      codeownerEmailAddresses: [],
     },
   );
 });
@@ -203,6 +207,7 @@ test("CODEOWNERS directory-style patterns match descendants", () => {
       unmatchedFiles: [],
       codeownerUserLogins: [],
       codeownerTeamSlugs: ["org/ops"],
+      codeownerEmailAddresses: [],
     },
   );
 });
@@ -216,6 +221,7 @@ test("CODEOWNERS dot-prefixed directory patterns match descendants", () => {
       unmatchedFiles: [],
       codeownerUserLogins: [],
       codeownerTeamSlugs: ["org/automation"],
+      codeownerEmailAddresses: [],
     },
   );
 });
@@ -229,6 +235,7 @@ test("CODEOWNERS dotted literal patterns match descendant paths", () => {
       unmatchedFiles: [],
       codeownerUserLogins: [],
       codeownerTeamSlugs: ["org/api"],
+      codeownerEmailAddresses: [],
     },
   );
 });
@@ -242,6 +249,7 @@ test("CODEOWNERS patterns preserve escaped spaces", () => {
       unmatchedFiles: [],
       codeownerUserLogins: [],
       codeownerTeamSlugs: ["org/docs"],
+      codeownerEmailAddresses: [],
     },
   );
 });
@@ -255,6 +263,7 @@ test("CODEOWNERS ownerless overrides clear inherited ownership", () => {
       unmatchedFiles: [],
       codeownerUserLogins: [],
       codeownerTeamSlugs: [],
+      codeownerEmailAddresses: [],
     },
   );
 });
@@ -496,6 +505,22 @@ test("self-CODEOWNER diagnostic stays conservative when a team owner is present"
   assert.deepEqual(summary.codeownerSelfApproval.codeownerTeamSlugs, ["org/reviewers"]);
 });
 
+test("self-CODEOWNER diagnostic stays conservative when an email owner is present", () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [{
+      type: "pull_request",
+      parameters: { require_code_owner_review: true },
+    }],
+    branchRulesets: [{ current_user_can_bypass: "never", bypass_actors: [] }],
+    codeownersText: "* @author reviewer@example.com\n",
+    changedFiles: ["README.md"],
+    prAuthorLogin: "author",
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, "possible_deadlock");
+  assert.equal(summary.codeownerSelfApproval.reason, "email-codeowner-ambiguous");
+});
+
 test("self-CODEOWNER diagnostic is not applicable when CODEOWNER review is disabled", () => {
   const summary = summarizeReviewerStates([], {
     branchRules: [{
@@ -534,6 +559,29 @@ test("self-CODEOWNER diagnostic clears when pull-request bypass is available", (
   assert.equal(summary.codeownerSelfApproval.bypassMode, "pull_request");
 });
 
+test("self-CODEOWNER diagnostic clears when an always ruleset bypass is available", () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [{
+      type: "pull_request",
+      ruleset_id: 1,
+      parameters: { require_code_owner_review: true },
+    }],
+    branchRulesets: [{
+      id: 1,
+      current_user_can_bypass: "always",
+      bypass_actors: [{ actor_id: 44661432, actor_type: "User", bypass_mode: "always" }],
+    }],
+    codeownersText: "* @author\n",
+    changedFiles: ["README.md"],
+    prAuthorLogin: "author",
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, "clear");
+  assert.equal(summary.codeownerSelfApproval.reason, "ruleset-bypass-available");
+  assert.equal(summary.codeownerSelfApproval.bypassDetected, true);
+  assert.equal(summary.codeownerSelfApproval.bypassMode, "always");
+});
+
 test("self-CODEOWNER diagnostic keeps classic protection outside ruleset bypass", () => {
   const summary = summarizeReviewerStates([], {
     branchRules: [{
@@ -561,6 +609,38 @@ test("self-CODEOWNER diagnostic keeps classic protection outside ruleset bypass"
   assert.equal(summary.codeownerSelfApproval.bypassDetected, false);
   assert.equal(summary.codeownerSelfApproval.bypassMode, "none");
   assert.equal(summary.codeownerSelfApproval.currentUserCanBypass, "pull_requests_only");
+});
+
+test("self-CODEOWNER diagnostic honors classic pull request bypass allowances", () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [{
+      type: "pull_request",
+      ruleset_id: 1,
+      parameters: { require_code_owner_review: true },
+    }],
+    branchRulesets: [{
+      id: 1,
+      current_user_can_bypass: "pull_requests_only",
+      bypass_actors: [{ actor_id: 44661432, actor_type: "User", bypass_mode: "pull_request" }],
+    }],
+    branchProtection: {
+      required_pull_request_reviews: {
+        require_code_owner_reviews: true,
+        bypass_pull_request_allowances: {
+          users: [{ login: "author" }],
+        },
+      },
+    },
+    codeownersText: "* @author\n",
+    changedFiles: ["README.md"],
+    prAuthorLogin: "author",
+    viewerLogin: "author",
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, "clear");
+  assert.equal(summary.codeownerSelfApproval.reason, "pull-request-bypass-available");
+  assert.equal(summary.codeownerSelfApproval.bypassDetected, true);
+  assert.equal(summary.codeownerSelfApproval.bypassMode, "pull_request");
 });
 
 test("self-CODEOWNER diagnostic ignores unrelated ruleset bypasses", () => {
@@ -603,9 +683,10 @@ test("self-CODEOWNER diagnostic accepts GitHub exempt bypass token", () => {
     prAuthorLogin: "author",
   });
 
-  assert.equal(summary.codeownerSelfApproval.status, "deadlock");
-  assert.equal(summary.codeownerSelfApproval.reason, "pr-author-is-only-direct-codeowner");
-  assert.equal(summary.codeownerSelfApproval.bypassDetected, false);
+  assert.equal(summary.codeownerSelfApproval.status, "clear");
+  assert.equal(summary.codeownerSelfApproval.reason, "ruleset-bypass-available");
+  assert.equal(summary.codeownerSelfApproval.bypassDetected, true);
+  assert.equal(summary.codeownerSelfApproval.bypassMode, "exempt");
   assert.equal(summary.codeownerSelfApproval.currentUserCanBypass, "exempt");
 });
 

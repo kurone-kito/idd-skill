@@ -510,7 +510,7 @@ default `instructions-only` profile keep using the written shell /
   `claim`, and optional `dispositionEvidence`
 - `reviewerStates.codeownerSelfApproval` diagnoses whether CODEOWNER
   approval can be satisfied by an eligible non-author owner or an
-  applicable pull-request-only ruleset bypass. `deadlock` and
+  applicable ruleset or classic pull-request bypass. `deadlock` and
   `possible_deadlock` statuses should be surfaced in F2 evidence and
   hold comments, but they do not grant bypass permission. The
   `currentUserCanBypass` token records the known GitHub ruleset value

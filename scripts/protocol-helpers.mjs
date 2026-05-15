@@ -1440,6 +1440,7 @@ export function summarizeBranchReviewRequirements(branchRules = [], branchProtec
   const requiredReviewerLogins = new Set();
   const requiredReviewerTeams = new Set();
   const requiredReviewerRequirements = [];
+  const classicBypassPullRequestUserLogins = new Set();
 
   let requiredApprovingReviewCount = 0;
   let requireCodeOwnerReview = false;
@@ -1490,6 +1491,12 @@ export function summarizeBranchReviewRequirements(branchRules = [], branchProtec
   const protectionReviews = branchProtection.required_pull_request_reviews ?? {};
   classicRequireCodeOwnerReview = Boolean(protectionReviews.require_code_owner_reviews)
     || Boolean(protectionReviews.require_code_owner_review);
+  for (const user of protectionReviews.bypass_pull_request_allowances?.users ?? []) {
+    const login = typeof user === "string" ? user : user?.login;
+    for (const normalizedLogin of normalizeTrustedMarkerLogins([login])) {
+      classicBypassPullRequestUserLogins.add(normalizedLogin);
+    }
+  }
   requiredApprovingReviewCount = Math.max(
     requiredApprovingReviewCount,
     Number(protectionReviews.required_approving_review_count ?? 0) || 0,
@@ -1510,6 +1517,7 @@ export function summarizeBranchReviewRequirements(branchRules = [], branchProtec
     requiredApprovingReviewCount,
     requireCodeOwnerReview,
     classicRequireCodeOwnerReview,
+    classicBypassPullRequestUserLogins: [...classicBypassPullRequestUserLogins].sort(),
     requiresConversationResolution,
     requiredCheckSourcePinned,
     requiredReviewerLogins: [...requiredReviewerLogins].sort(),
@@ -1579,6 +1587,7 @@ export function selectCodeownersText(payloads = []) {
 function collectCodeownersForFiles(rules, changedFiles = []) {
   const codeownerUsers = new Set();
   const codeownerTeams = new Set();
+  const codeownerEmails = new Set();
   const unmatchedFiles = [];
 
   for (const filePath of changedFiles) {
@@ -1602,6 +1611,9 @@ function collectCodeownersForFiles(rules, changedFiles = []) {
     for (const owner of owners.teams) {
       codeownerTeams.add(owner);
     }
+    for (const owner of owners.emails) {
+      codeownerEmails.add(owner);
+    }
   }
 
   return {
@@ -1610,6 +1622,7 @@ function collectCodeownersForFiles(rules, changedFiles = []) {
     unmatchedFiles,
     codeownerUserLogins: [...codeownerUsers].sort(),
     codeownerTeamSlugs: [...codeownerTeams].sort(),
+    codeownerEmailAddresses: [...codeownerEmails].sort(),
   };
 }
 
@@ -1625,6 +1638,7 @@ export function summarizeReviewerStates(
     eligibleCodeownerUserLogins = null,
     advisoryBotLogins = [],
     prAuthorLogin = "",
+    viewerLogin = "",
   } = {},
 ) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(branchRules, branchProtection);
@@ -1714,10 +1728,13 @@ export function summarizeReviewerStates(
     eligibleCodeownerUserLogins:
       eligibleCodeownerUserLogins === null ? null : [...eligibleCodeownerUsers].sort(),
     codeownerTeamSlugs: codeowners.codeownerTeamSlugs,
+    codeownerEmailAddresses: codeowners.codeownerEmailAddresses,
     prAuthorLogin,
+    viewerLogin,
     branchRules,
     branchRulesets,
     classicRequireCodeOwnerReview: branchReviewRequirements.classicRequireCodeOwnerReview,
+    classicBypassPullRequestUserLogins: branchReviewRequirements.classicBypassPullRequestUserLogins,
   });
 
   return {
@@ -1762,20 +1779,37 @@ function summarizeCodeownerSelfApproval({
   codeownerUserLogins = [],
   eligibleCodeownerUserLogins = null,
   codeownerTeamSlugs = [],
+  codeownerEmailAddresses = [],
   prAuthorLogin = "",
+  viewerLogin = "",
   branchRules = [],
   branchRulesets = [],
   classicRequireCodeOwnerReview = false,
+  classicBypassPullRequestUserLogins = [],
 }) {
   const normalizedAuthor = String(prAuthorLogin ?? "").trim().toLowerCase();
+  const normalizedViewer = String(viewerLogin ?? "").trim().toLowerCase();
   const directCodeownerUserLogins = normalizeTrustedMarkerLogins(codeownerUserLogins);
   const eligibleDirectCodeownerUserLogins = eligibleCodeownerUserLogins === null
     ? directCodeownerUserLogins
     : normalizeTrustedMarkerLogins(eligibleCodeownerUserLogins)
       .filter((login) => directCodeownerUserLogins.includes(login));
   const normalizedCodeownerTeamSlugs = normalizeTrustedMarkerLogins(codeownerTeamSlugs);
+  const normalizedCodeownerEmailAddresses = normalizeTrustedMarkerLogins(codeownerEmailAddresses);
+  const classicBypassDetected = Boolean(
+    Boolean(classicRequireCodeOwnerReview)
+    && normalizedViewer
+    && normalizeTrustedMarkerLogins(classicBypassPullRequestUserLogins).includes(normalizedViewer),
+  );
   const bypass = summarizeRulesetPullRequestBypass(branchRulesets, branchRules);
-  const applicableBypassDetected = bypass.detected && !classicRequireCodeOwnerReview;
+  const rulesetGateSatisfiedByBypass = bypass.relevantRulesetCount === 0 || bypass.detected;
+  const classicGateSatisfiedByBypass = !classicRequireCodeOwnerReview || classicBypassDetected;
+  const applicableBypassDetected = (bypass.detected || classicBypassDetected)
+    && rulesetGateSatisfiedByBypass
+    && classicGateSatisfiedByBypass;
+  const applicableBypassMode = applicableBypassDetected
+    ? (bypass.detected ? bypass.mode : "pull_request")
+    : "none";
   const base = {
     status: "not_applicable",
     reason: "codeowner-review-not-required",
@@ -1785,7 +1819,7 @@ function summarizeCodeownerSelfApproval({
     requireCodeOwnerReview: Boolean(requireCodeOwnerReview),
     codeownerApprovalSatisfied: Boolean(codeownerApprovalSatisfied),
     bypassDetected: applicableBypassDetected,
-    bypassMode: applicableBypassDetected ? bypass.mode : "none",
+    bypassMode: applicableBypassMode,
     currentUserCanBypass: bypass.currentUserCanBypass,
   };
 
@@ -1808,7 +1842,9 @@ function summarizeCodeownerSelfApproval({
     return {
       ...base,
       status: "clear",
-      reason: "pull-request-bypass-available",
+      reason: applicableBypassMode === "pull_request"
+        ? "pull-request-bypass-available"
+        : "ruleset-bypass-available",
     };
   }
   if (!normalizedAuthor) {
@@ -1835,6 +1871,13 @@ function summarizeCodeownerSelfApproval({
       ...base,
       status: "possible_deadlock",
       reason: "team-codeowner-ambiguous",
+    };
+  }
+  if (normalizedCodeownerEmailAddresses.length > 0) {
+    return {
+      ...base,
+      status: "possible_deadlock",
+      reason: "email-codeowner-ambiguous",
     };
   }
   if (allDirectUsersAreAuthor) {
@@ -1889,13 +1932,27 @@ function summarizeRulesetPullRequestBypass(branchRulesets = [], branchRules = []
   } else if (values.includes("never")) {
     currentUserCanBypass = "never";
   }
+  const bypassValues = new Set(["always", "exempt", "pull_requests_only"]);
   const detected = relevantRulesets.length > 0
     && values.length === relevantRulesets.length
-    && values.every((value) => value === "pull_requests_only");
+    && values.every((value) => bypassValues.has(value));
+  let mode = "none";
+  if (detected) {
+    if (new Set(values).size > 1) {
+      mode = "mixed";
+    } else if (values.includes("pull_requests_only")) {
+      mode = "pull_request";
+    } else if (values.includes("always")) {
+      mode = "always";
+    } else if (values.includes("exempt")) {
+      mode = "exempt";
+    }
+  }
   return {
     detected,
-    mode: detected ? "pull_request" : "none",
+    mode,
     currentUserCanBypass,
+    relevantRulesetCount: relevantRulesets.length,
   };
 }
 
@@ -2057,6 +2114,7 @@ export function buildPreMergeReadinessSummary(
     eligibleCodeownerUserLogins,
     advisoryBotLogins,
     prAuthorLogin,
+    viewerLogin: options.viewerLogin,
   });
   const ci = summarizeRequiredChecks(checks, branchRules, branchProtection);
   const advisoryWaitOptions = normalizeAdvisoryWaitRuntimeOptions(options);

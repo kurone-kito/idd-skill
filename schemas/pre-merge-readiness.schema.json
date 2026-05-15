@@ -324,7 +324,7 @@
             "bypassDetected": { "type": "boolean" },
             "bypassMode": {
               "type": "string",
-              "enum": ["none", "pull_request"]
+              "enum": ["none", "pull_request", "always", "exempt", "mixed"]
             },
             "currentUserCanBypass": {
               "type": "string",
