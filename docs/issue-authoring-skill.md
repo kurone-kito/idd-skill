@@ -271,7 +271,8 @@ discover guard while the full set is still being authored. Remove the
 label from all published issues only after the complete issue set is
 published and the user confirms the published result. If publishing is
 interrupted before that confirmation, leave the label in place so later
-discover passes continue to treat the issue as actively authored.
+discover passes route the issue through authoring-label handling instead
+of normal ready-work discovery.
 
 Removing the authoring label after publication confirmation does not
 start the IDD execution loop. Starting Discover, Claim, and Work still
