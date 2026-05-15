@@ -79,6 +79,18 @@
     "humanApprovedCount": 1,
     "requiredApprovalsSatisfied": true,
     "codeownerApprovalSatisfied": true,
+    "codeownerSelfApproval": {
+      "status": "not_applicable",
+      "reason": "codeowner-approval-satisfied",
+      "prAuthorLogin": "pr-author",
+      "directCodeownerUserLogins": ["owner-reviewer"],
+      "codeownerTeamSlugs": [],
+      "requireCodeOwnerReview": true,
+      "codeownerApprovalSatisfied": true,
+      "bypassDetected": false,
+      "bypassMode": "none",
+      "currentUserCanBypass": "never"
+    },
     "humanChangesRequestedCount": 0,
     "blockingChangesRequestedLogins": []
   },

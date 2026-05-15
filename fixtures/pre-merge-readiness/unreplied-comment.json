@@ -168,6 +168,18 @@
       "humanApprovedCount": 1,
       "requiredApprovalsSatisfied": true,
       "codeownerApprovalSatisfied": true,
+      "codeownerSelfApproval": {
+        "status": "not_applicable",
+        "reason": "codeowner-approval-satisfied",
+        "prAuthorLogin": "contributor",
+        "directCodeownerUserLogins": ["owner-reviewer"],
+        "codeownerTeamSlugs": [],
+        "requireCodeOwnerReview": true,
+        "codeownerApprovalSatisfied": true,
+        "bypassDetected": false,
+        "bypassMode": "none",
+        "currentUserCanBypass": "unknown"
+      },
       "humanChangesRequestedCount": 0,
       "blockingChangesRequestedLogins": []
     },

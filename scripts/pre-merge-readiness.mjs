@@ -9,6 +9,8 @@ import {
   deriveIddAgentLogins,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
+  resolveCodeownersForFiles,
+  resolveRulesetDetailPath,
   selectCodeownersText,
 } from "./protocol-helpers.mjs";
 import { normalizePolicyConfig, resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
@@ -31,6 +33,7 @@ const owner = args.owner || ghText(["repo", "view", "--json", "owner", "--jq", "
 const repo = args.repo || ghText(["repo", "view", "--json", "name", "--jq", ".name"]);
 const repoRef = `${owner}/${repo}`;
 const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
+const viewerAppSlug = safeGhText(["api", "app", "--jq", ".slug // .app_slug // empty"]).toLowerCase();
 const configuredTrustedActors = normalizeTrustedMarkerLogins([
   ...splitCsv(args.trustedMarkerLogins),
   ...splitCsv(process.env.IDD_TRUSTED_MARKER_ACTORS),
@@ -75,6 +78,7 @@ const branchRules = ghApiJson(
   [],
   { allowHttpStatuses: [404] },
 );
+const branchRulesets = fetchBranchRulesets(owner, repo, branchRules);
 const branchProtection = ghApiJson(
   `repos/${owner}/${repo}/branches/${encodedBaseRefName}/protection`,
   false,
@@ -101,6 +105,12 @@ const changedFiles = ghApiJson(`repos/${owner}/${repo}/pulls/${args.prNumber}/fi
   .map((file) => String(file.filename ?? ""))
   .filter(Boolean);
 const codeownersText = fetchCodeownersText(owner, repo, baseRefName);
+const eligibleCodeownerUserLogins = resolveEligibleCodeownerUserLogins(
+  owner,
+  repo,
+  resolveCodeownersForFiles(codeownersText, changedFiles).codeownerUserLogins,
+);
+const viewerTeamSlugs = resolveViewerClassicBypassTeamSlugs(owner, viewerLogin, branchProtection);
 
 const collaboratorTrustEnabled = readCollaboratorTrustEnabled();
 const trustedMarkerLogins = normalizeTrustedMarkerLogins([
@@ -129,12 +139,14 @@ const summary = buildPreMergeReadinessSummary(
     threads: threads.map(normalizeThread),
     checks,
     branchRules,
+    branchRulesets,
     branchProtection,
     requestedReviewers: requestedReviewers.users ?? [],
     timelineEvents,
     claimEvents: claimComments.map(normalizeClaimComment),
     changedFiles,
     codeownersText,
+    eligibleCodeownerUserLogins,
     reviewDecision,
   },
   {
@@ -162,6 +174,8 @@ const summary = buildPreMergeReadinessSummary(
         forcedHandoffPermissionCache,
       ),
     viewerLogin,
+    viewerTeamSlugs,
+    viewerAppSlug,
     configuredTrustedActors,
     collaboratorTrustEnabled,
   },
@@ -331,6 +345,20 @@ function resolveTrustedCollaboratorMarkerLogins(owner, repo, comments) {
   });
 }
 
+function resolveEligibleCodeownerUserLogins(owner, repo, logins) {
+  return normalizeTrustedMarkerLogins(logins)
+    .filter((login) => {
+      const permission = safeGhText([
+        "api",
+        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
+        "--jq",
+        ".permission",
+      ]).toLowerCase();
+
+      return permission === "admin" || permission === "maintain" || permission === "write";
+    });
+}
+
 function fetchCodeownersText(owner, repo, ref) {
   const payloads = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"].map((path) => {
     return ghApiJson(
@@ -341,6 +369,71 @@ function fetchCodeownersText(owner, repo, ref) {
     );
   });
   return selectCodeownersText(payloads);
+}
+
+function fetchBranchRulesets(owner, repo, branchRules) {
+  const rulesetPaths = [];
+  const seenPaths = new Set();
+  for (const rule of branchRules ?? []) {
+    const rulesetId = Number.parseInt(String(rule?.ruleset_id ?? ""), 10);
+    if (!Number.isInteger(rulesetId)) {
+      continue;
+    }
+    const path = resolveRulesetDetailPath(owner, repo, rule, rulesetId);
+    if (seenPaths.has(path)) {
+      continue;
+    }
+    seenPaths.add(path);
+    rulesetPaths.push(path);
+  }
+
+  return rulesetPaths
+    .map((path) => {
+      try {
+        return ghApiJson(
+          path,
+          false,
+          ["-H", "Accept: application/vnd.github+json"],
+          { allowHttpStatuses: [404] },
+        );
+      } catch {
+        return {};
+      }
+    })
+    .filter((ruleset) => Object.keys(ruleset).length > 0);
+}
+
+function resolveViewerClassicBypassTeamSlugs(owner, viewerLogin, branchProtection) {
+  if (!viewerLogin) {
+    return [];
+  }
+  const teams = branchProtection.required_pull_request_reviews?.bypass_pull_request_allowances?.teams ?? [];
+  const viewerTeams = new Set();
+  for (const team of teams) {
+    const slug = String(team?.slug ?? "").trim().toLowerCase();
+    if (!slug) {
+      continue;
+    }
+    const org = String(team?.organization?.login ?? extractTeamOrgFromHtmlUrl(team?.html_url) ?? owner)
+      .trim();
+    const state = safeGhText([
+      "api",
+      `orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(slug)}/memberships/${
+        encodeURIComponent(viewerLogin)
+      }`,
+      "--jq",
+      ".state",
+    ]).toLowerCase();
+    if (state === "active") {
+      viewerTeams.add(slug);
+    }
+  }
+  return [...viewerTeams].sort();
+}
+
+function extractTeamOrgFromHtmlUrl(htmlUrl) {
+  const match = String(htmlUrl ?? "").match(/\/orgs\/([^/]+)\/teams\//);
+  return match?.[1] ?? "";
 }
 
 function fetchReviewThreads(owner, repo, prNumber) {
@@ -483,7 +576,7 @@ function ghApiJson(path, paginate = false, extraArgs = [], options = {}) {
 
 function runGh(args, options = {}) {
   try {
-    return execFileSync("gh", args, { encoding: "utf8" });
+    return execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   } catch (error) {
     const status = Number(error?.status ?? -1);
     if ((options.allowStatuses ?? []).includes(status)) {

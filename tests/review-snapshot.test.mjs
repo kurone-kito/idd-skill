@@ -168,6 +168,24 @@ test("malformed forced-handoff comments remain visible activity", () => {
   assert.equal(summary.maxActivityUpdatedAt, "2026-05-10T10:40:00Z");
 });
 
+test("activity snapshot ignores pending check sentinel timestamps", () => {
+  const summary = buildActivitySnapshotSummary(
+    {
+      comments: [],
+      reviews: [],
+      threads: [],
+      checks: [
+        { name: "lint", state: "PENDING", completedAt: "0001-01-01T00:00:00Z" },
+        { name: "test", state: "SUCCESS", completedAt: "0001-01-01T00:00:00Z" },
+      ],
+    },
+    { trustedMarkerLogins: ["idd-bot"] },
+  );
+
+  assert.equal(summary.latestCiCompletedAt, "none");
+  assert.equal(summary.latestPassingCiCompletedAt, "none");
+});
+
 function readJson(relativePath) {
   return JSON.parse(readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8"));
 }

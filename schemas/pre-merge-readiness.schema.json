@@ -227,6 +227,7 @@
         "humanApprovedCount",
         "requiredApprovalsSatisfied",
         "codeownerApprovalSatisfied",
+        "codeownerSelfApproval",
         "humanChangesRequestedCount",
         "blockingChangesRequestedLogins"
       ],
@@ -288,6 +289,49 @@
         "humanApprovedCount": { "type": "integer", "minimum": 0 },
         "requiredApprovalsSatisfied": { "type": "boolean" },
         "codeownerApprovalSatisfied": { "type": "boolean" },
+        "codeownerSelfApproval": {
+          "type": "object",
+          "required": [
+            "status",
+            "reason",
+            "prAuthorLogin",
+            "directCodeownerUserLogins",
+            "codeownerTeamSlugs",
+            "requireCodeOwnerReview",
+            "codeownerApprovalSatisfied",
+            "bypassDetected",
+            "bypassMode",
+            "currentUserCanBypass"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["not_applicable", "clear", "possible_deadlock", "deadlock"]
+            },
+            "reason": { "type": "string", "minLength": 1 },
+            "prAuthorLogin": { "type": "string" },
+            "directCodeownerUserLogins": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "codeownerTeamSlugs": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "requireCodeOwnerReview": { "type": "boolean" },
+            "codeownerApprovalSatisfied": { "type": "boolean" },
+            "bypassDetected": { "type": "boolean" },
+            "bypassMode": {
+              "type": "string",
+              "enum": ["none", "pull_request", "always", "exempt", "mixed"]
+            },
+            "currentUserCanBypass": {
+              "type": "string",
+              "enum": ["unknown", "never", "always", "pull_requests_only", "exempt", "mixed"]
+            }
+          }
+        },
         "humanChangesRequestedCount": { "type": "integer", "minimum": 0 },
         "blockingChangesRequestedLogins": {
           "type": "array",

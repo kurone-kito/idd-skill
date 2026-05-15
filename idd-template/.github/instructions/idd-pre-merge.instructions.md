@@ -171,12 +171,20 @@ must align with every F2 condition below.
   same resolved `ciWait.runningTimeout`, `ciWait.generationTimeout`, and
   `ciWait.rerunPolicy` values; on-success → re-evaluate F2)
 - **Required reviews**: Required approvals count is satisfied and all
-  CODEOWNER approvals are obtained. If approvals are absent but there
-  are no open actionable review items (ReviewItems_snapshot is empty), do **not**
-  route to E1 — instead, request CODEOWNER/required reviewers directly
-  (if not already requested), post a hold comment, and stop. Return to
-  E1 only when there are actual review threads or comments to address (→
-  go to `idd-review-snapshot.instructions.md` only in that case).
+  CODEOWNER approvals are obtained. If helper evidence includes
+  `reviewerStates.codeownerSelfApproval`, include that diagnostic in the
+  F2 evidence and any hold comment when its `status` is `deadlock` or
+  `possible_deadlock`. `deadlock` means the current PR/ruleset/CODEOWNER
+  topology cannot be satisfied by ordinary self-approval; `possible_deadlock`
+  means the helper could not prove an eligible non-author CODEOWNER or
+  applicable pull-request bypass, so fail closed. This diagnostic is
+  evidence only and never permission to bypass the Required reviews
+  gate. If approvals are absent but there are no open actionable review
+  items (ReviewItems_snapshot is empty), do **not** route to E1 —
+  instead, request CODEOWNER/required reviewers directly (if not already
+  requested), post a hold comment, and stop. Return to E1 only when
+  there are actual review threads or comments to address (→ go to
+  `idd-review-snapshot.instructions.md` only in that case).
 - **No `CHANGES_REQUESTED`** (human/required/CODEOWNER reviewers only):
   No human, required, or CODEOWNER reviewer's latest state is
   `CHANGES_REQUESTED` (→ if not yet addressed, return to review triage;
