@@ -15,6 +15,25 @@ missing or disagrees.
 **Abort conditions**: A0-T, A1, A3 (default; see decision tree).
 **Early stop condition**: A0-T, A4, or A4.5 (no claim made — see below).
 
+## Authoring label guard
+
+The configured authoring label is `issueAuthoring.authoringLabelName`
+(default: `status:authoring`); the stale threshold is
+`issueAuthoring.authoringStaleAge` (default: `PT4H`).
+
+A0-T, A0-O, and A3 must treat a matching label as not startable. A0-T
+reports `Issue #N is currently being authored` and stops before claim;
+A0-O and A3 filter the issue out. For each skipped issue, fetch the
+latest matching `labeled` timeline event. If the label age exceeds
+`authoringStaleAge`, emit:
+
+```text
+Warning: Issue #N has carried the authoring label for {duration}; the authoring session may be stalled.
+```
+
+If the timestamp is unavailable, still skip the issue and report that the
+stale-authoring age could not be checked.
+
 ## A0-T — Explicit issue target shortcut
 
 Use this shortcut only when the current operator request contains one
@@ -34,7 +53,10 @@ selection. Before A5, run targeted readiness and viability checks against
 that issue only:
 
 1. Re-fetch the target issue.
-2. Apply the same readiness intent as A3 to the target:
+2. If the target issue carries the configured authoring label, report
+   `Issue #N is currently being authored`, run the stale-authoring
+   warning check above, and stop without claiming.
+3. Apply the same readiness intent as A3 to the target:
    - no `status:blocked-by-human` or `status:needs-decision` label;
    - no open dependent issues, except parent epics or aggregate issues
      that are acceptable under A3;
@@ -45,11 +67,11 @@ that issue only:
      markers resolve through the same scoped body-content lookup used by
      A3, and the matching roadmap work is closed or otherwise complete;
    - no external human coordination is required to start.
-3. Run the normal A4 viability gate against the target only.
-4. If `.github/idd/config.json` exists and is valid and
+4. Run the normal A4 viability gate against the target only.
+5. If `.github/idd/config.json` exists and is valid and
    `skipIssueAuthorApprovalGate` is `true`, skip the issue-author
    approval gate and keep the target selected.
-5. Otherwise, apply the same issue-author approval evaluation used in
+6. Otherwise, apply the same issue-author approval evaluation used in
    **A3.5**:
    - use `maintainerApprovalActorPolicy` from `.github/idd/config.json`
      when present; if absent, default to
@@ -111,6 +133,7 @@ body satisfies **all** of the following:
   `<!-- {{PROJECT_MARKER_PREFIX}}-blocked-by: … -->` marker.
 - Does NOT have a `status:blocked-by-human` or `status:needs-decision`
   label.
+- Does NOT have the configured authoring label.
 - Does NOT contain visible `Blocked by #NNN` lines where the referenced
   issue is open (apply the same fail-safe as A3: if a reference cannot
   be resolved, treat as blocked).
@@ -277,6 +300,7 @@ unresolvable references encountered during traversal.
 From A2, keep only issues that satisfy **all** of the following:
 
 - No `status:blocked-by-human` or `status:needs-decision` label
+- No configured authoring label
 - No open dependent issues (parent epics / aggregate issues that are
   still open are acceptable)
 - All dependency issues are closed or otherwise completed. Check both
@@ -504,30 +528,10 @@ for a separate, prior roadmap to close before they can start (cross-
 phase sequential dependency). Using it for grouping causes A3 to block
 every sub-task for the entire lifetime of the roadmap.
 
-## Scope invariant (detailed query allowlist)
+## Scope invariant (summary)
 
-Agents must not widen issue-selection scope beyond what the roadmap
-explicitly references (directly or transitively) without explicit
-operator instruction. Specifically:
-
-- A single explicit issue target provided by the operator in the current
-  run is explicit operator instruction for that one issue only. Use the
-  A0-T path; do not use the target as permission to search for alternate
-  issues.
-- Repo-wide searches (`gh issue list`, `gh search`, label-based queries)
-  are permitted only in **A1** (to locate the roadmap itself), in
-  **A0-T** for the scoped body-content lookup needed to resolve the
-  explicit target's `{{PROJECT_MARKER_PREFIX}}-blocked-by` markers, in
-  **A0-O** when `issue-scope` is `orphan-first` (body-content filter to
-  find issues lacking `{{PROJECT_MARKER_PREFIX}}-roadmap-id` and
-  `{{PROJECT_MARKER_PREFIX}}-blocked-by` markers), and for the scoped
-  `{{PROJECT_MARKER_PREFIX}}-roadmap-id` body-content lookup required by
-  A3's dependency-marker check. A1.5 may also run a narrow repo-wide
-  duplicate/reuse check for a specific autonomous gap before creating a
-  follow-up issue; the result may only prevent a duplicate or link an
-  existing issue back to the selected roadmap, not expand the candidate
-  set.
-- After a zero-result report at A3, an operator may grant a one-time
-  opt-in for the current run, specifying an alternate scope.
-- Opt-in must be granted interactively during the current run. Prior or
-  standing instructions do not count as opt-in.
+Do not widen issue-selection scope beyond the roadmap traversal except
+for the explicit query allowlist already defined in A0-T, A0-O, A1,
+A1.5, A3, and A4.5, or for a same-run operator opt-in after a
+zero-result report. A single explicit target authorizes only that issue;
+prior or standing instructions do not count as opt-in.

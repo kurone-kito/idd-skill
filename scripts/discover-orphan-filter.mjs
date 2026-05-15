@@ -5,6 +5,11 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  buildAuthoringLabelWarning,
+  resolveAuthoringGuardPolicy,
+} from "./authoring-label-guard.mjs";
+
 const DEFAULT_MARKER_PREFIX = "idd-skill";
 const BLOCKED_LABELS = new Set(["status:blocked-by-human", "status:needs-decision"]);
 
@@ -47,6 +52,7 @@ export function classifyIssue(issue, options) {
   const labels = new Set(normalizeLabels(issue.labels));
   const body = String(issue.body ?? "");
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
+  const authoringLabelName = normalizeAuthoringLabelName(options.authoringLabelName);
   const roadmapMarkerRegex = createMarkerRegex(markerPrefix, "roadmap-id");
   const blockedMarkerRegex = createMarkerRegex(markerPrefix, "blocked-by");
 
@@ -61,6 +67,10 @@ export function classifyIssue(issue, options) {
   const blockedLabel = [...labels].find((label) => BLOCKED_LABELS.has(label));
   if (blockedLabel) {
     return { orphan: false, reason: "blocked_label", details: blockedLabel };
+  }
+
+  if (labels.has(authoringLabelName)) {
+    return { orphan: false, reason: "authoring_label", details: authoringLabelName };
   }
 
   const refs = extractBlockedByReferences(body);
@@ -95,17 +105,20 @@ export function filterOrphanIssues(issues, options = {}) {
     roadmap_marker: [],
     blocked_by_marker: [],
     blocked_label: [],
+    authoring_label: [],
     blocked_by_open_reference: [],
     unresolvable_reference: [],
   };
   const orphans = [];
   const unresolvable = [];
+  const warnings = [];
 
   for (const issue of issues) {
     const result = classifyIssue(issue, {
       issueStateByNumber,
       fetchIssueStateByNumber,
       markerPrefix: options.markerPrefix,
+      authoringLabelName: options.authoringLabelName,
     });
     const entry = {
       number: issue.number,
@@ -123,6 +136,18 @@ export function filterOrphanIssues(issues, options = {}) {
           reference: number,
           reason: "issue-not-found-or-inaccessible",
         });
+      }
+    }
+    if (result.reason === "authoring_label") {
+      const warning = buildAuthoringLabelWarning({
+        issueNumber: issue.number,
+        labelName: result.details,
+        labelEvents: resolveIssueLabelEvents(issue, options.fetchLabelEventsByIssueNumber),
+        now: options.now ?? new Date(),
+        staleAgeMs: options.authoringStaleAgeMs ?? (4 * 60 * 60 * 1000),
+      });
+      if (warning) {
+        warnings.push(warning);
       }
     }
 
@@ -153,6 +178,7 @@ export function filterOrphanIssues(issues, options = {}) {
     orphans,
     filtered,
     unresolvable,
+    warnings,
     counts,
   };
 }
@@ -175,7 +201,11 @@ function runCli() {
   const result = filterOrphanIssues(openIssues, {
     issueStateByNumber: openStateByNumber,
     fetchIssueStateByNumber: (issueNumber) => fetchIssueState(repoRef, issueNumber),
+    fetchLabelEventsByIssueNumber: (issueNumber) => fetchIssueLabelEvents(repoRef, issueNumber),
     markerPrefix: policy.markerPrefix,
+    authoringLabelName: policy.authoringLabelName,
+    authoringStaleAgeMs: policy.authoringStaleAgeMs,
+    now: args.now || new Date(),
   });
 
   const output = {
@@ -187,6 +217,8 @@ function runCli() {
       source: policy.source,
       orphanFirstPolicy: policy.orphanFirstPolicy,
       markerPrefix: policy.markerPrefix,
+      authoringLabelName: policy.authoringLabelName,
+      authoringStaleAge: policy.authoringStaleAge,
     },
     ...result,
   };
@@ -201,6 +233,7 @@ function parseArgs(argv) {
     policy: "",
     pr: null,
     help: false,
+    now: "",
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -230,6 +263,11 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (token === "--now") {
+      parsed.now = value ?? "";
+      index += 1;
+      continue;
+    }
     if (token === "--help" || token === "-h") {
       parsed.help = true;
       continue;
@@ -241,22 +279,24 @@ function parseArgs(argv) {
 
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>] [--pr <number>]
+  node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>] [--pr <number>] [--now <ISO8601>]
 
 Output schema:
 {
   "repository": {"owner": "...", "repo": "..."},
   "diagnostics": {"pr": 404},
-  "policy": {"source": "...", "orphanFirstPolicy": "none|maintainer-approved|public-disabled", "markerPrefix": "..."},
+  "policy": {"source": "...", "orphanFirstPolicy": "none|maintainer-approved|public-disabled", "markerPrefix": "...", "authoringLabelName": "...", "authoringStaleAge": "..."},
   "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|blocked_references_closed", "url": "..."}],
   "filtered": {
     "roadmap_marker": [...],
     "blocked_by_marker": [...],
     "blocked_label": [...],
+    "authoring_label": [...],
     "blocked_by_open_reference": [...],
     "unresolvable_reference": [...]
   },
   "unresolvable": [{"issue": 1, "reference": 2, "reason": "issue-not-found-or-inaccessible"}],
+  "warnings": [{"issueNumber": 1, "message": "Warning: ..."}],
   "counts": {"scanned": 0, "orphans": 0, "filtered": {...}, "unresolvable": 0}
 }
 `);
@@ -267,16 +307,24 @@ function loadPolicy(policyPath) {
   const targetPath = policyPath ? resolve(process.cwd(), policyPath) : defaultPath;
   try {
     const config = JSON.parse(readFileSync(targetPath, "utf8"));
+    const authoringPolicy = resolveAuthoringGuardPolicy(config);
     return {
       source: targetPath,
       orphanFirstPolicy: getOrphanFirstPolicy(config),
       markerPrefix: normalizeMarkerPrefix(config.markerPrefix),
+      authoringLabelName: authoringPolicy.labelName,
+      authoringStaleAge: authoringPolicy.staleAge,
+      authoringStaleAgeMs: authoringPolicy.staleAgeMs,
     };
   } catch {
+    const authoringPolicy = resolveAuthoringGuardPolicy({});
     return {
       source: targetPath,
       orphanFirstPolicy: "none",
       markerPrefix: DEFAULT_MARKER_PREFIX,
+      authoringLabelName: authoringPolicy.labelName,
+      authoringStaleAge: authoringPolicy.staleAge,
+      authoringStaleAgeMs: authoringPolicy.staleAgeMs,
     };
   }
 }
@@ -287,9 +335,24 @@ function normalizeIssue(issue) {
     title: issue.title ?? "",
     state: issue.state ?? "",
     labels: normalizeLabels(issue.labels),
+    labelEvents: Array.isArray(issue.labelEvents) ? issue.labelEvents : [],
     body: issue.body ?? "",
     url: issue.url ?? issue.html_url ?? "",
   };
+}
+
+function resolveIssueLabelEvents(issue, fetchLabelEventsByIssueNumber) {
+  if (Array.isArray(issue.labelEvents) && issue.labelEvents.length > 0) {
+    return issue.labelEvents;
+  }
+  if (typeof fetchLabelEventsByIssueNumber !== "function") {
+    return [];
+  }
+  try {
+    return fetchLabelEventsByIssueNumber(issue.number);
+  } catch {
+    return [];
+  }
 }
 
 function normalizeLabels(labels) {
@@ -334,6 +397,22 @@ function fetchIssueState(repoRef, issueNumber) {
   }
 }
 
+function fetchIssueLabelEvents(repoRef, issueNumber) {
+  const events = [];
+  const pageSize = 100;
+  for (let page = 1; ; page += 1) {
+    const rawPage = ghJson([
+      "api",
+      `repos/${repoRef}/issues/${issueNumber}/timeline?per_page=${pageSize}&page=${page}`,
+    ]);
+    events.push(...rawPage.filter((event) => event?.event === "labeled"));
+    if (rawPage.length < pageSize) {
+      break;
+    }
+  }
+  return events;
+}
+
 function ghJson(args) {
   return JSON.parse(runGh(args).trim() || "[]");
 }
@@ -371,6 +450,10 @@ function normalizeMarkerPrefix(prefix) {
     return DEFAULT_MARKER_PREFIX;
   }
   return prefix;
+}
+
+function normalizeAuthoringLabelName(labelName) {
+  return typeof labelName === "string" && labelName.length > 0 ? labelName : "status:authoring";
 }
 
 function escapeRegex(value) {

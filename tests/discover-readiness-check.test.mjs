@@ -37,6 +37,31 @@ test("filters issue with blocked labels", async () => {
   assert.deepEqual(summary.filteredOut[0].reasons, ["label:status:blocked-by-human"]);
 });
 
+test("filters authoring-labeled issue and emits stale warning", async () => {
+  const summary = await evaluateDiscoverReadiness([151], {
+    now: "2026-05-15T12:00:00Z",
+    authoringStaleAgeMs: 4 * 60 * 60 * 1000,
+    loadIssue: async () => ({
+      number: 151,
+      title: "candidate being authored",
+      state: "OPEN",
+      body: "",
+      labels: [{ name: "status:authoring" }],
+      labelEvents: [{
+        event: "labeled",
+        label: { name: "status:authoring" },
+        created_at: "2026-05-15T07:00:00Z",
+      }],
+    }),
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.ready.length, 0);
+  assert.deepEqual(summary.filteredOut[0].reasons, ["label:status:authoring"]);
+  assert.equal(summary.warnings[0].status, "stale");
+  assert.match(summary.warnings[0].message, /Issue #151 has carried the authoring label for 5h/);
+});
+
 test("fails safe when blocked-by issue cannot be resolved", async () => {
   const issues = new Map([
     [201, { number: 201, title: "candidate", state: "OPEN", body: "Blocked by #202", labels: [] }],
