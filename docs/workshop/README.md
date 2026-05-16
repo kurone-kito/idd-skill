@@ -12,19 +12,43 @@ session excerpts.
 
 ## What You Will Build
 
-By the end of the workshop, readers will understand how IDD turns a
-blank repository into a working event calendar application.
+By the end of the workshop, you will have watched IDD turn a blank
+repository into a working VRChat Event Calendar MVP. The app lists
+events, shows event details, supports creator-owned edits, and gives
+readers enough local infrastructure to run tests before each merge.
 
-Screenshot: [TODO: add example app screenshot from #601].
+The example repository target is
+[`kurone-kito/vrc-event-calendar`](https://github.com/kurone-kito/vrc-event-calendar),
+the real artifact produced by the workshop roadmap. Treat it as the
+"look over the shoulder" companion to the edited narrative once Track A
+has published it: the workshop explains the IDD decisions, while the
+repository shows the app those loops created.
+
+Screenshot placeholder for #601: the final event-list screenshot will be
+inserted here after the example app screenshots are captured.
 
 Log segment: [TODO: link the unified build overview after #589].
 
 ## Prerequisites
 
-This section will list the required local tools, GitHub access, and IDD
-setup assumptions before readers begin the workshop.
+Before starting, make sure you can run the same baseline tools the
+agents use during the workshop:
 
-Checklist: [TODO: fill in prerequisites in #591].
+- Docker Desktop, or an equivalent Docker Engine setup with Docker
+  Compose support, for PostgreSQL and the local app stack.
+- Node.js 22 or newer, matching the example app and this repository's
+  supported runtime.
+- Git and a GitHub account that can create branches, open pull requests,
+  and read CI results.
+- GitHub CLI (`gh`), authenticated for the account you will use during
+  the workshop.
+- Copilot, Codex, or another coding agent that can follow the IDD phase
+  instructions and operate through GitHub issues and pull requests.
+
+The workshop also introduces PostgreSQL, Prisma, Tailwind CSS, Vitest,
+and Playwright as it builds the app. You do not need to install each of
+those separately before reading; the setup steps explain where they enter
+the project.
 
 ## Prologue: Bootstrap
 
