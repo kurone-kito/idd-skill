@@ -58,13 +58,39 @@ for base in [root / '.github', root / 'docs', root / 'profiles']:
 PY
 [command completed with no terminal output]
 
-$ rg -n "\{\{\s*[A-Za-z0-9_-]+\s*\}\}" .github docs profiles -S
+$ rg -n "\{\{REPO_NAME\}\}|\{\{PROJECT_MARKER_PREFIX\}\}|\{\{TRUSTED_MARKER_ACTOR\}\}|\{\{FIX_VALIDATE_COMMANDS\}\}|\{\{PRE_PUSH_VALIDATE_COMMANDS\}\}|\{\{POST_FIX_VALIDATE_COMMANDS\}\}|\{\{INSTALL_DEPS_COMMAND\}\}" \
+  .github docs profiles -S
 [no output]
 ```
 
 > **Note:** The initial onboarding baseline keeps the command rows at
 > `true` and sets helper runtime to `instructions-only` because the
 > application toolchain has not been bootstrapped yet.
+
+## [2026-05-16 17:33:20 JST] Apply Consumer-Specific Customization
+
+```shell
+$ apply_patch <<'PATCH'
+*** Update File: .github/idd/config.json
+*** Update File: .github/instructions/idd-overview.instructions.md
+*** Update File: .github/instructions/idd-overview-appendix.instructions.md
+*** Update File: AGENTS.md
+*** Update File: CLAUDE.md
+*** Update File: GEMINI.md
+*** Update File: .github/copilot-instructions.md
+*** Add File: docs/idd-policy.md
+*** Update File: docs/onboarding/placeholders.md
+*** Update File: docs/onboarding/agent-entry-and-verification.md
+*** Update File: docs/policy-constants.md
+*** Update File: .cspell.config.yml
+PATCH
+[command completed with no terminal output]
+```
+
+> **Note:** This edit block switched `helperRuntime.profile` to
+> `instructions-only`, recorded repository-local IDD policy, updated the
+> agent entry files to point at `docs/idd-workflow.md`, and removed
+> onboarding-doc lint issues introduced by raw placeholder replacement.
 
 ## [2026-05-16 17:35:10 JST] Validate Imported IDD State
 
