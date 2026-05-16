@@ -111,6 +111,31 @@ Child issue:
 Keep ready child issues in the roadmap task list rather than grouping
 them with hidden dependency markers.
 
+## Nested roadmap chooser note
+
+Use a nested roadmap when one roadmap track needs its own coordination
+boundary, active child list, or multi-session handoff. Keep the parent
+roadmap pointing to the nested roadmap, and keep the nested roadmap
+pointing to the leaf execution issues it coordinates.
+
+Parent roadmap `## Tracks` excerpt:
+
+```md
+- [ ] #510 — backend track roadmap
+```
+
+Nested roadmap `#510` `## Tracks` excerpt:
+
+```md
+- [ ] #511 — define the backend contract
+- [ ] #512 — wire the contract into Discover
+```
+
+Treat `#510` as a coordination/audit node, not as a normal execution
+issue. Do not replace that relationship with `Blocked by #NNN` or
+`<!-- <marker-prefix>-blocked-by: ... -->` only to group the leaf
+issues under the parent roadmap.
+
 ## Dependency minimization examples
 
 ### Natural parallel decomposition

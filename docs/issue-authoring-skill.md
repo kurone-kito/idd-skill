@@ -426,6 +426,36 @@ for a separate roadmap to close before it becomes startable:
 Do not use `idd-skill-blocked-by` to group children under the roadmap
 that already owns them. Grouping belongs in the roadmap task list.
 
+## Nested roadmap nodes
+
+Use a nested roadmap when one roadmap track needs its own coordination
+boundary, active child list, or multi-session handoff. A nested roadmap
+is still a roadmap node, not a normal execution candidate.
+
+Authoring rules:
+
+- reference the nested roadmap from the parent roadmap task list instead
+  of hiding it in prose
+- give the nested roadmap its own roadmap marker and `## Tracks` section
+  that links the active child work it coordinates
+- treat the nested roadmap as a coordination/audit node for discovery
+  and roadmap audit; do not draft it as normal A3/A4/A5 execution work
+- use two-level or three-level nesting only when the intermediate
+  roadmap has its own active child work or handoff boundary
+- do not use `Blocked by #NNN` or
+  `<!-- <marker-prefix>-blocked-by: ... -->` only to group leaf issues
+  under an active nested roadmap; reserve those encodings for true
+  execution dependencies or sequential roadmap dependencies between
+  separate roadmaps
+
+Validation expectations:
+
+- each nested roadmap node is linked from its parent roadmap task list
+- each nested roadmap node links its own active child work from its body
+- cycles, duplicate references, and closed intermediate roadmaps with
+  hidden open descendants must be surfaced as validation failures or
+  explicit follow-up notes, not silently normalized away
+
 ## Draft schemas
 
 The following schemas are normative. The skill may add small
@@ -486,12 +516,15 @@ Recommended content inside `## Tracks`:
 
 Validation expectations:
 
-- every active child issue is referenced from the roadmap body
+- every active child issue or nested roadmap node is referenced from the
+  roadmap body
 - the roadmap explains why multiple issues exist instead of hiding them
   as narrative text
 - dependency notes distinguish between active grouping and true
   sequential blocking
 - each dependency edge is justified and preserves natural cohesion
+- nested roadmap entries stay identifiable as coordination/audit nodes
+  instead of normal execution leaves
 - the roadmap can survive multi-session handoffs without relying on
   private session memory
 
@@ -533,10 +566,15 @@ Before reporting or publishing issue drafts, the skill should verify:
   stable bucket instead of being dropped
 - each roadmap has one roadmap marker and uses task-list links for child
   issues
+- each nested roadmap node is linked from the parent roadmap task list
+  and links its own active child work
+- each nested roadmap remains identifiable as a coordination/audit node
+  instead of a normal execution candidate
 - each dependency edge is justified and preserves natural cohesion
 - each `Blocked by #NNN` reference resolves to the intended issue
 - each `idd-skill-blocked-by` marker points to a real roadmap and is
-  used only for true sequential dependencies
+  used only for true sequential dependencies, never to group nested
+  roadmap children
 - each issue body is explicit enough that a later discover pass can
   decide whether the issue is ready without reconstructing hidden
   context

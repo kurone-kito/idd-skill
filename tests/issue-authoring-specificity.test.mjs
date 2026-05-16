@@ -66,6 +66,48 @@ test("dependency minimization guidance stays synced between canonical and bundle
   );
 });
 
+test("nested roadmap guidance stays synced between canonical and bundled contract", () => {
+  const canonicalFile = "docs/issue-authoring-skill.md";
+  const bundledFile = "skills/issue-authoring/references/contract.md";
+  const canonical = readText(canonicalFile);
+  const bundled = readText(bundledFile);
+
+  assert.equal(
+    extractTopLevelSection(canonical, canonicalFile, "## Nested roadmap nodes"),
+    extractTopLevelSection(bundled, bundledFile, "## Nested roadmap nodes"),
+    `canonical and bundled nested-roadmap guidance must stay in sync (${canonicalFile} vs ${bundledFile})`,
+  );
+});
+
+test("nested roadmap guidance keeps coordination-node rules", () => {
+  for (const file of [
+    "docs/issue-authoring-skill.md",
+    "skills/issue-authoring/references/contract.md",
+  ]) {
+    const section = extractTopLevelSection(
+      readText(file),
+      file,
+      "## Nested roadmap nodes",
+    );
+    const normalizedSection = normalizeWhitespace(section);
+
+    for (const needle of [
+      "coordination boundary, active child list, or multi-session handoff",
+      "roadmap node, not a normal execution candidate",
+      "parent roadmap task list",
+      "links the active child work it coordinates",
+      "normal A3/A4/A5 execution work",
+      "true execution dependencies or sequential roadmap dependencies",
+      "closed intermediate roadmaps with hidden open descendants",
+    ]) {
+      assert.ok(
+        normalizedSection.includes(normalizeWhitespace(needle)),
+        `${file} must keep nested-roadmap phrase: ${needle}`,
+      );
+    }
+  }
+});
+
 test("dependency minimization guidance keeps the edge-justification rules", () => {
   for (const file of [
     "docs/issue-authoring-skill.md",
@@ -97,15 +139,41 @@ test("dependency minimization guidance keeps the edge-justification rules", () =
 test("draft patterns keep the dependency minimization examples", () => {
   const file = "skills/issue-authoring/references/draft-patterns.md";
   const text = readText(file);
+  const normalizedText = normalizeWhitespace(text);
 
   for (const needle of [
+    "## Nested roadmap chooser note",
+    "Parent roadmap `## Tracks` excerpt:",
+    "Nested roadmap `#510` `## Tracks` excerpt:",
+    "coordination/audit node",
+    "normal execution issue",
     "## Dependency minimization examples",
     "### Natural parallel decomposition",
     "### Artificial decomposition",
     "Bad serial chain:",
     "Bad split for parallelism:",
   ]) {
-    assert.ok(text.includes(needle), `${file} must keep example anchor: ${needle}`);
+    assert.ok(
+      normalizedText.includes(normalizeWhitespace(needle)),
+      `${file} must keep example anchor: ${needle}`,
+    );
+  }
+});
+
+test("canonical validation checklist keeps nested-roadmap link rules", () => {
+  const file = "docs/issue-authoring-skill.md";
+  const text = readText(file);
+  const normalizedText = normalizeWhitespace(text);
+
+  for (const needle of [
+    "each nested roadmap node is linked from the parent roadmap task list and links its own active child work",
+    "each nested roadmap remains identifiable as a coordination/audit node instead of a normal execution candidate",
+    "used only for true sequential dependencies, never to group nested roadmap children",
+  ]) {
+    assert.ok(
+      normalizedText.includes(normalizeWhitespace(needle)),
+      `${file} must keep validation-checklist phrase: ${needle}`,
+    );
   }
 });
 

@@ -194,6 +194,36 @@ When an issue keeps a dependency edge, justify each dependency edge in
 the surrounding issue body and confirm that the split still preserves
 natural cohesion.
 
+## Nested roadmap nodes
+
+Use a nested roadmap when one roadmap track needs its own coordination
+boundary, active child list, or multi-session handoff. A nested roadmap
+is still a roadmap node, not a normal execution candidate.
+
+Authoring rules:
+
+- reference the nested roadmap from the parent roadmap task list instead
+  of hiding it in prose
+- give the nested roadmap its own roadmap marker and `## Tracks` section
+  that links the active child work it coordinates
+- treat the nested roadmap as a coordination/audit node for discovery
+  and roadmap audit; do not draft it as normal A3/A4/A5 execution work
+- use two-level or three-level nesting only when the intermediate
+  roadmap has its own active child work or handoff boundary
+- do not use `Blocked by #NNN` or
+  `<!-- <marker-prefix>-blocked-by: ... -->` only to group leaf issues
+  under an active nested roadmap; reserve those encodings for true
+  execution dependencies or sequential roadmap dependencies between
+  separate roadmaps
+
+Validation expectations:
+
+- each nested roadmap node is linked from its parent roadmap task list
+- each nested roadmap node links its own active child work from its body
+- cycles, duplicate references, and closed intermediate roadmaps with
+  hidden open descendants must be surfaced as validation failures or
+  explicit follow-up notes, not silently normalized away
+
 ## Required dependency encoding
 
 - Roadmap identity via `<!-- <marker-prefix>-roadmap-id: ... -->`
@@ -232,10 +262,13 @@ Validation expectations:
 
 Validation expectations:
 
-- every active child issue is referenced from the roadmap body
+- every active child issue or nested roadmap node is referenced from the
+  roadmap body
 - the roadmap explains why multiple issues exist
 - sequencing and blocking are explicit
 - each dependency edge is justified and preserves natural cohesion
+- nested roadmap entries stay identifiable as coordination/audit nodes
+  instead of normal execution leaves
 
 ### Child issue under a roadmap
 
