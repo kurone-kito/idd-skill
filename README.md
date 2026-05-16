@@ -15,6 +15,15 @@ branch, open a PR, handle review feedback, wait for CI, merge, and clean
 up according to the repository's selected merge policy. The whole loop
 lives in your repo as Markdown instruction files.
 
+![IDD workshop preview](docs/workshop/assets/workshop-header.gif)
+
+## Learn by Example
+
+Follow the [VRChat Event Calendar workshop](docs/workshop/README.md) to
+watch IDD build a real app end to end, then inspect the live companion
+repository at
+[`kurone-kito/vrc-event-calendar`](https://github.com/kurone-kito/vrc-event-calendar).
+
 ## Start here (persona navigation)
 
 If this is your first visit, choose the path that matches your goal:

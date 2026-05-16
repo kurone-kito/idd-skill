@@ -15,6 +15,16 @@ IDD Skill は、リポジトリへ移植できる Issue-Driven Development
 選択したマージポリシーに従ってマージと後片づけまで進めます。ループ全体は、
 リポジトリ内の Markdown で書かれた指示ファイルとして管理されます。
 
+![IDD workshop preview](docs/workshop/assets/workshop-header.gif)
+
+## 実例で学ぶ
+
+[VRChat Event Calendar ワークショップ](docs/workshop/README.md) を読むと、
+IDD が実在のアプリを最初から最後まで組み上げる流れを追えます。実装結果は
+対応する実例リポジトリ
+[`kurone-kito/vrc-event-calendar`](https://github.com/kurone-kito/vrc-event-calendar)
+でも確認できます。
+
 ## 最初の入口（ペルソナ別ナビゲーション）
 
 初見の場合は、目的に合う入口から始めてください:
