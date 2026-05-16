@@ -6,6 +6,7 @@ import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 
 import { planHandoff } from "./forced-handoff-marker.mjs";
+import { parsePaginatedGhNdjson } from "./protocol-helpers.mjs";
 
 const APPROVAL_ACTOR_POLICIES = new Set([
   "owners-and-maintainers-only",
@@ -58,7 +59,7 @@ export async function runHandoff(options = {}) {
 
   const issueComments = fetchIssueComments
     ? await fetchIssueComments(issueNumber)
-    : ghJson(["api", "--paginate", `repos/${owner}/${name}/issues/${issueNumber}/comments`], true).flat();
+    : ghJson(["api", "--paginate", `repos/${owner}/${name}/issues/${issueNumber}/comments`], true);
 
   const trustedMarkerLogins = givenTrustedLogins
     ?? buildTrustedMarkerLogins(owner, name, forcedBy, issueComments);
@@ -197,7 +198,11 @@ function safeGhText(args) {
 function ghJson(args, slurp = false) {
   const finalArgs = [...args];
   if (slurp) {
-    finalArgs.splice(1, 0, "--slurp");
+    // gh api with --paginate and --jq '.[]' emits one JSON object per line.
+    // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
+    // via apt, so keep the NDJSON-compatible form here.
+    finalArgs.splice(1, 0, "--jq", ".[]");
+    return parsePaginatedGhNdjson(execFileSync("gh", finalArgs, { encoding: "utf8" }));
   }
   return JSON.parse(execFileSync("gh", finalArgs, { encoding: "utf8" }));
 }

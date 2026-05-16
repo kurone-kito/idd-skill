@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 
 import {
   normalizeTrustedMarkerLogins,
+  parsePaginatedGhNdjson,
   planLiveStatusDigestUpsert,
   summarizeClaimValidation,
 } from "./protocol-helpers.mjs";
@@ -147,13 +148,17 @@ function updateReportFromPlan(report, planned) {
 }
 
 function fetchIssueComments(owner, repo, number) {
-  const result = ghJson([
+  // gh api with --paginate and --jq '.[]' emits one JSON object per line.
+  // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
+  // via apt, so keep the NDJSON-compatible form here.
+  const result = parsePaginatedGhNdjson(execFileSync("gh", [
     "api",
     "--paginate",
-    "--slurp",
+    "--jq",
+    ".[]",
     `repos/${owner}/${repo}/issues/${number}/comments`,
-  ]);
-  return result.flat().map((comment) => ({
+  ], { encoding: "utf8" }));
+  return result.map((comment) => ({
     id: comment.id,
     url: comment.url,
     html_url: comment.html_url,

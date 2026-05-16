@@ -9,6 +9,7 @@ import {
   deriveIddAgentLogins,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
+  parsePaginatedGhNdjson,
   resolveCodeownersForFiles,
   resolveRulesetDetailPath,
   selectCodeownersText,
@@ -562,14 +563,17 @@ function safeGhText(args) {
 function ghApiJson(path, paginate = false, extraArgs = [], options = {}) {
   const args = ["api", path, ...extraArgs];
   if (paginate) {
-    args.push("--paginate", "--slurp");
+    // gh api with --paginate and --jq '.[]' emits one JSON object per line.
+    // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
+    // via apt, so keep the NDJSON-compatible form here.
+    args.push("--paginate", "--jq", ".[]");
   }
   const raw = runGh(args, options).trim();
   if (!raw) {
     return paginate ? [] : {};
   }
   if (paginate) {
-    return JSON.parse(raw).flat();
+    return parsePaginatedGhNdjson(raw);
   }
   return JSON.parse(raw);
 }

@@ -5,7 +5,11 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-import { renderForcedHandoffComment, summarizeClaimValidation } from "./protocol-helpers.mjs";
+import {
+  parsePaginatedGhNdjson,
+  renderForcedHandoffComment,
+  summarizeClaimValidation,
+} from "./protocol-helpers.mjs";
 import { normalizePolicyConfig, resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
 
 export function generateSuccessorIds(baseAgentId) {
@@ -143,7 +147,7 @@ export function main(argv = process.argv.slice(2)) {
   if (args.plan) {
     const repoRef = args.repo ?? ghText(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
     const { owner, name } = parseOwnerRepo(repoRef);
-    const issueComments = ghJson(["api", "--paginate", `repos/${owner}/${name}/issues/${args.issueNumber}/comments`], true).flat();
+    const issueComments = ghJson(["api", "--paginate", `repos/${owner}/${name}/issues/${args.issueNumber}/comments`], true);
     const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
     const trustedMarkerLogins = buildTrustedMarkerLogins(owner, name, viewerLogin, args.trustedMarkerLogins, issueComments);
     const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
@@ -200,7 +204,7 @@ export function main(argv = process.argv.slice(2)) {
   if (readForcedHandoffMode() !== "human-gated") {
     throw new Error("forced-handoff mode is not human-gated; marker generation is disabled");
   }
-  const issueComments = ghJson(["api", "--paginate", `repos/${owner}/${name}/issues/${args.issueNumber}/comments`], true).flat();
+  const issueComments = ghJson(["api", "--paginate", `repos/${owner}/${name}/issues/${args.issueNumber}/comments`], true);
   const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
   const trustedMarkerLogins = buildTrustedMarkerLogins(owner, name, viewerLogin, args.trustedMarkerLogins, issueComments);
   const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
@@ -461,7 +465,11 @@ function parseOwnerRepo(value) {
 function ghJson(args, slurp = false) {
   const finalArgs = [...args];
   if (slurp) {
-    finalArgs.splice(1, 0, "--slurp");
+    // gh api with --paginate and --jq '.[]' emits one JSON object per line.
+    // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
+    // via apt, so keep the NDJSON-compatible form here.
+    finalArgs.splice(1, 0, "--jq", ".[]");
+    return parsePaginatedGhNdjson(execFileSync("gh", finalArgs, { encoding: "utf8" }));
   }
   return JSON.parse(execFileSync("gh", finalArgs, { encoding: "utf8" }));
 }
