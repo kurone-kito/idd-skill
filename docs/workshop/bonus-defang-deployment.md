@@ -114,6 +114,21 @@ explicitly chooses one.
 
 ## 4. Configure deployment values
 
+Set the Defang context before storing config values or deploying. Keep
+these variables in the shell that will run the remaining commands:
+
+```sh
+DEFANG_PROJECT_NAME=vrc-event-calendar
+
+# Choose one provider after the human deployment decision:
+# defang, aws, gcp, digitalocean, or azure.
+DEFANG_PROVIDER=defang
+```
+
+> **Human action required:** Confirm the provider value before the agent
+> stores secrets or deploys. Use `defang` for Defang Playground, or the
+> exact BYOC provider chosen for the workshop cloud account.
+
 Review `compose.yaml` for environment variable references before
 deploying. Do not dump a real `.env` file into the workshop log.
 
@@ -131,7 +146,9 @@ If the app needs secrets, use Defang config values.
 Agent-prepared command for a secret placeholder:
 
 ```sh
-defang config set DATABASE_URL
+defang config set DATABASE_URL \
+  --provider "$DEFANG_PROVIDER" \
+  --project-name "$DEFANG_PROJECT_NAME"
 ```
 
 `defang config set` is the short alias for `defang config create`.
@@ -152,19 +169,28 @@ services:
 
 ## 5. Deploy the Compose project
 
-For a learning deployment in Defang Playground, run:
+For a learning deployment in Defang Playground, keep
+`DEFANG_PROVIDER=defang` and run:
 
 ```sh
-defang compose up --provider defang --project-name vrc-event-calendar
+defang compose up \
+  --provider "$DEFANG_PROVIDER" \
+  --project-name "$DEFANG_PROJECT_NAME"
 ```
 
-For BYOC, replace the provider after the human chooses the cloud:
+For BYOC, first update `DEFANG_PROVIDER` to the selected provider, then
+run the same deployment command:
 
 ```sh
-defang compose up --provider aws --project-name vrc-event-calendar
-defang compose up --provider gcp --project-name vrc-event-calendar
-defang compose up --provider digitalocean --project-name vrc-event-calendar
+DEFANG_PROVIDER=aws
+
+defang compose up \
+  --provider "$DEFANG_PROVIDER" \
+  --project-name "$DEFANG_PROJECT_NAME"
 ```
+
+Replace `aws` with `gcp`, `digitalocean`, or `azure` when that is the
+human-approved BYOC provider.
 
 The `defang compose up` command deploys a new project or updates an
 existing one. It tails deployment output by default, so keep the
@@ -182,9 +208,20 @@ Record these details in the workshop log:
 Agent-executable commands:
 
 ```sh
-defang compose ps --project-name vrc-event-calendar
-defang compose logs --project-name vrc-event-calendar --since 10m
-defang tail --project-name vrc-event-calendar --deployment latest --since 10m
+defang compose ps \
+  --provider "$DEFANG_PROVIDER" \
+  --project-name "$DEFANG_PROJECT_NAME"
+
+defang compose logs \
+  --provider "$DEFANG_PROVIDER" \
+  --project-name "$DEFANG_PROJECT_NAME" \
+  --since 10m
+
+defang tail \
+  --provider "$DEFANG_PROVIDER" \
+  --project-name "$DEFANG_PROJECT_NAME" \
+  --deployment latest \
+  --since 10m
 ```
 
 Then verify the app URL in a browser or with `curl`:
@@ -208,20 +245,29 @@ For workshop evidence, capture:
 After code changes, repeat the deployment command:
 
 ```sh
-defang compose up --provider defang --project-name vrc-event-calendar
+defang compose up \
+  --provider "$DEFANG_PROVIDER" \
+  --project-name "$DEFANG_PROJECT_NAME"
 ```
 
 Use `--force` only when you intentionally want Defang to rebuild even if
 the CLI does not detect a change:
 
 ```sh
-defang compose up --provider defang --project-name vrc-event-calendar --force
+defang compose up \
+  --provider "$DEFANG_PROVIDER" \
+  --project-name "$DEFANG_PROJECT_NAME" \
+  --force
 ```
 
 If the command fails, collect logs first:
 
 ```sh
-defang compose logs --project-name vrc-event-calendar --type ALL --since 30m
+defang compose logs \
+  --provider "$DEFANG_PROVIDER" \
+  --project-name "$DEFANG_PROJECT_NAME" \
+  --type ALL \
+  --since 30m
 ```
 
 Then fix the app in a normal IDD issue, open a PR, and redeploy after
