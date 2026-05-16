@@ -26,6 +26,8 @@ $ cd /home/kurone-kito/ghq/github.com/kurone-kito/vrc-event-calendar.issue-548-r
 ## [2026-05-16 17:30:10 JST] Import IDD Template Bundle
 
 ```shell
+$ mkdir -p .github
+[command completed with no terminal output]
 $ rsync -a ../idd-skill/idd-template/.github/idd/ .github/idd/
 [command completed with no terminal output]
 $ rsync -a ../idd-skill/idd-template/.github/instructions/ \
