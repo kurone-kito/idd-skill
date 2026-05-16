@@ -42,7 +42,7 @@ Show
 Sleep 4000ms
 
 Hide
-Type 'scene "Ready for IDD discover\n\nlabels: roadmap, idd:ready\nblocked-by: none for the first implementation issue\nverification: pnpm lint && pnpm test\n\nNext: claim one ready issue, work small, review deeply."'
+Type 'scene "Execution handoff\n\nroadmap issue: label roadmap\nfirst task: linked from the roadmap, no roadmap label\napproval: maintainer adds ready signal after draft is stable\n\nNext: user explicitly asks IDD to discover and claim."'
 Enter
 Show
 Sleep 4000ms
