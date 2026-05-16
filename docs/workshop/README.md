@@ -17,12 +17,12 @@ repository into a working VRChat Event Calendar MVP. The app lists
 events, shows event details, supports creator-owned edits, and gives
 readers enough local infrastructure to run tests before each merge.
 
-The example repository target is
+The planned example repository URL is
 [`kurone-kito/vrc-event-calendar`](https://github.com/kurone-kito/vrc-event-calendar),
-the real artifact produced by the workshop roadmap. Treat it as the
-"look over the shoulder" companion to the edited narrative once Track A
-has published it: the workshop explains the IDD decisions, while the
-repository shows the app those loops created.
+the real artifact produced by the workshop roadmap after #547 publishes
+it. Treat that repository as the "look over the shoulder" companion to
+the edited narrative once Track A is complete: the workshop explains the
+IDD decisions, while the repository shows the app those loops created.
 
 Screenshot placeholder for #601: the final event-list screenshot will be
 inserted here after the example app screenshots are captured.
@@ -36,8 +36,8 @@ agents use during the workshop:
 
 - Docker Desktop, or an equivalent Docker Engine setup with Docker
   Compose support, for PostgreSQL and the local app stack.
-- Node.js 22 or newer, matching the example app and this repository's
-  supported runtime.
+- Node.js 22 or newer, including the bundled npm CLI, matching the
+  example app and this repository's supported runtime.
 - Git and a GitHub account that can create branches, open pull requests,
   and read CI results.
 - GitHub CLI (`gh`), authenticated for the account you will use during
