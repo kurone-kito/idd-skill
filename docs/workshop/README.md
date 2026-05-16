@@ -12,19 +12,51 @@ session excerpts.
 
 ## What You Will Build
 
-By the end of the workshop, readers will understand how IDD turns a
-blank repository into a working event calendar application.
+By the end of the workshop, you will have watched IDD turn a blank
+repository into a working VRChat Event Calendar MVP. The app lists
+events, shows event details, supports creator-owned edits, and gives
+readers enough local infrastructure to run tests before each merge.
 
-Screenshot: [TODO: add example app screenshot from #601].
+The planned example repository URL is
+[`kurone-kito/vrc-event-calendar`](https://github.com/kurone-kito/vrc-event-calendar),
+the real artifact produced by the workshop roadmap after #547 publishes
+it. Treat that repository as the "look over the shoulder" companion to
+the edited narrative once Track A is complete: the workshop explains the
+IDD decisions, while the repository shows the app those loops created.
 
-Log segment: [TODO: link the unified build overview after #589].
+Screenshot placeholder for #601: the final event-list screenshot will be
+inserted here after the example app screenshots are captured.
+
+Build overview placeholder for #589: the unified workshop log link will
+be inserted here after the master log is compiled.
 
 ## Prerequisites
 
-This section will list the required local tools, GitHub access, and IDD
-setup assumptions before readers begin the workshop.
+Before starting, make sure you can run the same baseline tools the
+agents use during the workshop:
 
-Checklist: [TODO: fill in prerequisites in #591].
+- Docker Desktop, or an equivalent Docker Engine setup with Docker
+  Compose support, for PostgreSQL and the local app stack.
+- Node.js 22.22.2 or newer on the 22.x line, or Node.js 24 or newer,
+  matching this repository's supported runtime.
+- Corepack with pnpm 10 enabled for this repository's validation
+  commands; Node.js also includes npm for example-app commands that use
+  npm.
+- Git and a GitHub account that can create branches, open pull requests,
+  post issue and PR comments for IDD markers, request reviews, and read
+  CI results.
+- GitHub CLI (`gh`), authenticated for the account you will use during
+  the workshop.
+- `jq` and `curl`, or equivalent JSON and REST-client tools, for the IDD
+  phases that inspect GitHub API responses or post operational markers
+  directly.
+- Copilot, Codex, or another coding agent that can follow the IDD phase
+  instructions and operate through GitHub issues and pull requests.
+
+The workshop also introduces PostgreSQL, Prisma, Tailwind CSS, Vitest,
+and Playwright as it builds the app. You do not need to install each of
+those separately before reading; the setup steps explain where they enter
+the project.
 
 ## Prologue: Bootstrap
 
