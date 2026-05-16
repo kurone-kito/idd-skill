@@ -175,6 +175,38 @@ route the draft to the
 approval-needed fallback bucket instead of the normal ready-to-start
 set.
 
+## Human-dependency isolation
+
+Treat unresolved human dependency as a side effect that should be
+isolated away from ready execution issues whenever possible.
+
+- **Front-load** human-dependent work when coding cannot start safely
+  until a person provides a decision, credential, permission,
+  maintainer-only action, external setup, or policy choice, or until an
+  unavailable system becomes usable again.
+- **Back-load** human-dependent work when the remaining dependency is
+  subjective review, publication choice, optional polish, or another
+  post-implementation judgment that should not block an otherwise
+  autonomous core change.
+- Keep the central execution issue as close as possible to a pure
+  autonomous unit: clear repository-local scope, no hidden human handoff
+  in the implementation steps or acceptance criteria, and objective
+  verification.
+- Preserve unavoidable human-dependent work in an explicit stable
+  bucket, dependency edge, or approval-needed hold rather than mixing it
+  into a ready issue.
+- Route unresolved choices to `needs-decision`, route waiting on people,
+  credentials, maintainer-only actions, or unavailable systems to
+  `blocked-by-human`, use `deferred` when timing or decomposition is not
+  strong enough yet, and keep approval-gated ready work in the
+  approval-needed hold instead of the normal ready-to-start set.
+- If a task cannot be expressed without unresolved human coordination in
+  the middle of implementation, it is not yet `ready`.
+
+This principle complements the execution axes rather than replacing
+them: it is a practical way to protect autonomous completion and clear
+verification during issue drafting.
+
 ## Dependency minimization
 
 Encode a dependency edge only when it reflects a true correctness,
@@ -310,6 +342,9 @@ Pre-publish validation checklist:
    in issue body
 3. **Uniqueness**: Reuse-first check passed; no duplicate or superseded
    work
+4. **Human dependency isolation**: Ready issues do not hide unresolved
+   decisions, credentials, subjective approvals, or mid-implementation
+   human handoffs
 
 If any check is uncertain, route the issue to `needs-decision` or
 `blocked-by-human` during drafting instead of publishing a

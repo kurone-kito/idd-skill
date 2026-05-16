@@ -96,6 +96,8 @@ needs-decision, blocked-by-human, and out-of-scope.
 
 - Preserve low-readiness work in stable buckets instead of dropping it.
 - Keep acceptance criteria explicitly verifiable.
+- Keep human-dependent setup, review, and approval work isolated from
+  ready execution issues whenever possible.
 - Link every active child issue from its roadmap body.
 - Justify each dependency edge and keep independent sibling work as
   roadmap task-list entries.

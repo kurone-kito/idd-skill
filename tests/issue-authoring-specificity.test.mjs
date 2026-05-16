@@ -108,6 +108,60 @@ test("nested roadmap guidance keeps coordination-node rules", () => {
   }
 });
 
+test("human-dependency isolation guidance stays synced between canonical and bundled contract", () => {
+  const canonicalFile = "docs/issue-authoring-skill.md";
+  const bundledFile = "skills/issue-authoring/references/contract.md";
+  const canonical = readText(canonicalFile);
+  const bundled = readText(bundledFile);
+
+  assert.equal(
+    extractTopLevelSection(
+      canonical,
+      canonicalFile,
+      "## Human-dependency isolation",
+    ),
+    extractTopLevelSection(
+      bundled,
+      bundledFile,
+      "## Human-dependency isolation",
+    ),
+    `canonical and bundled human-dependency isolation guidance must stay in sync (${canonicalFile} vs ${bundledFile})`,
+  );
+});
+
+test("human-dependency isolation guidance keeps the front-load and back-load rules", () => {
+  for (const file of [
+    "docs/issue-authoring-skill.md",
+    "skills/issue-authoring/references/contract.md",
+  ]) {
+    const section = extractTopLevelSection(
+      readText(file),
+      file,
+      "## Human-dependency isolation",
+    );
+    const normalizedSection = normalizeWhitespace(section);
+
+    for (const needle of [
+      "Treat unresolved human dependency as a side effect",
+      "**Front-load** human-dependent work",
+      "**Back-load** human-dependent work",
+      "maintainer-only action",
+      "unavailable system becomes usable again",
+      "Route unresolved choices to `needs-decision`",
+      "`blocked-by-human`",
+      "`deferred`",
+      "approval-needed hold",
+      "it is not yet `ready`",
+      "protect autonomous completion and clear verification",
+    ]) {
+      assert.ok(
+        normalizedSection.includes(normalizeWhitespace(needle)),
+        `${file} must keep human-dependency-isolation phrase: ${needle}`,
+      );
+    }
+  }
+});
+
 test("dependency minimization guidance keeps the edge-justification rules", () => {
   for (const file of [
     "docs/issue-authoring-skill.md",
