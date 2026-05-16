@@ -37,12 +37,19 @@ agents use during the workshop:
 
 - Docker Desktop, or an equivalent Docker Engine setup with Docker
   Compose support, for PostgreSQL and the local app stack.
-- Node.js 22 or newer, including the bundled npm CLI, matching the
-  example app and this repository's supported runtime.
+- Node.js 22.22.2 or newer on the 22.x line, or Node.js 24 or newer,
+  matching this repository's supported runtime.
+- Corepack with pnpm 10 enabled for this repository's validation
+  commands; Node.js also includes npm for example-app commands that use
+  npm.
 - Git and a GitHub account that can create branches, open pull requests,
-  and read CI results.
+  post issue and PR comments for IDD markers, request reviews, and read
+  CI results.
 - GitHub CLI (`gh`), authenticated for the account you will use during
   the workshop.
+- `jq` and `curl`, or equivalent JSON and REST-client tools, for the IDD
+  phases that inspect GitHub API responses or post operational markers
+  directly.
 - Copilot, Codex, or another coding agent that can follow the IDD phase
   instructions and operate through GitHub issues and pull requests.
 
