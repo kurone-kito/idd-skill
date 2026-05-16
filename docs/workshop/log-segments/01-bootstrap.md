@@ -9,11 +9,15 @@ $ git worktree add \
 Preparing worktree (new branch 'issue/548-run-idd-skill-onboarding-example')
 branch 'issue/548-run-idd-skill-onboarding-example' set up to track 'origin/main'.
 
+$ cd /home/kurone-kito/ghq/github.com/kurone-kito/vrc-event-calendar
+
 $ git worktree add \
   /home/kurone-kito/ghq/github.com/kurone-kito/vrc-event-calendar.issue-548-run-idd-skill-onboarding-example \
   -b issue/548-run-idd-skill-onboarding-example origin/main
 Preparing worktree (new branch 'issue/548-run-idd-skill-onboarding-example')
 branch 'issue/548-run-idd-skill-onboarding-example' set up to track 'origin/main'.
+
+$ cd /home/kurone-kito/ghq/github.com/kurone-kito/vrc-event-calendar.issue-548-run-idd-skill-onboarding-example
 ```
 
 > **Note:** The example repository was already created and cloned
@@ -64,27 +68,36 @@ $ rg -n "\{\{REPO_NAME\}\}|\{\{PROJECT_MARKER_PREFIX\}\}|\{\{TRUSTED_MARKER_ACTO
 ```
 
 > **Note:** The initial onboarding baseline keeps the command rows at
-> `true` and sets helper runtime to `instructions-only` because the
-> application toolchain has not been bootstrapped yet.
+> `true`. `helperRuntime.profile` is still at the imported template
+> default here and is switched to `instructions-only` in the next
+> customization step because the application toolchain has not been
+> bootstrapped yet.
 
 ## [2026-05-16 17:33:20 JST] Apply Consumer-Specific Customization
 
-```shell
-$ apply_patch <<'PATCH'
-*** Update File: .github/idd/config.json
-*** Update File: .github/instructions/idd-overview.instructions.md
-*** Update File: .github/instructions/idd-overview-appendix.instructions.md
-*** Update File: AGENTS.md
-*** Update File: CLAUDE.md
-*** Update File: GEMINI.md
-*** Update File: .github/copilot-instructions.md
-*** Add File: docs/idd-policy.md
-*** Update File: docs/onboarding/placeholders.md
-*** Update File: docs/onboarding/agent-entry-and-verification.md
-*** Update File: docs/policy-constants.md
-*** Update File: .cspell.config.yml
-PATCH
-[command completed with no terminal output]
+```text
+Manual apply_patch sequence in the example worktree:
+- .github/idd/config.json: switch `helperRuntime.profile` from
+  `package-manager` to `instructions-only`; add
+  `skipIssueAuthorApprovalGate = false`; add
+  `maintainerApprovalActorPolicy = owners-and-maintainers-only`.
+- .github/instructions/idd-overview.instructions.md: add resolved
+  roadmap marker examples for `vrc-event-calendar`.
+- .github/instructions/idd-overview-appendix.instructions.md: rewrite
+  the template-sync note so later updates pull from upstream
+  `kurone-kito/idd-skill`.
+- AGENTS.md, CLAUDE.md, GEMINI.md, .github/copilot-instructions.md:
+  add or update the repository-specific entry text and point the agent
+  entry files at `docs/idd-workflow.md` and `docs/idd-policy.md`.
+- docs/idd-policy.md: add the local policy record for
+  `fully_autonomous_merge`, `copilot-advisory`,
+  `fast-agent-resolve`, `instructions-only`, and the trusted marker
+  actor `kurone-kito`.
+- docs/onboarding/placeholders.md,
+  docs/onboarding/agent-entry-and-verification.md,
+  docs/policy-constants.md, and .cspell.config.yml: repair
+  placeholder-replacement artifacts and lint issues introduced by the
+  raw import.
 ```
 
 > **Note:** This edit block switched `helperRuntime.profile` to
