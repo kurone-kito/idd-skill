@@ -12,7 +12,7 @@ Hide
 Type 'scene() { clear; printf "%b\n" "$1"; }'
 Enter
 
-Type 'scene "Issue authoring: intake\n\nUser request:\nBuild a workshop-ready VRChat event calendar.\n\nGoal: create IDD-ready issues before any agent starts coding."'
+Type 'scene "Representative issue authoring\n\nUser request:\nBuild a workshop-ready VRChat event calendar.\n\nGoal: create IDD-ready issues before any agent starts coding."'
 Enter
 Show
 Sleep 2500ms
