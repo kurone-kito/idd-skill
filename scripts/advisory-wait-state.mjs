@@ -6,6 +6,7 @@ import { readAdvisoryWaitPolicy } from "./advisory-wait-policy.mjs";
 import {
   buildAdvisoryWaitSummary,
   normalizeTrustedMarkerLogins,
+  parsePaginatedGhNdjson,
 } from "./protocol-helpers.mjs";
 
 const args = parseArgs(process.argv.slice(2));
@@ -201,8 +202,11 @@ function safeGhText(args) {
 function ghApiJson(path, paginate = false, extraArgs = []) {
   const args = ["api", path, ...extraArgs];
   if (paginate) {
-    args.splice(1, 0, "--paginate", "--slurp");
-    return JSON.parse(execFileSync("gh", args, { encoding: "utf8" })).flat();
+    // gh api with --paginate and --jq '.[]' emits one JSON object per line.
+    // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
+    // via apt, so keep the NDJSON-compatible form here.
+    args.splice(1, 0, "--paginate", "--jq", ".[]");
+    return parsePaginatedGhNdjson(execFileSync("gh", args, { encoding: "utf8" }));
   }
   return JSON.parse(execFileSync("gh", args, { encoding: "utf8" }));
 }

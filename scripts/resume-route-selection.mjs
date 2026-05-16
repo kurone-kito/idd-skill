@@ -4,6 +4,8 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
+import { parsePaginatedGhNdjson } from "./protocol-helpers.mjs";
+
 const RUNNING_STATES = new Set(["queued", "in_progress", "pending", "waiting", "requested"]);
 const FAILURE_STATES = new Set(["failure", "cancelled", "timed_out"]);
 const PASS_EQUIVALENT_STATES = new Set(["success", "skipped", "neutral", "not_applicable"]);
@@ -401,17 +403,19 @@ function ghApiGraphqlJson({ query, variables }) {
 function ghApiJson(path, paginate = false) {
   const args = ["api", path];
   if (paginate) {
-    args.push("--paginate");
-    args.push("--slurp");
+    // gh api with --paginate and --jq '.[]' emits one JSON object per line.
+    // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
+    // via apt, so keep the NDJSON-compatible form here.
+    args.push("--paginate", "--jq", ".[]");
   }
-  const parsed = JSON.parse(runGh(args).trim() || "[]");
+  const raw = runGh(args).trim();
   if (!paginate) {
-    return parsed;
+    return JSON.parse(raw || "[]");
   }
-  if (!Array.isArray(parsed)) {
+  if (!raw) {
     return [];
   }
-  return parsed.flatMap((entry) => (Array.isArray(entry) ? entry : [entry]));
+  return parsePaginatedGhNdjson(raw);
 }
 
 function ghJson(args, options = {}) {

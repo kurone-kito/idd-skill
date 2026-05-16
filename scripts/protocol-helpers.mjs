@@ -87,6 +87,20 @@ const AMD_MARKER_PATTERN = /^\*\*Awaiting maintainer decision\*\*/i;
 const FORCED_HANDOFF_CONTEXT_SCOPES = new Set(["issue-only", "issue-plus-pr"]);
 const FORCED_HANDOFF_LINKED_PR_PATTERN = /^(?:[1-9]\d*|https?:\/\/[^\s<>"]+)$/;
 
+export function parsePaginatedGhNdjson(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text) {
+    return [];
+  }
+  return text
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .flatMap((line) => {
+      const value = JSON.parse(line);
+      return Array.isArray(value) ? value : [value];
+    });
+}
+
 export function parseClaimComment(body, createdAt) {
   const match = body.trimEnd().match(
     new RegExp(
