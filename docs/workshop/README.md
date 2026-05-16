@@ -12,17 +12,20 @@ session excerpts.
 
 ## What You Will Build
 
-By the end of the workshop, you will have watched IDD turn a blank
+By the end of the workshop, you will have watched IDD turn a fresh
 repository into a working VRChat Event Calendar MVP. The app lists
 events, shows event details, supports creator-owned edits, and gives
 readers enough local infrastructure to run tests before each merge.
 
-The planned example repository URL is
-[`kurone-kito/vrc-event-calendar`](https://github.com/kurone-kito/vrc-event-calendar),
-the real artifact produced by the workshop roadmap after #547 publishes
-it. Treat that repository as the "look over the shoulder" companion to
-the edited narrative once Track A is complete: the workshop explains the
-IDD decisions, while the repository shows the app those loops created.
+The example repository lives at
+[`kurone-kito/vrc-event-calendar`](https://github.com/kurone-kito/vrc-event-calendar).
+Track A now treats that public repository as the live companion
+artifact for the workshop. It starts from a template baseline and will
+evolve into the final VRChat Event Calendar app as the workshop issues
+land. Treat it as the "look over the shoulder" counterpart to this
+edited narrative: the workshop explains the IDD decisions, while the
+repository shows the code and configuration those loops build over
+time.
 
 Screenshot placeholder for #601: the final event-list screenshot will be
 inserted here after the example app screenshots are captured.
