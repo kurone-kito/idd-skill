@@ -27,7 +27,8 @@ IDD decisions, while the repository shows the app those loops created.
 Screenshot placeholder for #601: the final event-list screenshot will be
 inserted here after the example app screenshots are captured.
 
-Log segment: [TODO: link the unified build overview after #589].
+Build overview placeholder for #589: the unified workshop log link will
+be inserted here after the master log is compiled.
 
 ## Prerequisites
 
