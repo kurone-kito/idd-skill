@@ -155,3 +155,58 @@ idd:ready
 > **Note:** The branch-protection warning is a diagnostic limitation of
 > `idd-doctor` against ruleset-managed protection. Live ruleset
 > verification was handled separately during issue #549.
+
+## [2026-05-16 18:25:38 JST] Validate IDD Operational Status
+
+```shell
+$ node ../idd-skill/scripts/idd-doctor.mjs --json
+{
+  "root": "/home/kurone-kito/ghq/github.com/kurone-kito/vrc-event-calendar.issue-550-validate-idd-operational-status-example",
+  "errors": [],
+  "warnings": [
+    "all primary command rows are set to `true` (no-op substitutions)",
+    "branch protection not readable for kurone-kito/vrc-event-calendar:main"
+  ],
+  "passes": [
+    "required instruction and reference files are present",
+    "profile artifacts are present",
+    "no unresolved {{...}} placeholders in IDD-managed files",
+    "marker prefix is valid and consistent (vrc-event-calendar)",
+    "merge policy signal found",
+    "review policy signal found",
+    ".github/idd/config.json declares helper runtime profile \"instructions-only\"",
+    "AGENTS.md references docs/idd-workflow.md",
+    "CLAUDE.md references docs/idd-workflow.md",
+    "GEMINI.md references docs/idd-workflow.md",
+    "template version signal found in .github/idd/config.json"
+  ]
+}
+
+$ npx --yes ajv-cli validate --spec=draft2020 \
+  -s ../idd-skill/schemas/policy.schema.json \
+  -d .github/idd/config.json
+.github/idd/config.json valid
+
+$ gh issue list --state open --limit 20 --json number,title,labels
+[]
+
+$ gh label list --limit 20
+bug
+documentation
+duplicate
+enhancement
+help wanted
+good first issue
+invalid
+question
+wontfix
+roadmap
+status:blocked-by-human
+status:needs-decision
+status:authoring
+idd:ready
+```
+
+> **Note:** A trial discover pass at this point sees zero open issues,
+> so the correct bootstrap-state outcome is "no viable candidates"
+> rather than an infrastructure error.
