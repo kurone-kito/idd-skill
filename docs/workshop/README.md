@@ -70,7 +70,33 @@ Metrics: [TODO: add final implementation metrics in #595].
 
 ## What's Next
 
-This section will point readers toward deployment and extension ideas,
-including the optional Defang track.
+Once the local MVP is running, you can either ship it somewhere real or
+keep using it as a practice ground for future IDD loops. The core
+workshop stops at a working local app; everything below is optional and
+can become its own small, claimable issue.
 
-Next steps: [TODO: add Defang and feature-extension ideas in #596].
+For deployment practice, follow the
+[Defang deployment bonus](bonus-defang-deployment.md). It shows how to
+turn the Docker Compose app into a hosted service while keeping human
+account choices, browser login, and production secrets explicit.
+
+Feature extension ideas:
+
+- Add RSVP and attendance tracking so event hosts can estimate turnout
+  before the event starts.
+- Support recurring events so weekly meetups can be created once and
+  expanded into future calendar entries.
+- Store VRChat world thumbnails so each event card gives readers a quick
+  visual cue before they open the detail page.
+- Add notifications so creators can remind followers before an event
+  begins or when event details change.
+- Export events to Google Calendar so readers can keep their VRChat plans
+  beside the rest of their schedule.
+- Add moderation tools so maintainers can hide spam, fix broken event
+  details, and keep the public calendar trustworthy.
+
+For deeper IDD reference material, continue with the
+[full idd-skill documentation](../index.md). If you want to suggest a
+workshop improvement or share what you built, use the
+[project issue queue](https://github.com/kurone-kito/idd-skill/issues)
+as the community starting point.
