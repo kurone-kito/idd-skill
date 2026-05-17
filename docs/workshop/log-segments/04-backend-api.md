@@ -21,8 +21,10 @@
 ## [2026-05-17 17:49:20 JST] D1 — Implement GET /api/events
 
 ```shell
-npm ci
-npx tsc --noEmit
+$ npm ci
+[dependencies installed]
+$ npx tsc --noEmit
+[no type errors]
 ```
 
 Added `src/app/api/events/route.ts` with:
@@ -35,10 +37,7 @@ Added `src/app/api/events/route.ts` with:
 ## [2026-05-17 17:50:00 JST] D1 — Vitest Route Tests
 
 ```shell
-npx vitest run src/app/api/events/__tests__/route.test.ts
-```
-
-```text
+$ npx vitest run src/app/api/events/__tests__/route.test.ts
 ✓ src/app/api/events/__tests__/route.test.ts (5)
   ✓ GET /api/events (5)
     ✓ returns all events when no filters are provided
@@ -56,8 +55,10 @@ npx vitest run src/app/api/events/__tests__/route.test.ts
 ## [2026-05-17 17:51:00 JST] D1 — Self-Review And Lint
 
 ```shell
-npm run lint
-git diff --check
+$ npm run lint
+[no lint errors]
+$ git diff --check
+[no whitespace issues]
 ```
 
 > **Note:** The first `git commit` attempt stalled on local GPG
@@ -129,7 +130,8 @@ git diff --check
 - Branch: `issue/613-define-zod-validation-schemas`
 
 ```shell
-npm install zod
+$ npm install zod
+[zod installed as runtime dependency]
 ```
 
 Added `src/lib/validators/event.ts` with:
