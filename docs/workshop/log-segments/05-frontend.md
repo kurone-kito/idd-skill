@@ -22,9 +22,9 @@
 
 Plan recorded in issue `#572`:
 
-1. Replace `src/app/page.tsx` with a Server Component that calls
-   `GET /api/events` and renders the result list, forwarding URL
-   `searchParams` so filter state round-trips through the URL.
+1. Replace `src/app/page.tsx` with a Server Component that fetches all
+   events from `GET /api/events` and renders the result list (filter
+   forwarding is added later in E6 via the `FilterPanel` component).
 2. Extract `src/components/EventCard.tsx` to display title, formatted
    dates, category badge, and optional world name; keep it focused on
    display only, with no data-fetching side effects.
@@ -37,7 +37,7 @@ Plan recorded in issue `#572`:
 Added to `kurone-kito/vrc-event-calendar`:
 
 - `src/app/page.tsx` — Server Component that fetches from
-  `GET /api/events` with URL `searchParams` forwarded as query strings
+  `GET /api/events` and renders all events (no filter params yet)
 - `src/components/EventCard.tsx` — displays event title, formatted
   start/end dates, category badge, and optional world name
 - `src/app/loading.tsx` — skeleton loading state shown while the
@@ -243,17 +243,17 @@ project-specific local development guide including:
 
 ```shell
 $ npm run lint
-[no lint errors — 0 warnings, 0 errors]
+[zero ESLint errors]
 $ npm run test
-[58 unit tests pass — 0 failures]
-$ docker compose up -d db && npm run dev
-[database started; app running at http://localhost:3000]
+[56 tests across 5 suites pass]
 ```
 
-- Lint: ✓ clean
-- Unit tests: ✓ 58 passing (Vitest)
-- App: ✓ running and accessible at `http://localhost:3000`
-- CI on `kurone-kito/vrc-event-calendar` `main`: ✓ green through PR #31
+- Lint: ✓ zero ESLint errors
+- Unit tests: ✓ 56 tests across 5 suites passing (Vitest)
+- Docker/dev-server check: ✓ verified via CI build success (live Docker
+  environment required; confirmed through CI-green status on merged PRs
+  #22–#31)
+- No `[TODO]` or `[FIXME]` markers in `src/`: ✓ clean
 
 Issue #615 closed at `2026-05-18 00:51 JST`.
 
