@@ -13,6 +13,8 @@ In the idd-skill source repository, the following optional helpers were adopted:
 - `scripts/discover-orphan-filter.mjs` for A0-O orphan issue detection and
   filtering (referenced in
   [kurone-kito/idd-skill#390](https://github.com/kurone-kito/idd-skill/issues/390))
+- `scripts/discover-roadmap-graph.mjs` for A1.5/A2 recursive roadmap graph
+  enumeration and classification
 - `scripts/discover-readiness-check.mjs` for A3 readiness criterion
   evaluation (referenced in
   [kurone-kito/idd-skill#391](https://github.com/kurone-kito/idd-skill/issues/391))
@@ -147,6 +149,40 @@ rules remain authoritative when outputs diverge.
 For discover and suitability, use the adopted helpers first when helper
 support is enabled, then fall back to the portable instructions if a
 helper is unavailable or its output does not match the written rules.
+
+### Discover Roadmap Graph Contract
+
+`scripts/discover-roadmap-graph.mjs` evaluates the recursive A1.5/A2
+roadmap graph for one selected roadmap issue.
+
+- **Inputs**: `--issue <number>`, with optional `--owner <owner>`,
+  `--repo <repo>`, and `--policy <path>`.
+- **JSON output**:
+  - `root`: `{ number: number, title: string, state: string,`
+    `classification: "roadmap" | "execution", roadmapMarkerId: string }`
+  - `nodes`: `[{ number: number, title: string, state: string,`
+    `labels: string[], classification: "roadmap" | "execution",`
+    `roadmapMarkerId: string, depth: number }]`
+  - `edges`: `[{ source: number, target: number, relationship: string,`
+    `evidence: string }]`
+  - `provenancePaths`: `[{ target: number, path: number[] }]`
+  - `roadmapNodes`: `number[]`
+  - `executionCandidates`: `number[]`
+  - `diagnostics`: `{ duplicateReferences: object[], cycles: object[],`
+    `inaccessibleReferences: object[], unresolvedReferences: object[] }`
+  - `summary`: `{ rootNumber: number, nodeCount: number, edgeCount: number,`
+    `roadmapNodeCount: number, executionCandidateCount: number,`
+    `duplicateReferenceCount: number, cycleCount: number,`
+    `inaccessibleReferenceCount: number, unresolvedReferenceCount: number,`
+    `maxDepth: number }`
+- **Error conditions**: missing `--issue`, unknown flags, an unreadable
+  root roadmap, or incomplete `subIssues` GraphQL data throw. Missing or
+  inaccessible descendants are reported in `diagnostics` instead of
+  crashing.
+- **Behavior boundary**: the helper is evidence-only. It may read issue
+  bodies and GitHub sub-issue relationships, but it must not claim
+  issues, edit roadmap bodies, close roadmap nodes, or decide readiness
+  by itself.
 
 ### Discover Viability Gate Contract
 
@@ -384,6 +420,37 @@ installs the matching helper scripts. Repositories that stay on the
 default `instructions-only` profile keep using the written shell /
 `gh` / `jq` procedures in the phase instructions and do not need a
 `scripts/` directory.
+
+### External-check waiver contract
+
+Issue `#666` defines the policy and marker contract before the operator
+facade and F-phase consumer land. The contract is intentionally
+auditable and fail-closed.
+
+```md
+<!-- idd-external-check-waiver: {agent-id} {claim-id} {head-sha} check:{check-selector} reason:{reason-token} expires:{iso8601} -->
+
+_{actor}: external check waiver for IDD F phase._
+```
+
+Interpretation rules:
+
+- `agent-id`, `claim-id`, `head-sha`, `check`, `reason`, and `expires`
+  come from the marker body.
+- The issuer is the GitHub comment author and the issued timestamp is
+  the comment `created_at`. Do not duplicate either field inside the
+  marker body.
+- `check` may be an exact selector or a glob pattern, matching the
+  `ciGate.externalChecks.*[].selector` plus `matchMode` contract.
+- Missing or unparseable body fields, unknown selectors, expired
+  comments, wrong HEAD, wrong claim, or untrusted authors must fail
+  closed.
+- A valid waiver can apply only to checks listed in
+  `ciGate.externalChecks.waivable` and only when
+  `ciGate.externalCheckWaivers.mode` enables maintainer authorization.
+- Repo-owned required checks and GitHub-required checks remain
+  non-waivable at the contract layer. An IDD waiver never substitutes
+  for GitHub ruleset bypass.
 
 ### A4 viability gate
 
