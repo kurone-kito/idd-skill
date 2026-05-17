@@ -32,7 +32,7 @@ not to widen A2 candidates.
 
 When the selected roadmap graph includes descendant issues that are
 themselves roadmap nodes, such as descendants carrying the `roadmap`
-label or a `{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker, treat those
+label or a `idd-skill-roadmap-id` marker, treat those
 descendants as **nested roadmaps** rather than as normal execution
 leaves. A nested roadmap is a coordination/audit node in the recursive
 hierarchy: it may remain open while its own leaf descendants are still
