@@ -136,6 +136,17 @@ test("policy normalization provides default-safe values and supports aliases", (
       generationTimeout: "PT10M",
       rerunPolicy: "rerun-once",
     },
+    ciGate: {
+      externalChecks: {
+        advisory: [],
+        waivable: [],
+      },
+      externalCheckWaivers: {
+        mode: "disabled",
+        authorityPolicy: "owners-and-maintainers-only",
+        maxValidity: "PT24H",
+      },
+    },
     discover: {
       activeClaimPreScanBatchSize: 10,
     },
@@ -194,6 +205,17 @@ test("policy normalization provides default-safe values and supports aliases", (
       generationTimeout: "PT15M",
       rerunPolicy: "rerun-once",
     },
+    ciGate: {
+      externalChecks: {
+        advisory: [{ selector: "Copilot code review", matchMode: "exact" }],
+        waivable: [{ selector: "CodeRabbit*", matchMode: "glob" }],
+      },
+      externalCheckWaivers: {
+        mode: "maintainer-authorized",
+        authorityPolicy: "all-write-permission-actors",
+        maxValidity: "PT12H",
+      },
+    },
     discover: {
       activeClaimPreScanBatchSize: 11,
     },
@@ -243,6 +265,17 @@ test("policy normalization provides default-safe values and supports aliases", (
       runningTimeout: "PT35M",
       generationTimeout: "PT15M",
       rerunPolicy: "rerun-once",
+    },
+    ciGate: {
+      externalChecks: {
+        advisory: [{ selector: "Copilot code review", matchMode: "exact" }],
+        waivable: [{ selector: "CodeRabbit*", matchMode: "glob" }],
+      },
+      externalCheckWaivers: {
+        mode: "maintainer-authorized",
+        authorityPolicy: "all-write-permission-actors",
+        maxValidity: "PT12H",
+      },
     },
     discover: {
       activeClaimPreScanBatchSize: 11,
@@ -312,6 +345,29 @@ test("policy normalization provides default-safe values and supports aliases", (
       capExhaustedRoute: "strict-hold",
     },
   }).advisoryWait.capExhaustedRoute, "hold");
+
+  assert.deepEqual(normalizePolicyConfig({
+    ciGate: {
+      externalChecks: {
+        advisory: [{ selector: "", matchMode: "regex" }],
+      },
+      externalCheckWaivers: {
+        mode: "always-on",
+        authorityPolicy: "owners-only",
+        maxValidity: "PT",
+      },
+    },
+  }).ciGate, {
+    externalChecks: {
+      advisory: [],
+      waivable: [],
+    },
+    externalCheckWaivers: {
+      mode: "disabled",
+      authorityPolicy: "owners-and-maintainers-only",
+      maxValidity: "PT24H",
+    },
+  });
 });
 
 test("collaborator trust resolution honors aliases and env fallback", () => {

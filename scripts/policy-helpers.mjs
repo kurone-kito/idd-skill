@@ -10,6 +10,8 @@ const ORPHAN_FIRST_POLICIES = new Set(["none", "maintainer-approved", "public-di
 const APPROVAL_ACTOR_POLICIES = new Set(["owners-and-maintainers-only", "all-write-permission-actors"]);
 const FORCED_HANDOFF_MODES = new Set(["disabled", "human-gated"]);
 const ADVISORY_CAP_ROUTES = new Set(["phase-specific", "hold"]);
+const EXTERNAL_CHECK_WAIVER_MODES = new Set(["disabled", "maintainer-authorized"]);
+const CHECK_SELECTOR_MATCH_MODES = new Set(["exact", "glob"]);
 const LEGACY_ADVISORY_CAP_ROUTE_ALIASES = new Map([
   ["phase-default", "phase-specific"],
   ["strict-hold", "hold"],
@@ -51,6 +53,17 @@ export const POLICY_DEFAULTS = Object.freeze({
     runningTimeout: "PT30M",
     generationTimeout: "PT10M",
     rerunPolicy: "rerun-once",
+  }),
+  ciGate: Object.freeze({
+    externalChecks: Object.freeze({
+      advisory: Object.freeze([]),
+      waivable: Object.freeze([]),
+    }),
+    externalCheckWaivers: Object.freeze({
+      mode: "disabled",
+      authorityPolicy: "owners-and-maintainers-only",
+      maxValidity: "PT24H",
+    }),
   }),
   discover: Object.freeze({
     activeClaimPreScanBatchSize: 10,
@@ -204,6 +217,34 @@ export function normalizePolicyConfig(config) {
         POLICY_DEFAULTS.ciWait.generationTimeout,
       ),
       rerunPolicy: parseEnum(config?.ciWait?.rerunPolicy, CI_RERUN_POLICIES, POLICY_DEFAULTS.ciWait.rerunPolicy),
+    },
+    ciGate: {
+      externalChecks: {
+        advisory: parseCheckSelectors(
+          config?.ciGate?.externalChecks?.advisory,
+          POLICY_DEFAULTS.ciGate.externalChecks.advisory,
+        ),
+        waivable: parseCheckSelectors(
+          config?.ciGate?.externalChecks?.waivable,
+          POLICY_DEFAULTS.ciGate.externalChecks.waivable,
+        ),
+      },
+      externalCheckWaivers: {
+        mode: parseEnum(
+          config?.ciGate?.externalCheckWaivers?.mode,
+          EXTERNAL_CHECK_WAIVER_MODES,
+          POLICY_DEFAULTS.ciGate.externalCheckWaivers.mode,
+        ),
+        authorityPolicy: parseEnum(
+          config?.ciGate?.externalCheckWaivers?.authorityPolicy,
+          APPROVAL_ACTOR_POLICIES,
+          POLICY_DEFAULTS.ciGate.externalCheckWaivers.authorityPolicy,
+        ),
+        maxValidity: parsePositiveDuration(
+          config?.ciGate?.externalCheckWaivers?.maxValidity,
+          POLICY_DEFAULTS.ciGate.externalCheckWaivers.maxValidity,
+        ),
+      },
     },
     discover: {
       activeClaimPreScanBatchSize: parsePositiveInteger(
@@ -381,12 +422,49 @@ function parseAdvisoryCapRoute(value, fallback) {
   return fallback;
 }
 
+function parsePositiveDuration(value, fallback) {
+  return typeof value === "string" && ISO_DURATION_RE.test(value) && parseIsoDurationToMs(value) !== null
+    ? value
+    : fallback;
+}
+
 function parsePositiveInteger(value, fallback) {
   return Number.isInteger(value) && value >= 1 ? value : fallback;
 }
 
 function parseNonEmptyString(value, fallback) {
   return typeof value === "string" && value.length > 0 ? value : fallback;
+}
+
+function parseCheckSelectors(value, fallback) {
+  if (!Array.isArray(value) || value.length === 0) {
+    return clone(fallback);
+  }
+
+  const normalized = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      return clone(fallback);
+    }
+
+    const selector = parseNonEmptyString(entry.selector, "");
+    if (!selector) {
+      return clone(fallback);
+    }
+
+    if (hasOwn(entry, "matchMode")) {
+      if (typeof entry.matchMode !== "string" || !CHECK_SELECTOR_MATCH_MODES.has(entry.matchMode)) {
+        return clone(fallback);
+      }
+    }
+
+    normalized.push({
+      selector,
+      matchMode: typeof entry.matchMode === "string" ? entry.matchMode : "exact",
+    });
+  }
+
+  return normalized;
 }
 
 function hasConfiguredCollaboratorMarkerTrust(config) {

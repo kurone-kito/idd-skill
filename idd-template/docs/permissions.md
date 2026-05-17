@@ -89,6 +89,39 @@ merges:
 Do not use issue-author approval, trusted operational markers, or
 CODEOWNERS mismatch as substitutes for a satisfiable GitHub merge gate.
 
+## External-Check Waiver Authority
+
+Maintainer-authorized external-check waivers are narrower than ruleset
+bypass. They may let IDD continue past a configured repo-external check
+when repository-owned validation is otherwise healthy, but they do not
+weaken GitHub's required-check enforcement.
+
+Under the default
+`ciGate.externalCheckWaivers.authorityPolicy = owners-and-maintainers-only`:
+
+- repository owners qualify
+- collaborators with Maintain or Admin qualify
+- Write-only collaborators do not qualify
+
+Use GitHub permission evidence that can distinguish Maintain from Write
+when it is available. The collaborator `permission` string alone can
+collapse both to `write`, so consumers should prefer role-aware fields
+such as `role_name`; if the runtime cannot prove owner, Maintain, or
+Admin authority, it must fail closed.
+
+The canonical waiver proof is a trusted PR comment whose GitHub author
+metadata proves the issuer and whose GitHub `created_at` timestamp is
+the issuance time. The HTML marker body carries only the IDD-specific
+fields (`agent-id`, `claim-id`, `head-sha`, check selector, reason
+token, and expiry); copied or retyped marker text without matching
+GitHub actor and timestamp evidence is not authority.
+
+Normal PR approvals, CODEOWNER approvals, or casual comments such as
+"continue" are not waiver evidence. A valid external-check waiver also
+never bypasses stale review currency, unresolved threads, missing
+required approvals, claim ownership, repo-owned failing checks, or a
+GitHub-required check that the merge API would still reject.
+
 ## Phase Permissions
 
 Each IDD phase needs a different subset of access:
@@ -243,6 +276,9 @@ Keep approval labels and operational marker trust as separate controls:
   `review-baseline`, `advisory-wait`) and may include different actors.
 - A label alone never grants marker authority, and marker authority does
   not imply permission to approve arbitrary orphan issues.
+- External-check waivers are a separate maintainer authorization
+  surface. Neither a ready label nor a trusted operational marker can
+  substitute for the dedicated waiver contract.
 
 ## References
 

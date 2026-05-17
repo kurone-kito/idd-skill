@@ -62,6 +62,12 @@ test("policy schema declares ciWait only once at the top level", () => {
   assert.equal(ciWaitMatches.length, 1);
 });
 
+test("policy schema declares ciGate only once at the top level", () => {
+  const schemaText = readFileSync(new URL("../schemas/policy.schema.json", import.meta.url), "utf8");
+  const ciGateMatches = [...schemaText.matchAll(/^\s{4}"ciGate": \{$/gm)];
+  assert.equal(ciGateMatches.length, 1);
+});
+
 test("phase-graph schema uses only allowed keywords", () => {
   const schema = loadJson("schemas/phase-graph.schema.json");
   assert.deepEqual(checkSchemaKeywords(schema), []);
@@ -773,6 +779,92 @@ test("policy schema rejects ciWait.rerunPolicy unknown value", () => {
   instance.ciWait = { rerunPolicy: "rerun-forever" };
   const errors = validate(instance, schema);
   assert.ok(errors.some((e) => e.includes("ciWait")), errors.join("\n"));
+});
+
+test("policy schema accepts ciGate selector and waiver policy keys", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.ciGate = {
+    externalChecks: {
+      advisory: [{ selector: "Copilot code review", matchMode: "exact" }],
+      waivable: [{ selector: "CodeRabbit*", matchMode: "glob" }],
+    },
+    externalCheckWaivers: {
+      mode: "maintainer-authorized",
+      authorityPolicy: "all-write-permission-actors",
+      maxValidity: "PT12H",
+    },
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema accepts ciGate without nested keys", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.ciGate = {};
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects ciGate empty selector arrays", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.ciGate = {
+    externalChecks: {
+      advisory: [],
+    },
+  };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("ciGate")), errors.join("\n"));
+});
+
+test("policy schema rejects ciGate selector entries without selector", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.ciGate = {
+    externalChecks: {
+      waivable: [{ matchMode: "exact" }],
+    },
+  };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("ciGate")), errors.join("\n"));
+});
+
+test("policy schema rejects ciGate selector entries with unknown matchMode", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.ciGate = {
+    externalChecks: {
+      waivable: [{ selector: "CodeRabbit*", matchMode: "regex" }],
+    },
+  };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("ciGate")), errors.join("\n"));
+});
+
+test("policy schema rejects ciGate waiver mode unknown value", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.ciGate = {
+    externalCheckWaivers: {
+      mode: "always-on",
+    },
+  };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("ciGate")), errors.join("\n"));
+});
+
+test("policy schema rejects ciGate maxValidity empty duration (PT)", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.ciGate = {
+    externalCheckWaivers: {
+      maxValidity: "PT",
+    },
+  };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("ciGate")), errors.join("\n"));
 });
 
 test("policy schema accepts stallRecovery.quietWindow ISO 8601 duration", () => {

@@ -37,6 +37,27 @@
     "generationTimeout": "PT10M",
     "rerunPolicy": "rerun-once"
   },
+  "ciGate": {
+    "externalChecks": {
+      "advisory": [
+        {
+          "selector": "Copilot code review",
+          "matchMode": "exact"
+        }
+      ],
+      "waivable": [
+        {
+          "selector": "CodeRabbit*",
+          "matchMode": "glob"
+        }
+      ]
+    },
+    "externalCheckWaivers": {
+      "mode": "maintainer-authorized",
+      "authorityPolicy": "owners-and-maintainers-only",
+      "maxValidity": "PT24H"
+    }
+  },
   "discover": {
     "activeClaimPreScanBatchSize": 10
   },

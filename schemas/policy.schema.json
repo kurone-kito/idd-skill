@@ -259,6 +259,74 @@
         }
       }
     },
+    "ciGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "externalChecks": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "advisory": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["selector"],
+                "properties": {
+                  "selector": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "matchMode": {
+                    "type": "string",
+                    "enum": ["exact", "glob"]
+                  }
+                }
+              }
+            },
+            "waivable": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["selector"],
+                "properties": {
+                  "selector": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "matchMode": {
+                    "type": "string",
+                    "enum": ["exact", "glob"]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "externalCheckWaivers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["disabled", "maintainer-authorized"]
+            },
+            "authorityPolicy": {
+              "type": "string",
+              "enum": ["owners-and-maintainers-only", "all-write-permission-actors"]
+            },
+            "maxValidity": {
+              "type": "string",
+              "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
+            }
+          }
+        }
+      }
+    },
     "discover": {
       "type": "object",
       "additionalProperties": false,

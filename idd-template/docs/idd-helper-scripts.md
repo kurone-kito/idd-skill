@@ -385,6 +385,37 @@ default `instructions-only` profile keep using the written shell /
 `gh` / `jq` procedures in the phase instructions and do not need a
 `scripts/` directory.
 
+### External-check waiver contract
+
+Issue `#666` defines the policy and marker contract before the operator
+facade and F-phase consumer land. The contract is intentionally
+auditable and fail-closed.
+
+```md
+<!-- idd-external-check-waiver: {agent-id} {claim-id} {head-sha} check:{check-selector} reason:{reason-token} expires:{iso8601} -->
+
+_{actor}: external check waiver for IDD F phase._
+```
+
+Interpretation rules:
+
+- `agent-id`, `claim-id`, `head-sha`, `check`, `reason`, and `expires`
+  come from the marker body.
+- The issuer is the GitHub comment author and the issued timestamp is
+  the comment `created_at`. Do not duplicate either field inside the
+  marker body.
+- `check` may be an exact selector or a glob pattern, matching the
+  `ciGate.externalChecks.*[].selector` plus `matchMode` contract.
+- Missing or unparseable body fields, unknown selectors, expired
+  comments, wrong HEAD, wrong claim, or untrusted authors must fail
+  closed.
+- A valid waiver can apply only to checks listed in
+  `ciGate.externalChecks.waivable` and only when
+  `ciGate.externalCheckWaivers.mode` enables maintainer authorization.
+- Repo-owned required checks and GitHub-required checks remain
+  non-waivable at the contract layer. An IDD waiver never substitutes
+  for GitHub ruleset bypass.
+
 ### A4 viability gate
 
 - Command: `node scripts/discover-viability-gate.mjs --issue <number>`
