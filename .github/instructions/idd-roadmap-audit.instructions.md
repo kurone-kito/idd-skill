@@ -44,7 +44,10 @@ roadmap graph.
   not continue selecting child issues under a blocked roadmap.
 - If any referenced child or descendant issue is open, inaccessible, or
   unresolved, report the provenance path and reason, then continue to
-  A2.
+  A2, unless the open descendant is a nested roadmap whose reachable
+  leaf descendants are all closed or otherwise complete. In that
+  special case, treat the nested roadmap as the next completion target
+  and continue applying the bottom-up rules below before routing to A2.
 - If any referenced child or descendant has an open linked or closing
   PR that is not merged or otherwise obsolete, treat that child work as
   unresolved, report the PR, and continue to A2.

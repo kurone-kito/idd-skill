@@ -32,19 +32,22 @@ not to widen A2 candidates.
 
 When the selected roadmap graph includes descendant issues that are
 themselves roadmap nodes, such as descendants carrying the `roadmap`
-label or an `idd-skill-roadmap-id` marker, treat those descendants as
-**nested roadmaps** rather than as normal execution leaves. A nested
-roadmap is a coordination/audit node in the recursive hierarchy: it may
-remain open while its own leaf descendants are still executing, and its
-presence does not by itself widen A2 candidates outside the selected
-roadmap graph.
+label or a `{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker, treat those
+descendants as **nested roadmaps** rather than as normal execution
+leaves. A nested roadmap is a coordination/audit node in the recursive
+hierarchy: it may remain open while its own leaf descendants are still
+executing, and its presence does not by itself widen A2 candidates
+outside the selected roadmap graph.
 
 - If the roadmap itself has `status:blocked-by-human` or
   `status:needs-decision`, report the blocker and stop before A2. Do
   not continue selecting child issues under a blocked roadmap.
 - If any referenced child or descendant issue is open, inaccessible, or
   unresolved, report the provenance path and reason, then continue to
-  A2.
+  A2, unless the open descendant is a nested roadmap whose reachable
+  leaf descendants are all closed or otherwise complete. In that
+  special case, treat the nested roadmap as the next completion target
+  and continue applying the bottom-up rules below before routing to A2.
 - If any referenced child or descendant has an open linked or closing
   PR that is not merged or otherwise obsolete, treat that child work as
   unresolved, report the PR, and continue to A2.
