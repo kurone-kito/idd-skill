@@ -198,7 +198,7 @@ workers.
 
 Policy foundation namespaces are available in `.github/idd/config.json`
 for parameterized follow-up work: `stallRecovery`, `forcedHandoff`,
-`markerTrust`, `advisoryWait`, `ciWait`, `discover`, `claim`,
+`markerTrust`, `advisoryWait`, `ciWait`, `ciGate`, `discover`, `claim`,
 `critiqueLoop`, `reviewEscalation`, `approvalSignals`, and
 `issueAuthoring`. Leaving these keys unset keeps distributed behavior.
 
@@ -215,6 +215,37 @@ default `phase-specific` behavior keeps the current E14 skip / F2-F3
 hold split, while `hold` is a stricter override that also stops E14 on
 cap exhaustion. Do not introduce an override that weakens the F2/F3
 merge hold.
+
+Repositories that need a maintainer-authorized recovery path for stuck
+repo-external checks may record `ciGate.externalChecks.advisory`,
+`ciGate.externalChecks.waivable`, and `ciGate.externalCheckWaivers` in
+`.github/idd/config.json`. Omit the selector lists to keep the default
+classifier only; omit `externalCheckWaivers` or leave its `mode`
+disabled to keep waivers unavailable. `externalCheckWaivers.maxValidity`
+should stay short-lived and finite, and `authorityPolicy` should
+normally remain `owners-and-maintainers-only`.
+
+```json
+{
+  "ciGate": {
+    "externalChecks": {
+      "advisory": [{ "selector": "Copilot code review" }],
+      "waivable": [{ "selector": "CodeRabbit*", "matchMode": "glob" }]
+    },
+    "externalCheckWaivers": {
+      "mode": "maintainer-authorized",
+      "authorityPolicy": "owners-and-maintainers-only",
+      "maxValidity": "PT24H"
+    }
+  }
+}
+```
+
+This policy surface classifies only IDD's local CI gate. It does not
+turn a GitHub-required check into an optional one, and it does not
+replace ruleset bypass or branch protection. Treat GitHub-required
+checks as a separate merge-topology question that later F-phase logic
+must still prove.
 
 ## Phase ID Compatibility Contract
 
