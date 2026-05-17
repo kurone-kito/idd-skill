@@ -490,7 +490,7 @@ Output schema (JSON mode):
       "rootNumber": 638,
       "nodeCount": 2,
       "edgeCount": 1,
-      "roadmapNodeCount": 1,
+      "roadmapNodeCount": 0,
       "executionCandidateCount": 1,
       "duplicateReferenceCount": 0,
       "cycleCount": 0,
