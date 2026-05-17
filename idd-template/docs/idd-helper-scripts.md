@@ -415,6 +415,30 @@ Interpretation rules:
 - Repo-owned required checks and GitHub-required checks remain
   non-waivable at the contract layer. An IDD waiver never substitutes
   for GitHub ruleset bypass.
+- When the optional facade is installed, prefer helper-first usage:
+  - dry-run:
+
+    ```sh
+    idd-external-check-waiver --pr 123 \
+      --check "CodeRabbit" \
+      --reason "rate limit" \
+      --expires-in PT2H
+    ```
+
+  - apply after review:
+
+    ```sh
+    idd-external-check-waiver --pr 123 \
+      --check "CodeRabbit" \
+      --reason "rate limit" \
+      --expires-in PT2H \
+      --apply --yes
+    ```
+
+  - inspect the rendered body first; do not hand-write or copy raw
+    marker comments into the PR
+  - in solo-maintainer repositories, this helper-generated comment is
+    the authorization path; a normal PR approval is not equivalent
 
 ### A4 viability gate
 

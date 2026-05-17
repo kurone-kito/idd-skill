@@ -443,6 +443,34 @@ Non-Copilot agents can still drive the workflow end to end, but they
 should expect those later phases to interact with Copilot as a GitHub
 reviewer because that is part of this repository's current PR policy.
 
+## Maintainer-Authorized External-Check Waivers
+
+Some repositories classify a small set of repo-external checks as
+waivable so IDD can recover when a third-party integration becomes
+stuck, unavailable, or rate-limited even though repository-owned
+validation is already healthy. This is a human-authorized escape hatch,
+not an automatic merge bypass.
+
+High-level maintainer flow:
+
+1. Let IDD reach a D4 or F2 hold and confirm that the blocker is a
+   configured external check rather than a repository-owned or
+   GitHub-required gate.
+2. Run the optional waiver facade in dry-run mode to inspect the exact
+   comment body, matched check, active claim, current PR HEAD, and
+   expiry before any mutation.
+3. Post the canonical waiver comment only through the helper's apply
+   path, then resume IDD on the same PR head.
+4. Keep every other gate intact: review currency, unresolved threads,
+   unreplied comments, required reviews, claim ownership, and GitHub
+   merge topology still have to pass normally.
+
+Normal PR approvals or casual maintainer comments such as "continue" are
+not sufficient waiver evidence. In solo-maintainer repositories, this
+helper-generated comment is the auditable authorization surface because
+self-approval cannot express the required claim, head, check, and expiry
+proof.
+
 ## Optional helper scripts
 
 The idd-skill source repository that ships this template currently includes the
@@ -456,6 +484,8 @@ following optional helper scripts:
   snapshot metrics)
 - `scripts/advisory-wait-state.mjs` (read-only advisory-wait evidence
   and AW outcome reporting)
+- `scripts/external-check-waiver.mjs` (maintainer dry-run/apply facade
+  for canonical external-check waiver comments on the current PR head)
 - `scripts/pre-merge-readiness.mjs` (read-only F2/F3 readiness evidence
   collection)
 - `scripts/review-disposition-verify.mjs` (read-only E7 disposition

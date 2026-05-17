@@ -247,6 +247,19 @@ replace ruleset bypass or branch protection. Treat GitHub-required
 checks as a separate merge-topology question that later F-phase logic
 must still prove.
 
+When enabling this policy surface:
+
+- classify only repo-external checks whose failure modes are outside the
+  feature branch's normal control
+- keep repository-owned lint, test, build, and release checks out of
+  both `advisory` and `waivable` selector lists
+- prefer narrow selectors plus short expiries so a waiver applies to one
+  PR head, not as a blanket exception
+- document the helper-first operator path for maintainers; do not tell
+  humans to hand-write raw waiver markers
+- in solo-maintainer repositories, use the helper-generated waiver
+  comment instead of PR self-approval as the authorization surface
+
 ## Phase ID Compatibility Contract
 
 Treat phase IDs as a compatibility surface, not as presentation text.
