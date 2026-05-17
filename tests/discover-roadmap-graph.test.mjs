@@ -24,6 +24,8 @@ Refs #102
 Depends on #103
 Closes #104
 Sub-issue #105
+Fix #106
+Resolve #107
 `;
 
   assert.equal(extractRoadmapMarkerId(body), "root-roadmap");
@@ -35,6 +37,8 @@ Sub-issue #105
     { target: 103, relationship: "dependency", evidence: "Depends on #103" },
     { target: 104, relationship: "closing-keyword", evidence: "Closes #104" },
     { target: 105, relationship: "sub-issue-reference", evidence: "Sub-issue #105" },
+    { target: 106, relationship: "closing-keyword", evidence: "Fix #106" },
+    { target: 107, relationship: "closing-keyword", evidence: "Resolve #107" },
   ]);
   assert.deepEqual(
     classifyIssue({
@@ -49,17 +53,26 @@ test("extractKeywordReferences parses blocked dependencies and multi-target list
   const body = `
 Refs #201, #202
 Blocked by #203
-Depends on #204, #205
-Sub issue #206
+Depends on #204, #205, and #206
+Refs: #207
+Sub issue: #208
 `;
 
   assert.deepEqual(extractKeywordReferences(body), [
     { target: 201, relationship: "reference", evidence: "Refs #201, #202" },
     { target: 202, relationship: "reference", evidence: "Refs #201, #202" },
     { target: 203, relationship: "dependency", evidence: "Blocked by #203" },
-    { target: 204, relationship: "dependency", evidence: "Depends on #204, #205" },
-    { target: 205, relationship: "dependency", evidence: "Depends on #204, #205" },
-    { target: 206, relationship: "sub-issue-reference", evidence: "Sub issue #206" },
+    { target: 204, relationship: "dependency", evidence: "Depends on #204, #205, and #206" },
+    { target: 205, relationship: "dependency", evidence: "Depends on #204, #205, and #206" },
+    { target: 206, relationship: "dependency", evidence: "Depends on #204, #205, and #206" },
+    { target: 207, relationship: "reference", evidence: "Refs: #207" },
+    { target: 208, relationship: "sub-issue-reference", evidence: "Sub issue: #208" },
+  ]);
+});
+
+test("extractTaskListReferences accepts uppercase checked items", () => {
+  assert.deepEqual(extractTaskListReferences("- [X] #211"), [
+    { target: 211, relationship: "task-list", evidence: "- [X] #211" },
   ]);
 });
 
@@ -268,15 +281,7 @@ test("keeps traversing descendants when a shared node is reached through multipl
       { target: 354, path: [350, 352, 353, 354] },
     ],
   );
-  assert.deepEqual(graph.diagnostics.duplicateReferences, [
-    {
-      source: 352,
-      target: 353,
-      relationship: "reference",
-      evidence: "Refs #353",
-      firstSeenFrom: 351,
-    },
-  ]);
+  assert.deepEqual(graph.diagnostics.duplicateReferences, []);
 });
 
 test("re-expands descendants when a shorter ancestry path appears later", async () => {
@@ -573,6 +578,41 @@ process.exit(1);
       reason: "issue_not_found",
     },
   ]);
+});
+
+test("CLI path fails when an explicit policy file is invalid", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "idd-discover-roadmap-graph-policy-"));
+  const ghPath = join(tempRoot, "gh");
+  const policyPath = join(tempRoot, "bad-policy.json");
+
+  writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "repo" && args[1] === "view") {
+  const jq = args[args.indexOf("--jq") + 1];
+  process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
+  process.exit(0);
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`);
+  writeFileSync(policyPath, "{not-json");
+  chmodSync(ghPath, 0o755);
+
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [join(REPO_ROOT, "scripts/discover-roadmap-graph.mjs"), "--issue", "700", "--policy", policyPath],
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${tempRoot}:${process.env.PATH ?? ""}`,
+        },
+      },
+    ),
+    /failed to load policy from .*bad-policy\.json/,
+  );
 });
 
 test("reports when only roadmap nodes remain open", async () => {

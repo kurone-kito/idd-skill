@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const DEFAULT_MARKER_PREFIX = "idd-skill";
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({ __iddLookupStatus: "inaccessible" });
 const INACCESSIBLE_HTTP_STATUSES = new Set([403, 410, 451]);
-const KEYWORD_REFERENCE_REGEX = /\b(Closes|Close|Closed|Fixes|Fixed|Resolves|Resolved|Refs|Ref|Depends on|Blocked by|Sub-issue|Sub issue)\b/giu;
+const KEYWORD_REFERENCE_REGEX = /\b(Closes|Close|Closed|Fixes|Fixed|Fix|Resolves|Resolved|Resolve|Refs|Ref|Depends on|Blocked by|Sub-issue|Sub issue)\b/giu;
 const SUB_ISSUES_QUERY = `
 query($owner:String!, $repo:String!, $number:Int!, $after:String) {
   repository(owner:$owner, name:$repo) {
@@ -78,8 +78,6 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   const inaccessibleKeys = new Set();
   const unresolvedKeys = new Set();
   const referenceCache = new Map();
-  const firstReferenceByTarget = new Map();
-
   const rootIssue = await getIssue(rootIssueNumber, issueCache, loadIssue);
   if (!rootIssue) {
     throw new Error(`root issue #${rootIssueNumber} was not found`);
@@ -163,6 +161,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     const references = await getReferences(issue);
     const seenSourceTargets = new Set();
     const seenSourceEdgeKeys = new Set();
+    const firstReferenceBySourceTarget = new Map();
 
     for (const reference of references) {
       const edge = {
@@ -183,15 +182,15 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
 
         const sourceTargetKey = `${edge.source}:${edge.target}`;
         if (seenSourceTargets.has(sourceTargetKey)) {
-          recordDuplicateReference(edge, firstReferenceByTarget.get(edge.target) ?? edge);
+          recordDuplicateReference(edge, firstReferenceBySourceTarget.get(sourceTargetKey) ?? edge);
         }
         seenSourceTargets.add(sourceTargetKey);
 
-        const firstReference = firstReferenceByTarget.get(edge.target);
+        const firstReference = firstReferenceBySourceTarget.get(sourceTargetKey);
         if (firstReference) {
           recordDuplicateReference(edge, firstReference);
         } else {
-          firstReferenceByTarget.set(edge.target, edge);
+          firstReferenceBySourceTarget.set(sourceTargetKey, edge);
         }
       }
 
@@ -317,7 +316,7 @@ export function extractTaskListReferences(body) {
   return String(body ?? "")
     .split(/\r?\n/u)
     .flatMap((line) => {
-      const match = line.match(/^\s*-\s*\[(?: |x)\]\s+#(\d+)\b/u);
+      const match = line.match(/^\s*-\s*\[(?: |x|X)\]\s+#(\d+)\b/u);
       if (!match) {
         return [];
       }
@@ -372,7 +371,7 @@ function classifyKeywordRelationship(keyword) {
 
 function extractKeywordReferenceTargets(segment, currentRepoRef) {
   const targets = [];
-  let remaining = String(segment ?? "").trimStart();
+  let remaining = String(segment ?? "").trimStart().replace(/^:\s*/u, "");
 
   while (remaining) {
     const match = remaining.match(/^(?:([\w.-]+\/[\w.-]+)#(\d+)|#(\d+))/u);
@@ -389,7 +388,7 @@ function extractKeywordReferenceTargets(segment, currentRepoRef) {
     }
 
     remaining = remaining.slice(match[0].length);
-    const separatorMatch = remaining.match(/^\s*(?:,\s*|\band\b\s*)/iu);
+    const separatorMatch = remaining.match(/^\s*(?:,\s*(?:and\s*)?|\band\b\s*)/iu);
     if (!separatorMatch) {
       break;
     }
@@ -643,8 +642,12 @@ function loadPolicy(policyPath) {
     : resolve(process.cwd(), ".github/idd/config.json");
   try {
     return JSON.parse(readFileSync(targetPath, "utf8"));
-  } catch {
-    return {};
+  } catch (error) {
+    if (!policyPath) {
+      return {};
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`failed to load policy from ${targetPath}: ${detail}`);
   }
 }
 
