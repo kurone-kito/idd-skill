@@ -210,7 +210,12 @@ function probeConflictFilesReadOnly(prHeadSha, prBaseSha, prBaseRef, owner, repo
       notes.push(`git merge-tree exited with status ${result.status}; cannot probe conflicts.`);
       return null;
     }
-    return parseConflictFiles(result.stdout ?? "");
+    const conflictFiles = parseConflictFiles(result.stdout ?? "");
+    if (result.status === 1 && conflictFiles.length === 0) {
+      notes.push("git merge-tree exited 1 but no conflict files were parsed; treating as unknown.");
+      return null;
+    }
+    return conflictFiles;
   } catch {
     notes.push("git merge-tree unavailable; falling back to GitHub mergeability signal only.");
     return null;
@@ -241,8 +246,9 @@ function parseConflictFiles(mergeTreeOutput) {
     }
     // "CONFLICT (modify/delete): <path> deleted in ... and modified in ..."
     // "CONFLICT (rename/delete): <old> renamed to <new> in ..."
-    // First word after "TYPE): " is the conflicted path
-    const firstTokenMatch = line.match(/^CONFLICT\s+\([^)]+\):\s+(.+?)\s+(?:deleted|renamed|added|modified)\s+in\s+/i);
+    // "CONFLICT (rename/rename): <path> renamed to <a> in X and to <b> in Y"
+    // First token after "TYPE): " is the conflicted original path
+    const firstTokenMatch = line.match(/^CONFLICT\s+\([^)]+\):\s+(.+?)\s+(?:deleted|renamed|added|modified)\s+/i);
     if (firstTokenMatch) {
       files.add(firstTokenMatch[1].trim());
     }
