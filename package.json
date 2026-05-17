@@ -17,6 +17,7 @@
     "idd-discover-orphan-filter": "./bin/idd-discover-orphan-filter.mjs",
     "idd-discover-viability-gate": "./bin/idd-discover-viability-gate.mjs",
     "idd-doctor": "./bin/idd-doctor.mjs",
+    "idd-external-check-waiver": "./bin/idd-external-check-waiver.mjs",
     "idd-force-handoff": "./bin/idd-force-handoff.mjs",
     "idd-forced-handoff-marker": "./bin/idd-forced-handoff-marker.mjs",
     "idd-helper-bundle-manifest": "./bin/idd-helper-bundle-manifest.mjs",
