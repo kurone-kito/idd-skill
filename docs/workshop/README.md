@@ -3,12 +3,7 @@
 <!-- cspell:words Defang VRChat -->
 
 This workshop follows an end-to-end IDD session that builds a realistic
-VRChat event calendar example. This page is currently a skeleton: later
-issues will replace the `[TODO]` stubs with edited log segments, visual
-assets, and full prose.
-
-Use the [workshop log format](LOG-FORMAT.md) when adding captured agent
-session excerpts.
+VRChat event calendar example.
 
 ## What You Will Build
 
@@ -27,8 +22,7 @@ edited narrative: the workshop explains the IDD decisions, while the
 repository shows the code and configuration those loops build over
 time.
 
-![VRChat Events — event list page with category filter
-panel](assets/screenshots/event-list.png)
+![VRChat Event Calendar — event list page with category filters and calendar toggle](assets/screenshots/event-list.png)
 
 For the complete timestamped build log, see the
 [VRChat Event Calendar IDD Workshop Log](workshop-log.md).
@@ -187,14 +181,14 @@ four quality-hardening issues that run partly in parallel with Track D.
 - **F4** — README: prerequisites, Quick Start, and available-scripts table
   for the example repository.
 
-Log segment: [Tracks E and F — Frontend and Quality](log-segments/05-frontend-quality.md).
+Log segment: [Tracks E and F — Frontend and Quality](log-segments/05-frontend-quality.md)
 
 ## Conclusion: What Was Built
 
 **[`kurone-kito/vrc-event-calendar`](https://github.com/kurone-kito/vrc-event-calendar)
 — This is what we built.**
 
-![VRChat Events — event detail page showing full event
+![VRChat Event Calendar — event detail page showing full event
 information](assets/screenshots/event-detail.png)
 
 Over the course of the workshop, IDD turned an empty repository into a
