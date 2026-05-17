@@ -186,6 +186,164 @@ Resolve `<marker-prefix>` from the target repository's onboarding or IDD
 docs before publishing the draft. Use `idd-skill` only when the target
 repository actually configured that prefix.
 
+## Human-dependency isolation examples
+
+The examples below show how to move unavoidable human side effects to
+explicit boundaries rather than hiding them inside a ready execution
+issue. See [`contract.md`](contract.md) for the routing rules
+(`needs-decision`, `blocked-by-human`, `deferred`, approval-needed).
+
+### Front-loaded pattern
+
+Use this when coding cannot start safely until a person provides a
+decision, credential, permission, or external setup.
+
+**Bad (mixed)**: One execution issue that mixes implementation with an
+unresolved credential gap:
+
+```md
+## Background
+
+Add Stripe webhook support.
+
+## Proposed change
+
+Implement the `/api/webhooks/stripe` endpoint.
+
+## Acceptance criteria
+
+- Stripe webhook secret is configured in production.
+- Endpoint returns 200 for valid events.
+```
+
+This fails the IDD viability gate: the "Stripe webhook secret is
+configured in production" criterion requires a person to perform an
+action in an external system before the issue can be verified. The agent
+cannot autonomously confirm the outcome.
+
+**Good (front-loaded)**: Separate the human-dependent setup into its own
+issue, then write the autonomous implementation issue that depends on it:
+
+Roadmap `## Tracks` excerpt:
+
+```md
+- [ ] #431 — [blocked-by-human] obtain Stripe webhook secret for CI
+- [ ] #432 — implement /api/webhooks/stripe endpoint
+
+_Note: #432 can start after #431 delivers the secret in CI secrets._
+```
+
+`#431` — `blocked-by-human` issue:
+
+```md
+## Background
+
+The Stripe webhook endpoint (tracked in #432) needs a test-mode webhook
+secret in CI so automated tests can verify the signature check.
+
+## Required action
+
+1. Create a test-mode Stripe webhook in the Stripe dashboard.
+2. Store the signing secret in the `STRIPE_WEBHOOK_SECRET` repository
+   secret.
+3. Reply on this issue with the secret name once added.
+
+## Ready signal
+
+Close this issue after confirming the secret is available in CI.
+```
+
+`#432` — autonomous execution issue (Blocked by #431):
+
+```md
+## Background
+
+Parent roadmap: #430
+Blocked by #431
+
+## Proposed change
+
+Add POST /api/webhooks/stripe that validates the Stripe-Signature header
+and dispatches known event types.
+
+## Acceptance criteria
+
+- Handler validates the webhook secret sourced from CI `STRIPE_WEBHOOK_SECRET`.
+- Tests use the Stripe test-mode fixture and pass without manual setup.
+- `pnpm test` and `pnpm run lint` pass in CI.
+```
+
+The autonomous issue is fully verifiable in CI once the credential
+exists. It does not mention a person setting up anything inside its
+acceptance criteria.
+
+### Back-loaded pattern
+
+Use this when post-implementation work is subjective review, publication
+choice, optional polish, or a sign-off that should not block an
+otherwise verifiable core change.
+
+**Good (back-loaded)**: Separate the implementation from the optional
+human-gated step:
+
+Roadmap `## Tracks` excerpt:
+
+```md
+- [ ] #441 — add front-loaded/back-loaded draft-pattern examples
+
+Optional post-merge step (deferred, not an execution issue):
+
+- [ ] Decide whether to republish the website landing page to showcase
+      the new examples. Track in a follow-up if approved.
+```
+
+`#441` — autonomous execution issue:
+
+```md
+## Background
+
+Parent roadmap: #440
+
+The draft-patterns reference file does not yet show front-loaded or
+back-loaded human-dependency isolation patterns.
+
+## Proposed change
+
+Add a "Human-dependency isolation examples" section to
+`skills/issue-authoring/references/draft-patterns.md`.
+
+## Acceptance criteria
+
+- The section includes at least one front-loaded and one back-loaded
+  example using stable bucket names (needs-decision, blocked-by-human,
+  deferred, approval-needed).
+- Examples warn against hiding credentials or product decisions in a
+  ready issue.
+- `pnpm run lint:minimum` passes.
+```
+
+The website publication decision stays separate. It is not in the
+acceptance criteria of the ready issue and does not block autonomous
+verification.
+
+### Warning: hidden human dependencies are the most common IDD stall
+
+The most frequent reason for mid-implementation stalls is an execution
+issue that hides a human-only dependency inside its acceptance criteria
+or implementation steps:
+
+- "Credentials are configured in the production environment" → blocked
+  by a person with access.
+- "The design team has approved the final UI spec" → requires subjective
+  sign-off before the issue is verifiable.
+- "The external API key is available in the repository secrets" → an
+  unavailable system or permission.
+
+When any acceptance criterion cannot be confirmed autonomously through
+tests, lint, or CI, the issue is not yet ready. Move that criterion to a
+`blocked-by-human` or `needs-decision` issue and keep the autonomous
+execution issue focused on what the agent can verify independently.
+
 ## Handling duplicates and non-ready outcomes
 
 Before publishing an issue, apply a reuse-first decision tree:
