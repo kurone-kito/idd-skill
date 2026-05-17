@@ -222,15 +222,22 @@ action in an external system before the issue can be verified. The agent
 cannot autonomously confirm the outcome.
 
 **Good (front-loaded)**: Separate the human-dependent setup into its own
-issue, then write the autonomous implementation issue that depends on it:
+issue, then write the autonomous implementation issue that depends on it.
+The `## Tracks` task list should contain only ready execution issues;
+route the non-ready blocker to a separate section or a stable non-ready
+bucket.
 
-Roadmap `## Tracks` excerpt:
+Roadmap body excerpt:
 
 ```md
-- [ ] #431 — [blocked-by-human] obtain Stripe webhook secret for CI
-- [ ] #432 — implement /api/webhooks/stripe endpoint
+## Non-ready prerequisites
 
-_Note: #432 can start after #431 delivers the secret in CI secrets._
+- **[blocked-by-human]** #431 — obtain Stripe webhook secret for CI
+  _(must close before #432 can start)_
+
+## Tracks
+
+- [ ] #432 — implement /api/webhooks/stripe endpoint
 ```
 
 `#431` — `blocked-by-human` issue:
@@ -316,7 +323,7 @@ Add a "Human-dependency isolation examples" section to
 
 - The section includes at least one front-loaded and one back-loaded
   example using stable bucket names (needs-decision, blocked-by-human,
-  deferred, approval-needed).
+  deferred, out-of-scope).
 - Examples warn against hiding credentials or product decisions in a
   ready issue.
 - `pnpm run lint:minimum` passes.
@@ -340,9 +347,11 @@ or implementation steps:
   unavailable system or permission.
 
 When any acceptance criterion cannot be confirmed autonomously through
-tests, lint, or CI, the issue is not yet ready. Move that criterion to a
-`blocked-by-human` or `needs-decision` issue and keep the autonomous
-execution issue focused on what the agent can verify independently.
+tests, lint, CI, or other concrete objective criteria (such as checking
+repository state, file presence, or configuration values), the issue is
+not yet ready. Move that criterion to a `blocked-by-human` or
+`needs-decision` issue and keep the autonomous execution issue focused on
+what the agent can verify independently.
 
 ## Handling duplicates and non-ready outcomes
 
