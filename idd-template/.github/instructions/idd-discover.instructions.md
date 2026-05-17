@@ -288,7 +288,7 @@ touch issues outside the roadmap traversal graph:
   selected candidate and is not added to any candidate set.
 
 **Prohibited in all other contexts** — the following must not be used in
-any phase except as listed above, or when A3 step 4 explicit opt-in
+any phase except as listed above, or when A3 step 5 explicit opt-in
 authorizes an alternate scope for the current run:
 
 - `gh issue list` or any variant

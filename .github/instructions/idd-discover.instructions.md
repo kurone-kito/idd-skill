@@ -272,7 +272,7 @@ touch issues outside the roadmap traversal graph:
   selected candidate and is not added to any candidate set.
 
 **Prohibited in all other contexts** — the following must not be used in
-any phase except as listed above, or when A3 step 4 explicit opt-in
+any phase except as listed above, or when A3 step 5 explicit opt-in
 authorizes an alternate scope for the current run:
 
 - `gh issue list` or any variant
@@ -330,14 +330,14 @@ scope:
 2. **A2 empty — only open roadmap nodes remain**: report each open
    roadmap node and its provenance path; A1.5 audit is needed.
    Do not treat them as candidates.
-   Proceed to step 4.
+   Proceed to step 5.
 
-   **A2 empty — no candidates**: report zero open candidates and any
-   skipped references. Proceed to step 4.
+3. **A2 empty — no candidates** (no roadmap nodes found either): report
+   zero open candidates and any skipped references. Proceed to step 5.
 
-3. **A3 filtered to zero** (A2 found execution candidates but all were
+4. **A3 filtered to zero** (A2 found execution candidates but all were
    filtered out): report each candidate and the filter criterion it
-   failed, then proceed to step 4.
+   failed, then proceed to step 5.
 
    **Diagnostic — all candidates blocked by an open roadmap**: if every
    candidate is blocked by a `<!-- idd-skill-blocked-by: X -->` marker
@@ -346,7 +346,7 @@ scope:
    the task list (`- [ ] #NNN`); the `blocked-by` marker is for issues
    that must wait for a separate roadmap to close first.
 
-4. **Request explicit opt-in** — ask the operator: "No roadmap-scoped
+5. **Request explicit opt-in** — ask the operator: "No roadmap-scoped
    issues are available. Do you want to expand the search scope for this
    run? If so, specify the alternate scope." An agent is **unattended**
    if it cannot wait for and receive a same-run operator reply. Then:
