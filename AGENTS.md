@@ -48,8 +48,10 @@ terms literally.
   Write user-facing, lowercase subjects under 72 characters, and
   split unrelated changes into separate atomic commits.
 - **Branch strategy**: All changes reach `main` through pull
-  requests (merge commits only). Feature branches are always
-  rebased onto `main`, never merged. See
+  requests (merge commits only). Feature branches may rebase onto
+  `main` before the first PR-branch push; after publication, sync
+  from `main` with a normal merge by default instead of rebasing.
+  See
   [`.github/copilot-instructions.md`](.github/copilot-instructions.md#branch-strategy)
   for full rules.
 - **Merge policy**: This source repository records
