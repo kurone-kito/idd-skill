@@ -574,7 +574,7 @@ Interpretation rules:
 - Stable fields consumed by resume instructions: `route`, `reason`,
   `state`, and `evidence`
 - Stable enum:
-  - `route`: `D1|D4|E1|E15|F1|F2|stop`
+  - `route`: `D1|D4|E1|E15|Esync|F1|F2|stop`
 
 ### Advisory-wait evidence
 

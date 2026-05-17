@@ -95,7 +95,7 @@ test("routes F2 when PR exists, CI succeeded, no pending reviews, and branch is 
   assert.equal(result.route, "F2");
 });
 
-test("routes F2 when PR exists, CI succeeded, no pending reviews, and branch is behind without conflict", () => {
+test("routes F1 when PR exists, CI succeeded, no pending reviews, and branch is behind without conflict", () => {
   const result = selectResumeRoute({
     prExists: true,
     requiredChecksGenerated: true,
@@ -104,7 +104,8 @@ test("routes F2 when PR exists, CI succeeded, no pending reviews, and branch is 
     reviewPending: false,
     branchState: "behind-no-conflict",
   });
-  assert.equal(result.route, "F2");
+  assert.equal(result.route, "F1");
+  assert.equal(result.reason, "pr-ci-success-branch-behind-no-conflict");
 });
 
 test("routes Esync when PR exists, CI succeeded, no pending reviews, and branch has content conflict", () => {

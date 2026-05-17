@@ -142,7 +142,7 @@ node scripts/resume-route-selection.mjs --issue {issue-number}
 
 Map helper `route` to the Step 3 table outcomes:
 
-- `D1`, `D4`, `E1`, `E15`, `Esync`, `F2` → matching row outcome.
+- `D1`, `D4`, `E1`, `E15`, `Esync`, `F1`, `F2` → matching row outcome.
 - `stop` → stop and report the helper reason; do not mutate state.
 
 Before any mutation after helper-assisted routing, still re-check live
@@ -159,7 +159,8 @@ output is invalid, use the written table below directly.
 | `failure` / `cancelled` / `timed_out` | no reviews                                                           | D4 failure/cancelled branch                        |
 | `failure` / `cancelled` / `timed_out` | reviews exist                                                        | E15 failure/cancelled branch                       |
 | `success`                             | unresolved threads / unreplied comments / active `CHANGES_REQUESTED` | → E1                                               |
-| `success`                             | none of the above; branch clean or behind (no conflict)              | → F2                                               |
+| `success`                             | none of the above; branch clean                                      | → F2                                               |
+| `success`                             | none of the above; branch behind (no content conflict)               | → F1 (policy check, then F2 or Esync)              |
 | `success`                             | none of the above; branch has content conflict                       | → Esync (E-phase branch-sync check)                |
 | `success`                             | none of the above; branch dirty or unknown state                     | → hold/stop                                        |
 
