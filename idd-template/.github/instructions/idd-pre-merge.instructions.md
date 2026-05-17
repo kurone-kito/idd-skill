@@ -171,7 +171,23 @@ must align with every F2 condition below.
 - **CI**: Current PR head SHA has all required CI checks generated and
   all passing (→ run CI wait per `idd-ci.instructions.md` using the
   same resolved `ciWait.runningTimeout`, `ciWait.generationTimeout`, and
-  `ciWait.rerunPolicy` values; on-success → re-evaluate F2)
+  `ciWait.rerunPolicy` values; on-success → re-evaluate F2).
+
+  **External-check waivers**: When `pre-merge-readiness` reports a check
+  as `coveredByWaiver: true` in its output, a trusted maintainer has
+  authorized skipping that specific check under the current head SHA and
+  active claim. Treat it as passing for F2/F3 routing **only when**:
+  - `waiverEvidence.valid` is non-empty for that check's selector
+  - The waiver actor is a trusted marker login
+  - The waiver `headSha` matches the current PR HEAD
+  - The waiver `claimId` matches the active claim
+  - The waiver `expiresAt` is in the future
+
+  Waivers never bypass review currency, advisory wait, unresolved
+  threads, unreplied comments, required reviews, disposition evidence,
+  or claim ownership. If `waiverEvidence.wrongHead`, `wrongClaim`,
+  `unauthorized`, `expired`, or `malformed` are non-empty, report them
+  as suspicious context and do not treat them as valid permissions.
 - **Required reviews**: Required approvals count is satisfied and all
   CODEOWNER approvals are obtained. If helper evidence includes
   `reviewerStates.codeownerSelfApproval`, include that diagnostic in the

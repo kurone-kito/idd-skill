@@ -15,6 +15,7 @@ import {
   summarizeDispositionEvidenceForGate,
   summarizeAdvisoryWaitMarkers,
   summarizeClaimValidation,
+  summarizeExternalCheckWaivers,
   summarizeRegularCommentsForGate,
   summarizeRequiredChecks,
   summarizeReviewerStates,
@@ -1550,6 +1551,134 @@ test("advisory wait summary keeps F2 and F3 outcomes distinct when Copilot is no
 
   assert.equal(summary.outcome, "REQUEST_NEEDED");
   assert.equal(summary.f3Outcome, "SATISFIED");
+});
+
+function makeWaiverComment(fields) {
+  const { agentId = "a", claimId = "c", headSha = "a".repeat(40), checkSelector = "CodeRabbit", reason = "rate-limit", expiresAt = "2099-01-01T00:00:00Z" } = fields;
+  const enc = (s) => encodeURIComponent(s);
+  return `<!-- idd-external-check-waiver: ${agentId} ${claimId} ${headSha} check:${enc(checkSelector)} reason:${enc(reason)} expires:${expiresAt} -->\n\n_${agentId}: external check waiver for IDD F phase on \`${checkSelector}\`_`;
+}
+
+test("summarizeExternalCheckWaivers: empty comments returns all-empty evidence", () => {
+  const result = summarizeExternalCheckWaivers([], {
+    prHeadSha: "a".repeat(40),
+    activeClaimId: "claim-123",
+    trustedMarkerLogins: ["kurone-kito"],
+    now: "2026-05-17T00:00:00Z",
+  });
+  assert.deepEqual(result, { valid: [], expired: [], wrongHead: [], wrongClaim: [], unauthorized: [], malformed: [] });
+});
+
+test("summarizeExternalCheckWaivers: valid waiver is placed in valid bucket", () => {
+  const head = "b".repeat(40);
+  const body = makeWaiverComment({ claimId: "claim-123", headSha: head });
+  const comment = { body, author: { login: "kurone-kito" }, createdAt: "2026-05-17T00:00:00Z" };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: "claim-123",
+    trustedMarkerLogins: ["kurone-kito"],
+    now: "2026-05-17T00:00:00Z",
+  });
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.valid[0].checkSelector, "CodeRabbit");
+  assert.equal(result.valid[0].authorLogin, "kurone-kito");
+});
+
+test("summarizeExternalCheckWaivers: expired waiver goes to expired bucket", () => {
+  const head = "c".repeat(40);
+  const body = makeWaiverComment({ headSha: head, claimId: "claim-123", expiresAt: "2020-01-01T00:00:00Z" });
+  const comment = { body, author: { login: "kurone-kito" }, createdAt: "2026-05-17T00:00:00Z" };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: "claim-123",
+    trustedMarkerLogins: ["kurone-kito"],
+    now: "2026-05-17T00:00:00Z",
+  });
+  assert.equal(result.expired.length, 1);
+  assert.equal(result.valid.length, 0);
+});
+
+test("summarizeExternalCheckWaivers: wrong head SHA goes to wrongHead bucket", () => {
+  const body = makeWaiverComment({ headSha: "a".repeat(40), claimId: "claim-123" });
+  const comment = { body, author: { login: "kurone-kito" }, createdAt: "2026-05-17T00:00:00Z" };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: "b".repeat(40),
+    activeClaimId: "claim-123",
+    trustedMarkerLogins: ["kurone-kito"],
+    now: "2026-05-17T00:00:00Z",
+  });
+  assert.equal(result.wrongHead.length, 1);
+});
+
+test("summarizeExternalCheckWaivers: wrong claim ID goes to wrongClaim bucket", () => {
+  const head = "d".repeat(40);
+  const body = makeWaiverComment({ headSha: head, claimId: "claim-wrong" });
+  const comment = { body, author: { login: "kurone-kito" }, createdAt: "2026-05-17T00:00:00Z" };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: "claim-123",
+    trustedMarkerLogins: ["kurone-kito"],
+    now: "2026-05-17T00:00:00Z",
+  });
+  assert.equal(result.wrongClaim.length, 1);
+});
+
+test("summarizeExternalCheckWaivers: unauthorized actor goes to unauthorized bucket", () => {
+  const head = "e".repeat(40);
+  const body = makeWaiverComment({ headSha: head, claimId: "claim-123" });
+  const comment = { body, author: { login: "unknown-actor" }, createdAt: "2026-05-17T00:00:00Z" };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: "claim-123",
+    trustedMarkerLogins: ["kurone-kito"],
+    now: "2026-05-17T00:00:00Z",
+  });
+  assert.equal(result.unauthorized.length, 1);
+});
+
+test("summarizeExternalCheckWaivers: malformed waiver comment goes to malformed bucket", () => {
+  const comment = {
+    body: "<!-- idd-external-check-waiver: bad-format -->",
+    author: { login: "kurone-kito" },
+    createdAt: "2026-05-17T00:00:00Z",
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: "a".repeat(40),
+    activeClaimId: "claim-123",
+    trustedMarkerLogins: ["kurone-kito"],
+    now: "2026-05-17T00:00:00Z",
+  });
+  assert.equal(result.malformed.length, 1);
+});
+
+test("summarizeRequiredChecks: waiver covers failing required check", () => {
+  const waivers = {
+    valid: [{ authorLogin: "kurone-kito", checkSelector: "CodeRabbit", reason: "rate-limit", expiresAt: "2099-01-01T00:00:00Z" }],
+    expired: [], wrongHead: [], wrongClaim: [], unauthorized: [], malformed: [],
+  };
+  const result = summarizeRequiredChecks(
+    [{ name: "CodeRabbit", state: "PENDING", completedAt: "" }],
+    [],
+    { required_status_checks: { contexts: ["CodeRabbit"] } },
+    { waivers },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, true);
+  assert.equal(result.status, "success");
+});
+
+test("summarizeRequiredChecks: waiver does not affect already-passing check", () => {
+  const waivers = {
+    valid: [{ authorLogin: "kurone-kito", checkSelector: "lint", reason: "test", expiresAt: "2099-01-01T00:00:00Z" }],
+    expired: [], wrongHead: [], wrongClaim: [], unauthorized: [], malformed: [],
+  };
+  const result = summarizeRequiredChecks(
+    [{ name: "lint", state: "SUCCESS", completedAt: "2026-05-17T00:00:00Z" }],
+    [],
+    { required_status_checks: { contexts: ["lint"] } },
+    { waivers },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, undefined);
+  assert.equal(result.status, "success");
 });
 
 function readJson(relativePath) {

@@ -142,5 +142,13 @@
     "matchesExpectedClaim": true,
     "claimLost": false,
     "reason": "match"
+  },
+  "waiverEvidence": {
+    "valid": [],
+    "expired": [],
+    "wrongHead": [],
+    "wrongClaim": [],
+    "unauthorized": [],
+    "malformed": []
   }
 }
