@@ -187,6 +187,7 @@ comment token; use the HTTP `POST` path for reliability).
 
 ## E3 — Empty list check
 
-If ReviewItems_snapshot is empty → proceed to `idd-pre-merge.instructions.md`.
+If ReviewItems_snapshot is empty → proceed to the E-phase branch-sync
+check in `idd-review-triage.instructions.md`.
 
 Otherwise → proceed to `idd-review-triage.instructions.md` (E4).
