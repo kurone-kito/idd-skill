@@ -293,15 +293,20 @@ otherwise verifiable core change.
 **Good (back-loaded)**: Separate the implementation from the optional
 human-gated step:
 
-Roadmap `## Tracks` excerpt:
+Roadmap body excerpt (the `## Tracks` list contains only the ready
+execution issue; the deferred step is a narrative note, not a task-list
+entry):
 
 ```md
+## Tracks
+
 - [ ] #441 — add front-loaded/back-loaded draft-pattern examples
 
-Optional post-merge step (deferred, not an execution issue):
+## Deferred
 
-- [ ] Decide whether to republish the website landing page to showcase
-      the new examples. Track in a follow-up if approved.
+The website landing page could be updated to showcase the new examples,
+but that publication decision requires maintainer approval and is not a
+blocker for merging #441. Track in a follow-up if approved.
 ```
 
 `#441` — autonomous execution issue:
