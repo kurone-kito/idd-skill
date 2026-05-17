@@ -119,14 +119,14 @@ truthfully say, "All quality gates are now green."
 This section will introduce the event model, database migration, seed
 data, and Prisma client utility.
 
-Log segment: [TODO: link the Track C data layer log after #585].
+Log segment: [Track C — Data Layer](log-segments/03-data-layer.md)
 
 ## Step 3: Backend API
 
 This section will walk through the event API routes, validation, creator
 token behavior, and update/delete flow.
 
-Log segment: [TODO: link the Track D backend API log after #586].
+Log segment: [Track D — Backend API](log-segments/04-backend-api.md)
 
 ## Step 4: Frontend
 
