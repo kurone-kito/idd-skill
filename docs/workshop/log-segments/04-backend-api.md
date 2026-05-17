@@ -75,12 +75,13 @@ $ git diff --check
 
 ## [2026-05-17 23:00:00 JST] D2–D5 — Remaining CRUD Endpoints
 
-> **Note:** After D1 merged, D2 through D5 each followed the same
-> abbreviated cycle: claim the idd-skill tracking issue, implement
-> the endpoint with a Vitest suite, self-review, open a PR on
-> `kurone-kito/vrc-event-calendar`, wait for CI, and merge. The
-> frontend Track E ran concurrently for its first issues during this
-> window, beginning at approximately 23:42 JST after D5 completed.
+> **Note:** After D1 merged (17:52 JST), two deferred infrastructure
+> lanes completed before D2 started: B7 GitHub Actions CI (PR #16,
+> 23:04 JST) and B8 npm Docker scripts (PR #17, 23:13 JST). D2
+> through D5 then merged in rapid succession between 23:15 and 23:34
+> JST. The frontend Track E started immediately after D5 at 23:35 JST
+> (see Track E and F segment) and completed E1–E7 before D6 (Zod
+> schemas) ran at 00:29 JST.
 
 ### D2 — GET /api/events/\[id\] (PR #18, issue #567)
 
@@ -148,6 +149,7 @@ partial update payloads.
 - Merged: `2026-05-18 00:40:35 JST`
 - PR: <https://github.com/kurone-kito/vrc-event-calendar/pull/30>
 
-> **Note:** D6 ran after the frontend Track E completed its first
-> batch of issues, so D and E tracks effectively serialized in
-> practice: D2–D5, then E1–E5, then D6.
+> **Note:** D6 ran after the frontend Track E completed all seven UI
+> issues (E1–E7), so D and E tracks effectively serialized in practice:
+> D2–D5 (23:15-23:34), then E1–E7 (23:35-00:11), then D6 (00:29-00:40).
+> For the complete E-track record, see the Track E and F segment.

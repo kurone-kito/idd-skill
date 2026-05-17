@@ -134,3 +134,31 @@ $ curl -I http://127.0.0.1:3002
 > B2-B4 show merged infrastructure work. B5, B6, and B8 can each be
 > claimed independently of the others; B7 should wait for B5 to land so
 > the CI workflow has a `test` script to invoke.
+>
+> **Transition — 15-hour overnight pause:** Session closed at 01:55 JST
+> (May 17) and resumed the following afternoon. The pause is a natural
+> work-session boundary; all four B5-B8 branches remained uncommitted,
+> preserving the queued-lane shape. B5 and B6 completed first when the
+> session resumed, unlocking B7 and clearing the way for Track C to start.
+
+## [2026-05-17 16:58:21 JST] B5 — Vitest Unit Test Setup (PR #8, issue #562)
+
+- Added Vitest with jsdom and Testing Library base setup
+- Added `npm run test` and `npm run test:watch` npm scripts
+- Smoke test confirms the test runner resolves without hanging
+- Merged: `2026-05-17 16:58:21 JST`
+- PR: <https://github.com/kurone-kito/vrc-event-calendar/pull/8>
+
+## [2026-05-17 17:12:32 JST] B6 — Playwright E2E Smoke Test Harness (PR #9, issue #563)
+
+- Added Playwright with `npm run test:e2e` script
+- `playwright.config.ts` targeting `http://127.0.0.1:3000`, single
+  browser, single project
+- Merged: `2026-05-17 17:12:32 JST`
+- PR: <https://github.com/kurone-kito/vrc-event-calendar/pull/9>
+
+> **Note:** B5 and B6 completed at 16:58 and 17:12 JST respectively,
+> just before Track C (data layer) claimed its first issue at 17:15 JST.
+> B7 (GitHub Actions CI) and B8 (npm Docker scripts) complete later in
+> the day alongside the backend API track — see Track D segment for
+> their timestamps.
