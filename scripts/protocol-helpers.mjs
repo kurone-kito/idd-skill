@@ -50,6 +50,11 @@ const OPERATIONAL_MARKERS = [
     pattern: /^\s*<!--\s*forced-handoff:\s*\{[\s\S]*\}\s*-->[\s\S]*$/i,
     startPattern: /^<!--\s*forced-handoff:/i,
   },
+  {
+    label: "<!-- idd-external-check-waiver:",
+    pattern: /^<!--\s*idd-external-check-waiver:\s+\S+\s+\S+\s+[0-9a-f]{40}\s+check:\S+\s+reason:\S+\s+expires:\S+\s*-->[\s\S]*$/i,
+    startPattern: /^<!--\s*idd-external-check-waiver:/i,
+  },
 ];
 
 const IDD_AGENT_DERIVED_MARKERS = new Set([

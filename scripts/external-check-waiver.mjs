@@ -216,13 +216,15 @@ export async function runExternalCheckWaiver(options = {}) {
   const { owner, name } = parseOwnerRepo(repository);
   const rawConfig = readJsonFile(".github/idd/config.json");
   const policy = normalizePolicyConfig(rawConfig);
-  const actor = String(
-    options.actor
-      ?? args.actor
-      ?? safeGhText(["api", "user", "--jq", ".login"]),
-  ).trim().toLowerCase();
+  const viewerLogin = String(safeGhText(["api", "user", "--jq", ".login"])).trim().toLowerCase();
+  const actor = String(options.actor ?? args.actor ?? viewerLogin).trim().toLowerCase();
   if (!actor) {
     throw new Error("could not determine current GitHub user; ensure gh is authenticated");
+  }
+  if (args.apply && args.actor && actor !== viewerLogin && viewerLogin) {
+    throw new Error(
+      `--actor ${args.actor} does not match the authenticated user ${viewerLogin}; omit --actor to use the authenticated identity`,
+    );
   }
 
   const authority = options.authority
@@ -468,7 +470,16 @@ function resolveLinkedIssueCandidates({
       viewerLogin,
       issueComments: comments,
     });
-    const activeClaim = resolveHelperActiveClaim(comments, [...trustedMarkerLogins]);
+    const forcedHandoffAuthorityPolicy = normalizePolicyConfig(rawConfig).forcedHandoff.authorityPolicy;
+    const activeClaim = resolveHelperActiveClaim(comments, [...trustedMarkerLogins], {
+      isAuthorizedForcedHandoff: (fhActor) => {
+        const auth = resolveCollaboratorAuthority({ owner, repo, actor: fhActor });
+        if (forcedHandoffAuthorityPolicy === "all-write-permission-actors") {
+          return auth.permission === "admin" || auth.permission === "maintain" || auth.permission === "write";
+        }
+        return auth.permission === "admin" || auth.permission === "maintain";
+      },
+    });
     if (!activeClaim) {
       results.push({
         number: issue.number,
