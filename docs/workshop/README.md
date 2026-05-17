@@ -88,10 +88,31 @@ replacement, repository-specific customization, and validation with
 
 ## Step 1: Development Environment
 
-This section will establish the local development foundation: Docker
-Compose, Next.js, TypeScript, Tailwind CSS, Prisma, tests, and CI.
+Infrastructure comes before features because IDD can only merge safely
+when the repository can prove the same branch state every time. Before
+the workshop starts adding Prisma models, API routes, or UI screens, the
+example repository needs a scaffold that can build, lint, and boot in a
+repeatable way. That is why Track B begins with environment work instead
+of feature work: CI is not garnish in IDD, it is part of the merge gate.
 
-Log segment: [Track B — Infrastructure Setup](log-segments/02-infrastructure.md).
+Track B1 is the first full IDD loop in the workshop. The agent claims
+`idd-skill#555`, narrows scope to the Next.js 15 scaffold, validates the
+app on the host and inside a container, opens PR #3, waits for CI, and
+merges once the checks go green. That single cycle shows the whole
+claim -> work -> PR -> CI -> merge rhythm in one place, with enough
+detail for a first-time reader to see not just what happened, but why
+the agent made each decision.
+
+After B1 merges, the infrastructure track can fan out into B2-B8
+instead of serializing on one long-lived bootstrap branch. Formatting
+(`#556`), Docker Compose (`#554`), and Docker hardening (`#644`) are
+the first merged follow-up lanes, while test runners (`#562`, `#563`),
+CI wiring (`#564`), and developer scripts (`#565`) remain explicitly
+queued in the log. For the full timestamped record, see
+[Track B — Infrastructure Setup](log-segments/02-infrastructure.md).
+The narrower point this section closes on is that the merged B1-B4
+baseline is green, which is why the preserved completion digest can
+truthfully say, "All quality gates are now green."
 
 ## Step 2: Data Layer
 
