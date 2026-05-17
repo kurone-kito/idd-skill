@@ -219,6 +219,38 @@ Recommended routing rules:
 - if the work does not belong in this repository, route to
   `out-of-scope`
 
+## Human-dependency isolation
+
+Treat unresolved human dependency as a side effect that should be
+isolated away from ready execution issues whenever possible.
+
+- **Front-load** human-dependent work when coding cannot start safely
+  until a person provides a decision, credential, permission,
+  maintainer-only action, external setup, or policy choice, or until an
+  unavailable system becomes usable again.
+- **Back-load** human-dependent work when the remaining dependency is
+  subjective review, publication choice, optional polish, or another
+  post-implementation judgment that should not block an otherwise
+  autonomous core change.
+- Keep the central execution issue as close as possible to a pure
+  autonomous unit: clear repository-local scope, no hidden human handoff
+  in the implementation steps or acceptance criteria, and objective
+  verification.
+- Preserve unavoidable human-dependent work in an explicit stable
+  bucket, dependency edge, or approval-needed hold rather than mixing it
+  into a ready issue.
+- Route unresolved choices to `needs-decision`, route waiting on people,
+  credentials, maintainer-only actions, or unavailable systems to
+  `blocked-by-human`, use `deferred` when timing or decomposition is not
+  strong enough yet, and keep approval-gated ready work in the
+  approval-needed hold instead of the normal ready-to-start set.
+- If a task cannot be expressed without unresolved human coordination in
+  the middle of implementation, it is not yet `ready`.
+
+This principle complements the execution axes rather than replacing
+them: it is a practical way to protect autonomous completion and clear
+verification during issue drafting.
+
 ## Alignment with A4.5 Suitability Gate
 
 The IDD discover phase uses an A4.5 pre-claim suitability gate that
@@ -562,6 +594,9 @@ Before reporting or publishing issue drafts, the skill should verify:
 
 - each execution-ready issue passes limited scope, clear verification,
   and autonomous completion
+- no execution-ready issue hides unresolved human dependency that
+  belongs in `needs-decision`, `blocked-by-human`, `deferred`, or the
+  approval-needed fallback
 - each deferred, blocked, or decision-dependent item was preserved in a
   stable bucket instead of being dropped
 - each roadmap has one roadmap marker and uses task-list links for child
