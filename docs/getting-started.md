@@ -70,6 +70,13 @@ Use task-list links to group active roadmap work. Reserve
 `idd-skill-blocked-by` markers for true sequential dependencies on a
 separate roadmap.
 
+When a project has genuine parallel tracks or multi-session coordination
+boundaries, nested roadmap hierarchies let each track close
+independently before the parent roadmap closes. See
+[Recursive Roadmap Hierarchies](idd-workflow.md#recursive-roadmap-hierarchies)
+in the workflow guide for structure examples, the grouping-versus-dependency
+distinction, and how discovery and bottom-up audit behave across levels.
+
 ## 4. Start the Loop
 
 Ask the agent to start the IDD workflow in the target repository. The
