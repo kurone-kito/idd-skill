@@ -111,7 +111,7 @@ test("classifyBranchConflictState: BEHIND without conflict recommends merge-main
     baseRefName: "main",
     mergeable: "MERGEABLE",
     mergeStateStatus: "BEHIND",
-    headRepository: { pushedAt: "2026-05-01T00:00:00Z" },
+    headRepository: { id: "R_test", name: "test-repo" },
   };
   const result = await classifyBranchConflictState(201, {
     owner: "test-owner",
@@ -119,10 +119,8 @@ test("classifyBranchConflictState: BEHIND without conflict recommends merge-main
     _testPrData: prData,
     _skipGitProbe: true,
   });
-  assert.ok(
-    result.branchState === "behind-no-conflict" || result.branchState === "unknown",
-    `expected behind-no-conflict or unknown, got ${result.branchState}`,
-  );
+  assert.equal(result.branchState, "behind-no-conflict");
+  assert.equal(result.syncRecommendation, "merge-main");
 });
 
 test("parseConflictFiles: parses content conflict lines", () => {
@@ -166,7 +164,7 @@ test("classifyBranchConflictState: post-push merge recommendation for BEHIND is 
     baseRefName: "main",
     mergeable: "MERGEABLE",
     mergeStateStatus: "BEHIND",
-    headRepository: { pushedAt: "2026-05-01T00:00:00Z" },
+    headRepository: { id: "R_test", name: "test-repo" },
   };
   const result = await classifyBranchConflictState(202, {
     owner: "test-owner",
@@ -174,5 +172,25 @@ test("classifyBranchConflictState: post-push merge recommendation for BEHIND is 
     _testPrData: prData,
     _skipGitProbe: true,
   });
-  assert.notEqual(result.syncRecommendation, "force-push-exception");
+  assert.equal(result.syncRecommendation, "merge-main");
+});
+
+test("classifyBranchConflictState: published is true when head SHA is present", async () => {
+  const fixture = loadFixture("clean");
+  const result = await classifyBranchConflictState(fixture.prData.number, {
+    owner: "test-owner",
+    repo: "test-repo",
+    _testPrData: fixture.prData,
+  });
+  assert.equal(result.published, true);
+});
+
+test("classifyBranchConflictState: published is false when head SHA is absent", async () => {
+  const fixture = loadFixture("missing-sha");
+  const result = await classifyBranchConflictState(fixture.prData.number, {
+    owner: "test-owner",
+    repo: "test-repo",
+    _testPrData: fixture.prData,
+  });
+  assert.equal(result.published, false);
 });

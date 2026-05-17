@@ -7,7 +7,10 @@
     "baseRefName": "main",
     "mergeable": "CONFLICTING",
     "mergeStateStatus": "DIRTY",
-    "headRepository": { "pushedAt": "2026-05-01T00:00:00Z" }
+    "headRepository": {
+      "id": "R_test",
+      "name": "test-repo"
+    }
   },
   "expected": {
     "branchState": "content-conflict",
