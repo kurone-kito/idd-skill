@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  classifyBranchState,
   countLatestChangesRequestedByReviewer,
   recoverJsonFromGhFailure,
   selectResumeRoute,
@@ -82,26 +83,75 @@ test("routes E1 when PR exists, CI succeeded, and reviews are pending", () => {
   assert.equal(result.route, "E1");
 });
 
-test("routes F1 when PR exists, CI succeeded, no pending reviews, and merge needs rebase", () => {
+test("routes F2 when PR exists, CI succeeded, no pending reviews, and branch is clean", () => {
   const result = selectResumeRoute({
     prExists: true,
     requiredChecksGenerated: true,
     ciSuccess: true,
     reviewExists: false,
     reviewPending: false,
-    mergeNeedsRebase: true,
+    branchState: "clean",
   });
-  assert.equal(result.route, "F1");
+  assert.equal(result.route, "F2");
 });
 
-test("routes F2 when PR exists, CI succeeded, no pending reviews, and merge is clean", () => {
+test("routes F2 when PR exists, CI succeeded, no pending reviews, and branch is behind without conflict", () => {
   const result = selectResumeRoute({
     prExists: true,
     requiredChecksGenerated: true,
     ciSuccess: true,
     reviewExists: false,
     reviewPending: false,
-    mergeNeedsRebase: false,
+    branchState: "behind-no-conflict",
+  });
+  assert.equal(result.route, "F2");
+});
+
+test("routes Esync when PR exists, CI succeeded, no pending reviews, and branch has content conflict", () => {
+  const result = selectResumeRoute({
+    prExists: true,
+    requiredChecksGenerated: true,
+    ciSuccess: true,
+    reviewExists: false,
+    reviewPending: false,
+    branchState: "content-conflict",
+  });
+  assert.equal(result.route, "Esync");
+});
+
+test("routes stop when PR exists, CI succeeded, no pending reviews, and branch state is dirty", () => {
+  const result = selectResumeRoute({
+    prExists: true,
+    requiredChecksGenerated: true,
+    ciSuccess: true,
+    reviewExists: false,
+    reviewPending: false,
+    branchState: "dirty",
+  });
+  assert.equal(result.route, "stop");
+  assert.equal(result.reason, "pr-ci-success-branch-dirty-or-unknown");
+});
+
+test("routes stop when PR exists, CI succeeded, no pending reviews, and branch state is unknown", () => {
+  const result = selectResumeRoute({
+    prExists: true,
+    requiredChecksGenerated: true,
+    ciSuccess: true,
+    reviewExists: false,
+    reviewPending: false,
+    branchState: "unknown",
+  });
+  assert.equal(result.route, "stop");
+  assert.equal(result.reason, "pr-ci-success-branch-dirty-or-unknown");
+});
+
+test("routes F2 when PR exists, CI succeeded, no pending reviews, and branchState is not provided (defaults to clean)", () => {
+  const result = selectResumeRoute({
+    prExists: true,
+    requiredChecksGenerated: true,
+    ciSuccess: true,
+    reviewExists: false,
+    reviewPending: false,
   });
   assert.equal(result.route, "F2");
 });
@@ -124,6 +174,47 @@ test("routes E15 when PR exists, required checks are not generated, and reviews 
     reviewExists: true,
   });
   assert.equal(result.route, "E15");
+});
+
+test("classifyBranchState returns clean for CLEAN mergeStateStatus", () => {
+  assert.equal(
+    classifyBranchState({ mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" }),
+    "clean",
+  );
+});
+
+test("classifyBranchState returns behind-no-conflict for BEHIND mergeStateStatus", () => {
+  assert.equal(
+    classifyBranchState({ mergeable: "MERGEABLE", mergeStateStatus: "BEHIND" }),
+    "behind-no-conflict",
+  );
+});
+
+test("classifyBranchState returns content-conflict for CONFLICTING mergeable", () => {
+  assert.equal(
+    classifyBranchState({ mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }),
+    "content-conflict",
+  );
+});
+
+test("classifyBranchState returns dirty for DIRTY mergeStateStatus", () => {
+  assert.equal(
+    classifyBranchState({ mergeable: "MERGEABLE", mergeStateStatus: "DIRTY" }),
+    "dirty",
+  );
+});
+
+test("classifyBranchState returns clean for BLOCKED MERGEABLE (non-git-conflict block)", () => {
+  assert.equal(
+    classifyBranchState({ mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" }),
+    "clean",
+  );
+});
+
+test("classifyBranchState returns unknown for null/missing state", () => {
+  assert.equal(classifyBranchState(null), "unknown");
+  assert.equal(classifyBranchState({}), "unknown");
+  assert.equal(classifyBranchState({ mergeable: "UNKNOWN", mergeStateStatus: "" }), "unknown");
 });
 
 test("counts CHANGES_REQUESTED using each reviewer's latest gating state", () => {
