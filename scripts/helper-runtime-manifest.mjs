@@ -67,6 +67,14 @@ const HELPER_COMMANDS = [
     description: "Collect read-only A3 readiness filtering evidence for candidate issues.",
   },
   {
+    id: "discover-roadmap-graph",
+    scriptName: "idd:discover-roadmap-graph",
+    binName: "idd-discover-roadmap-graph",
+    entryPath: "scripts/discover-roadmap-graph.mjs",
+    vendoredCommand: "node scripts/discover-roadmap-graph.mjs",
+    description: "Collect read-only A1.5/A2 recursive roadmap graph evidence.",
+  },
+  {
     id: "discover-viability-gate",
     scriptName: "idd:discover-viability-gate",
     binName: "idd-discover-viability-gate",

@@ -256,6 +256,8 @@ test("helper script docs keep the discover viability gate helper in sync", () =>
   );
 
   assert.equal(template, live);
+  assert.match(live, /discover-roadmap-graph\.mjs/);
+  assert.match(live, /Discover Roadmap Graph Contract/);
   assert.match(live, /discover-viability-gate\.mjs/);
   assert.match(live, /suitability-triage\.mjs/);
 });
