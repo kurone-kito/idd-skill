@@ -63,10 +63,28 @@ the project.
 
 ## Prologue: Bootstrap
 
-This section will explain the chicken-and-egg bootstrap flow for applying
-idd-skill to a new example repository.
+IDD has a chicken-and-egg bootstrap problem: a brand-new repository
+cannot ask agents to follow its local IDD instructions until those
+instructions, policy files, and agent entry documents already exist.
+Theirs-flow is the deliberate way through that gap. Instead of asking a
+non-operational repository to review its own missing bootstrap files,
+you accept a trusted template baseline first and defer normal review to
+the work that follows.
 
-Log segment: [TODO: link the Track A bootstrap log after #583].
+In this workshop, that baseline comes from the `idd-template` bundle in
+this repository. The onboarding pass copies the template instructions
+and policy files into `kurone-kito/vrc-event-calendar`, replaces the
+repository-specific placeholders, records the local policy choices, and
+then runs validation to confirm that the imported state is coherent.
+That narrow "take the template as theirs" exception is what turns an
+empty repository into one that can safely run the normal
+claim -> work -> PR -> CI -> merge loop afterward.
+
+For the exact command sequence and outputs, see the
+[bootstrap log segment](log-segments/01-bootstrap.md). It shows the real
+session order: claim and worktree setup, template import, placeholder
+replacement, repository-specific customization, and validation with
+`idd-doctor`. After this section, your repository is IDD-operational.
 
 ## Step 1: Development Environment
 
