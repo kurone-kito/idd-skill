@@ -843,6 +843,18 @@ test("policy schema rejects ciGate selector entries with unknown matchMode", () 
   assert.ok(errors.some((e) => e.includes("ciGate")), errors.join("\n"));
 });
 
+test("policy schema rejects ciGate selector entries with unknown properties", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+  instance.ciGate = {
+    externalChecks: {
+      waivable: [{ selector: "CodeRabbit*", matchMode: "glob", extra: true }],
+    },
+  };
+  const errors = validate(instance, schema);
+  assert.ok(errors.some((e) => e.includes("ciGate")), errors.join("\n"));
+});
+
 test("policy schema rejects ciGate waiver mode unknown value", () => {
   const schema = loadJson("schemas/policy.schema.json");
   const instance = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));

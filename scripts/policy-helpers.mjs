@@ -447,6 +447,11 @@ function parseCheckSelectors(value, fallback) {
       return clone(fallback);
     }
 
+    const entryKeys = Object.keys(entry);
+    if (entryKeys.some((key) => key !== "selector" && key !== "matchMode")) {
+      return clone(fallback);
+    }
+
     const selector = parseNonEmptyString(entry.selector, "");
     if (!selector) {
       return clone(fallback);

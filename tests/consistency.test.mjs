@@ -368,6 +368,17 @@ test("policy normalization provides default-safe values and supports aliases", (
       maxValidity: "PT24H",
     },
   });
+
+  assert.deepEqual(normalizePolicyConfig({
+    ciGate: {
+      externalChecks: {
+        waivable: [{ selector: "CodeRabbit*", matchMode: "glob", extra: true }],
+      },
+    },
+  }).ciGate.externalChecks, {
+    advisory: [],
+    waivable: [],
+  });
 });
 
 test("collaborator trust resolution honors aliases and env fallback", () => {
