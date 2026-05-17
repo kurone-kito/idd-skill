@@ -9,6 +9,7 @@
   "bin": {
     "idd-advisory-wait-state": "./bin/idd-advisory-wait-state.mjs",
     "idd-audit-pr-cleanup": "./bin/idd-audit-pr-cleanup.mjs",
+    "idd-branch-conflict-state": "./bin/idd-branch-conflict-state.mjs",
     "idd-claim-approval-gate": "./bin/idd-claim-approval-gate.mjs",
     "idd-ci-wait-policy": "./bin/idd-ci-wait-policy.mjs",
     "idd-cleanup-hygiene-report": "./bin/idd-cleanup-hygiene-report.mjs",

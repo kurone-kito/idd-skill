@@ -102,11 +102,11 @@ function deriveBranchState({
   const mergeStateNorm = String(mergeStateStatus ?? "").toUpperCase();
 
   if (mergeableNorm === "CONFLICTING") {
-    const conflictFiles = skipGitProbe ? [] : probeConflictFilesReadOnly(prHeadSha, prBaseSha, prBaseRef, owner, repo, notes);
+    const probeResult = skipGitProbe ? [] : probeConflictFilesReadOnly(prHeadSha, prBaseSha, prBaseRef, owner, repo, notes);
     return {
       branchState: "content-conflict",
       syncRecommendation: "hold-unknown",
-      conflictFiles,
+      conflictFiles: probeResult ?? [],
       mergeableSource: "github-mergeable",
     };
   }
@@ -130,12 +130,28 @@ function deriveBranchState({
   }
 
   if (mergeStateNorm === "BEHIND") {
-    const conflictFiles = skipGitProbe ? [] : probeConflictFilesReadOnly(prHeadSha, prBaseSha, prBaseRef, owner, repo, notes);
-    if (conflictFiles.length > 0) {
+    if (skipGitProbe) {
+      return {
+        branchState: "behind-no-conflict",
+        syncRecommendation: "merge-main",
+        conflictFiles: [],
+        mergeableSource: "git-merge-tree",
+      };
+    }
+    const probeResult = probeConflictFilesReadOnly(prHeadSha, prBaseSha, prBaseRef, owner, repo, notes);
+    if (probeResult === null) {
+      return {
+        branchState: "unknown",
+        syncRecommendation: "hold-unknown",
+        conflictFiles: [],
+        mergeableSource: "git-merge-tree",
+      };
+    }
+    if (probeResult.length > 0) {
       return {
         branchState: "content-conflict",
         syncRecommendation: "hold-unknown",
-        conflictFiles,
+        conflictFiles: probeResult,
         mergeableSource: "git-merge-tree",
       };
     }
@@ -177,28 +193,27 @@ function deriveBranchState({
 
 function probeConflictFilesReadOnly(prHeadSha, prBaseSha, prBaseRef, owner, repo, notes) {
   try {
-    const mergeBase = gitText(["merge-base", prHeadSha, prBaseSha]);
+    let mergeBase = gitText(["merge-base", prHeadSha, prBaseSha]);
     if (!mergeBase) {
       tryFetchBase(prBaseRef, owner, repo, notes);
-      const mergeBase2 = gitText(["merge-base", prHeadSha, prBaseSha]);
-      if (!mergeBase2) {
-        notes.push("merge-base not found; skipping read-only conflict probe.");
-        return [];
+      mergeBase = gitText(["merge-base", prHeadSha, prBaseSha]);
+      if (!mergeBase) {
+        notes.push("merge-base not found; cannot prove conflict-free; holding unknown.");
+        return null;
       }
     }
-    const result = spawnSync("git", ["merge-tree", "--no-messages", "--merge-base=" + (mergeBase || prBaseSha), prHeadSha, prBaseSha], {
+    const result = spawnSync("git", ["merge-tree", "--merge-base=" + mergeBase, prHeadSha, prBaseSha], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
     if (result.status !== 0 && result.status !== 1) {
       notes.push(`git merge-tree exited with status ${result.status}; cannot probe conflicts.`);
-      return [];
+      return null;
     }
-    const conflictFiles = parseConflictFiles(result.stdout ?? "");
-    return conflictFiles;
+    return parseConflictFiles(result.stdout ?? "");
   } catch {
     notes.push("git merge-tree unavailable; falling back to GitHub mergeability signal only.");
-    return [];
+    return null;
   }
 }
 
@@ -218,10 +233,16 @@ function tryFetchBase(prBaseRef, owner, repo, notes) {
 function parseConflictFiles(mergeTreeOutput) {
   const files = new Set();
   for (const line of mergeTreeOutput.split("\n")) {
-    const match = line.match(/^CONFLICT\s+\([^)]+\):\s+(.+?)\s+in\s+/i)
-      ?? line.match(/^CONFLICT\s+\([^)]+\):\s+(.+?)$/i);
-    if (match) {
-      files.add(match[1].trim());
+    // "CONFLICT (content): Merge conflict in path/to/file"
+    const inMatch = line.match(/^CONFLICT\s+\([^)]+\):\s+.*\s+in\s+(.+?)\s*$/i);
+    if (inMatch) {
+      files.add(inMatch[1].trim());
+      continue;
+    }
+    // "CONFLICT (rename/delete): old renamed to new in ..." or bare CONFLICT lines
+    const bareMatch = line.match(/^CONFLICT\s+\([^)]+\):\s+(.+?)\s*$/i);
+    if (bareMatch) {
+      files.add(bareMatch[1].trim());
     }
   }
   return [...files];
