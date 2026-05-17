@@ -30,7 +30,7 @@ export async function classifyBranchConflictState(prNumber, options = {}) {
   const prBaseRef = String(prData.baseRefName ?? "");
   const mergeable = prData.mergeable ?? null;
   const mergeStateStatus = prData.mergeStateStatus ?? null;
-  const published = Boolean(prData.headRepository?.pushedAt);
+  const published = Boolean(prHeadSha);
 
   if (!prHeadSha || !prBaseSha) {
     return {
