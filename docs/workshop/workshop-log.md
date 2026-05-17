@@ -19,7 +19,7 @@
 | IDD loop cycles (PRs merged)       | 35                                     |
 | Issues closed (idd-skill tracking) | ~40                                    |
 | Sessions                           | Multiple (Copilot, Codex, claude-code) |
-| Unit tests at completion           | 58 (Vitest)                            |
+| Unit tests at completion           | 56 (Vitest)                            |
 | E2E smoke tests                    | 3 (Playwright)                         |
 
 ## Table of Contents
