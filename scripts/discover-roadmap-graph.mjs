@@ -105,7 +105,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   const sortedEdges = [...edges].sort(compareEdges);
   const sortedProvenancePaths = [...provenancePaths].sort(comparePaths);
   const roadmapNodes = nodes
-    .filter((node) => node.classification === "roadmap")
+    .filter((node) => node.classification === "roadmap" && node.number !== rootIssue.number)
     .map((node) => node.number);
   const executionCandidates = nodes
     .filter((node) => node.classification === "execution" && node.state === "OPEN")
@@ -478,7 +478,7 @@ Output schema (JSON mode):
     "nodes": [{ "number": 638, "title": "...", "state": "OPEN", "labels": ["roadmap"], "classification": "roadmap", "roadmapMarkerId": "...", "depth": 0 }],
     "edges": [{ "source": 638, "target": 640, "relationship": "task-list", "evidence": "- [ ] #640" }],
     "provenancePaths": [{ "target": 640, "path": [638, 640] }],
-    "roadmapNodes": [638],
+    "roadmapNodes": [],
     "executionCandidates": [640],
     "diagnostics": {
       "duplicateReferences": [],
