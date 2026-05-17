@@ -207,6 +207,41 @@ This principle complements the execution axes rather than replacing
 them: it is a practical way to protect autonomous completion and clear
 verification during issue drafting.
 
+## Hidden human-dependency validation
+
+Before publishing a `ready` issue, run a short pre-publication check for
+hidden human dependency. Treat this as a routing aid, not a rigid
+wording linter: the question is whether the work still depends on
+unresolved human action, not whether the draft used one forbidden
+phrase.
+
+Ask these checks:
+
+1. Does implementation require credentials, external access, hardware,
+   or infrastructure that the executing agent cannot already reach? If
+   yes, route the work to `blocked-by-human` unless that dependency can
+   be front-loaded into a separate prerequisite issue.
+2. Does any implementation step or acceptance criterion depend on a
+   product, policy, or design decision that has not been made? If yes,
+   route the work to `needs-decision`.
+3. Do the acceptance criteria require subjective human approval instead
+   of objective verification? If yes, rewrite the ready issue around
+   measurable checks and back-load the optional review or publication
+   judgment.
+4. Does a roadmap narrative hide human-dependent work inside prose while
+   the visible task list presents the item as execution-ready? If yes,
+   preserve that work in an explicit stable bucket, approval-needed
+   hold, or blocking issue instead of burying it in the narrative.
+5. Is any dependency marker being used only to group related work or
+   express preference order? If yes, remove the fake blocker and use
+   task-list structure or sequencing notes instead. Keep dependency
+   edges only for true start blockers.
+
+Normal post-implementation code review, merge approval, or publication
+choice does not by itself make an otherwise autonomous issue non-ready.
+The ready issue should still carry its own objective verification even
+when a human will look at the result afterward.
+
 ## Dependency minimization
 
 Encode a dependency edge only when it reflects a true correctness,

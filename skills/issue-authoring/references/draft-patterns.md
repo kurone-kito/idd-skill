@@ -77,6 +77,21 @@ Before you publish a ready issue, confirm:
   while adding more detail would start turning it into a lightweight
   model script
 
+## Hidden human-dependency quick check
+
+Before you publish a `ready` issue, confirm:
+
+- the implementation does not still depend on unresolved credentials,
+  access, or unavailable infrastructure
+- unresolved product, policy, or design choices have been routed to
+  `needs-decision` instead of being buried in implementation steps
+- acceptance criteria use objective verification, while optional
+  post-implementation review stays optional
+- roadmap narrative does not hide human-dependent work that belongs in a
+  stable bucket or approval-needed hold
+- dependency markers represent true start blockers rather than grouping
+  related work
+
 ## Example orphan issue
 
 - `## Background` or `## Goal`
@@ -388,6 +403,9 @@ common failures by validating before publish:
   issue body
 - **Uniqueness**: Reuse-first check passed; the work is not a duplicate
   or superseded
+- **Hidden human dependency**: Ready work does not still rely on
+  unresolved decisions, credentials, subjective approval, or
+  grouping-only dependency markers
 
 ## Specificity examples
 
