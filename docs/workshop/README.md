@@ -27,11 +27,11 @@ edited narrative: the workshop explains the IDD decisions, while the
 repository shows the code and configuration those loops build over
 time.
 
-Screenshot placeholder for #601: the final event-list screenshot will be
-inserted here after the example app screenshots are captured.
+![VRChat Events — event list page with category filter
+panel](assets/screenshots/event-list.png)
 
-Build overview placeholder for #589: the unified workshop log link will
-be inserted here after the master log is compiled.
+For the complete timestamped build log, see the
+[VRChat Event Calendar IDD Workshop Log](workshop-log.md).
 
 ## Prerequisites
 
@@ -194,8 +194,8 @@ Log segment: [Tracks E and F — Frontend and Quality](log-segments/05-frontend-
 **[`kurone-kito/vrc-event-calendar`](https://github.com/kurone-kito/vrc-event-calendar)
 — This is what we built.**
 
-<!-- Screenshot placeholder for #601: replace with the final event-list
-screenshot once the example app screenshots are captured. -->
+![VRChat Events — event detail page showing full event
+information](assets/screenshots/event-detail.png)
 
 Over the course of the workshop, IDD turned an empty repository into a
 working VRChat Event Calendar with:
