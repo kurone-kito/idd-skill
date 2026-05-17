@@ -191,10 +191,37 @@ Log segment: [Tracks E and F — Frontend and Quality](log-segments/05-frontend-
 
 ## Conclusion: What Was Built
 
-This section will summarize the finished application, the IDD loop
-metrics, and the example repository outcome.
+**[`kurone-kito/vrc-event-calendar`](https://github.com/kurone-kito/vrc-event-calendar)
+— This is what we built.**
 
-Metrics: [TODO: add final implementation metrics in #595].
+<!-- Screenshot placeholder for #601: replace with the final event-list
+screenshot once the example app screenshots are captured. -->
+
+Over the course of the workshop, IDD turned an empty repository into a
+working VRChat Event Calendar with:
+
+- Event listing with category and date-range filters
+- Monthly calendar view with event dots and navigation
+- Event detail pages with creator-owned edit and delete
+- REST API with Zod validation and constant-time token auth
+- Vitest unit test coverage and Playwright E2E smoke tests
+- Docker Compose local stack with PostgreSQL and seed data
+
+### Implementation metrics
+
+| Metric                                    | Value                                                |
+| ----------------------------------------- | ---------------------------------------------------- |
+| Total time (first to last PR merge)       | ~31 hours (2026-05-16 17:52 to 2026-05-18 01:08 JST) |
+| IDD loop cycles (PRs merged)              | 35                                                   |
+| Issues closed (idd-skill tracking issues) | ~40                                                  |
+| Unit tests at completion                  | 58 (Vitest)                                          |
+| E2E smoke tests                           | 3 (Playwright)                                       |
+
+Every loop followed the same six-phase IDD pattern: **claim → plan →
+implement → self-review → PR → CI → merge**. The parallel-track structure
+(infrastructure, data layer, API, frontend, quality) let narrow,
+independently-testable changes land continuously without long-lived
+feature branches or merge traffic jams.
 
 ## What's Next
 
