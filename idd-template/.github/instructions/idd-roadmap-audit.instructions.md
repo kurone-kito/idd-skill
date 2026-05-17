@@ -44,10 +44,11 @@ outside the selected roadmap graph.
   not continue selecting child issues under a blocked roadmap.
 - If any referenced child or descendant issue is open, inaccessible, or
   unresolved, report the provenance path and reason, then continue to
-  A2, unless the open descendant is a nested roadmap whose reachable
-  leaf descendants are all closed or otherwise complete. In that
-  special case, treat the nested roadmap as the next completion target
-  and continue applying the bottom-up rules below before routing to A2.
+  A2, unless the open descendant is a nested roadmap with at least one
+  reachable leaf descendant and all of those reachable leaf descendants
+  are closed or otherwise complete. In that special case, treat the
+  nested roadmap as the next completion target and continue applying
+  the bottom-up rules below before routing to A2.
 - If any referenced child or descendant has an open linked or closing
   PR that is not merged or otherwise obsolete, treat that child work as
   unresolved, report the PR, and continue to A2.
@@ -60,12 +61,15 @@ outside the selected roadmap graph.
 - If an open leaf issue sits under an open nested roadmap, treat the
   nested roadmap and every ancestor roadmap on that provenance path as
   unresolved. Report the deepest blocking path and continue to A2.
-- If a nested roadmap remains open after all of its reachable leaf
-  descendants are closed or otherwise complete, treat that nested
-  roadmap as the **next completion target**. Do not close its parent
-  first. Re-evaluate the graph bottom-up so the deepest completed nested
-  roadmap is audited and closed before its parent roadmap is considered
-  complete.
+- If a nested roadmap has no reachable leaf descendants after
+  traversal, treat it as childless or malformed and continue to A2. Do
+  not treat an empty reachable-leaf set as proof of completion.
+- If a nested roadmap remains open after at least one reachable leaf
+  descendant exists and all reachable leaf descendants are closed or
+  otherwise complete, treat that nested roadmap as the **next
+  completion target**. Do not close its parent first. Re-evaluate the
+  graph bottom-up so the deepest completed nested roadmap is audited and
+  closed before its parent roadmap is considered complete.
 - If a nested roadmap appears closed but still has an open, inaccessible,
   or otherwise unresolved descendant, treat that descendant as the
   controlling unresolved state. Report the contradictory provenance path
