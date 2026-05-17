@@ -169,7 +169,8 @@ roadmap graph for one selected roadmap issue.
   - `edges`: `[{ source: number, target: number, relationship: string,`
     `evidence: string }]`
   - `provenancePaths`: `[{ target: number, path: number[] }]`
-  - `roadmapNodes`: `number[]`
+  - `roadmapNodes`: `number[]` — nested roadmap nodes discovered through
+    traversal; **excludes** the root roadmap (A1 traversal entry point)
   - `executionCandidates`: `number[]`
   - `diagnostics`: `{ duplicateReferences: object[], cycles: object[],`
     `inaccessibleReferences: object[], unresolvedReferences: object[] }`
