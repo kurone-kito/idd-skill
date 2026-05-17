@@ -247,11 +247,14 @@ before another can start.
 ### How discovery treats nested roadmap nodes
 
 Discover (A2) traverses the full outbound reference graph from the
-selected roadmap. Open nested roadmap nodes are traversal-only
-coordination nodes: the agent walks through them to reach leaf execution
-issues but never advances a roadmap node itself into the
+selected roadmap. The intended design treats open nested roadmap nodes as
+traversal-only coordination nodes: the agent walks through them to reach
+leaf execution issues without advancing roadmap nodes themselves into the
 readiness/claim/viability gates. Only non-roadmap leaf issues become
-execution candidates.
+execution candidates. Check whether the Discover instruction files in
+your installed version already enforce this formal classification; if
+not, a nested roadmap node that passes the current A3/A4 filters could
+theoretically enter the candidate set.
 
 The no-candidate diagnostic distinguishes "no reachable leaf execution
 issues" from "only open roadmap nodes remain", so operators can tell
@@ -264,12 +267,15 @@ and roadmap audit use.
 
 ### Bottom-up completion
 
-Nested roadmaps create a natural bottom-up closing order. A nested
-roadmap (for example, a track roadmap) is eligible to close as soon as
-all of its own referenced leaf issues and any further descendants are
-resolved. Its parent roadmap remains open while any nested roadmap child
-is still open; only after all nested roadmap children close can the
-parent roadmap itself be audited and closed.
+Nested roadmaps create a natural bottom-up closing order. When all of a
+nested roadmap's referenced leaf issues and further descendants are
+resolved, the A1.5 roadmap audit evaluates its success criteria against
+the closed issues, merged PRs, task-list state, and repository state. If
+the audit finds autonomous gaps, it creates or links follow-up issues
+before closing. The parent roadmap remains open while any nested roadmap
+child is still open or has an unresolved autonomous gap; only after all
+nested roadmap children pass their own A1.5 audits can the parent
+roadmap itself be evaluated and closed.
 
 Each roadmap-side mutation (comment, label, close) uses a
 `roadmap-audit/*` coordination claim scoped to the roadmap issue being
@@ -283,7 +289,12 @@ Nested roadmap support does not change the repository's default
 the selected roadmap and traverses its full graph, including nested
 roadmap nodes, to find leaf execution candidates. Adopters who want
 unblocked orphan issues to be considered before roadmap traversal must
-choose `orphan-first` explicitly in `.github/idd/config.json`.
+set `orphan-first` in both the `"orphanFirstPolicy"` key in
+`.github/idd/config.json` and the `orphan-first-policy` row in the
+project commands table in
+`.github/instructions/idd-overview.instructions.md`. See
+[IDD policy constants](policy-constants.md) for the synchronization
+requirement between these two sources.
 
 ## Resume routing model
 
