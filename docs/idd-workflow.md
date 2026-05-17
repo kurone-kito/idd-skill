@@ -283,11 +283,12 @@ Discover and roadmap audit use.
 
 ### Bottom-up completion
 
-Roadmaps close bottom-up. When discovery loops back after a child merge,
-the audit evaluates the deepest roadmap whose referenced descendants are
-all closed. That roadmap closes first. Its parent roadmap remains open
-until all of its nested roadmap children are also closed or otherwise
-complete.
+Nested roadmaps create a natural bottom-up closing order. A nested
+roadmap (for example, a track roadmap) is eligible to close as soon as
+all of its own referenced leaf issues and any further descendants are
+resolved. Its parent roadmap remains open while any nested roadmap child
+is still open; only after all nested roadmap children close can the
+parent roadmap itself be audited and closed.
 
 Each roadmap-side mutation (comment, label, close) uses a
 `roadmap-audit/*` coordination claim scoped to the roadmap issue being
