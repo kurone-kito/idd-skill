@@ -84,8 +84,8 @@ Self-review confirmed:
 
 - TypeScript types flow cleanly from `GET /api/events` JSON to the
   `EventCard` props with no `any` casts
-- The `searchParams` pass-through is stateless — the page re-fetches
-  on every navigation and does not cache stale filter state
+- The page fetches all events on every render with no client-side
+  caching; filter forwarding is scoped to E6 and does not appear here
 - The `loading.tsx` skeleton renders immediately, preventing layout
   shift when the event list arrives
 
@@ -229,8 +229,7 @@ project-specific local development guide including:
 - **Quick Start**: step-by-step clone → `.env` setup → Docker
   compose → seed → `npm run dev` flow, with a `DATABASE_URL` host
   adjustment note for WSL2 users
-- **Available scripts**: full table of all 14 npm scripts with
-  descriptions
+- **Available scripts**: full table of npm scripts with descriptions
 
 - Merged: `2026-05-18 00:42:14 JST`
 - PR: <https://github.com/kurone-kito/vrc-event-calendar/pull/31>
