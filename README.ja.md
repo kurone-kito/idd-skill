@@ -155,7 +155,7 @@ jq '.instructionSizeBudgets, .bundleBudgets' audit/sync-manifest.json
   により実効フットプリントは source repository より小さくも大きくもなりえます。
 
 プロファイル選定時は
-[ONBOARDING Step 1B policy decisions](idd-template/ONBOARDING.md#step-1b-confirm-policy-decisions)
+[ONBOARDING Step 1B policy decisions](idd-template/ONBOARDING.md#step-1b--confirm-policy-decisions)
 と [helper runtime の選択順](docs/idd-helper-scripts.md#import-time-selection-order)
 を併せて確認してください。
 

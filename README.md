@@ -158,7 +158,7 @@ For adopters, practical loop pressure depends on helper runtime choices:
   extra repository instructions can make your practical footprint smaller
   or larger than this source repository.
 
-Use [ONBOARDING Step 1B policy decisions](idd-template/ONBOARDING.md#step-1b-confirm-policy-decisions)
+Use [ONBOARDING Step 1B policy decisions](idd-template/ONBOARDING.md#step-1b--confirm-policy-decisions)
 and [helper runtime selection order](docs/idd-helper-scripts.md#import-time-selection-order)
 to pick a profile deliberately.
 
