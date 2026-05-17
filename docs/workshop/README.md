@@ -91,7 +91,7 @@ replacement, repository-specific customization, and validation with
 This section will establish the local development foundation: Docker
 Compose, Next.js, TypeScript, Tailwind CSS, Prisma, tests, and CI.
 
-Log segment: [TODO: link the Track B infrastructure log after #584].
+Log segment: [Track B — Infrastructure Setup](log-segments/02-infrastructure.md).
 
 ## Step 2: Data Layer
 
