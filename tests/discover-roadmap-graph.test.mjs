@@ -116,7 +116,7 @@ test("enumerates a flat roadmap graph and separates execution candidates", async
     loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
   });
 
-  assert.deepEqual(graph.roadmapNodes, [100]);
+  assert.deepEqual(graph.roadmapNodes, []);
   assert.deepEqual(graph.executionCandidates, [101, 102]);
   assert.deepEqual(graph.edges, [
     { source: 100, target: 101, relationship: "task-list", evidence: "- [ ] #101" },
@@ -141,7 +141,7 @@ test("enumerates a two-level nested roadmap graph", async () => {
     loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
   });
 
-  assert.deepEqual(graph.roadmapNodes, [150, 151]);
+  assert.deepEqual(graph.roadmapNodes, [151]);
   assert.deepEqual(graph.executionCandidates, [152]);
   assert.deepEqual(graph.provenancePaths, [
     { target: 150, path: [150] },
@@ -163,7 +163,7 @@ test("enumerates a three-level nested roadmap graph", async () => {
     loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
   });
 
-  assert.deepEqual(graph.roadmapNodes, [175, 176, 177]);
+  assert.deepEqual(graph.roadmapNodes, [176, 177]);
   assert.deepEqual(graph.executionCandidates, [178]);
   assert.deepEqual(graph.provenancePaths, [
     { target: 175, path: [175] },
@@ -185,7 +185,7 @@ test("forces the selected root issue to remain a roadmap", async () => {
   });
 
   assert.equal(graph.root.classification, "roadmap");
-  assert.deepEqual(graph.roadmapNodes, [180]);
+  assert.deepEqual(graph.roadmapNodes, []);
   assert.deepEqual(graph.executionCandidates, [181]);
 });
 
@@ -200,7 +200,7 @@ test("keeps traversing through a closed intermediate roadmap to an open descenda
     loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
   });
 
-  assert.deepEqual(graph.roadmapNodes, [200, 201]);
+  assert.deepEqual(graph.roadmapNodes, [201]);
   assert.deepEqual(graph.executionCandidates, [202]);
   assert.deepEqual(graph.provenancePaths, [
     { target: 200, path: [200] },
@@ -494,7 +494,7 @@ process.exit(1);
   );
   const parsed = JSON.parse(output);
 
-  assert.deepEqual(parsed.roadmapNodes, [700]);
+  assert.deepEqual(parsed.roadmapNodes, []);
   assert.deepEqual(parsed.executionCandidates, [701]);
   assert.deepEqual(parsed.edges, [
     {
@@ -625,7 +625,7 @@ test("reports when only roadmap nodes remain open", async () => {
     loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
   });
 
-  assert.deepEqual(graph.roadmapNodes, [600, 601]);
+  assert.deepEqual(graph.roadmapNodes, [601]);
   assert.deepEqual(graph.executionCandidates, []);
   assert.equal(graph.summary.executionCandidateCount, 0);
 });
