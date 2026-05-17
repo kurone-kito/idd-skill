@@ -1173,3 +1173,36 @@ test("pre-merge readiness schema rejects non-positive advisory wait minute value
   const errors = validate(fixture, schema);
   assert.ok(errors.some((e) => e.includes("exclusiveMinimum")), errors.join("\n"));
 });
+
+test("branch-conflict-state schema uses only allowed keywords", () => {
+  const schema = loadJson("schemas/branch-conflict-state.schema.json");
+  assert.deepEqual(checkSchemaKeywords(schema), []);
+});
+
+test("branch-conflict-state schema publishes metadata fields", () => {
+  const schema = loadJson("schemas/branch-conflict-state.schema.json");
+  assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema");
+  assert.equal(
+    schema.$id,
+    "https://kurone-kito.github.io/idd-skill/schemas/branch-conflict-state.schema.json",
+  );
+  assert.equal(schema.title, "Branch Conflict State");
+});
+
+test("branch-conflict-state valid fixture passes validation", () => {
+  const { ok, errors } = validateFixture(
+    "schemas/branch-conflict-state.schema.json",
+    "fixtures/schemas/branch-conflict-state.valid.json",
+    true,
+  );
+  assert.ok(ok, errors.join("\n"));
+});
+
+test("branch-conflict-state invalid fixture fails validation", () => {
+  const { ok } = validateFixture(
+    "schemas/branch-conflict-state.schema.json",
+    "fixtures/schemas/branch-conflict-state.invalid.json",
+    false,
+  );
+  assert.ok(ok, "Expected invalid fixture to fail schema validation");
+});

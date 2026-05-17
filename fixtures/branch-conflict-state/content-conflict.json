@@ -1,0 +1,17 @@
+{
+  "prData": {
+    "number": 102,
+    "headRefOid": "cccccccccccccccccccccccccccccccccccccccc",
+    "baseRefOid": "dddddddddddddddddddddddddddddddddddddddd",
+    "headRefName": "feature/conflicting",
+    "baseRefName": "main",
+    "mergeable": "CONFLICTING",
+    "mergeStateStatus": "DIRTY",
+    "headRepository": { "pushedAt": "2026-05-01T00:00:00Z" }
+  },
+  "expected": {
+    "branchState": "content-conflict",
+    "syncRecommendation": "hold-unknown",
+    "mergeableSource": "github-mergeable"
+  }
+}

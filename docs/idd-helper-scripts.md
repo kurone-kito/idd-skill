@@ -36,6 +36,13 @@ In the idd-skill source repository, the following optional helpers were adopted:
   state routing (referenced in
   [kurone-kito/idd-skill#395](https://github.com/kurone-kito/idd-skill/issues/395))
 
+**Work & Submit Phase Helpers:**
+
+- `scripts/branch-conflict-state.mjs` for read-only branch conflict and
+  synchronization state classification; used by D/E/F routing to decide
+  whether `merge-main`, `hold-unknown`, or no action is needed without
+  mutating the worktree or PR branch (added in this release)
+
 **Review & Merge Phase Helpers:**
 
 - `scripts/review-activity-snapshot.mjs` for read-only E/F review
@@ -683,6 +690,48 @@ Interpretation rules:
   fields are missing, or output conflicts with observed triage evidence,
   discard helper output and apply written E7 checks directly.
 
+### Branch conflict and synchronization state evidence
+
+- Preferred command when helper runtime is enabled:
+  `idd-branch-conflict-state --pr <pr-number>`
+- Source repository equivalent:
+  `node scripts/branch-conflict-state.mjs --pr <pr-number>`
+- Output schema (stable fields):
+
+  ```json
+  {
+    "protocolVersion": "1",
+    "prNumber": 123,
+    "prHeadSha": "abc...",
+    "prBaseSha": "def...",
+    "published": true,
+    "mergeable": "MERGEABLE",
+    "mergeStateStatus": "CLEAN",
+    "branchState": "clean",
+    "syncRecommendation": "none",
+    "readOnly": true,
+    "worktreeUnchanged": true,
+    "diagnostics": {
+      "mergeableSource": "github-mergeable",
+      "conflictFiles": [],
+      "notes": []
+    }
+  }
+  ```
+
+- `branchState` values: `clean`, `behind-no-conflict`, `content-conflict`,
+  `dirty`, `force-push-exception`, `unknown`
+- `syncRecommendation` values: `none`, `merge-main`, `policy-required-update`,
+  `force-push-exception`, `hold-unknown`
+- Stable fields consumed by D/E/F routing: `branchState`,
+  `syncRecommendation`, `published`, `readOnly`, `worktreeUnchanged`
+- Read-only boundary: the helper never runs `git merge`, `git rebase`, or
+  any command that leaves merge state, index changes, or working-tree
+  changes. The `readOnly` and `worktreeUnchanged` fields confirm this.
+- Fail closed: if execution fails, output is invalid JSON, or required
+  fields are missing, discard helper output and apply written D4/E-phase
+  branch-sync checks directly.
+
 ### S2 quiet-window evidence
 
 - When helper runtime is enabled, Resume/S2 should call the
@@ -720,6 +769,7 @@ The workflow areas most likely to benefit from optional helpers are:
 | Post-merge cleanup candidates   | Adopted helper     | Dry-run by default, explicit apply | High          | GraphQL minimize-comment fallback flow                                 | Medium — minimization safety still depends on exact review/marker rules                  | Medium — roughly 400 to 700 bytes of repeated GraphQL audit prose       |
 | E7 disposition verification     | Adopted helper     | Read-only evidence verifier        | Low           | E7 verification steps in `idd-review-triage.instructions.md`           | Low — verification logic is deterministic and path/type rules are stable                 | Low to medium — roughly 150 to 300 bytes of repeated E7 pre-exit checks |
 | Branch protection/ruleset reads | Deferred candidate | Read-only API adapter              | Low           | Direct ruleset / branch-protection API reads                           | Medium — repository support varies and incomplete coverage could create false confidence | Low to medium — roughly 150 to 300 bytes of repeated ruleset prose      |
+| Branch conflict state           | Adopted helper     | Read-only evidence collector       | Low           | D4/E-phase branch-sync checks in `idd-pr-submit.instructions.md`       | Medium — helper must stay evidence-only and preserve the written sync gates              | Medium — roughly 300 to 500 bytes of repeated branch-state prose        |
 
 ### Ranked roadmap candidate list for the source roadmap
 

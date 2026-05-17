@@ -1,0 +1,17 @@
+{
+  "prData": {
+    "number": 105,
+    "headRefOid": "",
+    "baseRefOid": "",
+    "headRefName": "feature/missing",
+    "baseRefName": "main",
+    "mergeable": null,
+    "mergeStateStatus": null,
+    "headRepository": null
+  },
+  "expected": {
+    "branchState": "unknown",
+    "syncRecommendation": "hold-unknown",
+    "mergeableSource": "none"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "prData": {
+    "number": 103,
+    "headRefOid": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "baseRefOid": "ffffffffffffffffffffffffffffffffffffffff",
+    "headRefName": "feature/dirty",
+    "baseRefName": "main",
+    "mergeable": "UNKNOWN",
+    "mergeStateStatus": "DIRTY",
+    "headRepository": { "pushedAt": "2026-05-01T00:00:00Z" }
+  },
+  "expected": {
+    "branchState": "dirty",
+    "syncRecommendation": "hold-unknown",
+    "mergeableSource": "github-merge-state"
+  }
+}

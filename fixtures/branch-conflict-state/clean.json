@@ -1,0 +1,17 @@
+{
+  "prData": {
+    "number": 101,
+    "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "baseRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "headRefName": "feature/my-change",
+    "baseRefName": "main",
+    "mergeable": "MERGEABLE",
+    "mergeStateStatus": "CLEAN",
+    "headRepository": { "pushedAt": "2026-05-01T00:00:00Z" }
+  },
+  "expected": {
+    "branchState": "clean",
+    "syncRecommendation": "none",
+    "mergeableSource": "github-mergeable"
+  }
+}
