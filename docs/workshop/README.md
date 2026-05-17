@@ -103,14 +103,16 @@ claim -> work -> PR -> CI -> merge rhythm in one place, with enough
 detail for a first-time reader to see not just what happened, but why
 the agent made each decision.
 
-After B1 merges, the infrastructure track can fan out instead of
-serializing on one long-lived bootstrap branch. Formatting (`#556`),
-Docker Compose (`#554`), test runners (`#562`, `#563`), CI wiring
-(`#564`), and developer scripts (`#565`) can move as narrower parallel
-lanes, with only the small dependency edges called out explicitly. For
-the full timestamped record, see
+After B1 merges, the infrastructure track can fan out into B2-B8
+instead of serializing on one long-lived bootstrap branch. Formatting
+(`#556`), Docker Compose (`#554`), and Docker hardening (`#644`) are
+the first merged follow-up lanes, while test runners (`#562`, `#563`),
+CI wiring (`#564`), and developer scripts (`#565`) remain explicitly
+queued in the log. For the full timestamped record, see
 [Track B — Infrastructure Setup](log-segments/02-infrastructure.md).
-All quality gates are now green.
+The narrower point this section closes on is that the merged B1-B4
+baseline is green, which is why the preserved completion digest can
+truthfully say, "All quality gates are now green."
 
 ## Step 2: Data Layer
 
