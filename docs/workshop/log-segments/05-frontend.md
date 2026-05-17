@@ -113,8 +113,7 @@ Self-review confirmed:
 - Visual: clicking an `EventCard` from the list opens a detail page
   showing the event title as `h1`, category badge, full start/end
   datetime, optional world name and world ID, a multi-line description
-  if present, a Back to events link at the bottom, and (for the event
-  creator) Edit and Delete action links
+  if present, and a Back to events link at the bottom
 - Merged: `2026-05-17 23:43:46 JST`
 - PR: <https://github.com/kurone-kito/vrc-event-calendar/pull/23>
 
@@ -197,9 +196,10 @@ Self-review confirmed:
 Added `src/lib/utils/date.ts` with:
 
 - `formatEventDate(date)` — formats a `Date` as a localized string
-- `isEventToday(date)` — returns `true` if the date is today in
-  local time
-- `dateRangeOverlaps(a, b)` — checks whether two date ranges overlap
+- `isEventToday(startAt, endAt)` — returns `true` if the event's
+  time range overlaps with today (handles midnight boundary)
+- `dateRangeOverlaps(aStart, aEnd, bStart, bEnd)` — checks whether
+  two date ranges overlap
 
 Added full Vitest coverage at `src/lib/utils/__tests__/date.test.ts`:
 tests cover UTC/JST midnight boundaries, all `dateRangeOverlaps` cases
@@ -246,8 +246,8 @@ $ npm run lint
 [no lint errors — 0 warnings, 0 errors]
 $ npm run test
 [58 unit tests pass — 0 failures]
-$ docker compose up -d && npm run dev
-[app running at http://localhost:3000]
+$ docker compose up -d db && npm run dev
+[database started; app running at http://localhost:3000]
 ```
 
 - Lint: ✓ clean
