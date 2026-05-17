@@ -1716,6 +1716,82 @@ test("summarizeExternalCheckWaivers: suspicious marker-shaped comment from untru
   assert.equal(result.unauthorized[0].authorLogin, "untrusted-actor");
 });
 
+test("summarizeExternalCheckWaivers: mixed valid, expired, and wrongClaim in separate buckets", () => {
+  const head = "d".repeat(40);
+  const validBody = makeWaiverComment({ headSha: head, claimId: "claim-123", checkSelector: "CodeRabbit" });
+  const expiredBody = makeWaiverComment({ headSha: head, claimId: "claim-123", checkSelector: "lint", expiresAt: "2020-01-01T00:00:00Z" });
+  const wrongClaimBody = makeWaiverComment({ headSha: head, claimId: "claim-other", checkSelector: "Analyze" });
+  const comments = [
+    { body: validBody, author: { login: "kurone-kito" }, createdAt: "2026-05-17T00:00:00Z" },
+    { body: expiredBody, author: { login: "kurone-kito" }, createdAt: "2026-05-17T00:01:00Z" },
+    { body: wrongClaimBody, author: { login: "kurone-kito" }, createdAt: "2026-05-17T00:02:00Z" },
+  ];
+  const result = summarizeExternalCheckWaivers(comments, {
+    prHeadSha: head,
+    activeClaimId: "claim-123",
+    trustedMarkerLogins: ["kurone-kito"],
+    now: "2026-05-17T00:10:00Z",
+  });
+  assert.equal(result.valid.length, 1, "only one valid waiver");
+  assert.equal(result.expired.length, 1, "one expired waiver");
+  assert.equal(result.wrongClaim.length, 1, "one wrong-claim waiver");
+});
+
+test("summarizeExternalCheckWaivers: non-waiver comments are skipped without error", () => {
+  const comments = [
+    { body: "This is a regular PR comment", author: { login: "kurone-kito" }, createdAt: "2026-05-17T00:00:00Z" },
+    { body: "<!-- review-watermark: claude-code c " + "a".repeat(40) + " 2026-05-17T00:00:00Z 1 none -->", author: { login: "kurone-kito" }, createdAt: "2026-05-17T00:01:00Z" },
+  ];
+  const result = summarizeExternalCheckWaivers(comments, {
+    prHeadSha: "a".repeat(40),
+    activeClaimId: "claim-123",
+    trustedMarkerLogins: ["kurone-kito"],
+    now: "2026-05-17T00:10:00Z",
+  });
+  assert.deepEqual(result, { valid: [], expired: [], wrongHead: [], wrongClaim: [], unauthorized: [], malformed: [] });
+});
+
+test("summarizeRequiredChecks: waiver with glob selector covers matching failing check", () => {
+  const waivers = {
+    valid: [{ authorLogin: "kurone-kito", checkSelector: "Code*", reason: "test", expiresAt: "2099-01-01T00:00:00Z" }],
+    expired: [], wrongHead: [], wrongClaim: [], unauthorized: [], malformed: [],
+  };
+  const result = summarizeRequiredChecks(
+    [
+      { name: "CodeQL", state: "FAILURE", completedAt: "2026-05-17T00:00:00Z" },
+      { name: "lint", state: "FAILURE", completedAt: "2026-05-17T00:00:00Z" },
+    ],
+    [],
+    { required_status_checks: { contexts: ["CodeQL", "lint"] } },
+    { waivers },
+  );
+  const codeQL = result.checks.find((c) => c.name === "CodeQL");
+  const lint = result.checks.find((c) => c.name === "lint");
+  assert.equal(codeQL.coveredByWaiver, true, "CodeQL matched by Code* glob");
+  assert.equal(lint.coveredByWaiver, undefined, "lint not matched by Code* glob");
+});
+
+test("buildPreMergeReadinessSummary: waiverEvidence always present and validates against schema", () => {
+  const fixture = readJson("fixtures/pre-merge-readiness/clean.json");
+  const summary = buildPreMergeReadinessSummary(fixture.input, fixture.options);
+  assert.ok(Object.hasOwn(summary, "waiverEvidence"), "waiverEvidence must be present");
+  assert.ok(Array.isArray(summary.waiverEvidence.valid));
+  assert.ok(Array.isArray(summary.waiverEvidence.expired));
+  assert.ok(Array.isArray(summary.waiverEvidence.wrongHead));
+  assert.ok(Array.isArray(summary.waiverEvidence.wrongClaim));
+  assert.ok(Array.isArray(summary.waiverEvidence.unauthorized));
+  assert.ok(Array.isArray(summary.waiverEvidence.malformed));
+  assert.deepEqual(validate(summary, readinessSchema), []);
+});
+
+test("waiverEvidence with wrong-shape valid item fails schema validation", () => {
+  const fixture = readJson("fixtures/pre-merge-readiness/clean.json");
+  const summary = buildPreMergeReadinessSummary(fixture.input, fixture.options);
+  const bad = JSON.parse(JSON.stringify(summary));
+  bad.waiverEvidence.valid = [{ wrong: "shape", missing: "required fields" }];
+  assert.ok(validate(bad, readinessSchema).length > 0, "invalid waiverEvidence.valid shape must fail schema");
+});
+
 function readJson(relativePath) {
   return JSON.parse(readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8"));
 }
