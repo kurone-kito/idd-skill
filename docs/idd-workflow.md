@@ -46,7 +46,7 @@ entry file should be an explicit operator choice, not the default.
 | `.github/instructions/idd-roadmap-audit.instructions.md`   | A1.5: audit roadmap completion and run roadmap-side coordination before A2           |
 | `.github/instructions/idd-claim.instructions.md`           | A5: run claim pre-checks and claim verification                                      |
 | `.github/instructions/idd-work.instructions.md`            | B1-B3 + C1-C6: create worktree, plan, implement, and self-review                     |
-| `.github/instructions/idd-pr-submit.instructions.md`       | D1-D4: rebase, validate, push, open PR, and wait for CI                              |
+| `.github/instructions/idd-pr-submit.instructions.md`       | D1-D4: pre-publication main sync, validate, push, open PR, and wait for CI           |
 | `.github/instructions/idd-ci.instructions.md`              | D4/E15 helper: shared CI polling helper used by later phases                         |
 | `.github/instructions/idd-advisory-wait.instructions.md`   | AW1-AW5 helper: shared Copilot advisory-wait protocol (E14, F2, F3)                  |
 | `.github/instructions/idd-review-snapshot.instructions.md` | E1–E3: fetch activity snapshot, run critique, check if ReviewItems_snapshot is empty |
@@ -113,6 +113,32 @@ The IDD workflow distributed from this repository is therefore an
 instruction template first. Native skills can sit beside it as helpers,
 but the synchronization contract for the portable workflow remains
 between the live `.github/instructions/` files and `idd-template/`.
+
+## Branch publication and synchronization
+
+IDD treats branch-state classification as a separate concern from branch
+mutation. Read-only probes may classify a PR branch as
+`current-clean`, `behind-clean`, `content-conflicting`,
+`dirty-or-unknown`, `protected-update-required`, or
+`force-push-exception`, but the classification itself must not dirty the
+worktree or rewrite history.
+
+The first D-phase push is the publication boundary:
+
+- Before that push, D1 is the routine place to rebase onto `main`.
+- After that push, the branch becomes published review history.
+- `behind-clean` is evidence only. It does not trigger a branch update
+  by itself unless branch protection or explicit repository policy
+  requires an up-to-date head before merge.
+- `content-conflicting` and `protected-update-required` route back
+  through the E-phase review loop so the synchronization change is
+  reviewed, validated, pushed normally, and re-checked.
+- The default post-push synchronization action is a normal merge from
+  `main` into the PR branch.
+- Rebase plus force-push after publication is an exceptional recovery
+  path only.
+- F remains the final freshness and merge gate, not the first routine
+  place where branch-sync edits should happen.
 
 If you need to understand or change distributed timing defaults, start
 with [IDD policy constants](policy-constants.md). It names the claim,

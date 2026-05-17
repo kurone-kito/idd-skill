@@ -52,18 +52,32 @@ through a pull request.
 
 - **Never push directly to `main`** — all changes must go through a
   pull request. Branch protection is enforced on GitHub.
-- **Rebase onto `main`** — when a feature branch needs the latest
-  `main`, always rebase. Fetch first so the local `main` is not
-  stale, e.g. `git fetch origin && git rebase origin/main`
+- **Rebase onto `main` before publication** — before the first D-phase
+  push of a PR branch, rebase onto `main` as needed. Fetch first so the
+  local `main` is not stale, e.g.
+  `git fetch origin && git rebase origin/main`
   (or `git pull --rebase origin main`). Do not create merge commits
-  inside feature branches.
-- **Rebase between feature branches** — if one feature branch needs
-  changes from another, use rebase, not merge.
+  inside unpublished feature branches.
+- **Treat pushed PR branches as published review history** — after the
+  first D-phase push, branch-state checks stay read-only until a later
+  phase decides an update is required.
+- **Default post-push sync: merge `main` into the PR branch** — when an
+  already-pushed branch needs synchronization or conflict resolution,
+  merge `main` into the PR branch and send that follow-up through the
+  normal CI and review gates. Do not rebase or force-push merely
+  because the PR is `BEHIND`.
+- **Force-push exceptions stay narrow** — use rebase and
+  `--force-with-lease` after publication only when repository policy
+  explicitly permits it and merge-based recovery cannot safely fix the
+  branch, or when an already-started rebase must be completed or
+  aborted during recovery.
+- **Rebase between unpublished feature branches** — if one unpublished
+  feature branch needs changes from another, use rebase, not merge.
 - **Merge commits at PR boundary** — pull requests into `main` are
   merged with a merge commit (squash-merge and rebase-merge are
   disabled in the repository settings).
-- **fixup + autosquash for in-branch fixes** — when a later commit in
-  a feature branch fixes an earlier one, prefer
+- **fixup + autosquash for unpublished in-branch fixes** — when a later
+  commit in an unpublished feature branch fixes an earlier one, prefer
   `git commit --fixup=<sha>` followed by
   `git rebase -i --autosquash` to fold the fix into its target.
 - **Avoid giant commits** — if squashing would produce an
