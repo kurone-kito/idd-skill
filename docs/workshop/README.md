@@ -24,6 +24,9 @@ time.
 
 ![VRChat Event Calendar — event list page with category filters and calendar toggle](assets/screenshots/event-list.png)
 
+For the complete timestamped build log, see the
+[VRChat Event Calendar IDD Workshop Log](workshop-log.md).
+
 ## Prerequisites
 
 Before starting, make sure you can run the same baseline tools the
@@ -185,7 +188,8 @@ Log segment: [Tracks E and F — Frontend and Quality](log-segments/05-frontend-
 **[`kurone-kito/vrc-event-calendar`](https://github.com/kurone-kito/vrc-event-calendar)
 — This is what we built.**
 
-![VRChat Event Calendar — finished application event list](assets/screenshots/event-list.png)
+![VRChat Event Calendar — event detail page showing full event
+information](assets/screenshots/event-detail.png)
 
 Over the course of the workshop, IDD turned an empty repository into a
 working VRChat Event Calendar with:
