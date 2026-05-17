@@ -63,6 +63,17 @@ Sub issue #206
   ]);
 });
 
+test("extractKeywordReferences ignores cross-repository references", () => {
+  const body = `
+Refs other/repo#301, #302
+Depends on kurone-kito/idd-skill#303
+`;
+
+  assert.deepEqual(extractKeywordReferences(body), [
+    { target: 302, relationship: "reference", evidence: "Refs other/repo#301, #302" },
+  ]);
+});
+
 test("enumerates a flat roadmap graph and separates execution candidates", async () => {
   const issues = new Map([
     [100, roadmapIssue(100, "- [ ] #101\n- [ ] #102", "root-roadmap")],
@@ -130,6 +141,21 @@ test("enumerates a three-level nested roadmap graph", async () => {
     { target: 178, path: [175, 176, 177, 178] },
   ]);
   assert.equal(graph.summary.maxDepth, 3);
+});
+
+test("forces the selected root issue to remain a roadmap", async () => {
+  const issues = new Map([
+    [180, executionIssue(180, "- [ ] #181")],
+    [181, executionIssue(181, "leaf execution")],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(180, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.equal(graph.root.classification, "roadmap");
+  assert.deepEqual(graph.roadmapNodes, [180]);
+  assert.deepEqual(graph.executionCandidates, [181]);
 });
 
 test("keeps traversing through a closed intermediate roadmap to an open descendant", async () => {
@@ -200,6 +226,15 @@ test("keeps traversing descendants when a shared node is reached through multipl
       { target: 354, path: [350, 352, 353, 354] },
     ],
   );
+  assert.deepEqual(graph.diagnostics.duplicateReferences, [
+    {
+      source: 352,
+      target: 353,
+      relationship: "reference",
+      evidence: "Refs #353",
+      firstSeenFrom: 351,
+    },
+  ]);
 });
 
 test("re-expands descendants when a shorter ancestry path appears later", async () => {

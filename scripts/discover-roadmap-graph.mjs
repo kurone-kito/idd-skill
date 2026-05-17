@@ -171,19 +171,19 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       if (!edgeKeys.has(edgeKey)) {
         edgeKeys.add(edgeKey);
         edges.push(edge);
-      }
 
-      const sourceTargetKey = `${edge.source}:${edge.target}`;
-      if (seenSourceTargets.has(sourceTargetKey)) {
-        recordDuplicateReference(edge, firstReferenceByTarget.get(edge.target) ?? edge);
-      }
-      seenSourceTargets.add(sourceTargetKey);
+        const sourceTargetKey = `${edge.source}:${edge.target}`;
+        if (seenSourceTargets.has(sourceTargetKey)) {
+          recordDuplicateReference(edge, firstReferenceByTarget.get(edge.target) ?? edge);
+        }
+        seenSourceTargets.add(sourceTargetKey);
 
-      const firstReference = firstReferenceByTarget.get(edge.target);
-      if (firstReference) {
-        recordDuplicateReference(edge, firstReference);
-      } else {
-        firstReferenceByTarget.set(edge.target, edge);
+        const firstReference = firstReferenceByTarget.get(edge.target);
+        if (firstReference) {
+          recordDuplicateReference(edge, firstReference);
+        } else {
+          firstReferenceByTarget.set(edge.target, edge);
+        }
       }
 
       if (path.includes(edge.target)) {
@@ -237,6 +237,9 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   function recordNode(issue, path) {
     const existing = nodeRecords.get(issue.number);
     const classification = classifyIssue(issue, markerPrefix);
+    if (issue.number === rootIssue.number) {
+      classification.kind = "roadmap";
+    }
     const depth = path.length - 1;
     if (existing) {
       existing.depth = Math.min(existing.depth, depth);
@@ -326,6 +329,10 @@ export function extractKeywordReferences(body) {
       const segmentEnd = keywordMatches[index + 1]?.index ?? line.length;
       const segment = line.slice(segmentStart, segmentEnd);
       for (const targetMatch of segment.matchAll(/#(\d+)\b/gu)) {
+        const hashIndex = targetMatch.index ?? -1;
+        if (hashIndex >= 0 && isCrossRepositoryReference(segment, hashIndex)) {
+          continue;
+        }
         const target = Number.parseInt(targetMatch[1], 10);
         if (!Number.isInteger(target) || target <= 0) {
           continue;
@@ -353,6 +360,11 @@ function classifyKeywordRelationship(keyword) {
     return "reference";
   }
   return "closing-keyword";
+}
+
+function isCrossRepositoryReference(segment, hashIndex) {
+  const prefix = segment.slice(0, hashIndex);
+  return /[\w.-]+\/[\w.-]+$/u.test(prefix.trimEnd());
 }
 
 function normalizeSubIssueReferences(subIssues) {
