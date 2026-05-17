@@ -54,6 +54,9 @@ In the idd-skill source repository, the following optional helpers were adopted:
 
 **Operator Recovery Helpers:**
 
+- `scripts/external-check-waiver.mjs` for dry-run/apply generation of
+  maintainer-authorized external-check waiver comments tied to an active
+  PR claim
 - `scripts/force-handoff.mjs` for the interactive TTY-only
   `idd-force-handoff` operator facade that drives issue input, optional
   PR confirmation from live branch state, and final `y/N` consent
@@ -420,6 +423,26 @@ installs the matching helper scripts. Repositories that stay on the
 default `instructions-only` profile keep using the written shell /
 `gh` / `jq` procedures in the phase instructions and do not need a
 `scripts/` directory.
+
+### External-check waiver helper
+
+- Command:
+  `node scripts/external-check-waiver.mjs --pr <number> --check
+  <selector> --reason <text> (--expires <iso8601> | --expires-in
+  <duration>)`
+- Published bin: `idd-external-check-waiver`
+- Contract:
+  - dry-run is the default; the helper prints the canonical comment body
+    plus claim/check/authority evidence before any mutation
+  - `--apply` posts the PR comment only after verifying the linked
+    issue's active claim, the current PR HEAD SHA, the live check state,
+    waivable-selector coverage, and maintainer/admin authority
+  - non-interactive apply is refused unless `--yes` is provided after a
+    prior dry-run review; interactive TTY runs may confirm with `y/N`
+  - the helper fails closed when authority cannot distinguish owner,
+    Maintain, or Admin from plain Write access, when the requested check
+    is not configured in `ciGate.externalChecks.waivable`, or when the
+    expiry exceeds `ciGate.externalCheckWaivers.maxValidity`
 
 ### External-check waiver contract
 

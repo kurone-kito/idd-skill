@@ -50,6 +50,11 @@ const OPERATIONAL_MARKERS = [
     pattern: /^\s*<!--\s*forced-handoff:\s*\{[\s\S]*\}\s*-->[\s\S]*$/i,
     startPattern: /^<!--\s*forced-handoff:/i,
   },
+  {
+    label: "<!-- idd-external-check-waiver:",
+    pattern: /^<!--\s*idd-external-check-waiver:\s+\S+\s+\S+\s+[0-9a-f]{40}\s+check:\S+\s+reason:\S+\s+expires:\S+\s*-->[\s\S]*$/i,
+    startPattern: /^<!--\s*idd-external-check-waiver:/i,
+  },
 ];
 
 const IDD_AGENT_DERIVED_MARKERS = new Set([
@@ -286,6 +291,93 @@ export function renderForcedHandoffComment(payload) {
   };
 
   return `<!-- forced-handoff: ${JSON.stringify(markerPayload)} -->\n\n${renderForcedHandoffConsentNote(normalized)}`;
+}
+
+function normalizeExternalCheckWaiverField(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const trimmed = value.trim();
+  if (!trimmed || /[\r\n]/.test(trimmed) || trimmed.includes("<!--") || trimmed.includes("-->")) {
+    return "";
+  }
+  return trimmed;
+}
+
+function encodeExternalCheckWaiverField(value) {
+  return encodeURIComponent(value);
+}
+
+function decodeExternalCheckWaiverField(value) {
+  try {
+    return decodeURIComponent(String(value ?? "").trim());
+  } catch {
+    return "";
+  }
+}
+
+function renderExternalCheckWaiverNote(normalized) {
+  const actor = normalizeNonWhitespaceToken(normalized.actor) || "idd-operator";
+  return [
+    `_${actor}: external check waiver for IDD F phase on \`${normalized.checkSelector}\``,
+    `until \`${normalized.expiresAt}\` (reason: ${normalized.reason})._`,
+  ].join(" ");
+}
+
+export function renderExternalCheckWaiverComment(payload) {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const claimId = normalizeNonWhitespaceToken(payload?.claimId);
+  const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
+  const checkSelector = normalizeExternalCheckWaiverField(payload?.checkSelector ?? payload?.check);
+  const reason = normalizeExternalCheckWaiverField(payload?.reason);
+  const expiresAt = normalizeIsoTimestamp(payload?.expiresAt ?? payload?.expires);
+
+  if (!agentId || !claimId || !/^[0-9a-f]{40}$/.test(headSha) || !checkSelector || !reason || !expiresAt) {
+    throw new Error("invalid external check waiver payload");
+  }
+
+  const encodedCheck = encodeExternalCheckWaiverField(checkSelector);
+  const encodedReason = encodeExternalCheckWaiverField(reason);
+
+  return [
+    `<!-- idd-external-check-waiver: ${agentId} ${claimId} ${headSha} check:${encodedCheck} reason:${encodedReason} expires:${expiresAt} -->`,
+    "",
+    renderExternalCheckWaiverNote({
+      actor: payload?.actor,
+      checkSelector,
+      reason,
+      expiresAt,
+    }),
+  ].join("\n");
+}
+
+export function parseExternalCheckWaiverComment(body, createdAt) {
+  const match = body.trimEnd().match(
+    new RegExp(
+      `^<!--\\s*idd-external-check-waiver:\\s+(\\S+)\\s+(\\S+)\\s+([0-9a-f]{40})\\s+check:(\\S+)\\s+reason:(\\S+)\\s+expires:(\\S+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+      "i",
+    ),
+  );
+  if (!match) {
+    return null;
+  }
+
+  const checkSelector = normalizeExternalCheckWaiverField(decodeExternalCheckWaiverField(match[4]));
+  const reason = normalizeExternalCheckWaiverField(decodeExternalCheckWaiverField(match[5]));
+  const expiresAt = normalizeIsoTimestamp(match[6]);
+  if (!checkSelector || !reason || !expiresAt) {
+    return null;
+  }
+
+  return {
+    agentId: match[1],
+    claimId: match[2],
+    headSha: match[3].toLowerCase(),
+    checkSelector,
+    reason,
+    expiresAt,
+    createdAt: isValidIsoTimestamp(createdAt) ? createdAt : "none",
+  };
 }
 
 export function parseReviewWatermarkComment(body, createdAt) {

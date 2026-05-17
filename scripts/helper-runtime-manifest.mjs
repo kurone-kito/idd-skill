@@ -26,6 +26,14 @@ const HELPER_COMMANDS = [
     description: "Run IDD onboarding drift checks against the local repository.",
   },
   {
+    id: "external-check-waiver",
+    scriptName: "idd:external-check-waiver",
+    binName: "idd-external-check-waiver",
+    entryPath: "scripts/external-check-waiver.mjs",
+    vendoredCommand: "node scripts/external-check-waiver.mjs",
+    description: "Dry-run or apply a maintainer-authorized external-check waiver comment for an active PR claim.",
+  },
+  {
     id: "force-handoff",
     scriptName: "idd:force-handoff",
     binName: "idd-force-handoff",

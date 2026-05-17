@@ -73,6 +73,7 @@ test("vendored-node managed files match the canonical helper import closure", ()
   const expectedFiles = collectVendoredFiles(REPO_ROOT).map((file) => file.targetPath);
 
   assert.deepEqual(managedFiles, expectedFiles);
+  assert.ok(managedFiles.includes("scripts/external-check-waiver.mjs"));
   assert.ok(managedFiles.includes("scripts/forced-handoff-marker.mjs"));
   assert.ok(managedFiles.includes("scripts/protocol-helpers.mjs"));
   assert.ok(managedFiles.includes("scripts/idd-doctor.mjs"));
@@ -312,6 +313,28 @@ test("helper bundle manifest publishes the discover roadmap graph helper command
     "node scripts/discover-roadmap-graph.mjs",
   );
   assert.equal(existsSync(join(REPO_ROOT, "bin/idd-discover-roadmap-graph.mjs")), true);
+});
+
+test("helper bundle manifest publishes the external-check waiver helper command", () => {
+  const packageManagerManifest = buildHelperRuntimeManifest({
+    profile: "package-manager",
+    packageManager: "pnpm",
+    targetRoot: REPO_ROOT,
+  });
+  const vendoredManifest = buildHelperRuntimeManifest({
+    profile: "vendored-node",
+    targetRoot: REPO_ROOT,
+  });
+
+  assert.equal(
+    packageManagerManifest.profiles["package-manager"].commands["idd:external-check-waiver"],
+    "idd-external-check-waiver",
+  );
+  assert.equal(
+    vendoredManifest.profiles["vendored-node"].commands["idd:external-check-waiver"],
+    "node scripts/external-check-waiver.mjs",
+  );
+  assert.equal(existsSync(join(REPO_ROOT, "bin/idd-external-check-waiver.mjs")), true);
 });
 
 test("helper bundle manifest publishes the phase ID resolver helper command", () => {
