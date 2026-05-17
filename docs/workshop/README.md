@@ -112,7 +112,7 @@ Log segment: [TODO: link the Track D backend API log after #586].
 This section will cover the event list, detail view, create/edit forms,
 delete behavior, filters, calendar view, and quality hardening work.
 
-Log segment: [TODO: link the Tracks E and F frontend log after #587].
+Log segment: [Tracks E and F — Frontend and Quality Hardening](log-segments/05-frontend.md)
 
 ## Conclusion: What Was Built
 
