@@ -30,17 +30,24 @@ Added to `kurone-kito/vrc-event-calendar`:
   server fetches data
 
 ```shell
-npm ci
-npx tsc --noEmit
-npm run lint
+$ npm ci
+[dependencies installed]
+$ npx tsc --noEmit
+[no type errors]
+$ npm run lint
+[no lint errors]
 ```
 
 ## [2026-05-17 23:40:00 JST] E1 — Browser Validation
 
 ```shell
-docker compose up -d db
-npx prisma db seed
-npm run dev
+$ docker compose up -d db
+[Container vrc-event-calendar-db started]
+$ npx prisma db seed
+Seeding database...
+Seeded 10 events.
+$ npm run dev
+[Next.js dev server running on http://localhost:3000]
 ```
 
 > **🎉 Milestone:** At this moment, the browser at
@@ -147,7 +154,8 @@ tests cover UTC/JST midnight boundaries, all `dateRangeOverlaps` cases
 (no overlap, partial, containment, identical), and locale formatting.
 
 ```shell
-npx vitest run src/lib/utils/__tests__/date.test.ts
+$ npx vitest run src/lib/utils/__tests__/date.test.ts
+✓ src/lib/utils/__tests__/date.test.ts (all cases pass)
 ```
 
 - Merged: `2026-05-18 00:30:33 JST`
