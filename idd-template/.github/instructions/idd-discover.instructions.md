@@ -416,7 +416,8 @@ Candidates that fail the gate are **not** ready-to-start. Keep them in
 an **approval-needed fallback bucket** ordered by ascending issue number.
 Continue to A4 with only the startable candidates. Preserve any earlier
 A0-O filtering from `orphan-first-policy`; this gate never widens
-previously excluded orphan candidates back into scope.
+previously excluded orphan candidates back into scope. Keep fallback
+issues visible; do not drop them.
 
 If no startable candidates remain but the approval-needed fallback
 bucket is non-empty:
