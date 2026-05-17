@@ -95,24 +95,79 @@ Log segment: [Track B — Infrastructure Setup](log-segments/02-infrastructure.m
 
 ## Step 2: Data Layer
 
-This section will introduce the event model, database migration, seed
-data, and Prisma client utility.
+The data layer establishes the event model and database contract that all
+later tracks depend on. Track C runs four narrowly-scoped IDD loops:
 
-Log segment: [TODO: link the Track C data layer log after #585].
+- **C1** — Prisma bootstrap: `@prisma/client` installed, `prisma init`
+  creates `prisma/schema.prisma` with a PostgreSQL datasource, and a
+  `db push` smoke test confirms the Docker service is reachable.
+- **C2** — Event schema: `EventCategory` enum (PARTY, MUSIC, ART, GAME,
+  SOCIAL, OTHER) and `Event` model added; migration created and applied.
+- **C3** — Seed script: `prisma/seed.ts` written with 10 sample events
+  covering all six categories, using upsert for idempotent re-seeding.
+- **C4** — DB singleton: `src/lib/db.ts` exports a singleton
+  `PrismaClient` instance that all API routes import.
+
+By the end of Track C the local PostgreSQL database is schema-current and
+populated with sample events ready for the API layer.
+
+Log segment: [Track C — Data Layer](log-segments/03-data-layer.md).
 
 ## Step 3: Backend API
 
-This section will walk through the event API routes, validation, creator
-token behavior, and update/delete flow.
+Track D builds the REST API surface six IDD cycles at a time. D1 shows
+the complete loop in detail — claim, plan, implement, test, self-review,
+PR, CI, merge — for `GET /api/events`. D2–D6 follow the same pattern and
+are summarised:
 
-Log segment: [TODO: link the Track D backend API log after #586].
+- **D1** — `GET /api/events` with `category`, `date_from`, and `date_to`
+  filters; `buildEventWhere` centralises the Prisma `where` clause.
+- **D2** — `GET /api/events/[id]`: 200/404/400 responses.
+- **D3** — `POST /api/events`: generates a UUID creator token, returns it
+  in `X-Creator-Token`; validates required fields and `endAt > startAt`.
+- **D4** — `PUT /api/events/[id]`: `crypto.timingSafeEqual` token
+  comparison; 200/403/404 responses.
+- **D5** — `DELETE /api/events/[id]`: same token check; 204 No Content.
+- **D6** — Zod validation schemas (`CreateEventSchema`, `UpdateEventSchema`)
+  integrated into POST and PUT for structured field-level error responses.
+
+All six endpoints have mocked Vitest coverage that exercises the route
+handler without a live database.
+
+Log segment: [Track D — Backend API](log-segments/04-backend-api.md).
 
 ## Step 4: Frontend
 
-This section will cover the event list, detail view, create/edit forms,
-delete behavior, filters, calendar view, and quality hardening work.
+Track E and Track F build the browser experience across six UI issues and
+four quality-hardening issues that run partly in parallel with Track D.
 
-Log segment: [TODO: link the Tracks E and F frontend log after #587].
+**Track E — UI (E1–E6):**
+
+- **E1** — `EventCard` component and event list page (`/`): Server
+  Component reads `searchParams`, calls `/api/events`, renders a grid.
+- **E2** — Event detail page (`/events/[id]`): calls `notFound()` on
+  missing IDs; shows all event fields including optional worldName.
+- **E3** — Create form (`/events/new`): client component, stores the
+  returned creator token in `localStorage`.
+- **E4** — Edit form (`/events/[id]/edit`): pre-populates from the API;
+  sends `PATCH`-style `PUT` with the stored token.
+- **E5** — Delete button on the detail page: visible only when the
+  creator token is present in `localStorage`.
+- **E6** — Filter panel (`FilterPanel`): URL-synced category and date
+  range controls; `CalendarView` component with monthly navigation.
+
+**Track F — Quality hardening (F1–F4):**
+
+- **F1** — Playwright smoke tests: three E2E paths covering event list,
+  detail navigation, and create-then-redirect.
+- **F2** — Date utility functions: `formatEventDate`, `isEventToday`,
+  `dateRangeOverlaps`; Vitest coverage including UTC/JST midnight boundary.
+- **F3** — Quality gate verification: lint, unit tests, CI green on all
+  merged PRs.
+- **F4** — README: prerequisites, Quick Start, and available-scripts table
+  for the example repository.
+
+Log segment: [Tracks E and F — Frontend and Quality](log-segments/05-frontend-quality.md).
 
 ## Conclusion: What Was Built
 
