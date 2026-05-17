@@ -25,9 +25,12 @@ $ npm install
 $ npm run build
 $ npm run lint
 $ npx --yes cspell lint . --no-progress
+# (terminal 1 — dev server, left running in foreground)
 $ npm run dev -- --hostname 127.0.0.1 --port 3003
+# (terminal 2 — smoke test)
 $ curl -I http://127.0.0.1:3003
-$ docker run --rm -p 3002:3000 -v "$PWD":/app -w /app \
+$ docker run --rm --name vrc-event-calendar-555 --detach \
+  -p 3002:3000 -v "$PWD":/app -w /app \
   --user "$(id -u):$(id -g)" node:22-bookworm \
   bash -lc 'npm run dev -- --hostname 0.0.0.0 --port 3000'
 $ docker logs vrc-event-calendar-555
@@ -35,10 +38,12 @@ $ curl -I http://127.0.0.1:3002
 ```
 
 > **Note:** Host port `3000` was already occupied by another local dev
-> server, so the direct host smoke test moved to `3003`. The container
-> smoke test kept the app on internal port `3000`, which proved the
-> scaffold itself did not need a code change to run in the workshop's
-> future Docker flow.
+> server, so the direct host smoke test moved to `3003` and was run from
+> a second terminal while the dev server stayed in the foreground. The
+> container smoke test used `--name` and `--detach` so that `docker logs`
+> and `curl` could run in the same terminal session; internal port `3000`
+> proved the scaffold itself did not need a code change to run in the
+> workshop's future Docker flow.
 
 ## [2026-05-16 19:56:22 JST] Open PR #3 For The Scaffold
 
@@ -120,10 +125,12 @@ $ curl -I http://127.0.0.1:3002
 - B5: `idd-skill#562` — `Set up Vitest for unit testing` — `OPEN`
 - B6: `idd-skill#563` — `Set up Playwright for E2E smoke testing` — `OPEN`
 - B7: `idd-skill#564` — `Add GitHub Actions CI workflow` — `OPEN`
+  _(depends on B5: the CI workflow runs `npm test`, which requires the
+  Vitest `test` script that B5 adds)_
 - B8: `idd-skill#565` — `Add npm scripts for Docker development workflow` — `OPEN`
 
 > **Note:** The workshop's parallel-track shape is still visible even
 > where the execution lane has not landed yet. B1 proves the full loop.
-> B2-B4 show merged infrastructure work. B5-B8 remain queued as the
-> next independent branches that can be claimed without reopening the
-> scaffold or Docker baseline.
+> B2-B4 show merged infrastructure work. B5, B6, and B8 can each be
+> claimed independently of the others; B7 should wait for B5 to land so
+> the CI workflow has a `test` script to invoke.
