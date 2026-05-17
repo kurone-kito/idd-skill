@@ -127,6 +127,14 @@ The first D-phase push is the publication boundary:
 - F remains the final freshness and merge gate, not the first routine
   place where branch-sync edits should happen.
 
+This section defines the workflow contract first. Repositories adopting
+it should align later-phase conflict-handling instructions, pre-merge
+instructions, and any resume-routing helpers before treating the
+merge-based post-publication sync path as fully active end to end.
+Until that alignment lands, remaining rebase-oriented wording in those
+downstream surfaces is follow-up implementation debt rather than a
+competing policy contract.
+
 If you need to understand or change distributed timing defaults, start
 with [IDD policy constants](policy-constants.md). It names the claim,
 advisory, CI, and critique-loop defaults and points to the instruction

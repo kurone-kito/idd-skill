@@ -17,6 +17,11 @@ synchronization path. Later branch updates should return through the
 E-phase review loop and, by default, merge `main` into the published PR
 branch so the synchronization diff is reviewable.
 
+This D-phase file records the publication boundary and target
+post-push synchronization contract. Follow-up work may still be needed
+to align later-phase conflict-handling and resume-routing helpers before
+that runtime route is fully active everywhere.
+
 If D1 itself reveals content conflicts before the first push, resolve
 them and continue the rebase. After completing the rebase, if any files
 were manually edited during conflict resolution, run **fix-validate**

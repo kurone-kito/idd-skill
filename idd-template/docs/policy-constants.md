@@ -215,6 +215,11 @@ keys accept positive whole-minute ISO 8601 durations only.
 | Conflict-resolution route     | `content-conflicting` and `protected-update-required` states return through the E-phase review loop before merge                                                                                                         | [IDD workflow guide](idd-workflow.md#branch-publication-and-synchronization), [Review fix](../.github/instructions/idd-review-fix.instructions.md), [Pre-merge](../.github/instructions/idd-pre-merge.instructions.md) | Keep so post-push synchronization remains reviewable history rather than a hidden last-minute edit.            |
 | Force-push exception posture  | Rebase plus `--force-with-lease` after publication is allowed only when repository policy explicitly permits it and merge-based recovery is insufficient, or when an already-started rebase must be completed or aborted | [GitHub Flow rules](./../.github/copilot-instructions.md), [PR submit](../.github/instructions/idd-pr-submit.instructions.md), [Customizing IDD](customization.md)                                                     | Keep narrow by default so adopter repositories are not forced into a history-rewrite workflow they may forbid. |
 
+These defaults establish the contract first. Before treating the
+merge-based post-publication sync path as fully active, align the
+downstream E/F-phase conflict instructions, pre-merge behavior, and any
+resume-routing helpers with the same policy.
+
 ## Merge Policy Defaults
 
 | Policy default               | Distributed value                                                           | Owning surface                                                                                                                                                                                           | Onboarding expectation                                                                                                                              |

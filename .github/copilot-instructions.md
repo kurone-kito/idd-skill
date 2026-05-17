@@ -65,7 +65,9 @@ through a pull request.
   already-pushed branch needs synchronization or conflict resolution,
   merge `main` into the PR branch and send that follow-up through the
   normal CI and review gates. Do not rebase or force-push merely
-  because the PR is `BEHIND`.
+  because the PR is `BEHIND`. Treat this as the branch-policy contract;
+  later-phase instruction and helper alignment may land separately
+  before the runtime default is fully active end to end.
 - **Force-push exceptions stay narrow** — use rebase and
   `--force-with-lease` after publication only when repository policy
   explicitly permits it and merge-based recovery cannot safely fix the
