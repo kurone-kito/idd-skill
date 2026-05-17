@@ -310,7 +310,8 @@ From A2, keep only issues that satisfy **all** of the following:
   migration integrity problem such as a typo, deleted issue, or
   incomplete migration). If multiple issues match, treat as blocked if
   any is open.
-- No external human coordination required to start
+- No external human coordination required to start; otherwise keep
+  scanning
 
 **When A2 finds zero candidates, or when zero issues survive A3
 filtering**, apply the following decision tree — do not silently expand
@@ -392,7 +393,8 @@ Candidates that fail the gate are **not** ready-to-start. Keep them in
 an **approval-needed fallback bucket** ordered by ascending issue number.
 Continue to A4 with only the startable candidates. Preserve any earlier
 A0-O filtering from `orphan-first-policy`; this gate never widens
-previously excluded orphan candidates back into scope.
+previously excluded orphan candidates back into scope. Keep fallback
+issues visible; do not drop them.
 
 If no startable candidates remain but the approval-needed fallback
 bucket is non-empty:

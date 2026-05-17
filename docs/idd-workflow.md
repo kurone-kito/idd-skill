@@ -177,10 +177,12 @@ gate ahead of Claim. The distributed discover and claim instructions
 already enforce this behavior: explicit-target runs stop before claim
 when the selected issue lacks the required approval, and discovery keeps
 underprivileged unapproved issues in an approval-needed fallback bucket
-instead of treating them as ready to start. Approval actors are a
-repository-local policy choice and remain distinct from trusted
-operational marker actors; CODEOWNERS mismatch does not replace this
-pre-start gate.
+instead of treating them as ready to start or silently dropping them
+from view. That fallback preserves unattended progress: Discover can
+keep scanning autonomous candidates until only approval-gated work
+remains. Approval actors are a repository-local policy choice and
+remain distinct from trusted operational marker actors; operator
+attention and CODEOWNERS mismatch do not replace this pre-start gate.
 
 ## CODEOWNERS and Merge Gates
 
@@ -208,6 +210,10 @@ for labels, comment-and-stop defaults, and close boundaries:
 - uncertain outcomes (`unclear`, `needs-decision`, `blocked-by-human`)
   stay open by default with a concise routing comment, then A4.5 keeps
   scanning remaining candidates in the same run;
+- approval-needed fallback is separate from `needs-decision` and
+  `blocked-by-human`: it means the issue may be otherwise ready, but it
+  still lacks permission to start unattended and therefore remains a
+  stop bucket rather than a claimable candidate;
 - high-confidence `duplicate`, `invalid`, and `out-of-scope` outcomes
   are read-only by default and require explicit A4.5 mutation-policy
   customization before close/label side effects;
@@ -220,7 +226,8 @@ Discover owns roadmap-level state. After it finds an open roadmap, it
 can audit whether all explicitly referenced child work is complete
 before selecting the next issue. Passing audits post a concise evidence
 summary and close the roadmap; failing audits either add/link
-autonomous follow-up issues or route human-dependent gaps to an explicit
+autonomous follow-up issues when a missing step can still run
+unattended, or route genuinely human-dependent gaps to an explicit
 blocked or needs-decision state. Roadmap-level side effects still use a
 temporary claim on the roadmap issue itself, so concurrent agents do not
 close or edit the same roadmap at the same time.
