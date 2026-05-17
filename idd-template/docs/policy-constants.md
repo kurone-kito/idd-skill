@@ -273,7 +273,7 @@ CI enforces two layers of instruction file size limits via `audit/sync-manifest.
 
 | Bundle ID          | Files included                                                                                   | Limit        |
 | ------------------ | ------------------------------------------------------------------------------------------------ | ------------ |
-| `bundle-discovery` | `idd-overview-core` + `idd-overview-appendix` + `idd-discover` + `idd-suitability` + `idd-claim` | 75,000 bytes |
+| `bundle-discovery` | `idd-overview-core` + `idd-overview-appendix` + `idd-discover` + `idd-suitability` + `idd-claim` | 75,200 bytes |
 | `bundle-resume`    | `idd-overview-core` + `idd-overview-appendix` + `idd-resume`                                     | 46,000 bytes |
 
 Bundle checks run unconditionally (not filtered by changed files) and
