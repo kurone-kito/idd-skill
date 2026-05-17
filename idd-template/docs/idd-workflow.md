@@ -453,7 +453,7 @@ not an automatic merge bypass.
 
 High-level maintainer flow:
 
-1. Let IDD reach a D4 or F2 hold and confirm that the blocker is a
+1. Let IDD reach an F2 hold and confirm that the blocker is a
    configured external check rather than a repository-owned or
    GitHub-required gate.
 2. Run the optional waiver facade in dry-run mode to inspect the exact
@@ -485,7 +485,8 @@ following optional helper scripts:
 - `scripts/advisory-wait-state.mjs` (read-only advisory-wait evidence
   and AW outcome reporting)
 - `scripts/external-check-waiver.mjs` (maintainer dry-run/apply facade
-  for canonical external-check waiver comments on the current PR head)
+  for canonical external-check waiver comments on the current PR head;
+  added in this release)
 - `scripts/pre-merge-readiness.mjs` (read-only F2/F3 readiness evidence
   collection)
 - `scripts/review-disposition-verify.mjs` (read-only E7 disposition
