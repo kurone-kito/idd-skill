@@ -1,5 +1,12 @@
 # Bootstrap Log Segment
 
+> **Note:** This segment combines verbatim shell capture from the
+> preserved onboarding and validation worktrees with commit-derived
+> reconstruction from `kurone-kito/vrc-event-calendar` PR #2 /
+> commit `c5cfe0b` (`docs(idd): import onboarding baseline`). It does
+> not invent terminal output for editor-driven patches that were never
+> recorded verbatim.
+
 ## [2026-05-16 17:27:50 JST] Claim And Worktree Setup
 
 ```shell
@@ -22,6 +29,14 @@ $ cd /home/kurone-kito/ghq/github.com/kurone-kito/vrc-event-calendar.issue-548-r
 
 > **Note:** The example repository was already created and cloned
 > locally before this onboarding pass began.
+>
+> Track A chronology around this capture is:
+> `idd-skill#547` closed at `2026-05-16 16:28:28 JST` after creating the
+> public `kurone-kito/vrc-event-calendar` repository, `idd-skill#549`
+> closed at `2026-05-16 17:24:10 JST` after verifying labels and branch
+> protection, the onboarding worktree reopened at the timestamp above,
+> and `idd-skill#550` later re-ran the operational checks at
+> `2026-05-16 18:25:38 JST`.
 
 ## [2026-05-16 17:30:10 JST] Import IDD Template Bundle
 
@@ -38,6 +53,12 @@ $ rsync -a ../idd-skill/idd-template/docs/ docs/
 $ rsync -a ../idd-skill/idd-template/profiles/ profiles/
 [command completed with no terminal output]
 ```
+
+> **Note:** This is the chicken-and-egg bootstrap moment. Theirs-flow
+> deliberately accepts the `idd-template` bundle as the initial baseline
+> before the example repository can run its own IDD loop. Once these
+> files exist locally, normal claim -> work -> PR -> CI -> merge review
+> resumes on top of the imported state.
 
 ## [2026-05-16 17:31:35 JST] Replace Placeholders And Record Local Policy
 
@@ -78,26 +99,29 @@ $ rg -n "\{\{REPO_NAME\}\}|\{\{PROJECT_MARKER_PREFIX\}\}|\{\{TRUSTED_MARKER_ACTO
 ## [2026-05-16 17:33:20 JST] Apply Consumer-Specific Customization
 
 ```text
-Manual apply_patch sequence in the example worktree:
-- .github/idd/config.json: switch `helperRuntime.profile` from
+Commit-derived customization summary from
+`kurone-kito/vrc-event-calendar` commit `c5cfe0b`
+(`docs(idd): import onboarding baseline`):
+- `.github/idd/config.json`: switch `helperRuntime.profile` from
   `package-manager` to `instructions-only`; add
   `skipIssueAuthorApprovalGate = false`; add
   `maintainerApprovalActorPolicy = owners-and-maintainers-only`.
-- .github/instructions/idd-overview.instructions.md: add resolved
+- `.github/instructions/idd-overview.instructions.md`: add resolved
   roadmap marker examples for `vrc-event-calendar`.
-- .github/instructions/idd-overview-appendix.instructions.md: rewrite
+- `.github/instructions/idd-overview-appendix.instructions.md`: rewrite
   the template-sync note so later updates pull from upstream
   `kurone-kito/idd-skill`.
-- AGENTS.md, CLAUDE.md, GEMINI.md, .github/copilot-instructions.md:
-  add or update the repository-specific entry text and point the agent
-  entry files at `docs/idd-workflow.md` and `docs/idd-policy.md`.
-- docs/idd-policy.md: add the local policy record for
+- `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`,
+  `.github/copilot-instructions.md`: add or update the
+  repository-specific entry text and point the agent entry files at
+  `docs/idd-workflow.md` and `docs/idd-policy.md`.
+- `docs/idd-policy.md`: add the local policy record for
   `fully_autonomous_merge`, `copilot-advisory`,
   `fast-agent-resolve`, `instructions-only`, and the trusted marker
   actor `kurone-kito`.
-- docs/onboarding/placeholders.md,
-  docs/onboarding/agent-entry-and-verification.md,
-  docs/policy-constants.md, and .cspell.config.yml: repair
+- `docs/onboarding/placeholders.md`,
+  `docs/onboarding/agent-entry-and-verification.md`,
+  `docs/policy-constants.md`, and `.cspell.config.yml`: repair
   placeholder-replacement artifacts and lint issues introduced by the
   raw import.
 ```
@@ -106,6 +130,10 @@ Manual apply_patch sequence in the example worktree:
 > `instructions-only`, recorded repository-local IDD policy, updated the
 > agent entry files to point at `docs/idd-workflow.md`, and removed
 > onboarding-doc lint issues introduced by raw placeholder replacement.
+>
+> The original onboarding session applied those edits through in-editor
+> patches, so the preserved commit diff is the authoritative evidence
+> here rather than a verbatim terminal transcript.
 
 ## [2026-05-16 17:35:10 JST] Validate Imported IDD State
 
