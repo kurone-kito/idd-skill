@@ -16,14 +16,18 @@
 ## [2026-05-17 17:20:00 JST] Install Prisma And Bootstrap The Schema File
 
 ```shell
-npm install --save-dev prisma @prisma/client
+npm install @prisma/client
+npm install --save-dev prisma
 npx prisma init --datasource-provider postgresql
 ```
 
-> **Note:** `prisma init` creates `prisma/schema.prisma` with a
-> PostgreSQL datasource and `.env` with a placeholder `DATABASE_URL`.
-> The Prisma 6.19.3 pinned release was used to match the workshop's
-> `package.json` lockfile.
+> **Note:** `@prisma/client` is installed as a runtime dependency
+> because application code imports `PrismaClient` from it.
+> The `prisma` CLI is installed as a dev dependency since it is only
+> needed for schema management and migrations, not at runtime.
+> `prisma init` creates `prisma/schema.prisma` with a PostgreSQL
+> datasource and `.env` with a placeholder `DATABASE_URL`. Both are
+> pinned to Prisma 6.19.3 to match the workshop's lockfile.
 
 ## [2026-05-17 17:22:00 JST] Validate The Bootstrap Schema
 
