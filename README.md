@@ -130,7 +130,7 @@ than hand-counted file totals:
 | ------------------------------------- | ---------------- |
 | Always-loaded instruction file        | 20,000 bytes     |
 | Phase instruction file                | 30,000 bytes     |
-| Discovery bundle (`bundle-discovery`) | 75,200 bytes     |
+| Discovery bundle (`bundle-discovery`) | 75,300 bytes     |
 | Resume bundle (`bundle-resume`)       | 46,000 bytes     |
 
 See [Policy constants: Runtime Instruction Size and Bundle

@@ -241,7 +241,8 @@ Issues carrying the `roadmap` label or an
 other issue is an **execution leaf**. Include only open execution leaf
 issues in the candidate set; do not advance roadmap nodes to
 A3/A4/A4.5/A5. Traverse closed nodes too (so descendants cannot be
-hidden).
+hidden). The root roadmap from A1 is the traversal start; exclude it
+from the open roadmap-node set (it is not a discovered node).
 
 **Permitted repo-wide queries** — only the following scoped lookups may
 touch issues outside the roadmap traversal graph:
