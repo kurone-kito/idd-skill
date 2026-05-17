@@ -202,6 +202,29 @@ test("keeps traversing descendants when a shared node is reached through multipl
   );
 });
 
+test("re-expands descendants when a shorter ancestry path appears later", async () => {
+  const issues = new Map([
+    [360, roadmapIssue(360, "- [ ] #361\n- [ ] #363", "root-roadmap")],
+    [361, executionIssue(361, "Refs #362")],
+    [362, executionIssue(362, "Refs #363")],
+    [363, executionIssue(363, "Refs #364")],
+    [364, executionIssue(364, "leaf execution")],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(360, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(
+    graph.provenancePaths.filter((entry) => entry.target === 364),
+    [
+      { target: 364, path: [360, 363, 364] },
+      { target: 364, path: [360, 361, 362, 363, 364] },
+    ],
+  );
+  assert.equal(graph.nodes.find((node) => node.number === 363)?.depth, 1);
+});
+
 test("reports inaccessible and unresolved references fail-safe", async () => {
   const issues = new Map([
     [400, roadmapIssue(400, "- [ ] #401\n- [ ] #402", "root-roadmap")],
@@ -228,6 +251,35 @@ test("reports inaccessible and unresolved references fail-safe", async () => {
       target: 402,
       relationship: "task-list",
       evidence: "- [ ] #402",
+      reason: "issue_not_found",
+    },
+  ]);
+});
+
+test("treats pull request references as unresolved issue targets", async () => {
+  const issues = new Map([
+    [410, roadmapIssue(410, "- [ ] #411", "root-roadmap")],
+    [411, {
+      number: 411,
+      title: "pull request 411",
+      state: "open",
+      body: "",
+      labels: [],
+      pull_request: { url: "https://example.test/pulls/411" },
+    }],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(410, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(graph.executionCandidates, []);
+  assert.deepEqual(graph.diagnostics.unresolvedReferences, [
+    {
+      source: 410,
+      target: 411,
+      relationship: "task-list",
+      evidence: "- [ ] #411",
       reason: "issue_not_found",
     },
   ]);
@@ -368,6 +420,80 @@ process.exit(1);
       target: 701,
       relationship: "sub-issue",
       evidence: "GitHub sub-issue #701",
+    },
+  ]);
+});
+
+test("CLI path treats gh 404 descendants as unresolved references", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "idd-discover-roadmap-graph-404-"));
+  const ghPath = join(tempRoot, "gh");
+
+  writeFileSync(ghPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "repo" && args[1] === "view") {
+  const jq = args[args.indexOf("--jq") + 1];
+  process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] === "repos/kurone-kito/idd-skill/issues/720") {
+  process.stdout.write(JSON.stringify({
+    number: 720,
+    title: "roadmap 720",
+    state: "open",
+    body: "<!-- idd-skill-roadmap-id: root-roadmap -->\\n- [ ] #721",
+    labels: [{ name: "roadmap" }],
+  }));
+  process.exit(0);
+}
+if (args[0] === "api" && args[1] === "repos/kurone-kito/idd-skill/issues/721") {
+  process.stderr.write("gh: Not Found (HTTP 404)\\n");
+  process.exit(1);
+}
+if (args[0] === "api" && args[1] === "graphql") {
+  process.stdout.write(JSON.stringify({
+    data: {
+      repository: {
+        issue: {
+          subIssues: {
+            nodes: [],
+            pageInfo: {
+              hasNextPage: false,
+              endCursor: null,
+            },
+          },
+        },
+      },
+    },
+  }));
+  process.exit(0);
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`);
+  chmodSync(ghPath, 0o755);
+
+  const output = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, "scripts/discover-roadmap-graph.mjs"), "--issue", "720"],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${tempRoot}:${process.env.PATH ?? ""}`,
+      },
+    },
+  );
+  const parsed = JSON.parse(output);
+
+  assert.deepEqual(parsed.executionCandidates, []);
+  assert.deepEqual(parsed.diagnostics.unresolvedReferences, [
+    {
+      source: 720,
+      target: 721,
+      relationship: "task-list",
+      evidence: "- [ ] #721",
+      reason: "issue_not_found",
     },
   ]);
 });

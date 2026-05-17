@@ -84,6 +84,9 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   if (isInaccessibleIssue(rootIssue)) {
     throw new Error(`root issue #${rootIssueNumber} is inaccessible`);
   }
+  if (rootIssue.isPullRequest) {
+    throw new Error(`root issue #${rootIssueNumber} is a pull request`);
+  }
 
   await visitIssue(rootIssue.number, [rootIssue.number]);
 
@@ -205,6 +208,10 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       }
       if (isInaccessibleIssue(targetIssue)) {
         recordReferenceDiagnostic(diagnostics.inaccessibleReferences, inaccessibleKeys, edge, "issue_inaccessible");
+        continue;
+      }
+      if (targetIssue.isPullRequest) {
+        recordReferenceDiagnostic(diagnostics.unresolvedReferences, unresolvedKeys, edge, "issue_not_found");
         continue;
       }
 
@@ -453,6 +460,7 @@ function normalizeIssue(issue) {
     state: String(issue.state ?? "").toUpperCase(),
     body: String(issue.body ?? ""),
     labels: normalizeLabels(issue.labels),
+    isPullRequest: Boolean(issue.pull_request),
   };
 }
 
@@ -510,6 +518,9 @@ function buildIssueLoader(owner, repo) {
       }
       return JSON.parse(result);
     } catch (error) {
+      if (isNotFoundIssueLookupError(error)) {
+        return null;
+      }
       if (isInaccessibleIssueLookupError(error)) {
         return INACCESSIBLE_ISSUE_SENTINEL;
       }
@@ -624,6 +635,14 @@ function isInaccessibleIssueLookupError(error) {
   }
   const stderr = String(error.stderr ?? "");
   return /Resource not accessible|access denied|Forbidden|Unavailable for legal reasons/i.test(stderr);
+}
+
+function isNotFoundIssueLookupError(error) {
+  if (!error) {
+    return false;
+  }
+  const stderr = String(error.stderr ?? error.message ?? "");
+  return stderr.includes("HTTP 404");
 }
 
 function isMainModule(importMetaUrl) {
