@@ -235,8 +235,14 @@ referenced issues. Collect only **open** issues.
 - Incidental narrative mentions (e.g., "Similar to #NNN") without an
   explicit task, sub-issue, or dependency relationship
 
-Traverse referenced issues regardless of their open/closed state;
-include only **open** issues in the A2 candidate set.
+Traverse referenced issues regardless of their open/closed state.
+Issues carrying the `roadmap` label or an
+`<!-- idd-skill-roadmap-id: ... -->` marker are **roadmap nodes**; any
+other issue is an **execution leaf**. Include only open execution leaf
+issues in the candidate set; do not advance roadmap nodes to
+A3/A4/A4.5/A5. Traverse closed nodes too (so descendants cannot be
+hidden). The root roadmap from A1 is the traversal start; exclude it
+from the open roadmap-node set (it is not a discovered node).
 
 **Permitted repo-wide queries** — only the following scoped lookups may
 touch issues outside the roadmap traversal graph:
@@ -267,7 +273,7 @@ touch issues outside the roadmap traversal graph:
   selected candidate and is not added to any candidate set.
 
 **Prohibited in all other contexts** — the following must not be used in
-any phase except as listed above, or when A3 step 4 explicit opt-in
+any phase except as listed above, or when A3 step 5 explicit opt-in
 authorizes an alternate scope for the current run:
 
 - `gh issue list` or any variant
@@ -285,9 +291,9 @@ authorizes an alternate scope for the current run:
   unresolvable with the reason, skip that branch, and continue with the
   rest of the traversal. This is not an enumeration failure.
 
-Report every A2 candidate with its provenance path from the roadmap
-(e.g., `#222 → #228 → #257`) before passing to A3. Also report any
-unresolvable references encountered during traversal.
+Report every A2 execution candidate with its provenance path (e.g.,
+`#222 → #228 → #257`), open roadmap nodes encountered, and any
+unresolvable references before passing to A3.
 
 ## A3 — Filter to ready-to-start
 
@@ -310,7 +316,8 @@ From A2, keep only issues that satisfy **all** of the following:
   migration integrity problem such as a typo, deleted issue, or
   incomplete migration). If multiple issues match, treat as blocked if
   any is open.
-- No external human coordination required to start
+- No external human coordination required to start; otherwise keep
+  scanning
 
 **When A2 finds zero candidates, or when zero issues survive A3
 filtering**, apply the following decision tree — do not silently expand
@@ -321,26 +328,26 @@ scope:
    (Unresolvable individual references are already pruned in A2 and do
    not trigger this step.)
 
-2. **A2 empty** (roadmap has no outbound references, all referenced
-   issues are closed, or all branches were skipped due to unresolvable
-   references): report that A2 found zero open candidates — include any
-   skipped unresolvable references — then proceed to step 4.
+2. **A2 empty — only open roadmap nodes remain**: report each open
+   roadmap node and its provenance path; A1.5 audit is needed.
+   Do not treat them as candidates.
+   Proceed to step 5.
 
-3. **A3 filtered to zero** (A2 found candidates but all were filtered
-   out): report each candidate and the filter criterion it failed, then
-   proceed to step 4.
+3. **A2 empty — no candidates** (no roadmap nodes found either): report
+   zero open candidates and any skipped references. Proceed to step 5.
+
+4. **A3 filtered to zero** (A2 found execution candidates but all were
+   filtered out): report each candidate and the filter criterion it
+   failed, then proceed to step 5.
 
    **Diagnostic — all candidates blocked by an open roadmap**: if every
-   candidate is blocked because its `<!-- idd-skill-blocked-by: X -->`
-   marker points to a roadmap issue that is still open, the markers are
-   likely misused as grouping tags rather than as true sequential
-   dependencies. Sub-tasks that should be worked on while the roadmap is
-   open belong in the roadmap's task list as `- [ ] #NNN` entries; the
-   `blocked-by` marker is reserved for issues that must wait for a
-   separate, prior roadmap to close. Report this pattern explicitly so
-   the operator can correct the issue setup.
+   candidate is blocked by a `<!-- idd-skill-blocked-by: X -->` marker
+   that points to an open roadmap, the markers may be misused as
+   grouping tags. Sub-tasks that run while the roadmap is open belong in
+   the task list (`- [ ] #NNN`); the `blocked-by` marker is for issues
+   that must wait for a separate roadmap to close first.
 
-4. **Request explicit opt-in** — ask the operator: "No roadmap-scoped
+5. **Request explicit opt-in** — ask the operator: "No roadmap-scoped
    issues are available. Do you want to expand the search scope for this
    run? If so, specify the alternate scope." An agent is **unattended**
    if it cannot wait for and receive a same-run operator reply. Then:
@@ -392,7 +399,8 @@ Candidates that fail the gate are **not** ready-to-start. Keep them in
 an **approval-needed fallback bucket** ordered by ascending issue number.
 Continue to A4 with only the startable candidates. Preserve any earlier
 A0-O filtering from `orphan-first-policy`; this gate never widens
-previously excluded orphan candidates back into scope.
+previously excluded orphan candidates back into scope. Keep fallback
+issues visible; do not drop them.
 
 If no startable candidates remain but the approval-needed fallback
 bucket is non-empty:

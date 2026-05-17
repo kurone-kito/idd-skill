@@ -156,7 +156,7 @@
         ".github/instructions/idd-suitability.instructions.md",
         ".github/instructions/idd-claim.instructions.md"
       ],
-      "limitBytes": 75000
+      "limitBytes": 75300
     },
     {
       "id": "bundle-resume",
@@ -198,7 +198,13 @@
       "id": "idd-roadmap-audit-instructions",
       "source": "idd-template/.github/instructions/idd-roadmap-audit.instructions.md",
       "target": ".github/instructions/idd-roadmap-audit.instructions.md",
-      "mode": "exact"
+      "mode": "concreted",
+      "replacements": [
+        {
+          "from": "{{PROJECT_MARKER_PREFIX}}",
+          "to": "idd-skill"
+        }
+      ]
     },
     {
       "id": "idd-suitability-instructions",

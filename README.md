@@ -15,14 +15,14 @@ branch, open a PR, handle review feedback, wait for CI, merge, and clean
 up according to the repository's selected merge policy. The whole loop
 lives in your repo as Markdown instruction files.
 
-![IDD workshop preview](docs/workshop/assets/workshop-header.gif)
-
 ## Learn by Example
 
 Follow the [VRChat Event Calendar workshop](docs/workshop/README.md) to
 watch IDD build a real app end to end, then inspect the live companion
 repository at
 [`kurone-kito/vrc-event-calendar`](https://github.com/kurone-kito/vrc-event-calendar).
+
+![IDD workshop preview](docs/workshop/assets/workshop-header.gif)
 
 ## Start here (persona navigation)
 
@@ -130,7 +130,7 @@ than hand-counted file totals:
 | ------------------------------------- | ---------------- |
 | Always-loaded instruction file        | 20,000 bytes     |
 | Phase instruction file                | 30,000 bytes     |
-| Discovery bundle (`bundle-discovery`) | 75,000 bytes     |
+| Discovery bundle (`bundle-discovery`) | 75,300 bytes     |
 | Resume bundle (`bundle-resume`)       | 46,000 bytes     |
 
 See [Policy constants: Runtime Instruction Size and Bundle

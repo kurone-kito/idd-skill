@@ -14,6 +14,9 @@ import { findPlaceholders } from "../scripts/idd-doctor.mjs";
 
 const FIXTURE_ROOT = new URL("./fixtures/", import.meta.url);
 const SUITABILITY_PATH = new URL("../.github/instructions/idd-suitability.instructions.md", import.meta.url);
+const ROADMAP_AUDIT_PATH = new URL("../.github/instructions/idd-roadmap-audit.instructions.md", import.meta.url);
+const WORKFLOW_PATH = new URL("../docs/idd-workflow.md", import.meta.url);
+const CUSTOMIZATION_PATH = new URL("../docs/customization.md", import.meta.url);
 
 test("placeholder scenarios detect clean and dirty post-onboarding fixtures", () => {
   const clean = collectPlaceholderHits(new URL("./fixtures/consistency/placeholders/clean", import.meta.url));
@@ -412,6 +415,48 @@ test("A4.5 outcome fixtures match the documented check-to-outcome mapping", () =
     ["blocked-by-human", "duplicate", "invalid", "needs-decision", "out-of-scope", "unclear"],
   );
   assert.match(outcomes.get("invalid"), /do not retry/i);
+});
+
+test("discover A2 roadmap node classification guidance is present in instruction and docs surfaces", () => {
+  const discover = readFileSync(
+    new URL("../.github/instructions/idd-discover.instructions.md", import.meta.url),
+    "utf8",
+  );
+  const templateDiscover = readFileSync(
+    new URL("../idd-template/.github/instructions/idd-discover.instructions.md", import.meta.url),
+    "utf8",
+  );
+  const workflow = readFileSync(WORKFLOW_PATH, "utf8");
+  const templateWorkflow = readFileSync(
+    new URL("../idd-template/docs/idd-workflow.md", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(discover, /roadmap node/i);
+  assert.match(discover, /execution leaf/i);
+  assert.match(discover, /only open roadmap nodes remain/i);
+  assert.match(discover, /A3\/A4\/A4\.5\/A5/i);
+  assert.match(workflow, /classify roadmap/i);
+
+  assert.match(templateDiscover, /roadmap node/i);
+  assert.match(templateDiscover, /execution leaf/i);
+  assert.match(templateDiscover, /only open roadmap nodes remain/i);
+  assert.match(templateDiscover, /A3\/A4\/A4\.5\/A5/i);
+  assert.match(templateWorkflow, /classify roadmap/i);
+});
+
+test("recursive roadmap audit guidance stays aligned across instruction and docs surfaces", () => {
+  const audit = readFileSync(ROADMAP_AUDIT_PATH, "utf8");
+  const workflow = readFileSync(WORKFLOW_PATH, "utf8");
+  const customization = readFileSync(CUSTOMIZATION_PATH, "utf8");
+
+  assert.match(audit, /nested roadmaps?/i);
+  assert.match(audit, /bottom-up/i);
+  assert.match(audit, /exact roadmap issue being mutated/i);
+  assert.match(workflow, /nested roadmap/i);
+  assert.match(workflow, /bottom-up/i);
+  assert.match(customization, /bottom-up/i);
+  assert.match(customization, /exact roadmap node being mutated/i);
 });
 
 function collectPlaceholderHits(url) {

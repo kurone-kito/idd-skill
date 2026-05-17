@@ -26,6 +26,14 @@ const HELPER_COMMANDS = [
     description: "Run IDD onboarding drift checks against the local repository.",
   },
   {
+    id: "external-check-waiver",
+    scriptName: "idd:external-check-waiver",
+    binName: "idd-external-check-waiver",
+    entryPath: "scripts/external-check-waiver.mjs",
+    vendoredCommand: "node scripts/external-check-waiver.mjs",
+    description: "Dry-run or apply a maintainer-authorized external-check waiver comment for an active PR claim.",
+  },
+  {
     id: "force-handoff",
     scriptName: "idd:force-handoff",
     binName: "idd-force-handoff",
@@ -65,6 +73,14 @@ const HELPER_COMMANDS = [
     entryPath: "scripts/discover-readiness-check.mjs",
     vendoredCommand: "node scripts/discover-readiness-check.mjs",
     description: "Collect read-only A3 readiness filtering evidence for candidate issues.",
+  },
+  {
+    id: "discover-roadmap-graph",
+    scriptName: "idd:discover-roadmap-graph",
+    binName: "idd-discover-roadmap-graph",
+    entryPath: "scripts/discover-roadmap-graph.mjs",
+    vendoredCommand: "node scripts/discover-roadmap-graph.mjs",
+    description: "Collect read-only A1.5/A2 recursive roadmap graph evidence.",
   },
   {
     id: "discover-viability-gate",
@@ -190,6 +206,15 @@ const HELPER_COMMANDS = [
     entryPath: "scripts/review-disposition-verify.mjs",
     vendoredCommand: "node scripts/review-disposition-verify.mjs",
     description: "Verify disposition marker presence on review items for E7 meta-check.",
+  },
+  {
+    id: "branch-conflict-state",
+    scriptName: "idd:branch-conflict-state",
+    binName: "idd-branch-conflict-state",
+    entryPath: "scripts/branch-conflict-state.mjs",
+    vendoredCommand: "node scripts/branch-conflict-state.mjs",
+    description: "Collect read-only branch conflict and synchronization state evidence for a PR.",
+    contractPaths: ["schemas/branch-conflict-state.schema.json"],
   },
 ];
 

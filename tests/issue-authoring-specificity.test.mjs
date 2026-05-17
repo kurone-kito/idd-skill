@@ -162,6 +162,62 @@ test("human-dependency isolation guidance keeps the front-load and back-load rul
   }
 });
 
+test("hidden human-dependency validation stays synced between canonical and bundled contract", () => {
+  const canonicalFile = "docs/issue-authoring-skill.md";
+  const bundledFile = "skills/issue-authoring/references/contract.md";
+  const canonical = readText(canonicalFile);
+  const bundled = readText(bundledFile);
+
+  assert.equal(
+    extractTopLevelSection(
+      canonical,
+      canonicalFile,
+      "## Hidden human-dependency validation",
+    ),
+    extractTopLevelSection(
+      bundled,
+      bundledFile,
+      "## Hidden human-dependency validation",
+    ),
+    `canonical and bundled hidden-human-dependency validation must stay in sync (${canonicalFile} vs ${bundledFile})`,
+  );
+});
+
+test("hidden human-dependency validation keeps the pre-publication routing checks", () => {
+  for (const file of [
+    "docs/issue-authoring-skill.md",
+    "skills/issue-authoring/references/contract.md",
+  ]) {
+    const section = extractTopLevelSection(
+      readText(file),
+      file,
+      "## Hidden human-dependency validation",
+    );
+    const normalizedSection = normalizeWhitespace(section);
+
+    for (const needle of [
+      "routing aid, not a rigid wording linter",
+      "credentials, external access, hardware, or infrastructure",
+      "`blocked-by-human`",
+      "product, policy, or design decision",
+      "`needs-decision`",
+      "subjective human approval",
+      "objective verification",
+      "optional review or publication judgment",
+      "roadmap narrative",
+      "approval-needed hold",
+      "dependency marker",
+      "true start blockers",
+      "post-implementation code review, merge approval, or publication choice",
+    ]) {
+      assert.ok(
+        normalizedSection.includes(normalizeWhitespace(needle)),
+        `${file} must keep hidden-human-dependency phrase: ${needle}`,
+      );
+    }
+  }
+});
+
 test("dependency minimization guidance keeps the edge-justification rules", () => {
   for (const file of [
     "docs/issue-authoring-skill.md",
@@ -187,6 +243,29 @@ test("dependency minimization guidance keeps the edge-justification rules", () =
         `${file} must keep dependency-minimization phrase: ${needle}`,
       );
     }
+  }
+});
+
+test("draft patterns keep the hidden human-dependency quick check", () => {
+  const file = "skills/issue-authoring/references/draft-patterns.md";
+  const text = readText(file);
+  const normalizedText = normalizeWhitespace(text);
+
+  for (const needle of [
+    "## Hidden human-dependency quick check",
+    "unresolved credentials, access, or unavailable infrastructure",
+    "`needs-decision`",
+    "objective verification",
+    "optional post-implementation review stays optional",
+    "approval-needed hold",
+    "true start blockers rather than grouping related work",
+    "subjective approval",
+    "grouping-only dependency markers",
+  ]) {
+    assert.ok(
+      normalizedText.includes(normalizeWhitespace(needle)),
+      `${file} must keep hidden human-dependency phrase: ${needle}`,
+    );
   }
 });
 

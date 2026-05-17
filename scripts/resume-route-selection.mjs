@@ -48,8 +48,14 @@ export function selectResumeRoute(input) {
     if (state.reviewPending) {
       return result("E1", "pr-ci-success-review-pending", state, reasonParts);
     }
-    if (state.mergeNeedsRebase) {
-      return result("F1", "pr-ci-success-merge-conflicts-or-behind", state, reasonParts);
+    if (state.branchState === "content-conflict") {
+      return result("Esync", "pr-ci-success-content-conflict", state, reasonParts);
+    }
+    if (state.branchState === "dirty" || state.branchState === "unknown") {
+      return result("stop", "pr-ci-success-branch-dirty-or-unknown", state, reasonParts);
+    }
+    if (state.branchState === "behind-no-conflict") {
+      return result("F1", "pr-ci-success-branch-behind-no-conflict", state, reasonParts);
     }
     return result("F2", "pr-ci-success-no-review-pending", state, reasonParts);
   }
@@ -116,7 +122,7 @@ function collectRoutingInput({ repository, issueNumber }) {
       unresolvedThreadCount: 0,
       unrepliedCommentCount: 0,
       changesRequestedCount: 0,
-      mergeNeedsRebase: false,
+      branchState: "clean",
       prCount: prs.length,
       prNumber: null,
       prUrl: null,
@@ -149,7 +155,7 @@ function collectRoutingInput({ repository, issueNumber }) {
   const reviewPending = unresolvedThreadCount > 0 || unrepliedCommentCount > 0 || changesRequestedCount > 0;
 
   const mergeState = ghJson(["pr", "view", String(issuePr.number), "--repo", repository, "--json", "mergeable,mergeStateStatus"]);
-  const mergeNeedsRebase = isMergeRebaseRequired(mergeState);
+  const branchState = classifyBranchState(mergeState);
 
   return {
     prAmbiguous: false,
@@ -166,7 +172,7 @@ function collectRoutingInput({ repository, issueNumber }) {
     unresolvedThreadCount,
     unrepliedCommentCount,
     changesRequestedCount,
-    mergeNeedsRebase,
+    branchState,
     prCount: prs.length,
     prNumber: issuePr.number,
     prUrl: issuePr.url,
@@ -219,10 +225,15 @@ function countUnrepliedRegularComments(comments, viewerLogin) {
   return count;
 }
 
-function isMergeRebaseRequired(mergeState) {
+export function classifyBranchState(mergeState) {
   const mergeable = String(mergeState?.mergeable ?? "").toUpperCase();
   const mergeStateStatus = String(mergeState?.mergeStateStatus ?? "").toUpperCase();
-  return mergeable === "CONFLICTING" || mergeStateStatus === "BEHIND" || mergeStateStatus === "DIRTY";
+  if (mergeable === "CONFLICTING") return "content-conflict";
+  if (mergeStateStatus === "DIRTY") return "dirty";
+  if (mergeStateStatus === "CLEAN") return "clean";
+  if (mergeStateStatus === "BEHIND") return "behind-no-conflict";
+  if (mergeable === "MERGEABLE") return "clean";
+  return "unknown";
 }
 
 export function countLatestChangesRequestedByReviewer(reviews) {
@@ -263,7 +274,7 @@ function normalizeState(input) {
     ciSuccess: input.ciSuccess === true,
     reviewExists: input.reviewExists === true,
     reviewPending: input.reviewPending === true,
-    mergeNeedsRebase: input.mergeNeedsRebase === true,
+    branchState: typeof input.branchState === "string" ? input.branchState : "clean",
   };
 }
 
@@ -288,8 +299,10 @@ function decisionTable() {
     { condition: "PR + CI running/failing + no reviews", route: "D4" },
     { condition: "PR + CI running/failing + reviews exist", route: "E15" },
     { condition: "PR + CI success + review pending", route: "E1" },
-    { condition: "PR + CI success + no review pending + merge needs rebase", route: "F1" },
-    { condition: "PR + CI success + no review pending + merge clean", route: "F2" },
+    { condition: "PR + CI success + no review pending + content conflict", route: "Esync" },
+    { condition: "PR + CI success + no review pending + dirty or unknown branch state", route: "stop" },
+    { condition: "PR + CI success + no review pending + behind (no conflict)", route: "F1" },
+    { condition: "PR + CI success + no review pending + clean branch", route: "F2" },
   ];
 }
 
@@ -377,7 +390,7 @@ function printHelp() {
 
 Output schema:
 {
-  "route": "D1|D4|E1|E15|F1|F2|stop",
+  "route": "D1|D4|E1|E15|Esync|F1|F2|stop",
   "reason": "...",
   "state": {"prExists": true, "ciSuccess": false, ...},
   "evidence": {"rule_trace": ["..."]}

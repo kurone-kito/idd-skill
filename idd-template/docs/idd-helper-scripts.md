@@ -13,6 +13,8 @@ In the idd-skill source repository, the following optional helpers were adopted:
 - `scripts/discover-orphan-filter.mjs` for A0-O orphan issue detection and
   filtering (referenced in
   [kurone-kito/idd-skill#390](https://github.com/kurone-kito/idd-skill/issues/390))
+- `scripts/discover-roadmap-graph.mjs` for A1.5/A2 recursive roadmap graph
+  enumeration and classification
 - `scripts/discover-readiness-check.mjs` for A3 readiness criterion
   evaluation (referenced in
   [kurone-kito/idd-skill#391](https://github.com/kurone-kito/idd-skill/issues/391))
@@ -34,6 +36,13 @@ In the idd-skill source repository, the following optional helpers were adopted:
   state routing (referenced in
   [kurone-kito/idd-skill#395](https://github.com/kurone-kito/idd-skill/issues/395))
 
+**Work & Submit Phase Helpers:**
+
+- `scripts/branch-conflict-state.mjs` for read-only branch conflict and
+  synchronization state classification; used by D/E/F routing to decide
+  whether `merge-main`, `hold-unknown`, or no action is needed without
+  mutating the worktree or PR branch (added in this release)
+
 **Review & Merge Phase Helpers:**
 
 - `scripts/review-activity-snapshot.mjs` for read-only E/F review
@@ -52,6 +61,9 @@ In the idd-skill source repository, the following optional helpers were adopted:
 
 **Operator Recovery Helpers:**
 
+- `scripts/external-check-waiver.mjs` for dry-run/apply generation of
+  maintainer-authorized external-check waiver comments tied to an active
+  PR claim
 - `scripts/force-handoff.mjs` for the interactive TTY-only
   `idd-force-handoff` operator facade that drives issue input, optional
   PR confirmation from live branch state, and final `y/N` consent
@@ -147,6 +159,41 @@ rules remain authoritative when outputs diverge.
 For discover and suitability, use the adopted helpers first when helper
 support is enabled, then fall back to the portable instructions if a
 helper is unavailable or its output does not match the written rules.
+
+### Discover Roadmap Graph Contract
+
+`scripts/discover-roadmap-graph.mjs` evaluates the recursive A1.5/A2
+roadmap graph for one selected roadmap issue.
+
+- **Inputs**: `--issue <number>`, with optional `--owner <owner>`,
+  `--repo <repo>`, and `--policy <path>`.
+- **JSON output**:
+  - `root`: `{ number: number, title: string, state: string,`
+    `classification: "roadmap" | "execution", roadmapMarkerId: string }`
+  - `nodes`: `[{ number: number, title: string, state: string,`
+    `labels: string[], classification: "roadmap" | "execution",`
+    `roadmapMarkerId: string, depth: number }]`
+  - `edges`: `[{ source: number, target: number, relationship: string,`
+    `evidence: string }]`
+  - `provenancePaths`: `[{ target: number, path: number[] }]`
+  - `roadmapNodes`: `number[]` — nested roadmap nodes discovered through
+    traversal; **excludes** the root roadmap (A1 traversal entry point)
+  - `executionCandidates`: `number[]`
+  - `diagnostics`: `{ duplicateReferences: object[], cycles: object[],`
+    `inaccessibleReferences: object[], unresolvedReferences: object[] }`
+  - `summary`: `{ rootNumber: number, nodeCount: number, edgeCount: number,`
+    `roadmapNodeCount: number, executionCandidateCount: number,`
+    `duplicateReferenceCount: number, cycleCount: number,`
+    `inaccessibleReferenceCount: number, unresolvedReferenceCount: number,`
+    `maxDepth: number }`
+- **Error conditions**: missing `--issue`, unknown flags, an unreadable
+  root roadmap, or incomplete `subIssues` GraphQL data throw. Missing or
+  inaccessible descendants are reported in `diagnostics` instead of
+  crashing.
+- **Behavior boundary**: the helper is evidence-only. It may read issue
+  bodies and GitHub sub-issue relationships, but it must not claim
+  issues, edit roadmap bodies, close roadmap nodes, or decide readiness
+  by itself.
 
 ### Discover Viability Gate Contract
 
@@ -309,8 +356,12 @@ The adopted helper boundaries are intentionally narrow:
 
 - `pre-merge-readiness.mjs` is read-only, emits machine-readable F2/F3
   evidence including review currency, unresolved-thread state,
-  unreplied comments, reviewer states, advisory state, CI, and claim
-  validation
+  unreplied comments, reviewer states, advisory state, CI, claim
+  validation, and `waiverEvidence` (parsed external-check waiver comments
+  classified as `valid`, `expired`, `wrongHead`, `wrongClaim`,
+  `unauthorized`, or `malformed`; checks covered by a valid waiver are
+  reported with `coveredByWaiver: true` and treated as passing by the CI
+  gate)
 - it does not replace the pre-merge or merge decision tables; it only
   reduces command-copy variance when collecting canonical merge-gate
   evidence
@@ -385,6 +436,26 @@ default `instructions-only` profile keep using the written shell /
 `gh` / `jq` procedures in the phase instructions and do not need a
 `scripts/` directory.
 
+### External-check waiver helper
+
+- Command:
+  `node scripts/external-check-waiver.mjs --pr <number> --check
+  <selector> --reason <text> (--expires <iso8601> | --expires-in
+  <duration>)`
+- Published bin: `idd-external-check-waiver`
+- Contract:
+  - dry-run is the default; the helper prints the canonical comment body
+    plus claim/check/authority evidence before any mutation
+  - `--apply` posts the PR comment only after verifying the linked
+    issue's active claim, the current PR HEAD SHA, the live check state,
+    waivable-selector coverage, and maintainer/admin authority
+  - non-interactive apply is refused unless `--yes` is provided after a
+    prior dry-run review; interactive TTY runs may confirm with `y/N`
+  - the helper fails closed when authority cannot distinguish owner,
+    Maintain, or Admin from plain Write access, when the requested check
+    is not configured in `ciGate.externalChecks.waivable`, or when the
+    expiry exceeds `ciGate.externalCheckWaivers.maxValidity`
+
 ### External-check waiver contract
 
 Issue `#666` defines the policy and marker contract before the operator
@@ -415,6 +486,30 @@ Interpretation rules:
 - Repo-owned required checks and GitHub-required checks remain
   non-waivable at the contract layer. An IDD waiver never substitutes
   for GitHub ruleset bypass.
+- When the optional facade is installed, prefer helper-first usage:
+  - dry-run:
+
+    ```sh
+    idd-external-check-waiver --pr 123 \
+      --check "CodeRabbit" \
+      --reason "rate limit" \
+      --expires-in PT2H
+    ```
+
+  - apply after review:
+
+    ```sh
+    idd-external-check-waiver --pr 123 \
+      --check "CodeRabbit" \
+      --reason "rate limit" \
+      --expires-in PT2H \
+      --apply --yes
+    ```
+
+  - inspect the rendered body first; do not hand-write or copy raw
+    marker comments into the PR
+  - in solo-maintainer repositories, this helper-generated comment is
+    the authorization path; a normal PR approval is not equivalent
 
 ### A4 viability gate
 
@@ -483,7 +578,7 @@ Interpretation rules:
 - Stable fields consumed by resume instructions: `route`, `reason`,
   `state`, and `evidence`
 - Stable enum:
-  - `route`: `D1|D4|E1|E15|F1|F2|stop`
+  - `route`: `D1|D4|E1|E15|Esync|F1|F2|stop`
 
 ### Advisory-wait evidence
 
@@ -600,6 +695,48 @@ Interpretation rules:
   fields are missing, or output conflicts with observed triage evidence,
   discard helper output and apply written E7 checks directly.
 
+### Branch conflict and synchronization state evidence
+
+- Preferred command when helper runtime is enabled:
+  `idd-branch-conflict-state --pr <pr-number>`
+- Source repository equivalent:
+  `node scripts/branch-conflict-state.mjs --pr <pr-number>`
+- Output schema (stable fields):
+
+  ```json
+  {
+    "protocolVersion": "1",
+    "prNumber": 123,
+    "prHeadSha": "abc...",
+    "prBaseSha": "def...",
+    "published": true,
+    "mergeable": "MERGEABLE",
+    "mergeStateStatus": "CLEAN",
+    "branchState": "clean",
+    "syncRecommendation": "none",
+    "readOnly": true,
+    "worktreeUnchanged": true,
+    "diagnostics": {
+      "mergeableSource": "github-mergeable",
+      "conflictFiles": [],
+      "notes": []
+    }
+  }
+  ```
+
+- `branchState` values: `clean`, `behind-no-conflict`, `content-conflict`,
+  `dirty`, `force-push-exception`, `unknown`
+- `syncRecommendation` values: `none`, `merge-main`, `policy-required-update`,
+  `force-push-exception`, `hold-unknown`
+- Stable fields consumed by D/E/F routing: `branchState`,
+  `syncRecommendation`, `published`, `readOnly`, `worktreeUnchanged`
+- Read-only boundary: the helper never runs `git merge`, `git rebase`, or
+  any command that leaves merge state, index changes, or working-tree
+  changes. The `readOnly` and `worktreeUnchanged` fields confirm this.
+- Fail closed: if execution fails, output is invalid JSON, or required
+  fields are missing, discard helper output and apply written D4/E-phase
+  branch-sync checks directly.
+
 ### S2 quiet-window evidence
 
 - When helper runtime is enabled, Resume/S2 should call the
@@ -637,6 +774,7 @@ The workflow areas most likely to benefit from optional helpers are:
 | Post-merge cleanup candidates   | Adopted helper     | Dry-run by default, explicit apply | High          | GraphQL minimize-comment fallback flow                                 | Medium — minimization safety still depends on exact review/marker rules                  | Medium — roughly 400 to 700 bytes of repeated GraphQL audit prose       |
 | E7 disposition verification     | Adopted helper     | Read-only evidence verifier        | Low           | E7 verification steps in `idd-review-triage.instructions.md`           | Low — verification logic is deterministic and path/type rules are stable                 | Low to medium — roughly 150 to 300 bytes of repeated E7 pre-exit checks |
 | Branch protection/ruleset reads | Deferred candidate | Read-only API adapter              | Low           | Direct ruleset / branch-protection API reads                           | Medium — repository support varies and incomplete coverage could create false confidence | Low to medium — roughly 150 to 300 bytes of repeated ruleset prose      |
+| Branch conflict state           | Adopted helper     | Read-only evidence collector       | Low           | D4/E-phase branch-sync checks in `idd-pr-submit.instructions.md`       | Medium — helper must stay evidence-only and preserve the written sync gates              | Medium — roughly 300 to 500 bytes of repeated branch-state prose        |
 
 ### Ranked roadmap candidate list for the source roadmap
 

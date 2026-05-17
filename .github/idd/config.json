@@ -20,5 +20,9 @@
     "profile": "package-manager"
   },
   "issueScope": "roadmap",
-  "orphanFirstPolicy": "none"
+  "orphanFirstPolicy": "none",
+  "forcedHandoff": {
+    "mode": "human-gated",
+    "authorityPolicy": "owners-and-maintainers-only"
+  }
 }

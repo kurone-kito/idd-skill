@@ -1,0 +1,20 @@
+{
+  "prData": {
+    "number": 102,
+    "headRefOid": "cccccccccccccccccccccccccccccccccccccccc",
+    "baseRefOid": "dddddddddddddddddddddddddddddddddddddddd",
+    "headRefName": "feature/conflicting",
+    "baseRefName": "main",
+    "mergeable": "CONFLICTING",
+    "mergeStateStatus": "DIRTY",
+    "headRepository": {
+      "id": "R_test",
+      "name": "test-repo"
+    }
+  },
+  "expected": {
+    "branchState": "content-conflict",
+    "syncRecommendation": "hold-unknown",
+    "mergeableSource": "github-mergeable"
+  }
+}
