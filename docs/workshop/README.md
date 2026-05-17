@@ -88,38 +88,140 @@ replacement, repository-specific customization, and validation with
 
 ## Step 1: Development Environment
 
-This section will establish the local development foundation: Docker
-Compose, Next.js, TypeScript, Tailwind CSS, Prisma, tests, and CI.
+Infrastructure comes before features because IDD can only merge safely
+when the repository can prove the same branch state every time. Before
+the workshop starts adding Prisma models, API routes, or UI screens, the
+example repository needs a scaffold that can build, lint, and boot in a
+repeatable way. That is why Track B begins with environment work instead
+of feature work: CI is not garnish in IDD, it is part of the merge gate.
 
-Log segment: [Track B — Infrastructure Setup](log-segments/02-infrastructure.md).
+Track B1 is the first full IDD loop in the workshop. The agent claims
+`idd-skill#555`, narrows scope to the Next.js 15 scaffold, validates the
+app on the host and inside a container, opens PR #3, waits for CI, and
+merges once the checks go green. That single cycle shows the whole
+claim -> work -> PR -> CI -> merge rhythm in one place, with enough
+detail for a first-time reader to see not just what happened, but why
+the agent made each decision.
+
+After B1 merges, the infrastructure track can fan out into B2-B8
+instead of serializing on one long-lived bootstrap branch. Formatting
+(`#556`), Docker Compose (`#554`), and Docker hardening (`#644`) are
+the first merged follow-up lanes, while test runners (`#562`, `#563`),
+CI wiring (`#564`), and developer scripts (`#565`) remain explicitly
+queued in the log. For the full timestamped record, see
+[Track B — Infrastructure Setup](log-segments/02-infrastructure.md).
+The narrower point this section closes on is that the merged B1-B4
+baseline is green, which is why the preserved completion digest can
+truthfully say, "All quality gates are now green."
 
 ## Step 2: Data Layer
 
-This section will introduce the event model, database migration, seed
-data, and Prisma client utility.
+The data layer establishes the event model and database contract that all
+later tracks depend on. Track C runs three IDD loops:
 
-Log segment: [TODO: link the Track C data layer log after #585].
+- **C1** — Prisma bootstrap + Event schema: `@prisma/client` installed,
+  `prisma init` creates the datasource, `EventCategory` enum and `Event`
+  model defined.
+- **C2** — Initial migration + DB singleton: `prisma migrate dev --name init`
+  produces the SQL migration; `src/lib/db.ts` exports a cached
+  `PrismaClient` singleton.
+- **C3** — Seed script: `prisma/seed.ts` written with 10 sample events
+  covering all six categories, using `upsert` for idempotent re-seeding.
+
+By the end of Track C the local PostgreSQL database is schema-current and
+populated with sample events ready for the API layer.
+
+Log segment: [Track C — Data Layer](log-segments/03-data-layer.md)
 
 ## Step 3: Backend API
 
-This section will walk through the event API routes, validation, creator
-token behavior, and update/delete flow.
+Track D builds the REST API surface six IDD cycles at a time. D1 shows
+the complete loop in detail — claim, plan, implement, test, self-review,
+PR, CI, merge — for `GET /api/events`. D2–D6 follow the same pattern and
+are summarised:
 
-Log segment: [TODO: link the Track D backend API log after #586].
+- **D1** — `GET /api/events` with `category`, `date_from`, and `date_to`
+  filters; `buildEventWhere` centralises the Prisma `where` clause.
+- **D2** — `GET /api/events/[id]`: 200/404/400 responses.
+- **D3** — `POST /api/events`: generates a UUID creator token, returns it
+  in `X-Creator-Token`; validates required fields and `endAt > startAt`.
+- **D4** — `PUT /api/events/[id]`: `crypto.timingSafeEqual` token
+  comparison; 200/403/404 responses.
+- **D5** — `DELETE /api/events/[id]`: same token check; 204 No Content.
+- **D6** — Zod validation schemas (`CreateEventSchema`, `UpdateEventSchema`)
+  integrated into POST and PUT for structured field-level error responses.
+
+All six endpoints have mocked Vitest coverage that exercises the route
+handler without a live database.
+
+Log segment: [Track D — Backend API](log-segments/04-backend-api.md)
 
 ## Step 4: Frontend
 
-This section will cover the event list, detail view, create/edit forms,
-delete behavior, filters, calendar view, and quality hardening work.
+Track E and Track F build the browser experience across six UI issues and
+four quality-hardening issues that run partly in parallel with Track D.
 
-Log segment: [Tracks E and F — Frontend and Quality Hardening](log-segments/05-frontend.md)
+**Track E — UI (E1–E6):**
+
+- **E1** — `EventCard` component and event list page (`/`): Server
+  Component reads `searchParams`, calls `/api/events`, renders a grid.
+- **E2** — Event detail page (`/events/[id]`): calls `notFound()` on
+  missing IDs; shows all event fields including optional worldName.
+- **E3** — Create form (`/events/new`): client component, stores the
+  returned creator token in `localStorage`.
+- **E4** — Edit form (`/events/[id]/edit`): pre-populates from the API;
+  sends `PATCH`-style `PUT` with the stored token.
+- **E5** — Delete button on the detail page: visible only when the
+  creator token is present in `localStorage`.
+- **E6** — Filter panel (`FilterPanel`): URL-synced category and date
+  range controls; `CalendarView` component with monthly navigation.
+
+**Track F — Quality hardening (F1–F4):**
+
+- **F1** — Playwright smoke tests: three E2E paths covering event list,
+  detail navigation, and create-then-redirect.
+- **F2** — Date utility functions: `formatEventDate`, `isEventToday`,
+  `dateRangeOverlaps`; Vitest coverage including UTC/JST midnight boundary.
+- **F3** — Quality gate verification: lint, unit tests, CI green on all
+  merged PRs.
+- **F4** — README: prerequisites, Quick Start, and available-scripts table
+  for the example repository.
+
+Log segment: [Tracks E and F — Frontend and Quality](log-segments/05-frontend-quality.md).
 
 ## Conclusion: What Was Built
 
-This section will summarize the finished application, the IDD loop
-metrics, and the example repository outcome.
+**[`kurone-kito/vrc-event-calendar`](https://github.com/kurone-kito/vrc-event-calendar)
+— This is what we built.**
 
-Metrics: [TODO: add final implementation metrics in #595].
+<!-- Screenshot placeholder for #601: replace with the final event-list
+screenshot once the example app screenshots are captured. -->
+
+Over the course of the workshop, IDD turned an empty repository into a
+working VRChat Event Calendar with:
+
+- Event listing with category and date-range filters
+- Monthly calendar view with event dots and navigation
+- Event detail pages with creator-owned edit and delete
+- REST API with Zod validation and constant-time token auth
+- Vitest unit test coverage and Playwright E2E smoke tests
+- Docker Compose local stack with PostgreSQL and seed data
+
+### Implementation metrics
+
+| Metric                                    | Value                                                |
+| ----------------------------------------- | ---------------------------------------------------- |
+| Total time (first to last PR merge)       | ~31 hours (2026-05-16 17:52 to 2026-05-18 01:08 JST) |
+| IDD loop cycles (PRs merged)              | 35                                                   |
+| Issues closed (idd-skill tracking issues) | ~40                                                  |
+| Unit tests at completion                  | 58 (Vitest)                                          |
+| E2E smoke tests                           | 3 (Playwright)                                       |
+
+Every loop followed the same six-phase IDD pattern: **claim → plan →
+implement → self-review → PR → CI → merge**. The parallel-track structure
+(infrastructure, data layer, API, frontend, quality) let narrow,
+independently-testable changes land continuously without long-lived
+feature branches or merge traffic jams.
 
 ## What's Next
 
