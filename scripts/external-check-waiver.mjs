@@ -212,7 +212,7 @@ export async function runExternalCheckWaiver(options = {}) {
     return { exitCode: 0 };
   }
 
-  const repository = args.repo ?? ghText(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
+  const repository = args.repo || ghText(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
   const { owner, name } = parseOwnerRepo(repository);
   const rawConfig = readJsonFile(".github/idd/config.json");
   const policy = normalizePolicyConfig(rawConfig);
@@ -239,6 +239,7 @@ export async function runExternalCheckWaiver(options = {}) {
     issueNumber: args.issueNumber,
     expectedClaimId: args.claimId,
     headRefName: pr.headRefName,
+    prNumber: args.prNumber,
   });
 
   const report = planExternalCheckWaiver(
@@ -433,7 +434,11 @@ function resolveExpiryAt({ expiresAt, expiresIn, now }) {
     throw new Error("specify exactly one of --expires or --expires-in");
   }
   if (hasExpiresAt) {
-    return String(expiresAt).trim();
+    const parsed = new Date(String(expiresAt).trim());
+    if (!Number.isFinite(parsed.getTime())) {
+      throw new Error(`invalid --expires value: ${expiresAt}`);
+    }
+    return parsed.toISOString().replace(/\.\d{3}Z$/, "Z");
   }
 
   const durationMs = parseIsoDurationToMs(String(expiresIn).trim());
@@ -453,6 +458,7 @@ function resolveLinkedIssueCandidates({
   issueNumber,
   expectedClaimId,
   headRefName,
+  prNumber,
 }) {
   const issueRefs = (linkedIssues ?? []).filter((issue) => {
     return !issueNumber || Number(issue.number) === issueNumber;
@@ -471,7 +477,9 @@ function resolveLinkedIssueCandidates({
       issueComments: comments,
     });
     const forcedHandoffAuthorityPolicy = normalizePolicyConfig(rawConfig).forcedHandoff.authorityPolicy;
+    const expectedLinkedPrs = prNumber ? [String(prNumber)] : [];
     const activeClaim = resolveHelperActiveClaim(comments, [...trustedMarkerLogins], {
+      expectedLinkedPrs,
       isAuthorizedForcedHandoff: (fhActor) => {
         const auth = resolveCollaboratorAuthority({ owner, repo, actor: fhActor });
         if (forcedHandoffAuthorityPolicy === "all-write-permission-actors") {
