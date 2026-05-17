@@ -417,6 +417,34 @@ test("A4.5 outcome fixtures match the documented check-to-outcome mapping", () =
   assert.match(outcomes.get("invalid"), /do not retry/i);
 });
 
+test("discover A2 roadmap node classification guidance is present in instruction and docs surfaces", () => {
+  const discover = readFileSync(
+    new URL("../.github/instructions/idd-discover.instructions.md", import.meta.url),
+    "utf8",
+  );
+  const templateDiscover = readFileSync(
+    new URL("../idd-template/.github/instructions/idd-discover.instructions.md", import.meta.url),
+    "utf8",
+  );
+  const workflow = readFileSync(WORKFLOW_PATH, "utf8");
+  const templateWorkflow = readFileSync(
+    new URL("../idd-template/docs/idd-workflow.md", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(discover, /roadmap node/i);
+  assert.match(discover, /execution leaf/i);
+  assert.match(discover, /only open roadmap nodes remain/i);
+  assert.match(discover, /A3\/A4\/A4\.5\/A5/i);
+  assert.match(workflow, /classify roadmap/i);
+
+  assert.match(templateDiscover, /roadmap node/i);
+  assert.match(templateDiscover, /execution leaf/i);
+  assert.match(templateDiscover, /only open roadmap nodes remain/i);
+  assert.match(templateDiscover, /A3\/A4\/A4\.5\/A5/i);
+  assert.match(templateWorkflow, /classify roadmap/i);
+});
+
 test("recursive roadmap audit guidance stays aligned across instruction and docs surfaces", () => {
   const audit = readFileSync(ROADMAP_AUDIT_PATH, "utf8");
   const workflow = readFileSync(WORKFLOW_PATH, "utf8");
