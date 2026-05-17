@@ -8,7 +8,8 @@ Before posting any E-phase operational comment or GitHub reply, apply
 the shared claim revalidation gate. The active claim must still use your
 current `{claim-id}`.
 
-**If ReviewItems_snapshot is empty after E3**: proceed to `idd-pre-merge.instructions.md`.
+**If ReviewItems_snapshot is empty after E3**: proceed to the
+E-phase branch-sync check in `idd-review-triage.instructions.md`.
 **If ReviewItems_snapshot is non-empty after E3**: proceed to
 `idd-review-triage.instructions.md` (E4).
 

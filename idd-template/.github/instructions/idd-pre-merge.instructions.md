@@ -1,8 +1,8 @@
 # IDD — Pre-Merge Conditions Phase (F1–F2)
 
-Read this file after ReviewItems_snapshot is empty (E3 or E8), or when
-returning to merge gate checks after a fix cycle. It covers final
-conflict resolution
+Read this file after the E-phase branch-sync check confirms no
+synchronization is required, or when returning to merge gate checks
+after a sync cycle. It covers a final read-only branch-state check
 (F1) and the full pre-merge condition checklist (F2).
 
 This phase includes a repository-specific GitHub Copilot advisory review
@@ -25,30 +25,32 @@ claim ownership, advisory wait, or CI gates.
 When all F2 conditions are satisfied, proceed to
 `idd-merge-handoff.instructions.md`.
 
-## F1 — Final conflict resolution
+## F1 — Final branch-state check
 
-Check whether the PR branch is out of date with `main` by running:
+Read the current branch state. When helper runtime is enabled, call:
+`idd-branch-conflict-state --pr {pr-number}`
+
+Otherwise read the state directly:
 
 ```sh
 gh pr view {pr-number} --json mergeable,mergeStateStatus
 ```
 
-If `mergeable` is `CONFLICTING` or `mergeStateStatus` is `BEHIND` or
-`DIRTY`, resolve conflicts:
+This check is read-only — F1 does not rebase, merge, or push.
 
-1. **Active review gate**: if the PR has unresolved review threads,
-   unreplied comments, or any reviewer's latest state is
-   `CHANGES_REQUESTED`, get explicit operator confirmation before
-   rebasing, as the history rewrite can disrupt ongoing review.
-2. Rebase onto `main`. Resolve any conflicts and continue the rebase.
-3. Run **post-fix-validate**.
-
-4. Push (use `--force-with-lease` if you rebased).
-5. If the HEAD changed (new commits were added): return to
-   `idd-review-snapshot.instructions.md` (E1) to re-evaluate reviews.
-   Before returning, update the PR live status digest with
-   `Phase: F1 rebased`, the new HEAD in `Authoritative by`, and
-   `Next action: E1 review snapshot`.
+- **`clean`** (`mergeable` is `MERGEABLE` and `mergeStateStatus` is
+  `CLEAN`) or **`behind-no-conflict`** when no up-to-date-head policy
+  applies: proceed to F2.
+- **`behind-no-conflict`** when branch protection or recorded repository
+  policy requires an up-to-date head, or **`content-conflict`**
+  (`mergeable` is `CONFLICTING`): return to the E-phase branch-sync check
+  in `idd-review-triage.instructions.md`. Before returning, update the PR
+  live status digest with `Phase: F1 sync-required`, the branch state in
+  `Open blockers`, and `Next action: E-phase branch-sync`.
+- **`dirty`** (`mergeStateStatus` is `DIRTY`) or **`unknown`**: hold; post
+  a PR comment documenting the branch state and stop. Do not proceed to F2
+  without confirmed clean branch-state evidence. A maintainer must clear
+  the hold.
 
 ## F2 — Pre-merge condition check
 
