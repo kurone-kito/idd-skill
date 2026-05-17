@@ -39,26 +39,26 @@ entry file should be an explicit operator choice, not the default.
 
 ## IDD file map
 
-| File                                                       | Role                                                                                 |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `.github/instructions/idd-overview.instructions.md`        | Shared definitions, command sets, routing table, critique-pass mapping               |
-| `.github/instructions/idd-discover.instructions.md`        | A0-T–A4.5: find a viable issue, route roadmap audits, run suitability, and hand off  |
-| `.github/instructions/idd-roadmap-audit.instructions.md`   | A1.5: audit roadmap completion and run roadmap-side coordination before A2           |
-| `.github/instructions/idd-claim.instructions.md`           | A5: run claim pre-checks and claim verification                                      |
-| `.github/instructions/idd-work.instructions.md`            | B1-B3 + C1-C6: create worktree, plan, implement, and self-review                     |
-| `.github/instructions/idd-pr-submit.instructions.md`       | D1-D4: pre-publication main sync, validate, push, open PR, and wait for CI           |
-| `.github/instructions/idd-ci.instructions.md`              | D4/E15 helper: shared CI polling helper used by later phases                         |
-| `.github/instructions/idd-advisory-wait.instructions.md`   | AW1-AW5 helper: shared Copilot advisory-wait protocol (E14, F2, F3)                  |
-| `.github/instructions/idd-review-snapshot.instructions.md` | E1–E3: fetch activity snapshot, run critique, check if ReviewItems_snapshot is empty |
-| `.github/instructions/idd-review-triage.instructions.md`   | E4–E8: classify items, score, and record dispositions                                |
-| `.github/instructions/idd-review-fix.instructions.md`      | E9-E15: fix accepted review items and push follow-up commits                         |
-| `.github/instructions/idd-pre-merge.instructions.md`       | F1–F2: resolve conflicts and verify all pre-merge conditions                         |
-| `.github/instructions/idd-merge-handoff.instructions.md`   | F2.5: resolve merge-policy handoff vs autonomous merge routing                       |
-| `.github/instructions/idd-merge.instructions.md`           | F3–F5: execute the merge, clean up, and loop back to discover                        |
-| `.github/instructions/idd-resume.instructions.md`          | Resume Step 0-3: route crash, stalled, stale-takeover, or clean continuation         |
-| `.github/instructions/idd-resume-stall.instructions.md`    | Resume S1-S5: handle stalled-session recovery with a dedicated safety gate           |
-| `docs/idd-review-policy-profiles.md`                       | PR review policy profiles and customization surfaces                                 |
-| `docs/idd-comment-minimization.md`                         | Live status digest contract and post-merge comment minimization policy               |
+| File                                                       | Role                                                                                     |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `.github/instructions/idd-overview.instructions.md`        | Shared definitions, command sets, routing table, critique-pass mapping                   |
+| `.github/instructions/idd-discover.instructions.md`        | A0-T–A4.5: find a viable issue, route roadmap audits, run suitability, and hand off      |
+| `.github/instructions/idd-roadmap-audit.instructions.md`   | A1.5: audit roadmap completion, including bottom-up recursive roadmap closure, before A2 |
+| `.github/instructions/idd-claim.instructions.md`           | A5: run claim pre-checks and claim verification                                          |
+| `.github/instructions/idd-work.instructions.md`            | B1-B3 + C1-C6: create worktree, plan, implement, and self-review                         |
+| `.github/instructions/idd-pr-submit.instructions.md`       | D1-D4: rebase, validate, push, open PR, and wait for CI                                  |
+| `.github/instructions/idd-ci.instructions.md`              | D4/E15 helper: shared CI polling helper used by later phases                             |
+| `.github/instructions/idd-advisory-wait.instructions.md`   | AW1-AW5 helper: shared Copilot advisory-wait protocol (E14, F2, F3)                      |
+| `.github/instructions/idd-review-snapshot.instructions.md` | E1–E3: fetch activity snapshot, run critique, check if ReviewItems_snapshot is empty     |
+| `.github/instructions/idd-review-triage.instructions.md`   | E4–E8: classify items, score, and record dispositions                                    |
+| `.github/instructions/idd-review-fix.instructions.md`      | E9-E15: fix accepted review items and push follow-up commits                             |
+| `.github/instructions/idd-pre-merge.instructions.md`       | F1–F2: resolve conflicts and verify all pre-merge conditions                             |
+| `.github/instructions/idd-merge-handoff.instructions.md`   | F2.5: resolve merge-policy handoff vs autonomous merge routing                           |
+| `.github/instructions/idd-merge.instructions.md`           | F3–F5: execute the merge, clean up, and loop back to discover                            |
+| `.github/instructions/idd-resume.instructions.md`          | Resume Step 0-3: route crash, stalled, stale-takeover, or clean continuation             |
+| `.github/instructions/idd-resume-stall.instructions.md`    | Resume S1-S5: handle stalled-session recovery with a dedicated safety gate               |
+| `docs/idd-review-policy-profiles.md`                       | PR review policy profiles and customization surfaces                                     |
+| `docs/idd-comment-minimization.md`                         | Live status digest contract and post-merge comment minimization policy                   |
 
 ## ReviewItems_snapshot lifecycle
 
@@ -114,40 +114,6 @@ instruction template first. Native skills can sit beside it as helpers,
 but the synchronization contract for the portable workflow remains
 between the live `.github/instructions/` files and `idd-template/`.
 
-## Branch publication and synchronization
-
-IDD treats branch-state classification as a separate concern from branch
-mutation. Read-only probes may classify a PR branch as
-`current-clean`, `behind-clean`, `content-conflicting`,
-`dirty-or-unknown`, `protected-update-required`, or
-`force-push-exception`, but the classification itself must not dirty the
-worktree or rewrite history.
-
-The first D-phase push is the publication boundary:
-
-- Before that push, D1 is the routine place to rebase onto `main`.
-- After that push, the branch becomes published review history.
-- `behind-clean` is evidence only. It does not trigger a branch update
-  by itself unless branch protection or explicit repository policy
-  requires an up-to-date head before merge.
-- `content-conflicting` and `protected-update-required` route back
-  through the E-phase review loop so the synchronization change is
-  reviewed, validated, pushed normally, and re-checked.
-- The default post-push synchronization action is a normal merge from
-  `main` into the PR branch.
-- Rebase plus force-push after publication is an exceptional recovery
-  path only.
-- F remains the final freshness and merge gate, not the first routine
-  place where branch-sync edits should happen.
-
-This section defines the workflow contract first. Repositories adopting
-it should align later-phase conflict-handling instructions, pre-merge
-instructions, and any resume-routing helpers before treating the
-merge-based post-publication sync path as fully active end to end.
-Until that alignment lands, remaining rebase-oriented wording in those
-downstream surfaces is follow-up implementation debt rather than a
-competing policy contract.
-
 If you need to understand or change distributed timing defaults, start
 with [IDD policy constants](policy-constants.md). It names the claim,
 advisory, CI, and critique-loop defaults and points to the instruction
@@ -177,12 +143,10 @@ gate ahead of Claim. The distributed discover and claim instructions
 already enforce this behavior: explicit-target runs stop before claim
 when the selected issue lacks the required approval, and discovery keeps
 underprivileged unapproved issues in an approval-needed fallback bucket
-instead of treating them as ready to start or silently dropping them
-from view. That fallback preserves unattended progress: Discover can
-keep scanning autonomous candidates until only approval-gated work
-remains. Approval actors are a repository-local policy choice and
-remain distinct from trusted operational marker actors; operator
-attention and CODEOWNERS mismatch do not replace this pre-start gate.
+instead of treating them as ready to start. Approval actors are a
+repository-local policy choice and remain distinct from trusted
+operational marker actors; CODEOWNERS mismatch does not replace this
+pre-start gate.
 
 ## CODEOWNERS and Merge Gates
 
@@ -210,10 +174,6 @@ for labels, comment-and-stop defaults, and close boundaries:
 - uncertain outcomes (`unclear`, `needs-decision`, `blocked-by-human`)
   stay open by default with a concise routing comment, then A4.5 keeps
   scanning remaining candidates in the same run;
-- approval-needed fallback is separate from `needs-decision` and
-  `blocked-by-human`: it means the issue may be otherwise ready, but it
-  still lacks permission to start unattended and therefore remains a
-  stop bucket rather than a claimable candidate;
 - high-confidence `duplicate`, `invalid`, and `out-of-scope` outcomes
   are read-only by default and require explicit A4.5 mutation-policy
   customization before close/label side effects;
@@ -226,8 +186,7 @@ Discover owns roadmap-level state. After it finds an open roadmap, it
 can audit whether all explicitly referenced child work is complete
 before selecting the next issue. Passing audits post a concise evidence
 summary and close the roadmap; failing audits either add/link
-autonomous follow-up issues when a missing step can still run
-unattended, or route genuinely human-dependent gaps to an explicit
+autonomous follow-up issues or route human-dependent gaps to an explicit
 blocked or needs-decision state. Roadmap-level side effects still use a
 temporary claim on the roadmap issue itself, so concurrent agents do not
 close or edit the same roadmap at the same time.
@@ -240,121 +199,6 @@ This audit intentionally lives before A2 rather than in F4. F4 is
 limited to the PR that just merged and the local cleanup for that child
 issue. F5 then loops back to Discover, where roadmap completion can be
 checked with the broader parent context.
-
-## Recursive Roadmap Hierarchies
-
-IDD's roadmap traversal already follows transitive issue references, so
-nested structures such as `root roadmap → track roadmap → leaf execution
-issues` work without any extra configuration. This section explains when
-to use them, how to structure them, and how discovery and audit behave at
-each level.
-
-### When to keep a roadmap flat
-
-Start with a single-level roadmap. A flat task list inside one roadmap
-issue is the right default when all sub-tasks belong to the same
-implementation cycle, run at the same cadence, and can merge without
-coordination across teams or phases. Adding nesting for its own sake
-introduces unnecessary coordination overhead.
-
-### When nesting adds value
-
-Introduce a nested roadmap when the work genuinely needs a coordination
-boundary that a flat task list cannot express cleanly:
-
-- **Parallel tracks**: two sub-roadmaps that operate independently and
-  merge on different schedules (for example, a data-layer track and a UI
-  track that each need their own lifecycle before the parent can close).
-- **Multi-session handoff**: a sub-roadmap that a different team or agent
-  pool owns, where the parent roadmap should stay open until that team
-  signals completion at the sub-roadmap level.
-
-If the only reason to nest is that the task list feels long, keep the
-flat structure and use numbered sections inside the roadmap body instead.
-
-### Structuring a two-level hierarchy
-
-A two-level hierarchy has one parent roadmap with nested track roadmaps
-as children:
-
-```text
-Parent roadmap (#100)
-├─ Track A — roadmap (#110)
-│   ├─ Leaf issue #111
-│   └─ Leaf issue #112
-└─ Track B — roadmap (#120)
-    ├─ Leaf issue #121
-    └─ Leaf issue #122
-```
-
-Reference child roadmaps from the parent's task list using standard
-`- [ ] #NNN` entries. Do not use `idd-skill-blocked-by` markers to group
-sub-tasks under an active roadmap — that marker is reserved for true
-sequential dependencies on a _separate, prior_ roadmap that must close
-before the dependent work can start.
-
-### Grouping versus sequential dependency
-
-| Mechanism             | Syntax                                        | Meaning                                                    |
-| --------------------- | --------------------------------------------- | ---------------------------------------------------------- |
-| Task-list grouping    | `- [ ] #NNN` in roadmap body                  | Active parallel work; all items may proceed simultaneously |
-| Sequential dependency | `<!-- idd-skill-blocked-by: {roadmap-id} -->` | This issue must wait until the named roadmap is closed     |
-
-Use task-list links when you want concurrent execution. Use
-`idd-skill-blocked-by` only when one roadmap phase must completely finish
-before another can start.
-
-### How discovery treats nested roadmap nodes
-
-Discover (A2) traverses the full outbound reference graph from the
-selected roadmap. The intended design treats open nested roadmap nodes as
-traversal-only coordination nodes: the agent walks through them to reach
-leaf execution issues without advancing roadmap nodes themselves into the
-readiness/claim/viability gates. Only non-roadmap leaf issues become
-execution candidates. The Discover instruction rules that formally
-classify roadmap nodes are being specified in #640; until those rules
-land, a nested roadmap node that passes the current A3/A4 filters could
-theoretically enter the candidate set.
-
-The no-candidate diagnostic distinguishes "no reachable leaf execution
-issues" from "only open roadmap nodes remain", so operators can tell
-whether the tree is still healthy or whether leaf issues are missing.
-
-When the recursive graph helper (#642) is available, it can enumerate
-the full traversal graph, classify roadmap nodes separately from
-execution candidates, and report provenance paths and cycle detection for
-Discover and roadmap audit use.
-
-### Bottom-up completion
-
-Nested roadmaps create a natural bottom-up closing order. When all of a
-nested roadmap's referenced leaf issues and further descendants are
-resolved, the A1.5 roadmap audit evaluates its success criteria against
-the closed issues, merged PRs, task-list state, and repository state. If
-the audit finds autonomous gaps, it creates or links follow-up issues
-before closing. The parent roadmap remains open while any nested roadmap
-child is still open or has an unresolved autonomous gap; only after all
-nested roadmap children pass their own A1.5 audits can the parent
-roadmap itself be evaluated and closed.
-
-Each roadmap-side mutation (comment, label, close) uses a
-`roadmap-audit/*` coordination claim scoped to the roadmap issue being
-mutated. These claims are coordination locks for roadmap-side effects
-only and do not block child execution in other branches of the same tree.
-
-### Issue-scope default
-
-Nested roadmap support does not change the repository's default
-`issue-scope`. The `roadmap` default means Discover always starts with
-the selected roadmap and traverses its full graph, including nested
-roadmap nodes, to find leaf execution candidates. Adopters who want
-unblocked orphan issues to be considered before roadmap traversal must
-set `orphan-first` in both the `"orphanFirstPolicy"` key in
-`.github/idd/config.json` and the `orphan-first-policy` row in the
-project commands table in
-`.github/instructions/idd-overview.instructions.md`. See
-[IDD policy constants](policy-constants.md) for the synchronization
-requirement between these two sources.
 
 ## Resume routing model
 
@@ -420,6 +264,13 @@ Roadmap-audit claims are coordination-only. Use them only while the
 roadmap issue itself is being mutated, then release them once that
 roadmap-side effect is complete. They are not a proxy lock for child
 claims.
+
+Recursive roadmap hierarchies still follow that rule. Leaf execution
+issues finish first, then the deepest completed nested roadmap is
+audited and closed under its own `roadmap-audit/*` claim, and only then
+is the parent roadmap re-evaluated. Bottom-up closure keeps roadmap
+claims scoped to the exact roadmap issue being mutated instead of
+turning one parent claim into a lock over child or sibling work.
 
 If the roadmap claim remains open after the roadmap-side effect is done,
 or if it appears to serialize child execution, treat that as a misuse

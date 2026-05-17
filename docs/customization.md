@@ -640,6 +640,9 @@ roadmap-claim contention policy during onboarding:
   rules; local policy should not weaken them.
 - If a claim is fresh and owned by another live session, treat it as not
   inheritable and stop or defer under the shared claim-state rules.
+- In recursive hierarchies, audit and close nested roadmaps bottom-up,
+  and claim the exact roadmap node being mutated rather than holding one
+  parent claim across the whole hierarchy.
 - Operators should release roadmap-audit claims promptly after roadmap
   mutations complete.
 
@@ -652,6 +655,12 @@ same pull request.
 Roadmap-audit claims are coordination-only. Use them only while editing
 the roadmap issue itself, then release them once the roadmap-side effect
 is complete. They are not an execution lock for child issues.
+
+When recursive roadmap hierarchies are in play, this means the deepest
+completed nested roadmap is closed first under its own claim, then the
+parent roadmap is re-evaluated from fresh state. Do not reuse one
+roadmap-audit claim to comment on, edit, or close multiple roadmap
+nodes.
 
 If a roadmap claim stays open long after the roadmap mutation is done,
 or if it appears to block child work, treat that as a misuse signal:
