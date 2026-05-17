@@ -189,3 +189,27 @@ test("extractGhHttpStatus prefers HTTP status codes from gh stderr", () => {
   assert.equal(extractGhHttpStatus({ status: 1, stderr: "" }), 1);
   assert.equal(extractGhHttpStatus({ status: 0, stderr: "" }), 0);
 });
+
+test("parseExternalCheckWaiverComment returns null for empty or non-marker bodies", () => {
+  assert.equal(parseExternalCheckWaiverComment("", "2026-05-17T00:00:00Z"), null);
+  assert.equal(parseExternalCheckWaiverComment("some random text", "2026-05-17T00:00:00Z"), null);
+  assert.equal(parseExternalCheckWaiverComment("<!-- idd-external-check-waiver: bad-format -->", "2026-05-17T00:00:00Z"), null);
+});
+
+test("parseExternalCheckWaiverComment returns null when required fields are missing", () => {
+  const truncated = `<!-- idd-external-check-waiver: agent claim-id ${"a".repeat(40)} check:CodeRabbit -->`;
+  assert.equal(parseExternalCheckWaiverComment(truncated, "2026-05-17T00:00:00Z"), null);
+});
+
+test("planExternalCheckWaiver fails closed when authority lookup returns unknown", () => {
+  const input = buildBaseInput();
+  input.authority = { known: false };
+
+  const report = planExternalCheckWaiver(
+    input,
+    { now: new Date("2026-05-17T06:00:00Z"), repoOwner: "kurone-kito" },
+  );
+
+  assert.equal(report.canApply, false);
+  assert.ok(report.blockingReasons.some((r) => /authority|proven/.test(r)));
+});

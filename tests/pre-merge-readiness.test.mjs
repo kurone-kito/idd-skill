@@ -1681,6 +1681,41 @@ test("summarizeRequiredChecks: waiver does not affect already-passing check", ()
   assert.equal(result.status, "success");
 });
 
+test("summarizeExternalCheckWaivers: multiple valid waivers for different checks both land in valid bucket", () => {
+  const head = "b".repeat(40);
+  const comment1 = { body: makeWaiverComment({ headSha: head, claimId: "claim-123", checkSelector: "CodeRabbit" }), user: { login: "owner" }, created_at: "2026-05-17T10:00:00Z" };
+  const comment2 = { body: makeWaiverComment({ headSha: head, claimId: "claim-123", checkSelector: "Copilot*" }), user: { login: "owner" }, created_at: "2026-05-17T10:01:00Z" };
+
+  const result = summarizeExternalCheckWaivers([comment1, comment2], {
+    prHeadSha: head,
+    activeClaimId: "claim-123",
+    trustedMarkerLogins: ["owner"],
+    now: "2026-05-17T12:00:00Z",
+  });
+
+  assert.equal(result.valid.length, 2);
+  assert.equal(result.expired.length, 0);
+  assert.ok(result.valid.some((w) => w.checkSelector === "CodeRabbit"));
+  assert.ok(result.valid.some((w) => w.checkSelector === "Copilot*"));
+});
+
+test("summarizeExternalCheckWaivers: suspicious marker-shaped comment from untrusted actor never becomes valid", () => {
+  const head = "c".repeat(40);
+  const body = makeWaiverComment({ headSha: head, claimId: "claim-123" });
+  const comment = { body, user: { login: "untrusted-actor" }, created_at: "2026-05-17T10:00:00Z" };
+
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: "claim-123",
+    trustedMarkerLogins: ["trusted-only"],
+    now: "2026-05-17T12:00:00Z",
+  });
+
+  assert.equal(result.valid.length, 0);
+  assert.equal(result.unauthorized.length, 1);
+  assert.equal(result.unauthorized[0].authorLogin, "untrusted-actor");
+});
+
 function readJson(relativePath) {
   return JSON.parse(readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8"));
 }
