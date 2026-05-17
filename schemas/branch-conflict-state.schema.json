@@ -41,7 +41,7 @@
       "enum": ["MERGEABLE", "CONFLICTING", "UNKNOWN", null]
     },
     "mergeStateStatus": {
-      "enum": ["CLEAN", "BLOCKED", "BEHIND", "DIRTY", "UNSTABLE", "UNKNOWN", null]
+      "enum": ["CLEAN", "BLOCKED", "BEHIND", "DIRTY", "DRAFT", "HAS_HOOKS", "UNSTABLE", "UNKNOWN", null]
     },
     "branchState": {
       "type": "string",

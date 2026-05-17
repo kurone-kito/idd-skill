@@ -30,7 +30,7 @@ export async function classifyBranchConflictState(prNumber, options = {}) {
   const prBaseRef = String(prData.baseRefName ?? "");
   const mergeable = prData.mergeable ?? null;
   const mergeStateStatus = prData.mergeStateStatus ?? null;
-  const published = Boolean(prData.headRepository?.pushedAt ?? prHeadSha);
+  const published = Boolean(prData.headRepository?.pushedAt);
 
   if (!prHeadSha || !prBaseSha) {
     return {
@@ -135,7 +135,7 @@ function deriveBranchState({
         branchState: "behind-no-conflict",
         syncRecommendation: "merge-main",
         conflictFiles: [],
-        mergeableSource: "git-merge-tree",
+        mergeableSource: "github-merge-state",
       };
     }
     const probeResult = probeConflictFilesReadOnly(prHeadSha, prBaseSha, prBaseRef, owner, repo, notes);
@@ -234,15 +234,17 @@ function parseConflictFiles(mergeTreeOutput) {
   const files = new Set();
   for (const line of mergeTreeOutput.split("\n")) {
     // "CONFLICT (content): Merge conflict in path/to/file"
-    const inMatch = line.match(/^CONFLICT\s+\([^)]+\):\s+.*\s+in\s+(.+?)\s*$/i);
-    if (inMatch) {
-      files.add(inMatch[1].trim());
+    const contentMatch = line.match(/^CONFLICT\s+\(content\):\s+.*\s+in\s+(.+?)\s*$/i);
+    if (contentMatch) {
+      files.add(contentMatch[1].trim());
       continue;
     }
-    // "CONFLICT (rename/delete): old renamed to new in ..." or bare CONFLICT lines
-    const bareMatch = line.match(/^CONFLICT\s+\([^)]+\):\s+(.+?)\s*$/i);
-    if (bareMatch) {
-      files.add(bareMatch[1].trim());
+    // "CONFLICT (modify/delete): <path> deleted in ... and modified in ..."
+    // "CONFLICT (rename/delete): <old> renamed to <new> in ..."
+    // First word after "TYPE): " is the conflicted path
+    const firstTokenMatch = line.match(/^CONFLICT\s+\([^)]+\):\s+(.+?)\s+(?:deleted|renamed|added|modified)\s+in\s+/i);
+    if (firstTokenMatch) {
+      files.add(firstTokenMatch[1].trim());
     }
   }
   return [...files];
