@@ -4,15 +4,19 @@
     "comments": [
       {
         "id": "watermark-clean",
-        "author": { "login": "kurone-kito" },
-        "body": "<!-- review-watermark: github-copilot-cli claim-123 1111111111111111111111111111111111111111 2026-05-11T23:56:00Z 3 2026-05-11T23:57:00Z -->\n\n_github-copilot-cli: review triage snapshot — IDD automation marker. Do not edit._",
+        "author": {
+          "login": "kurone-kito"
+        },
+        "body": "<!-- review-watermark: github-copilot-cli claim-123 1111111111111111111111111111111111111111 2026-05-11T23:56:00Z 3 2026-05-11T23:57:00Z -->\n\n_github-copilot-cli: review triage snapshot \u2014 IDD automation marker. Do not edit._",
         "createdAt": "2026-05-11T23:58:00Z",
         "updatedAt": "2026-05-11T23:58:00Z"
       }
     ],
     "reviews": [
       {
-        "author": { "login": "copilot-pull-request-reviewer[bot]" },
+        "author": {
+          "login": "copilot-pull-request-reviewer[bot]"
+        },
         "state": "APPROVED",
         "commitId": "1111111111111111111111111111111111111111",
         "submittedAt": "2026-05-11T23:54:00Z",
@@ -20,7 +24,9 @@
         "updatedAt": "2026-05-11T23:54:00Z"
       },
       {
-        "author": { "login": "owner-reviewer" },
+        "author": {
+          "login": "owner-reviewer"
+        },
         "state": "APPROVED",
         "commitId": "",
         "submittedAt": "2026-05-11T23:55:00Z",
@@ -35,14 +41,20 @@
         "updatedAt": "",
         "reviewerReopenedAt": "",
         "comments": {
-          "pageInfo": { "hasNextPage": false },
+          "pageInfo": {
+            "hasNextPage": false
+          },
           "nodes": [
             {
-              "author": { "login": "kurone-kito" },
+              "author": {
+                "login": "kurone-kito"
+              },
               "body": "Fixed in the latest commit.",
               "createdAt": "2026-05-11T23:56:00Z",
               "updatedAt": "2026-05-11T23:56:00Z",
-              "pullRequestReview": { "id": "review-1" }
+              "pullRequestReview": {
+                "id": "review-1"
+              }
             }
           ]
         }
@@ -68,7 +80,11 @@
       {
         "type": "required_status_checks",
         "parameters": {
-          "required_status_checks": [{ "context": "lint" }]
+          "required_status_checks": [
+            {
+              "context": "lint"
+            }
+          ]
         }
       }
     ],
@@ -76,19 +92,27 @@
     "timelineEvents": [],
     "claimEvents": [
       {
-        "body": "<!-- claimed-by: github-copilot-cli claim-123 supersedes: none 2026-05-11T23:20:00Z branch: issue/309-pre-merge-readiness -->\n\n_github-copilot-cli: issue claim — IDD automation marker. Do not edit._",
+        "body": "<!-- claimed-by: github-copilot-cli claim-123 supersedes: none 2026-05-11T23:20:00Z branch: issue/309-pre-merge-readiness -->\n\n_github-copilot-cli: issue claim \u2014 IDD automation marker. Do not edit._",
         "createdAt": "2026-05-11T23:20:00Z",
-        "author": { "login": "kurone-kito" }
+        "author": {
+          "login": "kurone-kito"
+        }
       }
     ],
-    "changedFiles": ["README.md"],
+    "changedFiles": [
+      "README.md"
+    ],
     "codeownersText": "* @owner-reviewer\n",
     "reviewDecision": "APPROVED"
   },
   "options": {
     "now": "2026-05-12T00:00:00Z",
-    "trustedMarkerLogins": ["kurone-kito"],
-    "iddAgentLogins": ["kurone-kito"],
+    "trustedMarkerLogins": [
+      "kurone-kito"
+    ],
+    "iddAgentLogins": [
+      "kurone-kito"
+    ],
     "advisoryBotLogins": [],
     "prAuthorLogin": "contributor",
     "expectedClaimId": "claim-123",
@@ -152,7 +176,9 @@
       "requiresConversationResolution": false,
       "requiredReviewerLogins": [],
       "requiredReviewerTeams": [],
-      "codeownerUserLogins": ["owner-reviewer"],
+      "codeownerUserLogins": [
+        "owner-reviewer"
+      ],
       "codeownerTeamSlugs": [],
       "unmatchedCodeownerFiles": [],
       "latestByAuthor": [
@@ -182,7 +208,9 @@
         "status": "not_applicable",
         "reason": "codeowner-approval-satisfied",
         "prAuthorLogin": "contributor",
-        "directCodeownerUserLogins": ["owner-reviewer"],
+        "directCodeownerUserLogins": [
+          "owner-reviewer"
+        ],
         "codeownerTeamSlugs": [],
         "requireCodeOwnerReview": true,
         "codeownerApprovalSatisfied": true,
@@ -216,7 +244,9 @@
       "generatedRequiredCheckCount": 1,
       "requiredChecksGenerated": true,
       "requiredChecksPassing": true,
-      "requiredCheckNames": ["lint"],
+      "requiredCheckNames": [
+        "lint"
+      ],
       "missingRequiredCheckNames": [],
       "checks": [
         {
@@ -241,6 +271,14 @@
       "matchesExpectedClaim": true,
       "claimLost": false,
       "reason": "match"
+    },
+    "waiverEvidence": {
+      "valid": [],
+      "expired": [],
+      "wrongHead": [],
+      "wrongClaim": [],
+      "unauthorized": [],
+      "malformed": []
     }
   }
 }

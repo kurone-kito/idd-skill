@@ -447,7 +447,8 @@
                 "type": "string",
                 "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
               },
-              "required": { "type": "boolean" }
+              "required": { "type": "boolean" },
+              "coveredByWaiver": { "type": "boolean" }
             }
           }
         }
@@ -551,6 +552,91 @@
                   "unresolved-without-fresh-disposition"
                 ]
               }
+            }
+          }
+        }
+      }
+    },
+    "waiverEvidence": {
+      "type": "object",
+      "required": ["valid", "expired", "wrongHead", "wrongClaim", "unauthorized", "malformed"],
+      "additionalProperties": false,
+      "properties": {
+        "valid": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["authorLogin", "checkSelector", "reason", "expiresAt"],
+            "additionalProperties": false,
+            "properties": {
+              "authorLogin": { "type": "string" },
+              "checkSelector": { "type": "string" },
+              "reason": { "type": "string" },
+              "expiresAt": { "type": "string" }
+            }
+          }
+        },
+        "expired": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["authorLogin", "checkSelector", "expiresAt"],
+            "additionalProperties": false,
+            "properties": {
+              "authorLogin": { "type": "string" },
+              "checkSelector": { "type": "string" },
+              "expiresAt": { "type": "string" }
+            }
+          }
+        },
+        "wrongHead": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["authorLogin", "checkSelector", "waiverHeadSha"],
+            "additionalProperties": false,
+            "properties": {
+              "authorLogin": { "type": "string" },
+              "checkSelector": { "type": "string" },
+              "waiverHeadSha": { "type": "string" }
+            }
+          }
+        },
+        "wrongClaim": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["authorLogin", "checkSelector", "waiverClaimId"],
+            "additionalProperties": false,
+            "properties": {
+              "authorLogin": { "type": "string" },
+              "checkSelector": { "type": "string" },
+              "waiverClaimId": { "type": "string" }
+            }
+          }
+        },
+        "unauthorized": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["authorLogin", "checkSelector", "expiresAt"],
+            "additionalProperties": false,
+            "properties": {
+              "authorLogin": { "type": "string" },
+              "checkSelector": { "type": "string" },
+              "expiresAt": { "type": "string" }
+            }
+          }
+        },
+        "malformed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["authorLogin", "bodyPreview"],
+            "additionalProperties": false,
+            "properties": {
+              "authorLogin": { "type": "string" },
+              "bodyPreview": { "type": "string" }
             }
           }
         }

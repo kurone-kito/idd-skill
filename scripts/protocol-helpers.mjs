@@ -351,6 +351,82 @@ export function renderExternalCheckWaiverComment(payload) {
   ].join("\n");
 }
 
+function matchCheckSelectorLocal(name, selector) {
+  const n = String(name ?? "").trim();
+  const s = String(selector ?? "").trim();
+  if (!n || !s) return false;
+  if (s.includes("*")) {
+    const source = s.replace(/[|\\{}()[\]^$+?.]/g, "\\$&").replace(/\*/g, ".*");
+    return new RegExp(`^${source}$`).test(n);
+  }
+  return n === s;
+}
+
+export function summarizeExternalCheckWaivers(comments, {
+  prHeadSha = "",
+  activeClaimId = "",
+  trustedMarkerLogins = [],
+  now = "",
+} = {}) {
+  const trustedSet = new Set(normalizeTrustedMarkerLogins(trustedMarkerLogins));
+  const nowMs = isValidIsoTimestamp(now) ? new Date(now).getTime() : Date.now();
+  const headShaLower = String(prHeadSha).toLowerCase();
+  const activeClaimLower = String(activeClaimId);
+
+  const valid = [];
+  const expired = [];
+  const wrongHead = [];
+  const wrongClaim = [];
+  const unauthorized = [];
+  const malformed = [];
+
+  for (const comment of comments ?? []) {
+    const body = String(comment?.body ?? "");
+    if (!body.includes("idd-external-check-waiver")) continue;
+
+    const authorLogin = String(
+      comment?.author?.login ?? comment?.user?.login ?? "",
+    ).trim().toLowerCase();
+    const createdAt = String(comment?.created_at ?? comment?.createdAt ?? "");
+    const parsed = parseExternalCheckWaiverComment(body, createdAt);
+
+    if (!parsed) {
+      malformed.push({ authorLogin, bodyPreview: body.slice(0, 120) });
+      continue;
+    }
+
+    if (!trustedSet.has(authorLogin)) {
+      unauthorized.push({ authorLogin, checkSelector: parsed.checkSelector, expiresAt: parsed.expiresAt });
+      continue;
+    }
+
+    if (headShaLower && parsed.headSha !== headShaLower) {
+      wrongHead.push({ authorLogin, checkSelector: parsed.checkSelector, waiverHeadSha: parsed.headSha });
+      continue;
+    }
+
+    if (activeClaimLower && parsed.claimId !== activeClaimLower) {
+      wrongClaim.push({ authorLogin, checkSelector: parsed.checkSelector, waiverClaimId: parsed.claimId });
+      continue;
+    }
+
+    const expiresMs = new Date(parsed.expiresAt).getTime();
+    if (!Number.isFinite(expiresMs) || expiresMs <= nowMs) {
+      expired.push({ authorLogin, checkSelector: parsed.checkSelector, expiresAt: parsed.expiresAt });
+      continue;
+    }
+
+    valid.push({
+      authorLogin,
+      checkSelector: parsed.checkSelector,
+      reason: parsed.reason,
+      expiresAt: parsed.expiresAt,
+    });
+  }
+
+  return { valid, expired, wrongHead, wrongClaim, unauthorized, malformed };
+}
+
 export function parseExternalCheckWaiverComment(body, createdAt) {
   const match = body.trimEnd().match(
     new RegExp(
@@ -1649,22 +1725,31 @@ export function summarizeBranchReviewRequirements(branchRules = [], branchProtec
   };
 }
 
-export function summarizeRequiredChecks(checks = [], branchRules = [], branchProtection = {}) {
+export function summarizeRequiredChecks(checks = [], branchRules = [], branchProtection = {}, { waivers = null } = {}) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(branchRules, branchProtection);
   const requiredCheckNames = branchReviewRequirements.requiredCheckNames;
   const requiredCheckNameSet = new Set(requiredCheckNames);
-  const normalizedChecks = checks.map((check) => ({
-    name: String(check.name ?? ""),
-    state: String(check.state ?? "").toUpperCase(),
-    completedAt: String(check.completedAt ?? ""),
-  }));
+  const validWaivers = waivers?.valid ?? [];
+  const SUCCESS_STATES = new Set(["SUCCESS", "SKIPPED", "NEUTRAL", "NOT_APPLICABLE"]);
+
+  const normalizedChecks = checks.map((check) => {
+    const name = String(check.name ?? "");
+    const state = String(check.state ?? "").toUpperCase();
+    const coveredByWaiver = !SUCCESS_STATES.has(state)
+      && validWaivers.some((w) => matchCheckSelectorLocal(name, w.checkSelector));
+    return { name, state, completedAt: String(check.completedAt ?? ""), coveredByWaiver };
+  });
+
   const matchedRequiredChecks = normalizedChecks.filter((check) => requiredCheckNameSet.has(check.name));
   const presentNames = new Set(matchedRequiredChecks.map((check) => check.name));
   const missingRequiredCheckNames = requiredCheckNames.filter((name) => !presentNames.has(name));
 
   let status = "unknown";
   if (requiredCheckNames.length > 0) {
-    const ciClassification = classifyCiChecks(matchedRequiredChecks);
+    const effectiveChecks = matchedRequiredChecks.map((c) =>
+      c.coveredByWaiver ? { ...c, state: "SKIPPED" } : c,
+    );
+    const ciClassification = classifyCiChecks(effectiveChecks);
     status = missingRequiredCheckNames.length > 0
       ? "missing"
       : ciClassification.status;
@@ -1686,6 +1771,7 @@ export function summarizeRequiredChecks(checks = [], branchRules = [], branchPro
       state: check.state,
       completedAt: isValidIsoTimestamp(check.completedAt) ? check.completedAt : "",
       required: requiredCheckNameSet.has(check.name),
+      ...(check.coveredByWaiver ? { coveredByWaiver: true } : {}),
     })),
   };
 }
@@ -2284,7 +2370,6 @@ export function buildPreMergeReadinessSummary(
     viewerTeamSlugs: options.viewerTeamSlugs,
     viewerAppSlug: options.viewerAppSlug,
   });
-  const ci = summarizeRequiredChecks(checks, branchRules, branchProtection);
   const advisoryWaitOptions = normalizeAdvisoryWaitRuntimeOptions(options);
   const advisoryWait = buildAdvisoryWaitSummary(
     {
@@ -2313,6 +2398,13 @@ export function buildPreMergeReadinessSummary(
     expectedClaimId: options.expectedClaimId,
     expectedAgentId: options.expectedAgentId,
   });
+  const waiverEvidence = summarizeExternalCheckWaivers(comments, {
+    prHeadSha,
+    activeClaimId: claim.activeClaim?.claimId ?? options.activeClaimId ?? "",
+    trustedMarkerLogins,
+    now,
+  });
+  const ci = summarizeRequiredChecks(checks, branchRules, branchProtection, { waivers: waiverEvidence });
 
   const dispositionEvidence = options.includeDispositionEvidence
     ? summarizeDispositionEvidenceForGate(
@@ -2382,6 +2474,7 @@ export function buildPreMergeReadinessSummary(
     },
     ci,
     claim,
+    waiverEvidence,
   };
 
   if (dispositionEvidence) {

@@ -356,8 +356,12 @@ The adopted helper boundaries are intentionally narrow:
 
 - `pre-merge-readiness.mjs` is read-only, emits machine-readable F2/F3
   evidence including review currency, unresolved-thread state,
-  unreplied comments, reviewer states, advisory state, CI, and claim
-  validation
+  unreplied comments, reviewer states, advisory state, CI, claim
+  validation, and `waiverEvidence` (parsed external-check waiver comments
+  classified as `valid`, `expired`, `wrongHead`, `wrongClaim`,
+  `unauthorized`, or `malformed`; checks covered by a valid waiver are
+  reported with `coveredByWaiver: true` and treated as passing by the CI
+  gate)
 - it does not replace the pre-merge or merge decision tables; it only
   reduces command-copy variance when collecting canonical merge-gate
   evidence
