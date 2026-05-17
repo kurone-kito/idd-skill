@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const DEFAULT_MARKER_PREFIX = "idd-skill";
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({ __iddLookupStatus: "inaccessible" });
 const INACCESSIBLE_HTTP_STATUSES = new Set([403, 410, 451]);
+const KEYWORD_REFERENCE_REGEX = /\b(Closes|Close|Closed|Fixes|Fixed|Resolves|Resolved|Refs|Ref|Depends on|Blocked by|Sub-issue|Sub issue)\b/giu;
 const SUB_ISSUES_QUERY = `
 query($owner:String!, $repo:String!, $number:Int!, $after:String) {
   repository(owner:$owner, name:$repo) {
@@ -67,12 +68,13 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     unresolvedReferences: [],
   };
   const pathKeys = new Set();
+  const visitedIssuePaths = new Set();
   const edgeKeys = new Set();
   const duplicateKeys = new Set();
   const cycleKeys = new Set();
   const inaccessibleKeys = new Set();
   const unresolvedKeys = new Set();
-  const expanded = new Set();
+  const referenceCache = new Map();
   const firstReferenceByTarget = new Map();
 
   const rootIssue = await getIssue(rootIssueNumber, issueCache, loadIssue);
@@ -145,17 +147,14 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       return;
     }
 
-    recordNode(issue, path);
-    if (expanded.has(issue.number)) {
+    const visitKey = `${issue.number}:${path.join(">")}`;
+    if (visitedIssuePaths.has(visitKey)) {
       return;
     }
-    expanded.add(issue.number);
+    visitedIssuePaths.add(visitKey);
 
-    const references = [
-      ...extractTaskListReferences(issue.body),
-      ...extractKeywordReferences(issue.body),
-      ...normalizeSubIssueReferences(await loadSubIssues(issue.number)),
-    ];
+    recordNode(issue, path);
+    const references = await getReferences(issue);
     const seenSourceTargets = new Set();
 
     for (const reference of references) {
@@ -213,6 +212,19 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       recordProvenancePath(edge.target, nextPath);
       await visitIssue(edge.target, nextPath);
     }
+  }
+
+  async function getReferences(issue) {
+    if (referenceCache.has(issue.number)) {
+      return referenceCache.get(issue.number);
+    }
+    const references = [
+      ...extractTaskListReferences(issue.body),
+      ...extractKeywordReferences(issue.body),
+      ...normalizeSubIssueReferences(await loadSubIssues(issue.number)),
+    ];
+    referenceCache.set(issue.number, references);
+    return references;
   }
 
   function recordNode(issue, path) {
@@ -300,17 +312,23 @@ export function extractTaskListReferences(body) {
 export function extractKeywordReferences(body) {
   const references = [];
   for (const line of String(body ?? "").split(/\r?\n/u)) {
-    const regex = /\b(Closes|Close|Closed|Fixes|Fixed|Resolves|Resolved|Refs|Ref|Depends on|Sub-issue|Sub issue)\s+#(\d+)\b/giu;
-    for (const match of line.matchAll(regex)) {
-      const target = Number.parseInt(match[2], 10);
-      if (!Number.isInteger(target) || target <= 0) {
-        continue;
+    const keywordMatches = [...line.matchAll(KEYWORD_REFERENCE_REGEX)];
+    for (let index = 0; index < keywordMatches.length; index += 1) {
+      const match = keywordMatches[index];
+      const segmentStart = (match.index ?? 0) + match[0].length;
+      const segmentEnd = keywordMatches[index + 1]?.index ?? line.length;
+      const segment = line.slice(segmentStart, segmentEnd);
+      for (const targetMatch of segment.matchAll(/#(\d+)\b/gu)) {
+        const target = Number.parseInt(targetMatch[1], 10);
+        if (!Number.isInteger(target) || target <= 0) {
+          continue;
+        }
+        references.push({
+          target,
+          relationship: classifyKeywordRelationship(match[1]),
+          evidence: line.trim(),
+        });
       }
-      references.push({
-        target,
-        relationship: classifyKeywordRelationship(match[1]),
-        evidence: line.trim(),
-      });
     }
   }
   return references;
@@ -318,7 +336,7 @@ export function extractKeywordReferences(body) {
 
 function classifyKeywordRelationship(keyword) {
   const normalized = String(keyword ?? "").toLowerCase();
-  if (normalized.startsWith("depend")) {
+  if (normalized.startsWith("depend") || normalized.startsWith("blocked")) {
     return "dependency";
   }
   if (normalized.startsWith("sub")) {
@@ -443,17 +461,21 @@ function normalizeLabels(labelsInput) {
     return new Set();
   }
   if (labelsInput instanceof Set) {
-    return new Set([...labelsInput].map((label) => String(label ?? "")).filter(Boolean));
+    return new Set([...labelsInput].map(normalizeLabelName).filter(Boolean));
   }
   if (Array.isArray(labelsInput)) {
     return new Set(labelsInput.map((label) => {
       if (typeof label === "string") {
-        return label;
+        return normalizeLabelName(label);
       }
-      return String(label?.name ?? "");
+      return normalizeLabelName(label?.name);
     }).filter(Boolean));
   }
   return new Set();
+}
+
+function normalizeLabelName(label) {
+  return String(label ?? "").trim().toLowerCase();
 }
 
 function normalizeMarkerPrefix(markerPrefix) {

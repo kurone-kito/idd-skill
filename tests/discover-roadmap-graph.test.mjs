@@ -39,10 +39,28 @@ Sub-issue #105
   assert.deepEqual(
     classifyIssue({
       body,
-      labels: [{ name: "roadmap" }],
+      labels: [{ name: "Roadmap" }],
     }),
     { kind: "roadmap", roadmapMarkerId: "root-roadmap" },
   );
+});
+
+test("extractKeywordReferences parses blocked dependencies and multi-target lists", () => {
+  const body = `
+Refs #201, #202
+Blocked by #203
+Depends on #204, #205
+Sub issue #206
+`;
+
+  assert.deepEqual(extractKeywordReferences(body), [
+    { target: 201, relationship: "reference", evidence: "Refs #201, #202" },
+    { target: 202, relationship: "reference", evidence: "Refs #201, #202" },
+    { target: 203, relationship: "dependency", evidence: "Blocked by #203" },
+    { target: 204, relationship: "dependency", evidence: "Depends on #204, #205" },
+    { target: 205, relationship: "dependency", evidence: "Depends on #204, #205" },
+    { target: 206, relationship: "sub-issue-reference", evidence: "Sub issue #206" },
+  ]);
 });
 
 test("enumerates a flat roadmap graph and separates execution candidates", async () => {
@@ -160,6 +178,28 @@ test("records duplicate references and cycles without recursing forever", async 
       path: [300, 301, 300],
     },
   ]);
+});
+
+test("keeps traversing descendants when a shared node is reached through multiple paths", async () => {
+  const issues = new Map([
+    [350, roadmapIssue(350, "- [ ] #351\n- [ ] #352", "root-roadmap")],
+    [351, executionIssue(351, "Refs #353")],
+    [352, executionIssue(352, "Refs #353")],
+    [353, executionIssue(353, "Refs #354")],
+    [354, executionIssue(354, "leaf execution")],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(350, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(
+    graph.provenancePaths.filter((entry) => entry.target === 354),
+    [
+      { target: 354, path: [350, 351, 353, 354] },
+      { target: 354, path: [350, 352, 353, 354] },
+    ],
+  );
 });
 
 test("reports inaccessible and unresolved references fail-safe", async () => {
