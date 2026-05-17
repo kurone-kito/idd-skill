@@ -127,7 +127,7 @@ IDD は instruction の増加を、手作業のファイル数カウントでは
 | ------------------------------------- | ------------ |
 | 常時ロード instruction ファイル       | 20,000 bytes |
 | フェーズ instruction ファイル         | 30,000 bytes |
-| Discovery bundle (`bundle-discovery`) | 75,200 bytes |
+| Discovery bundle (`bundle-discovery`) | 75,300 bytes |
 | Resume bundle (`bundle-resume`)       | 46,000 bytes |
 
 正規の値と所有箇所は

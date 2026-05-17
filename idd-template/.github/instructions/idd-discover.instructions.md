@@ -257,6 +257,9 @@ traversal-only coordination nodes:
   A3/A4/A4.5/A5.
 - Track open roadmap nodes separately and report them alongside the A2
   execution candidates.
+- The root roadmap selected by A1 is the traversal starting point and
+  is not added to the roadmap-node set; only issues discovered through
+  its outbound references are classified and reported.
 
 **Permitted repo-wide queries** — only the following scoped lookups may
 touch issues outside the roadmap traversal graph:
