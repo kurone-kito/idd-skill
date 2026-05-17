@@ -207,6 +207,15 @@ const HELPER_COMMANDS = [
     vendoredCommand: "node scripts/review-disposition-verify.mjs",
     description: "Verify disposition marker presence on review items for E7 meta-check.",
   },
+  {
+    id: "branch-conflict-state",
+    scriptName: "idd:branch-conflict-state",
+    binName: "idd-branch-conflict-state",
+    entryPath: "scripts/branch-conflict-state.mjs",
+    vendoredCommand: "node scripts/branch-conflict-state.mjs",
+    description: "Collect read-only branch conflict and synchronization state evidence for a PR.",
+    contractPaths: ["schemas/branch-conflict-state.schema.json"],
+  },
 ];
 
 if (isMainModule(import.meta.url)) {

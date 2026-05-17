@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/branch-conflict-state.schema.json",
+  "title": "Branch Conflict State",
+  "description": "Read-only branch conflict and synchronization state evidence for a PR head.",
+  "type": "object",
+  "required": [
+    "protocolVersion",
+    "prNumber",
+    "prHeadSha",
+    "prBaseSha",
+    "published",
+    "mergeable",
+    "mergeStateStatus",
+    "branchState",
+    "syncRecommendation",
+    "readOnly",
+    "worktreeUnchanged"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "pattern": "^1$"
+    },
+    "prNumber": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "prHeadSha": {
+      "type": "string",
+      "pattern": "^$|^[0-9a-f]{40}$"
+    },
+    "prBaseSha": {
+      "type": "string",
+      "pattern": "^$|^[0-9a-f]{40}$"
+    },
+    "published": {
+      "type": "boolean"
+    },
+    "mergeable": {
+      "enum": ["MERGEABLE", "CONFLICTING", "UNKNOWN", null]
+    },
+    "mergeStateStatus": {
+      "enum": ["CLEAN", "BLOCKED", "BEHIND", "DIRTY", "DRAFT", "HAS_HOOKS", "UNSTABLE", "UNKNOWN", null]
+    },
+    "branchState": {
+      "type": "string",
+      "enum": [
+        "clean",
+        "behind-no-conflict",
+        "content-conflict",
+        "dirty",
+        "force-push-exception",
+        "unknown"
+      ]
+    },
+    "syncRecommendation": {
+      "type": "string",
+      "enum": [
+        "none",
+        "merge-main",
+        "policy-required-update",
+        "force-push-exception",
+        "hold-unknown"
+      ]
+    },
+    "readOnly": {
+      "type": "boolean"
+    },
+    "worktreeUnchanged": {
+      "type": "boolean"
+    },
+    "diagnostics": {
+      "type": "object",
+      "properties": {
+        "mergeableSource": {
+          "type": "string"
+        },
+        "conflictFiles": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

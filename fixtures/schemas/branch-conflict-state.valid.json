@@ -1,0 +1,18 @@
+{
+  "protocolVersion": "1",
+  "prNumber": 101,
+  "prHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "prBaseSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "published": true,
+  "mergeable": "MERGEABLE",
+  "mergeStateStatus": "CLEAN",
+  "branchState": "clean",
+  "syncRecommendation": "none",
+  "readOnly": true,
+  "worktreeUnchanged": true,
+  "diagnostics": {
+    "mergeableSource": "github-mergeable",
+    "conflictFiles": [],
+    "notes": []
+  }
+}
