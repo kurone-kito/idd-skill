@@ -235,14 +235,15 @@ function tryFetchBase(prBaseRef, owner, repo, notes) {
   }
 }
 
-function parseConflictFiles(mergeTreeOutput) {
+export function parseConflictFiles(mergeTreeOutput) {
   const files = new Set();
   for (const line of mergeTreeOutput.split("\n")) {
     // "CONFLICT (content): Merge conflict in path/to/file"
     // "CONFLICT (add/add): Merge conflict in path/to/file"
-    const contentMatch = line.match(/^CONFLICT\s+\((?:content|add\/add)\):\s+.*\s+in\s+(.+?)\s*$/i);
-    if (contentMatch) {
-      files.add(contentMatch[1].trim());
+    // Any conflict type whose message ends with "Merge conflict in <path>"
+    const mergeConflictMatch = line.match(/^CONFLICT\s+\([^)]+\):\s+Merge conflict in\s+(.+?)\s*$/i);
+    if (mergeConflictMatch) {
+      files.add(mergeConflictMatch[1].trim());
       continue;
     }
     // "CONFLICT (modify/delete): <path> deleted in ... and modified in ..."

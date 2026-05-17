@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { classifyBranchConflictState } from "../scripts/branch-conflict-state.mjs";
+import { classifyBranchConflictState, parseConflictFiles } from "../scripts/branch-conflict-state.mjs";
 
 function loadFixture(name) {
   return JSON.parse(
@@ -123,6 +123,38 @@ test("classifyBranchConflictState: BEHIND without conflict recommends merge-main
     result.branchState === "behind-no-conflict" || result.branchState === "unknown",
     `expected behind-no-conflict or unknown, got ${result.branchState}`,
   );
+});
+
+test("parseConflictFiles: parses content conflict lines", () => {
+  const output = "CONFLICT (content): Merge conflict in src/foo.ts\n";
+  assert.deepEqual(parseConflictFiles(output), ["src/foo.ts"]);
+});
+
+test("parseConflictFiles: parses add/add conflict lines", () => {
+  const output = "CONFLICT (add/add): Merge conflict in src/bar.ts\n";
+  assert.deepEqual(parseConflictFiles(output), ["src/bar.ts"]);
+});
+
+test("parseConflictFiles: parses modify/delete conflict lines", () => {
+  const output = "CONFLICT (modify/delete): src/baz.ts deleted in HEAD and modified in feature\n";
+  assert.deepEqual(parseConflictFiles(output), ["src/baz.ts"]);
+});
+
+test("parseConflictFiles: parses rename/delete conflict lines", () => {
+  const output = "CONFLICT (rename/delete): old.ts renamed to new.ts in feature and deleted in HEAD\n";
+  assert.deepEqual(parseConflictFiles(output), ["old.ts"]);
+});
+
+test("parseConflictFiles: deduplicates repeated conflict paths", () => {
+  const output =
+    "CONFLICT (content): Merge conflict in src/foo.ts\n" +
+    "CONFLICT (add/add): Merge conflict in src/foo.ts\n";
+  assert.deepEqual(parseConflictFiles(output), ["src/foo.ts"]);
+});
+
+test("parseConflictFiles: returns empty array for clean merge output", () => {
+  const output = "Merge made by the 'ort' strategy.\n src/foo.ts | 2 ++\n";
+  assert.deepEqual(parseConflictFiles(output), []);
 });
 
 test("classifyBranchConflictState: post-push merge recommendation for BEHIND is merge-main", async () => {
