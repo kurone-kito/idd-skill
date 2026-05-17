@@ -13,6 +13,8 @@ In the idd-skill source repository, the following optional helpers were adopted:
 - `scripts/discover-orphan-filter.mjs` for A0-O orphan issue detection and
   filtering (referenced in
   [kurone-kito/idd-skill#390](https://github.com/kurone-kito/idd-skill/issues/390))
+- `scripts/discover-roadmap-graph.mjs` for A1.5/A2 recursive roadmap graph
+  enumeration and classification
 - `scripts/discover-readiness-check.mjs` for A3 readiness criterion
   evaluation (referenced in
   [kurone-kito/idd-skill#391](https://github.com/kurone-kito/idd-skill/issues/391))
@@ -147,6 +149,40 @@ rules remain authoritative when outputs diverge.
 For discover and suitability, use the adopted helpers first when helper
 support is enabled, then fall back to the portable instructions if a
 helper is unavailable or its output does not match the written rules.
+
+### Discover Roadmap Graph Contract
+
+`scripts/discover-roadmap-graph.mjs` evaluates the recursive A1.5/A2
+roadmap graph for one selected roadmap issue.
+
+- **Inputs**: `--issue <number>`, with optional `--owner <owner>`,
+  `--repo <repo>`, and `--policy <path>`.
+- **JSON output**:
+  - `root`: `{ number: number, title: string, state: string,`
+    `classification: "roadmap" | "execution", roadmapMarkerId: string }`
+  - `nodes`: `[{ number: number, title: string, state: string,`
+    `labels: string[], classification: "roadmap" | "execution",`
+    `roadmapMarkerId: string, depth: number }]`
+  - `edges`: `[{ source: number, target: number, relationship: string,`
+    `evidence: string }]`
+  - `provenancePaths`: `[{ target: number, path: number[] }]`
+  - `roadmapNodes`: `number[]`
+  - `executionCandidates`: `number[]`
+  - `diagnostics`: `{ duplicateReferences: object[], cycles: object[],`
+    `inaccessibleReferences: object[], unresolvedReferences: object[] }`
+  - `summary`: `{ rootNumber: number, nodeCount: number, edgeCount: number,`
+    `roadmapNodeCount: number, executionCandidateCount: number,`
+    `duplicateReferenceCount: number, cycleCount: number,`
+    `inaccessibleReferenceCount: number, unresolvedReferenceCount: number,`
+    `maxDepth: number }`
+- **Error conditions**: missing `--issue`, unknown flags, an unreadable
+  root roadmap, or incomplete `subIssues` GraphQL data throw. Missing or
+  inaccessible descendants are reported in `diagnostics` instead of
+  crashing.
+- **Behavior boundary**: the helper is evidence-only. It may read issue
+  bodies and GitHub sub-issue relationships, but it must not claim
+  issues, edit roadmap bodies, close roadmap nodes, or decide readiness
+  by itself.
 
 ### Discover Viability Gate Contract
 
