@@ -9,7 +9,7 @@ the shared claim revalidation gate. The active claim must still use your
 current `{claim-id}`.
 
 **Skip condition E8**: if the Accepted PATH A count after verification
-is zero, proceed to `idd-pre-merge.instructions.md`.
+is zero, proceed to the **E-phase branch-sync check** below.
 
 ## E4 — Classify and score ReviewItems_snapshot
 
@@ -232,10 +232,55 @@ return to E1 afterward.
 
 ## E8 — Accepted PATH A count check
 
-If the Accepted PATH A count is zero → proceed to
-`idd-pre-merge.instructions.md`.
+If the Accepted PATH A count is zero → proceed to the
+**E-phase branch-sync check** below.
 
 Otherwise continue to `idd-review-fix.instructions.md`.
+
+## E-phase branch-sync check
+
+After the review loop confirms no PATH A items remain (from E3 or E8),
+check the current branch state before routing to F-phase. This gate uses
+merge-from-`main` (never rebase) when synchronization is required,
+preserving review history on the already-published PR branch.
+
+When helper runtime is enabled, call:
+`idd-branch-conflict-state --pr {pr-number}`
+
+Otherwise read branch state directly:
+
+```sh
+gh pr view {pr-number} --json mergeable,mergeStateStatus
+```
+
+Route based on `branchState` from the helper (or `mergeable` /
+`mergeStateStatus` from `gh pr view`):
+
+- **`clean`** or **`behind-no-conflict`** when branch protection does not
+  require an up-to-date head: proceed to
+  `idd-pre-merge.instructions.md` (F1).
+- **`behind-no-conflict`** when branch protection or recorded repository
+  policy requires an up-to-date head: → **sync path** below.
+- **`content-conflict`** (`mergeable` is `CONFLICTING`): → **sync path**
+  below.
+- **`dirty`** (`mergeStateStatus` is `DIRTY`) or **`unknown`**: hold; post
+  a PR comment documenting the state and stop. Do not proceed to F-phase
+  without confirmed branch-state evidence.
+
+**Sync path** (merge-from-`main`):
+
+1. **Active review gate**: if the PR has unresolved review threads,
+   unreplied comments, or any reviewer's latest state is
+   `CHANGES_REQUESTED`, get explicit operator confirmation before merging
+   `main` into the feature branch, as the merge commit will appear in the
+   PR history.
+2. Merge `main` into the feature branch:
+   `git fetch origin main && git merge origin/main`
+3. If conflicts arise, resolve them and complete the merge.
+4. Run **post-fix-validate**.
+5. Push the feature branch normally (no force push required for merge
+   commits).
+6. Return to `idd-review-snapshot.instructions.md` (E1).
 
 ## Review item classes
 

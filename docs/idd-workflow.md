@@ -50,9 +50,9 @@ entry file should be an explicit operator choice, not the default.
 | `.github/instructions/idd-ci.instructions.md`              | D4/E15 helper: shared CI polling helper used by later phases                                                    |
 | `.github/instructions/idd-advisory-wait.instructions.md`   | AW1-AW5 helper: shared Copilot advisory-wait protocol (E14, F2, F3)                                             |
 | `.github/instructions/idd-review-snapshot.instructions.md` | E1–E3: fetch activity snapshot, run critique, check if ReviewItems_snapshot is empty                            |
-| `.github/instructions/idd-review-triage.instructions.md`   | E4–E8: classify items, score, and record dispositions                                                           |
-| `.github/instructions/idd-review-fix.instructions.md`      | E9-E15: fix accepted review items and push follow-up commits                                                    |
-| `.github/instructions/idd-pre-merge.instructions.md`       | F1–F2: resolve conflicts and verify all pre-merge conditions                                                    |
+| `.github/instructions/idd-review-triage.instructions.md`   | E4–E8: classify items, score, record dispositions, and run E-phase branch-sync check before F-phase             |
+| `.github/instructions/idd-review-fix.instructions.md`      | E9-E15: fix accepted review items and push follow-up commits (merge-from-main, not rebase)                      |
+| `.github/instructions/idd-pre-merge.instructions.md`       | F1: final read-only branch-state check; F2: verify all pre-merge conditions                                     |
 | `.github/instructions/idd-merge-handoff.instructions.md`   | F2.5: resolve merge-policy handoff vs autonomous merge routing                                                  |
 | `.github/instructions/idd-merge.instructions.md`           | F3–F5: execute the merge, clean up, and loop back to discover                                                   |
 | `.github/instructions/idd-resume.instructions.md`          | Resume Step 0-3: route crash, stalled, stale-takeover, or clean continuation                                    |

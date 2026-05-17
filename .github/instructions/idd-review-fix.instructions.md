@@ -54,19 +54,22 @@ Convergence guardrails:
 ## E11 — Resolve conflicts with main
 
 Check for conflicts between the feature branch and `main`. If conflicts
-exist, rebase the feature branch onto `main`, resolve any conflicts, and
-continue the rebase.
+exist, merge `main` into the feature branch
+(`git fetch origin main && git merge origin/main`), resolve any
+conflicts, and complete the merge.
 
 **Active review gate**: if the PR has unresolved review threads,
 unreplied comments, or any reviewer's latest state is
-`CHANGES_REQUESTED`, get explicit operator confirmation before rebasing,
-as the history rewrite can disrupt ongoing review.
+`CHANGES_REQUESTED`, get explicit operator confirmation before merging
+`main` into the feature branch, as the merge commit will appear in the
+PR history.
 
 ## E12 — Lint, test, push
 
 Run **post-fix-validate**.
 
-Then push with `--force-with-lease` (E11 uses rebase).
+Then push the feature branch normally (E11 uses merge commits, not
+rebase, so no force push is required).
 
 ## E13 — Reply to feedback
 
