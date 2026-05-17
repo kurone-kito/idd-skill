@@ -110,10 +110,10 @@ Self-review confirmed:
 - Route: `/events/[id]`
 - Server Component; fetches `GET /api/events/[id]`
 - Calls `notFound()` for missing events → renders the 404 page
-- Visual: clicking an `EventCard` from the list opens a detail page
-  showing the event title as `h1`, category badge, full start/end
-  datetime, optional world name and world ID, a multi-line description
-  if present, and a Back to events link at the bottom
+- Visual: navigating to `/events/[id]` shows the event title as `h1`,
+  category badge, full start/end datetime, optional world name and
+  world ID, a multi-line description if present, and a Back to events
+  link at the bottom
 - Merged: `2026-05-17 23:43:46 JST`
 - PR: <https://github.com/kurone-kito/vrc-event-calendar/pull/23>
 
@@ -274,13 +274,15 @@ Added three Playwright smoke tests to `e2e/smoke.spec.ts`:
    new event's detail page
 
 Note: `npm run test:e2e` requires a running dev server and seeded
-database. These tests are designed for local validation per the README
-Quick Start; they are excluded from the automated CI workflow.
+database; the tests were validated via app structure inspection rather
+than a full automated run. The original issue #579 scope included an
+optional non-blocking `test:e2e` CI job, but PR #35 deferred the CI
+integration and excluded E2E from the automated workflow.
 
 - Merged: `2026-05-18 01:02:42 JST`
 
-> **Note:** After F4 merged, the MVP feature set was complete, the
-> quality gate was green, and the Playwright E2E suite validated all
-> three critical user paths. The VRChat Event Calendar application was
-> operational end-to-end and ready for the documentation phase of the
-> workshop.
+> **Note:** After F4 merged, the MVP feature set was complete and the
+> quality gate was green. The Playwright E2E tests cover the three
+> critical user paths via app structure validation. The VRChat Event
+> Calendar application was operationally complete and ready for the
+> documentation phase of the workshop.
