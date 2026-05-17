@@ -223,12 +223,10 @@ boundary that a flat task list cannot express cleanly:
 
 - **Parallel tracks**: two sub-roadmaps that operate independently and
   merge on different schedules (for example, a data-layer track and a UI
-  track that each have their own checkpoints before the parent can close).
+  track that each need their own lifecycle before the parent can close).
 - **Multi-session handoff**: a sub-roadmap that a different team or agent
   pool owns, where the parent roadmap should stay open until that team
   signals completion at the sub-roadmap level.
-- **Phase gates**: a project that has a documented checkpoint issue
-  (CP-A, CP-B, …) after which a group of sub-tasks becomes relevant.
 
 If the only reason to nest is that the task list feels long, keep the
 flat structure and use numbered sections inside the roadmap body instead.
