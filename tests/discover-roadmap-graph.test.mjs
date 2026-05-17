@@ -63,14 +63,32 @@ Sub issue #206
   ]);
 });
 
-test("extractKeywordReferences ignores cross-repository references", () => {
+test("extractKeywordReferences ignores cross-repository references but keeps same-repo qualified refs", () => {
   const body = `
 Refs other/repo#301, #302
 Depends on kurone-kito/idd-skill#303
 `;
 
-  assert.deepEqual(extractKeywordReferences(body), [
+  assert.deepEqual(extractKeywordReferences(body, {
+    owner: "kurone-kito",
+    repo: "idd-skill",
+  }), [
     { target: 302, relationship: "reference", evidence: "Refs other/repo#301, #302" },
+    { target: 303, relationship: "dependency", evidence: "Depends on kurone-kito/idd-skill#303" },
+  ]);
+});
+
+test("extractKeywordReferences stops before incidental narrative mentions", () => {
+  const body = `
+Refs #401; similar to #402
+Depends on #403, #404 and #405
+`;
+
+  assert.deepEqual(extractKeywordReferences(body), [
+    { target: 401, relationship: "reference", evidence: "Refs #401; similar to #402" },
+    { target: 403, relationship: "dependency", evidence: "Depends on #403, #404 and #405" },
+    { target: 404, relationship: "dependency", evidence: "Depends on #403, #404 and #405" },
+    { target: 405, relationship: "dependency", evidence: "Depends on #403, #404 and #405" },
   ]);
 });
 
@@ -202,6 +220,30 @@ test("records duplicate references and cycles without recursing forever", async 
       target: 300,
       relationship: "task-list",
       path: [300, 301, 300],
+    },
+  ]);
+});
+
+test("counts exact duplicate references from the same issue body", async () => {
+  const issues = new Map([
+    [320, roadmapIssue(320, "- [ ] #321\n- [ ] #321", "root-roadmap")],
+    [321, executionIssue(321, "leaf execution")],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(320, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(graph.edges, [
+    { source: 320, target: 321, relationship: "task-list", evidence: "- [ ] #321" },
+  ]);
+  assert.deepEqual(graph.diagnostics.duplicateReferences, [
+    {
+      source: 320,
+      target: 321,
+      relationship: "task-list",
+      evidence: "- [ ] #321",
+      firstSeenFrom: 320,
     },
   ]);
 });

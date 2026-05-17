@@ -39,6 +39,8 @@ if (isMainModule(import.meta.url)) {
 
   const graph = await enumerateRoadmapGraph(args.issue, {
     markerPrefix: policy.markerPrefix,
+    owner,
+    repo,
     loadIssue: buildIssueLoader(owner, repo),
     loadSubIssues: buildSubIssueLoader(owner, repo),
   });
@@ -52,6 +54,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   const loadSubIssues = typeof options.loadSubIssues === "function"
     ? options.loadSubIssues
     : async () => [];
+  const currentRepoRef = normalizeRepoRef(options.owner, options.repo);
 
   if (typeof loadIssue !== "function") {
     throw new Error("enumerateRoadmapGraph requires loadIssue(issueNumber)");
@@ -159,6 +162,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     recordNode(issue, path);
     const references = await getReferences(issue);
     const seenSourceTargets = new Set();
+    const seenSourceEdgeKeys = new Set();
 
     for (const reference of references) {
       const edge = {
@@ -168,6 +172,11 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
         evidence: reference.evidence,
       };
       const edgeKey = buildEdgeKey(edge);
+      if (seenSourceEdgeKeys.has(edgeKey)) {
+        recordDuplicateReference(edge, edge);
+        continue;
+      }
+      seenSourceEdgeKeys.add(edgeKey);
       if (!edgeKeys.has(edgeKey)) {
         edgeKeys.add(edgeKey);
         edges.push(edge);
@@ -227,7 +236,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     }
     const references = [
       ...extractTaskListReferences(issue.body),
-      ...extractKeywordReferences(issue.body),
+      ...extractKeywordReferences(issue.body, { currentRepoRef }),
       ...normalizeSubIssueReferences(await loadSubIssues(issue.number)),
     ];
     referenceCache.set(issue.number, references);
@@ -319,8 +328,12 @@ export function extractTaskListReferences(body) {
     });
 }
 
-export function extractKeywordReferences(body) {
+export function extractKeywordReferences(body, options = {}) {
   const references = [];
+  const currentRepoRef = normalizeRepoRef(
+    options.currentRepoRef ? options.currentRepoRef.split("/")[0] : options.owner,
+    options.currentRepoRef ? options.currentRepoRef.split("/")[1] : options.repo,
+  );
   for (const line of String(body ?? "").split(/\r?\n/u)) {
     const keywordMatches = [...line.matchAll(KEYWORD_REFERENCE_REGEX)];
     for (let index = 0; index < keywordMatches.length; index += 1) {
@@ -328,12 +341,7 @@ export function extractKeywordReferences(body) {
       const segmentStart = (match.index ?? 0) + match[0].length;
       const segmentEnd = keywordMatches[index + 1]?.index ?? line.length;
       const segment = line.slice(segmentStart, segmentEnd);
-      for (const targetMatch of segment.matchAll(/#(\d+)\b/gu)) {
-        const hashIndex = targetMatch.index ?? -1;
-        if (hashIndex >= 0 && isCrossRepositoryReference(segment, hashIndex)) {
-          continue;
-        }
-        const target = Number.parseInt(targetMatch[1], 10);
+      for (const target of extractKeywordReferenceTargets(segment, currentRepoRef)) {
         if (!Number.isInteger(target) || target <= 0) {
           continue;
         }
@@ -362,9 +370,39 @@ function classifyKeywordRelationship(keyword) {
   return "closing-keyword";
 }
 
-function isCrossRepositoryReference(segment, hashIndex) {
-  const prefix = segment.slice(0, hashIndex);
-  return /[\w.-]+\/[\w.-]+$/u.test(prefix.trimEnd());
+function extractKeywordReferenceTargets(segment, currentRepoRef) {
+  const targets = [];
+  let remaining = String(segment ?? "").trimStart();
+
+  while (remaining) {
+    const match = remaining.match(/^(?:([\w.-]+\/[\w.-]+)#(\d+)|#(\d+))/u);
+    if (!match) {
+      break;
+    }
+
+    const qualifiedRepoRef = match[1] ? normalizeRepoRef(...match[1].split("/")) : "";
+    const target = Number.parseInt(match[2] ?? match[3] ?? "", 10);
+    if ((!qualifiedRepoRef || qualifiedRepoRef === currentRepoRef)
+      && Number.isInteger(target)
+      && target > 0) {
+      targets.push(target);
+    }
+
+    remaining = remaining.slice(match[0].length);
+    const separatorMatch = remaining.match(/^\s*(?:,\s*|\band\b\s*)/iu);
+    if (!separatorMatch) {
+      break;
+    }
+    remaining = remaining.slice(separatorMatch[0].length);
+  }
+
+  return targets;
+}
+
+function normalizeRepoRef(owner, repo) {
+  const normalizedOwner = String(owner ?? "").trim().toLowerCase();
+  const normalizedRepo = String(repo ?? "").trim().toLowerCase();
+  return normalizedOwner && normalizedRepo ? `${normalizedOwner}/${normalizedRepo}` : "";
 }
 
 function normalizeSubIssueReferences(subIssues) {
