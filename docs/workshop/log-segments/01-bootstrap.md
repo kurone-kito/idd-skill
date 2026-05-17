@@ -238,3 +238,8 @@ idd:ready
 > **Note:** A trial discover pass at this point sees zero open issues,
 > so the correct bootstrap-state outcome is "no viable candidates"
 > rather than an infrastructure error.
+>
+> **Transition — 76-minute pause:** The bootstrap session closed at
+> 18:25 JST. Track B (infrastructure setup) opened 76 minutes later
+> at 19:41 JST after a brief planning review. No IDD state was lost
+> during the pause — the repository remained fully IDD-operational.

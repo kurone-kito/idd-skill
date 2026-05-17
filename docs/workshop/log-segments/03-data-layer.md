@@ -213,6 +213,16 @@ if (process.env.NODE_ENV !== "production") {
 - Title: `build(prisma): add db singleton`
 - Merge commit: PR #13 landed at `2026-05-17 17:42:31 JST`
 
+> **Transition — 5-hour parallel window:** Approximately five hours
+> elapsed between the DB singleton merge (17:42 JST) and the C3 seed
+> script claim (22:40 JST). During this window, Track D (backend API)
+> ran in parallel: D1 (`GET /api/events`) was claimed at 17:45 JST and
+> merged at 17:52 JST. C3 resumed with the seed script at 22:40 JST
+> after the D-track D1 loop completed. Note: B7 (GitHub Actions CI) and
+> B8 (npm Docker scripts) completed later at 23:04 and 23:13 JST
+> respectively, after C3 merged — see the Track D segment for their
+> exact placement.
+
 ## [2026-05-17 22:40:00 JST] Claim Track C3 — Database Seed
 
 - Issue: `kurone-kito/idd-skill#560`
