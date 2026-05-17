@@ -6,6 +6,22 @@ created in this directory are ignored by git; publish curated workshop
 GIFs from the parent `docs/workshop/assets/` directory when an issue
 requires a checked-in asset.
 
+## Published Previews
+
+GitHub Markdown should render these checked-in workshop GIFs directly:
+
+### Workshop Header
+
+![Workshop header terminal recording preview](../workshop-header.gif)
+
+### IDD Cycle
+
+![IDD cycle terminal recording preview](../idd-cycle.gif)
+
+### Issue Authoring
+
+![Issue authoring terminal recording preview](../issue-authoring.gif)
+
 ## Prerequisites
 
 - [VHS](https://github.com/charmbracelet/vhs)
