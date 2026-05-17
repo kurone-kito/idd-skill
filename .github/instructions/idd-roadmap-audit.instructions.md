@@ -30,12 +30,25 @@ a specific autonomous gap before creating a follow-up issue; use those
 results only to link existing gap work or avoid creating a duplicate,
 not to widen A2 candidates.
 
+When the selected roadmap graph includes descendant issues that are
+themselves roadmap nodes, such as descendants carrying the `roadmap`
+label or a `idd-skill-roadmap-id` marker, treat those
+descendants as **nested roadmaps** rather than as normal execution
+leaves. A nested roadmap is a coordination/audit node in the recursive
+hierarchy: it may remain open while its own leaf descendants are still
+executing, and its presence does not by itself widen A2 candidates
+outside the selected roadmap graph.
+
 - If the roadmap itself has `status:blocked-by-human` or
   `status:needs-decision`, report the blocker and stop before A2. Do
   not continue selecting child issues under a blocked roadmap.
 - If any referenced child or descendant issue is open, inaccessible, or
   unresolved, report the provenance path and reason, then continue to
-  A2.
+  A2, unless the open descendant is a nested roadmap with at least one
+  reachable leaf descendant and all of those reachable leaf descendants
+  are closed or otherwise complete. In that special case, treat the
+  nested roadmap as the next completion target and continue applying
+  the bottom-up rules below before routing to A2.
 - If any referenced child or descendant has an open linked or closing
   PR that is not merged or otherwise obsolete, treat that child work as
   unresolved, report the PR, and continue to A2.
@@ -45,6 +58,28 @@ not to widen A2 candidates.
   ready-to-start rules. Do not treat stale blocker labels on closed
   children as audit blockers when their referenced descendants are
   resolved.
+- If an open leaf issue sits under an open nested roadmap, treat the
+  nested roadmap and every ancestor roadmap on that provenance path as
+  unresolved. Report the deepest blocking path and continue to A2.
+- If a nested roadmap has no reachable leaf descendants after
+  traversal, treat it as childless or malformed and continue to A2. Do
+  not treat an empty reachable-leaf set as proof of completion.
+- If a nested roadmap remains open after at least one reachable leaf
+  descendant exists and all reachable leaf descendants are closed or
+  otherwise complete, treat that nested roadmap as the **next
+  completion target**. Do not close its parent first. Re-evaluate the
+  graph bottom-up so the deepest completed nested roadmap is audited and
+  closed before its parent roadmap is considered complete.
+- If a nested roadmap appears closed but still has an open, inaccessible,
+  or otherwise unresolved descendant, treat that descendant as the
+  controlling unresolved state. Report the contradictory provenance path
+  and continue to A2; do not infer parent completion from the nested
+  roadmap's closed state alone.
+- If traversal or helper output reports a cycle or duplicate reference
+  inside the recursive roadmap graph, preserve that evidence and treat
+  the affected path as unresolved until the graph can be interpreted
+  safely. Do not guess at a closure order when the traversal graph is
+  ambiguous.
 - If all referenced child and descendant work is closed or otherwise
   complete, compare the roadmap success criteria against the closed
   child issues, linked merged PRs, task-list state, follow-up comments,
@@ -52,8 +87,10 @@ not to widen A2 candidates.
   completion from checkbox state alone.
 
 A1.5 can publish roadmap-level GitHub side effects before a child task
-issue is selected. Before any such side effect, coordinate on the
-roadmap issue itself:
+issue is selected. In recursive hierarchies, the immediate audit target
+may be the selected roadmap or the deepest completed nested roadmap
+discovered beneath it. Before any such side effect, coordinate on the
+**exact roadmap issue being mutated**:
 
 Treat `stale` and `non-stale` in this section using the
 `claim-stale-age` policy default from `docs/policy-constants.md`
@@ -79,6 +116,10 @@ Treat `stale` and `non-stale` in this section using the
   coordination name, not a work branch, and it does not require
   creating a branch or worktree unless the audit also needs git
   changes.
+- In recursive hierarchies, do not reuse one roadmap-audit claim across
+  parent, child, or sibling roadmap mutations. Each roadmap comment,
+  follow-up issue link, body edit, label change, or close action must
+  be scoped to the roadmap issue being mutated at that moment.
 - If the active roadmap claim already uses this current session's
   previously recorded and verified `{claim-id}`, continue with that same
   claim and do not post a new claim.
@@ -99,9 +140,13 @@ input still matches the evidence.
 Apply one outcome:
 
 - **Audit passes**: post an `IDD roadmap completion audit` comment with
-  a concise evidence summary, then close the roadmap. No child task
-  issue is claimed. Return to `idd-discover.instructions.md` (A1) and
-  select the next open roadmap, if any.
+  a concise evidence summary, then close the roadmap. In recursive
+  hierarchies, this outcome applies only when the selected roadmap is
+  the deepest remaining open roadmap on its path whose descendants are
+  all complete. After closing a nested roadmap, release that
+  roadmap-audit claim, re-fetch the ancestor graph, and return to
+  `idd-discover.instructions.md` (A1) so the parent roadmap can be
+  re-evaluated from fresh state. No child task issue is claimed.
 - **Autonomous gaps found**: create or link follow-up issues using the
   repository's issue-authoring rules, update the roadmap task list with
   those links, and continue to A2 so the new work can be discovered.
