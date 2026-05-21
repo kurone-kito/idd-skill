@@ -132,13 +132,13 @@ Ownership timing in this workflow uses the policy defaults
 
 ## Fail-closed default
 
-IDD gates and pre-checks fail closed when state is ambiguous,
-unresolvable, or otherwise unavailable, unless a gate explicitly opts
-out. Phase files cite this default in the gate description instead of
-restating "fail closed" / "treat as missing" / "default to the safer
-outcome" for every condition. When a phase deliberately opts out
-(e.g., `skipIssueAuthorApprovalGate`), it states the opt-out
-explicitly.
+IDD gates and pre-checks **must** fail closed when state is ambiguous,
+unresolvable, or otherwise unavailable, unless the specific gate
+explicitly opts out. Phase files **should** cite this default in the
+gate description instead of restating "fail closed" / "treat as
+missing" / "default to the safer outcome" for every condition. When a
+phase deliberately opts out (e.g., `skipIssueAuthorApprovalGate`), it
+states the opt-out explicitly.
 
 ## Claim revalidation gate
 
