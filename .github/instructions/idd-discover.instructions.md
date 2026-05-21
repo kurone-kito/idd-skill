@@ -401,58 +401,27 @@ If **no issue** survives the gate:
 
 ### Step 1.5 — Active-claim pre-scan
 
-**Purpose**: Reduce thundering-herd collisions in scale-out deployments by
-identifying and skipping issues that are already claimed by other sessions.
+Before selecting from the surviving viable issues, eliminate
+candidates that already carry a concurrent active non-stale claim,
+in ascending issue-number order:
 
-Before selecting from the surviving viable issues, perform an
-**active-claim pre-scan** to eliminate candidates with concurrent claims:
+- Scan the **top N** survivors (ordered by ascending issue number),
+  where `N` is `.github/idd/config.json`
+  `discover.activeClaimPreScanBatchSize` (distributed default: `10`).
+- For each candidate, fetch the issue and parse comments per the
+  shared claim-state rules. A candidate is **ineligible** when a
+  trusted `claimed-by` comment exists with GitHub `created_at`
+  newer than the `claim-stale-age` policy default
+  (`docs/policy-constants.md`; distributed default: `24 h`).
+  Otherwise the candidate **remains eligible**.
 
-1. **Identify scan scope**: From the viable survivors (ordered by ascending
-   issue number), define the scan set as the **top N candidates** (or fewer if
-   fewer than N viable candidates exist). `N` comes from
-   `.github/idd/config.json` `discover.activeClaimPreScanBatchSize`
-   (distributed default: `10`).
+After scanning the current batch:
 
-2. **Scan each candidate for active claims**: For each issue in the scan set,
-   in ascending issue number order:
-
-   - **Fetch the issue** and parse its comments using the shared claim-state
-     rules (defined in `idd-claim.instructions.md`).
-   - **Detect active non-stale claims**: Use the `claim-stale-age` policy
-     default from `docs/policy-constants.md` (distributed default: `24 h`).
-     An issue has an **active non-stale claim** if:
-     - A trusted `claimed-by` comment exists, and
-     - That comment's GitHub `created_at` timestamp is **less than** the
-       `claim-stale-age` threshold (e.g., created less than 24 hours ago), and
-     - The comment matches the `claimed-by` format defined in
-       `idd-claim.instructions.md`.
-
-   - **Remove claimed candidates**: If an active non-stale claim is detected,
-     **mark this candidate as ineligible** and proceed to the next issue in
-     the scan set.
-
-   - **Skip stale or unclaimed candidates**: If the latest `claimed-by`
-     comment is stale (≥ 24 h old) or no claim exists, this candidate
-     **remains eligible**.
-
-3. **Determine selection candidate**: After scanning the top N:
-
-   - **If at least one eligible (unclaimed) candidate remains** in the scan
-     set: proceed to **Step 2** and select the lowest-numbered eligible
-     candidate.
-
-   - **If all top N are claimed**: the scan set is fully saturated with
-     concurrent work. Proceed to **Step 2** with the **next batch**: scan
-     candidates `N+1`–`2N`, then `2N+1`–`3N`, and so on, until an
-     unclaimed candidate is found or the viable candidate set is
-     exhausted.
-
-   - **If the entire viable candidate set is exhausted** (all issues up to the
-     highest viable candidate are claimed): report that all viable issues are
-     currently claimed by other sessions, then stop. Do not post
-     `unclaimed-by` because no claim was made. This is not an abort; the
-     session may retry Discover later if new viable candidates appear or
-     claims become stale.
+| Batch outcome                                                                       | Action                                                                                                                                                                                                  |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| At least one eligible candidate in the batch                                        | Proceed to Step 2 and pick the lowest-numbered eligible candidate.                                                                                                                                      |
+| All `N` in this batch are claimed but viable survivors remain                       | Continue with the next batch (`N+1`–`2N`, then `2N+1`–`3N`, …) until an eligible candidate is found.                                                                                                    |
+| Entire viable candidate set exhausted (all surviving viable candidates are claimed) | Report that all viable issues are currently claimed; stop. Do not post `unclaimed-by` (no claim was made). Not an abort; retry later when claims may have become stale or new viable candidates appear. |
 
 See [Discover — A4 Step 1.5 Rationale](../../docs/idd-design-rationale.md#a4-step-15--rationale-active-claim-pre-scan)
 for why this pre-scan exists.
