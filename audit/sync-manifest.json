@@ -82,6 +82,7 @@
         "idd-template/docs/idd-helper-scripts.md",
         "idd-template/docs/idd-comment-minimization.md",
         "idd-template/docs/idd-resume-detail.md",
+        "idd-template/docs/idd-advisory-wait-shell-fallback.md",
         "idd-template/docs/permissions.md",
         "idd-template/docs/getting-started.md",
         "idd-template/docs/concepts.md",
@@ -312,6 +313,12 @@
       "id": "idd-resume-detail-doc",
       "source": "idd-template/docs/idd-resume-detail.md",
       "target": "docs/idd-resume-detail.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-advisory-wait-shell-fallback-doc",
+      "source": "idd-template/docs/idd-advisory-wait-shell-fallback.md",
+      "target": "docs/idd-advisory-wait-shell-fallback.md",
       "mode": "exact"
     },
     {

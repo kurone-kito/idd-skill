@@ -119,119 +119,35 @@ Use this path whenever helper-first cannot be trusted.
 
 ### AW1 — Copilot review state
 
-```sh
-OWNER=$(gh repo view --json owner --jq '.owner.login')
-REPO=$(gh repo view --json name --jq '.name')
+AW3 inputs:
 
-LAST_COPILOT_COMMIT=$(
-  gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/reviews" \
-    --paginate \
-    --jq '.[] | select(.user.login | startswith("copilot-pull-request-reviewer")) |
-               {sa: .submitted_at, cid: .commit_id}' \
-  | jq -rs 'sort_by(.sa) | last | .cid // ""'
-)
+- `LAST_COPILOT_COMMIT` — `commit_id` of the latest Copilot review
+  (empty if none); equality with `PR_HEAD_SHA` short-circuits to
+  **SATISFIED**.
+- `COPILOT_PENDING` — `true` if Copilot is in `requested_reviewers`.
+- `COPILOT_PENDING_COVERS_HEAD` — `true` if the latest Copilot
+  `review_requested` event in the PR timeline follows the current
+  HEAD's `committed` event.
 
-COPILOT_PENDING=$(gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/requested_reviewers" \
-  --jq '.users | any(.login == "Copilot" or (.login | startswith("copilot-pull-request-reviewer")))')
-
-COPILOT_PENDING_COVERS_HEAD=$(
-  gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/timeline" \
-    -H "Accept: application/vnd.github+json" \
-    --paginate \
-    | jq -r -s --arg sha "${PR_HEAD_SHA}" '
-        (add // [])
-        | to_entries
-        | (map(select(.value.event == "committed"
-             and ((.value.sha // .value.commit_id // "") == $sha)))
-           | last | .key // null) as $head_index
-        | (map(select(.value.event == "review_requested"
-             and (((.value.requested_reviewer.login // "") == "Copilot")
-                  or ((.value.requested_reviewer.login // "")
-                      | startswith("copilot-pull-request-reviewer")))))
-           | last | .key // null) as $request_index
-        | ($head_index != null and $request_index != null and
-           $request_index > $head_index)
-      '
-)
-```
-
-If `LAST_COPILOT_COMMIT == PR_HEAD_SHA`, advisory state is
-**SATISFIED**.
-
-Never use commit author/committer timestamps as advisory proof.
+See [shell fallback AW1](../../docs/idd-advisory-wait-shell-fallback.md#aw1)
+for commands.
 
 ### AW2 — Advisory marker evidence
 
-```sh
-ADVISORY_COMMENTS_JSON=$(
-  gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/comments" --paginate \
-    | jq -s 'add // []'
-)
-CURRENT_MARKER_ACTOR=$(gh api user --jq '.login' 2>/dev/null || true)
-TRUSTED_MARKER_ACTORS="${IDD_TRUSTED_MARKER_ACTORS:-}"
-TRUST_COLLABORATOR_MARKERS="${IDD_TRUST_COLLABORATOR_MARKERS:-}"
-TRUSTED_MARKER_LOGIN_JSON=$(
-  {
-    if [ -n "$CURRENT_MARKER_ACTOR" ]; then
-      printf '%s\n' "$CURRENT_MARKER_ACTOR"
-    fi
-    printf '%s\n' "$TRUSTED_MARKER_ACTORS" | tr ',' '\n'
-    if printf '%s\n' "$TRUST_COLLABORATOR_MARKERS" | grep -Eiq '^(1|true|yes)$'; then
-      printf '%s\n' "$ADVISORY_COMMENTS_JSON" \
-        | jq -r '.[] | select((.body // "") | test("^advisory-wait:|^advisory-wait-recovery:|^<!-- advisory-wait:")) | .user.login // empty' \
-        | sort -fu \
-        | while IFS= read -r login; do
-          permission=$(
-            gh api "repos/${OWNER}/${REPO}/collaborators/${login}/permission" \
-              --jq '.permission' 2>/dev/null || true
-          )
-          case "$permission" in
-            admin | maintain | write) printf '%s\n' "$login" ;;
-          esac
-        done
-    fi
-  } | jq -R -s 'split("\n") | map(ascii_downcase | select(length > 0)) | unique'
-)
+AW3 inputs:
 
-EARLIEST_SAME_HEAD_AT=$(
-  printf '%s\n' "$ADVISORY_COMMENTS_JSON" \
-    | jq -r \
-      --arg sha "$PR_HEAD_SHA" \
-      --argjson trusted_marker_logins "$TRUSTED_MARKER_LOGIN_JSON" '
-        def marker_login: (.user.login // "" | ascii_downcase);
-        def trusted_marker_actor:
-          marker_login as $login
-          | ($login | length > 0)
-          and (($trusted_marker_logins | index($login)) != null);
-        [.[] | select(
-          trusted_marker_actor
-          and (
-            ((.body // "") | test("^advisory-wait: [^ ]+ " + $sha + "(?: |$)")) or
-            ((.body // "") | test("^advisory-wait-recovery: [^ ]+ " + $sha + "(?: |$)")) or
-            ((.body // "") | test("^<!-- advisory-wait: [^ ]+ " + $sha + " [^ ]+ -->$"))
-          )
-        )]
-        | min_by(.created_at) | .created_at // ""
-      '
-)
+- `TRUSTED_MARKER_LOGIN_JSON` — JSON list of trusted marker logins
+  (current actor, configured trusted actors, plus write/maintain/admin
+  collaborators when `IDD_TRUST_COLLABORATOR_MARKERS` is on).
+- `EARLIEST_SAME_HEAD_AT` — earliest `created_at` of a trusted marker
+  matching `advisory-wait`, `advisory-wait-recovery`, or
+  `<!-- advisory-wait: … -->` for the current `PR_HEAD_SHA` (empty if
+  none).
+- `REQUEST_MARKER_COUNT` — count of trusted `advisory-wait` markers
+  on this PR (excludes recovery markers).
 
-REQUEST_MARKER_COUNT=$(
-  printf '%s\n' "$ADVISORY_COMMENTS_JSON" \
-    | jq -r \
-      --argjson trusted_marker_logins "$TRUSTED_MARKER_LOGIN_JSON" '
-        def marker_login: (.user.login // "" | ascii_downcase);
-        def trusted_marker_actor:
-          marker_login as $login
-          | ($login | length > 0)
-          and (($trusted_marker_logins | index($login)) != null);
-        [.[] | select(
-          trusted_marker_actor
-          and ((.body // "") | test("^advisory-wait:|^<!-- advisory-wait:"))
-        )]
-        | length
-      '
-)
-```
+See [shell fallback AW2](../../docs/idd-advisory-wait-shell-fallback.md#aw2)
+for commands.
 
 Rules:
 
@@ -239,6 +155,7 @@ Rules:
 - same-head clock anchor is marker `created_at` (not embedded text)
 - request-cap counting excludes recovery markers
 - refresh AW2 evidence at each polling cycle
+- never use commit author/committer timestamps as advisory proof
 
 ### AW3 — Decision table
 
