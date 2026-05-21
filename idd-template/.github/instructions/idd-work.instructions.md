@@ -1,6 +1,6 @@
 # IDD — Work and Self-Review Phase (B + C)
 
-Read this file after a successful claim. It covers branch creation (B1),
+Read this file after a successful claim. It covers worktree creation (B1),
 planning (B2), implementation (B3), and the self-review loop (C).
 
 ---
