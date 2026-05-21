@@ -191,35 +191,31 @@ Codex connectors, and CI bots).
   window completes.
 - **Unresolved threads = 0** (backlog gate, orthogonal to the currency
   check above): No unresolved review threads remain, excluding
-  **awaiting-reviewer threads**. A thread is awaiting-reviewer if
-  **all** of the following hold: (1) the latest substantive thread
-  comment is from any IDD agent or the PR author; (2) no reviewer has
-  added a comment after that latest IDD-agent/PR-author comment; (3) the
-  reviewer has **not** reopened the thread after that latest comment — a
-  reopen action with no new text still counts as reviewer activity and
-  disqualifies the thread from awaiting-reviewer status; (4) the thread
-  does **not** contain an IDD-agent reply starting with
-  `**Awaiting maintainer decision**`. (→ return to review triage if any
-  non-awaiting-reviewer unresolved threads remain). Any remaining
-  unresolved thread that is not awaiting-reviewer indicates a new
-  reviewer comment or a thread the reviewer reopened — both require
-  attention. Exception: if the repo's branch protection requires
-  conversation resolution, the awaiting-reviewer exclusion does not
-  apply — all unresolved awaiting-reviewer threads must be resolved.
-  Note: AMD threads (those containing an IDD agent reply starting with
-  `**Awaiting maintainer decision**`) are **not** awaiting-reviewer by
-  definition; they are handled by the standard "non-awaiting-reviewer →
-  return to review triage" path, where E6 will detect the pending
-  maintainer response and post a hold. For each remaining unresolved
-  awaiting-reviewer thread under this exception: **(a)** if its latest
-  reply is from an **IDD agent** and it does **NOT** contain an AMD
-  reply — resolve it directly (direct resolution is permitted under this
-  constraint), then restart F2 from the beginning; **(b)** if the latest
-  reply is from the **PR author** (not an IDD agent) — post a brief
-  acknowledgement reply (e.g., "Acknowledging thread state to satisfy
-  conversation-resolution requirement") then resolve it directly, then
-  restart F2. Do **not** route to E1; E1 filters out awaiting-reviewer
-  threads and would surface no actionable item.
+  **awaiting-reviewer threads**. Classify each unresolved thread:
+
+  | Condition                                                                                                                                                | Classification              |
+  | -------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+  | Latest substantive comment is from an IDD agent or the PR author **and** no later reviewer comment **and** no later reviewer reopen **and** no AMD reply | `awaiting-reviewer`         |
+  | Thread contains an IDD-agent reply starting with `**Awaiting maintainer decision**`                                                                      | `AMD-thread` (not awaiting) |
+  | Reviewer added a comment or reopened (with or without new text) after the latest IDD-agent/PR-author comment                                             | `not awaiting-reviewer`     |
+  | Latest substantive comment is from a reviewer (no IDD-agent or PR-author reply yet)                                                                      | `not awaiting-reviewer`     |
+
+  `→ return to review triage` if any non-awaiting-reviewer (including
+  AMD-thread) unresolved threads remain — E6 will detect any pending
+  maintainer response and post a hold.
+
+  Exception: if the repo's branch protection requires conversation
+  resolution, the awaiting-reviewer exclusion does not apply and all
+  unresolved awaiting-reviewer threads must be resolved here. For each
+  remaining unresolved awaiting-reviewer thread under that exception:
+
+  | Latest reply author                        | Action                                                                                                                                                         |
+  | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | IDD agent (and no AMD reply on the thread) | resolve directly, then restart F2 from the beginning                                                                                                           |
+  | PR author (not an IDD agent)               | post a brief acknowledgement reply (e.g., "Acknowledging thread state to satisfy conversation-resolution requirement"), then resolve directly, then restart F2 |
+
+  Do **not** route to E1; E1 filters out awaiting-reviewer threads
+  and would surface no actionable item.
 - **Unreplied comments = 0**: No regular comment from a non-IDD-agent
   lacks a subsequent IDD-agent comment — where "subsequent" means any
   IDD-agent regular comment posted at a strictly later timestamp than
