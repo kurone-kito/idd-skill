@@ -293,6 +293,13 @@ current `{agent-id}` / `{claim-id}`, `Branch` to the verified branch,
 worktree`. If multiple marked digests exist, report their URLs and
 continue from the verified claim without editing a digest.
 
+The verified `branch:` field is also the input to the cwd-vs-claim
+check that every later mutation must satisfy. See the
+[Claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
+for the full algorithm (stop and report if a mutation would run from
+the primary worktree while the active claim names a non-`main`
+implementation branch).
+
 Then continue to `idd-work.instructions.md`.
 
 ## Claim-state parsing

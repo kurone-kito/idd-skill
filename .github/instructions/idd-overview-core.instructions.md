@@ -152,6 +152,29 @@ post further operational comments, and report the handoff or race. If
 loss came from handoff, the displaced session must not push,
 comment, resolve reviews, request reviewers, or merge.
 
+In addition to the `{claim-id}` check, verify that the mutation is
+about to run from the worktree named in the active claim's `branch:`
+field, not from the primary worktree:
+
+1. Resolve the mutation's working directory:
+   `git rev-parse --show-toplevel`.
+2. Resolve the active claim's expected sibling-path form from its
+   `branch:` field, using the B1 naming convention
+   (`../<repo-name>.<normalized-branch>`, with `/` in the branch name
+   replaced by `-`; see
+   [B1 Worktree creation](idd-work.instructions.md#worktree-creation)).
+3. If the mutation would run from the primary worktree (i.e.,
+   `git rev-parse --git-common-dir` equals `git rev-parse --git-dir`)
+   while the active claim names a non-`main` implementation branch,
+   stop and report. Do not auto-relocate the agent; the operator
+   should investigate (`scripts/idd-doctor.mjs` warns on the same
+   condition) and either remove the stale primary-HEAD branch or
+   rerun B1 cleanly in a fresh worktree.
+
+This check is read-only and pre-mutation. It must run before any push,
+rebase, comment, label change, reply, resolve, reviewer request, or
+merge.
+
 A1.5 roadmap completion audit side effects use the roadmap issue itself
 as the claim target (see `idd-roadmap-audit.instructions.md`). Even
 when the audit is GitHub-only and does not create a worktree, claim and
