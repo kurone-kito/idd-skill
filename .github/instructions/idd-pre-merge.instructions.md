@@ -198,6 +198,7 @@ Codex connectors, and CI bots).
   | Latest substantive comment is from an IDD agent or the PR author **and** no later reviewer comment **and** no later reviewer reopen **and** no AMD reply | `awaiting-reviewer`         |
   | Thread contains an IDD-agent reply starting with `**Awaiting maintainer decision**`                                                                      | `AMD-thread` (not awaiting) |
   | Reviewer added a comment or reopened (with or without new text) after the latest IDD-agent/PR-author comment                                             | `not awaiting-reviewer`     |
+  | Latest substantive comment is from a reviewer (no IDD-agent or PR-author reply yet)                                                                      | `not awaiting-reviewer`     |
 
   `→ return to review triage` if any non-awaiting-reviewer (including
   AMD-thread) unresolved threads remain — E6 will detect any pending

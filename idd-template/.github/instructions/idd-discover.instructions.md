@@ -428,11 +428,15 @@ in ascending issue-number order:
   where `N` is `.github/idd/config.json`
   `discover.activeClaimPreScanBatchSize` (distributed default: `10`).
 - For each candidate, fetch the issue and parse comments per the
-  shared claim-state rules. A candidate is **ineligible** when a
-  trusted `claimed-by` comment exists with GitHub `created_at`
+  shared claim-state rules in `idd-claim.instructions.md`. A
+  candidate is **ineligible** when parsing yields an **active claim**
+  whose latest valid `claimed-by` comment (matching the documented
+  format, authored by a trusted marker actor) has GitHub `created_at`
   newer than the `claim-stale-age` policy default
   (`docs/policy-constants.md`; distributed default: `24 h`).
-  Otherwise the candidate **remains eligible**.
+  Otherwise (no active claim, the active claim is already stale, or
+  no comment satisfies the trusted-marker + format requirements) the
+  candidate **remains eligible**.
 
 After scanning the current batch:
 
