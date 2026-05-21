@@ -119,27 +119,26 @@ Use this path whenever helper-first cannot be trusted.
 
 ### AW1 — Copilot review state
 
-Compute three variables consumed by AW3:
+AW3 inputs:
 
-- `LAST_COPILOT_COMMIT` — `commit_id` of the latest Copilot review on
-  this PR (empty if none).
-- `COPILOT_PENDING` — `true` when Copilot is in `requested_reviewers`.
-- `COPILOT_PENDING_COVERS_HEAD` — `true` when the latest Copilot
-  `review_requested` event follows the current HEAD's `committed`
-  event in the PR timeline.
+- `LAST_COPILOT_COMMIT` — `commit_id` of the latest Copilot review
+  (empty if none); equality with `PR_HEAD_SHA` short-circuits to
+  **SATISFIED**.
+- `COPILOT_PENDING` — `true` if Copilot is in `requested_reviewers`.
+- `COPILOT_PENDING_COVERS_HEAD` — `true` if the latest Copilot
+  `review_requested` event in the PR timeline follows the current
+  HEAD's `committed` event.
 
-If `LAST_COPILOT_COMMIT == PR_HEAD_SHA`, the outcome is **SATISFIED**.
-Never use commit author/committer timestamps as advisory proof. See
-[shell fallback AW1](../../docs/idd-advisory-wait-shell-fallback.md#aw1)
-for the exact `gh api` + `jq` commands.
+See [shell fallback AW1](../../docs/idd-advisory-wait-shell-fallback.md#aw1)
+for commands.
 
 ### AW2 — Advisory marker evidence
 
-Compute three variables consumed by AW3:
+AW3 inputs:
 
 - `TRUSTED_MARKER_LOGIN_JSON` — JSON list of trusted marker logins
-  (current actor, configured trusted actors, plus collaborators with
-  write/maintain/admin when `IDD_TRUST_COLLABORATOR_MARKERS` is on).
+  (current actor, configured trusted actors, plus write/maintain/admin
+  collaborators when `IDD_TRUST_COLLABORATOR_MARKERS` is on).
 - `EARLIEST_SAME_HEAD_AT` — earliest `created_at` of a trusted marker
   matching `advisory-wait`, `advisory-wait-recovery`, or
   `<!-- advisory-wait: … -->` for the current `PR_HEAD_SHA` (empty if
@@ -148,7 +147,7 @@ Compute three variables consumed by AW3:
   on this PR (excludes recovery markers).
 
 See [shell fallback AW2](../../docs/idd-advisory-wait-shell-fallback.md#aw2)
-for the exact `gh api` + `jq` commands.
+for commands.
 
 Rules:
 
@@ -156,6 +155,7 @@ Rules:
 - same-head clock anchor is marker `created_at` (not embedded text)
 - request-cap counting excludes recovery markers
 - refresh AW2 evidence at each polling cycle
+- never use commit author/committer timestamps as advisory proof
 
 ### AW3 — Decision table
 
