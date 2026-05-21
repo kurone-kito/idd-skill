@@ -316,13 +316,8 @@ scope:
    filtered out): report each candidate and the filter criterion it
    failed, then proceed to step 5.
 
-   **Diagnostic — all candidates blocked by an open roadmap**: if every
-   candidate is blocked by a
-   `<!-- {{PROJECT_MARKER_PREFIX}}-blocked-by: X -->` marker that points
-   to an open roadmap, the markers may be misused as grouping tags.
-   Sub-tasks that run while the roadmap is open belong in the task list
-   (`- [ ] #NNN`); the `blocked-by` marker is for issues that must wait
-   for a separate roadmap to close first.
+   See [Discover — A3 Diagnostic](../../docs/idd-design-rationale.md#a3---diagnostic-all-candidates-blocked-by-an-open-roadmap)
+   for the marker-misuse pattern this case typically indicates.
 
 5. **Request explicit opt-in** — ask the operator: "No roadmap-scoped
    issues are available. Do you want to expand the search scope for this
@@ -478,9 +473,8 @@ Before selecting from the surviving viable issues, perform an
      session may retry Discover later if new viable candidates appear or
      claims become stale.
 
-**Rationale**: Active-claim pre-scans eliminate known collisions
-deterministically and reduce wasted claim-post-recheck cycles, improving
-scale-out efficiency when multiple sessions start simultaneously.
+See [Discover — A4 Step 1.5 Rationale](../../docs/idd-design-rationale.md#a4-step-15--rationale-active-claim-pre-scan)
+for why this pre-scan exists.
 
 ### Step 2 — Select
 
