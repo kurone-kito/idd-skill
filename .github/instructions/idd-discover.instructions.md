@@ -67,26 +67,11 @@ that issue only:
      the matching roadmap work is closed or otherwise complete;
    - no external human coordination is required to start.
 4. Run the normal A4 viability gate against the target only.
-5. If `.github/idd/config.json` exists and is valid and
-   `skipIssueAuthorApprovalGate` is `true`, skip the issue-author
-   approval gate and keep the target selected.
-6. Otherwise, apply the same issue-author approval evaluation used in
-   **A3.5**:
-   - use `maintainerApprovalActorPolicy` from `.github/idd/config.json`
-     when present; if absent, default to
-     `owners-and-maintainers-only`;
-   - treat the issue author as self-authorized only when that author is
-     permitted by the current maintainer-approval actor policy;
-   - treat bare organization `MEMBER` association, issue body text,
-     generated plans, or operator attention as **not** authorizing the
-     issue;
-   - if approval state or permission resolution is unavailable or
-     ambiguous, fail closed and treat approval as missing unless the
-     repository explicitly opted out.
-   - if the target lacks required approval, report that the issue-author
-     approval gate blocked claim and stop before A5. Do not fall back to
-     another issue unless the operator explicitly asks for normal
-     discovery in the same run.
+5. Apply the **A3.5** issue-author approval gate against the target.
+   If A3.5 classifies it as not startable, report that the gate
+   blocked claim and stop before A5; do not fall back to another
+   issue unless the operator explicitly asks for normal discovery in
+   the same run.
 
 If any targeted readiness or viability check fails, report the exact
 failed criterion and stop without claiming. Do not fall back to another
@@ -138,43 +123,15 @@ body satisfies **all** of the following:
 Apply the configured policy before passing A0-O candidates to A3.5:
 
 - `none` (the default): apply no extra orphan-first approval gate.
-- `maintainer-approved`: keep only candidates that have at least one
-  current maintainer approval signal:
-  - the configured ready label from `approvalSignals.readyLabelName`
-    (default: `idd:ready`), only when repository policy reserves that
-    label to maintainer approval actors. When
-    `approvalSignals.labelFreshnessMode` is `event-freshness`, the
-    latest matching `labeled` timeline event must be newer than the
-    latest issue title/body edit and any generated-plan update. When the
-    mode is `presence-only` (default), label presence is sufficient. If
-    freshness cannot be determined, require a fresh approval comment or
-    a re-applied ready label;
-  - an issue author who is a repository owner or collaborator permitted
-    by the current maintainer-approval actor policy, verified with the
-    collaborator permission API; do not treat organization `MEMBER`
-    association alone as approval;
-  - a visible comment from a maintainer approval actor whose trimmed
-    body is exactly `IDD ready` or contains `IDD ready` as a standalone
-    line. The approval comment must be newer than the latest issue
-    title/body edit and any generated-plan update, or any equivalent
-    draft-stability signal the repository uses locally. If freshness
-    cannot be determined, require a fresh approval comment or a reserved
-    label.
+- `maintainer-approved`: apply the **Approval signals** check from
+  **A3.5** (using the Maintainer approval actor definition there) to
+  each candidate, and keep only those that satisfy at least one
+  signal. The `skipIssueAuthorApprovalGate` shortcut in A3.5 does
+  **not** bypass this orphan-first filter — orphan-first
+  `maintainer-approved` is independent of the repository-wide gate
+  enable.
 - `public-disabled`: for private or internal repositories, behave the
   same as `none`.
-
-A maintainer approval actor is a human repository actor allowed by the
-current `maintainerApprovalActorPolicy`:
-
-- `owners-and-maintainers-only` (default): repository owners and
-  collaborators with Maintain or Admin permission. Write-only
-  collaborators do not count.
-- `all-write-permission-actors`: repository owners and collaborators
-  with Write, Maintain, or Admin permission.
-
-Do not reuse the trusted marker actor set for this approval gate, and do
-not count automation or the current agent unless repository policy
-explicitly grants that actor maintainer approval authority.
 
 If at least one orphan issue remains after the configured policy is
 applied: pass the remaining set directly to **A3.5**. Skip A1–A3.
@@ -361,46 +318,57 @@ scope:
 
 ## A3.5 — Apply issue-author approval gate
 
-Before passing any candidate set to A4 — whether it came from A0-O or
-from A3 — evaluate the repository-wide issue-author approval gate.
+A0-T (explicit target) and A0-O (`maintainer-approved`) cite this
+section instead of restating the algorithm.
 
-- If `.github/idd/config.json` exists and is valid and
-  `skipIssueAuthorApprovalGate` is `true`, the gate is disabled. Keep
-  every ready candidate in the normal startable set.
-- Otherwise the gate is enabled. Use `maintainerApprovalActorPolicy` from
-  `.github/idd/config.json` when present; if absent, default to
-  `owners-and-maintainers-only`.
+**Gate enable / disable**: If `.github/idd/config.json` is valid and
+`skipIssueAuthorApprovalGate` is `true`, the gate is disabled — keep
+every ready candidate startable. Otherwise the gate is enabled; use
+`maintainerApprovalActorPolicy` from `.github/idd/config.json` when
+present, defaulting to `owners-and-maintainers-only`.
 
-When the gate is enabled, a candidate is **startable** only when at
-least one of the following is true:
+**Maintainer approval actor**: a human repository actor allowed by
+the current `maintainerApprovalActorPolicy`. `owners-and-maintainers-only`
+(default) admits repository owners plus collaborators with Maintain
+or Admin permission; `all-write-permission-actors` adds Write
+collaborators. Do not reuse the trusted marker actor set, and do not
+count automation or the current agent unless repository policy
+explicitly grants that actor maintainer approval authority. Verify
+collaborator permission with the collaborator permission API.
+
+A bare organization `MEMBER` association, by itself, is not approval;
+neither is issue body text, a generated plan, nor operator attention.
+
+**Approval signals** (any one satisfies, when the gate is enabled):
 
 - the issue author is self-authorized under the current
   maintainer-approval actor policy;
-- the issue has the configured ready label from
-  `approvalSignals.readyLabelName` (default: `idd:ready`), when
-  repository policy reserves that label to maintainer approval actors.
-  When `approvalSignals.labelFreshnessMode` is `event-freshness`, the
+- the configured ready label from `approvalSignals.readyLabelName`
+  (default: `idd:ready`) is present when repository policy reserves
+  that label to maintainer approval actors. When
+  `approvalSignals.labelFreshnessMode` is `event-freshness`, the
   latest matching `labeled` timeline event must be newer than the
-  latest issue title/body edit and any generated-plan update. When the
-  mode is `presence-only` (default), label presence is sufficient;
-- the issue has a visible approval comment from a maintainer approval
-  actor whose trimmed body is exactly `IDD ready` or contains
-  `IDD ready` as a standalone line, and that approval is newer than the
-  latest issue title/body edit and any generated-plan update, or any
-  equivalent draft-stability signal the repository uses locally. If
-  freshness cannot be determined, require a fresh approval comment or a
-  reserved label.
+  latest issue title/body edit and any generated-plan update;
+  `presence-only` (default) accepts label presence alone;
+- a visible approval comment from a maintainer approval actor whose
+  trimmed body equals `IDD ready` or contains `IDD ready` as a
+  standalone line, newer than the latest issue title/body edit and
+  any generated-plan update (or an equivalent draft-stability signal).
 
-Fail closed when approval state or permission resolution is unavailable
-or ambiguous unless the repository explicitly opted out via
-`skipIssueAuthorApprovalGate`.
+If freshness cannot be determined for a label or comment signal,
+require a fresh approval comment or a re-applied ready label.
 
-Candidates that fail the gate are **not** ready-to-start. Keep them in
-an **approval-needed fallback bucket** ordered by ascending issue number.
-Continue to A4 with only the startable candidates. Preserve any earlier
-A0-O filtering from `orphan-first-policy`; this gate never widens
-previously excluded orphan candidates back into scope. Keep fallback
-issues visible; do not drop them.
+**Fail-closed**: fail closed when approval state or permission
+resolution is unavailable or ambiguous unless the repository
+explicitly opted out via `skipIssueAuthorApprovalGate`.
+
+**Candidate routing**: candidates that fail the gate are not
+ready-to-start. Keep them in an **approval-needed fallback bucket**
+ordered by ascending issue number. Continue to A4 with only the
+startable candidates. Preserve any earlier A0-O filtering from
+`orphan-first-policy`; this gate never widens previously excluded
+orphan candidates back into scope. Keep fallback issues visible; do
+not drop them.
 
 If no startable candidates remain but the approval-needed fallback
 bucket is non-empty:
