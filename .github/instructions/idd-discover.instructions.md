@@ -330,9 +330,10 @@ or Admin permission; `all-write-permission-actors` adds Write
 collaborators. Do not reuse the trusted marker actor set, and do not
 count automation or the current agent unless repository policy
 explicitly grants that actor maintainer approval authority. Verify
-collaborator permission with the collaborator permission API. Bare
-organization `MEMBER` association, issue body text, generated plans,
-or operator attention are not authorizing signals.
+collaborator permission with the collaborator permission API.
+
+A bare organization `MEMBER` association, by itself, is not approval;
+neither is issue body text, a generated plan, nor operator attention.
 
 **Approval signals** (any one satisfies, when the gate is enabled):
 
@@ -345,10 +346,10 @@ or operator attention are not authorizing signals.
   latest matching `labeled` timeline event must be newer than the
   latest issue title/body edit and any generated-plan update;
   `presence-only` (default) accepts label presence alone;
-- a visible comment from a maintainer approval actor whose trimmed
-  body equals `IDD ready` or contains `IDD ready` as a standalone
-  line, newer than the latest issue title/body edit and any
-  generated-plan update (or an equivalent draft-stability signal).
+- a visible approval comment from a maintainer approval actor whose
+  trimmed body equals `IDD ready` or contains `IDD ready` as a
+  standalone line, newer than the latest issue title/body edit and
+  any generated-plan update (or an equivalent draft-stability signal).
 
 If freshness cannot be determined for a label or comment signal,
 require a fresh approval comment or a re-applied ready label.
