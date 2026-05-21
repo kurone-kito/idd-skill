@@ -130,6 +130,16 @@ Ownership timing in this workflow uses the policy defaults
   `{claim-id}` resets the stale clock. Embed timestamps are ignored;
   only the GitHub `created_at` of the comment itself counts.
 
+## Fail-closed default
+
+IDD gates and pre-checks **must** fail closed when state is ambiguous,
+unresolvable, or otherwise unavailable, unless the specific gate
+explicitly opts out. Phase files **should** cite this default in the
+gate description instead of restating "fail closed" / "treat as
+missing" / "default to the safer outcome" for every condition. When a
+phase deliberately opts out (e.g., `skipIssueAuthorApprovalGate`), it
+states the opt-out explicitly.
+
 ## Claim revalidation gate
 
 Before any step that can mutate git state or publish GitHub side effects

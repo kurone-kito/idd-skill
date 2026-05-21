@@ -4,8 +4,8 @@ Read this file after the self-review loop passes. It covers
 pre-publication main sync, claim verification, tests, pushing, PR
 creation, and waiting for CI.
 
-Before the D1 rebase and D2 push, apply the shared claim revalidation
-gate. The active claim must still use your current `{claim-id}`.
+Before the D1 rebase and D2 push, apply the
+[shared claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
 
 ## D1 — Sync main before first push
 

@@ -13,8 +13,8 @@ The merge-gate timing defaults referenced by F2 are named in
 [IDD policy constants](../../docs/policy-constants.md). Use that inventory
 for the canonical values, not as a behavior override.
 
-Before any F-phase mutating action, apply the shared claim revalidation
-gate. The active claim must still use your current `{claim-id}`.
+Before any F-phase mutating action, apply the
+[shared claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
 
 After a forced handoff on an open PR, the successor must rebuild review
 state through E1/E2 under its own `{claim-id}` before merge-bound
