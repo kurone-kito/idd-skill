@@ -111,6 +111,56 @@ reviewers that are not auto-assigned by GitHub, request them explicitly:
 gh pr edit {pr-number} --add-reviewer {reviewer-login}
 ```
 
+### D3.5 — Verify closing keyword detection
+
+After PR creation and before D4, confirm GitHub recognized the
+closing keyword for the claimed issue. Resume routing should re-enter
+this sub-step when a session restarts after PR creation but before CI
+completion.
+
+1. Re-fetch the PR body:
+
+   ```sh
+   gh pr view <pr-number> --json body --jq '.body'
+   ```
+
+2. Strip regions GitHub does not parse for closing keywords:
+
+   - lines inside fenced code blocks (triple backtick or triple tilde)
+   - spans inside inline code (single backticks)
+   - lines beginning with `>` (block-quote prefix) after leading
+     whitespace
+
+3. Search the remaining plain-text body for a closing keyword
+   referencing the **claimed issue number** `<N>`, using a regex
+   equivalent to:
+
+   ```text
+   (?im)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#<N>\b
+   ```
+
+4. **If no match in the stripped body**:
+
+   - Edit the PR body with
+     `gh pr edit <pr-number> --body <updated-body>` to add a
+     correctly placed plain-text closing keyword line (e.g.,
+     `Closes #<N>` as its own line, outside any code fence or
+     block quote).
+   - Repeat steps 1–3 once.
+   - If the second self-check still fails, post a hold note on the
+     issue citing the PR URL and stop. Do not proceed to D4.
+
+5. **If the keyword exists only inside a stripped region**: report
+   which wrapper form was detected (inline code, fenced block, or
+   block-quote prefix) and apply the same edit-and-recheck path
+   as step 4.
+
+GitHub's `closingIssuesReferences` field on the PR
+(`gh pr view <pr-number> --json closingIssuesReferences`) can also
+confirm detection: it lists every issue GitHub plans to close when
+the PR merges. If that list is non-empty and contains the claimed
+issue, the regex check above is redundant but still safe to run.
+
 ## D4 — Wait for CI
 
 Delegate to `idd-ci.instructions.md`.
