@@ -370,6 +370,72 @@ When WorkTrunk uses a pre-start install hook, that hook may satisfy
 `install-deps` automatically. The underlying command contract is the
 same: repeated runs must stay safe and predictable.
 
+### Project commands reference
+
+When a phase refers to a named command set, run the corresponding
+commands. **Adapt this table when applying this workflow to a
+different project.**
+
+If `.github/idd/config.json` exists and validates against the canonical
+schema at
+<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>,
+its `commands` object overrides the table below. Policy fields such as
+`skipIssueAuthorApprovalGate` and `maintainerApprovalActorPolicy` are
+the recorded machine-readable policy. Absent values keep the gate
+enabled and default approval actors to `owners-and-maintainers-only`.
+
+| Name                    | Commands                                                                                                                                     |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| **fix-validate**        | `npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"`                                       |
+| **pre-push-validate**   | `npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress`                                        |
+| **post-fix-validate**   | `npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress` |
+| **install-deps**        | `true`                                                                                                                                       |
+| **issue-scope**         | `roadmap`                                                                                                                                    |
+| **orphan-first-policy** | `none`                                                                                                                                       |
+
+Non-shell rows such as **issue-scope** and **orphan-first-policy** are
+workflow settings. Read them literally, not as commands.
+
+`pre-push-validate` omits auto-fix. If lint fails, run
+**fix-validate**, commit, then re-run **pre-push-validate**.
+
+If **fix-validate** or **post-fix-validate** changes files, stage and
+commit them before any push, rebase, or step that requires a clean
+tree.
+
+`install-deps` must be idempotent. Re-running it in fresh, reused, or
+recreated worktrees must not require manual cleanup and should not leave
+unexpected tracked changes.
+
+**Tool availability**: run commands only when tools exist. For Node.js:
+prefer project scripts; use `npx <tool>` only when `npx` is available
+and no relevant script exists; else use `true`. For other tools, use
+`true` when absent.
+
+### Template sync mapping
+
+This repository is the canonical source of the IDD template distributed
+via `idd-template/`. When modifying any `idd-*.instructions.md` file,
+`docs/idd-workflow.md`, or `docs/customization.md`, apply the equivalent
+change to the corresponding file in `idd-template/`, replacing resolved
+project-specific values with their `{{placeholder}}` forms:
+
+| Live value (`.github/instructions/`)                                | Template form (`idd-template/`)  |
+| ------------------------------------------------------------------- | -------------------------------- |
+| `idd-skill` in repo-name contexts                                   | `{{REPO_NAME}}`                  |
+| `idd-skill` in marker-prefix contexts (e.g. `idd-skill-roadmap-id`) | `{{PROJECT_MARKER_PREFIX}}`      |
+| **fix-validate** command string                                     | `{{FIX_VALIDATE_COMMANDS}}`      |
+| **pre-push-validate** command string                                | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
+| **post-fix-validate** command string                                | `{{POST_FIX_VALIDATE_COMMANDS}}` |
+| **install-deps** command string                                     | `{{INSTALL_DEPS_COMMAND}}`       |
+
+Match by the named command row in the Project commands table, not by
+command prefix, to avoid confusing commands that share the same
+executable.
+
+Commits that modify live instruction files without updating the template
+are incomplete; include both changes in the same atomic commit.
+
 ## Tooling Boundary
 
 IDD workflow files are tooling-agnostic. The only tooling contract is
