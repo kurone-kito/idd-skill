@@ -54,12 +54,51 @@ Use GH CLI or GH MCP to create the pull request. The PR body must
 include:
 
 - A concise summary of the branch's changes
-- A `Closes #<issue>` keyword linking the issue
+- A closing keyword on its own line linking the claimed issue (see
+  Closing keyword below)
 - Recommended follow-up issues (if any)
 - Relevant background/rationale, when it materially affects review (for
   example, reuse constraints, intentional trade-offs, or non-goals).
   Include only context grounded in the issue discussion, commits, diff,
   or explicit operator instructions; omit rather than speculate.
+
+### Closing keyword
+
+The closing keyword must appear in the PR **body** (not the title) as
+plain markdown text. Write a line such as Closes #N, Fixes #N, or
+Resolves #N (case-insensitive) where N is the claimed issue number.
+Render that example literally in the body — no backticks, no code
+fences, no block-quote prefix.
+
+When referring to keyword forms _as forms_ (not as the literal body
+text), inline code is fine in surrounding prose; the no-wrapper
+constraint applies only to the actual PR body content that GitHub
+must parse.
+
+GitHub recognizes the following keyword forms: close, closes, closed,
+fix, fixes, fixed, resolve, resolves, resolved.
+
+#### Anti-patterns
+
+GitHub's closing-keyword detection does NOT activate when the keyword
+is wrapped in any of these markdown forms — even if the underlying
+text is correct:
+
+- inline code (backtick-wrapped, e.g. `` `Closes #1` ``) — not
+  detected
+- fenced code block (triple backtick or triple tilde) — not detected
+- block quote prefix (`>` at line start) — not detected
+
+When detection fails, GitHub will not auto-close the linked issue on
+merge and the issue↔PR linking surfaces (sidebar, timeline) will not
+populate.
+
+#### Multiple closing issues
+
+When the PR closes more than one issue, repeat the keyword for each
+reference. `Closes #1, closes #2` works because GitHub parses each
+keyword + reference pair. `Closes #1, #2` does **not** auto-close `#2`
+because there is no keyword preceding the second reference.
 
 After creating the PR, if the repository has CODEOWNER rules or expected
 reviewers that are not auto-assigned by GitHub, request them explicitly:
