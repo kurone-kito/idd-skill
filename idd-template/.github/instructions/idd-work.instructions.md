@@ -25,12 +25,15 @@ Before creating, check for local conflicts in this order:
    git merge --ff-only origin/main
    ```
 
-   After this `main` fast-forward, leave the primary worktree on
-   `main`. Every remaining B1 step must run either from the primary
-   worktree (for read-only inspection commands such as `git worktree
-   list`) or from the new sibling worktree once it is created. Do
-   **not** change the primary worktree's HEAD off `main` for any
-   reason during B1. See Anti-patterns below.
+   After this `main` fast-forward, do **not** change the primary
+   worktree's HEAD off `main` for any reason during B1. Commands that
+   run from the primary worktree are allowed as long as HEAD stays on
+   `main` — these include read-only inspection (`git worktree list`)
+   and the HEAD-preserving branch/worktree commands used by Steps 2-3
+   below and by Worktree creation
+   (`git branch -d <stale-branch>`, `git worktree add`, `wt new`).
+   What must not happen is the primary worktree's HEAD switching to
+   the issue branch. See Anti-patterns below.
 
 2. Run `git worktree list` — if a worktree for the branch already
    exists, either reuse it (takeover) or remove it first using the exact
