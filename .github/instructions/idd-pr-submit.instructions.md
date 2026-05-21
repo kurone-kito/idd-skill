@@ -96,9 +96,13 @@ populate.
 #### Multiple closing issues
 
 When the PR closes more than one issue, repeat the keyword for each
-reference. `Closes #1, closes #2` works because GitHub parses each
-keyword + reference pair. `Closes #1, #2` does **not** auto-close `#2`
-because there is no keyword preceding the second reference.
+reference. Both keywords must appear in plain body text for GitHub to
+auto-close both issues:
+
+- Works — a body line written as Closes #1, closes #2 (GitHub parses
+  each keyword + reference pair).
+- Does **not** work — a body line written as Closes #1, #2 (no
+  keyword precedes the second reference, so #2 is not auto-closed).
 
 After creating the PR, if the repository has CODEOWNER rules or expected
 reviewers that are not auto-assigned by GitHub, request them explicitly:
