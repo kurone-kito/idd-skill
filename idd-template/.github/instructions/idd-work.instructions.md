@@ -5,7 +5,7 @@ planning (B2), implementation (B3), and the self-review loop (C).
 
 ---
 
-## B1 — Create branch and worktree
+## B1 — Create worktree (with branch)
 
 Before creating, check for local conflicts in this order:
 
@@ -25,6 +25,13 @@ Before creating, check for local conflicts in this order:
    git merge --ff-only origin/main
    ```
 
+   After this `main` fast-forward, leave the primary worktree on
+   `main`. Every remaining B1 step must run either from the primary
+   worktree (for read-only inspection commands such as `git worktree
+   list`) or from the new sibling worktree once it is created. Do
+   **not** change the primary worktree's HEAD off `main` for any
+   reason during B1. See Anti-patterns below.
+
 2. Run `git worktree list` — if a worktree for the branch already
    exists, either reuse it (takeover) or remove it first using the exact
    path shown in the list: `git worktree remove <path-from-list>`. (Must
@@ -43,6 +50,24 @@ Before creating, check for local conflicts in this order:
 Then create the worktree as described below. If this is a takeover,
 reuse the exact branch name from the existing claim comment — do not
 generate a new one.
+
+### Anti-patterns
+
+The following commands MUST NOT be used to create the implementation
+branch in the primary worktree:
+
+- `git switch -c <branch-name>` — switches the primary worktree to
+  the issue branch and skips worktree creation entirely.
+- `git checkout -b <branch-name>` — equivalent failure mode.
+- A standalone `git branch <branch-name>` followed by in-place commits
+  in the primary worktree — defeats the sibling-worktree invariant
+  even though `git branch` alone does not move HEAD.
+
+The primary worktree's HEAD MUST remain on `main` throughout B1. The
+implementation branch exists only inside the sibling worktree created
+by `git worktree add` (or WorkTrunk's `wt new`). If the primary
+worktree ever leaves `main` during B1, stop immediately and follow the
+B1 self-check repair path below.
 
 ### Worktree creation
 
@@ -84,6 +109,23 @@ are installed:
 
 `install-deps` must remain safe to rerun during retries, takeovers, and
 recreated worktrees without manual cleanup.
+
+### B1 self-check
+
+Before continuing to B2, verify all of the following:
+
+- `git -C <primary-worktree-root> rev-parse --abbrev-ref HEAD` returns
+  `main`.
+- `git worktree list` includes the new sibling worktree path.
+- The agent's current working directory is the new sibling worktree
+  path, not the primary worktree.
+
+If any check fails, the B1 worktree-creation contract has been
+violated. Stop and post a hold note on the issue describing which
+check failed; do not continue to B2 from the primary worktree. Repair
+by removing the misplaced branch from the primary worktree (after
+confirming no work is lost) and recreating the sibling worktree
+through the Worktree creation steps above.
 
 ## B2 — Create and refine plan
 
