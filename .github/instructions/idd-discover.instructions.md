@@ -123,9 +123,13 @@ body satisfies **all** of the following:
 Apply the configured policy before passing A0-O candidates to A3.5:
 
 - `none` (the default): apply no extra orphan-first approval gate.
-- `maintainer-approved`: apply the maintainer-approval evaluation
-  defined in **A3.5** to each candidate; keep only those A3.5 would
-  classify as startable in the orphan candidate set.
+- `maintainer-approved`: apply the **Approval signals** check from
+  **A3.5** (using the Maintainer approval actor definition there) to
+  each candidate, and keep only those that satisfy at least one
+  signal. The `skipIssueAuthorApprovalGate` shortcut in A3.5 does
+  **not** bypass this orphan-first filter — orphan-first
+  `maintainer-approved` is independent of the repository-wide gate
+  enable.
 - `public-disabled`: for private or internal repositories, behave the
   same as `none`.
 
