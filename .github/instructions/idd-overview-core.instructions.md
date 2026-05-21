@@ -152,6 +152,53 @@ post further operational comments, and report the handoff or race. If
 loss came from handoff, the displaced session must not push,
 comment, resolve reviews, request reviewers, or merge.
 
+In addition to the `{claim-id}` check, verify that the mutation is
+about to run from the worktree named in the active claim's `branch:`
+field. This **cwd-vs-claim check** applies only to mutations made
+from inside the implementation worktree contract (B3, D, E phases):
+
+Scope — the check runs **only** when **all** of the following are
+true:
+
+- The active claim's `branch:` field matches the `issue/*` pattern
+  (excluding `roadmap-audit/*` coordination claims, which do not
+  create a worktree).
+- The sibling worktree expected by the B1 naming convention is
+  already present in `git worktree list` (the check does not fire
+  during B1 setup before the worktree exists, or during F4 cleanup
+  after the worktree has been removed by intent).
+
+When in scope, run:
+
+1. Resolve the mutation's working directory:
+   `git rev-parse --show-toplevel`.
+2. Resolve the expected sibling-path from the active claim's
+   `branch:` field, using the B1 naming convention
+   (`../<repo-name>.<normalized-branch>`, with `/` in the branch
+   name replaced by `-`; see
+   [B1 Worktree creation](idd-work.instructions.md#worktree-creation)).
+3. If the cwd does **not** equal the expected sibling path, stop and
+   report. Do not auto-relocate the agent; the operator should
+   investigate (`scripts/idd-doctor.mjs` warns on the same primary-
+   worktree-HEAD symptom that this gate catches at mutation time) and
+   either remove the stale primary-HEAD branch or rerun B1 cleanly in
+   a fresh worktree.
+
+Out of scope and explicitly **not** blocked:
+
+- B1 setup commands run from the primary worktree on `main` (per the
+  B1 Anti-patterns rule — those commands must keep primary HEAD on
+  `main`).
+- A1.5 roadmap-audit coordination operations (claims whose `branch:`
+  starts with `roadmap-audit/`).
+- F4 post-merge cleanup (the sibling worktree is removed by F4
+  itself; subsequent local `main` updates run from the primary
+  worktree by design).
+
+This check is read-only and pre-mutation. When in scope, it must run
+before any push, rebase, comment, label change, reply, resolve,
+reviewer request, or merge.
+
 A1.5 roadmap completion audit side effects use the roadmap issue itself
 as the claim target (see `idd-roadmap-audit.instructions.md`). Even
 when the audit is GitHub-only and does not create a worktree, claim and
