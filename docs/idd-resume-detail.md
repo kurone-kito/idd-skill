@@ -52,16 +52,36 @@ digest `Authoritative by`. It must not silently inherit the old `{claim-id}`.
 
 ## §W1 — PR exists (1 match), no worktree
 
-Run `git fetch origin`. If a local branch named `{branch}` exists, check
-for unpushed commits: `git log origin/{branch}..{branch} --oneline`.
+Run `git fetch origin` from the primary worktree (this is a
+HEAD-preserving command and is safe there). If a local branch named
+`{branch}` exists, check for unpushed commits:
+`git log origin/{branch}..{branch} --oneline`.
 
-- **Commits appear**: create the worktree from the existing local branch.
-  If reviews exist on the PR → resume from E11; if no reviews → D1.
-- **No local commits**: reset the branch first:
-  `git branch -f {branch} origin/{branch}`, then create worktree.
+- **Commits appear**: create the sibling worktree from the existing
+  local branch using the B1 naming convention:
+  `git worktree add <sibling-worktree-path> {branch}`. If reviews
+  exist on the PR → resume from E11; if no reviews → D1.
+- **No local commits**: reset the branch first from the primary
+  worktree (HEAD-preserving):
+  `git branch -f {branch} origin/{branch}`, then create the sibling
+  worktree: `git worktree add <sibling-worktree-path> {branch}`.
 
-If no local branch named `{branch}` exists, create from remote:
-`git branch {branch} origin/{branch}`, then create worktree.
+If no local branch named `{branch}` exists, create from remote (still
+from the primary worktree, HEAD-preserving): `git branch {branch}
+origin/{branch}`, then create the sibling worktree:
+`git worktree add <sibling-worktree-path> {branch}`.
+
+`<sibling-worktree-path>` follows the B1 naming convention (sibling
+of the repository root, with `/` in branch name replaced by `-`).
+
+Anti-patterns (do not substitute these for the sequence above):
+
+- `git switch -c {branch} origin/{branch}` — moves the primary
+  worktree's HEAD to the issue branch and skips worktree creation.
+- `git checkout -b {branch} origin/{branch}` — equivalent failure.
+
+See [B1 Anti-patterns](../.github/instructions/idd-work.instructions.md#anti-patterns)
+for the full rule.
 
 ## §W2 — PR exists (1 match), rebase in progress
 
@@ -103,8 +123,23 @@ claim ownership:
 
 ## §W7 — No PR, remote branch exists
 
-Fetch remote branch, create local branch and worktree from it, then resume
-from C1. C exits to D1 immediately if the critique pass finds nothing new.
+From the primary worktree (HEAD stays on `main`):
+
+1. `git fetch origin {branch}` — fetch the remote tip.
+2. `git branch {branch} origin/{branch}` — create the local branch
+   without moving primary HEAD.
+3. `git worktree add <sibling-worktree-path> {branch}` — create the
+   sibling worktree using the B1 naming convention.
+
+Then resume from C1 inside the new worktree. C exits to D1
+immediately if the critique pass finds nothing new.
+
+Anti-patterns (do not substitute these for steps 2–3): `git switch -c
+{branch} origin/{branch}` or `git checkout -b {branch}
+origin/{branch}` — both move the primary worktree's HEAD to the
+issue branch and skip worktree creation. See
+[B1 Anti-patterns](../.github/instructions/idd-work.instructions.md#anti-patterns)
+for the full rule.
 
 ## §W8 — No PR, no remote branch, no worktree, local branch exists
 
