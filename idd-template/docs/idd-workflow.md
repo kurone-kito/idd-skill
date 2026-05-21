@@ -404,3 +404,21 @@ See [IDD comment minimization](idd-comment-minimization.md) for the live
 status digest helper, post-merge cleanup helper, GraphQL fallback command
 shape, and merged-PR experiment for hiding completed feedback and stale
 operational markers without deleting the audit trail.
+
+## Critique pass invocation
+
+A **critique pass** is an independent review of a plan or diff that
+produces a list of issues with severity, correctness, and coverage
+assessment. The goal and expected output are the same regardless of
+agent; only the mechanism differs.
+
+| Agent       | How to run a critique pass                                                                |
+| ----------- | ----------------------------------------------------------------------------------------- |
+| Copilot     | Launch a subagent in Agent mode; use the calling phase's critique checklist as the prompt |
+| Claude Code | `Agent(subagent_type="general-purpose")` with the calling phase's critique checklist      |
+| Codex CLI   | Self-critique: add a "review the above for issues" step in the next response              |
+| Gemini CLI  | Self-critique or use Gemini's native multi-step task mechanism if available               |
+
+When a phase file says "run a critique pass", apply the row for your
+agent above. If no subagent mechanism is available, perform the critique
+as a structured self-review step within the same response.
