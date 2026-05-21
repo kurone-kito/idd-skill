@@ -2,8 +2,10 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 
 import {
+  classifyPrimaryHead,
   extractMarkerPrefixes,
   findPlaceholders,
+  parsePrimaryWorktreePath,
   parseProjectCommandRows,
 } from "../scripts/idd-doctor.mjs"
 
@@ -54,4 +56,51 @@ test("extractMarkerPrefixes returns roadmap and blocked-by prefixes", () => {
 
   assert.deepEqual(markers.roadmap, ["idd-skill", "my-team"])
   assert.deepEqual(markers.blockedBy, ["idd-skill", "MyTeam"])
+})
+
+test("parsePrimaryWorktreePath returns the first worktree entry", () => {
+  const porcelain = [
+    "worktree /repo/idd-skill",
+    "HEAD ec72ee60dea3b9eeeb6ca0d7717daa46b98dcc13",
+    "branch refs/heads/main",
+    "",
+    "worktree /repo/idd-skill.issue-703-foo",
+    "HEAD abc123",
+    "branch refs/heads/issue/703-foo",
+    "",
+  ].join("\n")
+
+  assert.equal(parsePrimaryWorktreePath(porcelain), "/repo/idd-skill")
+})
+
+test("parsePrimaryWorktreePath returns null when input has no worktree line", () => {
+  assert.equal(parsePrimaryWorktreePath(""), null)
+  assert.equal(parsePrimaryWorktreePath("HEAD abc\nbranch main\n"), null)
+})
+
+test("classifyPrimaryHead flags issue/* branches as B1 violations", () => {
+  assert.deepEqual(classifyPrimaryHead("issue/123-foo"), {
+    isB1Violation: true,
+    kind: "issue",
+  })
+})
+
+test("classifyPrimaryHead flags roadmap-audit/* branches as B1 violations", () => {
+  assert.deepEqual(classifyPrimaryHead("roadmap-audit/456-bar"), {
+    isB1Violation: true,
+    kind: "roadmap-audit",
+  })
+})
+
+test("classifyPrimaryHead accepts main as not a violation", () => {
+  assert.deepEqual(classifyPrimaryHead("main"), {
+    isB1Violation: false,
+    kind: "other",
+  })
+})
+
+test("classifyPrimaryHead handles empty or non-string input as unknown", () => {
+  assert.deepEqual(classifyPrimaryHead(""), { isB1Violation: false, kind: "unknown" })
+  assert.deepEqual(classifyPrimaryHead(null), { isB1Violation: false, kind: "unknown" })
+  assert.deepEqual(classifyPrimaryHead(undefined), { isB1Violation: false, kind: "unknown" })
 })

@@ -50,9 +50,34 @@ export function runDoctor({ root, requireGithub }) {
   checkHelperRuntimeConfig(root, report)
   checkAgentEntryFiles(root, report)
   checkTemplateVersionSignal(root, report)
+  checkPrimaryWorktreeHead(root, report)
   checkGithubReadiness(root, requireGithub, report)
 
   return report
+}
+
+export function parsePrimaryWorktreePath(porcelain) {
+  const lines = porcelain.split("\n")
+  for (const line of lines) {
+    const match = line.match(/^worktree (.+)$/)
+    if (match) {
+      return match[1]
+    }
+  }
+  return null
+}
+
+export function classifyPrimaryHead(branch) {
+  if (typeof branch !== "string" || branch.length === 0) {
+    return { isB1Violation: false, kind: "unknown" }
+  }
+  if (branch.startsWith("issue/")) {
+    return { isB1Violation: true, kind: "issue" }
+  }
+  if (branch.startsWith("roadmap-audit/")) {
+    return { isB1Violation: true, kind: "roadmap-audit" }
+  }
+  return { isB1Violation: false, kind: "other" }
 }
 
 export function findPlaceholders(text) {
@@ -455,6 +480,37 @@ function checkTemplateVersionSignal(root, report) {
     return
   }
   report.warnings.push("template version signal not found (iddVersion/template version)")
+}
+
+function checkPrimaryWorktreeHead(root, report) {
+  const listResult = runCommand("git", ["worktree", "list", "--porcelain"], root)
+  if (!listResult.ok) {
+    return
+  }
+
+  const primaryPath = parsePrimaryWorktreePath(listResult.stdout)
+  if (!primaryPath) {
+    return
+  }
+
+  const headResult = runCommand("git", ["-C", primaryPath, "rev-parse", "--abbrev-ref", "HEAD"], root)
+  if (!headResult.ok) {
+    return
+  }
+
+  const branch = headResult.stdout.trim()
+  const classification = classifyPrimaryHead(branch)
+  if (!classification.isB1Violation) {
+    return
+  }
+
+  const kindLabel =
+    classification.kind === "issue"
+      ? "an issue branch"
+      : "a roadmap-audit branch"
+  report.warnings.push(
+    `primary worktree HEAD is on ${kindLabel} (${branch}) at ${primaryPath} — likely a past B1 violation. See B1 in .github/instructions/idd-work.instructions.md.`,
+  )
 }
 
 function checkGithubReadiness(root, requireGithub, report) {
