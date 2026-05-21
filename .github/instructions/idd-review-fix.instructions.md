@@ -13,9 +13,11 @@ The advisory-review timing defaults used by E14 are named in
 [IDD policy constants](../../docs/policy-constants.md). Refer there when
 you need the values, but keep the phase logic here unchanged.
 
-Apply the shared claim revalidation gate before E9, before the E12 push,
-and before each E13/E14/E15 GitHub side effect (reply, resolve,
-reviewer request, hold comment, or digest update).
+Apply the
+[shared claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
+before E9, before the E12 push, and before each E13/E14/E15 GitHub
+side effect (reply, resolve, reviewer request, hold comment, or digest
+update).
 
 ## E9 — Fix accepted issues
 

@@ -8,8 +8,8 @@ The final merge-gate timing defaults are named in
 [IDD policy constants](../../docs/policy-constants.md). Use that inventory
 when you need the canonical values; the merge logic itself stays here.
 
-Before any mutating action in F3, apply the shared claim revalidation
-gate. The active claim must still use your current `{claim-id}`.
+Before any mutating action in F3, apply the
+[shared claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
 
 ## F3 — Merge
 
