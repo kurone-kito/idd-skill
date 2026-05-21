@@ -266,6 +266,7 @@ docs/idd-helper-scripts.md
 docs/idd-comment-minimization.md
 docs/idd-resume-detail.md
 docs/idd-advisory-wait-shell-fallback.md
+docs/idd-design-rationale.md
 docs/permissions.md
 docs/getting-started.md
 docs/concepts.md
@@ -344,6 +345,7 @@ for FILE in \
   "docs/idd-comment-minimization.md" \
   "docs/idd-resume-detail.md" \
   "docs/idd-advisory-wait-shell-fallback.md" \
+  "docs/idd-design-rationale.md" \
   "docs/permissions.md" \
   "docs/getting-started.md" \
   "docs/concepts.md" \
@@ -430,6 +432,7 @@ for FILE in \
   "docs/idd-comment-minimization.md" \
   "docs/idd-resume-detail.md" \
   "docs/idd-advisory-wait-shell-fallback.md" \
+  "docs/idd-design-rationale.md" \
   "docs/permissions.md" \
   "docs/getting-started.md" \
   "docs/concepts.md" \
