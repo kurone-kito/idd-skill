@@ -2,12 +2,22 @@
 
 import { execFileSync } from "node:child_process"
 
-import { normalizeTrustedMarkerLogins } from "./protocol-helpers.mjs"
-
 const ALLOWED_CLASSIFIERS = new Set(["OUTDATED", "RESOLVED"])
+const ALLOWED_FORMATS = new Set(["json", "table"])
+const MINIMIZABLE_TYPENAMES = new Set([
+  "IssueComment",
+  "PullRequestReview",
+  "PullRequestReviewComment",
+])
 
 if (isMainModule(import.meta.url)) {
-  const args = parseArgs(process.argv.slice(2))
+  let args
+  try {
+    args = parseArgs(process.argv.slice(2))
+  } catch (error) {
+    console.error(`error: ${error.message}`)
+    process.exit(2)
+  }
 
   if (args.help) {
     printUsage()
@@ -21,16 +31,32 @@ if (isMainModule(import.meta.url)) {
     process.exit(2)
   }
 
+  if (!ALLOWED_FORMATS.has(args.format)) {
+    console.error(
+      `error: --format must be one of ${[...ALLOWED_FORMATS].join(", ")} (got "${args.format}")`,
+    )
+    process.exit(2)
+  }
+
   if (args.subjectIds.length === 0) {
     console.error("error: --subject-ids must contain at least one ID")
+    process.exit(2)
+  }
+
+  const trustedSet = buildTrustedSet(args.trustedMarkerLogins)
+  if (trustedSet.size === 0 && !args.allowUntrusted) {
+    console.error(
+      "error: no trusted marker logins supplied. Pass --trusted-marker-logins (or set IDD_TRUSTED_MARKER_ACTORS), or pass --allow-untrusted to explicitly opt out of the author gate.",
+    )
     process.exit(2)
   }
 
   const report = runMinimize({
     subjectIds: args.subjectIds,
     classifier: args.classifier,
-    trustedMarkerLogins: args.trustedMarkerLogins,
+    trustedSet,
     apply: args.apply,
+    allowUntrusted: args.allowUntrusted,
   })
 
   if (args.format === "table") {
@@ -43,29 +69,43 @@ if (isMainModule(import.meta.url)) {
   process.exit(exitCode)
 }
 
-export function runMinimize({ subjectIds, classifier, trustedMarkerLogins, apply }) {
+export function runMinimize({ subjectIds, classifier, trustedSet, apply, allowUntrusted }) {
   const report = {
     mode: apply ? "apply" : "dry-run",
     classifier,
-    counts: { eligible: 0, alreadyMinimized: 0, cannotMinimize: 0, untrusted: 0, applied: 0, failed: 0 },
+    counts: {
+      eligible: 0,
+      alreadyMinimized: 0,
+      cannotMinimize: 0,
+      untrusted: 0,
+      unsupportedType: 0,
+      applied: 0,
+      failed: 0,
+    },
     items: [],
   }
-
-  const trustedSet = buildTrustedSet(trustedMarkerLogins)
 
   for (const subjectId of subjectIds) {
     const probe = probeSubject(subjectId)
     if (!probe.ok) {
-      report.items.push({
-        subjectId,
-        status: "failed",
-        reason: probe.reason,
-      })
+      report.items.push({ subjectId, status: "failed", reason: probe.reason })
       report.counts.failed += 1
       continue
     }
 
     const { author, isMinimized, viewerCanMinimize, url, typename } = probe.node
+
+    if (!MINIMIZABLE_TYPENAMES.has(typename)) {
+      report.items.push({
+        subjectId,
+        url,
+        typename,
+        status: "skipped",
+        reason: "unsupported-type",
+      })
+      report.counts.unsupportedType += 1
+      continue
+    }
 
     if (isMinimized) {
       report.items.push({
@@ -91,7 +131,7 @@ export function runMinimize({ subjectIds, classifier, trustedMarkerLogins, apply
       continue
     }
 
-    if (trustedSet.size > 0 && !isTrustedAuthor(author, trustedSet)) {
+    if (!allowUntrusted && !isTrustedAuthor(author, trustedSet)) {
       report.items.push({
         subjectId,
         url,
@@ -107,25 +147,13 @@ export function runMinimize({ subjectIds, classifier, trustedMarkerLogins, apply
     report.counts.eligible += 1
 
     if (!apply) {
-      report.items.push({
-        subjectId,
-        url,
-        typename,
-        status: "would-apply",
-        author,
-      })
+      report.items.push({ subjectId, url, typename, status: "would-apply", author })
       continue
     }
 
     const mutation = applyMinimize(subjectId, classifier)
     if (mutation.ok) {
-      report.items.push({
-        subjectId,
-        url,
-        typename,
-        status: "applied",
-        author,
-      })
+      report.items.push({ subjectId, url, typename, status: "applied", author })
       report.counts.applied += 1
     } else {
       report.items.push({
@@ -142,7 +170,7 @@ export function runMinimize({ subjectIds, classifier, trustedMarkerLogins, apply
   return report
 }
 
-function probeSubject(subjectId) {
+export function probeSubject(subjectId) {
   const result = runGh(
     [
       "api",
@@ -169,6 +197,12 @@ function probeSubject(subjectId) {
   } catch (error) {
     return { ok: false, reason: `gh-graphql-parse: ${error.message}` }
   }
+  if (Array.isArray(parsed?.errors) && parsed.errors.length > 0) {
+    return {
+      ok: false,
+      reason: `gh-graphql-errors: ${parsed.errors.map((e) => e.message ?? "").filter(Boolean).join("; ").slice(0, 200)}`,
+    }
+  }
   const node = parsed?.data?.node
   if (!node) {
     return { ok: false, reason: "node-missing" }
@@ -185,7 +219,7 @@ function probeSubject(subjectId) {
   }
 }
 
-function applyMinimize(subjectId, classifier) {
+export function applyMinimize(subjectId, classifier) {
   const result = runGh([
     "api",
     "graphql",
@@ -208,7 +242,36 @@ function applyMinimize(subjectId, classifier) {
   if (!result.ok) {
     return { ok: false, reason: `mutation-error: ${result.stderr.slice(0, 200)}` }
   }
+  let parsed
+  try {
+    parsed = JSON.parse(result.stdout)
+  } catch (error) {
+    return { ok: false, reason: `mutation-parse: ${error.message}` }
+  }
+  if (Array.isArray(parsed?.errors) && parsed.errors.length > 0) {
+    return {
+      ok: false,
+      reason: `mutation-graphql-errors: ${parsed.errors.map((e) => e.message ?? "").filter(Boolean).join("; ").slice(0, 200)}`,
+    }
+  }
+  const minimized = parsed?.data?.minimizeComment?.minimizedComment
+  if (!minimized || minimized.isMinimized !== true) {
+    return {
+      ok: false,
+      reason: `mutation-no-confirmation: minimizedComment.isMinimized was not true`,
+    }
+  }
   return { ok: true }
+}
+
+export function normalizeTrustedMarkerLogins(logins) {
+  return [
+    ...new Set(
+      (Array.isArray(logins) ? logins : [])
+        .map((login) => String(login ?? "").trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ].sort()
 }
 
 function buildTrustedSet(logins) {
@@ -235,9 +298,9 @@ export function computeExitCode(report) {
 
 function printTable(report) {
   console.log(`mode: ${report.mode}  classifier: ${report.classifier}`)
-  const counts = report.counts
+  const c = report.counts
   console.log(
-    `counts: eligible=${counts.eligible} applied=${counts.applied} failed=${counts.failed} already=${counts.alreadyMinimized} blocked=${counts.cannotMinimize} untrusted=${counts.untrusted}`,
+    `counts: eligible=${c.eligible} applied=${c.applied} failed=${c.failed} already=${c.alreadyMinimized} blocked=${c.cannotMinimize} untrusted=${c.untrusted} unsupported=${c.unsupportedType}`,
   )
   for (const item of report.items) {
     const url = item.url ?? "(no url)"
@@ -267,6 +330,7 @@ function parseArgs(argv) {
     classifier: "OUTDATED",
     trustedMarkerLogins: process.env.IDD_TRUSTED_MARKER_ACTORS ?? "",
     apply: false,
+    allowUntrusted: false,
     format: "json",
     help: false,
   }
@@ -279,6 +343,10 @@ function parseArgs(argv) {
     }
     if (arg === "--apply") {
       args.apply = true
+      continue
+    }
+    if (arg === "--allow-untrusted") {
+      args.allowUntrusted = true
       continue
     }
     if (arg === "--subject-ids") {
@@ -328,7 +396,14 @@ function parseArgs(argv) {
 
 function printUsage() {
   console.log(
-    `Usage: minimize-superseded-markers --subject-ids <id1,id2,...> [--classifier OUTDATED|RESOLVED] [--trusted-marker-logins login1,login2] [--apply] [--format json|table]`,
+    `Usage: minimize-superseded-markers --subject-ids <id1,id2,...> [--classifier OUTDATED|RESOLVED] [--trusted-marker-logins login1,login2] [--allow-untrusted] [--apply] [--format json|table]
+
+The trusted-author gate is mandatory by default: pass a non-empty
+--trusted-marker-logins list (or set IDD_TRUSTED_MARKER_ACTORS) so the
+helper rejects markers from untrusted GitHub actors. Use
+--allow-untrusted only when you intentionally want to minimize markers
+regardless of author, and the caller has already verified the subject
+IDs are operationally safe to hide.`,
   )
 }
 

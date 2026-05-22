@@ -288,9 +288,11 @@ do not reuse the displaced `{claim-id}`.
 ### Hide displaced claim chain on takeover
 
 When the verified new claim was posted with `supersedes: <prior-id>`
-(stale takeover, legacy migration with prior-id, or forced-handoff
-recovery), minimize the displaced claim's marker chain on the issue
-as `OUTDATED` after this session has recorded its own verified
+naming a concrete prior `{claim-id}` (stale takeover or forced-handoff
+recovery; **not** the legacy-migration path, which always uses
+`supersedes: none` per the Legacy claim migration section below),
+minimize the displaced claim's marker chain on the issue as
+`OUTDATED` after this session has recorded its own verified
 `{claim-id}`. Find every trusted `claimed-by` / `unclaimed-by` /
 heartbeat comment whose embedded `{claim-id}` equals `<prior-id>`
 and call:
