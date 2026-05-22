@@ -128,6 +128,23 @@ not minimize comments that still determine review currency, advisory
 wait state, unresolved-thread state, unreplied-comment state, hold
 state, or a pending maintainer decision.
 
+### Server-side fallback
+
+This repository runs `.github/workflows/post-merge-cleanup.yml` on
+`pull_request.closed` events filtered to `merged == true`. The
+workflow invokes `node scripts/audit-pr-cleanup.mjs --apply
+--skip-claim-check` so that every actually-merged PR receives an
+`<!-- idd-cleanup-evidence: ... -->` comment within a few minutes,
+even when the agent did not run F4 manually.
+
+The agent F4 step in `idd-merge.instructions.md` remains the
+canonical, mandatory contract. The server-side workflow is a
+backstop, not a replacement: it uses the same helper, the same
+candidate rules, and the same evidence comment shape, and exits
+non-blocking on errors. Concurrency keyed on PR number prevents
+double-posting when an agent F4 and the workflow happen to run in
+the same minute.
+
 ## GitHub mechanism
 
 GitHub GraphQL exposes `minimizeComment`:
