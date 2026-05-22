@@ -115,24 +115,33 @@ export function runVerification(repoRoot, options = {}) {
 // Strips fenced code blocks (``` and ~~~) before pattern scanning so
 // example Markdown inside code samples is never interpreted as a real
 // link or heading. Tracks both fence character and opening length so a
-// 4-backtick block is not closed by a later 3-backtick line (the
-// closing fence must use the same character and be at least as long).
+// 4-backtick block is not closed by a later 3-backtick line. Closing
+// fences must contain ONLY optional whitespace after the fence marker
+// (per CommonMark §4.5), so a line like ```js inside a fenced block
+// is treated as content, not as a close.
 export function stripFencedCodeBlocks(content) {
   const lines = String(content).split(/\r?\n/)
   const out = []
   let fence = null
   for (const line of lines) {
-    const match = line.match(/^\s*(`{3,}|~{3,})/)
-    if (match) {
-      const open = match[1]
-      const openChar = open[0]
-      const openLen = open.length
+    const openMatch = line.match(/^\s*(`{3,}|~{3,})(.*)$/)
+    if (openMatch) {
+      const fenceMarker = openMatch[1]
+      const afterFence = openMatch[2]
+      const fenceChar = fenceMarker[0]
+      const fenceLen = fenceMarker.length
+      const onlyWhitespaceAfter = /^\s*$/.test(afterFence)
       if (fence === null) {
-        fence = { char: openChar, length: openLen }
+        // Opening fence: info string after the marker is allowed.
+        fence = { char: fenceChar, length: fenceLen }
         out.push("")
         continue
       }
-      if (openChar === fence.char && openLen >= fence.length) {
+      if (
+        fenceChar === fence.char
+        && fenceLen >= fence.length
+        && onlyWhitespaceAfter
+      ) {
         fence = null
         out.push("")
         continue
@@ -141,6 +150,14 @@ export function stripFencedCodeBlocks(content) {
     out.push(fence === null ? line : "")
   }
   return out.join("\n")
+}
+
+// Strips inline code spans (`...`, ``...``, etc.) from a single
+// line so `[demo](./missing.md)` inside backticks is not extracted
+// as a real link. Conservative: only handles single-line spans; a
+// span that opens and never closes is left as-is.
+export function stripInlineCodeSpans(line) {
+  return String(line).replace(/(`+)((?:(?!\1).)+?)\1/g, (_match, fence) => " ".repeat(fence.length * 2))
 }
 
 export function extractReferenceDefinitions(markdown) {
@@ -161,27 +178,52 @@ export function extractReferences(markdown, refDefs = new Map()) {
   const stripped = stripFencedCodeBlocks(markdown)
   const lines = stripped.split(/\r?\n/)
   for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
-    const line = lines[lineNumber]
-    extractInlineFromLine(line, lineNumber + 1, refs)
-    extractReferenceStyleFromLine(line, lineNumber + 1, refs, refDefs)
-    extractShortcutReferencesFromLine(line, lineNumber + 1, refs, refDefs)
+    // Mask inline code spans and backslash-escaped link delimiters so
+    // that `[demo](./missing.md)` inside backticks and \[demo](./x.md)
+    // in escaped prose are not parsed as real links.
+    const sanitized = maskBackslashEscapes(stripInlineCodeSpans(lines[lineNumber]))
+    extractInlineFromLine(sanitized, lineNumber + 1, refs)
+    extractReferenceStyleFromLine(sanitized, lineNumber + 1, refs, refDefs)
+    extractShortcutReferencesFromLine(sanitized, lineNumber + 1, refs, refDefs)
+    extractAutolinksFromLine(sanitized, lineNumber + 1, refs)
   }
   return refs
 }
 
+function maskBackslashEscapes(line) {
+  // Replace \[ and \] with two-char filler so the link/reference
+  // patterns do not consume them. Other escapes are left intact.
+  return String(line).replace(/\\([\[\]])/g, "  ")
+}
+
 function extractInlineFromLine(line, lineNumber, refs) {
-  // CommonMark inline link / image. Single-line only; balanced
-  // parentheses inside the destination are not supported (rare in
-  // this codebase). Optional title accepts double-quoted,
-  // single-quoted, or parenthesized form.
-  const pattern = /(!?)\[([^\]\n]*)\]\(\s*([^()\s]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g
+  // CommonMark inline link / image. Single-line only. Destination can
+  // be either a bare token (no whitespace, no balanced parens) or
+  // angle-bracket wrapped (`<./b.md>`), per CommonMark §6.6 destination
+  // grammar. Optional title accepts double-quoted, single-quoted, or
+  // parenthesized form.
+  const pattern = /(!?)\[([^\]\n]*)\]\(\s*(<[^>\n]*>|[^()\s]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g
   let match
   while ((match = pattern.exec(line)) !== null) {
+    let target = match[3]
+    if (target.startsWith("<") && target.endsWith(">")) {
+      target = target.slice(1, -1)
+    }
     refs.push({
       kind: match[1] === "!" ? "image" : "link",
-      target: match[3],
+      target,
       line: lineNumber,
     })
+  }
+}
+
+function extractAutolinksFromLine(line, lineNumber, refs) {
+  // CommonMark autolink: <scheme://...>. We only validate the URL
+  // syntax (no live HTTP), so we treat them as link references.
+  const pattern = /<([a-z][a-z0-9+.-]*:[^>\s]+)>/gi
+  let match
+  while ((match = pattern.exec(line)) !== null) {
+    refs.push({ kind: "link", target: match[1], line: lineNumber })
   }
 }
 
@@ -347,9 +389,23 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
     anchorPart = trimmed.slice(hashIndex + 1)
   }
 
+  // Strip query string from the local path; existsSync does not
+  // understand `?plain=1` and would falsely report missing.
+  const queryIndex = pathPart.indexOf("?")
+  if (queryIndex >= 0) {
+    pathPart = pathPart.slice(0, queryIndex)
+  }
+
   let decodedPath = pathPart
   try {
     decodedPath = decodeURIComponent(pathPart)
+  } catch {
+    // Leave as-is when not valid percent-encoding.
+  }
+
+  let decodedAnchor = anchorPart
+  try {
+    decodedAnchor = decodeURIComponent(anchorPart)
   } catch {
     // Leave as-is when not valid percent-encoding.
   }
@@ -406,7 +462,7 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
     }
     fileMeta.set(resolvedPath, meta)
   }
-  if (!meta.headingSlugs.has(anchorPart.toLowerCase())) {
+  if (!meta.headingSlugs.has(decodedAnchor.toLowerCase())) {
     return {
       status: "missing-anchor",
       detail: `anchor "#${anchorPart}" not found in ${relative(repoRoot, resolvedPath)}`,

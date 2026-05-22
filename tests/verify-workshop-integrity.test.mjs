@@ -136,9 +136,11 @@ test("computeExitCode returns 1 when issues exist, 0 otherwise", () => {
   assert.equal(computeExitCode({ issues: [{}] }), 1)
 })
 
-test("slugifyHeading collapses nested HTML so <<script>>x</script>> becomes script-x", () => {
+test("slugifyHeading fully collapses nested HTML to leave only the text", () => {
   // CodeQL flagged a single-pass HTML strip as incomplete-multi-char
-  // sanitization. The loop should fully collapse nested tags.
+  // sanitization. The loop should fully collapse nested tags so the
+  // remaining text is what survives — for `<<script>>x</script>>`
+  // that is the bare letter `x`.
   assert.equal(slugifyHeading("<<script>>x</script>>"), "x")
   assert.equal(slugifyHeading("plain <b>bold</b> text"), "plain-bold-text")
 })
@@ -235,6 +237,18 @@ test("stripFencedCodeBlocks requires closing fence to be at least as long as ope
   assert.equal(stripped.includes("after"), true)
 })
 
+test("stripFencedCodeBlocks treats fenced lines with info strings as content (not close)", () => {
+  // Per CommonMark §4.5, a closing fence may contain only optional
+  // whitespace after the fence marker. A line like ```js inside a
+  // fence is content, not a close.
+  const md = "outer\n```\n```js\nstill inside\n```\nafter"
+  const stripped = stripFencedCodeBlocks(md)
+  assert.equal(stripped.includes("```js"), false)
+  assert.equal(stripped.includes("still inside"), false)
+  assert.equal(stripped.includes("outer"), true)
+  assert.equal(stripped.includes("after"), true)
+})
+
 test("extractReferences resolves shortcut reference [label] against refDefs", () => {
   const md = `see [alpha] for details\n\n[alpha]: ./a.md\n`
   const defs = extractReferenceDefinitions(md)
@@ -258,4 +272,55 @@ test("classifyAndCheck accepts mailto: and tel: schemes", () => {
     classifyAndCheck("tel:+15555550123", "/tmp/x.md", "/tmp", new Map()).status,
     "ok",
   )
+})
+
+test("classifyAndCheck strips query strings before resolving local paths", async (t) => {
+  const repo = makeRepo()
+  t.after(() => repo.cleanup())
+  repo.write("docs/b.md", "# title\n")
+  const from = repo.write("docs/from.md", "# from\n")
+  const result = classifyAndCheck("./b.md?plain=1", from, repo.root, new Map())
+  assert.equal(result.status, "ok")
+})
+
+test("classifyAndCheck percent-decodes anchors before slug comparison", async (t) => {
+  const repo = makeRepo()
+  t.after(() => repo.cleanup())
+  // `日本語` percent-encoded.
+  repo.write("docs/target.md", "# 日本語\n")
+  const from = repo.write("docs/from.md", "# from\n")
+  const result = classifyAndCheck(
+    "./target.md#%E6%97%A5%E6%9C%AC%E8%AA%9E",
+    from,
+    repo.root,
+    new Map(),
+  )
+  assert.equal(result.status, "ok")
+})
+
+test("extractReferences ignores links inside inline code spans", () => {
+  const md = "real [a](./a.md) and `[demo](./missing.md)` in prose"
+  const refs = extractReferences(md)
+  assert.equal(refs.length, 1)
+  assert.equal(refs[0].target, "./a.md")
+})
+
+test("extractReferences ignores backslash-escaped link delimiters", () => {
+  const md = `\\[demo](./missing.md) is literal text\n`
+  const refs = extractReferences(md)
+  assert.equal(refs.length, 0)
+})
+
+test("extractReferences unwraps angle-bracket destinations", () => {
+  const md = `[ok](<./b.md>)\n`
+  const refs = extractReferences(md)
+  assert.equal(refs.length, 1)
+  assert.equal(refs[0].target, "./b.md")
+})
+
+test("extractReferences extracts CommonMark angle-bracket autolinks", () => {
+  const md = `See <https://example.com/x> for details\n`
+  const refs = extractReferences(md)
+  assert.equal(refs.length, 1)
+  assert.equal(refs[0].target, "https://example.com/x")
 })
