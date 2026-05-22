@@ -1,11 +1,18 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process"
-import { readFileSync, readdirSync, statSync } from "node:fs"
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
 import { join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { inspectHelperRuntimeConfig, parseProjectCommandRows } from "./policy-helpers.mjs"
+
+const WORKSHOP_ENTRY_POINTS = ["README.md", "README.ja.md", "docs/index.md"]
+const WORKSHOP_REL_PATH = "docs/workshop"
+const WORKSHOP_LINK_TARGET_PATTERNS = [
+  /(?:^|\/)docs\/workshop(?:\/|$)/,
+  /(?:^|\/)workshop(?:\/|$)/,
+]
 
 export { parseProjectCommandRows }
 
@@ -22,6 +29,7 @@ if (isMainModule(import.meta.url)) {
     requireGithub: args.requireGithub,
     cleanupBacklogWindowDays: args.cleanupBacklogWindowDays,
     cleanupBacklogWarnThreshold: args.cleanupBacklogWarnThreshold,
+    workshopCrossRefAllowMissing: args.workshopCrossRefAllowMissing,
   })
 
   if (args.json) {
@@ -38,6 +46,7 @@ export function runDoctor({
   requireGithub,
   cleanupBacklogWindowDays,
   cleanupBacklogWarnThreshold,
+  workshopCrossRefAllowMissing,
 }) {
   const files = listFiles(root)
   const textFiles = files.filter(isTextLikeFile)
@@ -65,6 +74,11 @@ export function runDoctor({
       warnThreshold: cleanupBacklogWarnThreshold ?? 2,
       requireGithub,
     },
+    report,
+  )
+  checkWorkshopCrossReferences(
+    root,
+    { allowMissing: workshopCrossRefAllowMissing ?? [] },
     report,
   )
   checkGithubReadiness(root, requireGithub, report)
@@ -697,6 +711,107 @@ function checkPostMergeCleanupBacklog(root, options, report) {
   )
 }
 
+export function findMissingWorkshopReferences(entryFiles, allowMissing) {
+  const allowSet = new Set(
+    (Array.isArray(allowMissing) ? allowMissing : []).map((path) => String(path)),
+  )
+  const missing = []
+  for (const entry of entryFiles) {
+    if (allowSet.has(entry.path)) {
+      continue
+    }
+    if (entry.content === null) {
+      missing.push(entry.path)
+      continue
+    }
+    if (typeof entry.content !== "string") {
+      continue
+    }
+    if (!containsWorkshopReference(entry.content)) {
+      missing.push(entry.path)
+    }
+  }
+  return missing
+}
+
+export function containsWorkshopReference(content) {
+  if (typeof content !== "string" || content.length === 0) {
+    return false
+  }
+  // Strip fenced code blocks (``` and ~~~) before scanning so demo
+  // Markdown inside code samples does not count as a real link.
+  const stripped = stripFencedCodeBlocks(content)
+  // Accept any double-quoted, single-quoted, or no-title destination
+  // form per CommonMark inline-link grammar.
+  const linkPattern = /\[[^\]\n]*\]\(\s*([^()\s]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g
+  let match
+  while ((match = linkPattern.exec(stripped)) !== null) {
+    const target = match[1]
+    if (!target) continue
+    if (matchesWorkshopPath(target)) {
+      return true
+    }
+  }
+  return false
+}
+
+function stripFencedCodeBlocks(content) {
+  const lines = String(content).split(/\r?\n/)
+  const out = []
+  let inFence = false
+  for (const line of lines) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence
+      continue
+    }
+    if (inFence) continue
+    out.push(line)
+  }
+  return out.join("\n")
+}
+
+function matchesWorkshopPath(target) {
+  const cleaned = String(target).replace(/^\.\/+/, "").replace(/^\/+/, "")
+  for (const pattern of WORKSHOP_LINK_TARGET_PATTERNS) {
+    if (pattern.test(`/${cleaned}`)) {
+      return true
+    }
+  }
+  return false
+}
+
+// Verifies that the workshop publication is discoverable from every
+// known entry point (README.md, README.ja.md, docs/index.md).
+// Skipped silently when docs/workshop/ does not exist (adopter repos
+// that never published a workshop should not see noise). The example
+// repository's back-link is intentionally out of scope here because
+// verifying it requires fetching a remote repository's README; that
+// is a separate concern under the helper-runtime profile work.
+function checkWorkshopCrossReferences(root, options, report) {
+  const allowMissing = options.allowMissing ?? []
+  const workshopDir = resolve(root, WORKSHOP_REL_PATH)
+  if (!existsSync(workshopDir)) {
+    return
+  }
+  const entryFiles = WORKSHOP_ENTRY_POINTS.map((relPath) => {
+    const abs = resolve(root, relPath)
+    if (!existsSync(abs)) {
+      return { path: relPath, content: null }
+    }
+    try {
+      return { path: relPath, content: readFileSync(abs, "utf8") }
+    } catch {
+      return { path: relPath, content: null }
+    }
+  })
+  const missing = findMissingWorkshopReferences(entryFiles, allowMissing)
+  for (const path of missing) {
+    report.warnings.push(
+      `workshop cross-reference missing in ${path}: expected a Markdown link whose target starts with ${WORKSHOP_REL_PATH}/. See acceptance criteria on issue #611 (CP-E).`,
+    )
+  }
+}
+
 function checkGithubReadiness(root, requireGithub, report) {
   const repoView = runCommand("gh", ["repo", "view", "--json", "owner,name,defaultBranchRef"], root)
   if (!repoView.ok) {
@@ -857,6 +972,18 @@ function parseArgs(argv) {
       index += 1
       continue
     }
+    if (arg === "--workshop-cross-ref-allow-missing") {
+      const value = argv[index + 1]
+      if (value === undefined) {
+        throw new Error("--workshop-cross-ref-allow-missing requires a value")
+      }
+      args.workshopCrossRefAllowMissing = value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0)
+      index += 1
+      continue
+    }
     throw new Error(`unknown argument: ${arg}`)
   }
 
@@ -890,6 +1017,7 @@ options:
   --require-github                         treat GitHub API check failures as errors
   --cleanup-backlog-window-days <N>        merged-PR window for the cleanup backlog check (default: 14)
   --cleanup-backlog-warn-threshold <N>     backlog count above which the check warns (default: 2)
+  --workshop-cross-ref-allow-missing <list> comma-separated entry-point paths to skip in the workshop cross-reference check (default: none)
   --help, -h                               show this help
 
 The merged-PR backlog scan caps at gh's per-query maximum of 1000
