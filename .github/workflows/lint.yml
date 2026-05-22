@@ -25,6 +25,8 @@ jobs:
         run: npx dprint@0.54.0 check "**/*.md"
       - name: Run protocol tests
         run: node --test tests/*.mjs
+      - name: Run workshop integrity check
+        run: node scripts/verify-workshop-integrity.mjs --format table
       - name: Run cspell
         uses: streetsidesoftware/cspell-action@v8
       - name: Run markdownlint
