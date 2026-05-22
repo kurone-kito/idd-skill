@@ -324,3 +324,32 @@ test("extractReferences extracts CommonMark angle-bracket autolinks", () => {
   assert.equal(refs.length, 1)
   assert.equal(refs[0].target, "https://example.com/x")
 })
+
+test("extractReferenceDefinitions unwraps angle-bracket destinations", () => {
+  const md = `[a]: <./b.md>\n[b]: <https://example.com>\n`
+  const defs = extractReferenceDefinitions(md)
+  assert.equal(defs.get("a"), "./b.md")
+  assert.equal(defs.get("b"), "https://example.com")
+})
+
+test("extractReferences treats backslash-escaped \\! as literal but keeps the link", () => {
+  // CommonMark §6.1: `\!` renders as a literal `!`, but the
+  // following `[text](target)` is still a valid inline link. So we
+  // should extract a link (not an image) pointing at the target.
+  const md = `\\![alt](./b.md) is rendered with a literal ! plus a link\n`
+  const refs = extractReferences(md)
+  assert.equal(refs.length, 1)
+  assert.equal(refs[0].kind, "link")
+  assert.equal(refs[0].target, "./b.md")
+})
+
+test("classifyAndCheck accepts non-hierarchical absolute URI schemes (urn:, data:)", () => {
+  assert.equal(
+    classifyAndCheck("urn:isbn:0451450523", "/tmp/x.md", "/tmp", new Map()).status,
+    "ok",
+  )
+  assert.equal(
+    classifyAndCheck("data:text/plain,hi", "/tmp/x.md", "/tmp", new Map()).status,
+    "ok",
+  )
+})

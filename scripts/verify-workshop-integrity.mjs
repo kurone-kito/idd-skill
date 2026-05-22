@@ -168,7 +168,12 @@ export function extractReferenceDefinitions(markdown) {
     const match = line.match(/^\s{0,3}\[([^\]]+)\]:\s*(\S+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*$/)
     if (!match) continue
     const label = match[1].trim().toLowerCase()
-    map.set(label, match[2])
+    let target = match[2]
+    // Unwrap angle-bracket destinations per CommonMark §6.6.
+    if (target.startsWith("<") && target.endsWith(">")) {
+      target = target.slice(1, -1)
+    }
+    map.set(label, target)
   }
   return map
 }
@@ -191,9 +196,10 @@ export function extractReferences(markdown, refDefs = new Map()) {
 }
 
 function maskBackslashEscapes(line) {
-  // Replace \[ and \] with two-char filler so the link/reference
-  // patterns do not consume them. Other escapes are left intact.
-  return String(line).replace(/\\([\[\]])/g, "  ")
+  // Replace \[, \], and \! with two-char filler so the link / image
+  // / reference patterns do not consume them. Other escapes are left
+  // intact.
+  return String(line).replace(/\\([\[\]!])/g, "  ")
 }
 
 function extractInlineFromLine(line, lineNumber, refs) {
@@ -361,20 +367,21 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
   if (trimmed.length === 0) {
     return { status: "missing-file", detail: "empty target" }
   }
-  if (trimmed.startsWith("mailto:") || trimmed.startsWith("tel:")) {
-    return { status: "ok" }
-  }
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+  if (trimmed.startsWith("//")) {
     try {
-      new URL(trimmed)
+      new URL(`https:${trimmed}`)
       return { status: "ok" }
     } catch (error) {
       return { status: "invalid-url", detail: error.message }
     }
   }
-  if (trimmed.startsWith("//")) {
+  // Any absolute URI scheme — hierarchical (with `//`) or
+  // non-hierarchical (`urn:`, `data:`, `mailto:`, `tel:`, ...). The
+  // URL constructor parses both shapes; we validate syntax only,
+  // never fetch.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed) && !trimmed.startsWith("//")) {
     try {
-      new URL(`https:${trimmed}`)
+      new URL(trimmed)
       return { status: "ok" }
     } catch (error) {
       return { status: "invalid-url", detail: error.message }
