@@ -522,6 +522,25 @@ test("containsExampleRepoBackLink accepts root-relative inline link targets", ()
   )
 })
 
+test("containsExampleRepoBackLink rejects URLs that appear only as image destinations", () => {
+  // `![badge](...)` is an image, not a navigational link. The
+  // back-link contract is about navigation, not presence of the
+  // URL anywhere on the page.
+  const md = "![badge](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink accepts a real navigation link even when the same URL also appears as an image", () => {
+  const md = `![badge](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n\n[Read the workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)`
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
 test("containsExampleRepoBackLink accepts root-relative reference-definition targets", () => {
   const md = "Link: [workshop][w]\n\n[w]: /kurone-kito/idd-skill/blob/main/docs/workshop/README.md\n"
   assert.equal(

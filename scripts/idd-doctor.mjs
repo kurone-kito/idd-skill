@@ -946,7 +946,14 @@ export function containsExampleRepoBackLink(readmeContent, repoSlug) {
   // (no host / query / fragment) so the regex can stay anchored
   // to `^/<slug>/` and query strings cannot smuggle the slug.
   const pattern = backLinkPatternFor(repoSlug)
-  const stripped = stripMarkdownNonText(readmeContent)
+  // Mask inline-image destinations BEFORE generic URL extraction
+  // so badge-style images like ![alt](https://github.com/...) do
+  // not count as navigational back-links.
+  const imagedStripped = stripMarkdownNonText(readmeContent).replace(
+    /!\[[^\]]*\]\(\s*<?[^()\s>]+>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g,
+    "",
+  )
+  const stripped = imagedStripped
   // Absolute http(s) URLs.
   const urlPattern = /https?:\/\/[^\s<>)\]"']+/gi
   let match
@@ -1057,9 +1064,15 @@ function checkWorkshopExampleRepoBackLink(root, options, report) {
     return
   }
   if (!/^[^/\s]+\/[^/\s]+$/.test(exampleRepo)) {
-    report.warnings.push(
-      `workshop example-repo check skipped: invalid workshop.exampleRepository value "${exampleRepo}" — expected "<owner>/<repo>".`,
-    )
+    const message = `invalid workshop.exampleRepository value "${exampleRepo}" — expected "<owner>/<repo>".`
+    // Misconfiguration is not a soft GitHub failure; it is a real
+    // gating signal. Under --require-github this must escalate so
+    // CI catches the typo instead of silently passing.
+    if (requireGithub) {
+      report.errors.push(`workshop example-repo back-link check: ${message}`)
+    } else {
+      report.warnings.push(`workshop example-repo check skipped: ${message}`)
+    }
     return
   }
 
