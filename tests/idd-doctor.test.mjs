@@ -491,7 +491,7 @@ test("containsExampleRepoBackLink accepts raw.githubusercontent.com host", () =>
   )
 })
 
-test("containsExampleRepoBackLink accepts GHES host only when IDD_WORKSHOP_BACKLINK_HOSTS is set", () => {
+test("containsExampleRepoBackLink accepts enterprise host only when IDD_WORKSHOP_BACKLINK_HOSTS is set", () => {
   const md = "[enterprise](https://github.acme.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)"
   // Without the env var, the heuristic must NOT accept arbitrary
   // hosts with "github" in the name (that was the github.evil.com
