@@ -81,6 +81,7 @@ export function runDoctor({
     { allowMissing: workshopCrossRefAllowMissing ?? [] },
     report,
   )
+  checkWorkshopExampleRepoBackLink(root, { requireGithub }, report)
   checkGithubReadiness(root, requireGithub, report)
 
   return report
@@ -808,6 +809,130 @@ function checkWorkshopCrossReferences(root, options, report) {
   for (const path of missing) {
     report.warnings.push(
       `workshop cross-reference missing in ${path}: expected a Markdown link whose target starts with ${WORKSHOP_REL_PATH}/. See acceptance criteria on issue #611 (CP-E).`,
+    )
+  }
+}
+
+// Verifies that the example repository's README links back to this
+// repository's workshop directory — the last scriptable item in the
+// CP-E (#611) checklist. Reads the example-repo coordinates from
+// `.github/idd/config.json` `workshop.exampleRepository`
+// (`<owner>/<repo>` shape). Skipped silently when:
+//   - the local docs/workshop/ does not exist (adopter never
+//     published a workshop);
+//   - workshop.exampleRepository is unset / empty;
+//   - the gh fetch fails (no network, no token, no permissions) —
+//     escalates to errors under --require-github.
+export function backLinkPatternFor(repoSlug) {
+  // Match any link target that mentions both the slug and the
+  // docs/workshop path (blob/main, tree/main, or raw URL shapes).
+  const escSlug = String(repoSlug).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return new RegExp(`${escSlug}[^)\\s]*?docs/workshop`, "i")
+}
+
+export function containsExampleRepoBackLink(readmeContent, repoSlug) {
+  if (typeof readmeContent !== "string" || readmeContent.length === 0) {
+    return false
+  }
+  // Scan all URL-shaped tokens (inline links, reference-definition
+  // destinations, autolinks, badge wrappers, raw README mentions).
+  // Stripping fenced code blocks first so demo URLs in code samples
+  // are not counted. Using a URL scan rather than parsing Markdown
+  // link grammar accepts the full range of link shapes that real
+  // READMEs use without needing a full Markdown parser.
+  const pattern = backLinkPatternFor(repoSlug)
+  const stripped = readmeContent.replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, "")
+  const urlPattern = /https?:\/\/[^\s<>)\]"']+/gi
+  let match
+  while ((match = urlPattern.exec(stripped)) !== null) {
+    if (pattern.test(match[0])) return true
+  }
+  return false
+}
+
+function checkWorkshopExampleRepoBackLink(root, options, report) {
+  const requireGithub = options.requireGithub === true
+  const workshopDir = resolve(root, WORKSHOP_REL_PATH)
+  if (!existsSync(workshopDir)) return
+
+  const configPath = resolve(root, ".github/idd/config.json")
+  if (!existsSync(configPath)) return
+  let config
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf8"))
+  } catch {
+    return
+  }
+  const exampleRepo = config?.workshop?.exampleRepository
+  if (typeof exampleRepo !== "string" || exampleRepo.trim().length === 0) {
+    return
+  }
+  if (!/^[^/\s]+\/[^/\s]+$/.test(exampleRepo)) {
+    report.warnings.push(
+      `workshop example-repo check skipped: invalid workshop.exampleRepository value "${exampleRepo}" — expected "<owner>/<repo>".`,
+    )
+    return
+  }
+
+  const recordSoftFailure = (message) => {
+    if (requireGithub) {
+      report.errors.push(`workshop example-repo back-link check: ${message}`)
+    }
+  }
+
+  // Resolve this repo's slug from gh repo view so the back-link
+  // pattern matches the correct owner / name even when the
+  // configured GitHub origin differs from local assumptions.
+  const repoView = runCommand("gh", ["repo", "view", "--json", "owner,name"], root)
+  if (!repoView.ok) {
+    recordSoftFailure(`gh repo view unavailable`)
+    return
+  }
+  let viewer
+  try {
+    viewer = JSON.parse(repoView.stdout)
+  } catch {
+    recordSoftFailure(`gh repo view output is not valid JSON`)
+    return
+  }
+  const owner = viewer.owner?.login
+  const name = viewer.name
+  if (!owner || !name) {
+    recordSoftFailure(`gh repo view did not return owner / name`)
+    return
+  }
+  const repoSlug = `${owner}/${name}`
+
+  const readmeFetch = runCommand(
+    "gh",
+    [
+      "api",
+      `repos/${exampleRepo}/contents/README.md`,
+      "--jq",
+      ".content",
+    ],
+    root,
+  )
+  if (!readmeFetch.ok) {
+    recordSoftFailure(`could not fetch ${exampleRepo}/README.md`)
+    return
+  }
+  const base64 = String(readmeFetch.stdout).replace(/\s+/g, "")
+  if (base64.length === 0) {
+    recordSoftFailure(`${exampleRepo}/README.md content was empty`)
+    return
+  }
+  let decoded
+  try {
+    decoded = Buffer.from(base64, "base64").toString("utf8")
+  } catch {
+    recordSoftFailure(`${exampleRepo}/README.md content could not be base64-decoded`)
+    return
+  }
+
+  if (!containsExampleRepoBackLink(decoded, repoSlug)) {
+    report.warnings.push(
+      `workshop example-repo back-link missing: ${exampleRepo}/README.md does not contain a Markdown link whose target matches ${repoSlug}/.../docs/workshop. See acceptance criteria on issue #611 (CP-E).`,
     )
   }
 }

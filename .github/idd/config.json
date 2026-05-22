@@ -10,6 +10,9 @@
     "heartbeatInterval": "PT12H"
   },
   "trustedMarkerActors": ["kurone-kito"],
+  "workshop": {
+    "exampleRepository": "kurone-kito/vrc-event-calendar"
+  },
   "commands": {
     "install-deps": "true",
     "fix-validate": "npx dprint fmt \"**/*.md\" && npx markdownlint-cli2 --fix \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\"",

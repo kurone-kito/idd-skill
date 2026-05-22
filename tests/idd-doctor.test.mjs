@@ -2,9 +2,11 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 
 import {
+  backLinkPatternFor,
   classifyBacklog,
   classifyPrimaryHead,
   computeWindowStartIso,
+  containsExampleRepoBackLink,
   containsWorkshopReference,
   extractMarkerPrefixes,
   findMissingWorkshopReferences,
@@ -281,4 +283,52 @@ test("findMissingWorkshopReferences honors the allow-missing list", () => {
     findMissingWorkshopReferences(entries, ["README.md", "docs/index.md"]),
     [],
   )
+})
+
+test("backLinkPatternFor escapes special regex characters in the slug", () => {
+  const pattern = backLinkPatternFor("kurone-kito/idd-skill")
+  assert.equal(pattern.test("kurone-kito/idd-skill/blob/main/docs/workshop/README.md"), true)
+  assert.equal(pattern.test("kurone-kito.idd-skill-other"), false)
+})
+
+test("containsExampleRepoBackLink accepts canonical blob/main link to docs/workshop", () => {
+  const md = "Read the [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)."
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
+test("containsExampleRepoBackLink accepts tree/main and deep-link with anchor", () => {
+  const tree = "Tutorial: [link](https://github.com/kurone-kito/idd-skill/tree/main/docs/workshop)"
+  const anchored = "More: [link](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md#prerequisites)"
+  assert.equal(containsExampleRepoBackLink(tree, "kurone-kito/idd-skill"), true)
+  assert.equal(containsExampleRepoBackLink(anchored, "kurone-kito/idd-skill"), true)
+})
+
+test("containsExampleRepoBackLink accepts raw.githubusercontent.com workshop links", () => {
+  const md = "Reference: [raw](https://raw.githubusercontent.com/kurone-kito/idd-skill/main/docs/workshop/README.md)"
+  assert.equal(containsExampleRepoBackLink(md, "kurone-kito/idd-skill"), true)
+})
+
+test("containsExampleRepoBackLink rejects when only the slug appears (no docs/workshop path)", () => {
+  const md = "Built with [idd-skill](https://github.com/kurone-kito/idd-skill)."
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink rejects when only docs/workshop appears (no slug)", () => {
+  const md = "See [workshop](https://github.com/other-org/other-repo/blob/main/docs/workshop/README.md)."
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink handles empty / null / undefined content", () => {
+  assert.equal(containsExampleRepoBackLink("", "x/y"), false)
+  assert.equal(containsExampleRepoBackLink(null, "x/y"), false)
+  assert.equal(containsExampleRepoBackLink(undefined, "x/y"), false)
 })
