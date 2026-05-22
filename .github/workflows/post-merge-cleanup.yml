@@ -36,6 +36,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set +e
           PR_NUMBER='${{ github.event.pull_request.number || github.event.inputs.pr_number }}'
           if [ -z "$PR_NUMBER" ]; then
             echo "::error::PR_NUMBER is empty"
@@ -45,13 +46,24 @@ jobs:
             --pr "$PR_NUMBER" \
             --apply \
             --skip-claim-check \
-            --format json)
-          printf '%s\n' "$JSON" > cleanup-report.json
-          STATUS=$(printf '%s' "$JSON" | jq -r '.status // "unknown"')
-          APPLIED=$(printf '%s' "$JSON" | jq -r '.applied | length')
-          FAILED=$(printf '%s' "$JSON" | jq -r '.failed | length')
-          SKIPPED=$(printf '%s' "$JSON" | jq -r '.skipped | length')
-          BLOCKED=$(printf '%s' "$JSON" | jq -r '[.skipped[] | select(.isMinimized==false and .viewerCanMinimize==false)] | length')
+            --format json 2>cleanup-stderr.log)
+          HELPER_EXIT=$?
+          set -e
+          if [ "$HELPER_EXIT" -ne 0 ] || [ -z "$JSON" ]; then
+            echo "::warning::audit-pr-cleanup exited $HELPER_EXIT; will still post evidence comment with helper-error status"
+            STATUS="helper-error"
+            APPLIED=0
+            FAILED=0
+            SKIPPED=0
+            BLOCKED=0
+          else
+            printf '%s\n' "$JSON" > cleanup-report.json
+            STATUS=$(printf '%s' "$JSON" | jq -r '.status // "unknown"')
+            APPLIED=$(printf '%s' "$JSON" | jq -r '.applied | length')
+            FAILED=$(printf '%s' "$JSON" | jq -r '.failed | length')
+            SKIPPED=$(printf '%s' "$JSON" | jq -r '.skipped | length')
+            BLOCKED=$(printf '%s' "$JSON" | jq -r '[.skipped[] | select(.isMinimized==false and .viewerCanMinimize==false)] | length')
+          fi
           {
             echo "pr_number=$PR_NUMBER"
             echo "status=$STATUS"
