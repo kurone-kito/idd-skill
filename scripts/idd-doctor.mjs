@@ -538,9 +538,13 @@ export function computeWindowStartIso(now, windowDays) {
 
 export function classifyBacklog(missingPrNumbers, warnThreshold) {
   const count = Array.isArray(missingPrNumbers) ? missingPrNumbers.length : 0
+  const thresholdNumber = Number(warnThreshold)
+  const safeThreshold = Number.isFinite(thresholdNumber) && thresholdNumber >= 0
+    ? thresholdNumber
+    : 0
   return {
     count,
-    warn: count > Number(warnThreshold),
+    warn: count > safeThreshold,
     examples: Array.isArray(missingPrNumbers) ? missingPrNumbers.slice(0, 5) : [],
   }
 }
@@ -584,7 +588,7 @@ function checkPostMergeCleanupBacklog(root, options, report) {
       "--json",
       "number",
       "--limit",
-      "100",
+      "1000",
     ],
     root,
   )
@@ -611,17 +615,21 @@ function checkPostMergeCleanupBacklog(root, options, report) {
       "gh",
       [
         "api",
+        "--paginate",
         `repos/${owner}/${repo}/issues/${number}/comments`,
         "--jq",
-        '[.[] | select(.body | startswith("<!-- idd-cleanup-evidence:"))] | length',
+        '.[] | select(.body | startswith("<!-- idd-cleanup-evidence:")) | .id',
       ],
       root,
     )
     if (!evidence.ok) {
       continue
     }
-    const count = Number(String(evidence.stdout).trim())
-    if (count === 0) {
+    const matchLines = String(evidence.stdout)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+    if (matchLines.length === 0) {
       missing.push(number)
     }
   }
@@ -772,7 +780,13 @@ function parseArgs(argv) {
       if (!value) {
         throw new Error("--cleanup-backlog-window-days requires a value")
       }
-      args.cleanupBacklogWindowDays = Number(value)
+      const numeric = Number(value)
+      if (!Number.isFinite(numeric) || numeric <= 0) {
+        throw new Error(
+          `--cleanup-backlog-window-days must be a positive finite number (got "${value}")`,
+        )
+      }
+      args.cleanupBacklogWindowDays = numeric
       index += 1
       continue
     }
@@ -781,7 +795,13 @@ function parseArgs(argv) {
       if (value === undefined) {
         throw new Error("--cleanup-backlog-warn-threshold requires a value")
       }
-      args.cleanupBacklogWarnThreshold = Number(value)
+      const numeric = Number(value)
+      if (!Number.isFinite(numeric) || numeric < 0) {
+        throw new Error(
+          `--cleanup-backlog-warn-threshold must be a non-negative finite number (got "${value}")`,
+        )
+      }
+      args.cleanupBacklogWarnThreshold = numeric
       index += 1
       continue
     }

@@ -146,3 +146,13 @@ test("classifyBacklog treats non-array input as zero", () => {
   assert.deepEqual(classifyBacklog(undefined, 2), { count: 0, warn: false, examples: [] })
   assert.deepEqual(classifyBacklog("not an array", 2), { count: 0, warn: false, examples: [] })
 })
+
+test("classifyBacklog coerces non-numeric / NaN / negative thresholds to 0", () => {
+  // Any positive count must warn when the threshold is unusable.
+  assert.equal(classifyBacklog([1], "not a number").warn, true)
+  assert.equal(classifyBacklog([1], NaN).warn, true)
+  assert.equal(classifyBacklog([1], Infinity).warn, true)
+  assert.equal(classifyBacklog([1], -5).warn, true)
+  // Zero count must not warn even with a broken threshold.
+  assert.equal(classifyBacklog([], NaN).warn, false)
+})
