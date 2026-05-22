@@ -114,27 +114,31 @@ export function runVerification(repoRoot, options = {}) {
 
 // Strips fenced code blocks (``` and ~~~) before pattern scanning so
 // example Markdown inside code samples is never interpreted as a real
-// link or heading.
+// link or heading. Tracks both fence character and opening length so a
+// 4-backtick block is not closed by a later 3-backtick line (the
+// closing fence must use the same character and be at least as long).
 export function stripFencedCodeBlocks(content) {
   const lines = String(content).split(/\r?\n/)
   const out = []
-  let fenceChar = null
+  let fence = null
   for (const line of lines) {
-    const match = line.match(/^\s*(```+|~~~+)/)
+    const match = line.match(/^\s*(`{3,}|~{3,})/)
     if (match) {
-      const open = match[1][0]
-      if (fenceChar === null) {
-        fenceChar = open
+      const open = match[1]
+      const openChar = open[0]
+      const openLen = open.length
+      if (fence === null) {
+        fence = { char: openChar, length: openLen }
         out.push("")
         continue
       }
-      if (open === fenceChar) {
-        fenceChar = null
+      if (openChar === fence.char && openLen >= fence.length) {
+        fence = null
         out.push("")
         continue
       }
     }
-    out.push(fenceChar === null ? line : "")
+    out.push(fence === null ? line : "")
   }
   return out.join("\n")
 }
@@ -160,6 +164,7 @@ export function extractReferences(markdown, refDefs = new Map()) {
     const line = lines[lineNumber]
     extractInlineFromLine(line, lineNumber + 1, refs)
     extractReferenceStyleFromLine(line, lineNumber + 1, refs, refDefs)
+    extractShortcutReferencesFromLine(line, lineNumber + 1, refs, refDefs)
   }
   return refs
 }
@@ -205,6 +210,39 @@ function extractReferenceStyleFromLine(line, lineNumber, refs, refDefs) {
       })
       continue
     }
+    refs.push({
+      kind: isImage ? "image" : "link",
+      target,
+      line: lineNumber,
+    })
+  }
+}
+
+function extractShortcutReferencesFromLine(line, lineNumber, refs, refDefs) {
+  // Skip reference-definition lines themselves.
+  if (/^\s{0,3}\[[^\]]+\]:\s*\S+/.test(line)) {
+    return
+  }
+  if (refDefs.size === 0) {
+    return
+  }
+  // CommonMark shortcut reference: [label] alone, not followed by
+  // (target), [other-label], or : (which would be a definition).
+  // The (?<!\]) lookbehind excludes the trailing [label] portion of
+  // a full reference-style link like [text][label], which is already
+  // captured by extractReferenceStyleFromLine.
+  // We only emit refs whose label resolves against refDefs — bare
+  // bracketed text without a matching definition is not flagged so
+  // ordinary prose like `the [example] above` does not produce false
+  // positives.
+  const pattern = /(?<!\])(!?)\[([^\]\n]+)\](?!\(|\[|:)/g
+  let match
+  while ((match = pattern.exec(line)) !== null) {
+    const isImage = match[1] === "!"
+    const labelRaw = match[2]
+    const label = labelRaw.trim().toLowerCase()
+    const target = refDefs.get(label)
+    if (!target) continue
     refs.push({
       kind: isImage ? "image" : "link",
       target,

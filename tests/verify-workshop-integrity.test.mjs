@@ -226,6 +226,29 @@ test("classifyAndCheck percent-decodes local paths before file checks", async (t
   assert.equal(result.status, "ok")
 })
 
+test("stripFencedCodeBlocks requires closing fence to be at least as long as opening", () => {
+  const md = "outer\n````\nfake ``` close\nstill inside\n````\nafter"
+  const stripped = stripFencedCodeBlocks(md)
+  assert.equal(stripped.includes("fake ``` close"), false)
+  assert.equal(stripped.includes("still inside"), false)
+  assert.equal(stripped.includes("outer"), true)
+  assert.equal(stripped.includes("after"), true)
+})
+
+test("extractReferences resolves shortcut reference [label] against refDefs", () => {
+  const md = `see [alpha] for details\n\n[alpha]: ./a.md\n`
+  const defs = extractReferenceDefinitions(md)
+  const refs = extractReferences(md, defs)
+  assert.equal(refs.length, 1)
+  assert.equal(refs[0].target, "./a.md")
+})
+
+test("extractReferences leaves unmatched bracketed text alone (no false positives)", () => {
+  const md = `prose with [example] brackets\n`
+  const refs = extractReferences(md, new Map())
+  assert.equal(refs.length, 0)
+})
+
 test("classifyAndCheck accepts mailto: and tel: schemes", () => {
   assert.equal(
     classifyAndCheck("mailto:foo@example.com", "/tmp/x.md", "/tmp", new Map()).status,
