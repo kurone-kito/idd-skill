@@ -8,11 +8,13 @@ import {
   computeWindowStartIso,
   containsExampleRepoBackLink,
   containsWorkshopReference,
+  decodeGithubReadmeBase64,
   extractMarkerPrefixes,
   findMissingWorkshopReferences,
   findPlaceholders,
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
+  stripMarkdownNonText,
 } from "../scripts/idd-doctor.mjs"
 
 test("findPlaceholders returns template tokens", () => {
@@ -286,9 +288,29 @@ test("findMissingWorkshopReferences honors the allow-missing list", () => {
 })
 
 test("backLinkPatternFor escapes special regex characters in the slug", () => {
+  // Slug carries real regex metacharacters so a missing escape would
+  // change the match semantics.
+  const pattern = backLinkPatternFor("foo.bar/repo+x")
+  assert.equal(
+    pattern.test("https://example.com/foo.bar/repo+x/blob/main/docs/workshop/README.md"),
+    true,
+  )
+  assert.equal(
+    pattern.test("https://example.com/fooXbar/repoXx/blob/main/docs/workshop/README.md"),
+    false,
+  )
+})
+
+test("backLinkPatternFor rejects fork-suffixed slugs that share a prefix", () => {
   const pattern = backLinkPatternFor("kurone-kito/idd-skill")
-  assert.equal(pattern.test("kurone-kito/idd-skill/blob/main/docs/workshop/README.md"), true)
-  assert.equal(pattern.test("kurone-kito.idd-skill-other"), false)
+  assert.equal(
+    pattern.test("https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md"),
+    true,
+  )
+  assert.equal(
+    pattern.test("https://github.com/kurone-kito/idd-skill-fork/blob/main/docs/workshop/README.md"),
+    false,
+  )
 })
 
 test("containsExampleRepoBackLink accepts canonical blob/main link to docs/workshop", () => {
@@ -331,4 +353,82 @@ test("containsExampleRepoBackLink handles empty / null / undefined content", () 
   assert.equal(containsExampleRepoBackLink("", "x/y"), false)
   assert.equal(containsExampleRepoBackLink(null, "x/y"), false)
   assert.equal(containsExampleRepoBackLink(undefined, "x/y"), false)
+})
+
+test("containsExampleRepoBackLink ignores URLs inside fenced code blocks", () => {
+  const md = "```md\n[ex](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n```"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink ignores URLs inside HTML comments", () => {
+  const md = "<!-- https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md -->\nplain prose"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink ignores URLs inside inline code spans", () => {
+  const md = "see `https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md` for example"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink ignores URLs inside indented code blocks", () => {
+  const md = "code:\n\n    https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md\n\nafter"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink ignores URLs inside unterminated fenced blocks", () => {
+  const md = "before\n```\nhttps://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md\n"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("stripMarkdownNonText removes fenced, indented, span, and HTML comment regions", () => {
+  const md = `before
+\`\`\`
+fenced
+\`\`\`
+inline \`code\` span
+<!-- comment -->
+
+    indented code line
+
+after`
+  const stripped = stripMarkdownNonText(md)
+  assert.equal(stripped.includes("fenced"), false)
+  assert.equal(stripped.includes("inline  span") || stripped.includes("inline span"), true)
+  assert.equal(stripped.includes("comment"), false)
+  assert.equal(stripped.includes("indented code line"), false)
+  assert.equal(stripped.includes("before"), true)
+  assert.equal(stripped.includes("after"), true)
+})
+
+test("decodeGithubReadmeBase64 decodes a typical GitHub content payload", () => {
+  const original = "# Hello\n\nlink: https://example.com\n"
+  const encoded = Buffer.from(original, "utf8").toString("base64")
+  assert.equal(decodeGithubReadmeBase64(encoded), original)
+  // GitHub's API returns base64 with newlines every 60 chars; the
+  // decoder should tolerate that.
+  const wrapped = encoded.replace(/(.{60})/g, "$1\n")
+  assert.equal(decodeGithubReadmeBase64(wrapped), original)
+})
+
+test("decodeGithubReadmeBase64 returns null for empty, null, or non-base64 input", () => {
+  assert.equal(decodeGithubReadmeBase64(""), null)
+  assert.equal(decodeGithubReadmeBase64("   \n  "), null)
+  assert.equal(decodeGithubReadmeBase64(null), null)
+  assert.equal(decodeGithubReadmeBase64(undefined), null)
+  assert.equal(decodeGithubReadmeBase64("not_valid_base64!!"), null)
 })

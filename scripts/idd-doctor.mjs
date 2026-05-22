@@ -13,6 +13,7 @@ const WORKSHOP_LINK_TARGET_PATTERNS = [
   /(?:^|\/)docs\/workshop(?:\/|$)/,
   /(?:^|\/)workshop(?:\/|$)/,
 ]
+const BASE64_PATTERN = /^[A-Za-z0-9+/=\s]+$/
 
 export { parseProjectCommandRows }
 
@@ -824,30 +825,68 @@ function checkWorkshopCrossReferences(root, options, report) {
 //   - the gh fetch fails (no network, no token, no permissions) —
 //     escalates to errors under --require-github.
 export function backLinkPatternFor(repoSlug) {
-  // Match any link target that mentions both the slug and the
-  // docs/workshop path (blob/main, tree/main, or raw URL shapes).
+  // Match a link target that contains the slug followed by a path
+  // boundary (`/`, `?`, `#`, or end of token) and a later
+  // `docs/workshop` path segment. The boundary prevents
+  // `<slug>-fork/.../docs/workshop` from satisfying `<slug>/...`.
   const escSlug = String(repoSlug).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-  return new RegExp(`${escSlug}[^)\\s]*?docs/workshop`, "i")
+  return new RegExp(`${escSlug}(?:[/?#][^\\s)]*?)?docs/workshop`, "i")
+}
+
+export function stripMarkdownNonText(content) {
+  if (typeof content !== "string") return ""
+  let s = content
+  // Strip HTML comments (single- or multi-line) first so their
+  // interior is not parsed as Markdown later.
+  s = s.replace(/<!--[\s\S]*?-->/g, "")
+  // Strip fenced code blocks (``` or ~~~), including unterminated
+  // ones that run to EOF. The non-greedy `(?:[\s\S]*?\1|[\s\S]*$)`
+  // accepts either a matching closing fence or end-of-content.
+  s = s.replace(/(^|\n)([ \t]*)(`{3,}|~{3,})[^\n]*\n([\s\S]*?)(\n\2\3[ \t]*(?=\n|$)|$)/g, "$1")
+  // Strip indented code blocks: lines starting with 4+ spaces or a
+  // tab, surrounded by blank lines (CommonMark §4.4). Conservative
+  // approximation: any sequence of indented lines.
+  s = s
+    .split(/\n/)
+    .map((line) => (/^(?: {4}|\t)/.test(line) ? "" : line))
+    .join("\n")
+  // Strip inline code spans (single or multi-backtick).
+  s = s.replace(/(`+)((?:(?!\1)[\s\S])+?)\1/g, "")
+  return s
 }
 
 export function containsExampleRepoBackLink(readmeContent, repoSlug) {
   if (typeof readmeContent !== "string" || readmeContent.length === 0) {
     return false
   }
-  // Scan all URL-shaped tokens (inline links, reference-definition
-  // destinations, autolinks, badge wrappers, raw README mentions).
-  // Stripping fenced code blocks first so demo URLs in code samples
-  // are not counted. Using a URL scan rather than parsing Markdown
-  // link grammar accepts the full range of link shapes that real
-  // READMEs use without needing a full Markdown parser.
+  // Scan URL-shaped tokens after stripping code samples and HTML
+  // comments so demo URLs and commented-out URLs do not count as
+  // back-links. URL scanning (vs strict Markdown link parsing)
+  // covers inline `[](url)`, badge wrappers, reference definitions,
+  // autolinks `<url>`, and raw URL mentions in a single pass.
   const pattern = backLinkPatternFor(repoSlug)
-  const stripped = readmeContent.replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, "")
+  const stripped = stripMarkdownNonText(readmeContent)
   const urlPattern = /https?:\/\/[^\s<>)\]"']+/gi
   let match
   while ((match = urlPattern.exec(stripped)) !== null) {
     if (pattern.test(match[0])) return true
   }
   return false
+}
+
+export function decodeGithubReadmeBase64(content) {
+  if (typeof content !== "string") return null
+  const compact = content.replace(/\s+/g, "")
+  if (compact.length === 0) return null
+  if (!BASE64_PATTERN.test(content)) return null
+  let decoded
+  try {
+    decoded = Buffer.from(compact, "base64").toString("utf8")
+  } catch {
+    return null
+  }
+  if (typeof decoded !== "string" || decoded.length === 0) return null
+  return decoded
 }
 
 function checkWorkshopExampleRepoBackLink(root, options, report) {
@@ -903,30 +942,27 @@ function checkWorkshopExampleRepoBackLink(root, options, report) {
   }
   const repoSlug = `${owner}/${name}`
 
+  // `repos/<owner>/<repo>/readme` returns whatever GitHub considers
+  // the canonical README (README.md, README.rst, README, case
+  // variants), so the check works for repos that do not name their
+  // README exactly `README.md`.
   const readmeFetch = runCommand(
     "gh",
     [
       "api",
-      `repos/${exampleRepo}/contents/README.md`,
+      `repos/${exampleRepo}/readme`,
       "--jq",
       ".content",
     ],
     root,
   )
   if (!readmeFetch.ok) {
-    recordSoftFailure(`could not fetch ${exampleRepo}/README.md`)
+    recordSoftFailure(`could not fetch ${exampleRepo}/readme`)
     return
   }
-  const base64 = String(readmeFetch.stdout).replace(/\s+/g, "")
-  if (base64.length === 0) {
-    recordSoftFailure(`${exampleRepo}/README.md content was empty`)
-    return
-  }
-  let decoded
-  try {
-    decoded = Buffer.from(base64, "base64").toString("utf8")
-  } catch {
-    recordSoftFailure(`${exampleRepo}/README.md content could not be base64-decoded`)
+  const decoded = decodeGithubReadmeBase64(readmeFetch.stdout)
+  if (!decoded) {
+    recordSoftFailure(`${exampleRepo}/readme content was empty or not valid base64`)
     return
   }
 
