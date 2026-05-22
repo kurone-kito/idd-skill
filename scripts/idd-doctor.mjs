@@ -825,16 +825,20 @@ function checkWorkshopCrossReferences(root, options, report) {
 //   - the gh fetch fails (no network, no token, no permissions) —
 //     escalates to errors under --require-github.
 // Returns a regex that matches a URL **pathname** of shape
-// `/<slug>/(<segments>/)*docs/workshop(/|$|[?#])`. It is anchored
-// to `^/<slug>/` so the slug must occupy the first two path
-// segments and be terminated by a real path separator (preventing
-// `acme/me/repo` from matching slug `me/repo`, and
+// `/<slug>/(<segments>/)*docs/workshop(/|$|[?#])`. Anchored to
+// `^/<slug>/` so the slug must occupy the first two path segments
+// and be terminated by a real path separator (prevents
+// `acme/me/repo` from matching slug `me/repo` and
 // `me/repodocs/workshop` from being read as `me/repo` +
 // `docs/workshop`). Trailing boundary prevents
 // `docs/workshops/...` and `docs/workshop-old/...` from matching
-// `docs/workshop`. Do not use this pattern against a full URL or
-// external host token; see containsExampleRepoBackLink for the
-// URL parser that pairs with it.
+// `docs/workshop`.
+//
+// This regex is the **pathname matcher only**. The URL parser that
+// pairs with it (containsExampleRepoBackLink below) handles host
+// validation, URL token cleanup, and root-relative target
+// extraction; do not use this pattern against a full URL or
+// external host token.
 export function backLinkPatternFor(repoSlug) {
   const escSlug = String(repoSlug).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
   return new RegExp(`^/${escSlug}/(?:[^?#]*?/)?docs/workshop(?:/|$|[?#])`, "i")
@@ -843,21 +847,23 @@ export function backLinkPatternFor(repoSlug) {
 export function stripMarkdownNonText(content) {
   if (typeof content !== "string") return ""
   let s = content
-  // Strip HTML comments (single- or multi-line) first so their
-  // interior is not parsed as Markdown later. Loop to a fixed
-  // point so nested payloads like `<!--<!-- x --> -->` fully
-  // collapse rather than leaving `<!--` fragments after a single
-  // pass — satisfies CodeQL's incomplete-multi-character
-  // sanitization rule.
+  // Order matters: strip code regions FIRST so a literal `<!--`
+  // inside a code span cannot trigger the HTML-comment strip
+  // across unrelated content. After code regions are gone, HTML
+  // comments are guaranteed to be real comments.
+  s = stripFencesPreservingLines(s)
+  s = stripIndentedCodeBlocksPreservingLines(s)
+  // Inline code spans (single or multi-backtick).
+  s = s.replace(/(`+)((?:(?!\1)[\s\S])+?)\1/g, "")
+  // Now strip HTML comments. Loop to a fixed point so nested
+  // payloads like `<!--<!-- x --> -->` fully collapse rather than
+  // leaving `<!--` fragments after a single pass — satisfies
+  // CodeQL's incomplete-multi-character sanitization rule.
   let prev
   do {
     prev = s
     s = s.replace(/<!--[\s\S]*?-->/g, "")
   } while (s !== prev)
-  s = stripFencesPreservingLines(s)
-  s = stripIndentedCodeBlocksPreservingLines(s)
-  // Strip inline code spans (single or multi-backtick).
-  s = s.replace(/(`+)((?:(?!\1)[\s\S])+?)\1/g, "")
   return s
 }
 
@@ -944,20 +950,17 @@ export function containsExampleRepoBackLink(readmeContent, repoSlug) {
   if (typeof readmeContent !== "string" || readmeContent.length === 0) {
     return false
   }
-  // Scan URL-shaped tokens after stripping code samples and HTML
-  // comments so demo URLs and commented-out URLs do not count as
-  // back-links. The back-link pattern is tested against the URL's
-  // host + pathname only, not the full URL — that keeps query
-  // parameters like `?redirect=https://github.com/...` from
-  // satisfying the match by smuggling the slug into a query
-  // string.
+  // Strip code samples first so any literal `<!--` inside a code
+  // span does not trigger HTML-comment removal across unrelated
+  // content. The pattern is tested against the URL pathname only
+  // (no host / query / fragment) so the regex can stay anchored
+  // to `^/<slug>/` and query strings cannot smuggle the slug.
   const pattern = backLinkPatternFor(repoSlug)
   const stripped = stripMarkdownNonText(readmeContent)
+  // Absolute http(s) URLs.
   const urlPattern = /https?:\/\/[^\s<>)\]"']+/gi
   let match
   while ((match = urlPattern.exec(stripped)) !== null) {
-    // Strip trailing sentence punctuation that the autolinker /
-    // GitHub renderer would not treat as part of the URL.
     const token = match[0].replace(/[.,;:!?]+$/, "")
     let url
     try {
@@ -965,16 +968,21 @@ export function containsExampleRepoBackLink(readmeContent, repoSlug) {
     } catch {
       continue
     }
-    // Verify the host looks like GitHub (public hosts plus the
-    // typical GitHub Enterprise Server pattern of any host whose
-    // name contains "github"). Adopters on a custom enterprise
-    // host name can extend the match via the IDD_WORKSHOP_BACKLINK_HOSTS
-    // env var (comma-separated list).
-    if (!isGithubBackLinkHost(url.host)) continue
-    // Test pathname only (no host, no query, no fragment) so the
-    // back-link regex stays anchored to `^/<slug>/` and query
-    // strings cannot smuggle the slug.
+    if (!isGithubBackLinkHost(url.hostname)) continue
     if (pattern.test(url.pathname)) return true
+  }
+  // Root-relative Markdown link targets (`[text](/owner/repo/...)`)
+  // and reference-definition destinations (`[id]: /owner/repo/...`).
+  // GitHub renders these against the current repo / docs origin;
+  // the back-link pattern already requires `^/<slug>/` so a
+  // root-relative target is checked against the same shape.
+  const mdInline = /\[[^\]]*\]\((\/[^()\s]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\)/g
+  while ((match = mdInline.exec(stripped)) !== null) {
+    if (pattern.test(match[1].replace(/[.,;:!?]+$/, ""))) return true
+  }
+  const mdRefDef = /^\s{0,3}\[[^\]]+\]:\s*(\/\S+)/gm
+  while ((match = mdRefDef.exec(stripped)) !== null) {
+    if (pattern.test(match[1].replace(/[.,;:!?]+$/, ""))) return true
   }
   return false
 }
@@ -988,12 +996,12 @@ const PUBLIC_GITHUB_HOSTS = new Set([
 export function isGithubBackLinkHost(host) {
   const lower = String(host ?? "").toLowerCase()
   if (PUBLIC_GITHUB_HOSTS.has(lower)) return true
-  // Heuristic: GitHub Enterprise Server installations typically
-  // use a host name containing "github" (e.g., `github.acme.com`,
-  // `code.github.acme.com`). Accept those, and let adopters
-  // explicitly extend with IDD_WORKSHOP_BACKLINK_HOSTS for hosts
-  // that do not follow that convention.
-  if (/(^|\.)github(\.|$)/.test(lower)) return true
+  // Accept subdomains of github.com only. GitHub Enterprise
+  // Server hosts that do not end with `.github.com` must be
+  // declared explicitly in IDD_WORKSHOP_BACKLINK_HOSTS so a host
+  // like `github.evil.com` cannot bypass the check by sharing a
+  // brand prefix.
+  if (lower.endsWith(".github.com")) return true
   const extra = (process.env.IDD_WORKSHOP_BACKLINK_HOSTS ?? "")
     .split(",")
     .map((entry) => entry.trim().toLowerCase())

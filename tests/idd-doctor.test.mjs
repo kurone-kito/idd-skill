@@ -491,8 +491,39 @@ test("containsExampleRepoBackLink accepts raw.githubusercontent.com host", () =>
   )
 })
 
-test("containsExampleRepoBackLink accepts GitHub Enterprise hosts (github in hostname)", () => {
+test("containsExampleRepoBackLink accepts GHES host only when IDD_WORKSHOP_BACKLINK_HOSTS is set", () => {
   const md = "[enterprise](https://github.acme.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)"
+  // Without the env var, the heuristic must NOT accept arbitrary
+  // hosts with "github" in the name (that was the github.evil.com
+  // bypass).
+  const prev = process.env.IDD_WORKSHOP_BACKLINK_HOSTS
+  try {
+    delete process.env.IDD_WORKSHOP_BACKLINK_HOSTS
+    assert.equal(
+      containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+      false,
+    )
+    process.env.IDD_WORKSHOP_BACKLINK_HOSTS = "github.acme.com"
+    assert.equal(
+      containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+      true,
+    )
+  } finally {
+    if (prev === undefined) delete process.env.IDD_WORKSHOP_BACKLINK_HOSTS
+    else process.env.IDD_WORKSHOP_BACKLINK_HOSTS = prev
+  }
+})
+
+test("containsExampleRepoBackLink accepts root-relative inline link targets", () => {
+  const md = "[workshop](/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
+test("containsExampleRepoBackLink accepts root-relative reference-definition targets", () => {
+  const md = "Link: [workshop][w]\n\n[w]: /kurone-kito/idd-skill/blob/main/docs/workshop/README.md\n"
   assert.equal(
     containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
     true,
@@ -510,6 +541,17 @@ test("isGithubBackLinkHost honors IDD_WORKSHOP_BACKLINK_HOSTS env override", () 
     if (prev === undefined) delete process.env.IDD_WORKSHOP_BACKLINK_HOSTS
     else process.env.IDD_WORKSHOP_BACKLINK_HOSTS = prev
   }
+})
+
+test("isGithubBackLinkHost rejects brand-prefix lookalikes like github.evil.com", () => {
+  assert.equal(isGithubBackLinkHost("github.evil.com"), false)
+  assert.equal(isGithubBackLinkHost("notgithub.com"), false)
+  assert.equal(isGithubBackLinkHost("github.com.evil"), false)
+})
+
+test("isGithubBackLinkHost accepts subdomains of github.com", () => {
+  assert.equal(isGithubBackLinkHost("api.github.com"), true)
+  assert.equal(isGithubBackLinkHost("subdomain.github.com"), true)
 })
 
 test("containsExampleRepoBackLink strips trailing sentence punctuation from URLs", () => {
