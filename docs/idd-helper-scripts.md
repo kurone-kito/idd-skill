@@ -56,6 +56,11 @@ In the idd-skill source repository, the following optional helpers were adopted:
 - `scripts/live-status-digest.mjs` for issue or PR live status digest
   discovery, rendering, dry-run, and claim-checked upsert
 - `scripts/audit-pr-cleanup.mjs` for post-merge comment cleanup auditing
+- `scripts/minimize-superseded-markers.mjs` for in-flight per-marker
+  `minimizeComment` of strictly superseded `review-watermark`,
+  `advisory-wait`, or `claimed-by` markers — called by E1 (Step 2),
+  advisory-wait AW3-H, and claim takeover after the replacement
+  marker is verified
 - `scripts/review-disposition-verify.mjs` for read-only E7 disposition
   marker presence verification across PATH A and PATH B items
 
