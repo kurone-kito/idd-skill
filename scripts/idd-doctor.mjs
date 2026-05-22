@@ -824,16 +824,19 @@ function checkWorkshopCrossReferences(root, options, report) {
 //   - workshop.exampleRepository is unset / empty;
 //   - the gh fetch fails (no network, no token, no permissions) —
 //     escalates to errors under --require-github.
+// Returns a regex that matches a URL **pathname** of shape
+// `/<slug>(/<segments>)*/docs/workshop(/|$|[?#])`. It is anchored
+// to `^/<slug>` so the slug must occupy the first two path
+// segments (the GitHub `<host>/<owner>/<repo>/...` shape) — that
+// prevents URLs like `github.com/acme/me/repo/...` from matching
+// slug `me/repo`. Trailing boundary prevents `docs/workshops/...`
+// and `docs/workshop-old/...` from matching `docs/workshop`. Do
+// not use this pattern against a full URL or external host token;
+// see containsExampleRepoBackLink for the URL parser that pairs
+// with it.
 export function backLinkPatternFor(repoSlug) {
-  // Match a link target that contains the slug followed by a path
-  // boundary (`/`, `?`, `#`, or end of token) and a later
-  // `docs/workshop` path segment followed by `/`, end-of-string,
-  // or query / fragment. The slug boundary prevents
-  // `<slug>-fork/.../docs/workshop` from satisfying `<slug>/...`;
-  // the `docs/workshop` boundary prevents `docs/workshop-old/...`
-  // and `docs/workshops/...` from matching.
   const escSlug = String(repoSlug).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-  return new RegExp(`${escSlug}(?:[/?#][^\\s)]*?)?docs/workshop(?:[/?#]|$)`, "i")
+  return new RegExp(`^/${escSlug}(?:/[^?#]*)?docs/workshop(?:/|$|[?#])`, "i")
 }
 
 export function stripMarkdownNonText(content) {
@@ -945,8 +948,10 @@ export function containsExampleRepoBackLink(readmeContent, repoSlug) {
     } catch {
       continue
     }
-    const target = `${url.host}${url.pathname}`
-    if (pattern.test(target)) return true
+    // Test pathname only (no host, no query, no fragment) so the
+    // back-link regex can stay anchored to `^/<slug>` and query
+    // strings cannot smuggle the slug.
+    if (pattern.test(url.pathname)) return true
   }
   return false
 }

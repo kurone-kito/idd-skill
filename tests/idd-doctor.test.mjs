@@ -289,14 +289,15 @@ test("findMissingWorkshopReferences honors the allow-missing list", () => {
 
 test("backLinkPatternFor escapes special regex characters in the slug", () => {
   // Slug carries real regex metacharacters so a missing escape would
-  // change the match semantics.
+  // change the match semantics. Pattern is anchored to `^/<slug>`
+  // and tested against URL pathnames only.
   const pattern = backLinkPatternFor("foo.bar/repo+x")
   assert.equal(
-    pattern.test("https://example.com/foo.bar/repo+x/blob/main/docs/workshop/README.md"),
+    pattern.test("/foo.bar/repo+x/blob/main/docs/workshop/README.md"),
     true,
   )
   assert.equal(
-    pattern.test("https://example.com/fooXbar/repoXx/blob/main/docs/workshop/README.md"),
+    pattern.test("/fooXbar/repoXx/blob/main/docs/workshop/README.md"),
     false,
   )
 })
@@ -304,12 +305,26 @@ test("backLinkPatternFor escapes special regex characters in the slug", () => {
 test("backLinkPatternFor rejects fork-suffixed slugs that share a prefix", () => {
   const pattern = backLinkPatternFor("kurone-kito/idd-skill")
   assert.equal(
-    pattern.test("https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md"),
+    pattern.test("/kurone-kito/idd-skill/blob/main/docs/workshop/README.md"),
     true,
   )
   assert.equal(
-    pattern.test("https://github.com/kurone-kito/idd-skill-fork/blob/main/docs/workshop/README.md"),
+    pattern.test("/kurone-kito/idd-skill-fork/blob/main/docs/workshop/README.md"),
     false,
+  )
+})
+
+test("backLinkPatternFor requires the slug at the start of pathname (no host-suffix matches)", () => {
+  // URL path under a different repo whose name happens to end with
+  // the configured slug. The anchored regex must NOT match.
+  const pattern = backLinkPatternFor("me/repo")
+  assert.equal(
+    pattern.test("/acme/me/repo/blob/main/docs/workshop/README.md"),
+    false,
+  )
+  assert.equal(
+    pattern.test("/me/repo/blob/main/docs/workshop/README.md"),
+    true,
   )
 })
 
@@ -317,20 +332,20 @@ test("backLinkPatternFor requires a path boundary after docs/workshop", () => {
   const pattern = backLinkPatternFor("kurone-kito/idd-skill")
   // Valid: trailing slash, anchor, query, or end-of-string.
   assert.equal(
-    pattern.test("github.com/kurone-kito/idd-skill/blob/main/docs/workshop/"),
+    pattern.test("/kurone-kito/idd-skill/blob/main/docs/workshop/"),
     true,
   )
   assert.equal(
-    pattern.test("github.com/kurone-kito/idd-skill/blob/main/docs/workshop?ref=main"),
+    pattern.test("/kurone-kito/idd-skill/tree/main/docs/workshop"),
     true,
   )
-  // Invalid: docs/workshops, docs/workshop-old, docs/workshop2.
+  // Invalid: docs/workshops, docs/workshop-old.
   assert.equal(
-    pattern.test("github.com/kurone-kito/idd-skill/blob/main/docs/workshops/README.md"),
+    pattern.test("/kurone-kito/idd-skill/blob/main/docs/workshops/README.md"),
     false,
   )
   assert.equal(
-    pattern.test("github.com/kurone-kito/idd-skill/blob/main/docs/workshop-old/README.md"),
+    pattern.test("/kurone-kito/idd-skill/blob/main/docs/workshop-old/README.md"),
     false,
   )
 })
