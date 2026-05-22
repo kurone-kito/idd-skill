@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -13,6 +13,7 @@ import {
   runVerification,
   slugifyHeading,
   stripFencedCodeBlocks,
+  stripHtmlComments,
 } from "../scripts/verify-workshop-integrity.mjs"
 
 function makeRepo() {
@@ -341,6 +342,49 @@ test("extractReferences treats backslash-escaped \\! as literal but keeps the li
   assert.equal(refs.length, 1)
   assert.equal(refs[0].kind, "link")
   assert.equal(refs[0].target, "./b.md")
+})
+
+test("extractReferences handles multi-line inline image/link alt text and reports the opening line", () => {
+  const md = "before\n\n![long alt that\nwraps lines](./img.png)\nafter\n"
+  const refs = extractReferences(md)
+  assert.equal(refs.length, 1)
+  assert.equal(refs[0].kind, "image")
+  assert.equal(refs[0].target, "./img.png")
+  // The opening `[` lives on the third line of the document.
+  assert.equal(refs[0].line, 3)
+})
+
+test("stripHtmlComments masks single-line and multi-line HTML comments", () => {
+  const md = "before <!-- inline --> middle\nblock <!--\n[demo](./x.md)\n--> end"
+  const stripped = stripHtmlComments(md)
+  assert.equal(stripped.includes("[demo]"), false)
+  assert.equal(stripped.includes("inline"), false)
+  assert.equal(stripped.includes("before"), true)
+  assert.equal(stripped.includes("middle"), true)
+  assert.equal(stripped.includes("end"), true)
+  // Line count is preserved (newlines untouched).
+  assert.equal(stripped.split("\n").length, md.split("\n").length)
+})
+
+test("extractReferences ignores links inside HTML comments", () => {
+  const md = "real [a](./a.md)\n<!-- ignored [demo](./missing.md) -->\nend"
+  const refs = extractReferences(md)
+  assert.equal(refs.length, 1)
+  assert.equal(refs[0].target, "./a.md")
+})
+
+test("classifyAndCheck rejects symlinks that point outside the repo as escapes-repo", async (t) => {
+  const repo = makeRepo()
+  t.after(() => repo.cleanup())
+  const outside = makeRepo()
+  t.after(() => outside.cleanup())
+  outside.write("secret.md", "# secret\n")
+  // Create a symlink inside the repo that points to a file outside.
+  mkdirSync(join(repo.root, "docs"), { recursive: true })
+  symlinkSync(join(outside.root, "secret.md"), join(repo.root, "docs/symlink.md"))
+  const from = repo.write("docs/from.md", "# from\n")
+  const result = classifyAndCheck("./symlink.md", from, repo.root, new Map())
+  assert.equal(result.status, "escapes-repo")
 })
 
 test("classifyAndCheck accepts non-hierarchical absolute URI schemes (urn:, data:)", () => {

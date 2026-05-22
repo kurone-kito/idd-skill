@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs"
 import { dirname, extname, join, normalize, relative, resolve, sep } from "node:path"
 
 const WORKSHOP_ROOTS = ["docs/workshop"]
@@ -118,7 +118,9 @@ export function runVerification(repoRoot, options = {}) {
 // 4-backtick block is not closed by a later 3-backtick line. Closing
 // fences must contain ONLY optional whitespace after the fence marker
 // (per CommonMark §4.5), so a line like ```js inside a fenced block
-// is treated as content, not as a close.
+// is treated as content, not as a close. Replaces masked lines with
+// blank lines (same line count) so downstream offset → line-number
+// calculations remain correct.
 export function stripFencedCodeBlocks(content) {
   const lines = String(content).split(/\r?\n/)
   const out = []
@@ -152,6 +154,15 @@ export function stripFencedCodeBlocks(content) {
   return out.join("\n")
 }
 
+// Replaces HTML-comment regions (`<!-- ... -->`, possibly multi-line)
+// with whitespace, preserving newlines so offset → line numbers
+// remain accurate. Markdown links inside comments are not real.
+export function stripHtmlComments(content) {
+  return String(content).replace(/<!--[\s\S]*?-->/g, (match) =>
+    match.replace(/[^\r\n]/g, " "),
+  )
+}
+
 // Strips inline code spans (`...`, ``...``, etc.) from a single
 // line so `[demo](./missing.md)` inside backticks is not extracted
 // as a real link. Conservative: only handles single-line spans; a
@@ -180,37 +191,46 @@ export function extractReferenceDefinitions(markdown) {
 
 export function extractReferences(markdown, refDefs = new Map()) {
   const refs = []
-  const stripped = stripFencedCodeBlocks(markdown)
-  const lines = stripped.split(/\r?\n/)
-  for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
-    // Mask inline code spans and backslash-escaped link delimiters so
-    // that `[demo](./missing.md)` inside backticks and \[demo](./x.md)
-    // in escaped prose are not parsed as real links.
-    const sanitized = maskBackslashEscapes(stripInlineCodeSpans(lines[lineNumber]))
-    extractInlineFromLine(sanitized, lineNumber + 1, refs)
-    extractReferenceStyleFromLine(sanitized, lineNumber + 1, refs, refDefs)
-    extractShortcutReferencesFromLine(sanitized, lineNumber + 1, refs, refDefs)
-    extractAutolinksFromLine(sanitized, lineNumber + 1, refs)
-  }
+  const stripped = stripHtmlComments(stripFencedCodeBlocks(markdown))
+  // Mask inline code spans and backslash-escaped link delimiters
+  // before any pattern matching so `[demo](./x.md)` inside backticks
+  // and \[demo](./x.md) in escaped prose are not parsed as real
+  // links. Both passes preserve newlines so offset → line numbers
+  // computed below remain accurate.
+  const sanitized = maskBackslashEscapes(stripInlineCodeSpans(stripped))
+  extractInlineFromContent(sanitized, refs)
+  extractReferenceStyleFromContent(sanitized, refs, refDefs)
+  extractShortcutReferencesFromContent(sanitized, refs, refDefs)
+  extractAutolinksFromContent(sanitized, refs)
   return refs
 }
 
-function maskBackslashEscapes(line) {
+function maskBackslashEscapes(content) {
   // Replace \[, \], and \! with two-char filler so the link / image
   // / reference patterns do not consume them. Other escapes are left
   // intact.
-  return String(line).replace(/\\([\[\]!])/g, "  ")
+  return String(content).replace(/\\([\[\]!])/g, "  ")
 }
 
-function extractInlineFromLine(line, lineNumber, refs) {
-  // CommonMark inline link / image. Single-line only. Destination can
-  // be either a bare token (no whitespace, no balanced parens) or
-  // angle-bracket wrapped (`<./b.md>`), per CommonMark §6.6 destination
-  // grammar. Optional title accepts double-quoted, single-quoted, or
+function lineNumberAtOffset(content, offset) {
+  let line = 1
+  const cap = Math.min(offset, content.length)
+  for (let i = 0; i < cap; i += 1) {
+    if (content.charCodeAt(i) === 10) line += 1
+  }
+  return line
+}
+
+function extractInlineFromContent(content, refs) {
+  // CommonMark inline link / image. Link text may span newlines
+  // (`[^\]]*` matches `\n`), but destinations and titles stay on
+  // one line. Destination can be either a bare token (no whitespace,
+  // no balanced parens) or angle-bracket wrapped (`<./b.md>`).
+  // Optional title accepts double-quoted, single-quoted, or
   // parenthesized form.
-  const pattern = /(!?)\[([^\]\n]*)\]\(\s*(<[^>\n]*>|[^()\s]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g
+  const pattern = /(!?)\[([^\]]*)\]\(\s*(<[^>\n]*>|[^()\s]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g
   let match
-  while ((match = pattern.exec(line)) !== null) {
+  while ((match = pattern.exec(content)) !== null) {
     let target = match[3]
     if (target.startsWith("<") && target.endsWith(">")) {
       target = target.slice(1, -1)
@@ -218,32 +238,35 @@ function extractInlineFromLine(line, lineNumber, refs) {
     refs.push({
       kind: match[1] === "!" ? "image" : "link",
       target,
-      line: lineNumber,
+      line: lineNumberAtOffset(content, match.index),
     })
   }
 }
 
-function extractAutolinksFromLine(line, lineNumber, refs) {
+function extractAutolinksFromContent(content, refs) {
   // CommonMark autolink: <scheme://...>. We only validate the URL
   // syntax (no live HTTP), so we treat them as link references.
   const pattern = /<([a-z][a-z0-9+.-]*:[^>\s]+)>/gi
   let match
-  while ((match = pattern.exec(line)) !== null) {
-    refs.push({ kind: "link", target: match[1], line: lineNumber })
+  while ((match = pattern.exec(content)) !== null) {
+    refs.push({
+      kind: "link",
+      target: match[1],
+      line: lineNumberAtOffset(content, match.index),
+    })
   }
 }
 
-function extractReferenceStyleFromLine(line, lineNumber, refs, refDefs) {
-  // Skip reference-definition lines themselves so [id]: target lines
-  // are not mistaken for references.
-  if (/^\s{0,3}\[[^\]]+\]:\s*\S+/.test(line)) {
-    return
-  }
+function extractReferenceStyleFromContent(content, refs, refDefs) {
   // [text][label] or ![alt][label]. Empty label (`[text][]`)
   // resolves against the text itself.
-  const pattern = /(!?)\[([^\]\n]+)\]\[([^\]\n]*)\]/g
+  const definitionLineCheck = /^\s{0,3}\[[^\]]+\]:\s*\S+/
+  const pattern = /(!?)\[([^\]]+)\]\[([^\]\n]*)\]/g
   let match
-  while ((match = pattern.exec(line)) !== null) {
+  while ((match = pattern.exec(content)) !== null) {
+    const lineNumber = lineNumberAtOffset(content, match.index)
+    const lineText = lineContaining(content, match.index)
+    if (definitionLineCheck.test(lineText)) continue
     const isImage = match[1] === "!"
     const text = match[2]
     const labelRaw = match[3].trim().length === 0 ? text : match[3]
@@ -266,26 +289,23 @@ function extractReferenceStyleFromLine(line, lineNumber, refs, refDefs) {
   }
 }
 
-function extractShortcutReferencesFromLine(line, lineNumber, refs, refDefs) {
-  // Skip reference-definition lines themselves.
-  if (/^\s{0,3}\[[^\]]+\]:\s*\S+/.test(line)) {
-    return
-  }
-  if (refDefs.size === 0) {
-    return
-  }
+function extractShortcutReferencesFromContent(content, refs, refDefs) {
+  if (refDefs.size === 0) return
+  const definitionLineCheck = /^\s{0,3}\[[^\]]+\]:\s*\S+/
   // CommonMark shortcut reference: [label] alone, not followed by
   // (target), [other-label], or : (which would be a definition).
   // The (?<!\]) lookbehind excludes the trailing [label] portion of
   // a full reference-style link like [text][label], which is already
-  // captured by extractReferenceStyleFromLine.
+  // captured by extractReferenceStyleFromContent.
   // We only emit refs whose label resolves against refDefs — bare
   // bracketed text without a matching definition is not flagged so
   // ordinary prose like `the [example] above` does not produce false
   // positives.
   const pattern = /(?<!\])(!?)\[([^\]\n]+)\](?!\(|\[|:)/g
   let match
-  while ((match = pattern.exec(line)) !== null) {
+  while ((match = pattern.exec(content)) !== null) {
+    const lineText = lineContaining(content, match.index)
+    if (definitionLineCheck.test(lineText)) continue
     const isImage = match[1] === "!"
     const labelRaw = match[2]
     const label = labelRaw.trim().toLowerCase()
@@ -294,9 +314,16 @@ function extractShortcutReferencesFromLine(line, lineNumber, refs, refDefs) {
     refs.push({
       kind: isImage ? "image" : "link",
       target,
-      line: lineNumber,
+      line: lineNumberAtOffset(content, match.index),
     })
   }
+}
+
+function lineContaining(content, offset) {
+  const lineStart = content.lastIndexOf("\n", offset - 1) + 1
+  const lineEndIdx = content.indexOf("\n", offset)
+  const lineEnd = lineEndIdx === -1 ? content.length : lineEndIdx
+  return content.slice(lineStart, lineEnd)
 }
 
 export function extractHeadingSlugs(markdown) {
@@ -428,10 +455,33 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
   resolvedPath = normalize(resolvedPath)
 
   const repoRootNormalized = normalize(repoRoot)
+  // Lexical containment first (catches `..` and root-relative
+  // escapes before any disk I/O).
   if (!isInside(resolvedPath, repoRootNormalized)) {
     return {
       status: "escapes-repo",
       detail: `${decodedPath} resolves outside ${relative(process.cwd(), repoRootNormalized) || "."}`,
+    }
+  }
+  // Realpath containment second: if `resolvedPath` is a symlink that
+  // points outside the repo, the lexical check would not notice. We
+  // resolve both sides via realpathSync when possible and re-verify.
+  // Failing realpath (non-existent path, EACCES, …) leaves the
+  // lexical check as the only guard.
+  if (existsSync(resolvedPath)) {
+    let realTarget
+    let realRoot
+    try {
+      realTarget = realpathSync(resolvedPath)
+      realRoot = realpathSync(repoRootNormalized)
+    } catch {
+      // Fall through to lexical containment only.
+    }
+    if (realTarget && realRoot && !isInside(realTarget, realRoot)) {
+      return {
+        status: "escapes-repo",
+        detail: `${decodedPath} symlink target resolves outside ${relative(process.cwd(), realRoot) || "."}`,
+      }
     }
   }
 
