@@ -59,10 +59,10 @@ jobs:
           if [ -n "$PARSED_STATUS" ]; then
             printf '%s\n' "$JSON" > cleanup-report.json
             STATUS="$PARSED_STATUS"
-            APPLIED=$(printf '%s' "$JSON" | jq -r '.applied | length')
-            FAILED=$(printf '%s' "$JSON" | jq -r '.failed | length')
-            SKIPPED=$(printf '%s' "$JSON" | jq -r '.skipped | length')
-            BLOCKED=$(printf '%s' "$JSON" | jq -r '[.skipped[] | select(.isMinimized==false and .viewerCanMinimize==false)] | length')
+            APPLIED=$(printf '%s' "$JSON" | jq -r '(.applied // []) | length')
+            FAILED=$(printf '%s' "$JSON" | jq -r '(.failed // []) | length')
+            SKIPPED=$(printf '%s' "$JSON" | jq -r '(.skipped // []) | length')
+            BLOCKED=$(printf '%s' "$JSON" | jq -r '[(.skipped // [])[] | select(.isMinimized==false and .viewerCanMinimize==false)] | length')
             if [ "$HELPER_EXIT" -ne 0 ]; then
               echo "::warning::audit-pr-cleanup exited $HELPER_EXIT but emitted a valid JSON report; using helper status \"$STATUS\""
             fi
