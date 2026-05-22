@@ -296,8 +296,10 @@ test("backLinkPatternFor escapes special regex characters in the slug", () => {
     pattern.test("/foo.bar/repo+x/blob/main/docs/workshop/README.md"),
     true,
   )
+  // Without proper escaping `.` would match any char and `+` would
+  // require one or more `o`, so this pathname would falsely match.
   assert.equal(
-    pattern.test("/fooXbar/repoXx/blob/main/docs/workshop/README.md"),
+    pattern.test("/fooabar/repoox/blob/main/docs/workshop/README.md"),
     false,
   )
 })
