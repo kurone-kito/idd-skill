@@ -2,7 +2,9 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 
 import {
+  classifyBacklog,
   classifyPrimaryHead,
+  computeWindowStartIso,
   extractMarkerPrefixes,
   findPlaceholders,
   parsePrimaryWorktreePath,
@@ -103,4 +105,62 @@ test("classifyPrimaryHead handles empty or non-string input as unknown", () => {
   assert.deepEqual(classifyPrimaryHead(""), { isB1Violation: false, kind: "unknown" })
   assert.deepEqual(classifyPrimaryHead(null), { isB1Violation: false, kind: "unknown" })
   assert.deepEqual(classifyPrimaryHead(undefined), { isB1Violation: false, kind: "unknown" })
+})
+
+test("computeWindowStartIso subtracts the given number of days from now", () => {
+  const now = Date.UTC(2026, 4, 21, 12, 0, 0)
+  assert.equal(computeWindowStartIso(now, 14), "2026-05-07T12:00:00.000Z")
+  assert.equal(computeWindowStartIso(now, 1), "2026-05-20T12:00:00.000Z")
+  assert.equal(computeWindowStartIso(now, 7), "2026-05-14T12:00:00.000Z")
+})
+
+test("computeWindowStartIso returns null for non-positive or non-finite windows", () => {
+  const now = Date.UTC(2026, 4, 21, 12, 0, 0)
+  assert.equal(computeWindowStartIso(now, 0), null)
+  assert.equal(computeWindowStartIso(now, -1), null)
+  assert.equal(computeWindowStartIso(now, "abc"), null)
+  assert.equal(computeWindowStartIso(now, NaN), null)
+  assert.equal(computeWindowStartIso(now, Infinity), null)
+})
+
+test("classifyBacklog warns only when count strictly exceeds the threshold", () => {
+  assert.deepEqual(classifyBacklog([], 2), { count: 0, warn: false, examples: [] })
+  assert.deepEqual(classifyBacklog([100], 2), { count: 1, warn: false, examples: [100] })
+  assert.deepEqual(classifyBacklog([100, 101], 2), { count: 2, warn: false, examples: [100, 101] })
+  assert.deepEqual(classifyBacklog([100, 101, 102], 2), {
+    count: 3,
+    warn: true,
+    examples: [100, 101, 102],
+  })
+})
+
+test("classifyBacklog caps examples at 5 entries", () => {
+  const verdict = classifyBacklog([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 2)
+  assert.equal(verdict.count, 10)
+  assert.equal(verdict.warn, true)
+  assert.deepEqual(verdict.examples, [1, 2, 3, 4, 5])
+})
+
+test("classifyBacklog treats non-array input as zero", () => {
+  assert.deepEqual(classifyBacklog(null, 2), { count: 0, warn: false, examples: [] })
+  assert.deepEqual(classifyBacklog(undefined, 2), { count: 0, warn: false, examples: [] })
+  assert.deepEqual(classifyBacklog("not an array", 2), { count: 0, warn: false, examples: [] })
+})
+
+test("classifyBacklog coerces non-numeric / NaN / negative thresholds to 0", () => {
+  // Any positive count must warn when the threshold is unusable.
+  assert.equal(classifyBacklog([1], "not a number").warn, true)
+  assert.equal(classifyBacklog([1], NaN).warn, true)
+  assert.equal(classifyBacklog([1], Infinity).warn, true)
+  assert.equal(classifyBacklog([1], -5).warn, true)
+  // Zero count must not warn even with a broken threshold.
+  assert.equal(classifyBacklog([], NaN).warn, false)
+})
+
+test("computeWindowStartIso returns null for windows that overflow Date range", () => {
+  const now = Date.UTC(2026, 4, 21, 12, 0, 0)
+  // ~1e9 days is well past the ±100,000,000-day toISOString limit and
+  // would historically throw RangeError before this guard landed.
+  assert.equal(computeWindowStartIso(now, 1e9), null)
+  assert.equal(computeWindowStartIso(now, Number.MAX_SAFE_INTEGER), null)
 })

@@ -20,6 +20,8 @@ if (isMainModule(import.meta.url)) {
   const report = runDoctor({
     root: resolve(args.root),
     requireGithub: args.requireGithub,
+    cleanupBacklogWindowDays: args.cleanupBacklogWindowDays,
+    cleanupBacklogWarnThreshold: args.cleanupBacklogWarnThreshold,
   })
 
   if (args.json) {
@@ -31,7 +33,12 @@ if (isMainModule(import.meta.url)) {
   process.exit(report.errors.length > 0 ? 1 : 0)
 }
 
-export function runDoctor({ root, requireGithub }) {
+export function runDoctor({
+  root,
+  requireGithub,
+  cleanupBacklogWindowDays,
+  cleanupBacklogWarnThreshold,
+}) {
   const files = listFiles(root)
   const textFiles = files.filter(isTextLikeFile)
   const report = {
@@ -51,6 +58,15 @@ export function runDoctor({ root, requireGithub }) {
   checkAgentEntryFiles(root, report)
   checkTemplateVersionSignal(root, report)
   checkPrimaryWorktreeHead(root, report)
+  checkPostMergeCleanupBacklog(
+    root,
+    {
+      windowDays: cleanupBacklogWindowDays ?? 14,
+      warnThreshold: cleanupBacklogWarnThreshold ?? 2,
+      requireGithub,
+    },
+    report,
+  )
   checkGithubReadiness(root, requireGithub, report)
 
   return report
@@ -513,6 +529,174 @@ function checkPrimaryWorktreeHead(root, report) {
   )
 }
 
+export function computeWindowStartIso(now, windowDays) {
+  const ms = Number(windowDays) * 24 * 60 * 60 * 1000
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return null
+  }
+  const candidate = Number(now) - ms
+  if (!Number.isFinite(candidate)) {
+    return null
+  }
+  const date = new Date(candidate)
+  // JavaScript `Date` accepts the full IEEE 754 range, but `toISOString`
+  // throws RangeError for any `Date` outside ±100,000,000 days of the
+  // epoch (≈ year ±271,821). Detect that here so a too-large
+  // `--cleanup-backlog-window-days` value never crashes the caller.
+  if (Number.isNaN(date.getTime())) {
+    return null
+  }
+  try {
+    return date.toISOString()
+  } catch {
+    return null
+  }
+}
+
+export function classifyBacklog(missingPrNumbers, warnThreshold) {
+  const count = Array.isArray(missingPrNumbers) ? missingPrNumbers.length : 0
+  const thresholdNumber = Number(warnThreshold)
+  const safeThreshold = Number.isFinite(thresholdNumber) && thresholdNumber >= 0
+    ? thresholdNumber
+    : 0
+  return {
+    count,
+    warn: count > safeThreshold,
+    examples: Array.isArray(missingPrNumbers) ? missingPrNumbers.slice(0, 5) : [],
+  }
+}
+
+function checkPostMergeCleanupBacklog(root, options, report) {
+  const windowDays = options.windowDays
+  const warnThreshold = options.warnThreshold
+  const requireGithub = options.requireGithub === true
+
+  // Soft GitHub-API failures (gh missing, no token, repo view fails,
+  // pr list fails) are silent by default — same pattern as the other
+  // doctor GitHub-readiness checks — and only surface as errors when
+  // the operator passed --require-github. Per-PR evidence-fetch
+  // failures are still always reported because they materially change
+  // the backlog count.
+  const recordGhFailure = (message) => {
+    if (requireGithub) {
+      report.errors.push(`post-merge cleanup backlog check: ${message}`)
+    }
+  }
+
+  const repoView = runCommand("gh", ["repo", "view", "--json", "owner,name"], root)
+  if (!repoView.ok) {
+    recordGhFailure("gh repo view unavailable")
+    return
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(repoView.stdout)
+  } catch {
+    recordGhFailure("gh repo view output is not valid JSON")
+    return
+  }
+  const owner = parsed.owner?.login
+  const repo = parsed.name
+  if (!owner || !repo) {
+    recordGhFailure("gh repo view did not return owner/name")
+    return
+  }
+
+  const sinceIso = computeWindowStartIso(Date.now(), windowDays)
+  if (!sinceIso) {
+    report.warnings.push(
+      `post-merge cleanup backlog check skipped: --cleanup-backlog-window-days value ${windowDays} produced an out-of-range Date and cannot be used as a search window. Re-run with a smaller positive value (default: 14).`,
+    )
+    return
+  }
+
+  const search = runCommand(
+    "gh",
+    [
+      "pr",
+      "list",
+      "--repo",
+      `${owner}/${repo}`,
+      "--state",
+      "merged",
+      "--search",
+      `merged:>=${sinceIso}`,
+      "--json",
+      "number",
+      "--limit",
+      "1000",
+    ],
+    root,
+  )
+  if (!search.ok) {
+    recordGhFailure(`merged-PR list query failed for ${owner}/${repo}`)
+    return
+  }
+  let mergedPrs
+  try {
+    mergedPrs = JSON.parse(search.stdout)
+  } catch {
+    recordGhFailure(`merged-PR list query for ${owner}/${repo} returned invalid JSON`)
+    return
+  }
+  if (!Array.isArray(mergedPrs) || mergedPrs.length === 0) {
+    return
+  }
+
+  const missing = []
+  const evidenceFailures = []
+  for (const pr of mergedPrs) {
+    const number = pr?.number
+    if (!Number.isInteger(number)) {
+      continue
+    }
+    const evidence = runCommand(
+      "gh",
+      [
+        "api",
+        "--paginate",
+        `repos/${owner}/${repo}/issues/${number}/comments`,
+        "--jq",
+        '.[] | select(.body | startswith("<!-- idd-cleanup-evidence:")) | .id',
+      ],
+      root,
+    )
+    if (!evidence.ok) {
+      evidenceFailures.push(number)
+      continue
+    }
+    const matchLines = String(evidence.stdout)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+    if (matchLines.length === 0) {
+      missing.push(number)
+    }
+  }
+
+  if (evidenceFailures.length > 0) {
+    const evidenceMessage =
+      `post-merge cleanup evidence query failed for ${evidenceFailures.length} merged PR(s) ` +
+      `(examples: ${evidenceFailures.slice(0, 5).map((n) => `#${n}`).join(", ")}). ` +
+      `Backlog count below may be undercounted.`
+    if (requireGithub) {
+      report.errors.push(evidenceMessage)
+    } else {
+      report.warnings.push(evidenceMessage)
+    }
+  }
+
+  const verdict = classifyBacklog(missing, warnThreshold)
+  if (!verdict.warn) {
+    return
+  }
+
+  const examplesText = verdict.examples.map((n) => `#${n}`).join(", ")
+  report.warnings.push(
+    `post-merge cleanup backlog: ${verdict.count} merged PRs in the last ${windowDays} days lack F4 cleanup evidence (warn threshold: ${warnThreshold}). Examples: ${examplesText}. Remediation: see docs/idd-comment-minimization.md or run \`node scripts/audit-pr-cleanup.mjs --pr <N> --apply --skip-claim-check\`.`,
+  )
+}
+
 function checkGithubReadiness(root, requireGithub, report) {
   const repoView = runCommand("gh", ["repo", "view", "--json", "owner,name,defaultBranchRef"], root)
   if (!repoView.ok) {
@@ -643,6 +827,36 @@ function parseArgs(argv) {
       index += 1
       continue
     }
+    if (arg === "--cleanup-backlog-window-days") {
+      const value = argv[index + 1]
+      if (!value) {
+        throw new Error("--cleanup-backlog-window-days requires a value")
+      }
+      const numeric = Number(value)
+      if (!Number.isFinite(numeric) || numeric <= 0) {
+        throw new Error(
+          `--cleanup-backlog-window-days must be a positive finite number (got "${value}")`,
+        )
+      }
+      args.cleanupBacklogWindowDays = numeric
+      index += 1
+      continue
+    }
+    if (arg === "--cleanup-backlog-warn-threshold") {
+      const value = argv[index + 1]
+      if (value === undefined) {
+        throw new Error("--cleanup-backlog-warn-threshold requires a value")
+      }
+      const numeric = Number(value)
+      if (!Number.isFinite(numeric) || numeric < 0) {
+        throw new Error(
+          `--cleanup-backlog-warn-threshold must be a non-negative finite number (got "${value}")`,
+        )
+      }
+      args.cleanupBacklogWarnThreshold = numeric
+      index += 1
+      continue
+    }
     throw new Error(`unknown argument: ${arg}`)
   }
 
@@ -671,10 +885,19 @@ function printUsage() {
   console.log(`usage: node scripts/idd-doctor.mjs [options]
 
 options:
-  --repo-root <path>   repository root to inspect (default: cwd)
-  --json               print JSON report
-  --require-github     treat GitHub API check failures as errors
-  --help, -h           show this help
+  --repo-root <path>                       repository root to inspect (default: cwd)
+  --json                                   print JSON report
+  --require-github                         treat GitHub API check failures as errors
+  --cleanup-backlog-window-days <N>        merged-PR window for the cleanup backlog check (default: 14)
+  --cleanup-backlog-warn-threshold <N>     backlog count above which the check warns (default: 2)
+  --help, -h                               show this help
+
+The merged-PR backlog scan caps at gh's per-query maximum of 1000
+results; repositories with > 1000 merged PRs in the window get a
+representative sample. The check makes one gh api .../comments
+call per merged PR returned, which is intentionally simple — for
+very large or rate-limited repos consider raising the warn
+threshold or shortening the window.
 `)
 }
 
