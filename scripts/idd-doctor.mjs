@@ -571,13 +571,15 @@ function checkPostMergeCleanupBacklog(root, options, report) {
   const warnThreshold = options.warnThreshold
   const requireGithub = options.requireGithub === true
 
+  // Soft GitHub-API failures (gh missing, no token, repo view fails,
+  // pr list fails) are silent by default — same pattern as the other
+  // doctor GitHub-readiness checks — and only surface as errors when
+  // the operator passed --require-github. Per-PR evidence-fetch
+  // failures are still always reported because they materially change
+  // the backlog count.
   const recordGhFailure = (message) => {
     if (requireGithub) {
       report.errors.push(`post-merge cleanup backlog check: ${message}`)
-    } else {
-      report.warnings.push(
-        `post-merge cleanup backlog check skipped: ${message}`,
-      )
     }
   }
 
@@ -602,6 +604,9 @@ function checkPostMergeCleanupBacklog(root, options, report) {
 
   const sinceIso = computeWindowStartIso(Date.now(), windowDays)
   if (!sinceIso) {
+    report.warnings.push(
+      `post-merge cleanup backlog check skipped: --cleanup-backlog-window-days value ${windowDays} produced an out-of-range Date and cannot be used as a search window. Re-run with a smaller positive value (default: 14).`,
+    )
     return
   }
 
@@ -880,10 +885,19 @@ function printUsage() {
   console.log(`usage: node scripts/idd-doctor.mjs [options]
 
 options:
-  --repo-root <path>   repository root to inspect (default: cwd)
-  --json               print JSON report
-  --require-github     treat GitHub API check failures as errors
-  --help, -h           show this help
+  --repo-root <path>                       repository root to inspect (default: cwd)
+  --json                                   print JSON report
+  --require-github                         treat GitHub API check failures as errors
+  --cleanup-backlog-window-days <N>        merged-PR window for the cleanup backlog check (default: 14)
+  --cleanup-backlog-warn-threshold <N>     backlog count above which the check warns (default: 2)
+  --help, -h                               show this help
+
+The merged-PR backlog scan caps at gh's per-query maximum of 1000
+results; repositories with > 1000 merged PRs in the window get a
+representative sample. The check makes one gh api .../comments
+call per merged PR returned, which is intentionally simple — for
+very large or rate-limited repos consider raising the warn
+threshold or shortening the window.
 `)
 }
 
