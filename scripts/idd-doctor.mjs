@@ -827,10 +827,13 @@ function checkWorkshopCrossReferences(root, options, report) {
 export function backLinkPatternFor(repoSlug) {
   // Match a link target that contains the slug followed by a path
   // boundary (`/`, `?`, `#`, or end of token) and a later
-  // `docs/workshop` path segment. The boundary prevents
-  // `<slug>-fork/.../docs/workshop` from satisfying `<slug>/...`.
+  // `docs/workshop` path segment followed by `/`, end-of-string,
+  // or query / fragment. The slug boundary prevents
+  // `<slug>-fork/.../docs/workshop` from satisfying `<slug>/...`;
+  // the `docs/workshop` boundary prevents `docs/workshop-old/...`
+  // and `docs/workshops/...` from matching.
   const escSlug = String(repoSlug).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-  return new RegExp(`${escSlug}(?:[/?#][^\\s)]*?)?docs/workshop`, "i")
+  return new RegExp(`${escSlug}(?:[/?#][^\\s)]*?)?docs/workshop(?:[/?#]|$)`, "i")
 }
 
 export function stripMarkdownNonText(content) {
@@ -847,20 +850,77 @@ export function stripMarkdownNonText(content) {
     prev = s
     s = s.replace(/<!--[\s\S]*?-->/g, "")
   } while (s !== prev)
-  // Strip fenced code blocks (``` or ~~~), including unterminated
-  // ones that run to EOF. The non-greedy `(?:[\s\S]*?\1|[\s\S]*$)`
-  // accepts either a matching closing fence or end-of-content.
-  s = s.replace(/(^|\n)([ \t]*)(`{3,}|~{3,})[^\n]*\n([\s\S]*?)(\n\2\3[ \t]*(?=\n|$)|$)/g, "$1")
-  // Strip indented code blocks: lines starting with 4+ spaces or a
-  // tab, surrounded by blank lines (CommonMark §4.4). Conservative
-  // approximation: any sequence of indented lines.
-  s = s
-    .split(/\n/)
-    .map((line) => (/^(?: {4}|\t)/.test(line) ? "" : line))
-    .join("\n")
+  s = stripFencesPreservingLines(s)
+  s = stripIndentedCodeBlocksPreservingLines(s)
   // Strip inline code spans (single or multi-backtick).
   s = s.replace(/(`+)((?:(?!\1)[\s\S])+?)\1/g, "")
   return s
+}
+
+// Per CommonMark §4.5: an opening fence may have up to 3 leading
+// spaces; a closing fence must use the same fence character, have
+// a length at least the opening length, and may have a different
+// indent (still <= 3 spaces) and trailing whitespace only.
+function stripFencesPreservingLines(content) {
+  const lines = String(content).split(/\r?\n/)
+  const out = []
+  let fence = null
+  for (const line of lines) {
+    const m = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/)
+    if (m) {
+      const indent = m[1].length
+      const marker = m[2]
+      const after = m[3]
+      const isCloseShape = /^\s*$/.test(after)
+      const fenceChar = marker[0]
+      const fenceLen = marker.length
+      if (fence === null) {
+        // Opening fence (info string after is allowed).
+        fence = { char: fenceChar, length: fenceLen }
+        out.push("")
+        continue
+      }
+      if (fenceChar === fence.char && fenceLen >= fence.length && isCloseShape && indent <= 3) {
+        fence = null
+        out.push("")
+        continue
+      }
+    }
+    out.push(fence === null ? line : "")
+  }
+  return out.join("\n")
+}
+
+// CommonMark §4.4 indented code blocks: at least 4 leading spaces
+// (or one tab), preceded by a blank line so a list item's
+// continuation lines stay rendered as list content. We only blank
+// lines that follow a blank or already-blanked line so nested
+// lists are preserved.
+function stripIndentedCodeBlocksPreservingLines(content) {
+  const lines = String(content).split(/\r?\n/)
+  const out = []
+  let prevBlank = true
+  let inBlock = false
+  for (const line of lines) {
+    const isBlank = /^\s*$/.test(line)
+    const indented = /^(?: {4}|\t)/.test(line)
+    if (isBlank) {
+      out.push(line)
+      prevBlank = true
+      inBlock = false
+      continue
+    }
+    if (indented && (prevBlank || inBlock)) {
+      out.push("")
+      inBlock = true
+      prevBlank = false
+      continue
+    }
+    out.push(line)
+    inBlock = false
+    prevBlank = false
+  }
+  return out.join("\n")
 }
 
 export function containsExampleRepoBackLink(readmeContent, repoSlug) {
@@ -869,15 +929,24 @@ export function containsExampleRepoBackLink(readmeContent, repoSlug) {
   }
   // Scan URL-shaped tokens after stripping code samples and HTML
   // comments so demo URLs and commented-out URLs do not count as
-  // back-links. URL scanning (vs strict Markdown link parsing)
-  // covers inline `[](url)`, badge wrappers, reference definitions,
-  // autolinks `<url>`, and raw URL mentions in a single pass.
+  // back-links. The back-link pattern is tested against the URL's
+  // host + pathname only, not the full URL — that keeps query
+  // parameters like `?redirect=https://github.com/...` from
+  // satisfying the match by smuggling the slug into a query
+  // string.
   const pattern = backLinkPatternFor(repoSlug)
   const stripped = stripMarkdownNonText(readmeContent)
   const urlPattern = /https?:\/\/[^\s<>)\]"']+/gi
   let match
   while ((match = urlPattern.exec(stripped)) !== null) {
-    if (pattern.test(match[0])) return true
+    let url
+    try {
+      url = new URL(match[0])
+    } catch {
+      continue
+    }
+    const target = `${url.host}${url.pathname}`
+    if (pattern.test(target)) return true
   }
   return false
 }
@@ -965,18 +1034,28 @@ function checkWorkshopExampleRepoBackLink(root, options, report) {
     root,
   )
   if (!readmeFetch.ok) {
-    recordSoftFailure(`could not fetch ${exampleRepo}/readme`)
+    recordSoftFailure(`could not fetch ${exampleRepo} README via gh api`)
     return
   }
-  const decoded = decodeGithubReadmeBase64(readmeFetch.stdout)
+  const stdout = String(readmeFetch.stdout)
+  const compact = stdout.replace(/\s+/g, "")
+  if (compact.length === 0) {
+    // Empty README is a real missing-back-link condition, not a
+    // soft fetch failure (the README exists but contains nothing).
+    report.warnings.push(
+      `workshop example-repo back-link missing: ${exampleRepo} README is empty; no link to ${repoSlug}/.../docs/workshop can be present.`,
+    )
+    return
+  }
+  const decoded = decodeGithubReadmeBase64(stdout)
   if (!decoded) {
-    recordSoftFailure(`${exampleRepo}/readme content was empty or not valid base64`)
+    recordSoftFailure(`${exampleRepo} README content was not valid base64`)
     return
   }
 
   if (!containsExampleRepoBackLink(decoded, repoSlug)) {
     report.warnings.push(
-      `workshop example-repo back-link missing: ${exampleRepo}/README.md does not contain a Markdown link whose target matches ${repoSlug}/.../docs/workshop. See acceptance criteria on issue #611 (CP-E).`,
+      `workshop example-repo back-link missing: ${exampleRepo} README does not contain a link whose target matches ${repoSlug}/.../docs/workshop. See acceptance criteria on issue #611 (CP-E).`,
     )
   }
 }

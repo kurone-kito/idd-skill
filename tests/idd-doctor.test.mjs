@@ -313,6 +313,28 @@ test("backLinkPatternFor rejects fork-suffixed slugs that share a prefix", () =>
   )
 })
 
+test("backLinkPatternFor requires a path boundary after docs/workshop", () => {
+  const pattern = backLinkPatternFor("kurone-kito/idd-skill")
+  // Valid: trailing slash, anchor, query, or end-of-string.
+  assert.equal(
+    pattern.test("github.com/kurone-kito/idd-skill/blob/main/docs/workshop/"),
+    true,
+  )
+  assert.equal(
+    pattern.test("github.com/kurone-kito/idd-skill/blob/main/docs/workshop?ref=main"),
+    true,
+  )
+  // Invalid: docs/workshops, docs/workshop-old, docs/workshop2.
+  assert.equal(
+    pattern.test("github.com/kurone-kito/idd-skill/blob/main/docs/workshops/README.md"),
+    false,
+  )
+  assert.equal(
+    pattern.test("github.com/kurone-kito/idd-skill/blob/main/docs/workshop-old/README.md"),
+    false,
+  )
+})
+
 test("containsExampleRepoBackLink accepts canonical blob/main link to docs/workshop", () => {
   const md = "Read the [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)."
   assert.equal(
@@ -389,6 +411,30 @@ test("containsExampleRepoBackLink ignores URLs inside indented code blocks", () 
 
 test("containsExampleRepoBackLink ignores URLs inside unterminated fenced blocks", () => {
   const md = "before\n```\nhttps://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md\n"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink ignores URLs that appear only in query strings (e.g., redirect=...)", () => {
+  const md = "Click [trap](https://example.com/?redirect=https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink preserves links inside nested-list continuation lines (not blank-separated)", () => {
+  const md = "- top\n    - sub: [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
+test("containsExampleRepoBackLink accepts CommonMark fence variations (indented opener, longer closer)", () => {
+  const md = "  ```\nhttps://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md\n````\n"
   assert.equal(
     containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
     false,
