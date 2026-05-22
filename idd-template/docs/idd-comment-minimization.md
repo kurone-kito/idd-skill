@@ -133,9 +133,13 @@ state, or a pending maintainer decision.
 The idd-skill source repository ships a
 `.github/workflows/post-merge-cleanup.yml` workflow that triggers
 on `pull_request_target.closed` events filtered to `merged == true`.
-The workflow invokes
-`node scripts/audit-pr-cleanup.mjs --pr <N> --apply --skip-claim-check
---format json`, parses the report, and posts the canonical
+The workflow invokes the helper:
+
+```sh
+node scripts/audit-pr-cleanup.mjs --pr <N> --apply --skip-claim-check --format json
+```
+
+It then parses the report and posts the canonical
 `<!-- idd-cleanup-evidence: ... -->` comment so every actually-merged
 PR receives evidence within a few minutes even when the agent did
 not run F4 manually.

@@ -49,20 +49,30 @@ jobs:
             --format json 2>cleanup-stderr.log)
           HELPER_EXIT=$?
           set -e
-          if [ "$HELPER_EXIT" -ne 0 ] || [ -z "$JSON" ]; then
-            echo "::warning::audit-pr-cleanup exited $HELPER_EXIT; will still post evidence comment with helper-error status"
+          # Prefer the helper's JSON report when it is parseable, even on
+          # non-zero exit (the helper writes the report then exits 1 when
+          # failed.length > 0, so the report is still authoritative).
+          PARSED_STATUS=""
+          if [ -n "$JSON" ]; then
+            PARSED_STATUS=$(printf '%s' "$JSON" | jq -r '.status // ""' 2>/dev/null || echo "")
+          fi
+          if [ -n "$PARSED_STATUS" ]; then
+            printf '%s\n' "$JSON" > cleanup-report.json
+            STATUS="$PARSED_STATUS"
+            APPLIED=$(printf '%s' "$JSON" | jq -r '.applied | length')
+            FAILED=$(printf '%s' "$JSON" | jq -r '.failed | length')
+            SKIPPED=$(printf '%s' "$JSON" | jq -r '.skipped | length')
+            BLOCKED=$(printf '%s' "$JSON" | jq -r '[.skipped[] | select(.isMinimized==false and .viewerCanMinimize==false)] | length')
+            if [ "$HELPER_EXIT" -ne 0 ]; then
+              echo "::warning::audit-pr-cleanup exited $HELPER_EXIT but emitted a valid JSON report; using helper status \"$STATUS\""
+            fi
+          else
+            echo "::warning::audit-pr-cleanup exited $HELPER_EXIT with no parseable JSON; posting helper-error evidence"
             STATUS="helper-error"
             APPLIED=0
             FAILED=0
             SKIPPED=0
             BLOCKED=0
-          else
-            printf '%s\n' "$JSON" > cleanup-report.json
-            STATUS=$(printf '%s' "$JSON" | jq -r '.status // "unknown"')
-            APPLIED=$(printf '%s' "$JSON" | jq -r '.applied | length')
-            FAILED=$(printf '%s' "$JSON" | jq -r '.failed | length')
-            SKIPPED=$(printf '%s' "$JSON" | jq -r '.skipped | length')
-            BLOCKED=$(printf '%s' "$JSON" | jq -r '[.skipped[] | select(.isMinimized==false and .viewerCanMinimize==false)] | length')
           fi
           {
             echo "pr_number=$PR_NUMBER"
