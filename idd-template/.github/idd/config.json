@@ -10,6 +10,9 @@
     "heartbeatInterval": "PT12H"
   },
   "trustedMarkerActors": ["{{TRUSTED_MARKER_ACTOR}}"],
+  "workshop": {
+    "exampleRepository": ""
+  },
   "commands": {
     "install-deps": "{{INSTALL_DEPS_COMMAND}}",
     "fix-validate": "{{FIX_VALIDATE_COMMANDS}}",

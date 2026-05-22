@@ -2,15 +2,20 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 
 import {
+  backLinkPatternFor,
   classifyBacklog,
   classifyPrimaryHead,
   computeWindowStartIso,
+  containsExampleRepoBackLink,
   containsWorkshopReference,
+  decodeGithubReadmeBase64,
   extractMarkerPrefixes,
   findMissingWorkshopReferences,
   findPlaceholders,
+  isGithubBackLinkHost,
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
+  stripMarkdownNonText,
 } from "../scripts/idd-doctor.mjs"
 
 test("findPlaceholders returns template tokens", () => {
@@ -281,4 +286,395 @@ test("findMissingWorkshopReferences honors the allow-missing list", () => {
     findMissingWorkshopReferences(entries, ["README.md", "docs/index.md"]),
     [],
   )
+})
+
+test("backLinkPatternFor escapes special regex characters in the slug", () => {
+  // Slug carries real regex metacharacters so a missing escape would
+  // change the match semantics. Pattern is anchored to `^/<slug>`
+  // and tested against URL pathnames only.
+  const pattern = backLinkPatternFor("foo.bar/repo+x")
+  assert.equal(
+    pattern.test("/foo.bar/repo+x/blob/main/docs/workshop/README.md"),
+    true,
+  )
+  // A path that differs in the metacharacter positions must not
+  // match (unescaped `.` would match any char and unescaped `+`
+  // would require one or more `o`).
+  assert.equal(
+    pattern.test("/different-org/different-repo/docs/workshop/"),
+    false,
+  )
+})
+
+test("backLinkPatternFor rejects fork-suffixed slugs that share a prefix", () => {
+  const pattern = backLinkPatternFor("kurone-kito/idd-skill")
+  assert.equal(
+    pattern.test("/kurone-kito/idd-skill/blob/main/docs/workshop/README.md"),
+    true,
+  )
+  assert.equal(
+    pattern.test("/kurone-kito/idd-skill-fork/blob/main/docs/workshop/README.md"),
+    false,
+  )
+})
+
+test("backLinkPatternFor requires the slug at the start of pathname (no host-suffix matches)", () => {
+  // URL path under a different repo whose name happens to end with
+  // the configured slug. The anchored regex must NOT match.
+  const pattern = backLinkPatternFor("me/repo")
+  assert.equal(
+    pattern.test("/acme/me/repo/blob/main/docs/workshop/README.md"),
+    false,
+  )
+  assert.equal(
+    pattern.test("/me/repo/blob/main/docs/workshop/README.md"),
+    true,
+  )
+})
+
+test("backLinkPatternFor requires a path separator after the slug (no slug+docs concatenation)", () => {
+  // Pathological case from review: pathname concatenates slug and
+  // docs/workshop without an intermediate `/`. The actual repo
+  // would be `kurone-kito/idd-skilldocs` which is a different
+  // repository; the regex must NOT match.
+  const pattern = backLinkPatternFor("kurone-kito/idd-skill")
+  assert.equal(
+    pattern.test("/kurone-kito/idd-skilldocs/workshop/README.md"),
+    false,
+  )
+})
+
+test("backLinkPatternFor requires a path boundary after docs/workshop", () => {
+  const pattern = backLinkPatternFor("kurone-kito/idd-skill")
+  // Valid: trailing slash, anchor, query, or end-of-string.
+  assert.equal(
+    pattern.test("/kurone-kito/idd-skill/blob/main/docs/workshop/"),
+    true,
+  )
+  assert.equal(
+    pattern.test("/kurone-kito/idd-skill/tree/main/docs/workshop"),
+    true,
+  )
+  // Invalid: docs/workshops, docs/workshop-old.
+  assert.equal(
+    pattern.test("/kurone-kito/idd-skill/blob/main/docs/workshops/README.md"),
+    false,
+  )
+  assert.equal(
+    pattern.test("/kurone-kito/idd-skill/blob/main/docs/workshop-old/README.md"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink accepts canonical blob/main link to docs/workshop", () => {
+  const md = "Read the [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)."
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
+test("containsExampleRepoBackLink accepts tree/main and deep-link with anchor", () => {
+  const tree = "Tutorial: [link](https://github.com/kurone-kito/idd-skill/tree/main/docs/workshop)"
+  const anchored = "More: [link](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md#prerequisites)"
+  assert.equal(containsExampleRepoBackLink(tree, "kurone-kito/idd-skill"), true)
+  assert.equal(containsExampleRepoBackLink(anchored, "kurone-kito/idd-skill"), true)
+})
+
+test("containsExampleRepoBackLink accepts raw.githubusercontent.com workshop links", () => {
+  const md = "Reference: [raw](https://raw.githubusercontent.com/kurone-kito/idd-skill/main/docs/workshop/README.md)"
+  assert.equal(containsExampleRepoBackLink(md, "kurone-kito/idd-skill"), true)
+})
+
+test("containsExampleRepoBackLink rejects when only the slug appears (no docs/workshop path)", () => {
+  const md = "Built with [idd-skill](https://github.com/kurone-kito/idd-skill)."
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink rejects when only docs/workshop appears (no slug)", () => {
+  const md = "See [workshop](https://github.com/other-org/other-repo/blob/main/docs/workshop/README.md)."
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink handles empty / null / undefined content", () => {
+  assert.equal(containsExampleRepoBackLink("", "x/y"), false)
+  assert.equal(containsExampleRepoBackLink(null, "x/y"), false)
+  assert.equal(containsExampleRepoBackLink(undefined, "x/y"), false)
+})
+
+test("containsExampleRepoBackLink ignores URLs inside fenced code blocks", () => {
+  const md = "```md\n[ex](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n```"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink ignores URLs inside HTML comments", () => {
+  const md = "<!-- https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md -->\nplain prose"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink ignores URLs inside inline code spans", () => {
+  const md = "see `https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md` for example"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink ignores URLs inside indented code blocks", () => {
+  const md = "code:\n\n    https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md\n\nafter"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink ignores URLs inside unterminated fenced blocks", () => {
+  const md = "before\n```\nhttps://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md\n"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink ignores URLs that appear only in query strings (e.g., redirect=...)", () => {
+  const md = "Click [trap](https://example.com/?redirect=https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink preserves links inside nested-list continuation lines (not blank-separated)", () => {
+  const md = "- top\n    - sub: [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
+test("containsExampleRepoBackLink preserves links inside blank-separated nested list items", () => {
+  // Loose-list shape: each list item separated by blank lines. The
+  // indented continuation line is a list item (starts with `- `),
+  // not a code block.
+  const md = "- top\n\n    - [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
+test("containsExampleRepoBackLink rejects URL whose host is not a GitHub host", () => {
+  const md = "[trap](https://example.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink accepts raw.githubusercontent.com host", () => {
+  const md = "[raw](https://raw.githubusercontent.com/kurone-kito/idd-skill/main/docs/workshop/README.md)"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
+test("containsExampleRepoBackLink accepts enterprise host only when IDD_WORKSHOP_BACKLINK_HOSTS is set", () => {
+  const md = "[enterprise](https://github.acme.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)"
+  // Without the env var, the heuristic must NOT accept arbitrary
+  // hosts with "github" in the name (that was the github.evil.com
+  // bypass).
+  const prev = process.env.IDD_WORKSHOP_BACKLINK_HOSTS
+  try {
+    delete process.env.IDD_WORKSHOP_BACKLINK_HOSTS
+    assert.equal(
+      containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+      false,
+    )
+    process.env.IDD_WORKSHOP_BACKLINK_HOSTS = "github.acme.com"
+    assert.equal(
+      containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+      true,
+    )
+  } finally {
+    if (prev === undefined) delete process.env.IDD_WORKSHOP_BACKLINK_HOSTS
+    else process.env.IDD_WORKSHOP_BACKLINK_HOSTS = prev
+  }
+})
+
+test("containsExampleRepoBackLink accepts root-relative inline link targets", () => {
+  const md = "[workshop](/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
+test("containsExampleRepoBackLink rejects URLs that appear only as image destinations", () => {
+  // `![badge](...)` is an image, not a navigational link. The
+  // back-link contract is about navigation, not presence of the
+  // URL anywhere on the page.
+  const md = "![badge](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink accepts a real navigation link even when the same URL also appears as an image", () => {
+  const md = `![badge](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n\n[Read the workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)`
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
+test("containsExampleRepoBackLink accepts root-relative reference-definition targets", () => {
+  const md = "Link: [workshop][w]\n\n[w]: /kurone-kito/idd-skill/blob/main/docs/workshop/README.md\n"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
+test("containsExampleRepoBackLink accepts root-relative targets with leading whitespace and angle brackets", () => {
+  // CommonMark allows optional whitespace before the destination
+  // inside `(   /...)` and angle-bracket-wrapped destinations
+  // `(</...>)`.
+  const indented = "[workshop](   /kurone-kito/idd-skill/blob/main/docs/workshop/README.md)"
+  const angled = "[workshop](</kurone-kito/idd-skill/blob/main/docs/workshop/README.md>)"
+  const refAngled = "[w]\n\n[w]: </kurone-kito/idd-skill/blob/main/docs/workshop/README.md>"
+  assert.equal(containsExampleRepoBackLink(indented, "kurone-kito/idd-skill"), true)
+  assert.equal(containsExampleRepoBackLink(angled, "kurone-kito/idd-skill"), true)
+  assert.equal(containsExampleRepoBackLink(refAngled, "kurone-kito/idd-skill"), true)
+})
+
+test("isGithubBackLinkHost honors IDD_WORKSHOP_BACKLINK_HOSTS env override", () => {
+  const prev = process.env.IDD_WORKSHOP_BACKLINK_HOSTS
+  try {
+    process.env.IDD_WORKSHOP_BACKLINK_HOSTS = "git.internal,scm.acme"
+    assert.equal(isGithubBackLinkHost("git.internal"), true)
+    assert.equal(isGithubBackLinkHost("scm.acme"), true)
+    assert.equal(isGithubBackLinkHost("unrelated.example"), false)
+  } finally {
+    if (prev === undefined) delete process.env.IDD_WORKSHOP_BACKLINK_HOSTS
+    else process.env.IDD_WORKSHOP_BACKLINK_HOSTS = prev
+  }
+})
+
+test("isGithubBackLinkHost rejects brand-prefix lookalikes like github.evil.com", () => {
+  assert.equal(isGithubBackLinkHost("github.evil.com"), false)
+  assert.equal(isGithubBackLinkHost("notgithub.com"), false)
+  assert.equal(isGithubBackLinkHost("github.com.evil"), false)
+})
+
+test("isGithubBackLinkHost rejects unrelated github.com subdomains", () => {
+  // *.github.com is too permissive (docs.github.com, api.github.com
+  // do not host repositories). Restricted to the public-host
+  // whitelist + explicit IDD_WORKSHOP_BACKLINK_HOSTS opt-in.
+  const prev = process.env.IDD_WORKSHOP_BACKLINK_HOSTS
+  try {
+    delete process.env.IDD_WORKSHOP_BACKLINK_HOSTS
+    assert.equal(isGithubBackLinkHost("docs.github.com"), false)
+    assert.equal(isGithubBackLinkHost("api.github.com"), false)
+    assert.equal(isGithubBackLinkHost("subdomain.github.com"), false)
+  } finally {
+    if (prev === undefined) delete process.env.IDD_WORKSHOP_BACKLINK_HOSTS
+    else process.env.IDD_WORKSHOP_BACKLINK_HOSTS = prev
+  }
+})
+
+test("containsExampleRepoBackLink strips trailing sentence punctuation from URLs", () => {
+  const md = "See https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md."
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
+test("containsExampleRepoBackLink preserves ordered-list items with paren markers (1)", () => {
+  const md = "1. top\n\n    1) [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
+test("stripMarkdownNonText leaves backtick-fence-shaped lines with backtick info strings as content", () => {
+  // CommonMark forbids backticks in a backtick-fence info string,
+  // so a line like ``` invalid `info ``` is plain text, not a
+  // fence opener. URLs that follow such a line must still be
+  // scanned.
+  const md = "before\n``` invalid ` info\nhttps://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md\n"
+  const stripped = stripMarkdownNonText(md)
+  assert.equal(stripped.includes("github.com/kurone-kito/idd-skill"), true)
+})
+
+test("containsExampleRepoBackLink accepts CommonMark fence variations (indented opener, longer closer)", () => {
+  const md = "  ```\nhttps://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md\n````\n"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("stripMarkdownNonText removes fenced, indented, span, and HTML comment regions", () => {
+  const md = `before
+\`\`\`
+fenced
+\`\`\`
+inline \`code\` span
+<!-- comment -->
+
+    indented code line
+
+after`
+  const stripped = stripMarkdownNonText(md)
+  assert.equal(stripped.includes("fenced"), false)
+  assert.equal(stripped.includes("inline  span") || stripped.includes("inline span"), true)
+  assert.equal(stripped.includes("comment"), false)
+  assert.equal(stripped.includes("indented code line"), false)
+  assert.equal(stripped.includes("before"), true)
+  assert.equal(stripped.includes("after"), true)
+})
+
+test("decodeGithubReadmeBase64 decodes a typical GitHub content payload", () => {
+  const original = "# Hello\n\nlink: https://example.com\n"
+  const encoded = Buffer.from(original, "utf8").toString("base64")
+  assert.equal(decodeGithubReadmeBase64(encoded), original)
+  // GitHub's API returns base64 with newlines every 60 chars; the
+  // decoder should tolerate that.
+  const wrapped = encoded.replace(/(.{60})/g, "$1\n")
+  assert.equal(decodeGithubReadmeBase64(wrapped), original)
+})
+
+test("decodeGithubReadmeBase64 returns null for empty, null, or non-base64 input", () => {
+  assert.equal(decodeGithubReadmeBase64(""), null)
+  assert.equal(decodeGithubReadmeBase64("   \n  "), null)
+  assert.equal(decodeGithubReadmeBase64(null), null)
+  assert.equal(decodeGithubReadmeBase64(undefined), null)
+  assert.equal(decodeGithubReadmeBase64("not_valid_base64!!"), null)
+})
+
+test("decodeGithubReadmeBase64 rejects literal jq-null and non-multiple-of-4 lengths", () => {
+  // `gh api --jq .content` prints the literal `null` when the JSON
+  // path does not exist (e.g., README not found via the /readme
+  // endpoint). Must not decode to garbage.
+  assert.equal(decodeGithubReadmeBase64("null"), null)
+  assert.equal(decodeGithubReadmeBase64("null\n"), null)
+  // Base64 strings are always a multiple of 4 chars (with padding).
+  assert.equal(decodeGithubReadmeBase64("abc"), null)
+  assert.equal(decodeGithubReadmeBase64("abcde"), null)
 })

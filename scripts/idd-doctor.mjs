@@ -13,6 +13,7 @@ const WORKSHOP_LINK_TARGET_PATTERNS = [
   /(?:^|\/)docs\/workshop(?:\/|$)/,
   /(?:^|\/)workshop(?:\/|$)/,
 ]
+const BASE64_PATTERN = /^[A-Za-z0-9+/=\s]+$/
 
 export { parseProjectCommandRows }
 
@@ -81,6 +82,7 @@ export function runDoctor({
     { allowMissing: workshopCrossRefAllowMissing ?? [] },
     report,
   )
+  checkWorkshopExampleRepoBackLink(root, { requireGithub }, report)
   checkGithubReadiness(root, requireGithub, report)
 
   return report
@@ -808,6 +810,338 @@ function checkWorkshopCrossReferences(root, options, report) {
   for (const path of missing) {
     report.warnings.push(
       `workshop cross-reference missing in ${path}: expected a Markdown link whose target starts with ${WORKSHOP_REL_PATH}/. See acceptance criteria on issue #611 (CP-E).`,
+    )
+  }
+}
+
+// Returns a regex that matches a URL **pathname** of shape
+// `/<slug>/(<segments>/)*docs/workshop(/|$|[?#])`. Anchored to
+// `^/<slug>/` so the slug must occupy the first two path segments
+// and be terminated by a real path separator (prevents
+// `acme/me/repo` from matching slug `me/repo` and
+// `me/repodocs/workshop` from being read as `me/repo` +
+// `docs/workshop`). Trailing boundary prevents
+// `docs/workshops/...` and `docs/workshop-old/...` from matching
+// `docs/workshop`.
+//
+// This is the **pathname matcher only**. The URL parser that
+// pairs with it (containsExampleRepoBackLink below) handles host
+// validation, URL token cleanup, and root-relative target
+// extraction; do not use this pattern against a full URL or
+// external host token.
+export function backLinkPatternFor(repoSlug) {
+  const escSlug = String(repoSlug).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return new RegExp(`^/${escSlug}/(?:[^?#]*?/)?docs/workshop(?:/|$|[?#])`, "i")
+}
+
+export function stripMarkdownNonText(content) {
+  if (typeof content !== "string") return ""
+  let s = content
+  // Order matters: strip code regions FIRST so a literal `<!--`
+  // inside a code span cannot trigger the HTML-comment strip
+  // across unrelated content. After code regions are gone, HTML
+  // comments are guaranteed to be real comments.
+  s = stripFencesPreservingLines(s)
+  s = stripIndentedCodeBlocksPreservingLines(s)
+  // Inline code spans (single or multi-backtick).
+  s = s.replace(/(`+)((?:(?!\1)[\s\S])+?)\1/g, "")
+  // Now strip HTML comments. Loop to a fixed point so nested
+  // payloads like `<!--<!-- x --> -->` fully collapse rather than
+  // leaving `<!--` fragments after a single pass — satisfies
+  // CodeQL's incomplete-multi-character sanitization rule.
+  let prev
+  do {
+    prev = s
+    s = s.replace(/<!--[\s\S]*?-->/g, "")
+  } while (s !== prev)
+  return s
+}
+
+// Per CommonMark §4.5: an opening fence may have up to 3 leading
+// spaces; the opening backtick fence info string MUST NOT contain
+// backticks (the tilde fence info string may contain anything); a
+// closing fence must use the same fence character, have a length
+// at least the opening length, and may have a different indent
+// (still <= 3 spaces) and trailing whitespace only.
+function stripFencesPreservingLines(content) {
+  const lines = String(content).split(/\r?\n/)
+  const out = []
+  let fence = null
+  for (const line of lines) {
+    const m = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/)
+    if (m) {
+      const indent = m[1].length
+      const marker = m[2]
+      const after = m[3]
+      const isCloseShape = /^\s*$/.test(after)
+      const fenceChar = marker[0]
+      const fenceLen = marker.length
+      if (fence === null) {
+        // Backtick-fence info strings cannot contain backticks. A
+        // line like ```` ``` invalid ` info ```` is not a real
+        // fence opener, so treat it as plain content.
+        if (fenceChar === "`" && after.includes("`")) {
+          out.push(line)
+          continue
+        }
+        fence = { char: fenceChar, length: fenceLen }
+        out.push("")
+        continue
+      }
+      if (fenceChar === fence.char && fenceLen >= fence.length && isCloseShape && indent <= 3) {
+        fence = null
+        out.push("")
+        continue
+      }
+    }
+    out.push(fence === null ? line : "")
+  }
+  return out.join("\n")
+}
+
+// CommonMark §4.4 indented code blocks: at least 4 leading spaces
+// (or one tab), preceded by a blank line. Indented lines that are
+// recognizable list items (`-`, `*`, `+`, or `\d+\.` after the
+// leading whitespace) stay as text — loose-list nested items can
+// otherwise be misread as code. We only blank lines that follow a
+// blank or already-blanked line and do not look like list items.
+function stripIndentedCodeBlocksPreservingLines(content) {
+  const lines = String(content).split(/\r?\n/)
+  const out = []
+  let prevBlank = true
+  let inBlock = false
+  for (const line of lines) {
+    const isBlank = /^\s*$/.test(line)
+    const indented = /^(?: {4}|\t)/.test(line)
+    // CommonMark §5.2: ordered-list markers may use either `.` or
+    // `)` after the digit. Both shapes count as list items (not
+    // code) even when indented under a parent item.
+    const looksLikeListItem = /^\s*(?:[-*+]\s|\d+[.)]\s)/.test(line)
+    if (isBlank) {
+      out.push(line)
+      prevBlank = true
+      inBlock = false
+      continue
+    }
+    if (indented && (prevBlank || inBlock) && !looksLikeListItem) {
+      out.push("")
+      inBlock = true
+      prevBlank = false
+      continue
+    }
+    out.push(line)
+    inBlock = false
+    prevBlank = false
+  }
+  return out.join("\n")
+}
+
+export function containsExampleRepoBackLink(readmeContent, repoSlug) {
+  if (typeof readmeContent !== "string" || readmeContent.length === 0) {
+    return false
+  }
+  // Strip code samples first so any literal `<!--` inside a code
+  // span does not trigger HTML-comment removal across unrelated
+  // content. The pattern is tested against the URL pathname only
+  // (no host / query / fragment) so the regex can stay anchored
+  // to `^/<slug>/` and query strings cannot smuggle the slug.
+  const pattern = backLinkPatternFor(repoSlug)
+  // Mask inline-image destinations BEFORE generic URL extraction
+  // so badge-style images like ![alt](https://github.com/...) do
+  // not count as navigational back-links.
+  const imagedStripped = stripMarkdownNonText(readmeContent).replace(
+    /!\[[^\]]*\]\(\s*<?[^()\s>]+>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g,
+    "",
+  )
+  const stripped = imagedStripped
+  // Absolute http(s) URLs.
+  const urlPattern = /https?:\/\/[^\s<>)\]"']+/gi
+  let match
+  while ((match = urlPattern.exec(stripped)) !== null) {
+    const token = match[0].replace(/[.,;:!?]+$/, "")
+    let url
+    try {
+      url = new URL(token)
+    } catch {
+      continue
+    }
+    if (!isGithubBackLinkHost(url.hostname)) continue
+    if (pattern.test(url.pathname)) return true
+  }
+  // Root-relative Markdown link targets (`[text](/owner/repo/...)`)
+  // and reference-definition destinations (`[id]: /owner/repo/...`).
+  // GitHub renders these against the current repo / docs origin;
+  // the back-link pattern already requires `^/<slug>/` so a
+  // root-relative target is checked against the same shape.
+  // Allows CommonMark optional whitespace before the destination
+  // and angle-bracket-wrapped destinations (`(<...>)` / `[id]: <...>`).
+  const mdInline = /\[[^\]]*\]\(\s*<?(\/[^()\s>]+)>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g
+  while ((match = mdInline.exec(stripped)) !== null) {
+    if (pattern.test(match[1].replace(/[.,;:!?]+$/, ""))) return true
+  }
+  const mdRefDef = /^\s{0,3}\[[^\]]+\]:\s*<?(\/[^\s>]+)>?/gm
+  while ((match = mdRefDef.exec(stripped)) !== null) {
+    if (pattern.test(match[1].replace(/[.,;:!?]+$/, ""))) return true
+  }
+  return false
+}
+
+// Runtime / skip semantics live on the check function below, not on
+// the helpers above. `checkWorkshopExampleRepoBackLink` reads the
+// example-repo coordinates from `.github/idd/config.json`
+// (`workshop.exampleRepository`, `<owner>/<repo>` shape) and skips
+// silently when the local docs/workshop/ is absent, the config
+// field is unset, or the gh fetch fails. Soft fetch failures
+// escalate to errors under `--require-github`.
+
+const PUBLIC_GITHUB_HOSTS = new Set([
+  "github.com",
+  "www.github.com",
+  "raw.githubusercontent.com",
+])
+
+export function isGithubBackLinkHost(host) {
+  const lower = String(host ?? "").toLowerCase()
+  if (PUBLIC_GITHUB_HOSTS.has(lower)) return true
+  // Any other host must be declared explicitly in
+  // IDD_WORKSHOP_BACKLINK_HOSTS. The `*.github.com` wildcard was
+  // removed because subdomains like `docs.github.com` and
+  // `api.github.com` do not host repository paths but would pass
+  // the wildcard check. GitHub Enterprise Server adopters whose
+  // host does not exactly match the public list must opt in
+  // explicitly.
+  const extra = (process.env.IDD_WORKSHOP_BACKLINK_HOSTS ?? "")
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean)
+  return extra.includes(lower)
+}
+
+export function decodeGithubReadmeBase64(content) {
+  if (typeof content !== "string") return null
+  const compact = content.replace(/\s+/g, "")
+  if (compact.length === 0) return null
+  // `gh api --jq .content` writes the literal string `null` when
+  // the JSON path does not exist; treat that as not-a-payload so a
+  // missing README does not decode to a non-empty UTF-8 string.
+  if (compact === "null") return null
+  // Base64 payload length is always a multiple of 4 (with padding);
+  // a short alphanumeric string like `null` survives the
+  // character-class check above but fails the length check here.
+  if (compact.length % 4 !== 0) return null
+  if (!BASE64_PATTERN.test(content)) return null
+  let decoded
+  try {
+    decoded = Buffer.from(compact, "base64").toString("utf8")
+  } catch {
+    return null
+  }
+  if (typeof decoded !== "string" || decoded.length === 0) return null
+  // Re-encode and compare to guard against base64-shaped strings
+  // that happen to decode to lossy garbage. Standard GitHub README
+  // payloads round-trip cleanly.
+  if (Buffer.from(decoded, "utf8").toString("base64") !== compact) {
+    return null
+  }
+  return decoded
+}
+
+function checkWorkshopExampleRepoBackLink(root, options, report) {
+  const requireGithub = options.requireGithub === true
+  const workshopDir = resolve(root, WORKSHOP_REL_PATH)
+  if (!existsSync(workshopDir)) return
+
+  const configPath = resolve(root, ".github/idd/config.json")
+  if (!existsSync(configPath)) return
+  let config
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf8"))
+  } catch {
+    return
+  }
+  const exampleRepo = config?.workshop?.exampleRepository
+  if (typeof exampleRepo !== "string" || exampleRepo.trim().length === 0) {
+    return
+  }
+  if (!/^[^/\s]+\/[^/\s]+$/.test(exampleRepo)) {
+    const message = `invalid workshop.exampleRepository value "${exampleRepo}" — expected "<owner>/<repo>".`
+    // Misconfiguration is not a soft GitHub failure; it is a real
+    // gating signal. Under --require-github this must escalate so
+    // CI catches the typo instead of silently passing.
+    if (requireGithub) {
+      report.errors.push(`workshop example-repo back-link check: ${message}`)
+    } else {
+      report.warnings.push(`workshop example-repo check skipped: ${message}`)
+    }
+    return
+  }
+
+  const recordSoftFailure = (message) => {
+    if (requireGithub) {
+      report.errors.push(`workshop example-repo back-link check: ${message}`)
+    }
+  }
+
+  // Resolve this repo's slug from gh repo view so the back-link
+  // pattern matches the correct owner / name even when the
+  // configured GitHub origin differs from local assumptions.
+  const repoView = runCommand("gh", ["repo", "view", "--json", "owner,name"], root)
+  if (!repoView.ok) {
+    recordSoftFailure(`gh repo view unavailable`)
+    return
+  }
+  let viewer
+  try {
+    viewer = JSON.parse(repoView.stdout)
+  } catch {
+    recordSoftFailure(`gh repo view output is not valid JSON`)
+    return
+  }
+  const owner = viewer.owner?.login
+  const name = viewer.name
+  if (!owner || !name) {
+    recordSoftFailure(`gh repo view did not return owner / name`)
+    return
+  }
+  const repoSlug = `${owner}/${name}`
+
+  // `repos/<owner>/<repo>/readme` returns whatever GitHub considers
+  // the canonical README (README.md, README.rst, README, case
+  // variants), so the check works for repos that do not name their
+  // README exactly `README.md`.
+  const readmeFetch = runCommand(
+    "gh",
+    [
+      "api",
+      `repos/${exampleRepo}/readme`,
+      "--jq",
+      ".content",
+    ],
+    root,
+  )
+  if (!readmeFetch.ok) {
+    recordSoftFailure(`could not fetch ${exampleRepo} README via gh api`)
+    return
+  }
+  const stdout = String(readmeFetch.stdout)
+  const compact = stdout.replace(/\s+/g, "")
+  if (compact.length === 0) {
+    // Empty README is a real missing-back-link condition, not a
+    // soft fetch failure (the README exists but contains nothing).
+    report.warnings.push(
+      `workshop example-repo back-link missing: ${exampleRepo} README is empty; no link to ${repoSlug}/.../docs/workshop can be present.`,
+    )
+    return
+  }
+  const decoded = decodeGithubReadmeBase64(stdout)
+  if (!decoded) {
+    recordSoftFailure(`${exampleRepo} README content was not valid base64`)
+    return
+  }
+
+  if (!containsExampleRepoBackLink(decoded, repoSlug)) {
+    report.warnings.push(
+      `workshop example-repo back-link missing: ${exampleRepo} README does not contain a link whose target matches ${repoSlug}/.../docs/workshop. See acceptance criteria on issue #611 (CP-E).`,
     )
   }
 }
