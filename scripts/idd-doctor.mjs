@@ -862,9 +862,11 @@ export function stripMarkdownNonText(content) {
 }
 
 // Per CommonMark §4.5: an opening fence may have up to 3 leading
-// spaces; a closing fence must use the same fence character, have
-// a length at least the opening length, and may have a different
-// indent (still <= 3 spaces) and trailing whitespace only.
+// spaces; the opening backtick fence info string MUST NOT contain
+// backticks (the tilde fence info string may contain anything); a
+// closing fence must use the same fence character, have a length
+// at least the opening length, and may have a different indent
+// (still <= 3 spaces) and trailing whitespace only.
 function stripFencesPreservingLines(content) {
   const lines = String(content).split(/\r?\n/)
   const out = []
@@ -879,7 +881,13 @@ function stripFencesPreservingLines(content) {
       const fenceChar = marker[0]
       const fenceLen = marker.length
       if (fence === null) {
-        // Opening fence (info string after is allowed).
+        // Backtick-fence info strings cannot contain backticks. A
+        // line like ```` ``` invalid ` info ```` is not a real
+        // fence opener, so treat it as plain content.
+        if (fenceChar === "`" && after.includes("`")) {
+          out.push(line)
+          continue
+        }
         fence = { char: fenceChar, length: fenceLen }
         out.push("")
         continue
@@ -909,7 +917,10 @@ function stripIndentedCodeBlocksPreservingLines(content) {
   for (const line of lines) {
     const isBlank = /^\s*$/.test(line)
     const indented = /^(?: {4}|\t)/.test(line)
-    const looksLikeListItem = /^\s*(?:[-*+]\s|\d+\.\s)/.test(line)
+    // CommonMark ordered lists allow both `\d+.` and `\d+)`
+    // markers, so both shapes are list items (not code) even when
+    // indented under a parent item.
+    const looksLikeListItem = /^\s*(?:[-*+]\s|\d+[.)]\s)/.test(line)
     if (isBlank) {
       out.push(line)
       prevBlank = true
@@ -945,29 +956,50 @@ export function containsExampleRepoBackLink(readmeContent, repoSlug) {
   const urlPattern = /https?:\/\/[^\s<>)\]"']+/gi
   let match
   while ((match = urlPattern.exec(stripped)) !== null) {
+    // Strip trailing sentence punctuation that the autolinker /
+    // GitHub renderer would not treat as part of the URL.
+    const token = match[0].replace(/[.,;:!?]+$/, "")
     let url
     try {
-      url = new URL(match[0])
+      url = new URL(token)
     } catch {
       continue
     }
-    // Verify the host is a GitHub host so an unrelated mirror that
-    // happens to expose a `/<owner>/<repo>/.../docs/workshop` path
-    // does not pass as a real back-link.
-    if (!GITHUB_HOSTS.has(url.host.toLowerCase())) continue
+    // Verify the host looks like GitHub (public hosts plus the
+    // typical GitHub Enterprise Server pattern of any host whose
+    // name contains "github"). Adopters on a custom enterprise
+    // host name can extend the match via the IDD_WORKSHOP_BACKLINK_HOSTS
+    // env var (comma-separated list).
+    if (!isGithubBackLinkHost(url.host)) continue
     // Test pathname only (no host, no query, no fragment) so the
-    // back-link regex can stay anchored to `^/<slug>/` and query
+    // back-link regex stays anchored to `^/<slug>/` and query
     // strings cannot smuggle the slug.
     if (pattern.test(url.pathname)) return true
   }
   return false
 }
 
-const GITHUB_HOSTS = new Set([
+const PUBLIC_GITHUB_HOSTS = new Set([
   "github.com",
   "www.github.com",
   "raw.githubusercontent.com",
 ])
+
+export function isGithubBackLinkHost(host) {
+  const lower = String(host ?? "").toLowerCase()
+  if (PUBLIC_GITHUB_HOSTS.has(lower)) return true
+  // Heuristic: GitHub Enterprise Server installations typically
+  // use a host name containing "github" (e.g., `github.acme.com`,
+  // `code.github.acme.com`). Accept those, and let adopters
+  // explicitly extend with IDD_WORKSHOP_BACKLINK_HOSTS for hosts
+  // that do not follow that convention.
+  if (/(^|\.)github(\.|$)/.test(lower)) return true
+  const extra = (process.env.IDD_WORKSHOP_BACKLINK_HOSTS ?? "")
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean)
+  return extra.includes(lower)
+}
 
 export function decodeGithubReadmeBase64(content) {
   if (typeof content !== "string") return null

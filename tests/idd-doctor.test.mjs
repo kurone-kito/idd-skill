@@ -12,6 +12,7 @@ import {
   extractMarkerPrefixes,
   findMissingWorkshopReferences,
   findPlaceholders,
+  isGithubBackLinkHost,
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
   stripMarkdownNonText,
@@ -488,6 +489,53 @@ test("containsExampleRepoBackLink accepts raw.githubusercontent.com host", () =>
     containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
     true,
   )
+})
+
+test("containsExampleRepoBackLink accepts GitHub Enterprise hosts (github in hostname)", () => {
+  const md = "[ghes](https://github.acme.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
+test("isGithubBackLinkHost honors IDD_WORKSHOP_BACKLINK_HOSTS env override", () => {
+  const prev = process.env.IDD_WORKSHOP_BACKLINK_HOSTS
+  try {
+    process.env.IDD_WORKSHOP_BACKLINK_HOSTS = "git.internal,scm.acme"
+    assert.equal(isGithubBackLinkHost("git.internal"), true)
+    assert.equal(isGithubBackLinkHost("scm.acme"), true)
+    assert.equal(isGithubBackLinkHost("unrelated.example"), false)
+  } finally {
+    if (prev === undefined) delete process.env.IDD_WORKSHOP_BACKLINK_HOSTS
+    else process.env.IDD_WORKSHOP_BACKLINK_HOSTS = prev
+  }
+})
+
+test("containsExampleRepoBackLink strips trailing sentence punctuation from URLs", () => {
+  const md = "See https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md."
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
+test("containsExampleRepoBackLink preserves ordered-list items with paren markers (1)", () => {
+  const md = "1. top\n\n    1) [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
+test("stripMarkdownNonText leaves backtick-fence-shaped lines with backtick info strings as content", () => {
+  // CommonMark forbids backticks in a backtick-fence info string,
+  // so a line like ``` invalid `info ``` is plain text, not a
+  // fence opener. URLs that follow such a line must still be
+  // scanned.
+  const md = "before\n``` invalid ` info\nhttps://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md\n"
+  const stripped = stripMarkdownNonText(md)
+  assert.equal(stripped.includes("github.com/kurone-kito/idd-skill"), true)
 })
 
 test("containsExampleRepoBackLink accepts CommonMark fence variations (indented opener, longer closer)", () => {
