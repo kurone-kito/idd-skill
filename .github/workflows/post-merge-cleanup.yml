@@ -1,6 +1,6 @@
 name: Post-merge cleanup
 on:
-  pull_request:
+  pull_request_target:
     types:
       - closed
   workflow_dispatch:
@@ -14,7 +14,7 @@ permissions:
   issues: write
   pull-requests: write
 concurrency:
-  group: post-merge-cleanup-${{ github.event.pull_request.number || inputs.pr_number }}
+  group: post-merge-cleanup-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
   cancel-in-progress: false
 jobs:
   cleanup:
@@ -25,18 +25,61 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 1
+          persist-credentials: false
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           check-latest: true
           node-version: 24.x
       - name: Run F4 cleanup (server-side fallback)
+        id: cleanup
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          PR_NUMBER='${{ github.event.pull_request.number || inputs.pr_number }}'
-          node scripts/audit-pr-cleanup.mjs \
+          PR_NUMBER='${{ github.event.pull_request.number || github.event.inputs.pr_number }}'
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::error::PR_NUMBER is empty"
+            exit 1
+          fi
+          JSON=$(node scripts/audit-pr-cleanup.mjs \
             --pr "$PR_NUMBER" \
             --apply \
             --skip-claim-check \
-            --format json
+            --format json)
+          printf '%s\n' "$JSON" > cleanup-report.json
+          STATUS=$(printf '%s' "$JSON" | jq -r '.status // "unknown"')
+          APPLIED=$(printf '%s' "$JSON" | jq -r '.applied | length')
+          FAILED=$(printf '%s' "$JSON" | jq -r '.failed | length')
+          SKIPPED=$(printf '%s' "$JSON" | jq -r '.skipped | length')
+          BLOCKED=$(printf '%s' "$JSON" | jq -r '[.skipped[] | select(.isMinimized==false and .viewerCanMinimize==false)] | length')
+          {
+            echo "pr_number=$PR_NUMBER"
+            echo "status=$STATUS"
+            echo "applied=$APPLIED"
+            echo "failed=$FAILED"
+            echo "skipped=$SKIPPED"
+            echo "blocked=$BLOCKED"
+          } >> "$GITHUB_OUTPUT"
+      - name: Post cleanup evidence comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.cleanup.outputs.pr_number }}
+          STATUS: ${{ steps.cleanup.outputs.status }}
+          APPLIED: ${{ steps.cleanup.outputs.applied }}
+          FAILED: ${{ steps.cleanup.outputs.failed }}
+          SKIPPED: ${{ steps.cleanup.outputs.skipped }}
+          BLOCKED: ${{ steps.cleanup.outputs.blocked }}
+        run: |
+          BODY=$(printf '%s\n\n%s\n\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+            "<!-- idd-cleanup-evidence: ${STATUS} applied:${APPLIED} failed:${FAILED} skipped:${SKIPPED} viewer-cannot-minimize:${BLOCKED} -->" \
+            "**F4 Cleanup Evidence** (server-side fallback via \`post-merge-cleanup.yml\`)" \
+            "| Field              | Value |" \
+            "| ------------------ | ----- |" \
+            "| Status             | ${STATUS} |" \
+            "| Applied            | ${APPLIED} |" \
+            "| Failed             | ${FAILED} |" \
+            "| Skipped            | ${SKIPPED} |" \
+            "| Permission-blocked | ${BLOCKED} |" \
+            "| Posted by          | post-merge-cleanup workflow |" \
+          )
+          printf '%s' "$BODY" | gh pr comment "$PR_NUMBER" --body-file -

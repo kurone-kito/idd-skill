@@ -128,22 +128,33 @@ not minimize comments that still determine review currency, advisory
 wait state, unresolved-thread state, unreplied-comment state, hold
 state, or a pending maintainer decision.
 
-### Server-side fallback
+### Server-side fallback (optional)
 
-This repository runs `.github/workflows/post-merge-cleanup.yml` on
-`pull_request.closed` events filtered to `merged == true`. The
-workflow invokes `node scripts/audit-pr-cleanup.mjs --apply
---skip-claim-check` so that every actually-merged PR receives an
-`<!-- idd-cleanup-evidence: ... -->` comment within a few minutes,
-even when the agent did not run F4 manually.
+The idd-skill source repository ships a
+`.github/workflows/post-merge-cleanup.yml` workflow that triggers
+on `pull_request_target.closed` events filtered to `merged == true`.
+The workflow invokes
+`node scripts/audit-pr-cleanup.mjs --pr <N> --apply --skip-claim-check
+--format json`, parses the report, and posts the canonical
+`<!-- idd-cleanup-evidence: ... -->` comment so every actually-merged
+PR receives evidence within a few minutes even when the agent did
+not run F4 manually.
+
+The template (`idd-template/`) does **not** ship this workflow
+because `scripts/audit-pr-cleanup.mjs` is part of the optional
+helper bundle and is not present in default instructions-only
+installs. Adopters who install the helper can copy the source
+workflow file as-is; permissions required are
+`contents: read`, `issues: write`, and `pull-requests: write`, plus
+`pull_request_target` (not `pull_request`) so that fork PRs can
+post comments under a writeable `GITHUB_TOKEN`.
 
 The agent F4 step in `idd-merge.instructions.md` remains the
 canonical, mandatory contract. The server-side workflow is a
-backstop, not a replacement: it uses the same helper, the same
-candidate rules, and the same evidence comment shape, and exits
-non-blocking on errors. Concurrency keyed on PR number prevents
-double-posting when an agent F4 and the workflow happen to run in
-the same minute.
+backstop, not a replacement: same helper, same candidate rules,
+same evidence comment shape, non-blocking on errors. Concurrency
+keyed on PR number prevents double-posting when an agent F4 and
+the workflow happen to run in the same minute.
 
 ## GitHub mechanism
 
