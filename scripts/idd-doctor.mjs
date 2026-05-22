@@ -20,6 +20,8 @@ if (isMainModule(import.meta.url)) {
   const report = runDoctor({
     root: resolve(args.root),
     requireGithub: args.requireGithub,
+    cleanupBacklogWindowDays: args.cleanupBacklogWindowDays,
+    cleanupBacklogWarnThreshold: args.cleanupBacklogWarnThreshold,
   })
 
   if (args.json) {
@@ -31,7 +33,12 @@ if (isMainModule(import.meta.url)) {
   process.exit(report.errors.length > 0 ? 1 : 0)
 }
 
-export function runDoctor({ root, requireGithub }) {
+export function runDoctor({
+  root,
+  requireGithub,
+  cleanupBacklogWindowDays,
+  cleanupBacklogWarnThreshold,
+}) {
   const files = listFiles(root)
   const textFiles = files.filter(isTextLikeFile)
   const report = {
@@ -51,6 +58,14 @@ export function runDoctor({ root, requireGithub }) {
   checkAgentEntryFiles(root, report)
   checkTemplateVersionSignal(root, report)
   checkPrimaryWorktreeHead(root, report)
+  checkPostMergeCleanupBacklog(
+    root,
+    {
+      windowDays: cleanupBacklogWindowDays ?? 14,
+      warnThreshold: cleanupBacklogWarnThreshold ?? 2,
+    },
+    report,
+  )
   checkGithubReadiness(root, requireGithub, report)
 
   return report
@@ -513,6 +528,115 @@ function checkPrimaryWorktreeHead(root, report) {
   )
 }
 
+export function computeWindowStartIso(now, windowDays) {
+  const ms = Number(windowDays) * 24 * 60 * 60 * 1000
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return null
+  }
+  return new Date(now - ms).toISOString()
+}
+
+export function classifyBacklog(missingPrNumbers, warnThreshold) {
+  const count = Array.isArray(missingPrNumbers) ? missingPrNumbers.length : 0
+  return {
+    count,
+    warn: count > Number(warnThreshold),
+    examples: Array.isArray(missingPrNumbers) ? missingPrNumbers.slice(0, 5) : [],
+  }
+}
+
+function checkPostMergeCleanupBacklog(root, options, report) {
+  const windowDays = options.windowDays
+  const warnThreshold = options.warnThreshold
+
+  const repoView = runCommand("gh", ["repo", "view", "--json", "owner,name"], root)
+  if (!repoView.ok) {
+    return
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(repoView.stdout)
+  } catch {
+    return
+  }
+  const owner = parsed.owner?.login
+  const repo = parsed.name
+  if (!owner || !repo) {
+    return
+  }
+
+  const sinceIso = computeWindowStartIso(Date.now(), windowDays)
+  if (!sinceIso) {
+    return
+  }
+
+  const search = runCommand(
+    "gh",
+    [
+      "pr",
+      "list",
+      "--repo",
+      `${owner}/${repo}`,
+      "--state",
+      "merged",
+      "--search",
+      `merged:>=${sinceIso}`,
+      "--json",
+      "number",
+      "--limit",
+      "100",
+    ],
+    root,
+  )
+  if (!search.ok) {
+    return
+  }
+  let mergedPrs
+  try {
+    mergedPrs = JSON.parse(search.stdout)
+  } catch {
+    return
+  }
+  if (!Array.isArray(mergedPrs) || mergedPrs.length === 0) {
+    return
+  }
+
+  const missing = []
+  for (const pr of mergedPrs) {
+    const number = pr?.number
+    if (!Number.isInteger(number)) {
+      continue
+    }
+    const evidence = runCommand(
+      "gh",
+      [
+        "api",
+        `repos/${owner}/${repo}/issues/${number}/comments`,
+        "--jq",
+        '[.[] | select(.body | startswith("<!-- idd-cleanup-evidence:"))] | length',
+      ],
+      root,
+    )
+    if (!evidence.ok) {
+      continue
+    }
+    const count = Number(String(evidence.stdout).trim())
+    if (count === 0) {
+      missing.push(number)
+    }
+  }
+
+  const verdict = classifyBacklog(missing, warnThreshold)
+  if (!verdict.warn) {
+    return
+  }
+
+  const examplesText = verdict.examples.map((n) => `#${n}`).join(", ")
+  report.warnings.push(
+    `post-merge cleanup backlog: ${verdict.count} merged PRs in the last ${windowDays} days lack F4 cleanup evidence (warn threshold: ${warnThreshold}). Examples: ${examplesText}. Remediation: see docs/idd-comment-minimization.md or run \`node scripts/audit-pr-cleanup.mjs --pr <N> --apply --skip-claim-check\`.`,
+  )
+}
+
 function checkGithubReadiness(root, requireGithub, report) {
   const repoView = runCommand("gh", ["repo", "view", "--json", "owner,name,defaultBranchRef"], root)
   if (!repoView.ok) {
@@ -640,6 +764,24 @@ function parseArgs(argv) {
         throw new Error("--repo-root requires a value")
       }
       args.root = value
+      index += 1
+      continue
+    }
+    if (arg === "--cleanup-backlog-window-days") {
+      const value = argv[index + 1]
+      if (!value) {
+        throw new Error("--cleanup-backlog-window-days requires a value")
+      }
+      args.cleanupBacklogWindowDays = Number(value)
+      index += 1
+      continue
+    }
+    if (arg === "--cleanup-backlog-warn-threshold") {
+      const value = argv[index + 1]
+      if (value === undefined) {
+        throw new Error("--cleanup-backlog-warn-threshold requires a value")
+      }
+      args.cleanupBacklogWarnThreshold = Number(value)
       index += 1
       continue
     }
