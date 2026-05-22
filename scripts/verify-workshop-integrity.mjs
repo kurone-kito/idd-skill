@@ -163,16 +163,20 @@ export function stripHtmlComments(content) {
   )
 }
 
-// Strips inline code spans (`...`, ``...``, etc.) from a single
-// line so `[demo](./missing.md)` inside backticks is not extracted
-// as a real link. Conservative: only handles single-line spans; a
-// span that opens and never closes is left as-is.
-export function stripInlineCodeSpans(line) {
-  return String(line).replace(/(`+)((?:(?!\1).)+?)\1/g, (_match, fence) => " ".repeat(fence.length * 2))
+// Strips inline code spans (`...`, ``...``, etc.) so
+// `[demo](./missing.md)` inside backticks is not extracted as a
+// real link. The lazy `[\s\S]+?` allows code spans to cross
+// newlines so multi-line spans are also covered. The replacement
+// preserves newlines so downstream offset → line numbers stay
+// accurate.
+export function stripInlineCodeSpans(content) {
+  return String(content).replace(/(`+)((?:(?!\1)[\s\S])+?)\1/g, (match, fence) =>
+    `${fence}${match.slice(fence.length, -fence.length).replace(/[^\r\n]/g, " ")}${fence}`,
+  )
 }
 
 export function extractReferenceDefinitions(markdown) {
-  const stripped = stripFencedCodeBlocks(markdown)
+  const stripped = stripHtmlComments(stripFencedCodeBlocks(markdown))
   const map = new Map()
   const lines = stripped.split(/\r?\n/)
   for (const line of lines) {
@@ -329,7 +333,7 @@ function lineContaining(content, offset) {
 export function extractHeadingSlugs(markdown) {
   const slugs = new Set()
   const counts = new Map()
-  const stripped = stripFencedCodeBlocks(markdown)
+  const stripped = stripHtmlComments(stripFencedCodeBlocks(markdown))
   const lines = stripped.split(/\r?\n/)
   const consider = (raw) => {
     const slug = slugifyHeading(raw)

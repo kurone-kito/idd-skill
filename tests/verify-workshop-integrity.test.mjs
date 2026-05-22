@@ -14,6 +14,7 @@ import {
   slugifyHeading,
   stripFencedCodeBlocks,
   stripHtmlComments,
+  stripInlineCodeSpans,
 } from "../scripts/verify-workshop-integrity.mjs"
 
 function makeRepo() {
@@ -371,6 +372,31 @@ test("extractReferences ignores links inside HTML comments", () => {
   const refs = extractReferences(md)
   assert.equal(refs.length, 1)
   assert.equal(refs[0].target, "./a.md")
+})
+
+test("extractReferenceDefinitions ignores definitions inside HTML comments", () => {
+  const md = `text\n\n<!--\n[hidden]: ./should-not-resolve.md\n-->\n[real]: ./a.md\n`
+  const defs = extractReferenceDefinitions(md)
+  assert.equal(defs.has("hidden"), false)
+  assert.equal(defs.get("real"), "./a.md")
+})
+
+test("extractHeadingSlugs ignores headings inside HTML comments", () => {
+  const md = `# Real\n\n<!-- # Hidden -->\n\n## Visible\n`
+  const slugs = extractHeadingSlugs(md)
+  assert.equal(slugs.has("real"), true)
+  assert.equal(slugs.has("visible"), true)
+  assert.equal(slugs.has("hidden"), false)
+})
+
+test("stripInlineCodeSpans masks multi-line backtick code spans", () => {
+  const md = "before `multi\nline span containing [demo](./x.md)\n` after"
+  const stripped = stripInlineCodeSpans(md)
+  assert.equal(stripped.includes("[demo]"), false)
+  assert.equal(stripped.includes("before"), true)
+  assert.equal(stripped.includes("after"), true)
+  // Newlines preserved.
+  assert.equal(stripped.split("\n").length, md.split("\n").length)
 })
 
 test("classifyAndCheck rejects symlinks that point outside the repo as escapes-repo", async (t) => {
