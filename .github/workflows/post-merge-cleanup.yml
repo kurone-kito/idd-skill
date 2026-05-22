@@ -92,6 +92,20 @@ jobs:
           SKIPPED: ${{ steps.cleanup.outputs.skipped }}
           BLOCKED: ${{ steps.cleanup.outputs.blocked }}
         run: |
+          # Avoid duplicate evidence comments. Workflow-level concurrency
+          # only serialises this workflow's own runs; an agent F4 (or a
+          # maintainer rerunning workflow_dispatch on the same PR) can
+          # still have posted an evidence comment outside this run. Skip
+          # if any <!-- idd-cleanup-evidence: ... --> comment is already
+          # on the PR.
+          EXISTING=$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --jq '.[] | select(.body | startswith("<!-- idd-cleanup-evidence:")) | .id' \
+            | head -n1)
+          if [ -n "$EXISTING" ]; then
+            echo "::notice::PR #${PR_NUMBER} already has an idd-cleanup-evidence comment (id: ${EXISTING}); skipping workflow post."
+            exit 0
+          fi
           BODY=$(printf '%s\n\n%s\n\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
             "<!-- idd-cleanup-evidence: ${STATUS} applied:${APPLIED} failed:${FAILED} skipped:${SKIPPED} viewer-cannot-minimize:${BLOCKED} -->" \
             "**F4 Cleanup Evidence** (server-side fallback via \`post-merge-cleanup.yml\`)" \
