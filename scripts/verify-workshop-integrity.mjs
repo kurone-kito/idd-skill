@@ -4,6 +4,7 @@ import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "n
 import { dirname, extname, join, normalize, relative, resolve, sep } from "node:path"
 
 const WORKSHOP_ROOTS = ["docs/workshop"]
+const WORKSHOP_ASSET_DIRS = ["docs/workshop/assets"]
 
 if (isMainModule(import.meta.url)) {
   let args
@@ -61,8 +62,12 @@ export function runVerification(repoRoot, options = {}) {
       invalidUrl: 0,
       escapedRepo: 0,
       unresolvedRef: 0,
+      assetOutsideAssetsDir: 0,
     },
   }
+  const assetDirs = (options.assetDirs ?? WORKSHOP_ASSET_DIRS).map((dir) =>
+    normalize(resolve(repoRoot, dir)),
+  )
 
   for (const file of files) {
     const content = fileContents.get(file)
@@ -88,6 +93,23 @@ export function runVerification(repoRoot, options = {}) {
       }
       const result = classifyAndCheck(ref.target, file, repoRoot, fileMeta)
       if (result.status === "ok") {
+        if (ref.kind === "image" && result.resolvedPath) {
+          const assetCheck = checkAssetUnderAssetsDir(
+            result.resolvedPath,
+            assetDirs,
+          )
+          if (!assetCheck.ok) {
+            report.counts.assetOutsideAssetsDir += 1
+            report.issues.push({
+              file: relative(repoRoot, file),
+              kind: ref.kind,
+              target: ref.target,
+              line: ref.line,
+              status: "asset-outside-assets-dir",
+              detail: assetCheck.detail,
+            })
+          }
+        }
         continue
       }
       if (result.status === "missing-file") {
@@ -250,15 +272,49 @@ function extractInlineFromContent(content, refs) {
 function extractAutolinksFromContent(content, refs) {
   // CommonMark autolink: <scheme://...>. We only validate the URL
   // syntax (no live HTTP), so we treat them as link references.
+  // Skip matches that overlap an inline-link destination such as
+  // [text](<https://x>) or a reference definition's destination,
+  // both of which already account for the URL.
+  const consumedRanges = collectAngleBracketDestinationRanges(content)
   const pattern = /<([a-z][a-z0-9+.-]*:[^>\s]+)>/gi
   let match
   while ((match = pattern.exec(content)) !== null) {
+    if (rangeOverlaps(consumedRanges, match.index, match.index + match[0].length)) {
+      continue
+    }
     refs.push({
       kind: "link",
       target: match[1],
       line: lineNumberAtOffset(content, match.index),
     })
   }
+}
+
+function collectAngleBracketDestinationRanges(content) {
+  const ranges = []
+  // Inline link/image destination wrapped in <...>.
+  const inlinePattern = /(!?)\[([^\]]*)\]\(\s*(<[^>\n]*>)/g
+  let match
+  while ((match = inlinePattern.exec(content)) !== null) {
+    const destStart = match.index + match[0].length - match[3].length
+    ranges.push([destStart, destStart + match[3].length])
+  }
+  // Reference definition destination wrapped in <...>.
+  const defPattern = /^\s{0,3}\[[^\]]+\]:\s*(<[^>\n]+>)/gm
+  while ((match = defPattern.exec(content)) !== null) {
+    const destStart = match.index + match[0].length - match[1].length
+    ranges.push([destStart, destStart + match[1].length])
+  }
+  return ranges
+}
+
+function rangeOverlaps(ranges, start, end) {
+  for (const [rangeStart, rangeEnd] of ranges) {
+    if (start < rangeEnd && end > rangeStart) {
+      return true
+    }
+  }
+  return false
 }
 
 function extractReferenceStyleFromContent(content, refs, refDefs) {
@@ -506,12 +562,12 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
   }
 
   if (anchorPart.length === 0) {
-    return { status: "ok" }
+    return { status: "ok", resolvedPath }
   }
 
   const isMarkdown = extname(resolvedPath).toLowerCase() === ".md"
   if (!isMarkdown) {
-    return { status: "ok" }
+    return { status: "ok", resolvedPath }
   }
 
   let meta = fileMeta.get(resolvedPath)
@@ -529,7 +585,22 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
       detail: `anchor "#${anchorPart}" not found in ${relative(repoRoot, resolvedPath)}`,
     }
   }
-  return { status: "ok" }
+  return { status: "ok", resolvedPath }
+}
+
+export function checkAssetUnderAssetsDir(resolvedPath, assetDirs) {
+  if (!Array.isArray(assetDirs) || assetDirs.length === 0) {
+    return { ok: true }
+  }
+  for (const dir of assetDirs) {
+    if (isInside(normalize(resolvedPath), normalize(dir))) {
+      return { ok: true }
+    }
+  }
+  return {
+    ok: false,
+    detail: `image target resolves outside ${assetDirs[0]}; image references should live under docs/workshop/assets/ or be absolute URLs`,
+  }
 }
 
 function isInside(targetPath, rootPath) {

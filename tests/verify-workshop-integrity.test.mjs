@@ -133,6 +133,19 @@ test("runVerification is a no-op when the workshop tree is absent", async (t) =>
   assert.equal(report.issues.length, 0)
 })
 
+test("runVerification flags image references that resolve outside docs/workshop/assets", async (t) => {
+  const repo = makeRepo()
+  t.after(() => repo.cleanup())
+  // Image points to a real file but outside the assets directory.
+  repo.write("docs/workshop/README.md", `![bad](../random.png)\n![ok](assets/a.png)\n`)
+  repo.write("docs/random.png", "fake png")
+  repo.write("docs/workshop/assets/a.png", "fake png")
+  const report = runVerification(repo.root)
+  const assetIssues = report.issues.filter((i) => i.status === "asset-outside-assets-dir")
+  assert.equal(assetIssues.length, 1)
+  assert.equal(assetIssues[0].target, "../random.png")
+})
+
 test("computeExitCode returns 1 when issues exist, 0 otherwise", () => {
   assert.equal(computeExitCode({ issues: [] }), 0)
   assert.equal(computeExitCode({ issues: [{}] }), 1)
@@ -325,6 +338,24 @@ test("extractReferences extracts CommonMark angle-bracket autolinks", () => {
   const refs = extractReferences(md)
   assert.equal(refs.length, 1)
   assert.equal(refs[0].target, "https://example.com/x")
+})
+
+test("extractReferences does not double-count autolinks inside inline-link destinations", () => {
+  const md = `[site](<https://example.com>)\n`
+  const refs = extractReferences(md)
+  // Exactly one ref — the inline link, NOT a duplicate autolink for
+  // the angle-bracket destination.
+  assert.equal(refs.length, 1)
+  assert.equal(refs[0].target, "https://example.com")
+})
+
+test("extractReferences does not duplicate when autolink sits in a reference definition's destination", () => {
+  const md = `[a]\n\n[a]: <https://example.com>\n`
+  const defs = extractReferenceDefinitions(md)
+  const refs = extractReferences(md, defs)
+  // One shortcut ref and the autolink should be suppressed.
+  assert.equal(refs.length, 1)
+  assert.equal(refs[0].target, "https://example.com")
 })
 
 test("extractReferenceDefinitions unwraps angle-bracket destinations", () => {
