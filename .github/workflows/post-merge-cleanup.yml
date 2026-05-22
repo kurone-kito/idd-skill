@@ -1,0 +1,121 @@
+name: Post-merge cleanup
+on:
+  pull_request_target:
+    types:
+      - closed
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to clean up
+        required: true
+        type: number
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+concurrency:
+  group: post-merge-cleanup-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: false
+jobs:
+  cleanup:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          check-latest: true
+          node-version: 24.x
+      - name: Run F4 cleanup (server-side fallback)
+        id: cleanup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          PR_NUMBER='${{ github.event.pull_request.number || github.event.inputs.pr_number }}'
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::error::PR_NUMBER is empty"
+            exit 1
+          fi
+          JSON=$(node scripts/audit-pr-cleanup.mjs \
+            --pr "$PR_NUMBER" \
+            --apply \
+            --skip-claim-check \
+            --format json 2>cleanup-stderr.log)
+          HELPER_EXIT=$?
+          set -e
+          # Prefer the helper's JSON report when it is parseable, even on
+          # non-zero exit (the helper writes the report then exits 1 when
+          # failed.length > 0, so the report is still authoritative).
+          PARSED_STATUS=""
+          if [ -n "$JSON" ]; then
+            PARSED_STATUS=$(printf '%s' "$JSON" | jq -r '.status // ""' 2>/dev/null || echo "")
+          fi
+          if [ -n "$PARSED_STATUS" ]; then
+            printf '%s\n' "$JSON" > cleanup-report.json
+            STATUS="$PARSED_STATUS"
+            APPLIED=$(printf '%s' "$JSON" | jq -r '(.applied // []) | length')
+            FAILED=$(printf '%s' "$JSON" | jq -r '(.failed // []) | length')
+            SKIPPED=$(printf '%s' "$JSON" | jq -r '(.skipped // []) | length')
+            BLOCKED=$(printf '%s' "$JSON" | jq -r '[(.skipped // [])[] | select(.isMinimized==false and .viewerCanMinimize==false)] | length')
+            if [ "$HELPER_EXIT" -ne 0 ]; then
+              echo "::warning::audit-pr-cleanup exited $HELPER_EXIT but emitted a valid JSON report; using helper status \"$STATUS\""
+            fi
+          else
+            echo "::warning::audit-pr-cleanup exited $HELPER_EXIT with no parseable JSON; posting helper-error evidence"
+            STATUS="helper-error"
+            APPLIED=0
+            FAILED=0
+            SKIPPED=0
+            BLOCKED=0
+          fi
+          {
+            echo "pr_number=$PR_NUMBER"
+            echo "status=$STATUS"
+            echo "applied=$APPLIED"
+            echo "failed=$FAILED"
+            echo "skipped=$SKIPPED"
+            echo "blocked=$BLOCKED"
+          } >> "$GITHUB_OUTPUT"
+      - name: Post cleanup evidence comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.cleanup.outputs.pr_number }}
+          STATUS: ${{ steps.cleanup.outputs.status }}
+          APPLIED: ${{ steps.cleanup.outputs.applied }}
+          FAILED: ${{ steps.cleanup.outputs.failed }}
+          SKIPPED: ${{ steps.cleanup.outputs.skipped }}
+          BLOCKED: ${{ steps.cleanup.outputs.blocked }}
+        run: |
+          # Avoid duplicate evidence comments. Workflow-level concurrency
+          # only serialises this workflow's own runs; an agent F4 (or a
+          # maintainer rerunning workflow_dispatch on the same PR) can
+          # still have posted an evidence comment outside this run. Skip
+          # if any <!-- idd-cleanup-evidence: ... --> comment is already
+          # on the PR.
+          EXISTING=$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --jq '.[] | select(.body | startswith("<!-- idd-cleanup-evidence:")) | .id' \
+            | head -n1)
+          if [ -n "$EXISTING" ]; then
+            echo "::notice::PR #${PR_NUMBER} already has an idd-cleanup-evidence comment (id: ${EXISTING}); skipping workflow post."
+            exit 0
+          fi
+          BODY=$(printf '%s\n\n%s\n\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+            "<!-- idd-cleanup-evidence: ${STATUS} applied:${APPLIED} failed:${FAILED} skipped:${SKIPPED} viewer-cannot-minimize:${BLOCKED} -->" \
+            "**F4 Cleanup Evidence** (server-side fallback via \`post-merge-cleanup.yml\`)" \
+            "| Field              | Value |" \
+            "| ------------------ | ----- |" \
+            "| Status             | ${STATUS} |" \
+            "| Applied            | ${APPLIED} |" \
+            "| Failed             | ${FAILED} |" \
+            "| Skipped            | ${SKIPPED} |" \
+            "| Permission-blocked | ${BLOCKED} |" \
+            "| Posted by          | post-merge-cleanup workflow |" \
+          )
+          printf '%s' "$BODY" | gh pr comment "$PR_NUMBER" --body-file -
