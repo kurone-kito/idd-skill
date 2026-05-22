@@ -814,16 +814,6 @@ function checkWorkshopCrossReferences(root, options, report) {
   }
 }
 
-// Verifies that the example repository's README links back to this
-// repository's workshop directory — the last scriptable item in the
-// CP-E (#611) checklist. Reads the example-repo coordinates from
-// `.github/idd/config.json` `workshop.exampleRepository`
-// (`<owner>/<repo>` shape). Skipped silently when:
-//   - the local docs/workshop/ does not exist (adopter never
-//     published a workshop);
-//   - workshop.exampleRepository is unset / empty;
-//   - the gh fetch fails (no network, no token, no permissions) —
-//     escalates to errors under --require-github.
 // Returns a regex that matches a URL **pathname** of shape
 // `/<slug>/(<segments>/)*docs/workshop(/|$|[?#])`. Anchored to
 // `^/<slug>/` so the slug must occupy the first two path segments
@@ -834,7 +824,7 @@ function checkWorkshopCrossReferences(root, options, report) {
 // `docs/workshops/...` and `docs/workshop-old/...` from matching
 // `docs/workshop`.
 //
-// This regex is the **pathname matcher only**. The URL parser that
+// This is the **pathname matcher only**. The URL parser that
 // pairs with it (containsExampleRepoBackLink below) handles host
 // validation, URL token cleanup, and root-relative target
 // extraction; do not use this pattern against a full URL or
@@ -923,9 +913,9 @@ function stripIndentedCodeBlocksPreservingLines(content) {
   for (const line of lines) {
     const isBlank = /^\s*$/.test(line)
     const indented = /^(?: {4}|\t)/.test(line)
-    // CommonMark ordered lists allow both `\d+.` and `\d+)`
-    // markers, so both shapes are list items (not code) even when
-    // indented under a parent item.
+    // CommonMark §5.2: ordered-list markers may use either `.` or
+    // `)` after the digit. Both shapes count as list items (not
+    // code) even when indented under a parent item.
     const looksLikeListItem = /^\s*(?:[-*+]\s|\d+[.)]\s)/.test(line)
     if (isBlank) {
       out.push(line)
@@ -976,16 +966,26 @@ export function containsExampleRepoBackLink(readmeContent, repoSlug) {
   // GitHub renders these against the current repo / docs origin;
   // the back-link pattern already requires `^/<slug>/` so a
   // root-relative target is checked against the same shape.
-  const mdInline = /\[[^\]]*\]\((\/[^()\s]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\)/g
+  // Allows CommonMark optional whitespace before the destination
+  // and angle-bracket-wrapped destinations (`(<...>)` / `[id]: <...>`).
+  const mdInline = /\[[^\]]*\]\(\s*<?(\/[^()\s>]+)>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g
   while ((match = mdInline.exec(stripped)) !== null) {
     if (pattern.test(match[1].replace(/[.,;:!?]+$/, ""))) return true
   }
-  const mdRefDef = /^\s{0,3}\[[^\]]+\]:\s*(\/\S+)/gm
+  const mdRefDef = /^\s{0,3}\[[^\]]+\]:\s*<?(\/[^\s>]+)>?/gm
   while ((match = mdRefDef.exec(stripped)) !== null) {
     if (pattern.test(match[1].replace(/[.,;:!?]+$/, ""))) return true
   }
   return false
 }
+
+// Runtime / skip semantics live on the check function below, not on
+// the helpers above. `checkWorkshopExampleRepoBackLink` reads the
+// example-repo coordinates from `.github/idd/config.json`
+// (`workshop.exampleRepository`, `<owner>/<repo>` shape) and skips
+// silently when the local docs/workshop/ is absent, the config
+// field is unset, or the gh fetch fails. Soft fetch failures
+// escalate to errors under `--require-github`.
 
 const PUBLIC_GITHUB_HOSTS = new Set([
   "github.com",
@@ -996,12 +996,13 @@ const PUBLIC_GITHUB_HOSTS = new Set([
 export function isGithubBackLinkHost(host) {
   const lower = String(host ?? "").toLowerCase()
   if (PUBLIC_GITHUB_HOSTS.has(lower)) return true
-  // Accept subdomains of github.com only. GitHub Enterprise
-  // Server hosts that do not end with `.github.com` must be
-  // declared explicitly in IDD_WORKSHOP_BACKLINK_HOSTS so a host
-  // like `github.evil.com` cannot bypass the check by sharing a
-  // brand prefix.
-  if (lower.endsWith(".github.com")) return true
+  // Any other host must be declared explicitly in
+  // IDD_WORKSHOP_BACKLINK_HOSTS. The `*.github.com` wildcard was
+  // removed because subdomains like `docs.github.com` and
+  // `api.github.com` do not host repository paths but would pass
+  // the wildcard check. GitHub Enterprise Server adopters whose
+  // host does not exactly match the public list must opt in
+  // explicitly.
   const extra = (process.env.IDD_WORKSHOP_BACKLINK_HOSTS ?? "")
     .split(",")
     .map((entry) => entry.trim().toLowerCase())

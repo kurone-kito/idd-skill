@@ -530,6 +530,18 @@ test("containsExampleRepoBackLink accepts root-relative reference-definition tar
   )
 })
 
+test("containsExampleRepoBackLink accepts root-relative targets with leading whitespace and angle brackets", () => {
+  // CommonMark allows optional whitespace before the destination
+  // inside `(   /...)` and angle-bracket-wrapped destinations
+  // `(</...>)`.
+  const indented = "[workshop](   /kurone-kito/idd-skill/blob/main/docs/workshop/README.md)"
+  const angled = "[workshop](</kurone-kito/idd-skill/blob/main/docs/workshop/README.md>)"
+  const refAngled = "[w]\n\n[w]: </kurone-kito/idd-skill/blob/main/docs/workshop/README.md>"
+  assert.equal(containsExampleRepoBackLink(indented, "kurone-kito/idd-skill"), true)
+  assert.equal(containsExampleRepoBackLink(angled, "kurone-kito/idd-skill"), true)
+  assert.equal(containsExampleRepoBackLink(refAngled, "kurone-kito/idd-skill"), true)
+})
+
 test("isGithubBackLinkHost honors IDD_WORKSHOP_BACKLINK_HOSTS env override", () => {
   const prev = process.env.IDD_WORKSHOP_BACKLINK_HOSTS
   try {
@@ -549,9 +561,20 @@ test("isGithubBackLinkHost rejects brand-prefix lookalikes like github.evil.com"
   assert.equal(isGithubBackLinkHost("github.com.evil"), false)
 })
 
-test("isGithubBackLinkHost accepts subdomains of github.com", () => {
-  assert.equal(isGithubBackLinkHost("api.github.com"), true)
-  assert.equal(isGithubBackLinkHost("subdomain.github.com"), true)
+test("isGithubBackLinkHost rejects unrelated github.com subdomains", () => {
+  // *.github.com is too permissive (docs.github.com, api.github.com
+  // do not host repositories). Restricted to the public-host
+  // whitelist + explicit IDD_WORKSHOP_BACKLINK_HOSTS opt-in.
+  const prev = process.env.IDD_WORKSHOP_BACKLINK_HOSTS
+  try {
+    delete process.env.IDD_WORKSHOP_BACKLINK_HOSTS
+    assert.equal(isGithubBackLinkHost("docs.github.com"), false)
+    assert.equal(isGithubBackLinkHost("api.github.com"), false)
+    assert.equal(isGithubBackLinkHost("subdomain.github.com"), false)
+  } finally {
+    if (prev === undefined) delete process.env.IDD_WORKSHOP_BACKLINK_HOSTS
+    else process.env.IDD_WORKSHOP_BACKLINK_HOSTS = prev
+  }
 })
 
 test("containsExampleRepoBackLink strips trailing sentence punctuation from URLs", () => {
