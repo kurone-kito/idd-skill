@@ -156,3 +156,11 @@ test("classifyBacklog coerces non-numeric / NaN / negative thresholds to 0", () 
   // Zero count must not warn even with a broken threshold.
   assert.equal(classifyBacklog([], NaN).warn, false)
 })
+
+test("computeWindowStartIso returns null for windows that overflow Date range", () => {
+  const now = Date.UTC(2026, 4, 21, 12, 0, 0)
+  // ~1e9 days is well past the ±100,000,000-day toISOString limit and
+  // would historically throw RangeError before this guard landed.
+  assert.equal(computeWindowStartIso(now, 1e9), null)
+  assert.equal(computeWindowStartIso(now, Number.MAX_SAFE_INTEGER), null)
+})

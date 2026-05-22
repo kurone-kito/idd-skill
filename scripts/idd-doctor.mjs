@@ -63,6 +63,7 @@ export function runDoctor({
     {
       windowDays: cleanupBacklogWindowDays ?? 14,
       warnThreshold: cleanupBacklogWarnThreshold ?? 2,
+      requireGithub,
     },
     report,
   )
@@ -533,7 +534,23 @@ export function computeWindowStartIso(now, windowDays) {
   if (!Number.isFinite(ms) || ms <= 0) {
     return null
   }
-  return new Date(now - ms).toISOString()
+  const candidate = Number(now) - ms
+  if (!Number.isFinite(candidate)) {
+    return null
+  }
+  const date = new Date(candidate)
+  // JavaScript `Date` accepts the full IEEE 754 range, but `toISOString`
+  // throws RangeError for any `Date` outside ±100,000,000 days of the
+  // epoch (≈ year ±271,821). Detect that here so a too-large
+  // `--cleanup-backlog-window-days` value never crashes the caller.
+  if (Number.isNaN(date.getTime())) {
+    return null
+  }
+  try {
+    return date.toISOString()
+  } catch {
+    return null
+  }
 }
 
 export function classifyBacklog(missingPrNumbers, warnThreshold) {
@@ -552,20 +569,34 @@ export function classifyBacklog(missingPrNumbers, warnThreshold) {
 function checkPostMergeCleanupBacklog(root, options, report) {
   const windowDays = options.windowDays
   const warnThreshold = options.warnThreshold
+  const requireGithub = options.requireGithub === true
+
+  const recordGhFailure = (message) => {
+    if (requireGithub) {
+      report.errors.push(`post-merge cleanup backlog check: ${message}`)
+    } else {
+      report.warnings.push(
+        `post-merge cleanup backlog check skipped: ${message}`,
+      )
+    }
+  }
 
   const repoView = runCommand("gh", ["repo", "view", "--json", "owner,name"], root)
   if (!repoView.ok) {
+    recordGhFailure("gh repo view unavailable")
     return
   }
   let parsed
   try {
     parsed = JSON.parse(repoView.stdout)
   } catch {
+    recordGhFailure("gh repo view output is not valid JSON")
     return
   }
   const owner = parsed.owner?.login
   const repo = parsed.name
   if (!owner || !repo) {
+    recordGhFailure("gh repo view did not return owner/name")
     return
   }
 
@@ -593,12 +624,14 @@ function checkPostMergeCleanupBacklog(root, options, report) {
     root,
   )
   if (!search.ok) {
+    recordGhFailure(`merged-PR list query failed for ${owner}/${repo}`)
     return
   }
   let mergedPrs
   try {
     mergedPrs = JSON.parse(search.stdout)
   } catch {
+    recordGhFailure(`merged-PR list query for ${owner}/${repo} returned invalid JSON`)
     return
   }
   if (!Array.isArray(mergedPrs) || mergedPrs.length === 0) {
@@ -606,6 +639,7 @@ function checkPostMergeCleanupBacklog(root, options, report) {
   }
 
   const missing = []
+  const evidenceFailures = []
   for (const pr of mergedPrs) {
     const number = pr?.number
     if (!Number.isInteger(number)) {
@@ -623,6 +657,7 @@ function checkPostMergeCleanupBacklog(root, options, report) {
       root,
     )
     if (!evidence.ok) {
+      evidenceFailures.push(number)
       continue
     }
     const matchLines = String(evidence.stdout)
@@ -631,6 +666,18 @@ function checkPostMergeCleanupBacklog(root, options, report) {
       .filter((line) => line.length > 0)
     if (matchLines.length === 0) {
       missing.push(number)
+    }
+  }
+
+  if (evidenceFailures.length > 0) {
+    const evidenceMessage =
+      `post-merge cleanup evidence query failed for ${evidenceFailures.length} merged PR(s) ` +
+      `(examples: ${evidenceFailures.slice(0, 5).map((n) => `#${n}`).join(", ")}). ` +
+      `Backlog count below may be undercounted.`
+    if (requireGithub) {
+      report.errors.push(evidenceMessage)
+    } else {
+      report.warnings.push(evidenceMessage)
     }
   }
 
