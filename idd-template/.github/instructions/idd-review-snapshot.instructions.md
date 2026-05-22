@@ -116,6 +116,31 @@ markers. Do not delete, hide, minimize, or otherwise unmark them on an
 open PR to "clear" state; ignore them and rerun E1 under the successor
 claim instead.
 
+**Hide superseded same-claim watermarks.** After the new watermark is
+verified to exist on GitHub, minimize every strictly older trusted
+**same-claim** `review-watermark` and `review-baseline` comment on
+this PR as `OUTDATED`. The new watermark covers their data, and
+hiding them reduces F4 backlog and review-page noise.
+
+Find candidate subject IDs (trusted same-claim watermarks older than
+the new one), then call:
+
+```sh
+node scripts/minimize-superseded-markers.mjs \
+  --subject-ids "<id1>,<id2>,..." \
+  --classifier OUTDATED \
+  --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" \
+  --apply
+```
+
+Skip this step entirely if the new watermark was not verified to
+exist on GitHub, the candidate set is empty, or the helper is
+unavailable — F4 cleanup still catches the superseded markers later.
+
+Different-claim watermarks (forced-handoff successors, takeovers)
+must not be hidden here — that is covered separately by the claim
+takeover hide path in `idd-claim.instructions.md`.
+
 Do not create or edit the PR live status digest after posting this
 watermark unless the next route is to E1, to an F3 blocked reroute that
 leaves the F2 restart path (F1/D4), to a hold/stop, or to post-merge

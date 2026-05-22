@@ -188,6 +188,35 @@ Rules:
 - advisory clock starts from marker comment `created_at`
 - if marker cannot be posted/read, route to `AW4` recovery-failed hold
 
+### AW3-H — Hide superseded advisory-wait markers
+
+After any new `advisory-wait` or `advisory-wait-recovery` marker is
+verified to exist on GitHub for the current `PR_HEAD_SHA`, minimize
+every trusted prior `advisory-wait*` marker on this PR whose embedded
+HEAD SHA does **not** match the current `PR_HEAD_SHA` as `OUTDATED`.
+The current-HEAD wait clock no longer needs the prior-HEAD markers
+to be visible, and hiding them reduces F4 backlog and review-page
+noise.
+
+Find candidate subject IDs (trusted `advisory-wait*` markers whose
+embedded SHA differs from `PR_HEAD_SHA`), then call:
+
+```sh
+node scripts/minimize-superseded-markers.mjs \
+  --subject-ids "<id1>,<id2>,..." \
+  --classifier OUTDATED \
+  --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" \
+  --apply
+```
+
+Skip this step entirely if the new marker was not verified on
+GitHub, the candidate set is empty (no prior-HEAD trusted markers),
+or the helper is unavailable — F4 cleanup still catches them later.
+
+Never hide a marker for the **current** `PR_HEAD_SHA`. The
+`EARLIEST_SAME_HEAD_AT` anchor in AW2 relies on at least one
+visible same-head marker.
+
 ### AW4 — Hold templates
 
 #### Pending refresh failed

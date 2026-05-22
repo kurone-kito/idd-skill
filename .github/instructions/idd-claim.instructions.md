@@ -285,6 +285,40 @@ forced-handoff evidence in the issue digest or resume report's
 `Authoritative by` field. Do not invent ad hoc `claimed-by` fields and
 do not reuse the displaced `{claim-id}`.
 
+### Hide displaced claim chain on takeover
+
+When the verified new claim was posted with `supersedes: <prior-id>`
+(stale takeover, legacy migration with prior-id, or forced-handoff
+recovery), minimize the displaced claim's marker chain on the issue
+as `OUTDATED` after this session has recorded its own verified
+`{claim-id}`. Find every trusted `claimed-by` / `unclaimed-by` /
+heartbeat comment whose embedded `{claim-id}` equals `<prior-id>`
+and call:
+
+```sh
+node scripts/minimize-superseded-markers.mjs \
+  --subject-ids "<id1>,<id2>,..." \
+  --classifier OUTDATED \
+  --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" \
+  --apply
+```
+
+Skip this step entirely if:
+
+- the new claim has `supersedes: none` (fresh claim — there is no
+  displaced chain to hide);
+- the takeover claim was not verified (do not hide the prior chain
+  until the successor is observable as the active claim);
+- the candidate set is empty (no trusted markers carry the prior
+  `{claim-id}`);
+- the helper is unavailable. Subsequent F4 cleanup still picks up
+  any missed candidates.
+
+**Do not** hide a same-`{claim-id}` heartbeat chain from a normal
+heartbeat post; heartbeats refresh the stale clock but do not
+supersede prior markers, and the visible heartbeat chain is the
+active-claim audit trail.
+
 After claim verification, upsert the issue live status digest when there
 is exactly one marked digest or none. Use the verified `claimed-by`
 comment as the authority: set `Phase` to `A5 claimed`, `Claim` to the
