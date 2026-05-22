@@ -5,7 +5,9 @@ import {
   classifyBacklog,
   classifyPrimaryHead,
   computeWindowStartIso,
+  containsWorkshopReference,
   extractMarkerPrefixes,
+  findMissingWorkshopReferences,
   findPlaceholders,
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
@@ -163,4 +165,69 @@ test("computeWindowStartIso returns null for windows that overflow Date range", 
   // would historically throw RangeError before this guard landed.
   assert.equal(computeWindowStartIso(now, 1e9), null)
   assert.equal(computeWindowStartIso(now, Number.MAX_SAFE_INTEGER), null)
+})
+
+test("containsWorkshopReference accepts canonical, dotted, and absolute link targets", () => {
+  assert.equal(
+    containsWorkshopReference("see [workshop](docs/workshop/README.md)"),
+    true,
+  )
+  assert.equal(
+    containsWorkshopReference("see [workshop](./docs/workshop/)"),
+    true,
+  )
+  assert.equal(
+    containsWorkshopReference("see [workshop](/docs/workshop/README.md#intro)"),
+    true,
+  )
+})
+
+test("containsWorkshopReference rejects unrelated targets and empty content", () => {
+  assert.equal(containsWorkshopReference("see [other](docs/index.md)"), false)
+  assert.equal(containsWorkshopReference("plain prose without links"), false)
+  assert.equal(containsWorkshopReference(""), false)
+  assert.equal(containsWorkshopReference(null), false)
+  assert.equal(containsWorkshopReference(undefined), false)
+})
+
+test("findMissingWorkshopReferences names entry files lacking workshop links", () => {
+  const entries = [
+    { path: "README.md", content: "see [workshop](docs/workshop/README.md)" },
+    { path: "README.ja.md", content: "ワークショップは [こちら](docs/workshop/)" },
+    { path: "docs/index.md", content: "no workshop link here" },
+  ]
+  assert.deepEqual(findMissingWorkshopReferences(entries, []), ["docs/index.md"])
+})
+
+test("findMissingWorkshopReferences flags all three entries when none link the workshop", () => {
+  const entries = [
+    { path: "README.md", content: "no link" },
+    { path: "README.ja.md", content: "リンクなし" },
+    { path: "docs/index.md", content: "no link" },
+  ]
+  assert.deepEqual(findMissingWorkshopReferences(entries, []), [
+    "README.md",
+    "README.ja.md",
+    "docs/index.md",
+  ])
+})
+
+test("findMissingWorkshopReferences skips entries whose content is null (missing files)", () => {
+  const entries = [
+    { path: "README.md", content: null },
+    { path: "README.ja.md", content: "see [workshop](docs/workshop/)" },
+  ]
+  assert.deepEqual(findMissingWorkshopReferences(entries, []), [])
+})
+
+test("findMissingWorkshopReferences honors the allow-missing list", () => {
+  const entries = [
+    { path: "README.md", content: "no link" },
+    { path: "README.ja.md", content: "see [workshop](docs/workshop/)" },
+    { path: "docs/index.md", content: "no link" },
+  ]
+  assert.deepEqual(
+    findMissingWorkshopReferences(entries, ["README.md", "docs/index.md"]),
+    [],
+  )
 })
