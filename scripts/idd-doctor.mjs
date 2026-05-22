@@ -837,8 +837,16 @@ export function stripMarkdownNonText(content) {
   if (typeof content !== "string") return ""
   let s = content
   // Strip HTML comments (single- or multi-line) first so their
-  // interior is not parsed as Markdown later.
-  s = s.replace(/<!--[\s\S]*?-->/g, "")
+  // interior is not parsed as Markdown later. Loop to a fixed
+  // point so nested payloads like `<!--<!-- x --> -->` fully
+  // collapse rather than leaving `<!--` fragments after a single
+  // pass — satisfies CodeQL's incomplete-multi-character
+  // sanitization rule.
+  let prev
+  do {
+    prev = s
+    s = s.replace(/<!--[\s\S]*?-->/g, "")
+  } while (s !== prev)
   // Strip fenced code blocks (``` or ~~~), including unterminated
   // ones that run to EOF. The non-greedy `(?:[\s\S]*?\1|[\s\S]*$)`
   // accepts either a matching closing fence or end-of-content.
