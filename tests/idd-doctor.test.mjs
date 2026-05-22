@@ -182,6 +182,41 @@ test("containsWorkshopReference accepts canonical, dotted, and absolute link tar
   )
 })
 
+test("containsWorkshopReference accepts docs/index.md-relative workshop links", () => {
+  // docs/index.md naturally links with `workshop/README.md` because
+  // it lives inside docs/ itself. The cross-ref check must accept
+  // this shape too.
+  assert.equal(
+    containsWorkshopReference("see [workshop](workshop/README.md)"),
+    true,
+  )
+  assert.equal(
+    containsWorkshopReference("see [workshop](./workshop/)"),
+    true,
+  )
+})
+
+test("containsWorkshopReference accepts single-quoted and parenthesized title forms", () => {
+  assert.equal(
+    containsWorkshopReference("[w](docs/workshop/README.md 'title')"),
+    true,
+  )
+  assert.equal(
+    containsWorkshopReference("[w](docs/workshop/README.md (title))"),
+    true,
+  )
+})
+
+test("containsWorkshopReference ignores workshop links inside fenced code blocks", () => {
+  const md = "Demo:\n```md\n[workshop](docs/workshop/README.md)\n```\nreal prose"
+  assert.equal(containsWorkshopReference(md), false)
+})
+
+test("containsWorkshopReference also ignores tilde-fence code blocks", () => {
+  const md = "Demo:\n~~~md\n[workshop](docs/workshop/README.md)\n~~~\nreal prose"
+  assert.equal(containsWorkshopReference(md), false)
+})
+
 test("containsWorkshopReference rejects unrelated targets and empty content", () => {
   assert.equal(containsWorkshopReference("see [other](docs/index.md)"), false)
   assert.equal(containsWorkshopReference("plain prose without links"), false)
@@ -212,12 +247,28 @@ test("findMissingWorkshopReferences flags all three entries when none link the w
   ])
 })
 
-test("findMissingWorkshopReferences skips entries whose content is null (missing files)", () => {
+test("findMissingWorkshopReferences flags missing entry-point files (content: null)", () => {
   const entries = [
     { path: "README.md", content: null },
     { path: "README.ja.md", content: "see [workshop](docs/workshop/)" },
   ]
-  assert.deepEqual(findMissingWorkshopReferences(entries, []), [])
+  // Missing required entry-point file is a real warning signal —
+  // an adopter who removes README.md needs to know the workshop
+  // cross-reference is also gone.
+  assert.deepEqual(findMissingWorkshopReferences(entries, []), ["README.md"])
+})
+
+test("findMissingWorkshopReferences honors allow-missing for genuinely absent files", () => {
+  const entries = [
+    { path: "README.md", content: null },
+    { path: "README.ja.md", content: "see [workshop](docs/workshop/)" },
+  ]
+  // If the adopter intentionally has no README.md, allow-missing
+  // suppresses the warning.
+  assert.deepEqual(
+    findMissingWorkshopReferences(entries, ["README.md"]),
+    [],
+  )
 })
 
 test("findMissingWorkshopReferences honors the allow-missing list", () => {

@@ -7,6 +7,13 @@ import { fileURLToPath } from "node:url"
 
 import { inspectHelperRuntimeConfig, parseProjectCommandRows } from "./policy-helpers.mjs"
 
+const WORKSHOP_ENTRY_POINTS = ["README.md", "README.ja.md", "docs/index.md"]
+const WORKSHOP_REL_PATH = "docs/workshop"
+const WORKSHOP_LINK_TARGET_PATTERNS = [
+  /(?:^|\/)docs\/workshop(?:\/|$)/,
+  /(?:^|\/)workshop(?:\/|$)/,
+]
+
 export { parseProjectCommandRows }
 
 if (isMainModule(import.meta.url)) {
@@ -22,6 +29,7 @@ if (isMainModule(import.meta.url)) {
     requireGithub: args.requireGithub,
     cleanupBacklogWindowDays: args.cleanupBacklogWindowDays,
     cleanupBacklogWarnThreshold: args.cleanupBacklogWarnThreshold,
+    workshopCrossRefAllowMissing: args.workshopCrossRefAllowMissing,
   })
 
   if (args.json) {
@@ -703,9 +711,6 @@ function checkPostMergeCleanupBacklog(root, options, report) {
   )
 }
 
-const WORKSHOP_ENTRY_POINTS = ["README.md", "README.ja.md", "docs/index.md"]
-const WORKSHOP_REL_PATH = "docs/workshop"
-
 export function findMissingWorkshopReferences(entryFiles, allowMissing) {
   const allowSet = new Set(
     (Array.isArray(allowMissing) ? allowMissing : []).map((path) => String(path)),
@@ -713,6 +718,10 @@ export function findMissingWorkshopReferences(entryFiles, allowMissing) {
   const missing = []
   for (const entry of entryFiles) {
     if (allowSet.has(entry.path)) {
+      continue
+    }
+    if (entry.content === null) {
+      missing.push(entry.path)
       continue
     }
     if (typeof entry.content !== "string") {
@@ -729,9 +738,14 @@ export function containsWorkshopReference(content) {
   if (typeof content !== "string" || content.length === 0) {
     return false
   }
-  const linkPattern = /\[[^\]\n]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g
+  // Strip fenced code blocks (``` and ~~~) before scanning so demo
+  // Markdown inside code samples does not count as a real link.
+  const stripped = stripFencedCodeBlocks(content)
+  // Accept any double-quoted, single-quoted, or no-title destination
+  // form per CommonMark inline-link grammar.
+  const linkPattern = /\[[^\]\n]*\]\(\s*([^()\s]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g
   let match
-  while ((match = linkPattern.exec(content)) !== null) {
+  while ((match = linkPattern.exec(stripped)) !== null) {
     const target = match[1]
     if (!target) continue
     if (matchesWorkshopPath(target)) {
@@ -741,9 +755,29 @@ export function containsWorkshopReference(content) {
   return false
 }
 
+function stripFencedCodeBlocks(content) {
+  const lines = String(content).split(/\r?\n/)
+  const out = []
+  let inFence = false
+  for (const line of lines) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence
+      continue
+    }
+    if (inFence) continue
+    out.push(line)
+  }
+  return out.join("\n")
+}
+
 function matchesWorkshopPath(target) {
   const cleaned = String(target).replace(/^\.\/+/, "").replace(/^\/+/, "")
-  return cleaned.startsWith(`${WORKSHOP_REL_PATH}/`) || cleaned === WORKSHOP_REL_PATH
+  for (const pattern of WORKSHOP_LINK_TARGET_PATTERNS) {
+    if (pattern.test(`/${cleaned}`)) {
+      return true
+    }
+  }
+  return false
 }
 
 // Verifies that the workshop publication is discoverable from every
