@@ -492,7 +492,7 @@ test("containsExampleRepoBackLink accepts raw.githubusercontent.com host", () =>
 })
 
 test("containsExampleRepoBackLink accepts GitHub Enterprise hosts (github in hostname)", () => {
-  const md = "[ghes](https://github.acme.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)"
+  const md = "[enterprise](https://github.acme.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)"
   assert.equal(
     containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
     true,
