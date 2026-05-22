@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
-import { dirname, extname, join, normalize, relative, resolve } from "node:path"
+import { dirname, extname, join, normalize, relative, resolve, sep } from "node:path"
 
 const WORKSHOP_ROOTS = ["docs/workshop"]
 
@@ -39,9 +39,15 @@ export function runVerification(repoRoot, options = {}) {
     }
   }
 
-  const headingIndex = new Map()
+  const fileContents = new Map()
+  const fileMeta = new Map()
   for (const file of files) {
-    headingIndex.set(file, extractHeadingSlugs(readFileSync(file, "utf8")))
+    const content = readFileSync(file, "utf8")
+    fileContents.set(file, content)
+    fileMeta.set(file, {
+      headingSlugs: extractHeadingSlugs(content),
+      refDefs: extractReferenceDefinitions(content),
+    })
   }
 
   const report = {
@@ -53,19 +59,34 @@ export function runVerification(repoRoot, options = {}) {
       missingFile: 0,
       missingAnchor: 0,
       invalidUrl: 0,
+      escapedRepo: 0,
+      unresolvedRef: 0,
     },
   }
 
   for (const file of files) {
-    const content = readFileSync(file, "utf8")
-    const refs = extractReferences(content)
+    const content = fileContents.get(file)
+    const { refDefs } = fileMeta.get(file)
+    const refs = extractReferences(content, refDefs)
     for (const ref of refs) {
       if (ref.kind === "image") {
         report.counts.checkedImages += 1
       } else {
         report.counts.checkedLinks += 1
       }
-      const result = classifyAndCheck(ref.target, file, repoRoot, headingIndex)
+      if (ref.status === "unresolved-reference") {
+        report.counts.unresolvedRef += 1
+        report.issues.push({
+          file: relative(repoRoot, file),
+          kind: ref.kind,
+          target: ref.label,
+          line: ref.line,
+          status: "unresolved-reference",
+          detail: `reference label "${ref.label}" has no [id]: target definition`,
+        })
+        continue
+      }
+      const result = classifyAndCheck(ref.target, file, repoRoot, fileMeta)
       if (result.status === "ok") {
         continue
       }
@@ -75,6 +96,8 @@ export function runVerification(repoRoot, options = {}) {
         report.counts.missingAnchor += 1
       } else if (result.status === "invalid-url") {
         report.counts.invalidUrl += 1
+      } else if (result.status === "escapes-repo") {
+        report.counts.escapedRepo += 1
       }
       report.issues.push({
         file: relative(repoRoot, file),
@@ -89,57 +112,161 @@ export function runVerification(repoRoot, options = {}) {
   return report
 }
 
-export function extractReferences(markdown) {
+// Strips fenced code blocks (``` and ~~~) before pattern scanning so
+// example Markdown inside code samples is never interpreted as a real
+// link or heading.
+export function stripFencedCodeBlocks(content) {
+  const lines = String(content).split(/\r?\n/)
+  const out = []
+  let fenceChar = null
+  for (const line of lines) {
+    const match = line.match(/^\s*(```+|~~~+)/)
+    if (match) {
+      const open = match[1][0]
+      if (fenceChar === null) {
+        fenceChar = open
+        out.push("")
+        continue
+      }
+      if (open === fenceChar) {
+        fenceChar = null
+        out.push("")
+        continue
+      }
+    }
+    out.push(fenceChar === null ? line : "")
+  }
+  return out.join("\n")
+}
+
+export function extractReferenceDefinitions(markdown) {
+  const stripped = stripFencedCodeBlocks(markdown)
+  const map = new Map()
+  const lines = stripped.split(/\r?\n/)
+  for (const line of lines) {
+    const match = line.match(/^\s{0,3}\[([^\]]+)\]:\s*(\S+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*$/)
+    if (!match) continue
+    const label = match[1].trim().toLowerCase()
+    map.set(label, match[2])
+  }
+  return map
+}
+
+export function extractReferences(markdown, refDefs = new Map()) {
   const refs = []
-  const linkPattern = /(!?)\[([^\]\n]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g
-  const lines = markdown.split(/\r?\n/)
-  let lineStart = 0
+  const stripped = stripFencedCodeBlocks(markdown)
+  const lines = stripped.split(/\r?\n/)
   for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
     const line = lines[lineNumber]
-    let match
-    const localPattern = new RegExp(linkPattern.source, "g")
-    while ((match = localPattern.exec(line)) !== null) {
-      const isImage = match[1] === "!"
-      const target = match[3]
-      refs.push({
-        kind: isImage ? "image" : "link",
-        target,
-        line: lineNumber + 1,
-      })
-    }
-    lineStart += line.length + 1
+    extractInlineFromLine(line, lineNumber + 1, refs)
+    extractReferenceStyleFromLine(line, lineNumber + 1, refs, refDefs)
   }
   return refs
 }
 
-export function extractHeadingSlugs(markdown) {
-  const slugs = new Set()
-  const lines = markdown.split(/\r?\n/)
-  let inFence = false
-  for (const line of lines) {
-    if (/^\s*```/.test(line)) {
-      inFence = !inFence
+function extractInlineFromLine(line, lineNumber, refs) {
+  // CommonMark inline link / image. Single-line only; balanced
+  // parentheses inside the destination are not supported (rare in
+  // this codebase). Optional title accepts double-quoted,
+  // single-quoted, or parenthesized form.
+  const pattern = /(!?)\[([^\]\n]*)\]\(\s*([^()\s]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g
+  let match
+  while ((match = pattern.exec(line)) !== null) {
+    refs.push({
+      kind: match[1] === "!" ? "image" : "link",
+      target: match[3],
+      line: lineNumber,
+    })
+  }
+}
+
+function extractReferenceStyleFromLine(line, lineNumber, refs, refDefs) {
+  // Skip reference-definition lines themselves so [id]: target lines
+  // are not mistaken for references.
+  if (/^\s{0,3}\[[^\]]+\]:\s*\S+/.test(line)) {
+    return
+  }
+  // [text][label] or ![alt][label]. Empty label (`[text][]`)
+  // resolves against the text itself.
+  const pattern = /(!?)\[([^\]\n]+)\]\[([^\]\n]*)\]/g
+  let match
+  while ((match = pattern.exec(line)) !== null) {
+    const isImage = match[1] === "!"
+    const text = match[2]
+    const labelRaw = match[3].trim().length === 0 ? text : match[3]
+    const label = labelRaw.trim().toLowerCase()
+    const target = refDefs.get(label)
+    if (!target) {
+      refs.push({
+        kind: isImage ? "image" : "link",
+        label: labelRaw,
+        line: lineNumber,
+        status: "unresolved-reference",
+      })
       continue
     }
-    if (inFence) continue
-    const match = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/)
-    if (!match) continue
-    const slug = slugifyHeading(match[2])
-    if (slug) {
-      slugs.add(slug)
+    refs.push({
+      kind: isImage ? "image" : "link",
+      target,
+      line: lineNumber,
+    })
+  }
+}
+
+export function extractHeadingSlugs(markdown) {
+  const slugs = new Set()
+  const counts = new Map()
+  const stripped = stripFencedCodeBlocks(markdown)
+  const lines = stripped.split(/\r?\n/)
+  const consider = (raw) => {
+    const slug = slugifyHeading(raw)
+    if (!slug) return
+    const count = counts.get(slug) ?? 0
+    counts.set(slug, count + 1)
+    const final = count === 0 ? slug : `${slug}-${count}`
+    slugs.add(final)
+  }
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]
+    const atx = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/)
+    if (atx) {
+      consider(atx[2])
+      continue
+    }
+    // Setext: a non-blank text line followed by ==... or --...
+    if (i + 1 < lines.length) {
+      const next = lines[i + 1]
+      const isSetextUnderline = /^\s{0,3}(=+|-+)\s*$/.test(next)
+      if (isSetextUnderline && line.trim().length > 0 && !/^\s*$/.test(line)) {
+        // Guard: ensure the current line is not itself a list bullet
+        // or fence; treat plain text only as a Setext heading.
+        if (!/^\s{0,3}(```|~~~|[-*+]\s|\d+\.\s|#)/.test(line)) {
+          consider(line.trim())
+        }
+      }
     }
   }
   return slugs
 }
 
-// GitHub heading slug algorithm (simplified): strip HTML, drop most
-// punctuation, lowercase, replace spaces with hyphens, keep Unicode
-// letters/digits, underscore, and hyphen. See
-// https://gist.github.com/asabaylus/3071099 for the reference.
+// GitHub heading slug algorithm (simplified): strip HTML tags,
+// drop most punctuation, lowercase, replace spaces with hyphens,
+// keep Unicode letters/digits, underscore, and hyphen. See
+// https://gist.github.com/asabaylus/3071099 for the reference
+// algorithm.
 export function slugifyHeading(text) {
   if (!text) return ""
   let s = String(text)
-  s = s.replace(/<[^>]+>/g, "")
+  // Strip HTML tags. Loop until no further change so payloads like
+  // `<<script>foo</script>>` collapse instead of leaving fragments
+  // such as `<script>foo</script>` after a single pass.
+  let prev
+  do {
+    prev = s
+    s = s.replace(/<[^<>]*>/g, "")
+  } while (s !== prev)
+  // Drop any remaining angle brackets defensively.
+  s = s.replace(/[<>]/g, "")
   s = s.replace(/`([^`]*)`/g, "$1")
   s = s.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
   s = s.toLowerCase()
@@ -149,7 +276,7 @@ export function slugifyHeading(text) {
   return s
 }
 
-export function classifyAndCheck(target, fromFile, repoRoot, headingIndex) {
+export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
   const trimmed = String(target).trim()
   if (trimmed.length === 0) {
     return { status: "missing-file", detail: "empty target" }
@@ -182,15 +309,30 @@ export function classifyAndCheck(target, fromFile, repoRoot, headingIndex) {
     anchorPart = trimmed.slice(hashIndex + 1)
   }
 
+  let decodedPath = pathPart
+  try {
+    decodedPath = decodeURIComponent(pathPart)
+  } catch {
+    // Leave as-is when not valid percent-encoding.
+  }
+
   let resolvedPath
-  if (pathPart.length === 0) {
+  if (decodedPath.length === 0) {
     resolvedPath = fromFile
-  } else if (pathPart.startsWith("/")) {
-    resolvedPath = resolve(repoRoot, pathPart.replace(/^\/+/, ""))
+  } else if (decodedPath.startsWith("/")) {
+    resolvedPath = resolve(repoRoot, decodedPath.replace(/^\/+/, ""))
   } else {
-    resolvedPath = resolve(dirname(fromFile), pathPart)
+    resolvedPath = resolve(dirname(fromFile), decodedPath)
   }
   resolvedPath = normalize(resolvedPath)
+
+  const repoRootNormalized = normalize(repoRoot)
+  if (!isInside(resolvedPath, repoRootNormalized)) {
+    return {
+      status: "escapes-repo",
+      detail: `${decodedPath} resolves outside ${relative(process.cwd(), repoRootNormalized) || "."}`,
+    }
+  }
 
   if (!existsSync(resolvedPath)) {
     return {
@@ -217,18 +359,28 @@ export function classifyAndCheck(target, fromFile, repoRoot, headingIndex) {
     return { status: "ok" }
   }
 
-  let slugs = headingIndex.get(resolvedPath)
-  if (!slugs) {
-    slugs = extractHeadingSlugs(readFileSync(resolvedPath, "utf8"))
-    headingIndex.set(resolvedPath, slugs)
+  let meta = fileMeta.get(resolvedPath)
+  if (!meta) {
+    const content = readFileSync(resolvedPath, "utf8")
+    meta = {
+      headingSlugs: extractHeadingSlugs(content),
+      refDefs: extractReferenceDefinitions(content),
+    }
+    fileMeta.set(resolvedPath, meta)
   }
-  if (!slugs.has(anchorPart.toLowerCase())) {
+  if (!meta.headingSlugs.has(anchorPart.toLowerCase())) {
     return {
       status: "missing-anchor",
       detail: `anchor "#${anchorPart}" not found in ${relative(repoRoot, resolvedPath)}`,
     }
   }
   return { status: "ok" }
+}
+
+function isInside(targetPath, rootPath) {
+  if (targetPath === rootPath) return true
+  const rootWithSep = rootPath.endsWith(sep) ? rootPath : `${rootPath}${sep}`
+  return targetPath.startsWith(rootWithSep)
 }
 
 export function computeExitCode(report) {
@@ -289,9 +441,11 @@ options:
   --format json|table  output format (default: table)
   --help, -h           show this help
 
-Scans docs/workshop/**/*.md for broken local link targets and
-missing heading anchors. Absolute URLs are validated for syntax
-only (no live HTTP fetch — the check stays offline-safe).
+Scans docs/workshop/**/*.md for broken local link targets, missing
+heading anchors, and unresolved reference labels. Absolute URLs are
+validated for syntax only (no live HTTP fetch — the check stays
+offline-safe). Targets that resolve outside the repository root via
+path traversal are reported as errors.
 `)
 }
 

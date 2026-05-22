@@ -8,9 +8,11 @@ import {
   classifyAndCheck,
   computeExitCode,
   extractHeadingSlugs,
+  extractReferenceDefinitions,
   extractReferences,
   runVerification,
   slugifyHeading,
+  stripFencedCodeBlocks,
 } from "../scripts/verify-workshop-integrity.mjs"
 
 function makeRepo() {
@@ -132,4 +134,105 @@ test("runVerification is a no-op when the workshop tree is absent", async (t) =>
 test("computeExitCode returns 1 when issues exist, 0 otherwise", () => {
   assert.equal(computeExitCode({ issues: [] }), 0)
   assert.equal(computeExitCode({ issues: [{}] }), 1)
+})
+
+test("slugifyHeading collapses nested HTML so <<script>>x</script>> becomes script-x", () => {
+  // CodeQL flagged a single-pass HTML strip as incomplete-multi-char
+  // sanitization. The loop should fully collapse nested tags.
+  assert.equal(slugifyHeading("<<script>>x</script>>"), "x")
+  assert.equal(slugifyHeading("plain <b>bold</b> text"), "plain-bold-text")
+})
+
+test("extractHeadingSlugs disambiguates duplicate headings with -1, -2 suffixes", () => {
+  const md = "# Notes\n\n# Notes\n\n# Notes\n"
+  const slugs = extractHeadingSlugs(md)
+  assert.equal(slugs.has("notes"), true)
+  assert.equal(slugs.has("notes-1"), true)
+  assert.equal(slugs.has("notes-2"), true)
+})
+
+test("extractHeadingSlugs recognizes Setext-style headings", () => {
+  const md = `Title\n=====\n\nSubtitle\n--------\n`
+  const slugs = extractHeadingSlugs(md)
+  assert.equal(slugs.has("title"), true)
+  assert.equal(slugs.has("subtitle"), true)
+})
+
+test("stripFencedCodeBlocks elides backtick and tilde fences alike", () => {
+  const md = "outside\n```\ninside-back\n```\nmiddle\n~~~\ninside-tilde\n~~~\nend"
+  const stripped = stripFencedCodeBlocks(md)
+  assert.equal(stripped.includes("inside-back"), false)
+  assert.equal(stripped.includes("inside-tilde"), false)
+  assert.equal(stripped.includes("outside"), true)
+  assert.equal(stripped.includes("middle"), true)
+  assert.equal(stripped.includes("end"), true)
+})
+
+test("extractReferences skips links inside fenced code blocks", () => {
+  const md = "real [link](./a.md)\n```md\nfake [link](./missing.md)\n```\n"
+  const refs = extractReferences(md)
+  assert.equal(refs.length, 1)
+  assert.equal(refs[0].target, "./a.md")
+})
+
+test("extractReferenceDefinitions reads [label]: target pairs", () => {
+  const md = `text\n\n[alpha]: ./a.md\n[beta]: https://example.com "Title"\n`
+  const defs = extractReferenceDefinitions(md)
+  assert.equal(defs.get("alpha"), "./a.md")
+  assert.equal(defs.get("beta"), "https://example.com")
+})
+
+test("extractReferences resolves [text][label] against the definition table", () => {
+  const md = `[click][alpha] and ![img][beta]\n\n[alpha]: ./a.md\n[beta]: ./img.png\n`
+  const defs = extractReferenceDefinitions(md)
+  const refs = extractReferences(md, defs)
+  assert.equal(refs.length, 2)
+  assert.equal(refs[0].target, "./a.md")
+  assert.equal(refs[0].kind, "link")
+  assert.equal(refs[1].target, "./img.png")
+  assert.equal(refs[1].kind, "image")
+})
+
+test("extractReferences reports unresolved reference labels", () => {
+  const md = `[click][nowhere]\n`
+  const refs = extractReferences(md, new Map())
+  assert.equal(refs.length, 1)
+  assert.equal(refs[0].status, "unresolved-reference")
+  assert.equal(refs[0].label, "nowhere")
+})
+
+test("extractReferences honors collapsed [text][] shape", () => {
+  const md = `[Alpha][]\n\n[alpha]: ./a.md\n`
+  const defs = extractReferenceDefinitions(md)
+  const refs = extractReferences(md, defs)
+  assert.equal(refs.length, 1)
+  assert.equal(refs[0].target, "./a.md")
+})
+
+test("classifyAndCheck flags path-traversal links as escapes-repo", async (t) => {
+  const repo = makeRepo()
+  t.after(() => repo.cleanup())
+  const from = repo.write("docs/from.md", "# from\n")
+  const result = classifyAndCheck("/../../etc/hosts", from, repo.root, new Map())
+  assert.equal(result.status, "escapes-repo")
+})
+
+test("classifyAndCheck percent-decodes local paths before file checks", async (t) => {
+  const repo = makeRepo()
+  t.after(() => repo.cleanup())
+  repo.write("docs/my file.md", "# title\n")
+  const from = repo.write("docs/from.md", "# from\n")
+  const result = classifyAndCheck("./my%20file.md", from, repo.root, new Map())
+  assert.equal(result.status, "ok")
+})
+
+test("classifyAndCheck accepts mailto: and tel: schemes", () => {
+  assert.equal(
+    classifyAndCheck("mailto:foo@example.com", "/tmp/x.md", "/tmp", new Map()).status,
+    "ok",
+  )
+  assert.equal(
+    classifyAndCheck("tel:+15555550123", "/tmp/x.md", "/tmp", new Map()).status,
+    "ok",
+  )
 })
