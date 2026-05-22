@@ -825,18 +825,19 @@ function checkWorkshopCrossReferences(root, options, report) {
 //   - the gh fetch fails (no network, no token, no permissions) —
 //     escalates to errors under --require-github.
 // Returns a regex that matches a URL **pathname** of shape
-// `/<slug>(/<segments>)*/docs/workshop(/|$|[?#])`. It is anchored
-// to `^/<slug>` so the slug must occupy the first two path
-// segments (the GitHub `<host>/<owner>/<repo>/...` shape) — that
-// prevents URLs like `github.com/acme/me/repo/...` from matching
-// slug `me/repo`. Trailing boundary prevents `docs/workshops/...`
-// and `docs/workshop-old/...` from matching `docs/workshop`. Do
-// not use this pattern against a full URL or external host token;
-// see containsExampleRepoBackLink for the URL parser that pairs
-// with it.
+// `/<slug>/(<segments>/)*docs/workshop(/|$|[?#])`. It is anchored
+// to `^/<slug>/` so the slug must occupy the first two path
+// segments and be terminated by a real path separator (preventing
+// `acme/me/repo` from matching slug `me/repo`, and
+// `me/repodocs/workshop` from being read as `me/repo` +
+// `docs/workshop`). Trailing boundary prevents
+// `docs/workshops/...` and `docs/workshop-old/...` from matching
+// `docs/workshop`. Do not use this pattern against a full URL or
+// external host token; see containsExampleRepoBackLink for the
+// URL parser that pairs with it.
 export function backLinkPatternFor(repoSlug) {
   const escSlug = String(repoSlug).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-  return new RegExp(`^/${escSlug}(?:/[^?#]*)?docs/workshop(?:/|$|[?#])`, "i")
+  return new RegExp(`^/${escSlug}/(?:[^?#]*?/)?docs/workshop(?:/|$|[?#])`, "i")
 }
 
 export function stripMarkdownNonText(content) {
@@ -895,10 +896,11 @@ function stripFencesPreservingLines(content) {
 }
 
 // CommonMark §4.4 indented code blocks: at least 4 leading spaces
-// (or one tab), preceded by a blank line so a list item's
-// continuation lines stay rendered as list content. We only blank
-// lines that follow a blank or already-blanked line so nested
-// lists are preserved.
+// (or one tab), preceded by a blank line. Indented lines that are
+// recognizable list items (`-`, `*`, `+`, or `\d+\.` after the
+// leading whitespace) stay as text — loose-list nested items can
+// otherwise be misread as code. We only blank lines that follow a
+// blank or already-blanked line and do not look like list items.
 function stripIndentedCodeBlocksPreservingLines(content) {
   const lines = String(content).split(/\r?\n/)
   const out = []
@@ -907,13 +909,14 @@ function stripIndentedCodeBlocksPreservingLines(content) {
   for (const line of lines) {
     const isBlank = /^\s*$/.test(line)
     const indented = /^(?: {4}|\t)/.test(line)
+    const looksLikeListItem = /^\s*(?:[-*+]\s|\d+\.\s)/.test(line)
     if (isBlank) {
       out.push(line)
       prevBlank = true
       inBlock = false
       continue
     }
-    if (indented && (prevBlank || inBlock)) {
+    if (indented && (prevBlank || inBlock) && !looksLikeListItem) {
       out.push("")
       inBlock = true
       prevBlank = false
@@ -948,18 +951,36 @@ export function containsExampleRepoBackLink(readmeContent, repoSlug) {
     } catch {
       continue
     }
+    // Verify the host is a GitHub host so an unrelated mirror that
+    // happens to expose a `/<owner>/<repo>/.../docs/workshop` path
+    // does not pass as a real back-link.
+    if (!GITHUB_HOSTS.has(url.host.toLowerCase())) continue
     // Test pathname only (no host, no query, no fragment) so the
-    // back-link regex can stay anchored to `^/<slug>` and query
+    // back-link regex can stay anchored to `^/<slug>/` and query
     // strings cannot smuggle the slug.
     if (pattern.test(url.pathname)) return true
   }
   return false
 }
 
+const GITHUB_HOSTS = new Set([
+  "github.com",
+  "www.github.com",
+  "raw.githubusercontent.com",
+])
+
 export function decodeGithubReadmeBase64(content) {
   if (typeof content !== "string") return null
   const compact = content.replace(/\s+/g, "")
   if (compact.length === 0) return null
+  // `gh api --jq .content` writes the literal string `null` when
+  // the JSON path does not exist; treat that as not-a-payload so a
+  // missing README does not decode to a non-empty UTF-8 string.
+  if (compact === "null") return null
+  // Base64 payload length is always a multiple of 4 (with padding);
+  // a short alphanumeric string like `null` survives the
+  // character-class check above but fails the length check here.
+  if (compact.length % 4 !== 0) return null
   if (!BASE64_PATTERN.test(content)) return null
   let decoded
   try {
@@ -968,6 +989,12 @@ export function decodeGithubReadmeBase64(content) {
     return null
   }
   if (typeof decoded !== "string" || decoded.length === 0) return null
+  // Re-encode and compare to guard against base64-shaped strings
+  // that happen to decode to lossy garbage. Standard GitHub README
+  // payloads round-trip cleanly.
+  if (Buffer.from(decoded, "utf8").toString("base64") !== compact) {
+    return null
+  }
   return decoded
 }
 

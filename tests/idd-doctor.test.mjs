@@ -331,6 +331,18 @@ test("backLinkPatternFor requires the slug at the start of pathname (no host-suf
   )
 })
 
+test("backLinkPatternFor requires a path separator after the slug (no slug+docs concatenation)", () => {
+  // Pathological case from review: pathname concatenates slug and
+  // docs/workshop without an intermediate `/`. The actual repo
+  // would be `kurone-kito/idd-skilldocs` which is a different
+  // repository; the regex must NOT match.
+  const pattern = backLinkPatternFor("kurone-kito/idd-skill")
+  assert.equal(
+    pattern.test("/kurone-kito/idd-skilldocs/workshop/README.md"),
+    false,
+  )
+})
+
 test("backLinkPatternFor requires a path boundary after docs/workshop", () => {
   const pattern = backLinkPatternFor("kurone-kito/idd-skill")
   // Valid: trailing slash, anchor, query, or end-of-string.
@@ -451,6 +463,33 @@ test("containsExampleRepoBackLink preserves links inside nested-list continuatio
   )
 })
 
+test("containsExampleRepoBackLink preserves links inside blank-separated nested list items", () => {
+  // Loose-list shape: each list item separated by blank lines. The
+  // indented continuation line is a list item (starts with `- `),
+  // not a code block.
+  const md = "- top\n\n    - [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
+test("containsExampleRepoBackLink rejects URL whose host is not a GitHub host", () => {
+  const md = "[trap](https://example.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    false,
+  )
+})
+
+test("containsExampleRepoBackLink accepts raw.githubusercontent.com host", () => {
+  const md = "[raw](https://raw.githubusercontent.com/kurone-kito/idd-skill/main/docs/workshop/README.md)"
+  assert.equal(
+    containsExampleRepoBackLink(md, "kurone-kito/idd-skill"),
+    true,
+  )
+})
+
 test("containsExampleRepoBackLink accepts CommonMark fence variations (indented opener, longer closer)", () => {
   const md = "  ```\nhttps://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md\n````\n"
   assert.equal(
@@ -495,4 +534,15 @@ test("decodeGithubReadmeBase64 returns null for empty, null, or non-base64 input
   assert.equal(decodeGithubReadmeBase64(null), null)
   assert.equal(decodeGithubReadmeBase64(undefined), null)
   assert.equal(decodeGithubReadmeBase64("not_valid_base64!!"), null)
+})
+
+test("decodeGithubReadmeBase64 rejects literal jq-null and non-multiple-of-4 lengths", () => {
+  // `gh api --jq .content` prints the literal `null` when the JSON
+  // path does not exist (e.g., README not found via the /readme
+  // endpoint). Must not decode to garbage.
+  assert.equal(decodeGithubReadmeBase64("null"), null)
+  assert.equal(decodeGithubReadmeBase64("null\n"), null)
+  // Base64 strings are always a multiple of 4 chars (with padding).
+  assert.equal(decodeGithubReadmeBase64("abc"), null)
+  assert.equal(decodeGithubReadmeBase64("abcde"), null)
 })
