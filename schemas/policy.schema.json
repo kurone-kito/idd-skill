@@ -71,6 +71,17 @@
         "minLength": 1
       }
     },
+    "workshop": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "exampleRepository": {
+          "type": "string",
+          "description": "GitHub <owner>/<repo> slug for the example repository whose README is expected to back-link to docs/workshop/. Empty string disables the doctor cross-check.",
+          "pattern": "^(?:|[^/\\s]+/[^/\\s]+)$"
+        }
+      }
+    },
     "commands": {
       "type": "object",
       "additionalProperties": false,
