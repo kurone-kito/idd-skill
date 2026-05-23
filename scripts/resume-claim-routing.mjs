@@ -8,7 +8,6 @@ import { fileURLToPath } from "node:url";
 import {
   isStaleAt,
   parseClaimComment,
-  parseReleaseComment,
   resolveActiveClaim,
 } from "./protocol-helpers.mjs";
 import { normalizePolicyConfig } from "./policy-helpers.mjs";
