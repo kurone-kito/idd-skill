@@ -2635,7 +2635,10 @@ export function applyClaimEvent(activeClaim, event, options = {}) {
       };
     }
 
-    if (claim.supersedes === activeClaim.claimId && isStaleAt(activeClaim.createdAt, event.createdAt ?? "")) {
+    if (
+      claim.supersedes === activeClaim.claimId
+      && normalizedOptions.isStale(activeClaim.createdAt, event.createdAt ?? "")
+    ) {
       return claim;
     }
 
@@ -2651,12 +2654,46 @@ export function applyClaimEvent(activeClaim, event, options = {}) {
   if (
     forcedHandoff
     && activeClaim
-    && normalizedOptions.isForcedHandoffEnabled(forcedHandoff, event)
-    && normalizedOptions.isAuthorizedForcedHandoff(forcedHandoff.forcedBy, forcedHandoff, event)
     && forcedHandoff.oldAgentId === activeClaim.agentId
     && forcedHandoff.oldClaimId === activeClaim.claimId
     && forcedHandoff.branch === activeClaim.branch
   ) {
+    if (!normalizedOptions.isForcedHandoffEnabled(forcedHandoff, event)) {
+      normalizedOptions.onIgnoredForcedHandoff({
+        reason: "mode-disabled",
+        forcedHandoff,
+        event,
+      });
+      return activeClaim;
+    }
+    // Optional: bind the asserted forcedBy identity to the comment
+    // author so a trusted-marker actor cannot self-attest a handoff by
+    // naming an unrelated maintainer in the payload. This is the
+    // strict mode used by the Resume routing path (idd-claim.instructions.md
+    // rule 7). The default is off because production forced-handoff
+    // markers can be posted on behalf of a maintainer by a separate
+    // automation account; callers that want the strict binding (e.g.
+    // resume-claim-routing.mjs) opt in via `requireAuthorMatchesForcedBy`.
+    if (normalizedOptions.requireAuthorMatchesForcedBy) {
+      const authorLoginLower = String(authorLogin).trim().toLowerCase();
+      const forcedByLower = String(forcedHandoff.forcedBy ?? "").trim().toLowerCase();
+      if (!authorLoginLower || authorLoginLower !== forcedByLower) {
+        normalizedOptions.onIgnoredForcedHandoff({
+          reason: "author-forced-by-mismatch",
+          forcedHandoff,
+          event,
+        });
+        return activeClaim;
+      }
+    }
+    if (!normalizedOptions.isAuthorizedForcedHandoff(forcedHandoff.forcedBy, forcedHandoff, event)) {
+      normalizedOptions.onIgnoredForcedHandoff({
+        reason: "forced-by-unauthorized",
+        forcedHandoff,
+        event,
+      });
+      return activeClaim;
+    }
     return {
       agentId: forcedHandoff.newAgentId,
       claimId: forcedHandoff.newClaimId,
@@ -2675,7 +2712,10 @@ function normalizeClaimResolutionOptions(optionsOrPredicate) {
       isTrustedAuthor: optionsOrPredicate,
       isForcedHandoffEnabled: () => false,
       isAuthorizedForcedHandoff: () => false,
+      isStale: isStaleAt,
+      requireAuthorMatchesForcedBy: false,
       onAnomalousHeartbeat: () => {},
+      onIgnoredForcedHandoff: () => {},
     };
   }
 
@@ -2691,9 +2731,18 @@ function normalizeClaimResolutionOptions(optionsOrPredicate) {
       typeof options.isAuthorizedForcedHandoff === "function"
         ? options.isAuthorizedForcedHandoff
         : () => false,
+    isStale:
+      typeof options.isStale === "function"
+        ? options.isStale
+        : isStaleAt,
+    requireAuthorMatchesForcedBy: Boolean(options.requireAuthorMatchesForcedBy),
     onAnomalousHeartbeat:
       typeof options.onAnomalousHeartbeat === "function"
         ? options.onAnomalousHeartbeat
+        : () => {},
+    onIgnoredForcedHandoff:
+      typeof options.onIgnoredForcedHandoff === "function"
+        ? options.onIgnoredForcedHandoff
         : () => {},
   };
 }

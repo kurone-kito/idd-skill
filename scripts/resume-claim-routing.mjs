@@ -5,7 +5,12 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { isStaleAt, parseClaimComment, parseForcedHandoffComment, parseReleaseComment } from "./protocol-helpers.mjs";
+import {
+  isStaleAt,
+  parseClaimComment,
+  parseReleaseComment,
+  resolveActiveClaim,
+} from "./protocol-helpers.mjs";
 import { normalizePolicyConfig } from "./policy-helpers.mjs";
 
 const DEFAULT_STALE_AGE_MS = 24 * 60 * 60 * 1000;
@@ -208,84 +213,57 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
   const isAuthorizedForcedHandoff = typeof options.isAuthorizedForcedHandoff === "function"
     ? options.isAuthorizedForcedHandoff
     : () => false;
-  const orderedEvents = [...events].sort(compareEvents);
+
+  // hasNewFormatClaim drives the new-format vs legacy-only mode. Detect
+  // it by scanning before delegating to the canonical parser so the
+  // wrapper can return the right legacy-fallback shape.
+  const hasNewFormatClaim = events.some(
+    (event) => parseClaimComment(event.body ?? "", event.createdAt ?? "") !== null,
+  );
+
   const warnings = [];
-  let activeClaim = null;
-  let hasNewFormatClaim = false;
-  for (const event of orderedEvents) {
-    const claim = parseClaimComment(event.body, event.createdAt);
-    if (claim) {
-      hasNewFormatClaim = true;
-      if (!activeClaim) {
-        if (claim.supersedes === "none") {
-          activeClaim = claim;
-        }
-        continue;
-      }
-      if (claim.agentId === activeClaim.agentId && claim.claimId === activeClaim.claimId) {
-        if (claim.branch === activeClaim.branch) {
-          activeClaim = { ...activeClaim, createdAt: event.createdAt };
-        } else {
-          warnings.push(
-            `ignored anomalous heartbeat for ${claim.claimId}: branch ${claim.branch} != ${activeClaim.branch}`,
-          );
-        }
-        continue;
-      }
-      if (claim.supersedes === activeClaim.claimId && isStaleByAge(activeClaim.createdAt, event.createdAt, staleAgeMs)) {
-        activeClaim = claim;
-      }
-      continue;
+  const onAnomalousHeartbeat = ({ claimId, activeBranch, heartbeatBranch }) => {
+    warnings.push(
+      `ignored anomalous heartbeat for ${claimId}: branch ${heartbeatBranch} != ${activeBranch}`,
+    );
+  };
+  const onIgnoredForcedHandoff = ({ reason, forcedHandoff, event }) => {
+    if (reason === "mode-disabled") {
+      warnings.push(
+        `ignored forced-handoff for ${forcedHandoff.oldClaimId}: forced-handoff mode is not enabled`,
+      );
+      return;
     }
+    if (reason === "author-forced-by-mismatch") {
+      warnings.push(
+        `ignored forced-handoff for ${forcedHandoff.oldClaimId}: comment author ${event.author?.login ?? "(unknown)"} does not match forcedBy ${forcedHandoff.forcedBy}`,
+      );
+      return;
+    }
+    if (reason === "forced-by-unauthorized") {
+      warnings.push(
+        `ignored forced-handoff for ${forcedHandoff.oldClaimId}: forcedBy ${forcedHandoff.forcedBy} is not an authorized maintainer`,
+      );
+    }
+  };
 
-    const release = parseReleaseComment(event.body);
-    if (release && activeClaim && release.agentId === activeClaim.agentId && release.claimId === activeClaim.claimId) {
-      activeClaim = null;
-      continue;
-    }
-
-    const forcedHandoff = parseForcedHandoffComment(event.body, event.createdAt);
-    if (
-      forcedHandoff
-      && activeClaim
-      && forcedHandoff.oldAgentId === activeClaim.agentId
-      && forcedHandoff.oldClaimId === activeClaim.claimId
-      && forcedHandoff.branch === activeClaim.branch
-    ) {
-      if (!isForcedHandoffEnabled(forcedHandoff, event)) {
-        warnings.push(
-          `ignored forced-handoff for ${forcedHandoff.oldClaimId}: forced-handoff mode is not enabled`,
-        );
-        continue;
-      }
-      const authorLogin = String(event.author?.login ?? "").trim().toLowerCase();
-      const forcedByLogin = String(forcedHandoff.forcedBy ?? "").trim().toLowerCase();
-      // Bind the asserted forcedBy identity to the comment author so a
-      // trusted-marker actor cannot self-attest a handoff by naming an
-      // unrelated maintainer in the payload. Without this binding the
-      // collaborator-permission lookup downstream would happily authorize
-      // any maintainer login the attacker types into the payload.
-      if (!authorLogin || authorLogin !== forcedByLogin) {
-        warnings.push(
-          `ignored forced-handoff for ${forcedHandoff.oldClaimId}: comment author ${event.author?.login ?? "(unknown)"} does not match forcedBy ${forcedHandoff.forcedBy}`,
-        );
-        continue;
-      }
-      if (!isAuthorizedForcedHandoff(forcedHandoff.forcedBy, forcedHandoff, event)) {
-        warnings.push(
-          `ignored forced-handoff for ${forcedHandoff.oldClaimId}: forcedBy ${forcedHandoff.forcedBy} is not an authorized maintainer`,
-        );
-        continue;
-      }
-      activeClaim = {
-        agentId: forcedHandoff.newAgentId,
-        claimId: forcedHandoff.newClaimId,
-        supersedes: forcedHandoff.oldClaimId,
-        branch: forcedHandoff.branch,
-        createdAt: forcedHandoff.createdAt ?? event.createdAt,
-      };
-    }
-  }
+  const activeClaim = hasNewFormatClaim
+    ? resolveActiveClaim(events, {
+      isTrustedAuthor: () => true, // events were already filtered by caller
+      isForcedHandoffEnabled,
+      isAuthorizedForcedHandoff,
+      isStale: (activeCreatedAt, nextCreatedAt) =>
+        isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs),
+      // Resume routing enforces the rule-7 author/forcedBy binding to
+      // block the same-identity self-signed hijack path. Other callers
+      // of summarizeClaimValidation default to off because they may
+      // receive maintainer-authorized handoffs posted by a separate
+      // automation actor on behalf of the maintainer.
+      requireAuthorMatchesForcedBy: true,
+      onAnomalousHeartbeat,
+      onIgnoredForcedHandoff,
+    })
+    : null;
 
   if (hasNewFormatClaim) {
     return {
@@ -297,6 +275,7 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
     };
   }
 
+  const orderedEvents = [...events].sort(compareEvents);
   const legacy = resolveLegacyClaimState(orderedEvents, nowIso, staleAgeMs);
   return {
     mode: "legacy-only",
