@@ -2613,6 +2613,22 @@ export function applyClaimEvent(activeClaim, event, options = {}) {
     }
 
     if (claim.agentId === activeClaim.agentId && claim.claimId === activeClaim.claimId) {
+      // Enforce the heartbeat branch invariant (idd-claim.instructions.md
+      // rule 3.5): a heartbeat candidate whose {branch} does not exactly
+      // match the active claim's {branch} is anomalous and must not
+      // refresh the stale clock. Without this guard, a spurious heartbeat
+      // could extend the stale clock indefinitely and block the 24h
+      // stale-takeover recovery path that audit-pr-cleanup depends on.
+      if (claim.branch !== activeClaim.branch) {
+        normalizedOptions.onAnomalousHeartbeat({
+          agentId: claim.agentId,
+          claimId: claim.claimId,
+          activeBranch: activeClaim.branch,
+          heartbeatBranch: claim.branch,
+          createdAt: event.createdAt,
+        });
+        return activeClaim;
+      }
       return {
         ...activeClaim,
         createdAt: event.createdAt ?? activeClaim.createdAt,
@@ -2659,6 +2675,7 @@ function normalizeClaimResolutionOptions(optionsOrPredicate) {
       isTrustedAuthor: optionsOrPredicate,
       isForcedHandoffEnabled: () => false,
       isAuthorizedForcedHandoff: () => false,
+      onAnomalousHeartbeat: () => {},
     };
   }
 
@@ -2674,6 +2691,10 @@ function normalizeClaimResolutionOptions(optionsOrPredicate) {
       typeof options.isAuthorizedForcedHandoff === "function"
         ? options.isAuthorizedForcedHandoff
         : () => false,
+    onAnomalousHeartbeat:
+      typeof options.onAnomalousHeartbeat === "function"
+        ? options.onAnomalousHeartbeat
+        : () => {},
   };
 }
 
