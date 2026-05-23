@@ -731,11 +731,15 @@ function isAuthorizedForcedHandoffActor(owner, repo, login, policy = forcedHando
   if (!normalized) {
     return false;
   }
-  const permission = collaboratorPermission(owner, repo, normalized);
+  const { permission, roleName } = collaboratorPermission(owner, repo, normalized);
   if (policy === "all-write-permission-actors") {
-    return permission === "admin" || permission === "maintain" || permission === "write";
+    return roleName === "admin"
+      || roleName === "maintain"
+      || roleName === "write"
+      || permission === "admin"
+      || permission === "write";
   }
-  return permission === "admin" || permission === "maintain";
+  return roleName === "admin" || roleName === "maintain" || permission === "admin";
 }
 
 function isTrustedMarkerAuthor(owner, repo, login) {
@@ -830,24 +834,33 @@ function collaboratorPermission(owner, repo, login) {
     return collaboratorPermissionCache.get(cacheKey);
   }
 
+  // Return both the legacy `permission` and the granular `role_name`.
+  // `permission` collapses maintain -> write / triage -> read, so a
+  // literal `maintain` check on it would silently reject legitimate
+  // maintainers. Callers apply each policy against the matching
+  // field. Mirrored from `scripts/resume-claim-routing.mjs`
+  // (PR #750 / #753).
   let permission = "";
+  let roleName = "";
   try {
-    permission = execFileSync(
+    const raw = execFileSync(
       "gh",
       [
         "api",
         `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-        "--jq",
-        ".permission",
       ],
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-    ).trim().toLowerCase();
+    );
+    const parsed = JSON.parse(raw);
+    permission = String(parsed?.permission ?? "").trim().toLowerCase();
+    roleName = String(parsed?.role_name ?? "").trim().toLowerCase();
   } catch {
-    permission = "";
+    // both stay empty
   }
 
-  collaboratorPermissionCache.set(cacheKey, permission);
-  return permission;
+  const result = { permission, roleName };
+  collaboratorPermissionCache.set(cacheKey, result);
+  return result;
 }
 
 function ghGraphql(query, variables, options = {}) {

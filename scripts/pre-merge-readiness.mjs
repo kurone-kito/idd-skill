@@ -647,15 +647,37 @@ function isAuthorizedForcedHandoffActor(owner, repo, login, policy, cache) {
     return cache.get(normalized);
   }
 
-  const permission = safeGhText([
+  // GitHub's legacy `permission` field collapses `maintain` -> `write`
+  // and `triage` -> `read`, which would reject `maintain`-role
+  // maintainers under the default `owners-and-maintainers-only`
+  // policy. Read the full collaborators-permission JSON and apply each
+  // policy against the field that matches its semantics: the strict
+  // policy honours role_name == admin / maintain (plus permission ==
+  // admin as a backstop); the loose policy additionally honours
+  // permission == write so custom write-base roles still satisfy it.
+  // Mirrored from `scripts/resume-claim-routing.mjs` (PR #750 / #753).
+  let permission = "";
+  let roleName = "";
+  const raw = safeGhText([
     "api",
     `repos/${owner}/${repo}/collaborators/${encodeURIComponent(normalized)}/permission`,
-    "--jq",
-    ".permission",
-  ]).toLowerCase();
+  ]);
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      permission = String(parsed?.permission ?? "").trim().toLowerCase();
+      roleName = String(parsed?.role_name ?? "").trim().toLowerCase();
+    } catch {
+      // both stay empty
+    }
+  }
   const isAuthorized = policy === "all-write-permission-actors"
-    ? permission === "admin" || permission === "maintain" || permission === "write"
-    : permission === "admin" || permission === "maintain";
+    ? roleName === "admin"
+      || roleName === "maintain"
+      || roleName === "write"
+      || permission === "admin"
+      || permission === "write"
+    : roleName === "admin" || roleName === "maintain" || permission === "admin";
 
   cache.set(normalized, isAuthorized);
   return isAuthorized;

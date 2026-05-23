@@ -523,14 +523,32 @@ function collaboratorPermission(owner, repo, login, cache) {
   if (cache.has(login)) {
     return cache.get(login);
   }
-  const permission = safeGhText([
+  // GitHub's legacy `permission` field collapses `maintain` -> `write`
+  // and `triage` -> `read`, so a literal `maintain` check would reject
+  // legitimate maintainers under the default `owners-and-maintainers-
+  // only` authority policy. Read `role_name` too so the strict policy
+  // can honour the granular role; `permission` also stays in scope so
+  // the loose policy can still accept custom write-base roles whose
+  // `role_name` is a custom string. Mirrored from
+  // `scripts/resume-claim-routing.mjs` (PR #750 / #753).
+  let permission = "";
+  let roleName = "";
+  const raw = safeGhText([
     "api",
     `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-    "--jq",
-    ".permission",
-  ]).toLowerCase();
-  cache.set(login, permission);
-  return permission;
+  ]);
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      permission = String(parsed?.permission ?? "").trim().toLowerCase();
+      roleName = String(parsed?.role_name ?? "").trim().toLowerCase();
+    } catch {
+      // leave both empty
+    }
+  }
+  const result = { permission, roleName };
+  cache.set(login, result);
+  return result;
 }
 
 function isAuthorizedForcedHandoffActor(owner, repo, login, policy, cache) {
@@ -538,11 +556,15 @@ function isAuthorizedForcedHandoffActor(owner, repo, login, policy, cache) {
   if (!normalized) {
     return false;
   }
-  const permission = collaboratorPermission(owner, repo, normalized, cache);
+  const { permission, roleName } = collaboratorPermission(owner, repo, normalized, cache);
   if (policy === "all-write-permission-actors") {
-    return permission === "admin" || permission === "maintain" || permission === "write";
+    return roleName === "admin"
+      || roleName === "maintain"
+      || roleName === "write"
+      || permission === "admin"
+      || permission === "write";
   }
-  return permission === "admin" || permission === "maintain";
+  return roleName === "admin" || roleName === "maintain" || permission === "admin";
 }
 
 export function currentIsoTimestamp() {
