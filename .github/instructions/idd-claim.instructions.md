@@ -370,6 +370,30 @@ chronologically and apply these rules:
    whose `{agent-id}` differs, or whose `{claim-id}` was already
    superseded, or whose `supersedes:` value does not match the current
    active claim when one exists, is ignored as a stale or invalid event.
+7. A `<!-- forced-handoff: { … } -->` marker (parsed by
+   `parseForcedHandoffComment` in `scripts/protocol-helpers.mjs`)
+   transfers the active claim to the named successor only when **all**
+   hold:
+   - the comment **author** is a trusted marker actor (rule 2);
+   - the author **equals** the marker's `forcedBy` (case-insensitive);
+     the GitHub author is authoritative, the payload field alone is
+     not (a mismatch is rejected as forged);
+   - that author is an authorized maintainer under
+     `forcedHandoff.authorityPolicy` — `owners-and-maintainers-only`
+     accepts `role_name == admin / maintain` or `permission == admin`;
+     `all-write-permission-actors` additionally accepts
+     `role_name == write` or `permission == write` so custom write-base
+     roles still satisfy the loose policy (reference implementation:
+     `isAuthorizedForcedHandoffActor`);
+   - `forcedHandoff.mode` is `human-gated` (default `disabled`);
+   - `oldAgentId` / `oldClaimId` / `branch` all match the active claim.
+
+   When all hold, replace the active claim with the successor
+   (`newAgentId` / `newClaimId`, same `branch`, `supersedes =
+   oldClaimId`). On any failure — typically an unauthorized
+   `forcedBy`, an author/`forcedBy` mismatch, or `mode != human-gated`
+   — leave the active claim unchanged and warn if it affects a routing
+   decision.
 
 Same-agent restarts never silently inherit or supersede an active
 non-stale claim. If the current session already recorded and verified
@@ -378,6 +402,9 @@ and use heartbeats; do not post a fresh takeover claim. If the session
 cannot prove ownership of the active `{claim-id}`, the active claim is
 treated as owned by another live session until it is released or stale,
 even when `{agent-id}` matches.
+Self-signed forced-handoff markers from the same identity never
+transfer ownership: rule 7 rejects them unless the author is itself
+an authorized maintainer.
 If a successor posts a fresh claim after forced handoff, later
 heartbeats from the displaced old `{claim-id}` are ignored as stale
 events; they do not reclaim ownership or refresh the stale clock.
