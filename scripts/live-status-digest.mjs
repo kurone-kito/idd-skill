@@ -211,6 +211,11 @@ function readActiveClaim(owner, repo, issueNumber, options = {}) {
     };
   });
 
+  // Read the authority policy once per call; the
+  // isAuthorizedForcedHandoff callback may fire multiple times during
+  // claim parsing and re-reading .github/idd/config.json on each call
+  // would be a needless I/O hot path.
+  const forcedHandoffAuthorityPolicyValue = readForcedHandoffAuthorityPolicy();
   const summary = summarizeClaimValidation(comments, {
     trustedMarkerLogins: resolveTrustedMarkerLogins(owner, repo, comments),
     forcedHandoffEnabled: readForcedHandoffMode() === "human-gated",
@@ -219,7 +224,7 @@ function readActiveClaim(owner, repo, issueNumber, options = {}) {
       owner,
       repo,
       forcedBy,
-      readForcedHandoffAuthorityPolicy(),
+      forcedHandoffAuthorityPolicyValue,
       collaboratorPermissionCache,
     ),
   });

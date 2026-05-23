@@ -34,9 +34,13 @@ const DEFAULT_POLICY_PATH = ".github/idd/config.json";
  * script share lookups, but separate scripts don't share state.
  */
 export function collaboratorPermission(owner, repo, login, cache) {
-  const key = String(login ?? "").trim().toLowerCase();
-  if (cache && cache.has(key)) {
-    return cache.get(key);
+  const normalizedLogin = String(login ?? "").trim().toLowerCase();
+  // Scope the cache key by repository so a single Map can be safely
+  // reused across owner/repo pairs without cross-repo poisoning of
+  // authorization decisions.
+  const cacheKey = `${owner}/${repo}:${normalizedLogin}`;
+  if (cache && cache.has(cacheKey)) {
+    return cache.get(cacheKey);
   }
   let permission = "";
   let roleName = "";
@@ -45,7 +49,7 @@ export function collaboratorPermission(owner, repo, login, cache) {
       "gh",
       [
         "api",
-        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(key)}/permission`,
+        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(normalizedLogin)}/permission`,
       ],
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
     );
@@ -57,7 +61,7 @@ export function collaboratorPermission(owner, repo, login, cache) {
   }
   const result = { permission, roleName };
   if (cache) {
-    cache.set(key, result);
+    cache.set(cacheKey, result);
   }
   return result;
 }

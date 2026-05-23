@@ -7,14 +7,11 @@ import { pathToFileURL } from "node:url";
 
 import { planHandoff } from "./forced-handoff-marker.mjs";
 import { parsePaginatedGhNdjson } from "./protocol-helpers.mjs";
-
-const APPROVAL_ACTOR_POLICIES = new Set([
-  "owners-and-maintainers-only",
-  "all-write-permission-actors",
-]);
-const APPROVAL_ACTOR_POLICY_DEFAULT = "owners-and-maintainers-only";
-const FORCED_HANDOFF_MODES = new Set(["disabled", "human-gated"]);
-const FORCED_HANDOFF_MODE_DEFAULT = "disabled";
+import {
+  isAuthorizedForcedHandoffActor,
+  readForcedHandoffAuthorityPolicy,
+  readForcedHandoffMode,
+} from "./collaborator-permission.mjs";
 
 export const NON_TTY_ERROR =
   "operator interaction is required; run idd-force-handoff in an interactive TTY";
@@ -276,72 +273,8 @@ function isTruthy(value) {
   return /^(1|true|yes)$/i.test(String(value ?? "").trim());
 }
 
-function readForcedHandoffMode() {
-  try {
-    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    const mode = String(
-      config?.forcedHandoff?.mode ??
-        config?.["forced-handoff"]?.mode ??
-        config?.forcedHandoffMode ??
-        config?.["forced-handoff-mode"] ??
-        "",
-    ).trim();
-    if (FORCED_HANDOFF_MODES.has(mode)) {
-      return mode;
-    }
-  } catch {
-    // Default mode remains disabled.
-  }
-  return FORCED_HANDOFF_MODE_DEFAULT;
-}
-
 function splitCsv(value) {
   return String(value ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-}
-
-function readForcedHandoffAuthorityPolicy() {
-  try {
-    const config = JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
-    const policy = String(
-      config?.forcedHandoff?.authorityPolicy ??
-        config?.["forced-handoff"]?.authorityPolicy ??
-        config?.forcedHandoffAuthority ??
-        config?.["forced-handoff-authority"] ??
-        "",
-    ).trim();
-    if (APPROVAL_ACTOR_POLICIES.has(policy)) {
-      return policy;
-    }
-  } catch {
-    // default
-  }
-  return APPROVAL_ACTOR_POLICY_DEFAULT;
-}
-
-function collaboratorPermission(owner, repo, login, cache) {
-  if (cache.has(login)) {
-    return cache.get(login);
-  }
-  const permission = safeGhText([
-    "api",
-    `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-    "--jq",
-    ".permission",
-  ]).toLowerCase();
-  cache.set(login, permission);
-  return permission;
-}
-
-function isAuthorizedForcedHandoffActor(owner, repo, login, policy, cache) {
-  const normalized = String(login ?? "").trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  const permission = collaboratorPermission(owner, repo, normalized, cache);
-  if (policy === "all-write-permission-actors") {
-    return permission === "admin" || permission === "maintain" || permission === "write";
-  }
-  return permission === "admin" || permission === "maintain";
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
