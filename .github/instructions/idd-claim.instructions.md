@@ -377,7 +377,14 @@ chronologically and apply these rules:
    - the comment **author** is a trusted marker actor (rule 2);
    - the author **equals** the marker's `forcedBy` (case-insensitive);
      the GitHub author is authoritative, the payload field alone is
-     not (a mismatch is rejected as forged);
+     not (a mismatch is rejected as forged). The Resume routing
+     parser (`resolveClaimState` in `scripts/resume-claim-routing.mjs`)
+     enforces this binding at the library level. The shared
+     revalidation parser (`applyClaimEvent` in
+     `scripts/protocol-helpers.mjs`) currently delegates the binding
+     to each caller's `isAuthorizedForcedHandoff` callback; callers
+     that use `summarizeClaimValidation` MUST verify the binding
+     themselves until the parsers consolidate;
    - that author is an authorized maintainer under
      `forcedHandoff.authorityPolicy` — `owners-and-maintainers-only`
      accepts `role_name == admin / maintain` or `permission == admin`;
