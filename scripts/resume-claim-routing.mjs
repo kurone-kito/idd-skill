@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { isStaleAt, parseClaimComment, parseForcedHandoffComment, parseReleaseComment } from "./protocol-helpers.mjs";
+import { normalizePolicyConfig } from "./policy-helpers.mjs";
 
 const DEFAULT_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 const LEGACY_CLAIM_PATTERN = /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
@@ -21,9 +22,18 @@ export function evaluateResumeClaimRouting(input, options = {}) {
   const trustedAuthor = typeof options.isTrustedAuthor === "function"
     ? options.isTrustedAuthor
     : () => true;
+  const isForcedHandoffEnabled = typeof options.isForcedHandoffEnabled === "function"
+    ? options.isForcedHandoffEnabled
+    : () => false;
+  const isAuthorizedForcedHandoff = typeof options.isAuthorizedForcedHandoff === "function"
+    ? options.isAuthorizedForcedHandoff
+    : () => false;
 
   const events = normalizeEvents(input.events).filter((event) => trustedAuthor(event.author?.login ?? ""));
-  const state = resolveClaimState(events, nowIso, staleAgeMs);
+  const state = resolveClaimState(events, nowIso, staleAgeMs, {
+    isForcedHandoffEnabled,
+    isAuthorizedForcedHandoff,
+  });
   const claimIdChecked = normalizeToken(input.claimId);
   const sameSecondContenders = state.activeClaim
     ? findSameSecondContenders(events, state.activeClaim)
@@ -143,6 +153,9 @@ function runCli() {
   const trustedSet = new Set(trustedLogins.map((login) => login.toLowerCase()));
   const comments = fetchIssueComments(repository, args.issue);
   const issue = ghJson(["api", `repos/${repository}/issues/${args.issue}`]);
+  const forcedHandoffEnabled = policy.forcedHandoff.mode === "human-gated";
+  const forcedHandoffAuthorityPolicy = policy.forcedHandoff.authorityPolicy;
+  const permissionCache = new Map();
 
   const result = evaluateResumeClaimRouting(
     {
@@ -157,6 +170,14 @@ function runCli() {
     },
     {
       isTrustedAuthor: (login) => trustedSet.has(String(login ?? "").trim().toLowerCase()),
+      isForcedHandoffEnabled: () => forcedHandoffEnabled,
+      isAuthorizedForcedHandoff: (forcedBy) => isAuthorizedForcedHandoffActor(
+        owner,
+        repo,
+        forcedBy,
+        forcedHandoffAuthorityPolicy,
+        permissionCache,
+      ),
     },
   );
 
@@ -172,13 +193,21 @@ function runCli() {
       source: policy.source,
       stale_age_ms: staleAgeMs,
       trusted_marker_logins: trustedLogins,
+      forced_handoff_mode: policy.forcedHandoff.mode,
+      forced_handoff_authority_policy: forcedHandoffAuthorityPolicy,
     },
     ...result,
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
 
-function resolveClaimState(events, nowIso, staleAgeMs) {
+function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
+  const isForcedHandoffEnabled = typeof options.isForcedHandoffEnabled === "function"
+    ? options.isForcedHandoffEnabled
+    : () => false;
+  const isAuthorizedForcedHandoff = typeof options.isAuthorizedForcedHandoff === "function"
+    ? options.isAuthorizedForcedHandoff
+    : () => false;
   const orderedEvents = [...events].sort(compareEvents);
   const warnings = [];
   let activeClaim = null;
@@ -223,6 +252,18 @@ function resolveClaimState(events, nowIso, staleAgeMs) {
       && forcedHandoff.oldClaimId === activeClaim.claimId
       && forcedHandoff.branch === activeClaim.branch
     ) {
+      if (!isForcedHandoffEnabled(forcedHandoff, event)) {
+        warnings.push(
+          `ignored forced-handoff for ${forcedHandoff.oldClaimId}: forced-handoff mode is not enabled`,
+        );
+        continue;
+      }
+      if (!isAuthorizedForcedHandoff(forcedHandoff.forcedBy, forcedHandoff, event)) {
+        warnings.push(
+          `ignored forced-handoff for ${forcedHandoff.oldClaimId}: forcedBy ${forcedHandoff.forcedBy} is not an authorized maintainer`,
+        );
+        continue;
+      }
       activeClaim = {
         agentId: forcedHandoff.newAgentId,
         claimId: forcedHandoff.newClaimId,
@@ -484,23 +525,64 @@ function loadPolicy(policyPath, { strict = false } = {}) {
   const source = policyPath ? resolve(process.cwd(), policyPath) : resolve(process.cwd(), ".github/idd/config.json");
   try {
     const config = JSON.parse(readFileSync(source, "utf8"));
+    const normalized = normalizePolicyConfig(config);
     return {
       source,
       staleAgeMs: parseDurationToMs(config?.claimTiming?.staleAge) ?? DEFAULT_STALE_AGE_MS,
       trustedMarkerActors: Array.isArray(config?.trustedMarkerActors)
         ? config.trustedMarkerActors.map((value) => String(value ?? "").trim()).filter(Boolean)
         : [],
+      forcedHandoff: {
+        mode: normalized.forcedHandoff.mode,
+        authorityPolicy: normalized.forcedHandoff.authorityPolicy,
+      },
     };
   } catch (error) {
     if (strict) {
       throw new Error(`failed to load policy from ${source}: ${String(error?.message ?? error)}`);
     }
+    const normalized = normalizePolicyConfig({});
     return {
       source,
       staleAgeMs: DEFAULT_STALE_AGE_MS,
       trustedMarkerActors: [],
+      forcedHandoff: {
+        mode: normalized.forcedHandoff.mode,
+        authorityPolicy: normalized.forcedHandoff.authorityPolicy,
+      },
     };
   }
+}
+
+function isAuthorizedForcedHandoffActor(owner, repo, login, policy, cache) {
+  const normalized = String(login ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const permission = collaboratorPermission(owner, repo, normalized, cache);
+  if (policy === "all-write-permission-actors") {
+    return permission === "admin" || permission === "maintain" || permission === "write";
+  }
+  return permission === "admin" || permission === "maintain";
+}
+
+function collaboratorPermission(owner, repo, login, cache) {
+  if (cache.has(login)) {
+    return cache.get(login);
+  }
+  let permission = "";
+  try {
+    permission = ghText([
+      "api",
+      `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
+      "--jq",
+      ".permission",
+    ]).toLowerCase();
+  } catch {
+    permission = "";
+  }
+  cache.set(login, permission);
+  return permission;
 }
 
 function parseDurationToMs(value) {
