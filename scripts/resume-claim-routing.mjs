@@ -11,6 +11,7 @@ import {
   resolveActiveClaim,
 } from "./protocol-helpers.mjs";
 import { normalizePolicyConfig } from "./policy-helpers.mjs";
+import { isAuthorizedForcedHandoffActor } from "./collaborator-permission.mjs";
 
 const DEFAULT_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 const LEGACY_CLAIM_PATTERN = /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
@@ -543,56 +544,6 @@ function loadPolicy(policyPath, { strict = false } = {}) {
       },
     };
   }
-}
-
-function isAuthorizedForcedHandoffActor(owner, repo, login, policy, cache) {
-  const normalized = String(login ?? "").trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  const { permission, roleName } = collaboratorPermission(owner, repo, normalized, cache);
-  // GitHub's legacy `permission` is one of admin|write|read|none and
-  // collapses maintain->write / triage->read. `role_name` is the
-  // granular role (admin|maintain|write|triage|read|none) but may also
-  // be a custom repository role name, in which case its literal value
-  // is not in the standard set. Check both fields so that:
-  //   - the strict policy honours role_name=maintain (otherwise
-  //     maintainers are demoted to write and rejected), and
-  //   - the loose policy honours permission=write (so custom roles
-  //     whose base permission is write still satisfy it).
-  if (policy === "all-write-permission-actors") {
-    return roleName === "admin"
-      || roleName === "maintain"
-      || roleName === "write"
-      || permission === "admin"
-      || permission === "write";
-  }
-  return roleName === "admin" || roleName === "maintain" || permission === "admin";
-}
-
-function collaboratorPermission(owner, repo, login, cache) {
-  if (cache.has(login)) {
-    return cache.get(login);
-  }
-  // Return both the legacy `permission` and the granular `role_name`
-  // so the caller can apply each policy against the field that matches
-  // its semantics. See isAuthorizedForcedHandoffActor for the rationale.
-  let permission = "";
-  let roleName = "";
-  try {
-    const raw = ghText([
-      "api",
-      `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-    ]);
-    const parsed = JSON.parse(raw);
-    permission = String(parsed?.permission ?? "").trim().toLowerCase();
-    roleName = String(parsed?.role_name ?? "").trim().toLowerCase();
-  } catch {
-    // both stay empty
-  }
-  const result = { permission, roleName };
-  cache.set(login, result);
-  return result;
 }
 
 function parseDurationToMs(value) {

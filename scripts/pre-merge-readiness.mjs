@@ -14,13 +14,12 @@ import {
   resolveRulesetDetailPath,
   selectCodeownersText,
 } from "./protocol-helpers.mjs";
-import { normalizePolicyConfig, resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
-
-const APPROVAL_ACTOR_POLICY = new Set([
-  "owners-and-maintainers-only",
-  "all-write-permission-actors",
-]);
-const APPROVAL_ACTOR_POLICY_DEFAULT = "owners-and-maintainers-only";
+import { resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
+import {
+  isAuthorizedForcedHandoffActor,
+  readForcedHandoffAuthorityPolicy,
+  readForcedHandoffMode,
+} from "./collaborator-permission.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.prNumber) {
@@ -621,64 +620,3 @@ function readCollaboratorTrustEnabled() {
   return isTruthy(process.env.IDD_TRUST_COLLABORATOR_MARKERS);
 }
 
-function readForcedHandoffAuthorityPolicy() {
-  const policy = readNormalizedPolicy().forcedHandoff.authorityPolicy;
-  return APPROVAL_ACTOR_POLICY.has(policy) ? policy : APPROVAL_ACTOR_POLICY_DEFAULT;
-}
-
-function readForcedHandoffMode() {
-  return readNormalizedPolicy().forcedHandoff.mode;
-}
-
-function readNormalizedPolicy() {
-  try {
-    return normalizePolicyConfig(JSON.parse(readFileSync(".github/idd/config.json", "utf8")));
-  } catch {
-    return normalizePolicyConfig({});
-  }
-}
-
-function isAuthorizedForcedHandoffActor(owner, repo, login, policy, cache) {
-  const normalized = String(login ?? "").trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  if (cache.has(normalized)) {
-    return cache.get(normalized);
-  }
-
-  // GitHub's legacy `permission` field collapses `maintain` -> `write`
-  // and `triage` -> `read`, which would reject `maintain`-role
-  // maintainers under the default `owners-and-maintainers-only`
-  // policy. Read the full collaborators-permission JSON and apply each
-  // policy against the field that matches its semantics: the strict
-  // policy honours role_name == admin / maintain (plus permission ==
-  // admin as a backstop); the loose policy additionally honours
-  // permission == write so custom write-base roles still satisfy it.
-  // Mirrored from `scripts/resume-claim-routing.mjs` (PR #750 / #753).
-  let permission = "";
-  let roleName = "";
-  const raw = safeGhText([
-    "api",
-    `repos/${owner}/${repo}/collaborators/${encodeURIComponent(normalized)}/permission`,
-  ]);
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      permission = String(parsed?.permission ?? "").trim().toLowerCase();
-      roleName = String(parsed?.role_name ?? "").trim().toLowerCase();
-    } catch {
-      // both stay empty
-    }
-  }
-  const isAuthorized = policy === "all-write-permission-actors"
-    ? roleName === "admin"
-      || roleName === "maintain"
-      || roleName === "write"
-      || permission === "admin"
-      || permission === "write"
-    : roleName === "admin" || roleName === "maintain" || permission === "admin";
-
-  cache.set(normalized, isAuthorized);
-  return isAuthorized;
-}

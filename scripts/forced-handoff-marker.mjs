@@ -10,7 +10,12 @@ import {
   renderForcedHandoffComment,
   summarizeClaimValidation,
 } from "./protocol-helpers.mjs";
-import { normalizePolicyConfig, resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
+import { resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
+import {
+  isAuthorizedForcedHandoffActor,
+  readForcedHandoffAuthorityPolicy,
+  readForcedHandoffMode,
+} from "./collaborator-permission.mjs";
 
 export function generateSuccessorIds(baseAgentId) {
   return {
@@ -496,75 +501,6 @@ function readCollaboratorTrustEnabled() {
     // Fall through to env-var fallback.
   }
   return isTruthy(process.env.IDD_TRUST_COLLABORATOR_MARKERS);
-}
-
-function readForcedHandoffAuthorityPolicy() {
-  return readNormalizedPolicy().forcedHandoff.authorityPolicy;
-}
-
-function readForcedHandoffMode() {
-  try {
-    return readNormalizedPolicy().forcedHandoff.mode;
-  } catch {
-    // Default mode remains disabled.
-    return "disabled";
-  }
-}
-
-function readNormalizedPolicy() {
-  try {
-    return normalizePolicyConfig(JSON.parse(readFileSync(".github/idd/config.json", "utf8")));
-  } catch {
-    return normalizePolicyConfig({});
-  }
-}
-
-function collaboratorPermission(owner, repo, login, cache) {
-  if (cache.has(login)) {
-    return cache.get(login);
-  }
-  // GitHub's legacy `permission` field collapses `maintain` -> `write`
-  // and `triage` -> `read`, so a literal `maintain` check would reject
-  // legitimate maintainers under the default `owners-and-maintainers-
-  // only` authority policy. Read `role_name` too so the strict policy
-  // can honour the granular role; `permission` also stays in scope so
-  // the loose policy can still accept custom write-base roles whose
-  // `role_name` is a custom string. Mirrored from
-  // `scripts/resume-claim-routing.mjs` (PR #750 / #753).
-  let permission = "";
-  let roleName = "";
-  const raw = safeGhText([
-    "api",
-    `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-  ]);
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      permission = String(parsed?.permission ?? "").trim().toLowerCase();
-      roleName = String(parsed?.role_name ?? "").trim().toLowerCase();
-    } catch {
-      // leave both empty
-    }
-  }
-  const result = { permission, roleName };
-  cache.set(login, result);
-  return result;
-}
-
-function isAuthorizedForcedHandoffActor(owner, repo, login, policy, cache) {
-  const normalized = String(login ?? "").trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  const { permission, roleName } = collaboratorPermission(owner, repo, normalized, cache);
-  if (policy === "all-write-permission-actors") {
-    return roleName === "admin"
-      || roleName === "maintain"
-      || roleName === "write"
-      || permission === "admin"
-      || permission === "write";
-  }
-  return roleName === "admin" || roleName === "maintain" || permission === "admin";
 }
 
 export function currentIsoTimestamp() {
