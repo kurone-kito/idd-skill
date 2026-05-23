@@ -9,16 +9,19 @@ import {
   planLiveStatusDigestUpsert,
   summarizeClaimValidation,
 } from "./protocol-helpers.mjs";
-import { normalizePolicyConfig, resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
+import { resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
+import {
+  collaboratorPermission,
+  isAuthorizedForcedHandoffActor,
+  readForcedHandoffAuthorityPolicy,
+  readForcedHandoffMode,
+} from "./collaborator-permission.mjs";
 
 const TRUSTED_MARKER_PERMISSIONS = new Set(["admin", "maintain", "write"]);
 const trustedMarkerAuthorCache = new Map();
 const collaboratorPermissionCache = new Map();
 let cachedConfiguredTrustedMarkerAuthors = null;
 let cachedCurrentViewerLogin = null;
-let cachedForcedHandoffAuthorityPolicy = null;
-let cachedForcedHandoffMode = null;
-let cachedNormalizedPolicy = null;
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -208,18 +211,22 @@ function readActiveClaim(owner, repo, issueNumber, options = {}) {
     };
   });
 
+  // Read the authority policy once per call; the
+  // isAuthorizedForcedHandoff callback may fire multiple times during
+  // claim parsing and re-reading .github/idd/config.json on each call
+  // would be a needless I/O hot path.
+  const forcedHandoffAuthorityPolicyValue = readForcedHandoffAuthorityPolicy();
   const summary = summarizeClaimValidation(comments, {
     trustedMarkerLogins: resolveTrustedMarkerLogins(owner, repo, comments),
     forcedHandoffEnabled: readForcedHandoffMode() === "human-gated",
     expectedLinkedPrs: options.expectedLinkedPrs ?? [],
-    isAuthorizedForcedHandoff: (forcedBy) => {
-      return isAuthorizedForcedHandoffActor(
-        owner,
-        repo,
-        forcedBy,
-        forcedHandoffAuthorityPolicy(),
-      );
-    },
+    isAuthorizedForcedHandoff: (forcedBy) => isAuthorizedForcedHandoffActor(
+      owner,
+      repo,
+      forcedBy,
+      forcedHandoffAuthorityPolicyValue,
+      collaboratorPermissionCache,
+    ),
   });
 
   return summary.activeClaimPresent ? summary.activeClaim : null;
@@ -246,57 +253,6 @@ function buildExpectedLinkedPrReferences(owner, repo, prNumber) {
   ];
 }
 
-function isAuthorizedForcedHandoffActor(owner, repo, login, policy = forcedHandoffAuthorityPolicy()) {
-  const normalized = String(login ?? "").trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  const { permission, roleName } = collaboratorPermission(owner, repo, normalized);
-  if (policy === "all-write-permission-actors") {
-    return roleName === "admin"
-      || roleName === "maintain"
-      || roleName === "write"
-      || permission === "admin"
-      || permission === "write";
-  }
-  return roleName === "admin" || roleName === "maintain" || permission === "admin";
-}
-
-function forcedHandoffAuthorityPolicy() {
-  if (cachedForcedHandoffAuthorityPolicy !== null) {
-    return cachedForcedHandoffAuthorityPolicy;
-  }
-  cachedForcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
-  return cachedForcedHandoffAuthorityPolicy;
-}
-
-function readForcedHandoffAuthorityPolicy() {
-  return readNormalizedPolicy().forcedHandoff.authorityPolicy;
-}
-
-function readForcedHandoffMode() {
-  if (cachedForcedHandoffMode !== null) {
-    return cachedForcedHandoffMode;
-  }
-  cachedForcedHandoffMode = readNormalizedPolicy().forcedHandoff.mode;
-  return cachedForcedHandoffMode;
-}
-
-function readNormalizedPolicy() {
-  if (cachedNormalizedPolicy !== null) {
-    return cachedNormalizedPolicy;
-  }
-  try {
-    cachedNormalizedPolicy = normalizePolicyConfig(
-      JSON.parse(readFileSync(".github/idd/config.json", "utf8")),
-    );
-    return cachedNormalizedPolicy;
-  } catch {
-    cachedNormalizedPolicy = normalizePolicyConfig({});
-    return cachedNormalizedPolicy;
-  }
-}
-
 function isTrustedMarkerAuthor(owner, repo, login) {
   if (!login) {
     return false;
@@ -319,7 +275,9 @@ function isTrustedMarkerAuthor(owner, repo, login) {
     return trustedMarkerAuthorCache.get(cacheKey);
   }
 
-  const trusted = TRUSTED_MARKER_PERMISSIONS.has(collaboratorPermission(owner, repo, normalized).permission);
+  const trusted = TRUSTED_MARKER_PERMISSIONS.has(
+    collaboratorPermission(owner, repo, normalized, collaboratorPermissionCache).permission,
+  );
 
   trustedMarkerAuthorCache.set(cacheKey, trusted);
   return trusted;
@@ -340,43 +298,6 @@ function currentViewerLogin() {
     cachedCurrentViewerLogin = "";
   }
   return cachedCurrentViewerLogin;
-}
-
-function collaboratorPermission(owner, repo, login) {
-  const cacheKey = `${owner}/${repo}:${login}`;
-  if (collaboratorPermissionCache.has(cacheKey)) {
-    return collaboratorPermissionCache.get(cacheKey);
-  }
-
-  // Return both the legacy `permission` and the granular `role_name`.
-  // `permission` collapses maintain -> write / triage -> read, so a
-  // literal `maintain` check on it would silently reject legitimate
-  // maintainers. Callers apply each policy against the matching field
-  // (isAuthorizedForcedHandoffActor checks both; isTrustedMarkerAuthor
-  // keeps the legacy-permission check via .permission since
-  // TRUSTED_MARKER_PERMISSIONS already accepts write).
-  // Mirrored from `scripts/resume-claim-routing.mjs` (PR #750 / #753).
-  let permission = "";
-  let roleName = "";
-  try {
-    const raw = execFileSync(
-      "gh",
-      [
-        "api",
-        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-      ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-    );
-    const parsed = JSON.parse(raw);
-    permission = String(parsed?.permission ?? "").trim().toLowerCase();
-    roleName = String(parsed?.role_name ?? "").trim().toLowerCase();
-  } catch {
-    // both stay empty
-  }
-
-  const result = { permission, roleName };
-  collaboratorPermissionCache.set(cacheKey, result);
-  return result;
 }
 
 function configuredTrustedMarkerAuthors() {
