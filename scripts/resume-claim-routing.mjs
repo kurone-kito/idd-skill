@@ -258,6 +258,19 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
         );
         continue;
       }
+      const authorLogin = String(event.author?.login ?? "").trim().toLowerCase();
+      const forcedByLogin = String(forcedHandoff.forcedBy ?? "").trim().toLowerCase();
+      // Bind the asserted forcedBy identity to the comment author so a
+      // trusted-marker actor cannot self-attest a handoff by naming an
+      // unrelated maintainer in the payload. Without this binding the
+      // collaborator-permission lookup downstream would happily authorize
+      // any maintainer login the attacker types into the payload.
+      if (!authorLogin || authorLogin !== forcedByLogin) {
+        warnings.push(
+          `ignored forced-handoff for ${forcedHandoff.oldClaimId}: comment author ${event.author?.login ?? "(unknown)"} does not match forcedBy ${forcedHandoff.forcedBy}`,
+        );
+        continue;
+      }
       if (!isAuthorizedForcedHandoff(forcedHandoff.forcedBy, forcedHandoff, event)) {
         warnings.push(
           `ignored forced-handoff for ${forcedHandoff.oldClaimId}: forcedBy ${forcedHandoff.forcedBy} is not an authorized maintainer`,
