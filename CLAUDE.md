@@ -8,9 +8,9 @@ project.
 **Canonical reference**: The full, authoritative project guidance
 lives in
 [`.github/copilot-instructions.md`](.github/copilot-instructions.md).
-This file contains tool-specific guidance for Codex. When
-Copilot-specific workflow names appear, apply the intent in Codex
-using Codex's own interaction model rather than following product
+This file contains tool-specific guidance for Claude. When
+Copilot-specific workflow names appear, apply the intent in Claude
+using Claude's own interaction model rather than following product
 terms literally.
 
 ## Minimum requirements
