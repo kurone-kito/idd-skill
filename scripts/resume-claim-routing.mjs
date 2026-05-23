@@ -583,13 +583,19 @@ function collaboratorPermission(owner, repo, login, cache) {
   if (cache.has(login)) {
     return cache.get(login);
   }
+  // GitHub's `permission` field is the legacy base permission and
+  // collapses `maintain` and `triage` down to `write` and `read`
+  // respectively, which would reject legitimate maintainers under the
+  // default `owners-and-maintainers-only` authority policy. Read
+  // `role_name` to recover the granular role; fall back to `permission`
+  // only if `role_name` is unavailable.
   let permission = "";
   try {
     permission = ghText([
       "api",
       `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
       "--jq",
-      ".permission",
+      ".role_name // .permission // \"\"",
     ]).toLowerCase();
   } catch {
     permission = "";
