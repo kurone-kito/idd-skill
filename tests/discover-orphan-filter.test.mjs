@@ -312,7 +312,7 @@ test("filterOrphanIssues handles pagination with PR-heavy pages", () => {
   assert.equal(result.orphans[0].reason, "blocked_references_closed");
 });
 
-test("filterOrphanIssues ranks orphans by autopilot-suitability and routes below-floor to humans", () => {
+test("filterOrphanIssues ranks orphans by autopilot-suitability and routes below-floor to humans (autopilot)", () => {
   const m = (n) => `<!-- idd-skill-autopilot-suitability: ${n} -->`;
   const issues = [
     { number: 1, title: "low", state: "OPEN", body: `task\n${m(1)}` },
@@ -324,6 +324,7 @@ test("filterOrphanIssues ranks orphans by autopilot-suitability and routes below
     issueStateByNumber: new Map(),
     fetchIssueStateByNumber: () => "UNRESOLVABLE",
     autopilotSuitabilityFloor: 3,
+    autopilot: true,
   });
 
   // High first; unscored kept (floor baseline), below-floor routed out.
@@ -332,6 +333,37 @@ test("filterOrphanIssues ranks orphans by autopilot-suitability and routes below
   assert.equal(result.counts.routed_to_human, 1);
   assert.equal(result.orphans.find((o) => o.number === 2).autopilotSuitability, 5);
   assert.equal(result.orphans.find((o) => o.number === 4).autopilotSuitability, null);
+});
+
+test("filterOrphanIssues keeps below-floor orphans selectable in attended (default) mode", () => {
+  const m = (n) => `<!-- idd-skill-autopilot-suitability: ${n} -->`;
+  const issues = [
+    { number: 1, title: "low", state: "OPEN", body: `task\n${m(1)}` },
+    { number: 2, title: "high", state: "OPEN", body: `task\n${m(5)}` },
+  ];
+  const result = filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => "UNRESOLVABLE",
+    autopilotSuitabilityFloor: 3,
+    // autopilot omitted -> attended: nothing routed out; below-floor ranked last.
+  });
+
+  assert.deepEqual(result.orphans.map((o) => o.number), [2, 1]);
+  assert.deepEqual(result.routed_to_human, []);
+});
+
+test("filterOrphanIssues tie-breaks equal scores by lowest issue number", () => {
+  const m = (n) => `<!-- idd-skill-autopilot-suitability: ${n} -->`;
+  const issues = [
+    { number: 20, title: "twenty", state: "OPEN", body: `task\n${m(5)}` },
+    { number: 7, title: "seven", state: "OPEN", body: `task\n${m(5)}` },
+    { number: 13, title: "thirteen", state: "OPEN", body: `task\n${m(5)}` },
+  ];
+  const result = filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => "UNRESOLVABLE",
+  });
+  assert.deepEqual(result.orphans.map((o) => o.number), [7, 13, 20]);
 });
 
 test("filterOrphanIssues leaves orphans unrouted when suitability is disabled", () => {

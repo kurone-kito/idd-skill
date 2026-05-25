@@ -172,12 +172,17 @@ export function filterOrphanIssues(issues, options = {}) {
   }
 
   // Rank the orphan candidate list by authored autopilot-suitability
-  // score and route below-floor candidates to a human bucket. This is
-  // advisory: the A4.5/A5 gates still run on any selected candidate,
-  // and unscored issues are never routed out (fail-safe).
-  const { ranked, routedToHuman } = rankAndRouteBySuitability(orphans, {
+  // score. Pre-sort by issue number so equal scores resolve by lowest
+  // number (the Step 2 tie-break) rather than by API fetch order.
+  // Below-floor routing is opt-in (autopilot runs only): in attended
+  // discovery the low-score issues stay selectable, just ranked last.
+  // Advisory throughout — the A4.5/A5 gates still run on any selected
+  // candidate, and unscored issues are never routed out (fail-safe).
+  const orphansByNumber = [...orphans].sort((left, right) => left.number - right.number);
+  const { ranked, routedToHuman } = rankAndRouteBySuitability(orphansByNumber, {
     floor: options.autopilotSuitabilityFloor ?? DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
     enabled: options.autopilotSuitabilityEnabled !== false,
+    routeBelowFloor: options.autopilot === true,
     getScore: (orphan) => orphan.autopilotSuitability,
   });
 
@@ -225,6 +230,7 @@ function runCli() {
     authoringStaleAgeMs: policy.authoringStaleAgeMs,
     autopilotSuitabilityFloor: policy.autopilotSuitabilityFloor,
     autopilotSuitabilityEnabled: policy.autopilotSuitabilityEnabled,
+    autopilot: args.autopilot,
     now: args.now || new Date(),
   });
 
@@ -256,6 +262,7 @@ function parseArgs(argv) {
     pr: null,
     help: false,
     now: "",
+    autopilot: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -290,6 +297,10 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (token === "--autopilot") {
+      parsed.autopilot = true;
+      continue;
+    }
     if (token === "--help" || token === "-h") {
       parsed.help = true;
       continue;
@@ -301,7 +312,7 @@ function parseArgs(argv) {
 
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>] [--pr <number>] [--now <ISO8601>]
+  node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>] [--pr <number>] [--now <ISO8601>] [--autopilot]
 
 Output schema:
 {
@@ -323,10 +334,12 @@ Output schema:
   "counts": {"scanned": 0, "orphans": 0, "routed_to_human": 0, "filtered": {...}, "unresolvable": 0}
 }
 
-orphans are ranked by authored autopilot-suitability score (high first);
-orphans whose score is below autopilotSuitabilityFloor (default 3) are
-moved to routed_to_human. A missing or out-of-range score is treated as
-no score: the issue stays in orphans and is never routed out.
+orphans are always ranked by authored autopilot-suitability score (high
+first; equal scores tie-break by lowest issue number). With --autopilot
+(autopilot runs), orphans whose score is below autopilotSuitabilityFloor
+(default 3) are moved to routed_to_human; without it (attended runs) they
+stay in orphans, ranked last. A missing or out-of-range score is treated
+as no score: the issue stays in orphans and is never routed out.
 `);
 }
 

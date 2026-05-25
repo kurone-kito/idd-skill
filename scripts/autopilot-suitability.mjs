@@ -73,16 +73,21 @@ export function normalizeAutopilotSuitabilityFloor(floor) {
  *
  * - `enabled: false` is a kill-switch: the items are returned
  *   unchanged with an empty routedToHuman bucket.
- * - Candidates whose score is present and `< floor` are moved to
- *   `routedToHuman` (kept visible, never discarded), preserving their
- *   original relative order.
- * - The remaining candidates (score `>= floor`, or no score) are
- *   stable-sorted by effective score descending, where a missing
- *   score uses the floor as a neutral baseline so unscored (e.g.
- *   pre-existing) issues are never buried and never skipped.
+ * - Ranking always runs (when enabled): items are stable-sorted by
+ *   effective score descending, where a missing score uses the floor as
+ *   a neutral baseline so unscored (e.g. pre-existing) issues are never
+ *   buried. Ties keep input order, so callers that need a domain
+ *   tie-break (e.g. lowest issue number) pre-sort the input by that key.
+ * - Routing is **opt-in** via `routeBelowFloor` (the autopilot-run
+ *   behavior). When true, candidates whose score is present and
+ *   `< floor` are moved to `routedToHuman` (kept visible, never
+ *   discarded). When false (the attended-safe default), below-floor
+ *   candidates stay in `ranked` — they simply sort to the bottom by
+ *   their real score — so attended discovery never loses a selectable
+ *   issue.
  *
  * @param {Array} items
- * @param {{floor?: number, enabled?: boolean, getScore: (item: any) => (number|null)}} options
+ * @param {{floor?: number, enabled?: boolean, routeBelowFloor?: boolean, getScore: (item: any) => (number|null)}} options
  * @returns {{ranked: Array, routedToHuman: Array}}
  */
 export function rankAndRouteBySuitability(items, options = {}) {
@@ -92,6 +97,7 @@ export function rankAndRouteBySuitability(items, options = {}) {
     return { ranked: list, routedToHuman: [] };
   }
   const floor = normalizeAutopilotSuitabilityFloor(options.floor);
+  const routeBelowFloor = options.routeBelowFloor === true;
 
   // Compute each item's score exactly once and reuse it for both routing
   // and ranking, so a non-trivial or non-deterministic getScore cannot
@@ -105,7 +111,7 @@ export function rankAndRouteBySuitability(items, options = {}) {
   const routedToHuman = [];
   const eligible = [];
   for (const entry of scored) {
-    if (entry.score !== null && entry.score < floor) {
+    if (routeBelowFloor && entry.score !== null && entry.score < floor) {
       routedToHuman.push(entry);
     } else {
       eligible.push(entry);

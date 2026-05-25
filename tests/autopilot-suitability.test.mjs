@@ -45,7 +45,24 @@ test("normalizeAutopilotSuitabilityFloor clamps to default for bad input", () =>
   assert.equal(normalizeAutopilotSuitabilityFloor(undefined), DEFAULT_AUTOPILOT_SUITABILITY_FLOOR);
 });
 
-test("rankAndRouteBySuitability ranks high first and routes below-floor to humans", () => {
+test("rankAndRouteBySuitability ranks high first and routes below-floor to humans (autopilot)", () => {
+  const items = [
+    { id: "a", score: 2 },
+    { id: "b", score: 5 },
+    { id: "c", score: 3 },
+    { id: "d", score: 1 },
+    { id: "e", score: 4 },
+  ];
+  const { ranked, routedToHuman } = rankAndRouteBySuitability(items, {
+    floor: 3,
+    routeBelowFloor: true,
+    getScore: (item) => item.score,
+  });
+  assert.deepEqual(ranked.map((item) => item.id), ["b", "e", "c"]);
+  assert.deepEqual(routedToHuman.map((item) => item.id), ["a", "d"]);
+});
+
+test("rankAndRouteBySuitability keeps below-floor items ranked last when routing is off (attended)", () => {
   const items = [
     { id: "a", score: 2 },
     { id: "b", score: 5 },
@@ -57,8 +74,9 @@ test("rankAndRouteBySuitability ranks high first and routes below-floor to human
     floor: 3,
     getScore: (item) => item.score,
   });
-  assert.deepEqual(ranked.map((item) => item.id), ["b", "e", "c"]);
-  assert.deepEqual(routedToHuman.map((item) => item.id), ["a", "d"]);
+  // Nothing routed out; below-floor (2, 1) sink to the bottom by real score.
+  assert.deepEqual(routedToHuman, []);
+  assert.deepEqual(ranked.map((item) => item.id), ["b", "e", "c", "a", "d"]);
 });
 
 test("rankAndRouteBySuitability never routes or buries unscored items (fail-safe)", () => {
@@ -70,6 +88,7 @@ test("rankAndRouteBySuitability never routes or buries unscored items (fail-safe
   ];
   const { ranked, routedToHuman } = rankAndRouteBySuitability(items, {
     floor: 3,
+    routeBelowFloor: true,
     getScore: (item) => item.score,
   });
   // Only the real below-floor score is routed out; unscored never are.
