@@ -80,5 +80,9 @@
     "maxClarificationRounds": 3,
     "authoringLabelName": "status:authoring",
     "authoringStaleAge": "PT4H"
+  },
+  "autopilotSuitability": {
+    "floor": 3,
+    "enabled": true
   }
 }

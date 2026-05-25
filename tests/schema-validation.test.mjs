@@ -264,6 +264,69 @@ test("policy schema rejects non-boolean issue-author approval opt-out", () => {
   );
 });
 
+test("policy schema accepts an in-range autopilotSuitability floor", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  for (const floor of [1, 2, 3, 4, 5]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+    );
+    instance.autopilotSuitability = { floor };
+    const errors = validate(instance, schema);
+    assert.deepEqual(errors, [], `floor ${floor}: ${errors.join("\n")}`);
+  }
+});
+
+test("policy schema accepts autopilotSuitability.enabled and omitted floor", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+  );
+  instance.autopilotSuitability = { enabled: false };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test("policy schema rejects an out-of-range autopilotSuitability floor", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  for (const floor of [0, 6]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+    );
+    instance.autopilotSuitability = { floor };
+    const errors = validate(instance, schema);
+    assert.ok(
+      errors.some((error) => error.includes("$.autopilotSuitability.floor")),
+      `floor ${floor} should be rejected: ${errors.join("\n")}`,
+    );
+  }
+});
+
+test("policy schema rejects a non-integer autopilotSuitability floor", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+  );
+  instance.autopilotSuitability = { floor: "3" };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes("$.autopilotSuitability.floor")),
+    errors.join("\n"),
+  );
+});
+
+test("policy schema rejects unknown keys inside autopilotSuitability", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+  );
+  instance.autopilotSuitability = { floor: 3, weight: 2 };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes('additional property "weight"')),
+    errors.join("\n"),
+  );
+});
+
 test("policy schema accepts x-* extension keys", () => {
   const schema = loadJson("schemas/policy.schema.json");
   const instance = JSON.parse(

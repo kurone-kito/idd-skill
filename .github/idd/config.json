@@ -27,5 +27,8 @@
   "forcedHandoff": {
     "mode": "human-gated",
     "authorityPolicy": "owners-and-maintainers-only"
+  },
+  "autopilotSuitability": {
+    "floor": 3
   }
 }

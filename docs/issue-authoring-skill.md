@@ -131,6 +131,32 @@ until all three pass.
 These supporting axes determine whether a ready task becomes an orphan
 issue, a roadmap plus sub-issues, or a non-ready bucket.
 
+### Autopilot-suitability score
+
+The **Autonomous completion** axis is also persisted as a graded
+**autopilot-suitability score** (1-5, higher = more
+autopilot-suitable) so the discover phase can rank and route
+candidates without re-deriving the judgment. This is a **planned
+contract**: the score is _defined_ here and in the contract, while
+authoring emission lands in T2 (#761) and discover ranking +
+routing in T3 (#762) of roadmap #759. Once T2 lands, authoring
+will score every drafted issue and emit it as an end-of-body
+footer (a visible line plus a hidden, prefix-aware marker
+`<!-- {marker-prefix}-autopilot-suitability: N -->`). See the
+[Autopilot-suitability score](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#autopilot-suitability-score)
+section of the contract for the rubric, footer format, and binding
+rules.
+
+- `5` autopilot-ideal · `4` strongly autopilot-suitable ·
+  `3` borderline · `2` mostly human · `1` human-only.
+- Scores below the configured floor (`autopilotSuitability.floor`,
+  default `3`) designate human-oriented issues that discover will
+  route to humans once T3 lands.
+- The score is an **advisory** ranking/routing hint only; it never
+  bypasses the A4.5/A5 gates, a `1` must agree with
+  `status:blocked-by-human`, and a missing or out-of-range score is
+  treated as having no score (evaluated normally, never skipped).
+
 ## Specificity target
 
 Issue drafting should aim for a level of specificity where a
