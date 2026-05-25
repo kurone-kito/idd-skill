@@ -136,13 +136,13 @@ issue, a roadmap plus sub-issues, or a non-ready bucket.
 The **Autonomous completion** axis is also persisted as a graded
 **autopilot-suitability score** (1-5, higher = more
 autopilot-suitable) so the discover phase can rank and route
-candidates without re-deriving the judgment. This is a **planned
-contract**: the score is _defined_ here and in the contract, while
-authoring emission lands in T2 (#761) and discover ranking +
-routing in T3 (#762) of roadmap #759. Once T2 lands, authoring
-will score every drafted issue and emit it as an end-of-body
-footer (a visible line plus a hidden, prefix-aware marker
-`<!-- {marker-prefix}-autopilot-suitability: N -->`). See the
+candidates without re-deriving the judgment. **Score every drafted
+issue and emit it** as an end-of-body footer (a visible line plus
+a hidden, prefix-aware marker
+`<!-- {marker-prefix}-autopilot-suitability: N -->`). Discover
+ranking + routing by the score is still planned (T3 / #762 of
+roadmap #759); until it lands the score is recorded but does not
+yet influence candidate selection. See the
 [Autopilot-suitability score](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#autopilot-suitability-score)
 section of the contract for the rubric, footer format, and binding
 rules.

@@ -98,6 +98,8 @@ Before you publish a `ready` issue, confirm:
 - `## Proposed change`
 - `## Acceptance criteria`
 - optional `## Candidate files`
+- an autopilot-suitability footer at the end of the body (visible
+  line + `<!-- <marker-prefix>-autopilot-suitability: N -->` marker)
 
 Use this shape when the work is narrow enough to pass the IDD viability
 gate on its own and the target repository can actually discover orphan
@@ -114,6 +116,7 @@ Roadmap issue:
 - `## Tracks`
 - `## Success criteria`
 - one `<!-- <marker-prefix>-roadmap-id: ... -->` marker
+- an autopilot-suitability footer at the end of the body
 
 Child issue:
 
@@ -122,6 +125,7 @@ Child issue:
 - `## Proposed change`
 - `## Acceptance criteria`
 - optional dependency line or sequential roadmap marker when needed
+- an autopilot-suitability footer at the end of the body
 
 Keep ready child issues in the roadmap task list rather than grouping
 them with hidden dependency markers.
