@@ -387,12 +387,21 @@ marginally-ready issue.
 
 ## Autopilot-suitability score
 
-Every authored issue carries a persisted **autopilot-suitability
-score** from 1 to 5 (higher = more autopilot-suitable). It is the
-durable, graded form of the **Autonomous completion** execution
-axis: the author makes the judgment once, while context is fresh,
-so the Discover phase can rank and route candidates by a cheap
-read instead of re-deriving autonomy per candidate.
+> **Status — planned contract.** This section _defines_ the score
+> (rubric, footer format, binding rules). The active behavior is
+> wired up by follow-up work in roadmap #759: authoring emission
+> (T2 / #761) and Discover ranking + routing (T3 / #762). Until
+> those land, this is the stable spec — authoring does not yet
+> auto-emit the marker and Discover does not yet rank or route by
+> it.
+
+Authored issues are intended to carry a persisted
+**autopilot-suitability score** from 1 to 5 (higher = more
+autopilot-suitable). It is the durable, graded form of the
+**Autonomous completion** execution axis: the author makes the
+judgment once, while context is fresh, so the Discover phase can
+rank and route candidates by a cheap read instead of re-deriving
+autonomy per candidate.
 
 | Score | Meaning                     | Typical signals                                                                                                          |
 | ----- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -403,8 +412,9 @@ read instead of re-deriving autonomy per candidate.
 | 1     | Human-only                  | Interactive credentials, real deployment, subjective/design/product judgment, or external coordination                   |
 
 Scores below the configured discovery floor
-(`autopilotSuitability.floor`, default `3`) are **human-oriented
-issues**: Discover routes them to humans rather than autopilot.
+(`autopilotSuitability.floor`, default `3`) designate
+**human-oriented issues**: once T3 lands, Discover will route them
+to humans rather than autopilot.
 
 The score is recorded as a **footer at the end of the issue
 body** — a visible line paired with a hidden, prefix-aware
