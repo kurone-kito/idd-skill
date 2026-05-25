@@ -309,6 +309,9 @@ Validation expectations:
 - `## Background` or `## Goal`
 - `## Proposed change`
 - `## Acceptance criteria`
+- an autopilot-suitability footer at the end of the body (visible
+  line + `<!-- <marker-prefix>-autopilot-suitability: N -->` marker;
+  see [Autopilot-suitability score](#autopilot-suitability-score))
 
 Validation expectations:
 
@@ -317,6 +320,8 @@ Validation expectations:
 - acceptance criteria are explicitly verifiable
 - the issue stays discoverable under the target repository's
   `issue-scope` setting
+- exactly one autopilot-suitability footer with an integer 1-5
+  marker; a score of `1` also carries `status:blocked-by-human`
 
 ### Roadmap issue
 
@@ -326,6 +331,8 @@ Validation expectations:
 - `## Tracks`
 - `## Success criteria`
 - one `<!-- <marker-prefix>-roadmap-id: <roadmap-id> -->` marker
+- an autopilot-suitability footer at the end of the body (visible
+  line + `<!-- <marker-prefix>-autopilot-suitability: N -->` marker)
 
 Validation expectations:
 
@@ -336,6 +343,8 @@ Validation expectations:
 - each dependency edge is justified and preserves natural cohesion
 - nested roadmap entries stay identifiable as coordination/audit nodes
   instead of normal execution leaves
+- exactly one autopilot-suitability footer with an integer 1-5
+  marker; a score of `1` also carries `status:blocked-by-human`
 
 ### Child issue under a roadmap
 
@@ -344,6 +353,8 @@ Validation expectations:
 - `## Proposed change`
 - `## Acceptance criteria`
 - optional dependency line or sequential roadmap marker when needed
+- an autopilot-suitability footer at the end of the body (visible
+  line + `<!-- <marker-prefix>-autopilot-suitability: N -->` marker)
 
 Validation expectations:
 
@@ -352,6 +363,8 @@ Validation expectations:
 - any dependency marker is resolvable, intentionally chosen, and
   justified
 - the issue can be claimed independently without absorbing sibling work
+- exactly one autopilot-suitability footer with an integer 1-5
+  marker; a score of `1` also carries `status:blocked-by-human`
 
 ## A4.5 Suitability Gate Alignment
 
@@ -387,21 +400,17 @@ marginally-ready issue.
 
 ## Autopilot-suitability score
 
-> **Status — planned contract.** This section _defines_ the score
-> (rubric, footer format, binding rules). The active behavior is
-> wired up by follow-up work in roadmap #759: authoring emission
-> (T2 / #761) and Discover ranking + routing (T3 / #762). Until
-> those land, this is the stable spec — authoring does not yet
-> auto-emit the marker and Discover does not yet rank or route by
-> it.
+> **Status.** Authoring **emits** the score footer now (this is
+> the active contract). Discover ranking + routing by the score is
+> still planned (T3 / #762 of roadmap #759); until it lands the
+> score is recorded but does not yet influence candidate selection.
 
-Authored issues are intended to carry a persisted
-**autopilot-suitability score** from 1 to 5 (higher = more
-autopilot-suitable). It is the durable, graded form of the
-**Autonomous completion** execution axis: the author makes the
-judgment once, while context is fresh, so the Discover phase can
-rank and route candidates by a cheap read instead of re-deriving
-autonomy per candidate.
+Authored issues carry a persisted **autopilot-suitability score**
+from 1 to 5 (higher = more autopilot-suitable). It is the durable,
+graded form of the **Autonomous completion** execution axis: the
+author makes the judgment once, while context is fresh, so the
+Discover phase can rank and route candidates by a cheap read
+instead of re-deriving autonomy per candidate.
 
 | Score | Meaning                     | Typical signals                                                                                                          |
 | ----- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -451,6 +460,10 @@ Binding rules:
   out-of-range marker means "no score": Discover evaluates the
   issue the normal way and never skips it. Pre-existing issues
   with no score keep flowing.
+
+Backfill is opportunistic: when an existing open issue without a
+score footer is next edited by the authoring flow, add one. No
+bulk backfill of the existing backlog is required.
 
 ## Publication boundary
 
