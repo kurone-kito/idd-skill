@@ -442,7 +442,7 @@ After scanning the current batch:
 
 | Batch outcome                                                                       | Action                                                                                                                                                                                                  |
 | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| At least one eligible candidate in the batch                                        | Proceed to Step 2 and pick the lowest-numbered eligible candidate.                                                                                                                                      |
+| At least one eligible candidate in the batch                                        | Proceed to Step 2 to rank and select.                                                                                                                                                                   |
 | All `N` in this batch are claimed but viable survivors remain                       | Continue with the next batch (`N+1`–`2N`, then `2N+1`–`3N`, …) until an eligible candidate is found.                                                                                                    |
 | Entire viable candidate set exhausted (all surviving viable candidates are claimed) | Report that all viable issues are currently claimed; stop. Do not post `unclaimed-by` (no claim was made). Not an abort; retry later when claims may have become stale or new viable candidates appear. |
 
@@ -452,7 +452,14 @@ for why this pre-scan exists.
 ### Step 2 — Select
 
 Among the surviving viable and unclaimed issues (after Step 1.5), pick the
-one with the **lowest issue number**.
+**highest authored autopilot-suitability score** (the
+`<!-- {{PROJECT_MARKER_PREFIX}}-autopilot-suitability: N -->` footer, or the
+`discover-roadmap-graph` node's `autopilotSuitability`), tie-broken by
+**lowest issue number**. In autopilot runs, skip scores below
+`autopilotSuitability.floor` (default `3`) as human-oriented; a missing or
+out-of-range score is treated as no score — ranked at the floor and never
+skipped, so the unscored backlog flows as before. Advisory only: the pick
+still passes A4.5/A5 unchanged and the score never bypasses a gate.
 
 After picking, continue to **A4.5** (`idd-suitability.instructions.md`).
 
