@@ -6,6 +6,10 @@ import { join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { inspectHelperRuntimeConfig, parseProjectCommandRows } from "./policy-helpers.mjs"
+import {
+  isAutopilotSuitabilityScore,
+  normalizeAutopilotSuitabilityFloor,
+} from "./autopilot-suitability.mjs"
 
 const WORKSHOP_ENTRY_POINTS = ["README.md", "README.ja.md", "docs/index.md"]
 const WORKSHOP_REL_PATH = "docs/workshop"
@@ -84,8 +88,115 @@ export function runDoctor({
   )
   checkWorkshopExampleRepoBackLink(root, { requireGithub }, report)
   checkGithubReadiness(root, requireGithub, report)
+  checkAutopilotSuitabilityConsistency(root, { requireGithub, markerPrefix }, report)
 
   return report
+}
+
+/**
+ * Classify each open issue's authored autopilot-suitability marker and
+ * emit warning strings for contradictions, without any I/O. Exported
+ * for unit testing. Issues are `{ number, body, labels }` where labels
+ * are strings or `{ name }` objects.
+ */
+export function evaluateAutopilotSuitabilityConsistency(issues, options = {}) {
+  const floor = normalizeAutopilotSuitabilityFloor(options.floor)
+  const prefix =
+    typeof options.markerPrefix === "string" && options.markerPrefix.length > 0
+      ? options.markerPrefix
+      : "idd-skill"
+  const warnings = []
+  for (const issue of Array.isArray(issues) ? issues : []) {
+    const labelNames = new Set(
+      (issue?.labels ?? []).map((label) =>
+        typeof label === "string" ? label : label?.name ?? "",
+      ),
+    )
+    const blockedByHuman = labelNames.has("status:blocked-by-human")
+    const marker = detectAutopilotSuitabilityMarker(issue?.body, prefix)
+    if (!marker.present) {
+      continue
+    }
+    const number = issue?.number
+    if (marker.malformed) {
+      warnings.push(
+        `autopilot-suitability: issue #${number} has a malformed or out-of-range score marker (expected a single integer 1-5)`,
+      )
+      continue
+    }
+    if (marker.value === 1 && !blockedByHuman) {
+      warnings.push(
+        `autopilot-suitability: issue #${number} is scored 1 (human-only) but is missing the status:blocked-by-human label`,
+      )
+    } else if (marker.value >= floor && blockedByHuman) {
+      warnings.push(
+        `autopilot-suitability: issue #${number} is scored ${marker.value} (>= floor ${floor}) but carries status:blocked-by-human; the score and label disagree`,
+      )
+    }
+  }
+  return { warnings }
+}
+
+function detectAutopilotSuitabilityMarker(body, prefix) {
+  const regex = new RegExp(
+    `<!--\\s*${escapeRegex(prefix)}-autopilot-suitability:\\s*([^\\s>]+)\\s*-->`,
+    "gi",
+  )
+  const raws = [...String(body ?? "").matchAll(regex)].map((match) => match[1])
+  if (raws.length === 0) {
+    return { present: false, value: null, malformed: false }
+  }
+  const values = raws.map((raw) => (/^\d+$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN))
+  const distinct = new Set(values)
+  if (!values.every(isAutopilotSuitabilityScore) || distinct.size !== 1) {
+    return { present: true, value: null, malformed: true }
+  }
+  return { present: true, value: [...distinct][0], malformed: false }
+}
+
+function checkAutopilotSuitabilityConsistency(root, options, report) {
+  const requireGithub = options.requireGithub === true
+  const recordGhFailure = (message) => {
+    if (requireGithub) {
+      report.errors.push(`autopilot-suitability consistency check: ${message}`)
+    }
+  }
+
+  const list = runCommand(
+    "gh",
+    ["issue", "list", "--state", "open", "--json", "number,labels,body", "--limit", "1000"],
+    root,
+  )
+  if (!list.ok) {
+    recordGhFailure("gh issue list unavailable")
+    return
+  }
+  let issues
+  try {
+    issues = JSON.parse(list.stdout)
+  } catch {
+    recordGhFailure("gh issue list returned invalid JSON")
+    return
+  }
+  if (!Array.isArray(issues) || issues.length === 0) {
+    return
+  }
+
+  let floor
+  try {
+    const config = JSON.parse(readFileSync(join(root, ".github/idd/config.json"), "utf8"))
+    floor = config?.autopilotSuitability?.floor
+  } catch {
+    floor = undefined
+  }
+
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(issues, {
+    floor,
+    markerPrefix: options.markerPrefix,
+  })
+  for (const warning of warnings) {
+    report.warnings.push(warning)
+  }
 }
 
 export function parsePrimaryWorktreePath(porcelain) {

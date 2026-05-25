@@ -9,6 +9,7 @@ import {
   containsExampleRepoBackLink,
   containsWorkshopReference,
   decodeGithubReadmeBase64,
+  evaluateAutopilotSuitabilityConsistency,
   extractMarkerPrefixes,
   findMissingWorkshopReferences,
   findPlaceholders,
@@ -17,6 +18,68 @@ import {
   parseProjectCommandRows,
   stripMarkdownNonText,
 } from "../scripts/idd-doctor.mjs"
+
+const ap = (n) => `<!-- idd-skill-autopilot-suitability: ${n} -->`
+
+test("autopilot-suitability consistency: valid score+label combinations produce no warnings", () => {
+  const issues = [
+    { number: 1, body: `task\n${ap(5)}`, labels: [] },
+    { number: 2, body: `task\n${ap(4)}`, labels: [{ name: "enhancement" }] },
+    { number: 3, body: `human-only\n${ap(1)}`, labels: ["status:blocked-by-human"] },
+    { number: 4, body: "no score marker at all", labels: [] },
+  ]
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(issues, { floor: 3 })
+  assert.deepEqual(warnings, [])
+})
+
+test("autopilot-suitability consistency: score 1 without blocked-by-human warns", () => {
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 7, body: `task\n${ap(1)}`, labels: [] }],
+    { floor: 3 },
+  )
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /issue #7 is scored 1 .* missing the status:blocked-by-human label/)
+})
+
+test("autopilot-suitability consistency: score >= floor with blocked-by-human warns", () => {
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 8, body: `task\n${ap(4)}`, labels: ["status:blocked-by-human"] }],
+    { floor: 3 },
+  )
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /issue #8 is scored 4 \(>= floor 3\) but carries status:blocked-by-human/)
+})
+
+test("autopilot-suitability consistency: malformed or conflicting markers warn", () => {
+  const issues = [
+    { number: 9, body: `task\n${ap(6)}`, labels: [] },
+    { number: 10, body: `task\n${ap("high")}`, labels: [] },
+    { number: 11, body: `task\n${ap(4)}\n${ap(2)}`, labels: [] },
+  ]
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(issues, { floor: 3 })
+  assert.equal(warnings.length, 3)
+  assert.ok(warnings.every((w) => /malformed or out-of-range score marker/.test(w)))
+})
+
+test("autopilot-suitability consistency: missing marker never warns (fail-safe)", () => {
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 12, body: "ordinary issue, no score", labels: ["status:blocked-by-human"] }],
+    { floor: 3 },
+  )
+  assert.deepEqual(warnings, [])
+})
+
+test("autopilot-suitability consistency: honors a custom floor and marker prefix", () => {
+  const issues = [
+    // floor 4: score 3 with blocked-by-human is NOT >= floor, so no warning.
+    { number: 13, body: `t\n<!-- my-org-autopilot-suitability: 3 -->`, labels: ["status:blocked-by-human"] },
+    // floor 4: score 4 with blocked-by-human warns.
+    { number: 14, body: `t\n<!-- my-org-autopilot-suitability: 4 -->`, labels: ["status:blocked-by-human"] },
+  ]
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(issues, { floor: 4, markerPrefix: "my-org" })
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /issue #14 is scored 4 \(>= floor 4\)/)
+})
 
 test("findPlaceholders returns template tokens", () => {
   const placeholders = findPlaceholders(`
