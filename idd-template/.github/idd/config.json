@@ -23,5 +23,8 @@
     "profile": "package-manager"
   },
   "issueScope": "roadmap",
-  "orphanFirstPolicy": "none"
+  "orphanFirstPolicy": "none",
+  "autopilotSuitability": {
+    "floor": 3
+  }
 }

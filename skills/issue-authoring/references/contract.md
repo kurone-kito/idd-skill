@@ -385,6 +385,63 @@ If any check is uncertain, route the issue to `needs-decision` or
 `blocked-by-human` during drafting instead of publishing a
 marginally-ready issue.
 
+## Autopilot-suitability score
+
+Every authored issue carries a persisted **autopilot-suitability
+score** from 1 to 5 (higher = more autopilot-suitable). It is the
+durable, graded form of the **Autonomous completion** execution
+axis: the author makes the judgment once, while context is fresh,
+so the Discover phase can rank and route candidates by a cheap
+read instead of re-deriving autonomy per candidate.
+
+| Score | Meaning                     | Typical signals                                                                                                          |
+| ----- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 5     | Autopilot-ideal             | Fully specified; deterministic verification (tests/lint/CI/mechanical); no external systems; no human judgment; isolated |
+| 4     | Strongly autopilot-suitable | Well-specified and verifiable; minor ambiguity resolvable from repo context; no external/human dependency                |
+| 3     | Borderline / mixed          | Autopilot can likely finish but with notable judgment, weaker verification, or review-attention risk                     |
+| 2     | Mostly human                | Agent may draft a partial result; completion needs human judgment, an asset, or review the agent cannot supply           |
+| 1     | Human-only                  | Interactive credentials, real deployment, subjective/design/product judgment, or external coordination                   |
+
+Scores below the configured discovery floor
+(`autopilotSuitability.floor`, default `3`) are **human-oriented
+issues**: Discover routes them to humans rather than autopilot.
+
+The score is recorded as a **footer at the end of the issue
+body** — a visible line paired with a hidden, prefix-aware
+machine marker, mirroring the `claimed-by` convention (visible
+note + HTML marker):
+
+```text
+---
+
+_Autopilot suitability: N / 5 -- higher is more autopilot-suitable;
+below the configured floor is human-oriented._
+
+<!-- {marker-prefix}-autopilot-suitability: N -->
+```
+
+Binding rules:
+
+- **Authoritative value = the HTML marker**, read prefix-aware via
+  `createMarkerRegex(markerPrefix, "autopilot-suitability")` exactly
+  as `roadmap-id` / `blocked-by` are. `N` is an integer 1-5. The
+  visible line is a human-readable mirror authoring keeps in sync;
+  discovery parses only the marker.
+- **Authoring marker, not operational marker.** This is body
+  content like `roadmap-id`; it must never be added to
+  `OPERATIONAL_MARKERS` in `scripts/protocol-helpers.mjs` or
+  subjected to F4 minimization.
+- **One source of truth.** A score of `1` must agree with
+  `status:blocked-by-human`; never publish a contradiction.
+- **Advisory, never a gate.** The score only ranks/routes
+  candidates. The A4.5 suitability gate and A5 claim safety checks
+  still run unchanged on whatever issue is selected; a high score
+  never bypasses a gate.
+- **Fail-safe on absence.** A missing, non-integer, or
+  out-of-range marker means "no score": Discover evaluates the
+  issue the normal way and never skips it. Pre-existing issues
+  with no score keep flowing.
+
 ## Publication boundary
 
 Drafting issues does not authorize publishing them or starting the IDD

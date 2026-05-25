@@ -417,6 +417,21 @@
           "pattern": "^P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
         }
       }
+    },
+    "autopilotSuitability": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "floor": {
+          "type": "integer",
+          "enum": [1, 2, 3, 4, 5],
+          "description": "Discovery skip floor (default 3 when absent). Autopilot considers issues whose authored autopilot-suitability score is >= floor; scores below the floor are routed to humans. Advisory ranking/routing hint only; never bypasses the A4.5/A5 safety gates."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "When false, discovery ignores the score entirely and evaluates every candidate the legacy way (default true)."
+        }
+      }
     }
   },
   "patternProperties": {
