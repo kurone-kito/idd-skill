@@ -93,27 +93,31 @@ export function rankAndRouteBySuitability(items, options = {}) {
   }
   const floor = normalizeAutopilotSuitabilityFloor(options.floor);
 
+  // Compute each item's score exactly once and reuse it for both routing
+  // and ranking, so a non-trivial or non-deterministic getScore cannot
+  // produce inconsistent decisions. Any non-finite value (null, NaN, …)
+  // is treated as "no score".
+  const scored = list.map((item, index) => {
+    const raw = getScore(item);
+    return { item, index, score: Number.isFinite(raw) ? raw : null };
+  });
+
   const routedToHuman = [];
   const eligible = [];
-  for (const item of list) {
-    const score = getScore(item);
-    if (typeof score === "number" && score < floor) {
-      routedToHuman.push(item);
+  for (const entry of scored) {
+    if (entry.score !== null && entry.score < floor) {
+      routedToHuman.push(entry);
     } else {
-      eligible.push(item);
+      eligible.push(entry);
     }
   }
 
   const ranked = eligible
-    .map((item, index) => ({ item, index, effective: effectiveScore(getScore(item), floor) }))
-    .sort((left, right) => (right.effective - left.effective) || (left.index - right.index))
+    .sort((left, right) =>
+      ((right.score ?? floor) - (left.score ?? floor)) || (left.index - right.index))
     .map((entry) => entry.item);
 
-  return { ranked, routedToHuman };
-}
-
-function effectiveScore(score, floor) {
-  return typeof score === "number" ? score : floor;
+  return { ranked, routedToHuman: routedToHuman.map((entry) => entry.item) };
 }
 
 function escapeRegex(value) {
