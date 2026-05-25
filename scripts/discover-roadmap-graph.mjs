@@ -5,6 +5,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parseAutopilotSuitability } from "./autopilot-suitability.mjs";
+
 const DEFAULT_MARKER_PREFIX = "idd-skill";
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({ __iddLookupStatus: "inaccessible" });
 const INACCESSIBLE_HTTP_STATUSES = new Set([403, 410, 451]);
@@ -99,6 +101,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       labels: [...node.labels].sort(),
       classification: node.classification,
       roadmapMarkerId: node.roadmapMarkerId,
+      autopilotSuitability: node.autopilotSuitability ?? null,
       depth: node.depth,
     }))
     .sort(compareByNumber);
@@ -261,6 +264,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       labels: issue.labels,
       classification: classification.kind,
       roadmapMarkerId: classification.roadmapMarkerId,
+      autopilotSuitability: parseAutopilotSuitability(issue.body, markerPrefix),
       depth,
     });
     recordProvenancePath(issue.number, path);

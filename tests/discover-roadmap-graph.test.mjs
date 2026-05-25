@@ -649,3 +649,19 @@ function executionIssue(number, body, state = "open") {
     labels: [],
   };
 }
+
+test("nodes carry the authored autopilot-suitability score (null when unscored)", async () => {
+  const issues = new Map([
+    [500, roadmapIssue(500, "- [ ] #501\n- [ ] #502", "score-roadmap")],
+    [501, executionIssue(501, "task one\n<!-- idd-skill-autopilot-suitability: 5 -->")],
+    [502, executionIssue(502, "task two with no score")],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(500, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  const byNumber = new Map(graph.nodes.map((node) => [node.number, node]));
+  assert.equal(byNumber.get(501).autopilotSuitability, 5);
+  assert.equal(byNumber.get(502).autopilotSuitability, null);
+});

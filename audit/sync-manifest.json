@@ -158,7 +158,7 @@
         ".github/instructions/idd-suitability.instructions.md",
         ".github/instructions/idd-claim.instructions.md"
       ],
-      "limitBytes": 75300
+      "limitBytes": 76000
     },
     {
       "id": "bundle-resume",

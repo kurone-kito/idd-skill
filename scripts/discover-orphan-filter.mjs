@@ -9,6 +9,11 @@ import {
   buildAuthoringLabelWarning,
   resolveAuthoringGuardPolicy,
 } from "./authoring-label-guard.mjs";
+import {
+  DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
+  parseAutopilotSuitability,
+  rankAndRouteBySuitability,
+} from "./autopilot-suitability.mjs";
 
 const DEFAULT_MARKER_PREFIX = "idd-skill";
 const BLOCKED_LABELS = new Set(["status:blocked-by-human", "status:needs-decision"]);
@@ -158,6 +163,7 @@ export function filterOrphanIssues(issues, options = {}) {
         state: issue.state,
         reason: result.reason,
         url: issue.url ?? "",
+        autopilotSuitability: parseAutopilotSuitability(issue.body, options.markerPrefix),
       });
       continue;
     }
@@ -165,9 +171,20 @@ export function filterOrphanIssues(issues, options = {}) {
     filtered[result.reason].push(entry);
   }
 
+  // Rank the orphan candidate list by authored autopilot-suitability
+  // score and route below-floor candidates to a human bucket. This is
+  // advisory: the A4.5/A5 gates still run on any selected candidate,
+  // and unscored issues are never routed out (fail-safe).
+  const { ranked, routedToHuman } = rankAndRouteBySuitability(orphans, {
+    floor: options.autopilotSuitabilityFloor ?? DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
+    enabled: options.autopilotSuitabilityEnabled !== false,
+    getScore: (orphan) => orphan.autopilotSuitability,
+  });
+
   const counts = {
     scanned: issues.length,
-    orphans: orphans.length,
+    orphans: ranked.length,
+    routed_to_human: routedToHuman.length,
     filtered: Object.fromEntries(
       Object.entries(filtered).map(([reason, entries]) => [reason, entries.length]),
     ),
@@ -175,7 +192,8 @@ export function filterOrphanIssues(issues, options = {}) {
   };
 
   return {
-    orphans,
+    orphans: ranked,
+    routed_to_human: routedToHuman,
     filtered,
     unresolvable,
     warnings,
@@ -205,6 +223,8 @@ function runCli() {
     markerPrefix: policy.markerPrefix,
     authoringLabelName: policy.authoringLabelName,
     authoringStaleAgeMs: policy.authoringStaleAgeMs,
+    autopilotSuitabilityFloor: policy.autopilotSuitabilityFloor,
+    autopilotSuitabilityEnabled: policy.autopilotSuitabilityEnabled,
     now: args.now || new Date(),
   });
 
@@ -219,6 +239,8 @@ function runCli() {
       markerPrefix: policy.markerPrefix,
       authoringLabelName: policy.authoringLabelName,
       authoringStaleAge: policy.authoringStaleAge,
+      autopilotSuitabilityFloor: policy.autopilotSuitabilityFloor,
+      autopilotSuitabilityEnabled: policy.autopilotSuitabilityEnabled,
     },
     ...result,
   };
@@ -285,8 +307,9 @@ Output schema:
 {
   "repository": {"owner": "...", "repo": "..."},
   "diagnostics": {"pr": 404},
-  "policy": {"source": "...", "orphanFirstPolicy": "none|maintainer-approved|public-disabled", "markerPrefix": "...", "authoringLabelName": "...", "authoringStaleAge": "..."},
-  "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|blocked_references_closed", "url": "..."}],
+  "policy": {"source": "...", "orphanFirstPolicy": "none|maintainer-approved|public-disabled", "markerPrefix": "...", "authoringLabelName": "...", "authoringStaleAge": "...", "autopilotSuitabilityFloor": 3, "autopilotSuitabilityEnabled": true},
+  "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|blocked_references_closed", "url": "...", "autopilotSuitability": 4}],
+  "routed_to_human": [{"number": 2, "title": "...", "state": "OPEN", "reason": "orphan", "url": "...", "autopilotSuitability": 1}],
   "filtered": {
     "roadmap_marker": [...],
     "blocked_by_marker": [...],
@@ -297,8 +320,13 @@ Output schema:
   },
   "unresolvable": [{"issue": 1, "reference": 2, "reason": "issue-not-found-or-inaccessible"}],
   "warnings": [{"issueNumber": 1, "message": "Warning: ..."}],
-  "counts": {"scanned": 0, "orphans": 0, "filtered": {...}, "unresolvable": 0}
+  "counts": {"scanned": 0, "orphans": 0, "routed_to_human": 0, "filtered": {...}, "unresolvable": 0}
 }
+
+orphans are ranked by authored autopilot-suitability score (high first);
+orphans whose score is below autopilotSuitabilityFloor (default 3) are
+moved to routed_to_human. A missing or out-of-range score is treated as
+no score: the issue stays in orphans and is never routed out.
 `);
 }
 
@@ -315,6 +343,8 @@ function loadPolicy(policyPath) {
       authoringLabelName: authoringPolicy.labelName,
       authoringStaleAge: authoringPolicy.staleAge,
       authoringStaleAgeMs: authoringPolicy.staleAgeMs,
+      autopilotSuitabilityFloor: resolveAutopilotSuitabilityFloor(config),
+      autopilotSuitabilityEnabled: resolveAutopilotSuitabilityEnabled(config),
     };
   } catch {
     const authoringPolicy = resolveAuthoringGuardPolicy({});
@@ -325,8 +355,21 @@ function loadPolicy(policyPath) {
       authoringLabelName: authoringPolicy.labelName,
       authoringStaleAge: authoringPolicy.staleAge,
       authoringStaleAgeMs: authoringPolicy.staleAgeMs,
+      autopilotSuitabilityFloor: DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
+      autopilotSuitabilityEnabled: true,
     };
   }
+}
+
+function resolveAutopilotSuitabilityFloor(config) {
+  const floor = config?.autopilotSuitability?.floor;
+  return Number.isInteger(floor) && floor >= 1 && floor <= 5
+    ? floor
+    : DEFAULT_AUTOPILOT_SUITABILITY_FLOOR;
+}
+
+function resolveAutopilotSuitabilityEnabled(config) {
+  return config?.autopilotSuitability?.enabled !== false;
 }
 
 function normalizeIssue(issue) {
