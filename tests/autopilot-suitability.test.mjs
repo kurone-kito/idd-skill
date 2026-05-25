@@ -3,10 +3,40 @@ import { test } from "node:test";
 
 import {
   DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
+  isAutopilotSuitabilityScore,
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
   rankAndRouteBySuitability,
 } from "../scripts/autopilot-suitability.mjs";
+
+test("isAutopilotSuitabilityScore accepts only integers 1-5", () => {
+  for (const value of [1, 2, 3, 4, 5]) {
+    assert.equal(isAutopilotSuitabilityScore(value), true, `score ${value}`);
+  }
+  for (const value of [0, 6, 2.5, -1, NaN, null, undefined, "3", Infinity]) {
+    assert.equal(isAutopilotSuitabilityScore(value), false, `score ${String(value)}`);
+  }
+});
+
+test("rankAndRouteBySuitability treats invalid finite scores as no-score (fail-safe)", () => {
+  const items = [
+    { id: "zero", score: 0 },
+    { id: "six", score: 6 },
+    { id: "frac", score: 2.5 },
+    { id: "high", score: 5 },
+    { id: "low", score: 2 },
+  ];
+  const { ranked, routedToHuman } = rankAndRouteBySuitability(items, {
+    floor: 3,
+    routeBelowFloor: true,
+    getScore: (item) => item.score,
+  });
+  // Only the genuine below-floor integer (2) is routed; 0 and 6 and 2.5
+  // are no-score and stay (ranked at the floor baseline), not routed
+  // despite 0 < floor.
+  assert.deepEqual(routedToHuman.map((item) => item.id), ["low"]);
+  assert.deepEqual(ranked.map((item) => item.id), ["high", "zero", "six", "frac"]);
+});
 
 const marker = (n, prefix = "idd-skill") => `<!-- ${prefix}-autopilot-suitability: ${n} -->`;
 

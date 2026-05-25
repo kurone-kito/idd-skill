@@ -101,11 +101,13 @@ export function rankAndRouteBySuitability(items, options = {}) {
 
   // Compute each item's score exactly once and reuse it for both routing
   // and ranking, so a non-trivial or non-deterministic getScore cannot
-  // produce inconsistent decisions. Any non-finite value (null, NaN, …)
-  // is treated as "no score".
+  // produce inconsistent decisions. Defensively normalize here too:
+  // anything that is not an integer 1-5 (null, NaN, 0, 6, 2.5, …) is
+  // treated as "no score", upholding the fail-safe rule regardless of
+  // what the caller's getScore returns.
   const scored = list.map((item, index) => {
     const raw = getScore(item);
-    return { item, index, score: Number.isFinite(raw) ? raw : null };
+    return { item, index, score: isAutopilotSuitabilityScore(raw) ? raw : null };
   });
 
   const routedToHuman = [];
@@ -124,6 +126,14 @@ export function rankAndRouteBySuitability(items, options = {}) {
     .map((entry) => entry.item);
 
   return { ranked, routedToHuman: routedToHuman.map((entry) => entry.item) };
+}
+
+/**
+ * True when `value` is a valid authored autopilot-suitability score:
+ * an integer in the inclusive range 1-5.
+ */
+export function isAutopilotSuitabilityScore(value) {
+  return Number.isInteger(value) && value >= 1 && value <= 5;
 }
 
 function escapeRegex(value) {

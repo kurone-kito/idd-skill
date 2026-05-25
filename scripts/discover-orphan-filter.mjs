@@ -11,6 +11,7 @@ import {
 } from "./authoring-label-guard.mjs";
 import {
   DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
+  normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
   rankAndRouteBySuitability,
 } from "./autopilot-suitability.mjs";
@@ -375,10 +376,9 @@ function loadPolicy(policyPath) {
 }
 
 function resolveAutopilotSuitabilityFloor(config) {
-  const floor = config?.autopilotSuitability?.floor;
-  return Number.isInteger(floor) && floor >= 1 && floor <= 5
-    ? floor
-    : DEFAULT_AUTOPILOT_SUITABILITY_FLOOR;
+  // Delegate range/default validation to the shared normalizer so the
+  // 1-5 rule and the default cannot drift between modules.
+  return normalizeAutopilotSuitabilityFloor(config?.autopilotSuitability?.floor);
 }
 
 function resolveAutopilotSuitabilityEnabled(config) {
