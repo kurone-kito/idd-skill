@@ -386,14 +386,16 @@ already has a suitable home.
 
 **Claim-state precondition (check this first).** Before reusing or
 extending any existing issue, determine whether it has an active claim
-(latest valid `claimed-by` less than 24 h old) or an open PR, or is
-otherwise actively executing. If so, the skill **must not edit its
-body** — the working agent snapshots the body into its B2 plan and never
-re-reads it, so a post-claim edit is silently lost. Comments/appends are
-allowed but must not be relied on to be picked up; cover the change with
-a follow-up issue (or roadmap track) and post a cross-reference comment
-on the claimed issue. Stale or reclaimable claims (≥ 24 h old) are
-exempt, since the next claimer re-reads the latest body.
+(latest valid `claimed-by` newer than the configured `claim-stale-age`,
+distributed default 24 h) or an open PR, or is otherwise actively
+executing. If so, the skill **must not edit its body** — the working
+agent snapshots the body into its B2 plan and never re-reads it, so a
+post-claim edit is silently lost. A separate comment is allowed (never
+an edit or append to the body) but must not be relied on to be picked
+up; cover the change with a follow-up issue (or roadmap track), and the
+skill **should** post a cross-reference comment on the claimed issue.
+Stale or reclaimable claims (older than `claim-stale-age`) are exempt,
+since the next claimer re-reads the latest body.
 
 Then apply these checks in order:
 

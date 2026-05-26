@@ -127,18 +127,19 @@ suitable home.
 
 **Claim-state precondition (check this first).** Before reusing or
 extending _any_ existing issue, determine whether it has an **active
-claim** (its latest valid `claimed-by` comment is less than 24 h old) or
-an **open PR**, or is otherwise actively executing. If so, you **MUST
-NOT edit its body**: the working agent snapshots the issue body into its
-B2 plan and treats that plan as authoritative — it never re-reads the
-body, so a post-claim body edit is silently lost and becomes an
-implementation gap. You **may** post a comment or append, but **must
-not** rely on the claimed agent picking it up. Cover the intended change
-with a **follow-up issue** (or a roadmap track around it), and you
-**SHOULD** post a cross-reference comment on the claimed issue linking
-the follow-up. Stale or reclaimable claims (latest `claimed-by` ≥ 24 h
-old) are exempt — the next claimer re-reads the latest body, so editing
-them is safe.
+claim** (its latest valid `claimed-by` comment is newer than the
+configured `claim-stale-age`; distributed default 24 h) or an **open
+PR**, or is otherwise actively executing. If so, you **MUST NOT edit its
+body**: the working agent snapshots the issue body into its B2 plan and
+treats that plan as authoritative — it never re-reads the body, so a
+post-claim body edit is silently lost and becomes an implementation gap.
+You **may** add a separate **comment** (never an edit or append to the
+body), but **must not** rely on the claimed agent acting on it. Cover
+the intended change with a **follow-up issue** (or a roadmap track around
+it), and you **SHOULD** post a cross-reference comment on the claimed
+issue linking the follow-up. Stale or reclaimable claims (latest
+`claimed-by` older than `claim-stale-age`) are exempt — the next claimer
+re-reads the latest body, so editing them is safe.
 
 Then apply these checks in order:
 
