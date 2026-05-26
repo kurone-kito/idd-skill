@@ -22,7 +22,7 @@ behavior change too.
 | Forced handoff contract | Disabled unless the repository explicitly records a human-gated policy                                                                                                                   | Keep forced handoff separate from trusted marker-author authority. Record the opt-in state, human approval authority, canonical consent text, and marker contract in the repository-local policy block here, then keep the always-loaded overview pointer aligned with those docs.                                                                                                                                                                                                                                                        |
 | CI commands             | Project-specific command rows in the overview file                                                                                                                                       | Set `fix-validate`, `pre-push-validate`, `post-fix-validate`, and `install-deps` in `.github/instructions/idd-overview.instructions.md` during onboarding.                                                                                                                                                                                                                                                                                                                                                                                |
 | Helper runtime          | `instructions-only` by default, with evidence-based helper support proposals that still require explicit operator confirmation during onboarding                                         | Use [IDD template onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#step-1b--confirm-policy-decisions) together with [IDD helper script evaluation](idd-helper-scripts.md#import-time-selection-order). Auto-propose helper support only when repository evidence shows a real package-manager or Node.js helper path, keep operator confirmation explicit, prefer `package-manager` when supported package-manager evidence exists, and otherwise prefer `vendored-node` before `ephemeral-npx`. |
-| Issue scope             | Roadmap-first discovery                                                                                                                                                                  | Keep `issue-scope` as `roadmap` for roadmap-scoped work, or deliberately choose `orphan-first` when the repository wants unblocked orphan issues to be considered before roadmap traversal.                                                                                                                                                                                                                                                                                                                                               |
+| Issue scope             | Roadmap-first discovery (roadmap path first, orphan fallback)                                                                                                                            | Default is `roadmap-first`. Set `issue-scope` to `roadmap` for strict roadmap-only discovery (no orphan fallback), or to `orphan-first` when unblocked orphan issues should be considered before roadmap traversal.                                                                                                                                                                                                                                                                                                                       |
 | Orphan-first approval   | No extra gate beyond orphan readiness checks                                                                                                                                             | Keep `orphan-first-policy` as `none`, or opt in to `maintainer-approved` or `public-disabled` when public or community-submitted issues need an explicit maintainer approval layer before A0-O can select them.                                                                                                                                                                                                                                                                                                                           |
 | Issue-author approval   | Secure-by-default target contract; unattended work needs a self-authorizing issue author or explicit approval unless the repository opts out                                             | Record the gate decision, approval actors, freshness rule, approval signals, and opt-out semantics in repository-local policy docs and onboarding. Keep this contract aligned with the discovery/claim behavior that already ships, and update both surfaces together if local policy changes later.                                                                                                                                                                                                                                      |
 | Issue authoring guard   | Discover skips issues carrying the configured authoring label and warns when that label appears stale                                                                                    | Configure `issueAuthoring.authoringLabelName` and `issueAuthoring.authoringStaleAge` in `.github/idd/config.json` when local label naming or timing differs from the distributed defaults. Keep the label available in the target repository and keep `authoringStaleAge` less than `claimTiming.staleAge`; see [IDD policy constants](policy-constants.md#issue-authoring-defaults).                                                                                                                                                     |
@@ -391,7 +391,7 @@ enabled and default approval actors to `owners-and-maintainers-only`.
 | **pre-push-validate**   | `npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress`                                        |
 | **post-fix-validate**   | `npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress` |
 | **install-deps**        | `true`                                                                                                                                       |
-| **issue-scope**         | `roadmap`                                                                                                                                    |
+| **issue-scope**         | `roadmap-first`                                                                                                                              |
 | **orphan-first-policy** | `none`                                                                                                                                       |
 
 Non-shell rows such as **issue-scope** and **orphan-first-policy** are
@@ -502,16 +502,32 @@ override commands with project-appropriate checks.
 
 ## Issue Scope
 
-The default `issue-scope` is `roadmap`, which keeps discovery inside the
-selected roadmap's explicit task graph. This is the safest mode for
-large initiatives because agents do not silently widen the work queue.
+The default `issue-scope` is `roadmap-first`: Discover runs the roadmap
+task-graph path first and falls back to A0-O orphan discovery only when
+the roadmap path yields no startable candidate. This keeps roadmap work
+prioritized while no longer stranding unblocked orphan issues.
 
-`orphan-first` changes discovery so unblocked orphan issues are
-considered before roadmap traversal. Choose it only when the repository
-intentionally wants small standalone issues to take priority over
-roadmap work. It is a workflow behavior change, so update the overview
-file and record the decision in local onboarding notes or repository
-documentation.
+The three values are:
+
+- `roadmap-first` (default): roadmap path first, orphan fallback when the
+  roadmap path is empty.
+- `roadmap`: roadmap-only — Discover never looks at orphan issues. The
+  safest mode for large initiatives that must not widen the work queue
+  at all.
+- `orphan-first`: the mirror image — unblocked orphan issues first, with
+  the roadmap path as the fallback. Choose it only when small standalone
+  issues should take priority over roadmap work.
+
+Changing `issue-scope` is a workflow behavior change, so update the
+overview file and record the decision in local onboarding notes or
+repository documentation.
+
+**Migration note.** The distributed default changed from `roadmap`
+(roadmap-only) to `roadmap-first`. Repositories that require strict
+roadmap-only discovery must now set `issue-scope: roadmap` explicitly.
+The fallback never widens the auto-claim queue to unapproved authors —
+the A3.5 issue-author approval gate still runs on every surfaced
+candidate.
 
 When `issue-scope` is `orphan-first`, keep `orphan-first-policy` as
 `none` to preserve the distributed default. Public or community-facing

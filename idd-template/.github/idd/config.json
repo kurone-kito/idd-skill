@@ -22,7 +22,7 @@
   "helperRuntime": {
     "profile": "package-manager"
   },
-  "issueScope": "roadmap",
+  "issueScope": "roadmap-first",
   "orphanFirstPolicy": "none",
   "autopilotSuitability": {
     "floor": 3

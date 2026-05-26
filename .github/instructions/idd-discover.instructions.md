@@ -90,9 +90,9 @@ claim-verification rules remain unchanged.
 Read the **issue-scope** value from the Project commands table in
 `idd-overview.instructions.md`.
 
-- If `issue-scope` is `roadmap` (the default): skip A0-O and proceed to
-  A1 as normal.
-- If `issue-scope` is `roadmap-first`: proceed to A1 as normal. When the
+- If `issue-scope` is `roadmap`: skip A0-O and proceed to A1 as normal.
+- If `issue-scope` is `roadmap-first` (the default): proceed to A1 as
+  normal. When the
   roadmap path yields **zero candidates reaching A3.5** — i.e. A2
   enumerated no open execution leaves, or A3 filtered them all out as
   blocked — fall back to **A0-O** before entering the A3 decision tree

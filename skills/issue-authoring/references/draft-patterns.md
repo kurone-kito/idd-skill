@@ -103,9 +103,10 @@ Before you publish a `ready` issue, confirm:
 
 Use this shape when the work is narrow enough to pass the IDD viability
 gate on its own and the target repository can actually discover orphan
-issues. If the repository keeps the default `issue-scope: roadmap`,
-prefer a one-item roadmap package instead of publishing a standalone
-orphan issue.
+issues (`issue-scope: roadmap-first`, the default, via the orphan
+fallback, or `orphan-first`). If the repository sets
+`issue-scope: roadmap` (roadmap-only), prefer a one-item roadmap package
+instead of publishing a standalone orphan issue.
 
 ## Example roadmap package
 

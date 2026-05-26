@@ -8,9 +8,13 @@ import {
   parseIsoDurationToMs,
 } from "../scripts/policy-helpers.mjs";
 
-test("issueScope accepts roadmap-first while default stays roadmap", () => {
-  assert.equal(POLICY_DEFAULTS.issueScope, "roadmap");
-  assert.equal(normalizePolicyConfig({}).issueScope, "roadmap");
+test("issueScope defaults to roadmap-first and accepts all values", () => {
+  assert.equal(POLICY_DEFAULTS.issueScope, "roadmap-first");
+  assert.equal(normalizePolicyConfig({}).issueScope, "roadmap-first");
+  assert.equal(
+    normalizePolicyConfig({ issueScope: "roadmap" }).issueScope,
+    "roadmap",
+  );
   assert.equal(
     normalizePolicyConfig({ issueScope: "roadmap-first" }).issueScope,
     "roadmap-first",
@@ -21,7 +25,7 @@ test("issueScope accepts roadmap-first while default stays roadmap", () => {
   );
   assert.equal(
     normalizePolicyConfig({ issueScope: "bogus" }).issueScope,
-    "roadmap",
+    "roadmap-first",
   );
 });
 

@@ -427,11 +427,13 @@ to package them.
 - limited scope, clear verification, and autonomous completion all pass
 - no roadmap-level dependency or parallel track is needed
 - the work is unlikely to require multiple agent sessions
-- the target repository already discovers orphan issues through
-  `issue-scope: orphan-first`, and any configured
+- the target repository discovers orphan issues — `issue-scope` is
+  `roadmap-first` (the default; orphans are the fallback when no roadmap
+  work is startable) or `orphan-first` — and any configured
   `orphan-first-policy` approval step can happen after drafting; or the
-  draft explicitly tells the operator to switch to that mode before
-  starting the execution loop
+  draft explicitly tells the operator to switch to a discovering mode
+  before starting the execution loop (a `roadmap`/roadmap-only
+  repository does not discover orphans)
 
 ### Create a roadmap when any are true
 
@@ -594,9 +596,11 @@ Validation expectations:
 - acceptance criteria are testable or otherwise explicitly verifiable
 - scope is narrow enough to pass the IDD viability gate as a single
   issue
-- the draft preserves discoverability by using a repository configured
-  for `issue-scope: orphan-first`, or by surfacing that configuration
-  change before the operator starts the Discover -> Claim loop
+- the draft preserves discoverability by using a repository that
+  discovers orphans (`issue-scope: roadmap-first`, the default, via the
+  orphan fallback, or `orphan-first`), or by surfacing that
+  configuration change before the operator starts the Discover -> Claim
+  loop
 - when the repository uses `orphan-first-policy: maintainer-approved`,
   the draft includes a post-publication maintainer approval step after
   the final title, body, and generated plan are stable
