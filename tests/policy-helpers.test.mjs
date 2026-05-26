@@ -2,9 +2,28 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  POLICY_DEFAULTS,
   getReviewEscalationChangesRequestedPolicy,
+  normalizePolicyConfig,
   parseIsoDurationToMs,
 } from "../scripts/policy-helpers.mjs";
+
+test("issueScope accepts roadmap-first while default stays roadmap", () => {
+  assert.equal(POLICY_DEFAULTS.issueScope, "roadmap");
+  assert.equal(normalizePolicyConfig({}).issueScope, "roadmap");
+  assert.equal(
+    normalizePolicyConfig({ issueScope: "roadmap-first" }).issueScope,
+    "roadmap-first",
+  );
+  assert.equal(
+    normalizePolicyConfig({ issueScope: "orphan-first" }).issueScope,
+    "orphan-first",
+  );
+  assert.equal(
+    normalizePolicyConfig({ issueScope: "bogus" }).issueScope,
+    "roadmap",
+  );
+});
 
 test("parseIsoDurationToMs parses supported ISO durations", () => {
   assert.equal(parseIsoDurationToMs("PT5S"), 5000);

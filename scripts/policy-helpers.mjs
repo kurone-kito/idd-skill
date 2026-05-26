@@ -5,7 +5,7 @@ const HELPER_RUNTIME_PROFILES = new Set([
   "instructions-only",
 ]);
 const HELPER_RUNTIME_KEYS = new Set(["profile"]);
-const ISSUE_SCOPES = new Set(["roadmap", "orphan-first"]);
+const ISSUE_SCOPES = new Set(["roadmap", "roadmap-first", "orphan-first"]);
 const ORPHAN_FIRST_POLICIES = new Set(["none", "maintainer-approved", "public-disabled"]);
 const APPROVAL_ACTOR_POLICIES = new Set(["owners-and-maintainers-only", "all-write-permission-actors"]);
 const FORCED_HANDOFF_MODES = new Set(["disabled", "human-gated"]);

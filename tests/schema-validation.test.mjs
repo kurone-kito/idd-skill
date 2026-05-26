@@ -264,6 +264,31 @@ test("policy schema rejects non-boolean issue-author approval opt-out", () => {
   );
 });
 
+test("policy schema accepts every issueScope value including roadmap-first", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  for (const issueScope of ["roadmap", "roadmap-first", "orphan-first"]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+    );
+    instance.issueScope = issueScope;
+    const errors = validate(instance, schema);
+    assert.deepEqual(errors, [], `${issueScope}: ${JSON.stringify(errors)}`);
+  }
+});
+
+test("policy schema rejects an unknown issueScope value", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+  );
+  instance.issueScope = "roadmap-only";
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes("$.issueScope")),
+    errors.join("\n"),
+  );
+});
+
 test("policy schema accepts an in-range autopilotSuitability floor", () => {
   const schema = loadJson("schemas/policy.schema.json");
   for (const floor of [1, 2, 3, 4, 5]) {

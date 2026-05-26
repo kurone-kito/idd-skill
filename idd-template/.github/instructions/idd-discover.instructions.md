@@ -93,6 +93,14 @@ Read the **issue-scope** value from the Project commands table in
 
 - If `issue-scope` is `roadmap` (the default): skip A0-O and proceed to
   A1 as normal.
+- If `issue-scope` is `roadmap-first`: proceed to A1 as normal. When the
+  roadmap path yields **zero candidates reaching A3.5** — i.e. A2
+  enumerated no open execution leaves, or A3 filtered them all out as
+  blocked — fall back to **A0-O** before entering the A3 decision tree
+  (mirror of `orphan-first`). If candidates do reach A3.5 but it holds
+  them all as
+  approval-needed, do **not** fall back: A3.5's stop/ask behavior
+  governs, so the fallback never re-scopes around the approval gate.
 - If `issue-scope` is `orphan-first`: proceed to A0-O.
 
 ## A0-O — Discover orphan issues
@@ -100,6 +108,12 @@ Read the **issue-scope** value from the Project commands table in
 Read the **orphan-first-policy** value from the Project commands table
 in `idd-overview.instructions.md` before any repo-wide orphan issue
 search.
+
+When A0-O runs as the `roadmap-first` fallback (not the `orphan-first`
+primary path), every "proceed to A1" / "skip to A1" exit below instead
+goes to the **A3 decision tree** — the roadmap path already ran and must
+not be re-entered (this prevents an A1 ↔ A0-O loop, e.g. under
+`public-disabled` on a public repo).
 
 - If `orphan-first-policy` is `public-disabled`, first determine the
   repository visibility. If the repository is public, skip A0-O without
@@ -141,13 +155,15 @@ applied: pass the remaining set directly to **A3.5**. Skip A1–A3.
 
 If no orphan issues remain after the configured policy is applied: fall
 back to the roadmap path. Proceed to **A1** and continue with the normal
-A1 → A1.5 → A2 → A3 → A3.5 → A4 sequence.
+A1 → A1.5 → A2 → A3 → A3.5 → A4 sequence. (For the `roadmap-first`
+fallback, the guard above redirects this exit to A3.)
 
 The A3 decision tree (abort / ask operator in unattended mode) is
-reached when the active discovery path(s) produce zero results: when
-`orphan-first` is active, this means both the orphan path and the
-roadmap fallback returned zero; when `issue-scope` is `roadmap`, only
-the roadmap path runs and A3 applies when it returns zero.
+reached when the active discovery path(s) produce zero results: for
+`orphan-first`, both the orphan path and the roadmap fallback returned
+zero; for `roadmap-first`, both the roadmap path and the orphan fallback
+returned zero; for `roadmap`, only the roadmap path runs and A3 applies
+when it returns zero.
 
 ## A1 — Find the roadmap
 
@@ -159,7 +175,8 @@ umbrella issue. If no roadmap issue exists, report and abort.
 **A0-T** (the scoped `{{PROJECT_MARKER_PREFIX}}-roadmap-id` lookup
 needed to resolve the explicit target's
 `{{PROJECT_MARKER_PREFIX}}-blocked-by` markers),
-**A0-O** (when `issue-scope` is `orphan-first`, to find orphan issues),
+**A0-O** (when `issue-scope` is `orphan-first`, or `roadmap-first` as
+the roadmap-path fallback, to find orphan issues),
 **A1** (to locate the roadmap), **A1.5** (narrow duplicate/reuse lookup
 for one specific autonomous gap), and **A3** (narrow body-content lookup
 for `{{PROJECT_MARKER_PREFIX}}-roadmap-id` to resolve
@@ -225,8 +242,9 @@ touch issues outside the roadmap traversal graph:
   `{{PROJECT_MARKER_PREFIX}}-blocked-by` markers on the explicit target.
   The result is used solely to determine targeted readiness and is not
   added to any candidate set.
-- **A0-O only** (when `issue-scope` is `orphan-first`): a repo-wide
-  open-issue query to find issues without
+- **A0-O only** (when `issue-scope` is `orphan-first`, or when
+  `issue-scope` is `roadmap-first` and A0-O runs as the roadmap-path
+  fallback): a repo-wide open-issue query to find issues without
   `{{PROJECT_MARKER_PREFIX}}-roadmap-id` or
   `{{PROJECT_MARKER_PREFIX}}-blocked-by` markers.
 - **A1 only**: any method (including `gh issue list`, `gh search`, or
