@@ -227,7 +227,7 @@ touch issues outside the roadmap traversal graph:
 - **A0-O only** (when `issue-scope` is `orphan-first`, or when
   `issue-scope` is `roadmap-first` and A0-O runs as the roadmap-path
   fallback): a repo-wide open-issue query to find issues without
-  `roadmap-id` or `blocked-by` markers.
+  `idd-skill-roadmap-id` or `idd-skill-blocked-by` markers.
 - **A1 only**: any method (including `gh issue list`, `gh search`, or
   label-based queries) to locate the roadmap issue itself.
 - **A1.5 only**: a narrow duplicate/reuse lookup for one specific
