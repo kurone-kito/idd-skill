@@ -42,7 +42,7 @@ enabled and default approval actors to
 | **pre-push-validate**   | `npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress`                                        |
 | **post-fix-validate**   | `npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress` |
 | **install-deps**        | `true`                                                                                                                                       |
-| **issue-scope**         | `roadmap`                                                                                                                                    |
+| **issue-scope**         | `roadmap-first`                                                                                                                              |
 | **orphan-first-policy** | `none`                                                                                                                                       |
 
 Non-shell rows such as **issue-scope** and **orphan-first-policy** are

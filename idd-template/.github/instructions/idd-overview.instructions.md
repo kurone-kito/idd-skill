@@ -42,7 +42,7 @@ enabled and default approval actors to
 | **pre-push-validate**   | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
 | **post-fix-validate**   | `{{POST_FIX_VALIDATE_COMMANDS}}` |
 | **install-deps**        | `{{INSTALL_DEPS_COMMAND}}`       |
-| **issue-scope**         | `roadmap`                        |
+| **issue-scope**         | `roadmap-first`                  |
 | **orphan-first-policy** | `none`                           |
 
 Non-shell rows such as **issue-scope** and **orphan-first-policy** are

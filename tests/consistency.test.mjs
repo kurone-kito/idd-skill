@@ -113,7 +113,7 @@ test("helper runtime inspection accepts absent and supported profiles, rejects u
 
 test("policy normalization provides default-safe values and supports aliases", () => {
   assert.deepEqual(normalizePolicyConfig(null), {
-    issueScope: "roadmap",
+    issueScope: "roadmap-first",
     orphanFirstPolicy: "none",
     skipIssueAuthorApprovalGate: false,
     maintainerApprovalActorPolicy: "owners-and-maintainers-only",

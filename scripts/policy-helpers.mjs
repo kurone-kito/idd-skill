@@ -28,7 +28,7 @@ const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
 export const POLICY_DEFAULTS = Object.freeze({
-  issueScope: "roadmap",
+  issueScope: "roadmap-first",
   orphanFirstPolicy: "none",
   skipIssueAuthorApprovalGate: false,
   maintainerApprovalActorPolicy: "owners-and-maintainers-only",
