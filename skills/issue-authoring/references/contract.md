@@ -166,13 +166,15 @@ so a later session can follow the reasoning.
 Choose the smallest safe output shape:
 
 - **Orphan issue**: one autonomous task can finish the work, no
-  roadmap-level coordination is needed, and the target repository is
-  discoverable through `issue-scope: orphan-first`. If the repository
-  also uses `orphan-first-policy: maintainer-approved`, surface the
-  required post-publication maintainer approval step. If the repository
-  keeps the default `issue-scope: roadmap` or disables public
-  orphan-first discovery with `orphan-first-policy: public-disabled`,
-  surface that constraint and prefer a roadmap package instead.
+  roadmap-level coordination is needed, and the target repository
+  discovers orphans — i.e. `issue-scope` is `roadmap-first` (the
+  default; orphans are picked up as the fallback when no roadmap work is
+  startable) or `orphan-first` (orphans first). If the repository uses
+  `orphan-first-policy: maintainer-approved`, surface the required
+  post-publication maintainer approval step. If the repository sets
+  `issue-scope: roadmap` (roadmap-only) or disables public orphan-first
+  discovery with `orphan-first-policy: public-disabled`, surface that
+  constraint and prefer a roadmap package instead.
 - **Roadmap plus sub-issues**: the request needs visible sequencing,
   parallel tracks, multiple ready issues, or multi-session handoff.
 - **Stable non-ready buckets**: some work is deferred, blocked by a

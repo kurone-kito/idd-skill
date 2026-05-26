@@ -83,8 +83,9 @@ time and report the specific failure (unclear, invalid, duplicate).
 
 ## Use this bundle to
 
-- prepare IDD-ready orphan issues when the target repository supports
-  `issue-scope: orphan-first`, including any required
+- prepare IDD-ready orphan issues when the target repository discovers
+  orphans (`issue-scope: roadmap-first`, the default, via the orphan
+  fallback, or `orphan-first`), including any required
   `orphan-first-policy` approval handoff
 - prepare roadmap packages and child issues when work needs visible
   sequencing or parallel tracks
