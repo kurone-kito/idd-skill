@@ -384,7 +384,18 @@ does not start Discover, Claim, and Work.
 Before creating any new issue, the skill should check whether the work
 already has a suitable home.
 
-Apply these checks in order:
+**Claim-state precondition (check this first).** Before reusing or
+extending any existing issue, determine whether it has an active claim
+(latest valid `claimed-by` less than 24 h old) or an open PR, or is
+otherwise actively executing. If so, the skill **must not edit its
+body** — the working agent snapshots the body into its B2 plan and never
+re-reads it, so a post-claim edit is silently lost. Comments/appends are
+allowed but must not be relied on to be picked up; cover the change with
+a follow-up issue (or roadmap track) and post a cross-reference comment
+on the claimed issue. Stale or reclaimable claims (≥ 24 h old) are
+exempt, since the next claimer re-reads the latest body.
+
+Then apply these checks in order:
 
 1. If an existing open issue already matches the task and only lacks the
    new schema details, extend that issue instead of cloning it.
@@ -394,8 +405,9 @@ Apply these checks in order:
 3. If an existing issue is close but too broad, split follow-up work out
    of it rather than widening the original issue further.
 4. If an existing issue is already claimed, has an open PR, or is
-   otherwise being actively executed, avoid repurposing it. Create a
-   follow-up issue or extend the roadmap around it instead.
+   otherwise being actively executed, do not edit its body or repurpose
+   it (see the claim-state precondition); create a follow-up issue or
+   extend the roadmap around it instead.
 5. Create a brand-new issue only when no existing issue can absorb the
    work without harming ownership, clarity, or reviewability.
 
