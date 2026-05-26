@@ -150,10 +150,11 @@ Then apply these checks in order:
    umbrella.
 3. If an existing issue is close but too broad, split follow-up work
    out of it rather than widening the original issue further.
-4. If an existing issue is already claimed, has an open PR, or is
+4. If an existing issue has an **active claim**, an open PR, or is
    otherwise being actively executed, do **not** edit its body or
-   repurpose it (see the claim-state precondition); create a follow-up
-   issue or extend the roadmap around it instead.
+   repurpose it (see the claim-state precondition, which exempts
+   stale/reclaimable claims); create a follow-up issue or extend the
+   roadmap around it instead.
 5. Create a brand-new issue only when no existing issue can absorb the
    work without harming ownership, clarity, or reviewability.
 
@@ -439,7 +440,7 @@ instead of re-deriving autonomy per candidate.
 
 Scores below the configured discovery floor
 (`autopilotSuitability.floor`, default `3`) designate
-**human-oriented issues**: once T3 lands, Discover will route them
+**human-oriented issues**: in autopilot runs Discover routes them
 to humans rather than autopilot.
 
 The score is recorded as a **footer at the end of the issue

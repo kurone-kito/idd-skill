@@ -140,9 +140,8 @@ candidates without re-deriving the judgment. **Score every drafted
 issue and emit it** as an end-of-body footer (a visible line plus
 a hidden, prefix-aware marker
 `<!-- {marker-prefix}-autopilot-suitability: N -->`). Discover
-ranking + routing by the score is still planned (T3 / #762 of
-roadmap #759); until it lands the score is recorded but does not
-yet influence candidate selection. See the
+**ranks and routes** candidates by the score (roadmap #759, fully
+merged); it stays advisory and fail-safe on absence. See the
 [Autopilot-suitability score](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#autopilot-suitability-score)
 section of the contract for the rubric, footer format, and binding
 rules.
@@ -150,8 +149,8 @@ rules.
 - `5` autopilot-ideal · `4` strongly autopilot-suitable ·
   `3` borderline · `2` mostly human · `1` human-only.
 - Scores below the configured floor (`autopilotSuitability.floor`,
-  default `3`) designate human-oriented issues that discover will
-  route to humans once T3 lands.
+  default `3`) designate human-oriented issues that discover routes
+  to humans in autopilot runs.
 - The score is an **advisory** ranking/routing hint only; it never
   bypasses the A4.5/A5 gates, a `1` must agree with
   `status:blocked-by-human`, and a missing or out-of-range score is
@@ -406,10 +405,11 @@ Then apply these checks in order:
    umbrella.
 3. If an existing issue is close but too broad, split follow-up work out
    of it rather than widening the original issue further.
-4. If an existing issue is already claimed, has an open PR, or is
+4. If an existing issue has an active claim, an open PR, or is
    otherwise being actively executed, do not edit its body or repurpose
-   it (see the claim-state precondition); create a follow-up issue or
-   extend the roadmap around it instead.
+   it (see the claim-state precondition, which exempts stale/reclaimable
+   claims); create a follow-up issue or extend the roadmap around it
+   instead.
 5. Create a brand-new issue only when no existing issue can absorb the
    work without harming ownership, clarity, or reviewability.
 
