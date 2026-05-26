@@ -140,9 +140,8 @@ candidates without re-deriving the judgment. **Score every drafted
 issue and emit it** as an end-of-body footer (a visible line plus
 a hidden, prefix-aware marker
 `<!-- {marker-prefix}-autopilot-suitability: N -->`). Discover
-ranking + routing by the score is still planned (T3 / #762 of
-roadmap #759); until it lands the score is recorded but does not
-yet influence candidate selection. See the
+**ranks and routes** candidates by the score (roadmap #759, fully
+merged); it stays advisory and fail-safe on absence. See the
 [Autopilot-suitability score](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#autopilot-suitability-score)
 section of the contract for the rubric, footer format, and binding
 rules.
@@ -150,8 +149,8 @@ rules.
 - `5` autopilot-ideal · `4` strongly autopilot-suitable ·
   `3` borderline · `2` mostly human · `1` human-only.
 - Scores below the configured floor (`autopilotSuitability.floor`,
-  default `3`) designate human-oriented issues that discover will
-  route to humans once T3 lands.
+  default `3`) designate human-oriented issues that discover routes
+  to humans in autopilot runs.
 - The score is an **advisory** ranking/routing hint only; it never
   bypasses the A4.5/A5 gates, a `1` must agree with
   `status:blocked-by-human`, and a missing or out-of-range score is
@@ -384,7 +383,20 @@ does not start Discover, Claim, and Work.
 Before creating any new issue, the skill should check whether the work
 already has a suitable home.
 
-Apply these checks in order:
+**Claim-state precondition (check this first).** Before reusing or
+extending any existing issue, determine whether it has an active claim
+(latest valid `claimed-by` newer than the configured `claim-stale-age`,
+distributed default 24 h) or an open PR, or is otherwise actively
+executing. If so, the skill **must not edit its body** — the working
+agent snapshots the body into its B2 plan and never re-reads it, so a
+post-claim edit is silently lost. A separate comment is allowed (never
+an edit or append to the body) but must not be relied on to be picked
+up; cover the change with a follow-up issue (or roadmap track), and the
+skill **should** post a cross-reference comment on the claimed issue.
+Stale or reclaimable claims (older than `claim-stale-age`) are exempt,
+since the next claimer re-reads the latest body.
+
+Then apply these checks in order:
 
 1. If an existing open issue already matches the task and only lacks the
    new schema details, extend that issue instead of cloning it.
@@ -393,9 +405,11 @@ Apply these checks in order:
    umbrella.
 3. If an existing issue is close but too broad, split follow-up work out
    of it rather than widening the original issue further.
-4. If an existing issue is already claimed, has an open PR, or is
-   otherwise being actively executed, avoid repurposing it. Create a
-   follow-up issue or extend the roadmap around it instead.
+4. If an existing issue has an active claim, an open PR, or is
+   otherwise being actively executed, do not edit its body or repurpose
+   it (see the claim-state precondition, which exempts stale/reclaimable
+   claims); create a follow-up issue or extend the roadmap around it
+   instead.
 5. Create a brand-new issue only when no existing issue can absorb the
    work without harming ownership, clarity, or reviewability.
 

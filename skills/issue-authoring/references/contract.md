@@ -125,7 +125,23 @@ too much implementation shape implicit. The drafting target is therefore
 Before creating any new issue, check whether the work already has a
 suitable home.
 
-Apply these checks in order:
+**Claim-state precondition (check this first).** Before reusing or
+extending _any_ existing issue, determine whether it has an **active
+claim** (its latest valid `claimed-by` comment is newer than the
+configured `claim-stale-age`; distributed default 24 h) or an **open
+PR**, or is otherwise actively executing. If so, you **MUST NOT edit its
+body**: the working agent snapshots the issue body into its B2 plan and
+treats that plan as authoritative — it never re-reads the body, so a
+post-claim body edit is silently lost and becomes an implementation gap.
+You **may** add a separate **comment** (never an edit or append to the
+body), but **must not** rely on the claimed agent acting on it. Cover
+the intended change with a **follow-up issue** (or a roadmap track around
+it), and you **SHOULD** post a cross-reference comment on the claimed
+issue linking the follow-up. Stale or reclaimable claims (latest
+`claimed-by` older than `claim-stale-age`) are exempt — the next claimer
+re-reads the latest body, so editing them is safe.
+
+Then apply these checks in order:
 
 1. If an existing open issue already matches the task and only lacks the
    new schema details, extend that issue instead of cloning it.
@@ -134,9 +150,11 @@ Apply these checks in order:
    umbrella.
 3. If an existing issue is close but too broad, split follow-up work
    out of it rather than widening the original issue further.
-4. If an existing issue is already claimed, has an open PR, or is
-   otherwise being actively executed, avoid repurposing it. Create a
-   follow-up issue or extend the roadmap around it instead.
+4. If an existing issue has an **active claim**, an open PR, or is
+   otherwise being actively executed, do **not** edit its body or
+   repurpose it (see the claim-state precondition, which exempts
+   stale/reclaimable claims); create a follow-up issue or extend the
+   roadmap around it instead.
 5. Create a brand-new issue only when no existing issue can absorb the
    work without harming ownership, clarity, or reviewability.
 
@@ -400,10 +418,10 @@ marginally-ready issue.
 
 ## Autopilot-suitability score
 
-> **Status.** Authoring **emits** the score footer now (this is
-> the active contract). Discover ranking + routing by the score is
-> still planned (T3 / #762 of roadmap #759); until it lands the
-> score is recorded but does not yet influence candidate selection.
+> **Status.** Active contract. Authoring **emits** the score footer
+> and Discover **ranks and routes** candidates by it (roadmap #759,
+> fully merged). The score stays advisory: it never bypasses the
+> A4.5/A5 gates and is fail-safe on absence.
 
 Authored issues carry a persisted **autopilot-suitability score**
 from 1 to 5 (higher = more autopilot-suitable). It is the durable,
@@ -422,7 +440,7 @@ instead of re-deriving autonomy per candidate.
 
 Scores below the configured discovery floor
 (`autopilotSuitability.floor`, default `3`) designate
-**human-oriented issues**: once T3 lands, Discover will route them
+**human-oriented issues**: in autopilot runs Discover routes them
 to humans rather than autopilot.
 
 The score is recorded as a **footer at the end of the issue
@@ -463,7 +481,9 @@ Binding rules:
 
 Backfill is opportunistic: when an existing open issue without a
 score footer is next edited by the authoring flow, add one. No
-bulk backfill of the existing backlog is required.
+bulk backfill of the existing backlog is required. The claim-state
+precondition still applies — never add the footer to the body of an
+actively-claimed or open-PR issue; defer it to a follow-up instead.
 
 ## Publication boundary
 
