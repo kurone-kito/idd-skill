@@ -95,8 +95,9 @@ Read the **issue-scope** value from the Project commands table in
 - If `issue-scope` is `roadmap-first`: proceed to A1 as normal. When the
   roadmap path yields **zero candidates reaching A3.5** — i.e. A2
   enumerated no open execution leaves, or A3 filtered them all out as
-  blocked — fall back to **A0-O** before aborting (mirror of
-  `orphan-first`). If candidates do reach A3.5 but it holds them all as
+  blocked — fall back to **A0-O** before entering the A3 decision tree
+  (mirror of `orphan-first`). If candidates do reach A3.5 but it holds
+  them all as
   approval-needed, do **not** fall back: A3.5's stop/ask behavior
   governs, so the fallback never re-scopes around the approval gate.
 - If `issue-scope` is `orphan-first`: proceed to A0-O.
