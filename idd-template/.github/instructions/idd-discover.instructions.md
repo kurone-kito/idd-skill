@@ -93,6 +93,10 @@ Read the **issue-scope** value from the Project commands table in
 
 - If `issue-scope` is `roadmap` (the default): skip A0-O and proceed to
   A1 as normal.
+- If `issue-scope` is `roadmap-first`: proceed to A1 as normal, but if
+  the roadmap path (A1 → A3) yields zero startable candidates, fall back
+  to **A0-O** before the A3 decision tree aborts (mirror of
+  `orphan-first`).
 - If `issue-scope` is `orphan-first`: proceed to A0-O.
 
 ## A0-O — Discover orphan issues
@@ -139,15 +143,19 @@ Apply the configured policy before passing A0-O candidates to A3.5:
 If at least one orphan issue remains after the configured policy is
 applied: pass the remaining set directly to **A3.5**. Skip A1–A3.
 
-If no orphan issues remain after the configured policy is applied: fall
-back to the roadmap path. Proceed to **A1** and continue with the normal
-A1 → A1.5 → A2 → A3 → A3.5 → A4 sequence.
+If no orphan issues remain after the configured policy is applied:
+when A0-O ran as the `orphan-first` primary path, fall back to the
+roadmap path (proceed to **A1**, normal A1 → A1.5 → A2 → A3 → A3.5 → A4
+sequence); when A0-O ran as the `roadmap-first` fallback (the roadmap
+path already returned zero), do **not** re-run it — proceed to the A3
+decision tree.
 
 The A3 decision tree (abort / ask operator in unattended mode) is
-reached when the active discovery path(s) produce zero results: when
-`orphan-first` is active, this means both the orphan path and the
-roadmap fallback returned zero; when `issue-scope` is `roadmap`, only
-the roadmap path runs and A3 applies when it returns zero.
+reached when the active discovery path(s) produce zero results: for
+`orphan-first`, both the orphan path and the roadmap fallback returned
+zero; for `roadmap-first`, both the roadmap path and the orphan fallback
+returned zero; for `roadmap`, only the roadmap path runs and A3 applies
+when it returns zero.
 
 ## A1 — Find the roadmap
 

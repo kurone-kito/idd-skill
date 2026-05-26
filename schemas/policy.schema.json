@@ -124,7 +124,7 @@
     },
     "issueScope": {
       "type": "string",
-      "enum": ["roadmap", "orphan-first"]
+      "enum": ["roadmap", "roadmap-first", "orphan-first"]
     },
     "orphanFirstPolicy": {
       "type": "string",
