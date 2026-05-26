@@ -272,7 +272,7 @@ test("policy schema accepts every issueScope value including roadmap-first", () 
     );
     instance.issueScope = issueScope;
     const errors = validate(instance, schema);
-    assert.deepEqual(errors, [], `${issueScope}: ${errors.join("\n")}`);
+    assert.deepEqual(errors, [], `${issueScope}: ${JSON.stringify(errors)}`);
   }
 });
 
