@@ -22,8 +22,6 @@ watch IDD build a real app end to end, then inspect the live companion
 repository at
 [`kurone-kito/vrc-event-calendar`](https://github.com/kurone-kito/vrc-event-calendar).
 
-![IDD workshop preview](docs/workshop/assets/workshop-header.gif)
-
 ## Start here (persona navigation)
 
 If this is your first visit, choose the path that matches your goal:
