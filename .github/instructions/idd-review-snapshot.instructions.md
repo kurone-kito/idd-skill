@@ -30,7 +30,7 @@ throughout. Then fetch all of the following from GitHub in a single pass
 Exclude **trusted agent operational comments** from the snapshot:
 comments whose body begins with one of these exact operational marker
 prefixes and whose GitHub author is a trusted marker actor per
-`idd-overview.instructions.md`:
+`idd-overview-core.instructions.md`:
 
 - `<!-- review-watermark:`
 - `<!-- review-baseline:`
@@ -177,8 +177,8 @@ Copilot and CI advisory bot comments; they follow PATH B in E4-E7.
 ## E2 — Critique pass
 
 Run a critique pass on the branch's changes and add any newly found
-issues to ReviewItems_snapshot. See `idd-overview.instructions.md` for per-agent
-implementation.
+issues to ReviewItems_snapshot. See `idd-overview-appendix.instructions.md`
+for per-agent implementation.
 
 **Incremental review**: on the second and later passes **within the same
 claim**, scope the review to the diff since the previous E2 execution's

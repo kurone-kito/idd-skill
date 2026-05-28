@@ -63,7 +63,7 @@ terms literally.
 
 ## For IDD work
 
-Open `.github/instructions/idd-overview.instructions.md` and the
+Open `.github/instructions/idd-overview-core.instructions.md` and the
 relevant phase file before starting work. See
 [docs/idd-workflow.md](docs/idd-workflow.md) for the cross-agent
 entry path and phase routing.

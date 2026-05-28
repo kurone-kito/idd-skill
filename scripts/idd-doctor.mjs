@@ -242,7 +242,7 @@ export function extractMarkerPrefixes(text) {
 
 function checkRequiredFiles(files, report) {
   const required = [
-    ".github/instructions/idd-overview.instructions.md",
+    ".github/instructions/idd-overview-core.instructions.md",
     ".github/instructions/idd-discover.instructions.md",
     ".github/instructions/idd-suitability.instructions.md",
     ".github/instructions/idd-claim.instructions.md",
@@ -336,7 +336,7 @@ function checkPlaceholders(root, files, report) {
 
 function checkMarkerPrefixes(root, report) {
   const discoverPath = join(root, ".github/instructions/idd-discover.instructions.md")
-  const overviewPath = join(root, ".github/instructions/idd-overview.instructions.md")
+  const overviewPath = join(root, ".github/instructions/idd-overview-core.instructions.md")
   let discover = ""
   let overview = ""
   try {
@@ -388,12 +388,12 @@ function checkMarkerPrefixes(root, report) {
 }
 
 function checkProjectCommands(root, report) {
-  const path = join(root, ".github/instructions/idd-overview.instructions.md")
+  const path = join(root, ".github/instructions/idd-overview-core.instructions.md")
   let text = ""
   try {
     text = readFileSync(path, "utf8")
   } catch {
-    report.errors.push("cannot read .github/instructions/idd-overview.instructions.md")
+    report.errors.push("cannot read .github/instructions/idd-overview-core.instructions.md")
     return null
   }
 

@@ -17,19 +17,19 @@ If you arrived here from your agent's entry file, pick up at step 2. If
 you are reading this guide first, start at step 1.
 
 1. Read the entry file for your agent or surface (see table below).
-2. Read `.github/instructions/idd-overview.instructions.md`.
+2. Read `.github/instructions/idd-overview-core.instructions.md`.
 3. Read the phase file that matches your current state.
 4. If you are editing package-specific code, also follow the matching
    scoped instruction file in `.github/instructions/`.
 
 ## Entry points and auto-load expectations
 
-| Agent / surface         | Read first                        | Automatically available IDD context                                                                                                                                | Open manually                                                                 |
-| ----------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
-| GitHub Copilot surfaces | `.github/copilot-instructions.md` | `.github/instructions/idd-overview.instructions.md` for execution surfaces; package-scoped `.instructions.md` files in VS Code Copilot when editing matching paths | The routed phase file when the current step changes                           |
-| Codex CLI               | `AGENTS.md`                       | None from `.github/instructions/`                                                                                                                                  | `.github/instructions/idd-overview.instructions.md` and the routed phase file |
-| Claude Code             | `CLAUDE.md`                       | None from `.github/instructions/` by default                                                                                                                       | `.github/instructions/idd-overview.instructions.md` and the routed phase file |
-| Gemini CLI              | `GEMINI.md`                       | None from `.github/instructions/`                                                                                                                                  | `.github/instructions/idd-overview.instructions.md` and the routed phase file |
+| Agent / surface         | Read first                        | Automatically available IDD context                                                                                                                                     | Open manually                                                                      |
+| ----------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| GitHub Copilot surfaces | `.github/copilot-instructions.md` | `.github/instructions/idd-overview-core.instructions.md` for execution surfaces; package-scoped `.instructions.md` files in VS Code Copilot when editing matching paths | The routed phase file when the current step changes                                |
+| Codex CLI               | `AGENTS.md`                       | None from `.github/instructions/`                                                                                                                                       | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file |
+| Claude Code             | `CLAUDE.md`                       | None from `.github/instructions/` by default                                                                                                                            | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file |
+| Gemini CLI              | `GEMINI.md`                       | None from `.github/instructions/`                                                                                                                                       | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file |
 
 During onboarding, create or update `CLAUDE.md`, `AGENTS.md`, and
 `GEMINI.md` so each non-Copilot agent listed above has a stable first
@@ -41,7 +41,7 @@ entry file should be an explicit operator choice, not the default.
 
 | File                                                       | Role                                                                                                            |
 | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `.github/instructions/idd-overview.instructions.md`        | Shared definitions, command sets, routing table, critique-pass mapping                                          |
+| `.github/instructions/idd-overview-core.instructions.md`   | Shared definitions, command sets, routing table, critique-pass mapping                                          |
 | `.github/instructions/idd-discover.instructions.md`        | A0-T–A4.5: find a viable issue, classify roadmap vs. leaf nodes during traversal, run suitability, and hand off |
 | `.github/instructions/idd-roadmap-audit.instructions.md`   | A1.5: audit roadmap completion, including bottom-up recursive roadmap closure, before A2                        |
 | `.github/instructions/idd-claim.instructions.md`           | A5: run claim pre-checks and claim verification                                                                 |
@@ -274,7 +274,7 @@ keeping review coupled to the full overview, narrowing `applyTo` and
 risking execution-agent discoverability, or splitting a separate
 reviewer-only instruction file. Copilot code review may still use the
 lightweight repository-wide `.github/copilot-instructions.md`; only the
-heavier `idd-overview.instructions.md` is excluded from review.
+heavier `idd-overview-core.instructions.md` is excluded from review.
 
 ## F2 merge-readiness evidence checklist
 

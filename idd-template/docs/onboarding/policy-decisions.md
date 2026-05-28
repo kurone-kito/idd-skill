@@ -295,7 +295,7 @@ agents do not need to infer what changed.
 `.github/idd/config.json` is the machine-readable record of the same
 policy decisions. When present and valid, its `commands` object
 overrides the command table values in
-`idd-overview.instructions.md`. The non-command policy fields are a
+`idd-overview-core.instructions.md`. The non-command policy fields are a
 machine-readable mirror that should stay aligned with the owning
 instruction files and human-readable policy notes, including
 `claimTiming.*` and `ciWait.*` when the repository records those

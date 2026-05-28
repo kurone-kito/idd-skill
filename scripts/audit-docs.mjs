@@ -295,11 +295,11 @@ function checkConfigInstructionDrift() {
   const pairs = [
     {
       configPath: ".github/idd/config.json",
-      overviewPath: ".github/instructions/idd-overview.instructions.md",
+      overviewPath: ".github/instructions/idd-overview-core.instructions.md",
     },
     {
       configPath: "idd-template/.github/idd/config.json",
-      overviewPath: "idd-template/.github/instructions/idd-overview.instructions.md",
+      overviewPath: "idd-template/.github/instructions/idd-overview-core.instructions.md",
     },
   ];
 

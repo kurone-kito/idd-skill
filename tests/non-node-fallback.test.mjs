@@ -224,7 +224,7 @@ test("onboarding keeps claim timing and CI wait policy in the explicit confirmat
   );
   assert.match(
     onboarding,
-    /`\.github\/instructions\/idd-overview\.instructions\.md` keeps/,
+    /`\.github\/instructions\/idd-overview-core\.instructions\.md` keeps/,
     "ONBOARDING Step 6 must use the full idd-overview path in the checklist",
   );
 });
@@ -384,12 +384,12 @@ test("onboarding links extracted agent-entry and verification guidance", () => {
   );
   assert.match(
     reference,
-    /`\.github\/instructions\/idd-overview\.instructions\.md` has/,
+    /`\.github\/instructions\/idd-overview-core\.instructions\.md` has/,
     "agent-entry reference must use the full idd-overview path in the checklist",
   );
   assert.match(
     reference,
-    /`\.github\/instructions\/idd-discover\.instructions\.md` and\s+`\.github\/instructions\/idd-overview\.instructions\.md`/,
+    /`\.github\/instructions\/idd-discover\.instructions\.md` and\s+`\.github\/instructions\/idd-overview-core\.instructions\.md`/,
     "agent-entry reference must use the full instruction paths in the marker checklist",
   );
 });
@@ -414,8 +414,8 @@ test("policy reference keeps helper specs pinned and config scope accurate", () 
 });
 
 test("overview instructions document the npx-availability gate", () => {
-  const live = readText(".github/instructions/idd-overview.instructions.md");
-  const template = readText("idd-template/.github/instructions/idd-overview.instructions.md");
+  const live = readText(".github/instructions/idd-overview-core.instructions.md");
+  const template = readText("idd-template/.github/instructions/idd-overview-core.instructions.md");
 
   assert.ok(
     live.includes("`npx <tool>` only when `npx` is available"),

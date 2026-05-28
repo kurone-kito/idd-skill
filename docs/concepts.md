@@ -25,7 +25,7 @@ claim so long-running sessions do not look abandoned.
 Operational details live in
 [claim phase](../.github/instructions/idd-claim.instructions.md) and the
 shared definitions in
-[IDD overview](../.github/instructions/idd-overview.instructions.md).
+[IDD overview](../.github/instructions/idd-overview-core.instructions.md).
 
 ## Review Snapshots
 

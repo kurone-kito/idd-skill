@@ -163,7 +163,7 @@ catches parallel-session concurrency before a new claim comment is posted.
 
 2. **Remote branch scan** (scoped Refs API, not repo-wide):
    Query the Refs API with the issue-number prefix only, to stay within
-   the scope invariant defined in idd-overview.instructions.md:
+   the scope invariant defined in idd-overview-appendix.instructions.md:
 
    ```sh
    gh api "repos/{owner}/{repo}/git/matching-refs/heads/issue/<number>-" \
