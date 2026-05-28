@@ -36,7 +36,7 @@ agents. Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
 cross-agent entry path and phase routing.
 
 Before starting IDD work, open
-`.github/instructions/idd-overview.instructions.md`. Open the routed
+`.github/instructions/idd-overview-core.instructions.md`. Open the routed
 phase file manually when the current step changes.
 ```
 
@@ -65,7 +65,7 @@ agents. Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
 cross-agent entry path and phase routing.
 
 Before starting IDD work, open
-`.github/instructions/idd-overview.instructions.md`. Open the routed
+`.github/instructions/idd-overview-core.instructions.md`. Open the routed
 phase file manually when the current step changes.
 ```
 
@@ -73,7 +73,7 @@ phase file manually when the current step changes.
 
 If `AGENTS.md` already exists, add the shared IDD workflow section and
 keep the wording explicit that Codex CLI agents should manually open
-`.github/instructions/idd-overview.instructions.md` and the routed
+`.github/instructions/idd-overview-core.instructions.md` and the routed
 phase file before starting IDD work.
 
 If `AGENTS.md` does not exist, create a minimal file such as:
@@ -96,7 +96,7 @@ agents. Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
 cross-agent entry path and phase routing.
 
 Before starting IDD work, open
-`.github/instructions/idd-overview.instructions.md`. Open the routed
+`.github/instructions/idd-overview-core.instructions.md`. Open the routed
 phase file manually when the current step changes.
 ```
 
@@ -126,7 +126,7 @@ agents. Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
 cross-agent entry path and phase routing.
 
 Before starting IDD work, open
-`.github/instructions/idd-overview.instructions.md`. Open the routed
+`.github/instructions/idd-overview-core.instructions.md`. Open the routed
 phase file manually when the current step changes.
 ```
 
@@ -136,7 +136,7 @@ If `.github/copilot-instructions.md` already exists, add a parallel IDD
 workflow section there as well so GitHub Copilot execution surfaces
 receive the same entry path. Keep the
 `excludeAgent: "code-review"` behavior in
-`.github/instructions/idd-overview.instructions.md`; repository-wide
+`.github/instructions/idd-overview-core.instructions.md`; repository-wide
 Copilot guidance may still apply during review.
 
 ## Verification details
@@ -193,11 +193,11 @@ checks, confirm the detailed items below.
 ### Placeholder, marker, and config alignment
 
 - [ ] No `{{...}}` placeholders remain in any copied file.
-- [ ] `.github/instructions/idd-overview.instructions.md` has
+- [ ] `.github/instructions/idd-overview-core.instructions.md` has
       `applyTo: "**"` and `excludeAgent: "code-review"` in its
       frontmatter.
 - [ ] The `Project commands` table in
-      `.github/instructions/idd-overview.instructions.md`
+      `.github/instructions/idd-overview-core.instructions.md`
       contains the correct commands for this project.
 - [ ] If the project chooses `issue-scope: orphan-first`, the
       `orphan-first-policy` value is recorded as `none`,
@@ -206,7 +206,7 @@ checks, confirm the detailed items below.
 - [ ] The `{{PROJECT_MARKER_PREFIX}}-roadmap-id` and
       `{{PROJECT_MARKER_PREFIX}}-blocked-by` marker names in
       `.github/instructions/idd-discover.instructions.md` and
-      `.github/instructions/idd-overview.instructions.md`
+      `.github/instructions/idd-overview-core.instructions.md`
       match the prefix chosen for this project.
 - [ ] If `.github/idd/config.json` is used, it matches the recorded
       `iddVersion`, marker prefix, merge/review/thread policies,

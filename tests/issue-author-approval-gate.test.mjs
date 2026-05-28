@@ -69,8 +69,8 @@ test("suitability instructions keep issue-author approval outside A4.5 outcomes"
 });
 
 test("overview documents the secure default issue-author approval config behavior", () => {
-  const live = read(".github/instructions/idd-overview.instructions.md");
-  const template = read("idd-template/.github/instructions/idd-overview.instructions.md");
+  const live = read(".github/instructions/idd-overview-core.instructions.md");
+  const template = read("idd-template/.github/instructions/idd-overview-core.instructions.md");
   const expected = /Absent values keep the gate\s+enabled and default approval actors to\s+`owners-and-maintainers-only`\./;
 
   assert.match(live, /skipIssueAuthorApprovalGate/);

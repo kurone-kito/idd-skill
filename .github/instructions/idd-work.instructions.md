@@ -134,7 +134,7 @@ through the Worktree creation steps above.
 
 Draft an implementation plan and post it as an issue comment. Then run a
 critique pass to review the plan for correctness and concreteness (see
-`idd-overview.instructions.md` for per-agent implementation). Post the
+`idd-overview-appendix.instructions.md` for per-agent implementation). Post the
 refined final plan as a follow-up or update to the same issue comment.
 After the final plan comment is posted and claim ownership is
 re-validated, update the issue live status digest: `Phase` is `B2
@@ -149,7 +149,7 @@ Implement the plan. Before each commit, run **fix-validate**.
 Keep commits atomic — one logical change per commit.
 
 If B3 or C must stop for a hold, use the shared Hold / suspend rules in
-`idd-overview.instructions.md` and update the issue digest with the
+`idd-overview-appendix.instructions.md` and update the issue digest with the
 blocking condition before stopping. Do not use the digest as the only
 record of unfinished work; material decisions still need issue comments
 or commits.
@@ -172,7 +172,7 @@ improvements unrelated to PR intent), skip to
 Run a critique pass on this branch's diff. Ask it to check whether the
 implementation is correct, whether the issue's requirements are
 satisfied, whether adequate test coverage exists, and whether any other
-problems exist. See `idd-overview.instructions.md` for per-agent
+problems exist. See `idd-overview-appendix.instructions.md` for per-agent
 implementation. The distributed defaults for the C-phase skip and loop
 guards are listed in `docs/policy-constants.md`.
 

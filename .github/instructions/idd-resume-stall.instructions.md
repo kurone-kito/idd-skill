@@ -9,7 +9,7 @@ This file applies only to unattended stale-takeover evidence for a
 non-owned claim. Human-gated forced handoff is a separate recovery path
 and is routed from `idd-resume.instructions.md` before this file runs.
 
-Read `idd-overview.instructions.md` and
+Read `idd-overview-core.instructions.md` and
 `idd-resume.instructions.md` first.
 
 ## Inputs to collect
@@ -90,7 +90,7 @@ waives the stale-threshold gate in S3.
 
 ### S3 — Stale-threshold gate (ownership transfer gate)
 
-Apply the shared stale rule from `idd-overview.instructions.md` and
+Apply the shared stale rule from `idd-overview-core.instructions.md` and
 `claim-stale-age` in `docs/policy-constants.md`:
 takeover is allowed only when the active non-owned claim is stale
 (`latest valid claimed-by created_at >= 24h`).

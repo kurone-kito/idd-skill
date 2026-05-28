@@ -12,7 +12,7 @@ import { runDoctor } from "../scripts/idd-doctor.mjs";
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const FIXTURE_ROOT = new URL("./fixtures/helper-runtime-config/", import.meta.url);
 const REQUIRED_INSTRUCTION_FILES = [
-  ".github/instructions/idd-overview.instructions.md",
+  ".github/instructions/idd-overview-core.instructions.md",
   ".github/instructions/idd-discover.instructions.md",
   ".github/instructions/idd-suitability.instructions.md",
   ".github/instructions/idd-claim.instructions.md",
@@ -283,7 +283,7 @@ function createDoctorFixtureRepoFromConfig(config, {
   const discoverText = buildDiscoverText(markerPrefix);
 
   for (const file of REQUIRED_INSTRUCTION_FILES) {
-    const contents = file.endsWith("idd-overview.instructions.md")
+    const contents = file.endsWith("idd-overview-core.instructions.md")
       ? overviewText
       : file.endsWith("idd-discover.instructions.md")
         ? discoverText

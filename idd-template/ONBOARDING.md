@@ -26,6 +26,35 @@ a new repository.
 > reference and resolved this file by fetching the repository README are
 > also in the right place.
 
+## Upgrading from an earlier IDD version
+
+> **Breaking change (2026-05-28):**
+> `.github/instructions/idd-overview.instructions.md` was a thin
+> redirect with no unique runtime content other than the **Project
+> commands** table. That table now lives in
+> `.github/instructions/idd-overview-core.instructions.md`, the
+> redirect file has been removed from the template, and every script,
+> test, and doc has been updated to read the table from core.
+>
+> If your target repository was set up from an earlier import, do the
+> following once after pulling the new template files:
+>
+> 1. Move any local customizations (typically the `fix-validate`,
+>    `pre-push-validate`, `post-fix-validate`, `install-deps`,
+>    `issue-scope`, and `orphan-first-policy` rows you adjusted during
+>    onboarding) from your old
+>    `.github/instructions/idd-overview.instructions.md` into the
+>    Project commands table in
+>    `.github/instructions/idd-overview-core.instructions.md`. Per-row
+>    overrides via `.github/idd/config.json` `commands.*` continue to
+>    work unchanged.
+> 2. Delete
+>    `.github/instructions/idd-overview.instructions.md` from your
+>    target repository. No machine consumer reads that path anymore.
+>
+> First-time adopters can ignore this section — the flow below already
+> references the new file.
+
 ## What you are setting up
 
 IDD is a multi-agent GitHub automation workflow. Agents work through a
@@ -241,7 +270,6 @@ recording template you will apply in Step 3.
 
 ```text
 .github/idd/config.json
-.github/instructions/idd-overview.instructions.md
 .github/instructions/idd-overview-core.instructions.md
 .github/instructions/idd-overview-appendix.instructions.md
 .github/instructions/idd-discover.instructions.md
@@ -320,7 +348,6 @@ mkdir -p "${DEST}/.github/idd" "${DEST}/.github/instructions" "${DEST}/docs" \
 
 for FILE in \
   ".github/idd/config.json" \
-  ".github/instructions/idd-overview.instructions.md" \
   ".github/instructions/idd-overview-core.instructions.md" \
   ".github/instructions/idd-overview-appendix.instructions.md" \
   ".github/instructions/idd-discover.instructions.md" \
@@ -407,7 +434,6 @@ mkdir -p "${DEST}/.github/idd" "${DEST}/.github/instructions" "${DEST}/docs" \
 
 for FILE in \
   ".github/idd/config.json" \
-  ".github/instructions/idd-overview.instructions.md" \
   ".github/instructions/idd-overview-core.instructions.md" \
   ".github/instructions/idd-overview-appendix.instructions.md" \
   ".github/instructions/idd-discover.instructions.md" \
@@ -563,12 +589,12 @@ agents. Start with [docs/idd-workflow.md](docs/idd-workflow.md) for the
 cross-agent entry path and phase routing.
 
 Before starting IDD work, open
-`.github/instructions/idd-overview.instructions.md`. Open the routed
+`.github/instructions/idd-overview-core.instructions.md`. Open the routed
 phase file manually when the current step changes.
 ```
 
 - point to `docs/idd-workflow.md` as the cross-agent entry path
-- open `.github/instructions/idd-overview.instructions.md` before
+- open `.github/instructions/idd-overview-core.instructions.md` before
   starting IDD work
 - manually open the routed phase file when the current step changes
 
@@ -579,7 +605,7 @@ workflow references and the same opt-out rule.
 If `.github/copilot-instructions.md` already exists, add a parallel IDD
 workflow section there as well. Keep the
 `excludeAgent: "code-review"` behavior in
-`.github/instructions/idd-overview.instructions.md`; repository-wide
+`.github/instructions/idd-overview-core.instructions.md`; repository-wide
 Copilot guidance may still apply to reviews.
 
 ---
@@ -608,7 +634,7 @@ After completing the steps above, confirm each item:
 - [ ] No `{{...}}` placeholders remain, the `Project commands` table is
       correct, and any `orphan-first` scope choice has a valid policy
       value.
-- [ ] `.github/instructions/idd-overview.instructions.md` keeps
+- [ ] `.github/instructions/idd-overview-core.instructions.md` keeps
       `applyTo: "**"` and `excludeAgent: "code-review"` in its
       frontmatter.
 - [ ] `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md` exist and reference

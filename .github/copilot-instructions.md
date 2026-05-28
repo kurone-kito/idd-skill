@@ -256,7 +256,7 @@ This project uses Issue-Driven Development (IDD) with parallel AI
 agents. Start with [docs/idd-workflow.md](../docs/idd-workflow.md) for
 the cross-agent entry path and phase routing.
 
-`.github/instructions/idd-overview.instructions.md` loads automatically
+`.github/instructions/idd-overview-core.instructions.md` loads automatically
 for GitHub Copilot execution surfaces because it has `applyTo: "**"`,
 but it is excluded from Copilot code review with
 `excludeAgent: "code-review"` so reviewer-side context stays lighter.

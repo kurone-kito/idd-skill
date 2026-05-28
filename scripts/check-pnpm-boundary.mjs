@@ -6,7 +6,7 @@ import { parseProjectCommandRows } from "./idd-doctor.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const TEMPLATE_OVERVIEW_PATH =
-  "idd-template/.github/instructions/idd-overview.instructions.md";
+  "idd-template/.github/instructions/idd-overview-core.instructions.md";
 const COMMAND_ROWS = [
   "fix-validate",
   "pre-push-validate",

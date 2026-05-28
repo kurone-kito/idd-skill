@@ -88,7 +88,7 @@ claim-verification rules remain unchanged.
 ## A0 — Check issue-scope setting
 
 Read the **issue-scope** value from the Project commands table in
-`idd-overview.instructions.md`.
+`idd-overview-core.instructions.md`.
 
 - If `issue-scope` is `roadmap`: skip A0-O and proceed to A1 as normal.
 - If `issue-scope` is `roadmap-first` (the default): proceed to A1 as
@@ -105,7 +105,7 @@ Read the **issue-scope** value from the Project commands table in
 ## A0-O — Discover orphan issues
 
 Read the **orphan-first-policy** value from the Project commands table
-in `idd-overview.instructions.md` before any repo-wide orphan issue
+in `idd-overview-core.instructions.md` before any repo-wide orphan issue
 search.
 
 When A0-O runs as the `roadmap-first` fallback (not the `orphan-first`

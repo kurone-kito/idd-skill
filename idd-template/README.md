@@ -92,7 +92,7 @@ strings). This JSON is optional and does not replace
 
 ```text
 .github/instructions/
-  idd-overview.instructions.md       ← shared definitions; auto-loaded by Copilot execution surfaces (applyTo: "**", excludeAgent: "code-review"); see docs/idd-workflow.md for per-agent loading
+  idd-overview-core.instructions.md       ← shared definitions; auto-loaded by Copilot execution surfaces (applyTo: "**", excludeAgent: "code-review"); see docs/idd-workflow.md for per-agent loading
   idd-discover.instructions.md       ← A0–A4: find and select next issue
   idd-roadmap-audit.instructions.md  ← A1.5: roadmap completion audit and roadmap-side coordination
   idd-suitability.instructions.md    ← A4.5: pre-claim suitability triage

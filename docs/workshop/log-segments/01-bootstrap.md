@@ -106,7 +106,7 @@ Commit-derived customization summary from
   `package-manager` to `instructions-only`; add
   `skipIssueAuthorApprovalGate = false`; add
   `maintainerApprovalActorPolicy = owners-and-maintainers-only`.
-- `.github/instructions/idd-overview.instructions.md`: add resolved
+- `.github/instructions/idd-overview-core.instructions.md`: add resolved
   roadmap marker examples for `vrc-event-calendar`.
 - `.github/instructions/idd-overview-appendix.instructions.md`: rewrite
   the template-sync note so later updates pull from upstream
