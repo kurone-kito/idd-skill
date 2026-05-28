@@ -1,8 +1,3 @@
----
-applyTo: "**"
-excludeAgent: "code-review"
----
-
 # IDD — Reference and Implementation Appendix
 
 This appendix contains reference content, implementation details, and
