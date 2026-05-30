@@ -211,41 +211,25 @@ ack / error, as defined in E4):
   prove that no review exists — if a separate _completed_ review of the
   current HEAD is also present, disposition that review under the
   completed-review rules above.)
-- **Re-request (non-Copilot advisory bots only).** When a non-Copilot
-  advisory bot supports an on-demand trigger (e.g. `@coderabbitai
-  review`), you **MAY** re-request the review for the current HEAD **at
-  most once per HEAD**. To keep that cap enforceable across restarts,
-  first record a durable, restart-visible `advisory-wait` marker for the
-  current HEAD (per the AW2 / AW3-R marker conventions in
-  `idd-advisory-wait.instructions.md`); if such a marker already exists
-  for this HEAD, or you cannot record one, do **not** re-request again —
-  go straight to the terminal disposition below. Do **not** record a
-  disposition on the re-request acknowledgement, and do **not** merge on
-  it. Posting the re-request makes the agent the last speaker, so E1's
-  regular-comment filter will drop the original notice on the next
-  snapshot — do **not** rely on a later E1 pass to re-surface it.
-- After re-requesting, wait at most the advisory **settled window**
-  (`advisoryWait.settledWindow`), polling every
-  `advisoryWait.pollInterval` (see
-  [policy constants](../../docs/policy-constants.md)), for a completed
-  review of the current HEAD. Reusing these existing advisory constants
-  — rather than an undefined "advisory window" — keeps the bound
-  deterministic.
-- **Copilot non-review notices** do not use the re-request above; route
-  them through the advisory-wait protocol in
-  `idd-advisory-wait.instructions.md` (AW3 `REQUEST_NEEDED` → E14, with
-  the trusted request marker and request-cap accounting; F2/F3 already
-  route `REQUEST_NEEDED` back to E14). Requesting Copilot directly from
-  triage would leave a pending review with no request marker and
-  under-count the per-PR cap across restarts.
-- The current triage pass **owns the terminal disposition** and must
-  record it before E7 — a non-review-notice item is never left pending
-  across snapshots: `**Accepted**` if a completed review of the current
-  HEAD is now present (dispositioned per the completed-review rules
-  above), otherwise the _not produced_ rejection with the existing
-  prefix: `**Rejected** — {bot} did not review HEAD {sha} ({reason});
-  this is not a completed review`. This keeps the disposition vocabulary
-  unchanged for the E7 verifier and the F2/F3 gates.
+- **Disposition it deterministically in the current pass — no
+  re-request, no wait.** Record `**Accepted**` only if a completed
+  review of the current HEAD is independently present (dispositioned per
+  the completed-review rules above); otherwise record the _not produced_
+  rejection with the existing prefix: `**Rejected** — {bot} did not
+  review HEAD {sha} ({reason}); this is not a completed review`. This
+  keeps the disposition vocabulary unchanged for the E7 verifier and the
+  F2/F3 gates, and never leaves the item pending across snapshots.
+- **Do not auto-request a fresh review from triage** to "upgrade" a
+  non-review notice. Triggering a new review is a separate concern:
+  Copilot advisory state is owned solely by the advisory-wait protocol
+  in `idd-advisory-wait.instructions.md` (AW3 `REQUEST_NEEDED` → E14),
+  and a maintainer may manually re-trigger a non-Copilot bot. Any review
+  that later completes for the current HEAD is picked up and
+  dispositioned normally on a subsequent E1 pass. **Never** post an
+  `advisory-wait` marker for a non-Copilot bot — AW2/AW3 treat any
+  trusted same-HEAD `advisory-wait` marker as Copilot evidence, so doing
+  so could wrongly satisfy the Copilot advisory gate and consume its
+  request cap.
 - **Fail-closed honesty**: never cite a non-review notice as evidence
   that the advisory reviewer reviewed the current HEAD — not in the
   disposition reply, the `Authoritative by` line, or the PR live status
