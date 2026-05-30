@@ -212,11 +212,13 @@ ack / error, as defined in E4):
   current HEAD is also present, disposition that review under the
   completed-review rules above.)
 - **Disposition it deterministically in the current pass — no
-  re-request, no wait.** Record `**Accepted**` only if a completed
-  review of the current HEAD is independently present (dispositioned per
-  the completed-review rules above); otherwise record the _not produced_
-  rejection with the existing prefix: `**Rejected** — {bot} did not
-  review HEAD {sha} ({reason}); this is not a completed review`. This
+  re-request, no wait.** The notice item itself is **always rejected**,
+  because it carries no advisory result — never record `**Accepted**` on
+  the notice: `**Rejected** — {bot} did not review HEAD {sha}
+  ({reason}); this is not a completed review`. A separate _completed_
+  review of the current HEAD, if one is present, is a **distinct**
+  ReviewItems_snapshot item dispositioned `**Accepted**` under the
+  completed-review rules above — accept that review, not the notice. This
   keeps the disposition vocabulary unchanged for the E7 verifier and the
   F2/F3 gates, and never leaves the item pending across snapshots.
 - **Do not auto-request a fresh review from triage** to "upgrade" a
