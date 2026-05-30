@@ -60,8 +60,9 @@ Record a path-specific disposition for every item:
   - `Accepted` means the advisory confirms the current implementation or
     captures useful context.
   - `Rejected` means the advisory is noted, but no action is required.
-  - An advisory non-review notice (E4) is **not** recorded here;
-    disposition it under the E6 non-review-notice rule.
+  - An advisory non-review notice (E4) is **not scored** here; it is
+    still recorded, but always as `Rejected` per the E6 non-review-notice
+    rule (it is not a scorable advisory result).
 
 Accepted PATH B items do **not** enter review-fix. They are fully
 handled in E6-E7.
@@ -218,7 +219,12 @@ ack / error, as defined in E4):
   ({reason}); this is not a completed review`. A separate _completed_
   review of the current HEAD, if one is present, is a **distinct**
   ReviewItems_snapshot item dispositioned `**Accepted**` under the
-  completed-review rules above — accept that review, not the notice. This
+  completed-review rules above — accept that review, not the notice.
+  **Re-validate just before posting the rejection**: a completed review
+  can race in after the E1 snapshot but before this rejection. If one
+  has, disposition that review (Accepted) and take a fresh E1 snapshot,
+  so the rejection's later timestamp does not filter the completed
+  review out of the next pass. This
   keeps the disposition vocabulary unchanged for the E7 verifier and the
   F2/F3 gates, and never leaves the item pending across snapshots.
 - **Do not auto-request a fresh review from triage** to "upgrade" a
