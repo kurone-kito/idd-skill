@@ -62,7 +62,7 @@ Record a path-specific disposition for every item:
   - `Rejected` means the advisory is noted, but no action is required.
   - An advisory non-review notice (E4) is **not scored** here; it is
     still recorded, but always as `Rejected` per the E6 non-review-notice
-    rule (it is not a scorable advisory result).
+    rule (it carries no advisory result to score).
 
 Accepted PATH B items do **not** enter review-fix. They are fully
 handled in E6-E7.
