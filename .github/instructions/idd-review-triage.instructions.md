@@ -23,6 +23,17 @@ For each item in ReviewItems_snapshot, first classify it:
   change.
 - If classification is ambiguous, default to PATH A.
 
+**Advisory non-review notice.** Before scoring a PATH B item, decide
+whether it is a _completed_ advisory review of the current HEAD or an
+**advisory non-review notice** — an advisory bot comment reporting that
+it did **not** review the current HEAD. Treat these as non-review
+notices: rate-limit-exceeded warnings, usage / quota / credit
+exhaustion, queued / in-progress / "reviewing" status, a bare request
+acknowledgement (e.g. CodeRabbit "Actions performed"), and error or
+"temporarily unavailable" notices. A non-review notice carries no
+advisory result to score; handle it with the E6 non-review-notice rule
+instead of the normal PATH B disposition.
+
 Then apply path-specific scoring:
 
 - **PATH A**: assess severity and relevance to PR intent.
@@ -31,9 +42,11 @@ Then apply path-specific scoring:
   - **Low** (minor improvements unrelated to PR intent) → **Reject
     recommended**
   - **Medium** → judge by context
-- **PATH B**: do **not** assign High / Medium / Low. Instead, decide
-  whether the advisory should be treated as `Accepted` (confirmed /
-  useful context) or `Rejected` (noted, no action required).
+- **PATH B**: do **not** assign High / Medium / Low. Score only a
+  _completed_ advisory review of the current HEAD here — decide whether
+  it should be treated as `Accepted` (confirmed / useful context) or
+  `Rejected` (noted, no action required). Route an advisory non-review
+  notice (defined above) to the E6 non-review-notice rule instead.
 
 ## E5 — Record Accept / Reject decisions
 
@@ -43,10 +56,13 @@ Record a path-specific disposition for every item:
   - High-severity items are Accepted automatically.
   - Medium- and Low-severity items require an explicit Accept or Reject
     decision.
-- **PATH B**:
+- **PATH B** (a _completed_ review of the current HEAD):
   - `Accepted` means the advisory confirms the current implementation or
     captures useful context.
   - `Rejected` means the advisory is noted, but no action is required.
+  - An advisory non-review notice (E4) is **not scored** here; it is
+    still recorded, but always as `Rejected` per the E6 non-review-notice
+    rule (it carries no advisory result to score).
 
 Accepted PATH B items do **not** enter review-fix. They are fully
 handled in E6-E7.
@@ -167,22 +183,68 @@ For each Rejected PATH A item whose source is reviewer feedback:
 
 Use these prefixes so that disposition is always unambiguous:
 
-- PATH B acceptance marker:
-  `**Accepted** — {what the advisory comment confirmed}`
+- PATH B acceptance marker (only for a _completed_ review of the current
+  HEAD): `**Accepted** — {what the advisory comment confirmed}`
 - Ordinary rejection: `**Rejected** — {reason}`
 - CODEOWNER / required reviewer exception:
   `**Awaiting maintainer decision** — {reasoning}`
 
-PATH B — Advisory items:
+PATH B — Advisory items (completed review of the current HEAD):
 
 - Reply immediately with a decision marker, even when no code change is
-  needed:
+  needed. Use `**Accepted**` / "no findings / no action required"
+  framing **only** when the advisory is a completed review of the
+  current HEAD:
   - `**Accepted** — {what the advisory comment confirmed}`
   - `**Rejected** — {why no action is required}`
 - **Review threads**: resolve immediately after posting the marker.
 - **Regular comments**: reply only.
 - Do not send PATH B items to review-fix. Their work is complete once
   the marker is posted and any thread resolution is done.
+
+PATH B — Advisory non-review notice (rate-limit / quota / queued / bare
+ack / error, as defined in E4):
+
+- A non-review notice is **not itself a completed review** of the
+  current HEAD and must never be treated as evidence of one, so it must
+  never be dispositioned as a confirmation, "no findings", or "no action
+  required because reviewed". (A non-review notice does not by itself
+  prove that no review exists — if a separate _completed_ review of the
+  current HEAD is also present, disposition that review under the
+  completed-review rules above.)
+- **Disposition it deterministically in the current pass — no
+  re-request, no wait.** The notice item itself is **always rejected**,
+  because it carries no advisory result — never record `**Accepted**` on
+  the notice: `**Rejected** — {bot} did not review HEAD {sha}
+  ({reason}); this is not a completed review`. A separate _completed_
+  review of the current HEAD, if one is present, is a **distinct**
+  ReviewItems_snapshot item dispositioned `**Accepted**` under the
+  completed-review rules above — accept that review, not the notice.
+  **Re-validate just before posting the rejection**: a completed review
+  can race in after the E1 snapshot but before this rejection. If one
+  has, disposition that review (Accepted) and take a fresh E1 snapshot,
+  so the rejection's later timestamp does not filter the completed
+  review out of the next pass. This
+  keeps the disposition vocabulary unchanged for the E7 verifier and the
+  F2/F3 gates, and never leaves the item pending across snapshots.
+- **Do not auto-request a fresh review from triage** to "upgrade" a
+  non-review notice. Triggering a new review is a separate concern:
+  Copilot advisory state is owned solely by the advisory-wait protocol
+  in `idd-advisory-wait.instructions.md` (AW3 `REQUEST_NEEDED` → E14),
+  and a maintainer may manually re-trigger a non-Copilot bot. Any review
+  that later completes for the current HEAD is picked up and
+  dispositioned normally on a subsequent E1 pass. **Never** post an
+  `advisory-wait` marker for a non-Copilot bot — AW2/AW3 treat any
+  trusted same-HEAD `advisory-wait` marker as Copilot evidence, so doing
+  so could wrongly satisfy the Copilot advisory gate and consume its
+  request cap.
+- **Fail-closed honesty**: never cite a non-review notice as evidence
+  that the advisory reviewer reviewed the current HEAD — not in the
+  disposition reply, the `Authoritative by` line, or the PR live status
+  digest.
+- **Non-blocking boundary**: this rule does not make PATH B a merge
+  blocker. The blocking advisory gate remains the Copilot advisory-wait
+  protocol in `idd-advisory-wait.instructions.md`, which is unchanged.
 
 ## E7 — Verify recorded dispositions
 

@@ -172,7 +172,10 @@ requested in a previous E13/E14 pass.
 **Regular comments** where the last speaker is not any IDD agent, and no
 reply from **you** (the current agent) exists after that comment's
 timestamp — exclude periodic notification bots (Renovate, etc.). Include
-Copilot and CI advisory bot comments; they follow PATH B in E4-E7.
+Copilot and CI advisory bot comments; they follow PATH B in E4-E7
+(advisory non-review notices — rate-limit / quota / queued / bare
+request acknowledgement / error — are dispositioned under the E6
+non-review-notice rule).
 
 ## E2 — Critique pass
 
