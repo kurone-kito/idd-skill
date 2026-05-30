@@ -204,9 +204,13 @@ PATH B — Advisory items (completed review of the current HEAD):
 PATH B — Advisory non-review notice (rate-limit / quota / queued / bare
 ack / error, as defined in E4):
 
-- A non-review notice means **no review of the current HEAD exists**, so
-  it must never be dispositioned as a confirmation, "no findings", or
-  "no action required because reviewed".
+- A non-review notice is **not itself a completed review** of the
+  current HEAD and must never be treated as evidence of one, so it must
+  never be dispositioned as a confirmation, "no findings", or "no action
+  required because reviewed". (A non-review notice does not by itself
+  prove that no review exists — if a separate _completed_ review of the
+  current HEAD is also present, disposition that review under the
+  completed-review rules above.)
 - When the advisory bot supports an on-demand trigger (e.g.
   `@coderabbitai review`), you **SHOULD** re-request the review for the
   current HEAD **at most once per HEAD**. Do **not** disposition on the
