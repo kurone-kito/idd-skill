@@ -214,15 +214,23 @@ ack / error, as defined in E4):
 - **Re-request (non-Copilot advisory bots only).** When a non-Copilot
   advisory bot supports an on-demand trigger (e.g. `@coderabbitai
   review`), you **MAY** re-request the review for the current HEAD **at
-  most once per HEAD**. Do **not** record a disposition on the
-  re-request acknowledgement, and do **not** merge on it. Posting the
-  re-request makes the agent the last speaker, so E1's regular-comment
-  filter will drop the original notice on the next snapshot — do **not**
-  rely on a later E1 pass to re-surface it. Keep the item in the current
-  ReviewItems_snapshot and, bounded, wait for a completed review of the
-  current HEAD or for the advisory window to elapse; the current pass
-  owns the terminal disposition (next bullet) and must record it before
-  E7.
+  most once per HEAD**. To keep that cap enforceable across restarts,
+  first record a durable, restart-visible `advisory-wait` marker for the
+  current HEAD (per the AW2 / AW3-R marker conventions in
+  `idd-advisory-wait.instructions.md`); if such a marker already exists
+  for this HEAD, or you cannot record one, do **not** re-request again —
+  go straight to the terminal disposition below. Do **not** record a
+  disposition on the re-request acknowledgement, and do **not** merge on
+  it. Posting the re-request makes the agent the last speaker, so E1's
+  regular-comment filter will drop the original notice on the next
+  snapshot — do **not** rely on a later E1 pass to re-surface it.
+- After re-requesting, wait at most the advisory **settled window**
+  (`advisoryWait.settledWindow`), polling every
+  `advisoryWait.pollInterval` (see
+  [policy constants](../../docs/policy-constants.md)), for a completed
+  review of the current HEAD. Reusing these existing advisory constants
+  — rather than an undefined "advisory window" — keeps the bound
+  deterministic.
 - **Copilot non-review notices** do not use the re-request above; route
   them through the advisory-wait protocol in
   `idd-advisory-wait.instructions.md` (AW3 `REQUEST_NEEDED` → E14, with
@@ -230,14 +238,14 @@ ack / error, as defined in E4):
   route `REQUEST_NEEDED` back to E14). Requesting Copilot directly from
   triage would leave a pending review with no request marker and
   under-count the per-PR cap across restarts.
-- If no completed review of the current HEAD arrives within the wait,
-  disposition the item explicitly as _not produced_ with the existing
-  rejection prefix: `**Rejected** — {bot} did not review HEAD {sha}
-  ({reason}); this is not a completed review`. Every non-review-notice
-  item must carry this terminal disposition (or `**Accepted**` for an
-  arriving completed review) before E7 — it is never left pending across
-  snapshots. This keeps the disposition vocabulary unchanged for the E7
-  verifier and the F2/F3 gates.
+- The current triage pass **owns the terminal disposition** and must
+  record it before E7 — a non-review-notice item is never left pending
+  across snapshots: `**Accepted**` if a completed review of the current
+  HEAD is now present (dispositioned per the completed-review rules
+  above), otherwise the _not produced_ rejection with the existing
+  prefix: `**Rejected** — {bot} did not review HEAD {sha} ({reason});
+  this is not a completed review`. This keeps the disposition vocabulary
+  unchanged for the E7 verifier and the F2/F3 gates.
 - **Fail-closed honesty**: never cite a non-review notice as evidence
   that the advisory reviewer reviewed the current HEAD — not in the
   disposition reply, the `Authoritative by` line, or the PR live status
