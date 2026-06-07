@@ -432,6 +432,25 @@
           "description": "When false, discovery ignores the score entirely and evaluates every candidate the legacy way (default true)."
         }
       }
+    },
+    "worktreeGuard": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Opt-in toggle for the disposable-worktree guard (default false; absent means false). When enabled, the guard's enforcement consumers treat a primary-worktree implementation-branch HEAD as a blocking error instead of an advisory warning: idd-doctor (and its --strict CI step) fail, and the optional core.hooksPath hook rejects the commit or push. Those consumers ship incrementally across the worktree-guard rollout, so enabling this flag alone has no effect until they are present. Absent or false preserves the historical advisory-only behavior."
+        },
+        "branchPatterns": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Branch globs the guard treats as implementation branches that must not live in the primary worktree (default [\"issue/*\", \"roadmap-audit/*\"] when absent)."
+        }
+      }
     }
   },
   "patternProperties": {

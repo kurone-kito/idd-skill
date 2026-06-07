@@ -84,5 +84,9 @@
   "autopilotSuitability": {
     "floor": 3,
     "enabled": true
+  },
+  "worktreeGuard": {
+    "enabled": true,
+    "branchPatterns": ["issue/*", "roadmap-audit/*"]
   }
 }
