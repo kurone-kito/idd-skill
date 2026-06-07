@@ -16,6 +16,7 @@ import {
   evaluateAutopilotSuitabilityConsistency,
   extractMarkerPrefixes,
   findMissingWorkshopReferences,
+  findMissingWorktreeHardening,
   findPlaceholders,
   isGithubBackLinkHost,
   parsePrimaryWorktreePath,
@@ -251,6 +252,85 @@ test("readWorktreeGuardEnabled returns false when config is missing or invalid",
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+const HARDENED_WORK = "## B1\n\n### Anti-patterns\n\ntext\n\n### B1 self-check\n\ntext\n"
+const HARDENED_CORE = "The cwd-vs-claim check runs before any local commit, push, or merge.\n"
+const HARDENED_DOCTOR = "function checkPrimaryWorktreeHead(root, report) {}\n"
+
+test("findMissingWorktreeHardening reports nothing when all signals are present", () => {
+  assert.deepEqual(
+    findMissingWorktreeHardening({
+      work: HARDENED_WORK,
+      core: HARDENED_CORE,
+      doctor: HARDENED_DOCTOR,
+    }),
+    [],
+  )
+})
+
+test("findMissingWorktreeHardening flags a stale instruction set missing the B1 sections", () => {
+  const missing = findMissingWorktreeHardening({
+    work: "## B1\n\nno guardrails here\n",
+    core: HARDENED_CORE,
+    doctor: HARDENED_DOCTOR,
+  })
+  assert.ok(missing.some((m) => /Anti-patterns/.test(m)))
+  assert.ok(missing.some((m) => /B1 self-check/.test(m)))
+})
+
+test("findMissingWorktreeHardening flags cwd-vs-claim present but lacking local-commit coverage", () => {
+  const missing = findMissingWorktreeHardening({
+    work: HARDENED_WORK,
+    core: "The cwd-vs-claim check runs before any push or merge.\n",
+    doctor: HARDENED_DOCTOR,
+  })
+  assert.deepEqual(missing, ["overview-core cwd-vs-claim local-commit coverage"])
+})
+
+test("findMissingWorktreeHardening is not fooled by an unrelated 'local commit' mention", () => {
+  const missing = findMissingWorktreeHardening({
+    work: HARDENED_WORK,
+    // "local commit" appears, but not in the gate's mutation enumeration.
+    core: "A local commit is just a commit. The cwd-vs-claim check runs before any push or merge.\n",
+    doctor: HARDENED_DOCTOR,
+  })
+  assert.deepEqual(missing, ["overview-core cwd-vs-claim local-commit coverage"])
+})
+
+test("findMissingWorktreeHardening accepts the opening '(local commit,' enumeration", () => {
+  assert.deepEqual(
+    findMissingWorktreeHardening({
+      work: HARDENED_WORK,
+      core: "The cwd-vs-claim gate covers (local commit, claim heartbeat, push, merge).\n",
+      doctor: HARDENED_DOCTOR,
+    }),
+    [],
+  )
+})
+
+test("findMissingWorktreeHardening flags a missing cwd-vs-claim gate", () => {
+  const missing = findMissingWorktreeHardening({
+    work: HARDENED_WORK,
+    core: "no gate at all\n",
+    doctor: HARDENED_DOCTOR,
+  })
+  assert.deepEqual(missing, ["overview-core cwd-vs-claim gate"])
+})
+
+test("findMissingWorktreeHardening flags a vendored idd-doctor without the detector", () => {
+  const missing = findMissingWorktreeHardening({
+    work: HARDENED_WORK,
+    core: HARDENED_CORE,
+    doctor: "function somethingElse() {}\n",
+  })
+  assert.deepEqual(missing, ["idd-doctor checkPrimaryWorktreeHead detector"])
+})
+
+test("findMissingWorktreeHardening skips absent files instead of reporting them", () => {
+  // null/undefined (file not present) must not be treated as a stale signal.
+  assert.deepEqual(findMissingWorktreeHardening({ work: null, core: null, doctor: null }), [])
+  assert.deepEqual(findMissingWorktreeHardening({}), [])
 })
 
 test("computeWindowStartIso subtracts the given number of days from now", () => {
