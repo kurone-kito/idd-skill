@@ -49,6 +49,7 @@ export function runDoctor({
   checkTemplateVersionSignal(root, report)
   const worktreeGuardEnforced = strict === true || readWorktreeGuardEnabled(root)
   checkPrimaryWorktreeHead(root, report, { enforce: worktreeGuardEnforced })
+  checkWorktreeHardeningPresence(root, report)
   checkPostMergeCleanupBacklog(
     root,
     {
@@ -609,6 +610,63 @@ export function readWorktreeGuardEnabled(root) {
   } catch {
     return false
   }
+}
+
+/**
+ * Decide which worktree-hardening signals are missing from the consuming
+ * repository's imported files. Pure (no I/O): each argument is the file's
+ * text, or `null`/`undefined` when the file is absent (absent files are
+ * skipped, not reported, so this never double-reports a missing required
+ * file). Returns a list of human-readable missing-signal labels.
+ *
+ * @param {{ work?: string|null, core?: string|null, doctor?: string|null }} files
+ * @returns {string[]}
+ */
+export function findMissingWorktreeHardening({ work, core, doctor } = {}) {
+  const missing = []
+  if (typeof work === "string") {
+    if (!/^###\s+Anti-patterns\b/m.test(work)) {
+      missing.push("idd-work B1 Anti-patterns section")
+    }
+    if (!/^###\s+B1 self-check\b/m.test(work)) {
+      missing.push("idd-work B1 self-check section")
+    }
+  }
+  if (typeof core === "string") {
+    if (!/cwd-vs-claim/.test(core)) {
+      missing.push("overview-core cwd-vs-claim gate")
+    } else if (!/local commit/.test(core)) {
+      missing.push("overview-core cwd-vs-claim local-commit coverage")
+    }
+  }
+  // Only meaningful when idd-doctor is vendored into the repo at all.
+  if (typeof doctor === "string" && !/checkPrimaryWorktreeHead/.test(doctor)) {
+    missing.push("idd-doctor checkPrimaryWorktreeHead detector")
+  }
+  return missing
+}
+
+function checkWorktreeHardeningPresence(root, report) {
+  const read = (relativePath) => {
+    try {
+      return readFileSync(join(root, relativePath), "utf8")
+    } catch {
+      return null
+    }
+  }
+  const missing = findMissingWorktreeHardening({
+    work: read(".github/instructions/idd-work.instructions.md"),
+    core: read(".github/instructions/idd-overview-core.instructions.md"),
+    doctor: read("scripts/idd-doctor.mjs"),
+  })
+  if (missing.length === 0) {
+    return
+  }
+  report.warnings.push(
+    `stale import — missing worktree-hardening: ${missing.join("; ")}. `
+      + "Re-sync the IDD template to adopt the B1 worktree guard; see B1 in "
+      + ".github/instructions/idd-work.instructions.md.",
+  )
 }
 
 function checkPrimaryWorktreeHead(root, report, options = {}) {
