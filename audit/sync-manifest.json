@@ -45,6 +45,7 @@
       "stripPrefix": "idd-template/",
       "sourceGlobs": [
         "idd-template/.github/idd/*.json",
+        "idd-template/.githooks/*",
         "idd-template/.github/instructions/idd-*.instructions.md",
         "idd-template/docs/idd-*.md",
         "idd-template/docs/permissions.md",
@@ -58,6 +59,9 @@
       ],
       "paths": [
         "idd-template/.github/idd/config.json",
+        "idd-template/.githooks/_idd-worktree-guard.sh",
+        "idd-template/.githooks/pre-commit",
+        "idd-template/.githooks/pre-push",
         "idd-template/.github/instructions/idd-overview-core.instructions.md",
         "idd-template/.github/instructions/idd-overview-appendix.instructions.md",
         "idd-template/.github/instructions/idd-discover.instructions.md",

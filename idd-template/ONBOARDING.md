@@ -270,6 +270,9 @@ recording template you will apply in Step 3.
 
 ```text
 .github/idd/config.json
+.githooks/_idd-worktree-guard.sh
+.githooks/pre-commit
+.githooks/pre-push
 .github/instructions/idd-overview-core.instructions.md
 .github/instructions/idd-overview-appendix.instructions.md
 .github/instructions/idd-discover.instructions.md
@@ -348,6 +351,9 @@ mkdir -p "${DEST}/.github/idd" "${DEST}/.github/instructions" "${DEST}/docs" \
 
 for FILE in \
   ".github/idd/config.json" \
+  ".githooks/_idd-worktree-guard.sh" \
+  ".githooks/pre-commit" \
+  ".githooks/pre-push" \
   ".github/instructions/idd-overview-core.instructions.md" \
   ".github/instructions/idd-overview-appendix.instructions.md" \
   ".github/instructions/idd-discover.instructions.md" \
@@ -434,6 +440,9 @@ mkdir -p "${DEST}/.github/idd" "${DEST}/.github/instructions" "${DEST}/docs" \
 
 for FILE in \
   ".github/idd/config.json" \
+  ".githooks/_idd-worktree-guard.sh" \
+  ".githooks/pre-commit" \
+  ".githooks/pre-push" \
   ".github/instructions/idd-overview-core.instructions.md" \
   ".github/instructions/idd-overview-appendix.instructions.md" \
   ".github/instructions/idd-discover.instructions.md" \
@@ -528,6 +537,33 @@ Keep the companion separate from the execution instructions:
 - In the source `idd-skill` repository, maintainers must keep
   `skills/issue-authoring/` and its bundled references aligned with
   `docs/issue-authoring-skill.md`.
+
+### Optional — enable the local worktree guard
+
+The template ships an opt-in git hook set under `.githooks/` that
+refuses commits and pushes made from the **primary** worktree while
+HEAD is on an implementation branch (`issue/*` or `roadmap-audit/*`),
+enforcing the B1 disposable-worktree rule locally. The hooks are pure
+POSIX sh — no Node, `jq`, or other runtime dependency.
+
+To enable it in the target repository:
+
+1. Set `worktreeGuard.enabled` to `true` in `.github/idd/config.json`
+   (the guard is off by default).
+2. Point git at the shipped hooks. `core.hooksPath` is local and not
+   committed, so each clone runs this once:
+
+   ```sh
+   git config core.hooksPath .githooks
+   chmod +x .githooks/pre-commit .githooks/pre-push
+   ```
+
+When `worktreeGuard.enabled` is absent or `false`, the hooks are a
+no-op. To bypass the guard for a single intentional commit or push,
+pass `--no-verify`. CI cannot detect this class of violation — a
+primary-worktree mistake leaves no trace in the pushed history — so
+this local hook, together with `idd-doctor --strict`, is the practical
+enforcement surface.
 
 ---
 
