@@ -231,6 +231,36 @@ test("policy valid fixture passes validation", () => {
   assert.ok(ok, errors.join("\n"));
 });
 
+test("policy schema accepts the worktreeGuard opt-in object", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+  );
+  instance.worktreeGuard = { enabled: true, branchPatterns: ["issue/*"] };
+  assert.deepEqual(validate(instance, schema), []);
+});
+
+test("policy schema treats missing worktreeGuard as advisory-only default", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+  );
+  delete instance.worktreeGuard;
+  assert.deepEqual(validate(instance, schema), []);
+});
+
+test("policy schema rejects an unknown worktreeGuard subkey", () => {
+  const schema = loadJson("schemas/policy.schema.json");
+  const instance = JSON.parse(
+    JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")),
+  );
+  instance.worktreeGuard = { enabled: true, bogus: 1 };
+  assert.ok(
+    validate(instance, schema).length > 0,
+    "expected an unknown worktreeGuard subkey to be rejected",
+  );
+});
+
 test("policy schema accepts missing helperRuntime as instructions-only fallback", () => {
   const schema = loadJson("schemas/policy.schema.json");
   const instance = JSON.parse(

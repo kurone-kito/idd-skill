@@ -432,6 +432,25 @@
           "description": "When false, discovery ignores the score entirely and evaluates every candidate the legacy way (default true)."
         }
       }
+    },
+    "worktreeGuard": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "When true, the disposable-worktree guard is enforced for this repository: idd-doctor promotes the primary-worktree-HEAD finding to an error (also reachable via --strict) and the optional core.hooksPath hook rejects commits/pushes made from the primary worktree while HEAD is on an implementation branch. Absent or false keeps the historical advisory-only behavior (default false; opt-in)."
+        },
+        "branchPatterns": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Branch globs the guard treats as implementation branches that must not live in the primary worktree (default [\"issue/*\", \"roadmap-audit/*\"] when absent)."
+        }
+      }
     }
   },
   "patternProperties": {
