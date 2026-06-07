@@ -439,7 +439,7 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "When true, the disposable-worktree guard is enforced for this repository: idd-doctor promotes the primary-worktree-HEAD finding to an error (also reachable via --strict) and the optional core.hooksPath hook rejects commits/pushes made from the primary worktree while HEAD is on an implementation branch. Absent or false keeps the historical advisory-only behavior (default false; opt-in)."
+          "description": "Opt-in toggle for the disposable-worktree guard (default false; absent means false). When enabled, the guard's enforcement consumers treat a primary-worktree implementation-branch HEAD as a blocking error instead of an advisory warning: idd-doctor (and its --strict CI step) fail, and the optional core.hooksPath hook rejects the commit or push. Those consumers ship incrementally across the worktree-guard rollout, so enabling this flag alone has no effect until they are present. Absent or false preserves the historical advisory-only behavior."
         },
         "branchPatterns": {
           "type": "array",
