@@ -143,9 +143,9 @@ states the opt-out explicitly.
 ## Claim revalidation gate
 
 Before any step that can mutate git state or publish GitHub side effects
-(claim heartbeat, hold or unclaim comment, issue or PR plan comment,
-push, rebase, reply, resolve, reviewer request, merge), re-read the
-issue and parse the active claim using the rules in
+(local commit, claim heartbeat, hold or unclaim comment, issue or PR
+plan comment, push, rebase, reply, resolve, reviewer request, merge),
+re-read the issue and parse the active claim using the rules in
 `idd-claim.instructions.md`. The active claim must still use your
 current `{claim-id}`. If it does not, the claim was lost. Stop, do not
 post further operational comments, and report the handoff or race. If
@@ -196,8 +196,8 @@ Out of scope and explicitly **not** blocked:
   worktree by design).
 
 This check is read-only and pre-mutation. When in scope, it must run
-before any push, rebase, comment, label change, reply, resolve,
-reviewer request, or merge.
+before any local commit, push, rebase, comment, label change, reply,
+resolve, reviewer request, or merge.
 
 A1.5 roadmap completion audit side effects use the roadmap issue itself
 as the claim target (see `idd-roadmap-audit.instructions.md`). Even
