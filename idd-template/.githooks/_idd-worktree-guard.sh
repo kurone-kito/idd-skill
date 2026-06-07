@@ -40,12 +40,32 @@ idd_worktree_guard_check() {
   [ -n "$primary" ] || return 0
   [ "$primary" = "$repo_root" ] || return 0
 
-  # Only implementation branches are guarded.
+  # Only implementation branches are guarded. The globs come from
+  # worktreeGuard.branchPatterns, defaulting to issue/* and
+  # roadmap-audit/* when the key is absent. (A detached HEAD reports
+  # "HEAD" and never matches.)
   branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
-  case "$branch" in
-    issue/* | roadmap-audit/*) ;;
-    *) return 0 ;;
+  [ -n "$branch" ] && [ "$branch" != "HEAD" ] || return 0
+
+  patterns='issue/* roadmap-audit/*'
+  case "$guard_body" in
+    *'"branchPatterns":['*)
+      raw=${guard_body#*'"branchPatterns":['}
+      raw=${raw%%]*}
+      patterns=$(printf '%s' "$raw" | tr ',' ' ' | tr -d '"')
+      ;;
   esac
+
+  matched=0
+  for pattern in $patterns; do
+    # Unquoted $pattern is intentional: it enables glob matching of the
+    # configured branch pattern against the branch name.
+    # shellcheck disable=SC2254
+    case "$branch" in
+      $pattern) matched=1; break ;;
+    esac
+  done
+  [ "$matched" = 1 ] || return 0
 
   printf 'IDD worktree guard: refusing to %s on "%s" from the primary worktree (%s).\n' \
     "$action" "$branch" "$repo_root" >&2

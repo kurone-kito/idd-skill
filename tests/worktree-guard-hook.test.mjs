@@ -91,6 +91,20 @@ test("hook is a no-op on issue/* when worktreeGuard is absent (default)", () => 
   }
 })
 
+test("hook honors a custom worktreeGuard.branchPatterns override", () => {
+  const repo = setupRepo({
+    worktreeGuard: { enabled: true, branchPatterns: ["release/*"] },
+  })
+  try {
+    git(repo, ["checkout", "-q", "-b", "release/1"])
+    assert.equal(runHook(repo, "pre-commit"), 1) // matches the custom glob
+    git(repo, ["checkout", "-q", "-b", "issue/9-example"])
+    assert.equal(runHook(repo, "pre-commit"), 0) // default issue/* no longer applies
+  } finally {
+    rmSync(repo, { recursive: true, force: true })
+  }
+})
+
 test("hook allows issue/* commits from a sibling worktree", () => {
   const repo = setupRepo({ worktreeGuard: { enabled: true } })
   const sibling = `${repo}-sibling`
