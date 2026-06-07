@@ -635,7 +635,12 @@ export function findMissingWorktreeHardening({ work, core, doctor } = {}) {
   if (typeof core === "string") {
     if (!/cwd-vs-claim/.test(core)) {
       missing.push("overview-core cwd-vs-claim gate")
-    } else if (!/local commit/.test(core)) {
+    } else if (!/\(local commit,/.test(core) && !/before any local commit\b/.test(core)) {
+      // Scope the local-commit signal to the gate's own mutation
+      // enumeration (the opening "(local commit, ..." list and the
+      // closing "before any local commit, ..." sentence) so an unrelated
+      // "local commit" mention elsewhere in the file cannot mask a gate
+      // that still omits commit coverage.
       missing.push("overview-core cwd-vs-claim local-commit coverage")
     }
   }

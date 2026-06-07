@@ -288,6 +288,27 @@ test("findMissingWorktreeHardening flags cwd-vs-claim present but lacking local-
   assert.deepEqual(missing, ["overview-core cwd-vs-claim local-commit coverage"])
 })
 
+test("findMissingWorktreeHardening is not fooled by an unrelated 'local commit' mention", () => {
+  const missing = findMissingWorktreeHardening({
+    work: HARDENED_WORK,
+    // "local commit" appears, but not in the gate's mutation enumeration.
+    core: "A local commit is just a commit. The cwd-vs-claim check runs before any push or merge.\n",
+    doctor: HARDENED_DOCTOR,
+  })
+  assert.deepEqual(missing, ["overview-core cwd-vs-claim local-commit coverage"])
+})
+
+test("findMissingWorktreeHardening accepts the opening '(local commit,' enumeration", () => {
+  assert.deepEqual(
+    findMissingWorktreeHardening({
+      work: HARDENED_WORK,
+      core: "The cwd-vs-claim gate covers (local commit, claim heartbeat, push, merge).\n",
+      doctor: HARDENED_DOCTOR,
+    }),
+    [],
+  )
+})
+
 test("findMissingWorktreeHardening flags a missing cwd-vs-claim gate", () => {
   const missing = findMissingWorktreeHardening({
     work: HARDENED_WORK,
