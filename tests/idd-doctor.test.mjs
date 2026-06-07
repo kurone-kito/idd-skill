@@ -1,10 +1,14 @@
 import assert from "node:assert/strict"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { test } from "node:test"
 
 import {
   backLinkPatternFor,
   classifyBacklog,
   classifyPrimaryHead,
+  classifyWorktreeHeadFinding,
   computeWindowStartIso,
   containsExampleRepoBackLink,
   containsWorkshopReference,
@@ -16,6 +20,7 @@ import {
   isGithubBackLinkHost,
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
+  readWorktreeGuardEnabled,
   stripMarkdownNonText,
 } from "../scripts/idd-doctor.mjs"
 
@@ -175,6 +180,77 @@ test("classifyPrimaryHead handles empty or non-string input as unknown", () => {
   assert.deepEqual(classifyPrimaryHead(""), { isB1Violation: false, kind: "unknown" })
   assert.deepEqual(classifyPrimaryHead(null), { isB1Violation: false, kind: "unknown" })
   assert.deepEqual(classifyPrimaryHead(undefined), { isB1Violation: false, kind: "unknown" })
+})
+
+test("classifyWorktreeHeadFinding returns null when HEAD is not a violation", () => {
+  assert.equal(
+    classifyWorktreeHeadFinding({ isB1Violation: false, kind: "other" }, "main", "/repo", true),
+    null,
+  )
+})
+
+test("classifyWorktreeHeadFinding warns (not errors) when the guard is not enforced", () => {
+  const finding = classifyWorktreeHeadFinding(
+    { isB1Violation: true, kind: "issue" },
+    "issue/123-foo",
+    "/repo",
+    false,
+  )
+  assert.equal(finding.level, "warning")
+  assert.match(finding.message, /an issue branch \(issue\/123-foo\)/)
+  assert.match(finding.message, /likely a past B1 violation/)
+})
+
+test("classifyWorktreeHeadFinding promotes to an error when the guard is enforced", () => {
+  const finding = classifyWorktreeHeadFinding(
+    { isB1Violation: true, kind: "issue" },
+    "issue/123-foo",
+    "/repo",
+    true,
+  )
+  assert.equal(finding.level, "error")
+  assert.match(finding.message, /worktree guard enforced/)
+})
+
+test("classifyWorktreeHeadFinding labels roadmap-audit branches", () => {
+  const finding = classifyWorktreeHeadFinding(
+    { isB1Violation: true, kind: "roadmap-audit" },
+    "roadmap-audit/456-bar",
+    "/repo",
+    true,
+  )
+  assert.equal(finding.level, "error")
+  assert.match(finding.message, /a roadmap-audit branch/)
+})
+
+test("readWorktreeGuardEnabled reads worktreeGuard.enabled from config", () => {
+  const dir = mkdtempSync(join(tmpdir(), "idd-guard-"))
+  try {
+    const writeConfig = (obj) => {
+      mkdirSync(join(dir, ".github/idd"), { recursive: true })
+      writeFileSync(join(dir, ".github/idd/config.json"), JSON.stringify(obj))
+    }
+    writeConfig({ worktreeGuard: { enabled: true } })
+    assert.equal(readWorktreeGuardEnabled(dir), true)
+    writeConfig({ worktreeGuard: { enabled: false } })
+    assert.equal(readWorktreeGuardEnabled(dir), false)
+    writeConfig({ markerPrefix: "idd-skill" })
+    assert.equal(readWorktreeGuardEnabled(dir), false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("readWorktreeGuardEnabled returns false when config is missing or invalid", () => {
+  const dir = mkdtempSync(join(tmpdir(), "idd-guard-"))
+  try {
+    assert.equal(readWorktreeGuardEnabled(dir), false)
+    mkdirSync(join(dir, ".github/idd"), { recursive: true })
+    writeFileSync(join(dir, ".github/idd/config.json"), "{ not json")
+    assert.equal(readWorktreeGuardEnabled(dir), false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test("computeWindowStartIso subtracts the given number of days from now", () => {

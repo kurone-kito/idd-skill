@@ -21,37 +21,13 @@ const BASE64_PATTERN = /^[A-Za-z0-9+/=\s]+$/
 
 export { parseProjectCommandRows }
 
-if (isMainModule(import.meta.url)) {
-  const args = parseArgs(process.argv.slice(2))
-
-  if (args.help) {
-    printUsage()
-    process.exit(0)
-  }
-
-  const report = runDoctor({
-    root: resolve(args.root),
-    requireGithub: args.requireGithub,
-    cleanupBacklogWindowDays: args.cleanupBacklogWindowDays,
-    cleanupBacklogWarnThreshold: args.cleanupBacklogWarnThreshold,
-    workshopCrossRefAllowMissing: args.workshopCrossRefAllowMissing,
-  })
-
-  if (args.json) {
-    console.log(JSON.stringify(report, null, 2))
-  } else {
-    printHumanReport(report)
-  }
-
-  process.exit(report.errors.length > 0 ? 1 : 0)
-}
-
 export function runDoctor({
   root,
   requireGithub,
   cleanupBacklogWindowDays,
   cleanupBacklogWarnThreshold,
   workshopCrossRefAllowMissing,
+  strict,
 }) {
   const files = listFiles(root)
   const textFiles = files.filter(isTextLikeFile)
@@ -71,7 +47,8 @@ export function runDoctor({
   checkHelperRuntimeConfig(root, report)
   checkAgentEntryFiles(root, report)
   checkTemplateVersionSignal(root, report)
-  checkPrimaryWorktreeHead(root, report)
+  const worktreeGuardEnforced = strict === true || readWorktreeGuardEnabled(root)
+  checkPrimaryWorktreeHead(root, report, { enforce: worktreeGuardEnforced })
   checkPostMergeCleanupBacklog(
     root,
     {
@@ -625,7 +602,16 @@ function checkTemplateVersionSignal(root, report) {
   report.warnings.push("template version signal not found (iddVersion/template version)")
 }
 
-function checkPrimaryWorktreeHead(root, report) {
+export function readWorktreeGuardEnabled(root) {
+  try {
+    const config = JSON.parse(readFileSync(join(root, ".github/idd/config.json"), "utf8"))
+    return config?.worktreeGuard?.enabled === true
+  } catch {
+    return false
+  }
+}
+
+function checkPrimaryWorktreeHead(root, report, options = {}) {
   const listResult = runCommand("git", ["worktree", "list", "--porcelain"], root)
   if (!listResult.ok) {
     return
@@ -643,17 +629,49 @@ function checkPrimaryWorktreeHead(root, report) {
 
   const branch = headResult.stdout.trim()
   const classification = classifyPrimaryHead(branch)
-  if (!classification.isB1Violation) {
+  const finding = classifyWorktreeHeadFinding(
+    classification,
+    branch,
+    primaryPath,
+    options.enforce === true,
+  )
+  if (!finding) {
     return
   }
+  if (finding.level === "error") {
+    report.errors.push(finding.message)
+  } else {
+    report.warnings.push(finding.message)
+  }
+}
 
-  const kindLabel =
-    classification.kind === "issue"
-      ? "an issue branch"
-      : "a roadmap-audit branch"
-  report.warnings.push(
-    `primary worktree HEAD is on ${kindLabel} (${branch}) at ${primaryPath} — likely a past B1 violation. See B1 in .github/instructions/idd-work.instructions.md.`,
-  )
+/**
+ * Decide whether a primary-worktree HEAD classification is a finding and,
+ * if so, at what level. Pure (no I/O) so it can be unit-tested directly.
+ *
+ * @param {{ isB1Violation: boolean, kind?: string }} classification
+ * @param {string} branch       current primary-worktree branch name
+ * @param {string} primaryPath  primary worktree path (for the message)
+ * @param {boolean} enforce     true when the worktree guard is enabled or
+ *                              --strict was passed; promotes the finding
+ *                              from a warning to a blocking error
+ * @returns {{ level: "error"|"warning", message: string } | null}
+ */
+export function classifyWorktreeHeadFinding(classification, branch, primaryPath, enforce) {
+  if (!classification || !classification.isB1Violation) {
+    return null
+  }
+  const kindLabel = classification.kind === "issue"
+    ? "an issue branch"
+    : "a roadmap-audit branch"
+  const severity = enforce
+    ? "B1 violation: this branch must live in a sibling worktree, not the primary worktree (worktree guard enforced)"
+    : "likely a past B1 violation"
+  return {
+    level: enforce ? "error" : "warning",
+    message:
+      `primary worktree HEAD is on ${kindLabel} (${branch}) at ${primaryPath} — ${severity}. See B1 in .github/instructions/idd-work.instructions.md.`,
+  }
 }
 
 export function computeWindowStartIso(now, windowDays) {
@@ -1362,6 +1380,7 @@ function parseArgs(argv) {
     json: false,
     help: false,
     requireGithub: false,
+    strict: false,
   }
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -1376,6 +1395,10 @@ function parseArgs(argv) {
     }
     if (arg === "--require-github") {
       args.requireGithub = true
+      continue
+    }
+    if (arg === "--strict") {
+      args.strict = true
       continue
     }
     if (arg === "--repo-root") {
@@ -1460,6 +1483,7 @@ options:
   --repo-root <path>                       repository root to inspect (default: cwd)
   --json                                   print JSON report
   --require-github                         treat GitHub API check failures as errors
+  --strict                                 treat a primary-worktree implementation-branch HEAD as an error (also enabled by worktreeGuard.enabled in config)
   --cleanup-backlog-window-days <N>        merged-PR window for the cleanup backlog check (default: 14)
   --cleanup-backlog-warn-threshold <N>     backlog count above which the check warns (default: 2)
   --workshop-cross-ref-allow-missing <list> comma-separated entry-point paths to skip in the workshop cross-reference check (default: none)
@@ -1538,4 +1562,34 @@ function isMainModule(moduleUrl) {
     return false
   }
   return fileURLToPath(moduleUrl) === resolve(process.argv[1])
+}
+
+// Run as a CLI only after the whole module (including consts used by the
+// checks above) has finished evaluating. Keeping this block at the end of
+// the file avoids a temporal-dead-zone crash when runDoctor reaches a check
+// that reads a `const` declared later in the file.
+if (isMainModule(import.meta.url)) {
+  const args = parseArgs(process.argv.slice(2))
+
+  if (args.help) {
+    printUsage()
+    process.exit(0)
+  }
+
+  const report = runDoctor({
+    root: resolve(args.root),
+    requireGithub: args.requireGithub,
+    cleanupBacklogWindowDays: args.cleanupBacklogWindowDays,
+    cleanupBacklogWarnThreshold: args.cleanupBacklogWarnThreshold,
+    workshopCrossRefAllowMissing: args.workshopCrossRefAllowMissing,
+    strict: args.strict,
+  })
+
+  if (args.json) {
+    console.log(JSON.stringify(report, null, 2))
+  } else {
+    printHumanReport(report)
+  }
+
+  process.exit(report.errors.length > 0 ? 1 : 0)
 }
