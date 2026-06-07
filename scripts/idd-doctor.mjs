@@ -665,7 +665,7 @@ export function classifyWorktreeHeadFinding(classification, branch, primaryPath,
     ? "an issue branch"
     : "a roadmap-audit branch"
   const severity = enforce
-    ? "B1 violation (worktree guard enabled): this branch must live in a sibling worktree, not the primary worktree"
+    ? "B1 violation: this branch must live in a sibling worktree, not the primary worktree (worktree guard enforced)"
     : "likely a past B1 violation"
   return {
     level: enforce ? "error" : "warning",

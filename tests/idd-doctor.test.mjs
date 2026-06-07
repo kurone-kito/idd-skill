@@ -209,7 +209,7 @@ test("classifyWorktreeHeadFinding promotes to an error when the guard is enforce
     true,
   )
   assert.equal(finding.level, "error")
-  assert.match(finding.message, /worktree guard enabled/)
+  assert.match(finding.message, /worktree guard enforced/)
 })
 
 test("classifyWorktreeHeadFinding labels roadmap-audit branches", () => {
