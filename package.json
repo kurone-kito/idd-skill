@@ -43,7 +43,7 @@
     "docs:sync:check": "node scripts/sync-docs.mjs --check"
   },
   "devDependencies": {
-    "@commitlint/cli": "^21.0.0",
+    "@commitlint/cli": "^21.0.2",
     "@commitlint/config-conventional": "^21.0.0",
     "cspell": "^10.0.0",
     "dprint": "0.54.0",
