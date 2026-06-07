@@ -51,6 +51,25 @@ Use the always-loaded overview and the policy constants page as the
 source of truth for these rules. Configuration can tune defaults, but it
 cannot disable the gates above.
 
+## Template Version and Staleness
+
+`iddVersion` in `.github/idd/config.json` records which release of the
+distributed IDD workflow a repository imported.
+
+- **Source-template maintainers** bump `iddVersion` whenever a change to
+  the distributed instruction set, schema, or safety surface — for
+  example a new guardrail, hardening section, or default change — would
+  matter to an adopter who re-syncs. Follow semantic-versioning intent: a
+  new opt-in capability or hardening is a minor bump; a breaking change
+  to existing defaults is a major bump. Keep the template config and this
+  repository's own `.github/idd/config.json` on the same value.
+- **Adopters** can compare their `iddVersion` against the source release
+  to see whether a re-sync is worthwhile. Because the value only moves
+  when maintainers bump it, it is a coarse signal — so `idd-doctor` also
+  runs a content-based stale-import check that warns when the imported
+  files lack the current worktree-hardening sections, catching a missed
+  bump.
+
 ## Helper Runtime Profile
 
 Keep helper support optional. During onboarding, start from
