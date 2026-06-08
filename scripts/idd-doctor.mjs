@@ -205,6 +205,23 @@ export function findPlaceholders(text) {
   return [...text.matchAll(/\{\{\s*[A-Za-z0-9_-]+\s*\}\}/g)].map((match) => match[0])
 }
 
+/**
+ * Find unresolved `{{…}}` placeholders in one file's text. Markdown docs
+ * under `docs/` legitimately *document* placeholder names inside code
+ * spans, so those are stripped first to avoid false positives. Every
+ * other file (including `.github/instructions/*.md`, whose marker
+ * examples may contain unsubstituted placeholders inside inline code or
+ * HTML comments) is scanned raw, so a real leftover is still detected.
+ *
+ * @param {string} file relative file path
+ * @param {string} text file contents
+ * @returns {string[]}
+ */
+export function scanFileForPlaceholders(file, text) {
+  const documentsPlaceholders = file.startsWith("docs/") && file.endsWith(".md")
+  return findPlaceholders(documentsPlaceholders ? stripMarkdownNonText(text) : text)
+}
+
 export function extractMarkerPrefixes(text) {
   // The negative lookahead keeps each match to a complete marker token
   // (e.g. `idd-skill-blocked-by:` or `idd-skill-roadmap-id`), so a
@@ -303,11 +320,7 @@ function checkPlaceholders(root, files, report) {
     } catch {
       continue
     }
-    // Strip code spans/blocks and HTML comments first: docs legitimately
-    // document the `{{…}}` placeholder names inside code spans, and those
-    // are not unresolved substitutions. A genuine leftover placeholder in
-    // prose (or in a non-markdown file) is still detected.
-    const placeholders = findPlaceholders(stripMarkdownNonText(text))
+    const placeholders = scanFileForPlaceholders(file, text)
     if (placeholders.length === 0) {
       continue
     }

@@ -22,6 +22,7 @@ import {
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
   readWorktreeGuardEnabled,
+  scanFileForPlaceholders,
   stripMarkdownNonText,
 } from "../scripts/idd-doctor.mjs"
 
@@ -147,21 +148,35 @@ test("extractMarkerPrefixes ignores prose/heading slugs and status labels", () =
   assert.deepEqual(markers.blockedBy, ["idd-skill"])
 })
 
-test("findPlaceholders + stripMarkdownNonText ignores placeholders documented in code", () => {
-  // Documented in an inline code span — not an unresolved substitution.
+test("scanFileForPlaceholders ignores placeholder names documented in docs code spans", () => {
+  // A docs/*.md file documents the placeholder name in an inline code
+  // span — not an unresolved substitution.
   assert.deepEqual(
-    findPlaceholders(stripMarkdownNonText("Set `{{REPO_NAME}}` during onboarding.")),
+    scanFileForPlaceholders("docs/customization.md", "Set `{{REPO_NAME}}` during onboarding."),
     [],
   )
-  // Documented in a fenced code block — likewise ignored.
+  // A genuine leftover in docs prose is still detected.
   assert.deepEqual(
-    findPlaceholders(stripMarkdownNonText("```\n{{PROJECT_MARKER_PREFIX}}\n```\n")),
-    [],
-  )
-  // A genuine leftover in prose is still detected.
-  assert.deepEqual(
-    findPlaceholders(stripMarkdownNonText("Welcome to {{REPO_NAME}} (oops, unsubstituted).")),
+    scanFileForPlaceholders("docs/customization.md", "Welcome to {{REPO_NAME}} (oops)."),
     ["{{REPO_NAME}}"],
+  )
+})
+
+test("scanFileForPlaceholders scans non-docs files raw so code-span leftovers are caught", () => {
+  // An instruction file's marker example with an UNSUBSTITUTED
+  // placeholder inside inline code / an HTML comment must still be
+  // flagged (stripping is not applied outside docs/).
+  assert.deepEqual(
+    scanFileForPlaceholders(
+      ".github/instructions/idd-discover.instructions.md",
+      "example: `<!-- {{PROJECT_MARKER_PREFIX}}-blocked-by: x -->`",
+    ),
+    ["{{PROJECT_MARKER_PREFIX}}"],
+  )
+  // A non-markdown file is also scanned raw.
+  assert.deepEqual(
+    scanFileForPlaceholders(".github/idd/config.json", "{ \"markerPrefix\": \"{{PROJECT_MARKER_PREFIX}}\" }"),
+    ["{{PROJECT_MARKER_PREFIX}}"],
   )
 })
 
