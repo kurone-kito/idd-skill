@@ -206,10 +206,15 @@ export function findPlaceholders(text) {
 }
 
 export function extractMarkerPrefixes(text) {
-  const roadmap = [...text.matchAll(/([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)-roadmap-id/g)].map(
+  // The negative lookahead keeps each match to a complete marker token
+  // (e.g. `idd-skill-blocked-by:` or `idd-skill-roadmap-id`), so a
+  // prose/heading slug such as
+  // `diagnostic-all-candidates-blocked-by-an-open-roadmap` is not
+  // mis-read as a marker prefix.
+  const roadmap = [...text.matchAll(/([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)-roadmap-id(?![A-Za-z0-9-])/g)].map(
     (match) => match[1],
   )
-  const blockedBy = [...text.matchAll(/([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)-blocked-by/g)].map(
+  const blockedBy = [...text.matchAll(/([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)-blocked-by(?![A-Za-z0-9-])/g)].map(
     (match) => match[1],
   )
   return {
@@ -298,7 +303,11 @@ function checkPlaceholders(root, files, report) {
     } catch {
       continue
     }
-    const placeholders = findPlaceholders(text)
+    // Strip code spans/blocks and HTML comments first: docs legitimately
+    // document the `{{…}}` placeholder names inside code spans, and those
+    // are not unresolved substitutions. A genuine leftover placeholder in
+    // prose (or in a non-markdown file) is still detected.
+    const placeholders = findPlaceholders(stripMarkdownNonText(text))
     if (placeholders.length === 0) {
       continue
     }
@@ -345,17 +354,25 @@ function checkMarkerPrefixes(root, report) {
     return null
   }
 
-  if (!sameMembers(discoverPrefixes.roadmap, discoverPrefixes.blockedBy)) {
+  // Compare only sets that are actually populated: a file that does not
+  // reference roadmap-id/blocked-by markers at all (e.g. overview-core,
+  // which defines claim markers, not roadmap markers) imposes no
+  // constraint and must not trip a spurious "differ" error. Real
+  // mismatches between two populated sets still error.
+  const consistent = (left, right) =>
+    left.length === 0 || right.length === 0 || sameMembers(left, right)
+
+  if (!consistent(discoverPrefixes.roadmap, discoverPrefixes.blockedBy)) {
     report.errors.push("discover marker prefixes differ between roadmap-id and blocked-by")
     return null
   }
-  if (!sameMembers(overviewPrefixes.roadmap, overviewPrefixes.blockedBy)) {
+  if (!consistent(overviewPrefixes.roadmap, overviewPrefixes.blockedBy)) {
     report.errors.push("overview marker prefixes differ between roadmap-id and blocked-by")
     return null
   }
   if (
-    !sameMembers(discoverPrefixes.roadmap, overviewPrefixes.roadmap) ||
-    !sameMembers(discoverPrefixes.blockedBy, overviewPrefixes.blockedBy)
+    !consistent(discoverPrefixes.roadmap, overviewPrefixes.roadmap) ||
+    !consistent(discoverPrefixes.blockedBy, overviewPrefixes.blockedBy)
   ) {
     report.errors.push("marker prefixes differ between discover and overview instructions")
     return null

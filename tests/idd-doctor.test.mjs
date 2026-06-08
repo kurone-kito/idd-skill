@@ -136,6 +136,35 @@ test("extractMarkerPrefixes returns roadmap and blocked-by prefixes", () => {
   assert.deepEqual(markers.blockedBy, ["idd-skill", "MyTeam"])
 })
 
+test("extractMarkerPrefixes ignores prose/heading slugs and status labels", () => {
+  const markers = extractMarkerPrefixes(
+    "## A3.5 — diagnostic-all-candidates-blocked-by-an-open-roadmap\n"
+      + "see `status:blocked-by-human`, idd-skill-roadmap-id and idd-skill-blocked-by here\n",
+  )
+  // The heading slug (`...-blocked-by-an-...`) and the `status:` label
+  // must not contribute a bogus prefix; only the real markers count.
+  assert.deepEqual(markers.roadmap, ["idd-skill"])
+  assert.deepEqual(markers.blockedBy, ["idd-skill"])
+})
+
+test("findPlaceholders + stripMarkdownNonText ignores placeholders documented in code", () => {
+  // Documented in an inline code span — not an unresolved substitution.
+  assert.deepEqual(
+    findPlaceholders(stripMarkdownNonText("Set `{{REPO_NAME}}` during onboarding.")),
+    [],
+  )
+  // Documented in a fenced code block — likewise ignored.
+  assert.deepEqual(
+    findPlaceholders(stripMarkdownNonText("```\n{{PROJECT_MARKER_PREFIX}}\n```\n")),
+    [],
+  )
+  // A genuine leftover in prose is still detected.
+  assert.deepEqual(
+    findPlaceholders(stripMarkdownNonText("Welcome to {{REPO_NAME}} (oops, unsubstituted).")),
+    ["{{REPO_NAME}}"],
+  )
+})
+
 test("parsePrimaryWorktreePath returns the first worktree entry", () => {
   const porcelain = [
     "worktree /repo/idd-skill",
