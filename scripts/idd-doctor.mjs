@@ -191,8 +191,10 @@ export function parsePrimaryWorktreePath(porcelain) {
 export const DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS = ["issue/*", "roadmap-audit/*"]
 
 /**
- * Convert a shell-style branch glob (only `*` and `?` are special) to an
- * anchored RegExp, matching the core.hooksPath hook's `case` semantics.
+ * Convert a shell-style branch glob to an anchored RegExp, matching the
+ * core.hooksPath hook's POSIX `case` semantics: `*` (any run), `?` (any
+ * one character), and bracket expressions (`[...]`, `[!...]`/`[^...]`).
+ * A malformed glob yields a never-matching RegExp rather than throwing.
  */
 function branchGlobToRegExp(pattern) {
   let out = "^"
