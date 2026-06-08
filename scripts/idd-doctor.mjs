@@ -196,28 +196,62 @@ export const DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS = ["issue/*", "roadmap-audit
  */
 function branchGlobToRegExp(pattern) {
   let out = "^"
-  for (const ch of pattern) {
-    if (ch === "*") out += ".*"
-    else if (ch === "?") out += "."
-    else out += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+  let i = 0
+  while (i < pattern.length) {
+    const ch = pattern[i]
+    if (ch === "*") {
+      out += ".*"
+      i += 1
+    } else if (ch === "?") {
+      out += "."
+      i += 1
+    } else if (ch === "[") {
+      // POSIX glob bracket expression, matching the hook's `case`
+      // semantics. A `]` immediately after `[`, `[!`, or `[^` is a
+      // literal member rather than the terminator.
+      let j = i + 1
+      if (pattern[j] === "!" || pattern[j] === "^") j += 1
+      if (pattern[j] === "]") j += 1
+      while (j < pattern.length && pattern[j] !== "]") j += 1
+      if (j >= pattern.length) {
+        out += "\\[" // unterminated — treat the `[` as a literal
+        i += 1
+      } else {
+        const body = pattern.slice(i + 1, j)
+        const negated = body[0] === "!" || body[0] === "^"
+        const members = (negated ? body.slice(1) : body)
+          .replace(/\\/g, "\\\\")
+          .replace(/\]/g, "\\]")
+        out += `[${negated ? "^" : ""}${members}]`
+        i = j + 1
+      }
+    } else {
+      out += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      i += 1
+    }
   }
-  return new RegExp(`${out}$`)
+  try {
+    return new RegExp(`${out}$`)
+  } catch {
+    return /(?!)/ // malformed glob: never matches, never crashes
+  }
 }
 
 export function classifyPrimaryHead(branch, patterns = DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS) {
   if (typeof branch !== "string" || branch.length === 0) {
     return { isB1Violation: false, kind: "unknown" }
   }
-  const matches = patterns.some((pattern) => branchGlobToRegExp(pattern).test(branch))
-  if (!matches) {
+  const matchedPattern = patterns.find((pattern) => branchGlobToRegExp(pattern).test(branch))
+  if (matchedPattern === undefined) {
     return { isB1Violation: false, kind: "other" }
   }
-  // Keep the familiar labels for the default prefixes; any other matched
-  // (custom) pattern is reported as a generic implementation branch.
-  if (branch.startsWith("issue/")) {
+  // Derive the kind from the matched pattern, not the branch name, so a
+  // custom glob (e.g. "*") is reported as a generic implementation
+  // branch even when the branch happens to start with issue/.
+  if (matchedPattern === "issue/*") {
     return { isB1Violation: true, kind: "issue" }
   }
-  if (branch.startsWith("roadmap-audit/")) {
+  if (matchedPattern === "roadmap-audit/*") {
     return { isB1Violation: true, kind: "roadmap-audit" }
   }
   return { isB1Violation: true, kind: "implementation" }
@@ -697,7 +731,11 @@ export function readWorktreeGuardBranchPatterns(root) {
   try {
     const config = JSON.parse(readFileSync(join(root, ".github/idd/config.json"), "utf8"))
     const patterns = config?.worktreeGuard?.branchPatterns
-    if (Array.isArray(patterns) && patterns.length > 0 && patterns.every((p) => typeof p === "string")) {
+    if (
+      Array.isArray(patterns)
+      && patterns.length > 0
+      && patterns.every((p) => typeof p === "string" && p.trim().length > 0)
+    ) {
       return patterns
     }
   } catch {

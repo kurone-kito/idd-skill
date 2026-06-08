@@ -432,6 +432,21 @@ test("classifyPrimaryHead honors custom branchPatterns", () => {
     isB1Violation: true,
     kind: "issue",
   })
+  // kind is derived from the matched pattern, not the branch name: a
+  // catch-all glob reports a generic implementation branch even for an
+  // issue/ branch.
+  assert.deepEqual(classifyPrimaryHead("issue/9", ["*"]), {
+    isB1Violation: true,
+    kind: "implementation",
+  })
+})
+
+test("classifyPrimaryHead supports bracket-expression globs like the hook", () => {
+  assert.equal(classifyPrimaryHead("release/1", ["release/[0-9]*"]).isB1Violation, true)
+  assert.equal(classifyPrimaryHead("release/x", ["release/[0-9]*"]).isB1Violation, false)
+  // Negated bracket expression ([!…]).
+  assert.equal(classifyPrimaryHead("wip/a", ["wip/[!0-9]"]).isB1Violation, true)
+  assert.equal(classifyPrimaryHead("wip/5", ["wip/[!0-9]"]).isB1Violation, false)
 })
 
 test("classifyWorktreeHeadFinding labels a custom implementation branch", () => {
@@ -455,7 +470,11 @@ test("readWorktreeGuardBranchPatterns returns config patterns or the default", (
     assert.deepEqual(readWorktreeGuardBranchPatterns(dir), ["release/*", "wip/*"])
     write({ worktreeGuard: { enabled: true } }) // no branchPatterns → default
     assert.deepEqual(readWorktreeGuardBranchPatterns(dir), DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS)
-    write({ worktreeGuard: { branchPatterns: [] } }) // empty → default
+    write({ worktreeGuard: { branchPatterns: [] } }) // empty array → default
+    assert.deepEqual(readWorktreeGuardBranchPatterns(dir), DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS)
+    write({ worktreeGuard: { branchPatterns: ["", "issue/*"] } }) // empty entry → default
+    assert.deepEqual(readWorktreeGuardBranchPatterns(dir), DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS)
+    write({ worktreeGuard: { branchPatterns: ["   "] } }) // whitespace-only → default
     assert.deepEqual(readWorktreeGuardBranchPatterns(dir), DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS)
   } finally {
     rmSync(dir, { recursive: true, force: true })
