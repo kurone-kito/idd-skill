@@ -565,6 +565,39 @@ primary-worktree mistake leaves no trace in the pushed history — so
 this local hook, together with `idd-doctor --strict`, is the practical
 enforcement surface.
 
+### Optional — run idd-doctor as a CI health gate
+
+For repositories that vendor the IDD helper scripts, running `idd-doctor`
+in CI catches repository-health regressions (config/schema drift,
+unresolved placeholders, marker-prefix inconsistency, missing required
+files) on every change. It is opt-in — add a workflow such as:
+
+```yaml
+name: IDD doctor health gate
+on:
+  pull_request:
+  push:
+    branches: ['**', '!main']
+permissions:
+  contents: read
+jobs:
+  idd-doctor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }} # detached HEAD keeps the worktree check inert
+          persist-credentials: false
+      - run: node scripts/idd-doctor.mjs
+```
+
+Adjust the command to your helper-runtime profile. This gate checks
+repository **health**, not the disposable-worktree rule: CI cannot detect
+a primary-worktree B1 violation (it leaves no trace in pushed history and
+CI checks out a detached HEAD), so worktree enforcement stays local — the
+`core.hooksPath` hook above, the cwd-vs-claim gate, and
+`idd-doctor --strict` run on a developer's machine.
+
 ---
 
 ## Step 3 — Record policy decisions
