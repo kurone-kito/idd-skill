@@ -156,17 +156,18 @@ test("evaluateMarkerPrefixConsistency skips when no prefixes are present", () =>
 test("evaluateMarkerPrefixConsistency catches a cross-type prefix mismatch hidden by empty sets", () => {
   // discover only has a roadmap-id prefix, overview only a blocked-by
   // prefix, and they differ — the pairwise empty-tolerant checks all
-  // pass, so the all-prefixes guard must catch it.
+  // pass, so the all-prefixes guard must catch it. (Prefixes must be
+  // valid multi-character tokens or the format guard fires first.)
   const result = evaluateMarkerPrefixConsistency(
-    { roadmap: ["a"], blockedBy: [] },
-    { roadmap: [], blockedBy: ["b"] },
+    { roadmap: ["alpha"], blockedBy: [] },
+    { roadmap: [], blockedBy: ["beta"] },
   )
   assert.ok(result.error && /inconsistent/.test(result.error), result.error)
 })
 
 test("evaluateMarkerPrefixConsistency reports a within-file roadmap/blocked-by mismatch", () => {
   const result = evaluateMarkerPrefixConsistency(
-    { roadmap: ["a"], blockedBy: ["a", "b"] },
+    { roadmap: ["alpha"], blockedBy: ["alpha", "beta"] },
     { roadmap: [], blockedBy: [] },
   )
   assert.equal(result.error, "discover marker prefixes differ between roadmap-id and blocked-by")
