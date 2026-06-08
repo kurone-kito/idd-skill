@@ -21,6 +21,12 @@ jobs:
   idd-doctor:
     runs-on: ubuntu-slim
     steps:
+      # Check out the exact commit (detached HEAD) so idd-doctor's
+      # local-only primary-worktree-HEAD check never false-positives on a
+      # push-event checkout, where actions/checkout would otherwise leave
+      # HEAD on the issue/* branch and trip the (enabled) worktree guard.
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
       - name: Run idd-doctor repository-health check
         run: node scripts/idd-doctor.mjs
