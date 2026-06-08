@@ -14,6 +14,7 @@ import {
   containsWorkshopReference,
   decodeGithubReadmeBase64,
   evaluateAutopilotSuitabilityConsistency,
+  evaluateMarkerPrefixConsistency,
   extractMarkerPrefixes,
   findMissingWorkshopReferences,
   findMissingWorktreeHardening,
@@ -22,6 +23,7 @@ import {
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
   readWorktreeGuardEnabled,
+  scanFileForPlaceholders,
   stripMarkdownNonText,
 } from "../scripts/idd-doctor.mjs"
 
@@ -134,6 +136,84 @@ test("extractMarkerPrefixes returns roadmap and blocked-by prefixes", () => {
 
   assert.deepEqual(markers.roadmap, ["idd-skill", "my-team"])
   assert.deepEqual(markers.blockedBy, ["idd-skill", "MyTeam"])
+})
+
+test("evaluateMarkerPrefixConsistency accepts one consistent prefix with an empty overview set", () => {
+  const result = evaluateMarkerPrefixConsistency(
+    { roadmap: ["idd-skill"], blockedBy: ["idd-skill"] },
+    { roadmap: [], blockedBy: [] },
+  )
+  assert.deepEqual(result, { prefix: "idd-skill" })
+})
+
+test("evaluateMarkerPrefixConsistency skips when no prefixes are present", () => {
+  assert.deepEqual(
+    evaluateMarkerPrefixConsistency({ roadmap: [], blockedBy: [] }, { roadmap: [], blockedBy: [] }),
+    { skip: true },
+  )
+})
+
+test("evaluateMarkerPrefixConsistency catches a cross-type prefix mismatch hidden by empty sets", () => {
+  // discover only has a roadmap-id prefix, overview only a blocked-by
+  // prefix, and they differ — the pairwise empty-tolerant checks all
+  // pass, so the all-prefixes guard must catch it. (Prefixes must be
+  // valid multi-character tokens or the format guard fires first.)
+  const result = evaluateMarkerPrefixConsistency(
+    { roadmap: ["alpha"], blockedBy: [] },
+    { roadmap: [], blockedBy: ["beta"] },
+  )
+  assert.ok(result.error && /inconsistent/.test(result.error), result.error)
+})
+
+test("evaluateMarkerPrefixConsistency reports a within-file roadmap/blocked-by mismatch", () => {
+  const result = evaluateMarkerPrefixConsistency(
+    { roadmap: ["alpha"], blockedBy: ["alpha", "beta"] },
+    { roadmap: [], blockedBy: [] },
+  )
+  assert.equal(result.error, "discover marker prefixes differ between roadmap-id and blocked-by")
+})
+
+test("extractMarkerPrefixes ignores prose/heading slugs and status labels", () => {
+  const markers = extractMarkerPrefixes(
+    "## A3.5 — diagnostic-all-candidates-blocked-by-an-open-roadmap\n"
+      + "see `status:blocked-by-human`, idd-skill-roadmap-id and idd-skill-blocked-by here\n",
+  )
+  // The heading slug (`...-blocked-by-an-...`) and the `status:` label
+  // must not contribute a bogus prefix; only the real markers count.
+  assert.deepEqual(markers.roadmap, ["idd-skill"])
+  assert.deepEqual(markers.blockedBy, ["idd-skill"])
+})
+
+test("scanFileForPlaceholders ignores placeholder names documented in docs code spans", () => {
+  // A docs/*.md file documents the placeholder name in an inline code
+  // span — not an unresolved substitution.
+  assert.deepEqual(
+    scanFileForPlaceholders("docs/customization.md", "Set `{{REPO_NAME}}` during onboarding."),
+    [],
+  )
+  // A genuine leftover in docs prose is still detected.
+  assert.deepEqual(
+    scanFileForPlaceholders("docs/customization.md", "Welcome to {{REPO_NAME}} (oops)."),
+    ["{{REPO_NAME}}"],
+  )
+})
+
+test("scanFileForPlaceholders scans non-docs files raw so code-span leftovers are caught", () => {
+  // An instruction file's marker example with an UNSUBSTITUTED
+  // placeholder inside inline code / an HTML comment must still be
+  // flagged (stripping is not applied outside docs/).
+  assert.deepEqual(
+    scanFileForPlaceholders(
+      ".github/instructions/idd-discover.instructions.md",
+      "example: `<!-- {{PROJECT_MARKER_PREFIX}}-blocked-by: x -->`",
+    ),
+    ["{{PROJECT_MARKER_PREFIX}}"],
+  )
+  // A non-markdown file is also scanned raw.
+  assert.deepEqual(
+    scanFileForPlaceholders(".github/idd/config.json", "{ \"markerPrefix\": \"{{PROJECT_MARKER_PREFIX}}\" }"),
+    ["{{PROJECT_MARKER_PREFIX}}"],
+  )
 })
 
 test("parsePrimaryWorktreePath returns the first worktree entry", () => {

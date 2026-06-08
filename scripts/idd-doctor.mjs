@@ -205,11 +205,33 @@ export function findPlaceholders(text) {
   return [...text.matchAll(/\{\{\s*[A-Za-z0-9_-]+\s*\}\}/g)].map((match) => match[0])
 }
 
+/**
+ * Find unresolved `{{…}}` placeholders in one file's text. Markdown docs
+ * under `docs/` legitimately *document* placeholder names inside code
+ * spans, so those are stripped first to avoid false positives. Every
+ * other file (including `.github/instructions/*.md`, whose marker
+ * examples may contain unsubstituted placeholders inside inline code or
+ * HTML comments) is scanned raw, so a real leftover is still detected.
+ *
+ * @param {string} file relative file path
+ * @param {string} text file contents
+ * @returns {string[]}
+ */
+export function scanFileForPlaceholders(file, text) {
+  const documentsPlaceholders = file.startsWith("docs/") && file.endsWith(".md")
+  return findPlaceholders(documentsPlaceholders ? stripMarkdownNonText(text) : text)
+}
+
 export function extractMarkerPrefixes(text) {
-  const roadmap = [...text.matchAll(/([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)-roadmap-id/g)].map(
+  // The negative lookahead keeps each match to a complete marker token
+  // (e.g. `idd-skill-blocked-by:` or `idd-skill-roadmap-id`), so a
+  // prose/heading slug such as
+  // `diagnostic-all-candidates-blocked-by-an-open-roadmap` is not
+  // mis-read as a marker prefix.
+  const roadmap = [...text.matchAll(/([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)-roadmap-id(?![A-Za-z0-9-])/g)].map(
     (match) => match[1],
   )
-  const blockedBy = [...text.matchAll(/([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)-blocked-by/g)].map(
+  const blockedBy = [...text.matchAll(/([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)-blocked-by(?![A-Za-z0-9-])/g)].map(
     (match) => match[1],
   )
   return {
@@ -298,7 +320,7 @@ function checkPlaceholders(root, files, report) {
     } catch {
       continue
     }
-    const placeholders = findPlaceholders(text)
+    const placeholders = scanFileForPlaceholders(file, text)
     if (placeholders.length === 0) {
       continue
     }
@@ -325,44 +347,75 @@ function checkMarkerPrefixes(root, report) {
     return null
   }
 
-  const discoverPrefixes = extractMarkerPrefixes(discover)
-  const overviewPrefixes = extractMarkerPrefixes(overview)
+  const result = evaluateMarkerPrefixConsistency(
+    extractMarkerPrefixes(discover),
+    extractMarkerPrefixes(overview),
+  )
+  if (result.skip) {
+    report.warnings.push("marker-prefix checks skipped because no resolved marker prefixes were found")
+    return null
+  }
+  if (result.error) {
+    report.errors.push(result.error)
+    return null
+  }
+  report.passes.push(`marker prefix is valid and consistent (${result.prefix})`)
+  return result.prefix
+}
+
+/**
+ * Decide whether the marker prefixes extracted from the discover and
+ * overview instruction files are valid and consistent. Pure (no I/O), so
+ * it can be unit-tested. Empty sets impose no constraint (a file may not
+ * reference roadmap-id/blocked-by markers at all — e.g. overview-core,
+ * which defines claim markers, not roadmap markers), but an explicit
+ * all-prefixes guard still catches a mismatch hidden across different
+ * marker types (e.g. discover uses `a-roadmap-id` while overview uses
+ * `b-blocked-by`).
+ *
+ * @param {{ roadmap: string[], blockedBy: string[] }} discoverPrefixes
+ * @param {{ roadmap: string[], blockedBy: string[] }} overviewPrefixes
+ * @returns {{ skip: true } | { error: string } | { prefix: string }}
+ */
+export function evaluateMarkerPrefixConsistency(discoverPrefixes, overviewPrefixes) {
   const allPrefixes = unique([
     ...discoverPrefixes.roadmap,
     ...discoverPrefixes.blockedBy,
     ...overviewPrefixes.roadmap,
     ...overviewPrefixes.blockedBy,
   ])
-
   if (allPrefixes.length === 0) {
-    report.warnings.push("marker-prefix checks skipped because no resolved marker prefixes were found")
-    return null
+    return { skip: true }
   }
-
   const invalid = allPrefixes.filter((prefix) => !/^[a-z][a-z0-9-]{1,31}$/.test(prefix))
   if (invalid.length > 0) {
-    report.errors.push(`invalid marker prefixes: ${invalid.join(", ")}`)
-    return null
+    return { error: `invalid marker prefixes: ${invalid.join(", ")}` }
   }
-
-  if (!sameMembers(discoverPrefixes.roadmap, discoverPrefixes.blockedBy)) {
-    report.errors.push("discover marker prefixes differ between roadmap-id and blocked-by")
-    return null
+  // Compare only populated sets so a file that does not reference these
+  // markers at all imposes no constraint.
+  const consistent = (left, right) =>
+    left.length === 0 || right.length === 0 || sameMembers(left, right)
+  if (!consistent(discoverPrefixes.roadmap, discoverPrefixes.blockedBy)) {
+    return { error: "discover marker prefixes differ between roadmap-id and blocked-by" }
   }
-  if (!sameMembers(overviewPrefixes.roadmap, overviewPrefixes.blockedBy)) {
-    report.errors.push("overview marker prefixes differ between roadmap-id and blocked-by")
-    return null
+  if (!consistent(overviewPrefixes.roadmap, overviewPrefixes.blockedBy)) {
+    return { error: "overview marker prefixes differ between roadmap-id and blocked-by" }
   }
   if (
-    !sameMembers(discoverPrefixes.roadmap, overviewPrefixes.roadmap) ||
-    !sameMembers(discoverPrefixes.blockedBy, overviewPrefixes.blockedBy)
+    !consistent(discoverPrefixes.roadmap, overviewPrefixes.roadmap)
+    || !consistent(discoverPrefixes.blockedBy, overviewPrefixes.blockedBy)
   ) {
-    report.errors.push("marker prefixes differ between discover and overview instructions")
-    return null
+    return { error: "marker prefixes differ between discover and overview instructions" }
   }
-
-  report.passes.push(`marker prefix is valid and consistent (${allPrefixes[0]})`)
-  return allPrefixes[0]
+  // Catch a mismatch the empty-tolerant pairwise checks miss: two files
+  // referencing different marker types with different prefixes.
+  if (allPrefixes.length > 1) {
+    return {
+      error:
+        `marker prefixes are inconsistent across discover/overview instructions: ${allPrefixes.join(", ")}`,
+    }
+  }
+  return { prefix: allPrefixes[0] }
 }
 
 function checkProjectCommands(root, report) {
