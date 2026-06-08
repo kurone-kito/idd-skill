@@ -1,0 +1,26 @@
+concurrency:
+  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+name: IDD doctor health gate
+# Repository-health gate: runs idd-doctor and fails the build on any
+# idd-doctor error (config/doc/marker-prefix/required-file regressions).
+# This does NOT enforce the disposable-worktree rule — a primary-worktree
+# B1 violation leaves no trace in pushed history and CI checks out a
+# detached HEAD, so the worktree-head check never fires here. Worktree
+# enforcement is local only (idd-doctor --strict, the core.hooksPath
+# hook, the cwd-vs-claim gate, and the B1 self-check).
+on:
+  push:
+    branches:
+      - '**'
+      - '!main'
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  idd-doctor:
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run idd-doctor repository-health check
+        run: node scripts/idd-doctor.mjs
