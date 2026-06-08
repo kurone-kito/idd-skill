@@ -14,6 +14,7 @@ import {
   containsWorkshopReference,
   decodeGithubReadmeBase64,
   evaluateAutopilotSuitabilityConsistency,
+  evaluateMarkerPrefixConsistency,
   extractMarkerPrefixes,
   findMissingWorkshopReferences,
   findMissingWorktreeHardening,
@@ -135,6 +136,40 @@ test("extractMarkerPrefixes returns roadmap and blocked-by prefixes", () => {
 
   assert.deepEqual(markers.roadmap, ["idd-skill", "my-team"])
   assert.deepEqual(markers.blockedBy, ["idd-skill", "MyTeam"])
+})
+
+test("evaluateMarkerPrefixConsistency accepts one consistent prefix with an empty overview set", () => {
+  const result = evaluateMarkerPrefixConsistency(
+    { roadmap: ["idd-skill"], blockedBy: ["idd-skill"] },
+    { roadmap: [], blockedBy: [] },
+  )
+  assert.deepEqual(result, { prefix: "idd-skill" })
+})
+
+test("evaluateMarkerPrefixConsistency skips when no prefixes are present", () => {
+  assert.deepEqual(
+    evaluateMarkerPrefixConsistency({ roadmap: [], blockedBy: [] }, { roadmap: [], blockedBy: [] }),
+    { skip: true },
+  )
+})
+
+test("evaluateMarkerPrefixConsistency catches a cross-type prefix mismatch hidden by empty sets", () => {
+  // discover only has a roadmap-id prefix, overview only a blocked-by
+  // prefix, and they differ — the pairwise empty-tolerant checks all
+  // pass, so the all-prefixes guard must catch it.
+  const result = evaluateMarkerPrefixConsistency(
+    { roadmap: ["a"], blockedBy: [] },
+    { roadmap: [], blockedBy: ["b"] },
+  )
+  assert.ok(result.error && /inconsistent/.test(result.error), result.error)
+})
+
+test("evaluateMarkerPrefixConsistency reports a within-file roadmap/blocked-by mismatch", () => {
+  const result = evaluateMarkerPrefixConsistency(
+    { roadmap: ["a"], blockedBy: ["a", "b"] },
+    { roadmap: [], blockedBy: [] },
+  )
+  assert.equal(result.error, "discover marker prefixes differ between roadmap-id and blocked-by")
 })
 
 test("extractMarkerPrefixes ignores prose/heading slugs and status labels", () => {
