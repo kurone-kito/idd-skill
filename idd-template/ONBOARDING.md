@@ -585,6 +585,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }} # detached HEAD keeps the worktree check inert
+          persist-credentials: false
       - run: node scripts/idd-doctor.mjs
 ```
 

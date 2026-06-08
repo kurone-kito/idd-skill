@@ -28,5 +28,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
+          # Read-only health check: no need to persist the token in git config.
+          persist-credentials: false
       - name: Run idd-doctor repository-health check
         run: node scripts/idd-doctor.mjs
