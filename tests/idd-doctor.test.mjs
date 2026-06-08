@@ -9,6 +9,7 @@ import {
   classifyBacklog,
   classifyPrimaryHead,
   classifyWorktreeHeadFinding,
+  DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS,
   computeWindowStartIso,
   containsExampleRepoBackLink,
   containsWorkshopReference,
@@ -22,6 +23,7 @@ import {
   isGithubBackLinkHost,
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
+  readWorktreeGuardBranchPatterns,
   readWorktreeGuardEnabled,
   scanFileForPlaceholders,
   stripMarkdownNonText,
@@ -411,6 +413,81 @@ test("findMissingWorktreeHardening skips absent files instead of reporting them"
   // null/undefined (file not present) must not be treated as a stale signal.
   assert.deepEqual(findMissingWorktreeHardening({ work: null, core: null, doctor: null }), [])
   assert.deepEqual(findMissingWorktreeHardening({}), [])
+})
+
+test("classifyPrimaryHead honors custom branchPatterns", () => {
+  // A custom pattern matches → violation, reported as a generic
+  // implementation branch.
+  assert.deepEqual(classifyPrimaryHead("release/1", ["release/*"]), {
+    isB1Violation: true,
+    kind: "implementation",
+  })
+  // The default issue/* is no longer guarded when patterns are overridden.
+  assert.deepEqual(classifyPrimaryHead("issue/9", ["release/*"]), {
+    isB1Violation: false,
+    kind: "other",
+  })
+  // Default prefixes keep their familiar kind labels.
+  assert.deepEqual(classifyPrimaryHead("issue/9", ["issue/*"]), {
+    isB1Violation: true,
+    kind: "issue",
+  })
+  // kind is derived from the matched pattern, not the branch name: a
+  // catch-all glob reports a generic implementation branch even for an
+  // issue/ branch.
+  assert.deepEqual(classifyPrimaryHead("issue/9", ["*"]), {
+    isB1Violation: true,
+    kind: "implementation",
+  })
+})
+
+test("classifyPrimaryHead supports bracket-expression globs like the hook", () => {
+  assert.equal(classifyPrimaryHead("release/1", ["release/[0-9]*"]).isB1Violation, true)
+  assert.equal(classifyPrimaryHead("release/x", ["release/[0-9]*"]).isB1Violation, false)
+  // Negated bracket expression ([!…]).
+  assert.equal(classifyPrimaryHead("wip/a", ["wip/[!0-9]"]).isB1Violation, true)
+  assert.equal(classifyPrimaryHead("wip/5", ["wip/[!0-9]"]).isB1Violation, false)
+})
+
+test("classifyWorktreeHeadFinding labels a custom implementation branch", () => {
+  const finding = classifyWorktreeHeadFinding(
+    { isB1Violation: true, kind: "implementation" },
+    "release/1",
+    "/repo",
+    true,
+  )
+  assert.match(finding.message, /an implementation branch/)
+})
+
+test("readWorktreeGuardBranchPatterns returns config patterns or the default", () => {
+  const dir = mkdtempSync(join(tmpdir(), "idd-bp-"))
+  try {
+    const write = (obj) => {
+      mkdirSync(join(dir, ".github/idd"), { recursive: true })
+      writeFileSync(join(dir, ".github/idd/config.json"), JSON.stringify(obj))
+    }
+    write({ worktreeGuard: { branchPatterns: ["release/*", "wip/*"] } })
+    assert.deepEqual(readWorktreeGuardBranchPatterns(dir), ["release/*", "wip/*"])
+    write({ worktreeGuard: { enabled: true } }) // no branchPatterns → default
+    assert.deepEqual(readWorktreeGuardBranchPatterns(dir), DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS)
+    write({ worktreeGuard: { branchPatterns: [] } }) // empty array → default
+    assert.deepEqual(readWorktreeGuardBranchPatterns(dir), DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS)
+    write({ worktreeGuard: { branchPatterns: ["", "issue/*"] } }) // empty entry → default
+    assert.deepEqual(readWorktreeGuardBranchPatterns(dir), DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS)
+    write({ worktreeGuard: { branchPatterns: ["   "] } }) // whitespace-only → default
+    assert.deepEqual(readWorktreeGuardBranchPatterns(dir), DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("readWorktreeGuardBranchPatterns defaults when config is missing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "idd-bp-"))
+  try {
+    assert.deepEqual(readWorktreeGuardBranchPatterns(dir), DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test("computeWindowStartIso subtracts the given number of days from now", () => {

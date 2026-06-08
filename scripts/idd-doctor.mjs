@@ -188,17 +188,75 @@ export function parsePrimaryWorktreePath(porcelain) {
   return null
 }
 
-export function classifyPrimaryHead(branch) {
+export const DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS = ["issue/*", "roadmap-audit/*"]
+
+/**
+ * Convert a shell-style branch glob to an anchored RegExp, matching the
+ * core.hooksPath hook's POSIX `case` semantics: `*` (any run), `?` (any
+ * one character), and bracket expressions (`[...]`, `[!...]`/`[^...]`).
+ * A malformed glob yields a never-matching RegExp rather than throwing.
+ */
+function branchGlobToRegExp(pattern) {
+  let out = "^"
+  let i = 0
+  while (i < pattern.length) {
+    const ch = pattern[i]
+    if (ch === "*") {
+      out += ".*"
+      i += 1
+    } else if (ch === "?") {
+      out += "."
+      i += 1
+    } else if (ch === "[") {
+      // POSIX glob bracket expression, matching the hook's `case`
+      // semantics. A `]` immediately after `[`, `[!`, or `[^` is a
+      // literal member rather than the terminator.
+      let j = i + 1
+      if (pattern[j] === "!" || pattern[j] === "^") j += 1
+      if (pattern[j] === "]") j += 1
+      while (j < pattern.length && pattern[j] !== "]") j += 1
+      if (j >= pattern.length) {
+        out += "\\[" // unterminated — treat the `[` as a literal
+        i += 1
+      } else {
+        const body = pattern.slice(i + 1, j)
+        const negated = body[0] === "!" || body[0] === "^"
+        const members = (negated ? body.slice(1) : body)
+          .replace(/\\/g, "\\\\")
+          .replace(/\]/g, "\\]")
+        out += `[${negated ? "^" : ""}${members}]`
+        i = j + 1
+      }
+    } else {
+      out += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      i += 1
+    }
+  }
+  try {
+    return new RegExp(`${out}$`)
+  } catch {
+    return /(?!)/ // malformed glob: never matches, never crashes
+  }
+}
+
+export function classifyPrimaryHead(branch, patterns = DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS) {
   if (typeof branch !== "string" || branch.length === 0) {
     return { isB1Violation: false, kind: "unknown" }
   }
-  if (branch.startsWith("issue/")) {
+  const matchedPattern = patterns.find((pattern) => branchGlobToRegExp(pattern).test(branch))
+  if (matchedPattern === undefined) {
+    return { isB1Violation: false, kind: "other" }
+  }
+  // Derive the kind from the matched pattern, not the branch name, so a
+  // custom glob (e.g. "*") is reported as a generic implementation
+  // branch even when the branch happens to start with issue/.
+  if (matchedPattern === "issue/*") {
     return { isB1Violation: true, kind: "issue" }
   }
-  if (branch.startsWith("roadmap-audit/")) {
+  if (matchedPattern === "roadmap-audit/*") {
     return { isB1Violation: true, kind: "roadmap-audit" }
   }
-  return { isB1Violation: false, kind: "other" }
+  return { isB1Violation: true, kind: "implementation" }
 }
 
 export function findPlaceholders(text) {
@@ -666,6 +724,29 @@ export function readWorktreeGuardEnabled(root) {
 }
 
 /**
+ * Read `worktreeGuard.branchPatterns` from the repo config, falling back
+ * to the default implementation-branch globs when the key is absent,
+ * empty, or malformed. Matches the core.hooksPath hook so idd-doctor and
+ * the hook agree on which branches the guard covers.
+ */
+export function readWorktreeGuardBranchPatterns(root) {
+  try {
+    const config = JSON.parse(readFileSync(join(root, ".github/idd/config.json"), "utf8"))
+    const patterns = config?.worktreeGuard?.branchPatterns
+    if (
+      Array.isArray(patterns)
+      && patterns.length > 0
+      && patterns.every((p) => typeof p === "string" && p.trim().length > 0)
+    ) {
+      return patterns
+    }
+  } catch {
+    // fall through to defaults
+  }
+  return DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS
+}
+
+/**
  * Decide which worktree-hardening signals are missing from the consuming
  * repository's imported files. Pure (no I/O): each argument is the file's
  * text, or `null`/`undefined` when the file is absent (absent files are
@@ -744,7 +825,7 @@ function checkPrimaryWorktreeHead(root, report, options = {}) {
   }
 
   const branch = headResult.stdout.trim()
-  const classification = classifyPrimaryHead(branch)
+  const classification = classifyPrimaryHead(branch, readWorktreeGuardBranchPatterns(root))
   const finding = classifyWorktreeHeadFinding(
     classification,
     branch,
@@ -779,7 +860,9 @@ export function classifyWorktreeHeadFinding(classification, branch, primaryPath,
   }
   const kindLabel = classification.kind === "issue"
     ? "an issue branch"
-    : "a roadmap-audit branch"
+    : classification.kind === "roadmap-audit"
+      ? "a roadmap-audit branch"
+      : "an implementation branch"
   const severity = enforce
     ? "B1 violation: this branch must live in a sibling worktree, not the primary worktree (worktree guard enforced)"
     : "likely a past B1 violation"
