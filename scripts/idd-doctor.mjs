@@ -188,17 +188,39 @@ export function parsePrimaryWorktreePath(porcelain) {
   return null
 }
 
-export function classifyPrimaryHead(branch) {
+export const DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS = ["issue/*", "roadmap-audit/*"]
+
+/**
+ * Convert a shell-style branch glob (only `*` and `?` are special) to an
+ * anchored RegExp, matching the core.hooksPath hook's `case` semantics.
+ */
+function branchGlobToRegExp(pattern) {
+  let out = "^"
+  for (const ch of pattern) {
+    if (ch === "*") out += ".*"
+    else if (ch === "?") out += "."
+    else out += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+  }
+  return new RegExp(`${out}$`)
+}
+
+export function classifyPrimaryHead(branch, patterns = DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS) {
   if (typeof branch !== "string" || branch.length === 0) {
     return { isB1Violation: false, kind: "unknown" }
   }
+  const matches = patterns.some((pattern) => branchGlobToRegExp(pattern).test(branch))
+  if (!matches) {
+    return { isB1Violation: false, kind: "other" }
+  }
+  // Keep the familiar labels for the default prefixes; any other matched
+  // (custom) pattern is reported as a generic implementation branch.
   if (branch.startsWith("issue/")) {
     return { isB1Violation: true, kind: "issue" }
   }
   if (branch.startsWith("roadmap-audit/")) {
     return { isB1Violation: true, kind: "roadmap-audit" }
   }
-  return { isB1Violation: false, kind: "other" }
+  return { isB1Violation: true, kind: "implementation" }
 }
 
 export function findPlaceholders(text) {
@@ -666,6 +688,25 @@ export function readWorktreeGuardEnabled(root) {
 }
 
 /**
+ * Read `worktreeGuard.branchPatterns` from the repo config, falling back
+ * to the default implementation-branch globs when the key is absent,
+ * empty, or malformed. Matches the core.hooksPath hook so idd-doctor and
+ * the hook agree on which branches the guard covers.
+ */
+export function readWorktreeGuardBranchPatterns(root) {
+  try {
+    const config = JSON.parse(readFileSync(join(root, ".github/idd/config.json"), "utf8"))
+    const patterns = config?.worktreeGuard?.branchPatterns
+    if (Array.isArray(patterns) && patterns.length > 0 && patterns.every((p) => typeof p === "string")) {
+      return patterns
+    }
+  } catch {
+    // fall through to defaults
+  }
+  return DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS
+}
+
+/**
  * Decide which worktree-hardening signals are missing from the consuming
  * repository's imported files. Pure (no I/O): each argument is the file's
  * text, or `null`/`undefined` when the file is absent (absent files are
@@ -744,7 +785,7 @@ function checkPrimaryWorktreeHead(root, report, options = {}) {
   }
 
   const branch = headResult.stdout.trim()
-  const classification = classifyPrimaryHead(branch)
+  const classification = classifyPrimaryHead(branch, readWorktreeGuardBranchPatterns(root))
   const finding = classifyWorktreeHeadFinding(
     classification,
     branch,
@@ -779,7 +820,9 @@ export function classifyWorktreeHeadFinding(classification, branch, primaryPath,
   }
   const kindLabel = classification.kind === "issue"
     ? "an issue branch"
-    : "a roadmap-audit branch"
+    : classification.kind === "roadmap-audit"
+      ? "a roadmap-audit branch"
+      : "an implementation branch"
   const severity = enforce
     ? "B1 violation: this branch must live in a sibling worktree, not the primary worktree (worktree guard enforced)"
     : "likely a past B1 violation"

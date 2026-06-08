@@ -9,6 +9,7 @@ import {
   classifyBacklog,
   classifyPrimaryHead,
   classifyWorktreeHeadFinding,
+  DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS,
   computeWindowStartIso,
   containsExampleRepoBackLink,
   containsWorkshopReference,
@@ -22,6 +23,7 @@ import {
   isGithubBackLinkHost,
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
+  readWorktreeGuardBranchPatterns,
   readWorktreeGuardEnabled,
   scanFileForPlaceholders,
   stripMarkdownNonText,
@@ -411,6 +413,62 @@ test("findMissingWorktreeHardening skips absent files instead of reporting them"
   // null/undefined (file not present) must not be treated as a stale signal.
   assert.deepEqual(findMissingWorktreeHardening({ work: null, core: null, doctor: null }), [])
   assert.deepEqual(findMissingWorktreeHardening({}), [])
+})
+
+test("classifyPrimaryHead honors custom branchPatterns", () => {
+  // A custom pattern matches → violation, reported as a generic
+  // implementation branch.
+  assert.deepEqual(classifyPrimaryHead("release/1", ["release/*"]), {
+    isB1Violation: true,
+    kind: "implementation",
+  })
+  // The default issue/* is no longer guarded when patterns are overridden.
+  assert.deepEqual(classifyPrimaryHead("issue/9", ["release/*"]), {
+    isB1Violation: false,
+    kind: "other",
+  })
+  // Default prefixes keep their familiar kind labels.
+  assert.deepEqual(classifyPrimaryHead("issue/9", ["issue/*"]), {
+    isB1Violation: true,
+    kind: "issue",
+  })
+})
+
+test("classifyWorktreeHeadFinding labels a custom implementation branch", () => {
+  const finding = classifyWorktreeHeadFinding(
+    { isB1Violation: true, kind: "implementation" },
+    "release/1",
+    "/repo",
+    true,
+  )
+  assert.match(finding.message, /an implementation branch/)
+})
+
+test("readWorktreeGuardBranchPatterns returns config patterns or the default", () => {
+  const dir = mkdtempSync(join(tmpdir(), "idd-bp-"))
+  try {
+    const write = (obj) => {
+      mkdirSync(join(dir, ".github/idd"), { recursive: true })
+      writeFileSync(join(dir, ".github/idd/config.json"), JSON.stringify(obj))
+    }
+    write({ worktreeGuard: { branchPatterns: ["release/*", "wip/*"] } })
+    assert.deepEqual(readWorktreeGuardBranchPatterns(dir), ["release/*", "wip/*"])
+    write({ worktreeGuard: { enabled: true } }) // no branchPatterns → default
+    assert.deepEqual(readWorktreeGuardBranchPatterns(dir), DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS)
+    write({ worktreeGuard: { branchPatterns: [] } }) // empty → default
+    assert.deepEqual(readWorktreeGuardBranchPatterns(dir), DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("readWorktreeGuardBranchPatterns defaults when config is missing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "idd-bp-"))
+  try {
+    assert.deepEqual(readWorktreeGuardBranchPatterns(dir), DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test("computeWindowStartIso subtracts the given number of days from now", () => {
