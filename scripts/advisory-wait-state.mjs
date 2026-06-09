@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 import { readAdvisoryWaitPolicy } from "./advisory-wait-policy.mjs";
 import {
   buildAdvisoryWaitSummary,
   normalizeTrustedMarkerLogins,
   parsePaginatedGhNdjson,
+  resolveTrustedMarkerActors,
 } from "./protocol-helpers.mjs";
 
 const args = parseArgs(process.argv.slice(2));
@@ -18,10 +20,11 @@ const owner = args.owner || ghText(["repo", "view", "--json", "owner", "--jq", "
 const repo = args.repo || ghText(["repo", "view", "--json", "name", "--jq", ".name"]);
 const repoRef = `${owner}/${repo}`;
 const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
-const configuredTrustedActors = normalizeTrustedMarkerLogins([
-  ...splitCsv(args.trustedMarkerLogins),
-  ...splitCsv(process.env.IDD_TRUSTED_MARKER_ACTORS),
-]);
+const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } = resolveTrustedMarkerActors({
+  flagValue: args.trustedMarkerLogins,
+  envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+  config: loadIddConfig(),
+});
 
 const prHeadSha = ghText([
   "pr",
@@ -82,7 +85,9 @@ const summary = buildAdvisoryWaitSummary(
   },
 );
 
-process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+process.stdout.write(`${
+  JSON.stringify({ ...summary, trustedMarkerActors: configuredTrustedActors, trustedMarkerActorsSource }, null, 2)
+}\n`);
 
 function parseArgs(argv) {
   const parsed = {
@@ -176,15 +181,16 @@ function advisoryMarkerComment(body) {
     || normalized.startsWith("<!-- advisory-wait:");
 }
 
-function splitCsv(value) {
-  return String(value ?? "")
-    .split(",")
-    .map((token) => token.trim())
-    .filter(Boolean);
-}
-
 function isTruthy(value) {
   return /^(1|true|yes)$/i.test(String(value ?? "").trim());
+}
+
+function loadIddConfig() {
+  try {
+    return JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 function ghText(args) {

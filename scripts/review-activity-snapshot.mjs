@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
-import { buildActivitySnapshotSummary } from "./protocol-helpers.mjs";
+import { buildActivitySnapshotSummary, resolveTrustedMarkerActors } from "./protocol-helpers.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.prNumber) {
@@ -12,10 +13,11 @@ if (!args.prNumber) {
 const owner = args.owner || ghText(["repo", "view", "--json", "owner", "--jq", ".owner.login"]);
 const repo = args.repo || ghText(["repo", "view", "--json", "name", "--jq", ".name"]);
 const repoRef = `${owner}/${repo}`;
-const trustedMarkerLogins = args.trustedMarkerLogins
-  .split(",")
-  .map((login) => login.trim())
-  .filter(Boolean);
+const { actors: trustedMarkerLogins, source: trustedMarkerActorsSource } = resolveTrustedMarkerActors({
+  flagValue: args.trustedMarkerLogins,
+  envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+  config: loadIddConfig(),
+});
 
 const headSha = ghText([
   "pr",
@@ -64,12 +66,22 @@ const summary = buildActivitySnapshotSummary(
 
 process.stdout.write(`${JSON.stringify({
   headSha,
+  trustedMarkerActors: trustedMarkerLogins,
+  trustedMarkerActorsSource,
   totalItemCount: summary.totalItemCount,
   maxActivityUpdatedAt: summary.maxActivityUpdatedAt,
   latestCiCompletedAt: summary.latestCiCompletedAt,
   latestPassingCiCompletedAt: summary.latestPassingCiCompletedAt,
   counts: summary.counts,
 }, null, 2)}\n`);
+
+function loadIddConfig() {
+  try {
+    return JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+  } catch {
+    return null;
+  }
+}
 
 function parseArgs(argv) {
   const parsed = {
