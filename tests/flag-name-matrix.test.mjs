@@ -11,17 +11,48 @@ function readScript(name) {
   return readFileSync(join(scriptsDir, name), "utf8");
 }
 
-// One canonical CLI flag name per shared concept. Helpers may keep the prior
-// name as a deprecated alias for one release, but the canonical flag must
-// always be accepted wherever the concept is, so a working invocation copied
-// from one phase keeps working in the next.
+// One canonical CLI flag name per shared concept. `helpers` is the explicit set
+// of scripts that accept the concept, so the test catches a canonical flag being
+// renamed or removed (not only a stray deprecated alias). A `deprecated` name
+// may be kept as an alias for one release but must always warn on stderr and
+// coexist with the canonical flag.
 const FLAG_CONCEPTS = [
-  { concept: "claim id", canonical: "--claim-id", deprecated: "--expected-claim-id" },
-  { concept: "agent id", canonical: "--agent-id", deprecated: "--expected-agent-id" },
+  {
+    concept: "claim id",
+    canonical: "--claim-id",
+    deprecated: "--expected-claim-id",
+    helpers: [
+      "audit-pr-cleanup.mjs",
+      "external-check-waiver.mjs",
+      "live-status-digest.mjs",
+      "pre-merge-readiness.mjs",
+      "resume-claim-routing.mjs",
+    ],
+  },
+  {
+    concept: "agent id",
+    canonical: "--agent-id",
+    deprecated: "--expected-agent-id",
+    helpers: [
+      "audit-pr-cleanup.mjs",
+      "live-status-digest.mjs",
+      "pre-merge-readiness.mjs",
+    ],
+  },
 ];
 
-for (const { concept, canonical, deprecated } of FLAG_CONCEPTS) {
-  test(`every helper accepting a ${concept} flag accepts the canonical ${canonical}`, () => {
+for (const { concept, canonical, deprecated, helpers } of FLAG_CONCEPTS) {
+  test(`every ${concept} helper exposes the canonical ${canonical}`, () => {
+    for (const helper of helpers) {
+      const src = readScript(helper);
+      assert.ok(
+        src.includes(`"${canonical}"`),
+        `${helper} must accept the canonical ${canonical}`,
+      );
+    }
+  });
+
+  test(`no helper accepts ${deprecated} without the canonical ${canonical}`, () => {
     for (const file of scriptFiles) {
       const src = readScript(file);
       if (src.includes(`"${deprecated}"`)) {
@@ -33,20 +64,26 @@ for (const { concept, canonical, deprecated } of FLAG_CONCEPTS) {
     }
   });
 
-  test(`${deprecated} is only a deprecated alias that warns`, () => {
+  test(`${deprecated} alias emits a stderr deprecation warning`, () => {
     for (const file of scriptFiles) {
       const src = readScript(file);
-      if (src.includes(`"${deprecated}"`)) {
-        assert.ok(
-          src.includes("is deprecated") || src.includes("warnDeprecatedFlag"),
-          `${file} accepts the deprecated ${deprecated} without emitting a deprecation warning`,
-        );
+      if (!src.includes(`"${deprecated}"`)) {
+        continue;
       }
+      assert.ok(
+        src.includes(`warnDeprecatedFlag("${deprecated}"`),
+        `${file} should route ${deprecated} through warnDeprecatedFlag()`,
+      );
+      assert.match(
+        src,
+        /function warnDeprecatedFlag[\s\S]*?process\.stderr\.write/,
+        `${file} warnDeprecatedFlag() should write the deprecation warning to stderr`,
+      );
     }
   });
 }
 
-test("pre-merge-readiness accepts both canonical claim/agent flags", () => {
+test("pre-merge-readiness accepts both canonical and deprecated claim/agent flags", () => {
   const src = readScript("pre-merge-readiness.mjs");
   for (const flag of ["--claim-id", "--agent-id", "--expected-claim-id", "--expected-agent-id"]) {
     assert.ok(src.includes(`"${flag}"`), `pre-merge-readiness.mjs should accept ${flag}`);
