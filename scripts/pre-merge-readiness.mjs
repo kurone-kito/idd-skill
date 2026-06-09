@@ -12,6 +12,7 @@ import {
   parsePaginatedGhNdjson,
   resolveCodeownersForFiles,
   resolveRulesetDetailPath,
+  resolveTrustedMarkerActors,
   selectCodeownersText,
 } from "./protocol-helpers.mjs";
 import { resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
@@ -34,10 +35,11 @@ const repo = args.repo || ghText(["repo", "view", "--json", "name", "--jq", ".na
 const repoRef = `${owner}/${repo}`;
 const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
 const viewerAppSlug = safeGhText(["api", "app", "--jq", ".slug // .app_slug // empty"]).toLowerCase();
-const configuredTrustedActors = normalizeTrustedMarkerLogins([
-  ...splitCsv(args.trustedMarkerLogins),
-  ...splitCsv(process.env.IDD_TRUSTED_MARKER_ACTORS),
-]);
+const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } = resolveTrustedMarkerActors({
+  flagValue: args.trustedMarkerLogins,
+  envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+  config: loadIddConfig(),
+});
 const advisoryBotLogins = normalizeTrustedMarkerLogins(splitCsv(args.advisoryBotLogins));
 
 const pr = ghJson([
@@ -181,7 +183,9 @@ const summary = buildPreMergeReadinessSummary(
   },
 );
 
-process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+process.stdout.write(`${
+  JSON.stringify({ ...summary, trustedMarkerActors: configuredTrustedActors, trustedMarkerActorsSource }, null, 2)
+}\n`);
 
 function parseArgs(argv) {
   const parsed = {
@@ -618,5 +622,13 @@ function readCollaboratorTrustEnabled() {
     // Fall through to env-var fallback.
   }
   return isTruthy(process.env.IDD_TRUST_COLLABORATOR_MARKERS);
+}
+
+function loadIddConfig() {
+  try {
+    return JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+  } catch {
+    return null;
+  }
 }
 

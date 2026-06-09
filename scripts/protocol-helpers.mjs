@@ -1115,6 +1115,41 @@ export function normalizeTrustedMarkerLogins(logins) {
   )].sort();
 }
 
+/**
+ * Resolve the trusted marker actors for a read-only evidence helper.
+ *
+ * Precedence is strict: an explicit `--trusted-marker-logins` flag wins over
+ * the `IDD_TRUSTED_MARKER_ACTORS` env var, which wins over the
+ * `trustedMarkerActors` array declared in `.github/idd/config.json`. The flag
+ * and env var are CSV strings (or arrays); `config` is the parsed policy
+ * object. The returned `source` records which input supplied the value so the
+ * helper can emit it as auditable JSON evidence.
+ *
+ * @param {{ flagValue?: string|string[], envValue?: string|string[], config?: object|null }} input
+ * @returns {{ actors: string[], source: "flag"|"env"|"config"|"none" }}
+ */
+export function resolveTrustedMarkerActors({ flagValue = "", envValue = "", config = null } = {}) {
+  const fromFlag = normalizeTrustedMarkerLogins(trustedMarkerActorTokens(flagValue));
+  if (fromFlag.length > 0) {
+    return { actors: fromFlag, source: "flag" };
+  }
+  const fromEnv = normalizeTrustedMarkerLogins(trustedMarkerActorTokens(envValue));
+  if (fromEnv.length > 0) {
+    return { actors: fromEnv, source: "env" };
+  }
+  const fromConfig = normalizeTrustedMarkerLogins(
+    Array.isArray(config?.trustedMarkerActors) ? config.trustedMarkerActors : [],
+  );
+  if (fromConfig.length > 0) {
+    return { actors: fromConfig, source: "config" };
+  }
+  return { actors: [], source: "none" };
+}
+
+function trustedMarkerActorTokens(value) {
+  return Array.isArray(value) ? value : String(value ?? "").split(",");
+}
+
 export function deriveIddAgentLogins({
   viewerLogin = "",
   iddAgentLogins = [],
