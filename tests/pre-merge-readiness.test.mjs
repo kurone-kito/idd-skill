@@ -101,6 +101,8 @@ test("pre-merge readiness exposes effective advisory policy", () => {
 test("required check summaries block when no merge-gate policy evidence exists", () => {
   assert.deepEqual(summarizeRequiredChecks([], [], {}), {
     status: "unknown",
+    noRequiredChecksConfigured: true,
+    presentRunConclusion: "none",
     requiredCheckCount: 0,
     generatedRequiredCheckCount: 0,
     requiredChecksGenerated: false,

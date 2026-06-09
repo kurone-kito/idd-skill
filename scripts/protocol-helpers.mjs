@@ -1795,6 +1795,8 @@ export function summarizeRequiredChecks(checks = [], branchRules = [], branchPro
 
   return {
     status,
+    noRequiredChecksConfigured: requiredCheckNames.length === 0,
+    presentRunConclusion: resolvePresentRunConclusion(normalizedChecks),
     requiredCheckCount: requiredCheckNames.length,
     generatedRequiredCheckCount: matchedRequiredChecks.length,
     requiredChecksGenerated: requiredCheckNames.length > 0 && missingRequiredCheckNames.length === 0,
@@ -1809,6 +1811,27 @@ export function summarizeRequiredChecks(checks = [], branchRules = [], branchPro
       ...(check.coveredByWaiver ? { coveredByWaiver: true } : {}),
     })),
   };
+}
+
+// Conclusion over *all* present check runs (waiver-covered runs count as
+// skipped), used for the F2 fallback when no required checks are configured:
+// an unprotected branch must not satisfy CI vacuously, so the gate inspects the
+// real run conclusions instead.
+function resolvePresentRunConclusion(normalizedChecks) {
+  if (normalizedChecks.length === 0) {
+    return "none";
+  }
+  const effective = normalizedChecks.map((check) =>
+    check.coveredByWaiver ? { ...check, state: "SKIPPED" } : check,
+  );
+  const { status } = classifyCiChecks(effective);
+  if (status === "success") {
+    return "all-passing";
+  }
+  if (status === "pending") {
+    return "pending";
+  }
+  return "some-failing";
 }
 
 export function resolveCodeownersForFiles(codeownersText, changedFiles = []) {

@@ -151,6 +151,17 @@ Codex connectors, and CI bots).
   same resolved `ciWait.runningTimeout`, `ciWait.generationTimeout`, and
   `ciWait.rerunPolicy` values; on-success → re-evaluate F2).
 
+  **No required checks configured**: When `pre-merge-readiness` reports
+  `ci.noRequiredChecksConfigured: true` (an unprotected branch, or a branch
+  with no required status checks), the CI gate is **not** satisfied
+  vacuously — that state is reported distinctly from "all required checks
+  passed". Route by `ci.presentRunConclusion` over the actual runs on the
+  current HEAD:
+  - `all-passing` → the CI gate may pass (every present run completed green).
+  - `pending` → wait per `idd-ci.instructions.md`, then re-evaluate F2.
+  - `some-failing`, or `none` (no runs exist at all) → **hold**; do not
+    merge on a vacuous green. Route to an operator or blocked state.
+
   **External-check waivers**: When `pre-merge-readiness` reports a check
   as `coveredByWaiver: true` in its output, a trusted maintainer has
   authorized skipping that specific check under the current head SHA and
