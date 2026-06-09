@@ -187,6 +187,10 @@ process.stdout.write(`${
   JSON.stringify({ ...summary, trustedMarkerActors: configuredTrustedActors, trustedMarkerActorsSource }, null, 2)
 }\n`);
 
+function warnDeprecatedFlag(deprecated, canonical) {
+  process.stderr.write(`warning: ${deprecated} is deprecated; use ${canonical} instead.\n`);
+}
+
 function parseArgs(argv) {
   const parsed = {
     prNumber: null,
@@ -239,12 +243,24 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
-    if (token === "--expected-claim-id") {
+    if (token === "--claim-id") {
       parsed.expectedClaimId = value ?? "";
       index += 1;
       continue;
     }
+    if (token === "--expected-claim-id") {
+      warnDeprecatedFlag("--expected-claim-id", "--claim-id");
+      parsed.expectedClaimId = value ?? "";
+      index += 1;
+      continue;
+    }
+    if (token === "--agent-id") {
+      parsed.expectedAgentId = value ?? "";
+      index += 1;
+      continue;
+    }
     if (token === "--expected-agent-id") {
+      warnDeprecatedFlag("--expected-agent-id", "--agent-id");
       parsed.expectedAgentId = value ?? "";
       index += 1;
       continue;
@@ -273,7 +289,8 @@ function parseArgs(argv) {
 
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/pre-merge-readiness.mjs --pr <number> --claim-issue <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--expected-claim-id <claim-id>] [--expected-agent-id <agent-id>] [--now <ISO8601>]
+  node scripts/pre-merge-readiness.mjs --pr <number> --claim-issue <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--claim-id <claim-id>] [--agent-id <agent-id>] [--now <ISO8601>]
+  Deprecated aliases (one release): --expected-claim-id -> --claim-id, --expected-agent-id -> --agent-id
 `);
 }
 
