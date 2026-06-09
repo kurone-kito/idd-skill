@@ -631,7 +631,7 @@ Interpretation rules:
   `latestPassingCiCompletedAt`
 - Readiness command: `node scripts/pre-merge-readiness.mjs`
   with `--pr <pr-number>`, `--claim-issue <issue-number>`,
-  `--expected-claim-id <claim-id>`, and
+  `--claim-id <claim-id>`, and
   `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`
 - Stable contract:
   [`pre-merge-readiness.schema.json`][pre-merge-readiness-schema]
