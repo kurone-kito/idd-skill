@@ -66,3 +66,24 @@ export function collectPolicyConfigDrift(config, overviewText) {
 function hasOwn(value, key) {
   return Object.prototype.hasOwnProperty.call(value ?? {}, key);
 }
+
+export function collectRootMarkdownAllowlistViolations(repoFiles, config) {
+  if (!config) {
+    return [];
+  }
+
+  const id = config.id ?? "root-markdown-allowlist";
+  const allowed = new Set(config.allowed ?? []);
+  const violations = [];
+  for (const file of repoFiles) {
+    if (file.includes("/") || !/\.md$/i.test(file)) {
+      continue;
+    }
+    if (!allowed.has(file)) {
+      violations.push(
+        `${id}: ${file} is not an allowed root-level Markdown file; record session evidence in issue comments instead`,
+      );
+    }
+  }
+  return violations;
+}

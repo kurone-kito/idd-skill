@@ -10,7 +10,7 @@ node scripts/audit-docs.mjs --check
 ```
 
 The audit reads [`sync-manifest.json`](sync-manifest.json). The
-manifest has three main responsibilities:
+manifest's main responsibilities:
 
 - README pairs define files that must change together in pull requests,
   plus lightweight structure and language-link checks.
@@ -18,6 +18,9 @@ manifest has three main responsibilities:
   repository state and compared with marked Markdown blocks.
 - Sync pairs define template versus dogfooding files and the comparison
   mode for each pair.
+- The root Markdown allowlist names the only `*.md` files that may live
+  at the repository root; anything else fails the audit with a hint to
+  record session evidence in issue comments instead.
 
 ## Sync Modes
 
