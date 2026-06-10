@@ -10,7 +10,7 @@ node scripts/audit-docs.mjs --check
 ```
 
 The audit reads [`sync-manifest.json`](sync-manifest.json). The
-manifest's main responsibilities:
+manifest has these main responsibilities:
 
 - README pairs define files that must change together in pull requests,
   plus lightweight structure and language-link checks.

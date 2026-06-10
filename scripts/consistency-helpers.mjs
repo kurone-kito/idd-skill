@@ -81,7 +81,7 @@ export function collectRootMarkdownAllowlistViolations(repoFiles, config) {
     }
     if (!allowed.has(file)) {
       violations.push(
-        `${id}: ${file} is not an allowed root-level Markdown file; record session evidence in issue comments instead`,
+        `${id}: ${file} is not an allowed root-level Markdown file; record session evidence in issue comments instead, or add an intentional root document to rootMarkdownAllowlist in audit/sync-manifest.json`,
       );
     }
   }

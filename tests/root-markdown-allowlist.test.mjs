@@ -18,7 +18,7 @@ test("a stray root-level session file fails with a clear message", () => {
   );
 
   assert.deepEqual(violations, [
-    "root-markdown-allowlist: SESSION-NOTES.md is not an allowed root-level Markdown file; record session evidence in issue comments instead",
+    "root-markdown-allowlist: SESSION-NOTES.md is not an allowed root-level Markdown file; record session evidence in issue comments instead, or add an intentional root document to rootMarkdownAllowlist in audit/sync-manifest.json",
   ]);
 });
 
