@@ -1,23 +1,22 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-
-import {
-  normalizeTrustedMarkerLogins,
-  parsePaginatedGhNdjson,
-  planLiveStatusDigestUpsert,
-  summarizeClaimValidation,
-} from "./protocol-helpers.mjs";
-import { resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import {
   collaboratorPermission,
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
-} from "./collaborator-permission.mjs";
+} from './collaborator-permission.mjs';
+import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
+import {
+  normalizeTrustedMarkerLogins,
+  parsePaginatedGhNdjson,
+  planLiveStatusDigestUpsert,
+  summarizeClaimValidation,
+} from './protocol-helpers.mjs';
 
-const TRUSTED_MARKER_PERMISSIONS = new Set(["admin", "maintain", "write"]);
+const TRUSTED_MARKER_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
 const trustedMarkerAuthorCache = new Map();
 const collaboratorPermissionCache = new Map();
 let cachedConfiguredTrustedMarkerAuthors = null;
@@ -31,34 +30,50 @@ if (args.help) {
 }
 
 if (args.issue && args.pr) {
-  fail("choose only one of --issue or --pr");
+  fail('choose only one of --issue or --pr');
 }
 if (!args.issue && !args.pr) {
-  fail("missing required --issue <number> or --pr <number>");
+  fail('missing required --issue <number> or --pr <number>');
 }
 if (args.apply && args.dryRun) {
-  fail("choose only one of --dry-run or --apply");
+  fail('choose only one of --dry-run or --apply');
 }
 if (!args.apply) {
   args.dryRun = true;
 }
 if (args.apply && args.skipClaimCheck && (args.claimIssue || args.claimId)) {
-  fail("--skip-claim-check cannot be combined with --claim-issue or --claim-id");
+  fail(
+    '--skip-claim-check cannot be combined with --claim-issue or --claim-id',
+  );
 }
 if (args.apply && !args.skipClaimCheck && (!args.claimIssue || !args.claimId)) {
-  fail("--apply requires --claim-issue and --claim-id, or explicit --skip-claim-check");
+  fail(
+    '--apply requires --claim-issue and --claim-id, or explicit --skip-claim-check',
+  );
 }
 
 const repository = args.repo ?? detectRepository();
 const [owner, repo] = parseRepository(repository);
-const targetType = args.issue ? "issue" : "pr";
-const targetNumber = parsePositiveInteger(args.issue ?? args.pr, `--${targetType}`);
-const claimContext = targetType === "pr"
-  ? { expectedLinkedPrs: buildExpectedLinkedPrReferences(owner, repo, targetNumber) }
-  : {};
+const targetType = args.issue ? 'issue' : 'pr';
+const targetNumber = parsePositiveInteger(
+  args.issue ?? args.pr,
+  `--${targetType}`,
+);
+const claimContext =
+  targetType === 'pr'
+    ? {
+        expectedLinkedPrs: buildExpectedLinkedPrReferences(
+          owner,
+          repo,
+          targetNumber,
+        ),
+      }
+    : {};
 
 if (args.claimIssue) {
-  args.claimIssue = String(parsePositiveInteger(args.claimIssue, "--claim-issue"));
+  args.claimIssue = String(
+    parsePositiveInteger(args.claimIssue, '--claim-issue'),
+  );
 }
 
 const fields = {
@@ -84,7 +99,7 @@ const report = {
     type: targetType,
     number: targetNumber,
   },
-  mode: args.apply ? "apply" : "dry-run",
+  mode: args.apply ? 'apply' : 'dry-run',
   action: planned.action,
   canApply: planned.canApply,
   commentId: planned.commentId ?? null,
@@ -95,7 +110,7 @@ const report = {
   body: args.includeBody ? planned.body : undefined,
 };
 
-if (planned.action === "duplicate") {
+if (planned.action === 'duplicate') {
   writeReport(report, args.format);
   process.exit(1);
 }
@@ -103,33 +118,48 @@ if (planned.action === "duplicate") {
 if (args.apply) {
   if (!args.skipClaimCheck) {
     try {
-      assertActiveClaim(owner, repo, args.claimIssue, args.agentId, args.claimId, claimContext);
+      assertActiveClaim(
+        owner,
+        repo,
+        args.claimIssue,
+        args.agentId,
+        args.claimId,
+        claimContext,
+      );
     } catch (error) {
       fail(error.message);
     }
   }
 
   try {
-    planned = planLiveStatusDigestUpsert(fetchIssueComments(owner, repo, targetNumber), fields);
+    planned = planLiveStatusDigestUpsert(
+      fetchIssueComments(owner, repo, targetNumber),
+      fields,
+    );
   } catch (error) {
     fail(error.message);
   }
   updateReportFromPlan(report, planned);
-  if (planned.action === "duplicate") {
+  if (planned.action === 'duplicate') {
     writeReport(report, args.format);
     process.exit(1);
   }
 
-  if (planned.action === "create") {
+  if (planned.action === 'create') {
     const created = createIssueComment(owner, repo, targetNumber, planned.body);
     report.applied = true;
     report.commentId = created.id ?? null;
     report.url = created.html_url ?? created.url ?? null;
-  } else if (planned.action === "update") {
+  } else if (planned.action === 'update') {
     if (!planned.commentId) {
-      fail("cannot update digest because the current comment id is missing");
+      fail('cannot update digest because the current comment id is missing');
     }
-    const updated = updateIssueComment(owner, repo, planned.commentId, planned.body);
+    const updated = updateIssueComment(
+      owner,
+      repo,
+      planned.commentId,
+      planned.body,
+    );
     report.applied = true;
     report.commentId = updated.id ?? planned.commentId;
     report.url = updated.html_url ?? updated.url ?? planned.url ?? null;
@@ -154,62 +184,83 @@ function fetchIssueComments(owner, repo, number) {
   // gh api with --paginate and --jq '.[]' emits one JSON object per line.
   // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
   // via apt, so keep the NDJSON-compatible form here.
-  const result = parsePaginatedGhNdjson(execFileSync("gh", [
-    "api",
-    "--paginate",
-    "--jq",
-    ".[]",
-    `repos/${owner}/${repo}/issues/${number}/comments`,
-  ], { encoding: "utf8" }));
+  const result = parsePaginatedGhNdjson(
+    execFileSync(
+      'gh',
+      [
+        'api',
+        '--paginate',
+        '--jq',
+        '.[]',
+        `repos/${owner}/${repo}/issues/${number}/comments`,
+      ],
+      { encoding: 'utf8' },
+    ),
+  );
   return result.map((comment) => ({
     id: comment.id,
     url: comment.url,
     html_url: comment.html_url,
-    body: comment.body ?? "",
-    created_at: comment.created_at ?? "",
-    updated_at: comment.updated_at ?? comment.created_at ?? "",
-    author: { login: comment.user?.login ?? "" },
+    body: comment.body ?? '',
+    created_at: comment.created_at ?? '',
+    updated_at: comment.updated_at ?? comment.created_at ?? '',
+    author: { login: comment.user?.login ?? '' },
   }));
 }
 
 function createIssueComment(owner, repo, number, body) {
   return ghJson([
-    "api",
+    'api',
     `repos/${owner}/${repo}/issues/${number}/comments`,
-    "-X",
-    "POST",
-    "-f",
+    '-X',
+    'POST',
+    '-f',
     `body=${body}`,
   ]);
 }
 
 function updateIssueComment(owner, repo, commentId, body) {
   return ghJson([
-    "api",
+    'api',
     `repos/${owner}/${repo}/issues/comments/${commentId}`,
-    "-X",
-    "PATCH",
-    "-f",
+    '-X',
+    'PATCH',
+    '-f',
     `body=${body}`,
   ]);
 }
 
-function assertActiveClaim(owner, repo, issueNumber, agentId, claimId, options = {}) {
+function assertActiveClaim(
+  owner,
+  repo,
+  issueNumber,
+  agentId,
+  claimId,
+  options = {},
+) {
   const active = readActiveClaim(owner, repo, issueNumber, options);
-  if (!active || active.claimId !== claimId || (agentId && active.agentId !== agentId)) {
-    const activeLabel = active ? `${active.agentId} ${active.claimId}` : "none";
-    throw new Error(`claim check failed for #${issueNumber}: active claim is ${activeLabel}`);
+  if (
+    !active ||
+    active.claimId !== claimId ||
+    (agentId && active.agentId !== agentId)
+  ) {
+    const activeLabel = active ? `${active.agentId} ${active.claimId}` : 'none';
+    throw new Error(
+      `claim check failed for #${issueNumber}: active claim is ${activeLabel}`,
+    );
   }
 }
 
 function readActiveClaim(owner, repo, issueNumber, options = {}) {
-  const comments = fetchIssueComments(owner, repo, issueNumber).map((comment) => {
-    return {
-      body: comment.body,
-      createdAt: comment.created_at,
-      author: { login: comment.author?.login ?? "" },
-    };
-  });
+  const comments = fetchIssueComments(owner, repo, issueNumber).map(
+    (comment) => {
+      return {
+        body: comment.body,
+        createdAt: comment.created_at,
+        author: { login: comment.author?.login ?? '' },
+      };
+    },
+  );
 
   // Read the authority policy once per call; the
   // isAuthorizedForcedHandoff callback may fire multiple times during
@@ -218,15 +269,16 @@ function readActiveClaim(owner, repo, issueNumber, options = {}) {
   const forcedHandoffAuthorityPolicyValue = readForcedHandoffAuthorityPolicy();
   const summary = summarizeClaimValidation(comments, {
     trustedMarkerLogins: resolveTrustedMarkerLogins(owner, repo, comments),
-    forcedHandoffEnabled: readForcedHandoffMode() === "human-gated",
+    forcedHandoffEnabled: readForcedHandoffMode() === 'human-gated',
     expectedLinkedPrs: options.expectedLinkedPrs ?? [],
-    isAuthorizedForcedHandoff: (forcedBy) => isAuthorizedForcedHandoffActor(
-      owner,
-      repo,
-      forcedBy,
-      forcedHandoffAuthorityPolicyValue,
-      collaboratorPermissionCache,
-    ),
+    isAuthorizedForcedHandoff: (forcedBy) =>
+      isAuthorizedForcedHandoffActor(
+        owner,
+        repo,
+        forcedBy,
+        forcedHandoffAuthorityPolicyValue,
+        collaboratorPermissionCache,
+      ),
   });
 
   return summary.activeClaimPresent ? summary.activeClaim : null;
@@ -235,14 +287,14 @@ function readActiveClaim(owner, repo, issueNumber, options = {}) {
 function resolveTrustedMarkerLogins(owner, repo, comments) {
   return normalizeTrustedMarkerLogins(
     comments
-      .map((comment) => comment.author?.login ?? "")
+      .map((comment) => comment.author?.login ?? '')
       .filter(Boolean)
       .filter((login) => isTrustedMarkerAuthor(owner, repo, login)),
   );
 }
 
 function buildExpectedLinkedPrReferences(owner, repo, prNumber) {
-  const normalized = String(prNumber ?? "").trim();
+  const normalized = String(prNumber ?? '').trim();
   if (!normalized) {
     return [];
   }
@@ -276,7 +328,8 @@ function isTrustedMarkerAuthor(owner, repo, login) {
   }
 
   const trusted = TRUSTED_MARKER_PERMISSIONS.has(
-    collaboratorPermission(owner, repo, normalized, collaboratorPermissionCache).permission,
+    collaboratorPermission(owner, repo, normalized, collaboratorPermissionCache)
+      .permission,
   );
 
   trustedMarkerAuthorCache.set(cacheKey, trusted);
@@ -290,12 +343,14 @@ function currentViewerLogin() {
 
   try {
     cachedCurrentViewerLogin = execFileSync(
-      "gh",
-      ["api", "user", "--jq", ".login"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-    ).trim().toLowerCase();
+      'gh',
+      ['api', 'user', '--jq', '.login'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    )
+      .trim()
+      .toLowerCase();
   } catch {
-    cachedCurrentViewerLogin = "";
+    cachedCurrentViewerLogin = '';
   }
   return cachedCurrentViewerLogin;
 }
@@ -306,8 +361,8 @@ function configuredTrustedMarkerAuthors() {
   }
 
   cachedConfiguredTrustedMarkerAuthors = new Set(
-    (process.env.IDD_TRUSTED_MARKER_ACTORS ?? "")
-      .split(",")
+    (process.env.IDD_TRUSTED_MARKER_ACTORS ?? '')
+      .split(',')
       .map((login) => login.trim().toLowerCase())
       .filter(Boolean),
   );
@@ -317,29 +372,35 @@ function configuredTrustedMarkerAuthors() {
 function trustCollaboratorMarkers() {
   try {
     return resolveCollaboratorMarkerTrust(
-      JSON.parse(readFileSync(".github/idd/config.json", "utf8")),
+      JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
       process.env.IDD_TRUST_COLLABORATOR_MARKERS,
     );
   } catch {
     // Fall through to env-var fallback.
   }
-  return /^(1|true|yes)$/i.test(process.env.IDD_TRUST_COLLABORATOR_MARKERS ?? "");
+  return /^(1|true|yes)$/i.test(
+    process.env.IDD_TRUST_COLLABORATOR_MARKERS ?? '',
+  );
 }
 
 function detectRepository() {
   if (process.env.GITHUB_REPOSITORY) {
     return process.env.GITHUB_REPOSITORY;
   }
-  return execFileSync("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], {
-    encoding: "utf8",
-  }).trim();
+  return execFileSync(
+    'gh',
+    ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'],
+    {
+      encoding: 'utf8',
+    },
+  ).trim();
 }
 
 function parseRepository(value) {
-  const parts = value.split("/");
+  const parts = value.split('/');
   if (
-    parts.length !== 2
-    || parts.some((part) => part.length === 0 || /\s/.test(part))
+    parts.length !== 2 ||
+    parts.some((part) => part.length === 0 || /\s/.test(part))
   ) {
     fail(`invalid repository ${value}; expected owner/name`);
   }
@@ -348,18 +409,18 @@ function parseRepository(value) {
 
 function ghJson(commandArgs) {
   try {
-    return JSON.parse(execFileSync("gh", commandArgs, { encoding: "utf8" }));
+    return JSON.parse(execFileSync('gh', commandArgs, { encoding: 'utf8' }));
   } catch (error) {
-    const stdout = String(error.stdout ?? "").trim();
-    const stderr = String(error.stderr ?? "").trim();
+    const stdout = String(error.stdout ?? '').trim();
+    const stderr = String(error.stderr ?? '').trim();
     const response = parseJsonOrNull(stdout);
     if (response?.message || response?.errors) {
-      fail(`gh ${commandArgs.join(" ")} failed: ${JSON.stringify(response)}`);
+      fail(`gh ${commandArgs.join(' ')} failed: ${JSON.stringify(response)}`);
     }
     if (response) {
       return response;
     }
-    fail(`gh ${commandArgs.join(" ")} failed: ${stderr || error.message}`);
+    fail(`gh ${commandArgs.join(' ')} failed: ${stderr || error.message}`);
   }
 }
 
@@ -372,30 +433,34 @@ function parseJsonOrNull(value) {
 }
 
 function writeReport(report, format) {
-  if (format === "json") {
+  if (format === 'json') {
     console.log(`${JSON.stringify(report, null, 2)}\n`);
     return;
   }
 
   console.log(`mode\taction\tcanApply\tapplied\tcommentId\turl`);
-  console.log([
-    report.mode,
-    report.action,
-    report.canApply,
-    report.applied,
-    report.commentId ?? "",
-    report.url ?? "",
-  ].join("\t"));
+  console.log(
+    [
+      report.mode,
+      report.action,
+      report.canApply,
+      report.applied,
+      report.commentId ?? '',
+      report.url ?? '',
+    ].join('\t'),
+  );
   if (report.duplicates.length > 0) {
-    console.log("duplicates:");
-    console.log("id\tcreatedAt\tupdatedAt\turl");
+    console.log('duplicates:');
+    console.log('id\tcreatedAt\tupdatedAt\turl');
     for (const duplicate of report.duplicates) {
-      console.log([
-        duplicate.id ?? "",
-        duplicate.createdAt ?? "",
-        duplicate.updatedAt ?? "",
-        duplicate.url ?? "",
-      ].join("\t"));
+      console.log(
+        [
+          duplicate.id ?? '',
+          duplicate.createdAt ?? '',
+          duplicate.updatedAt ?? '',
+          duplicate.url ?? '',
+        ].join('\t'),
+      );
     }
   }
   if (report.repairPath) {
@@ -405,71 +470,71 @@ function writeReport(report, format) {
 
 function parseArgs(argv) {
   const parsed = {
-    format: "json",
+    format: 'json',
   };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     switch (arg) {
-      case "--help":
-      case "-h":
+      case '--help':
+      case '-h':
         parsed.help = true;
         break;
-      case "--issue":
+      case '--issue':
         parsed.issue = readValue(argv, ++index, arg);
         break;
-      case "--pr":
+      case '--pr':
         parsed.pr = readValue(argv, ++index, arg);
         break;
-      case "--repo":
+      case '--repo':
         parsed.repo = readValue(argv, ++index, arg);
         break;
-      case "--dry-run":
+      case '--dry-run':
         parsed.dryRun = true;
         break;
-      case "--apply":
+      case '--apply':
         parsed.apply = true;
         break;
-      case "--phase":
+      case '--phase':
         parsed.phase = readValue(argv, ++index, arg);
         break;
-      case "--claim":
+      case '--claim':
         parsed.claim = readValue(argv, ++index, arg);
         break;
-      case "--branch":
+      case '--branch':
         parsed.branch = readValue(argv, ++index, arg);
         break;
-      case "--last-checked":
+      case '--last-checked':
         parsed.lastChecked = readValue(argv, ++index, arg);
         break;
-      case "--open-blockers":
+      case '--open-blockers':
         parsed.openBlockers = readValue(argv, ++index, arg);
         break;
-      case "--next-action":
+      case '--next-action':
         parsed.nextAction = readValue(argv, ++index, arg);
         break;
-      case "--authoritative-by":
+      case '--authoritative-by':
         parsed.authoritativeBy = readValue(argv, ++index, arg);
         break;
-      case "--claim-issue":
+      case '--claim-issue':
         parsed.claimIssue = readValue(argv, ++index, arg);
         break;
-      case "--claim-id":
+      case '--claim-id':
         parsed.claimId = readValue(argv, ++index, arg);
         break;
-      case "--agent-id":
+      case '--agent-id':
         parsed.agentId = readValue(argv, ++index, arg);
         break;
-      case "--skip-claim-check":
+      case '--skip-claim-check':
         parsed.skipClaimCheck = true;
         break;
-      case "--include-body":
+      case '--include-body':
         parsed.includeBody = true;
         break;
-      case "--format":
+      case '--format':
         parsed.format = readValue(argv, ++index, arg);
-        if (!["json", "table"].includes(parsed.format)) {
-          fail("--format must be json or table");
+        if (!['json', 'table'].includes(parsed.format)) {
+          fail('--format must be json or table');
         }
         break;
       default:
@@ -478,12 +543,12 @@ function parseArgs(argv) {
   }
 
   for (const flag of [
-    ["phase", "--phase"],
-    ["claim", "--claim"],
-    ["branch", "--branch"],
-    ["openBlockers", "--open-blockers"],
-    ["nextAction", "--next-action"],
-    ["authoritativeBy", "--authoritative-by"],
+    ['phase', '--phase'],
+    ['claim', '--claim'],
+    ['branch', '--branch'],
+    ['openBlockers', '--open-blockers'],
+    ['nextAction', '--next-action'],
+    ['authoritativeBy', '--authoritative-by'],
   ]) {
     if (!parsed[flag[0]]) {
       if (!parsed.help) {
@@ -497,7 +562,7 @@ function parseArgs(argv) {
 
 function readValue(argv, index, flag) {
   const value = argv[index];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith('--')) {
     fail(`${flag} requires a value`);
   }
   return value;
@@ -511,7 +576,7 @@ function parsePositiveInteger(value, flag) {
 }
 
 function currentIsoTimestamp() {
-  return new Date().toISOString().replace(".000Z", "Z");
+  return new Date().toISOString().replace('.000Z', 'Z');
 }
 
 function printUsage() {

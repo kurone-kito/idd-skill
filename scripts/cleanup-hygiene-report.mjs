@@ -1,27 +1,27 @@
 #!/usr/bin/env node
 /**
  * cleanup-hygiene-report.mjs
- * 
+ *
  * Produces auditable cleanup hygiene snapshots for merged PRs.
  * Generates metrics for trend reporting and CI audit purposes.
  */
 
-import { execSync } from "child_process";
+import { execFileSync } from 'node:child_process';
 
 /**
  * Aggregate cleanup metrics from PR data
- * 
+ *
  * This function computes cleanup hygiene metrics from merged PRs.
  * In production, it queries real PR data; in tests, it accepts mock data.
  */
 export function aggregateMetrics(prs, timestamp) {
   // Validate inputs
   if (!Array.isArray(prs)) {
-    throw new Error("prs must be an array");
+    throw new Error('prs must be an array');
   }
-  
-  if (!timestamp || isNaN(new Date(timestamp).getTime())) {
-    throw new Error("timestamp must be a valid ISO 8601 date string");
+
+  if (!timestamp || Number.isNaN(new Date(timestamp).getTime())) {
+    throw new Error('timestamp must be a valid ISO 8601 date string');
   }
 
   const metrics = JSON.parse(JSON.stringify(METRIC_SCHEMA));
@@ -39,11 +39,11 @@ export function aggregateMetrics(prs, timestamp) {
   // Separate recent and historical PRs
   const recentPRs = prs.filter((pr) => {
     const mergedAt = new Date(pr.mergedAt);
-    return !isNaN(mergedAt.getTime()) && mergedAt >= sevenDaysAgo;
+    return !Number.isNaN(mergedAt.getTime()) && mergedAt >= sevenDaysAgo;
   });
   const historicalPRs = prs.filter((pr) => {
     const mergedAt = new Date(pr.mergedAt);
-    return !isNaN(mergedAt.getTime()) && mergedAt < sevenDaysAgo;
+    return !Number.isNaN(mergedAt.getTime()) && mergedAt < sevenDaysAgo;
   });
 
   // Classify recent PRs
@@ -54,12 +54,13 @@ export function aggregateMetrics(prs, timestamp) {
   for (const pr of recentPRs) {
     const status = classifyPRCleanupStatus(pr);
 
-    if (status.status === "clean") {
+    if (status.status === 'clean') {
       recentClean++;
-    } else if (status.status === "needs_apply") {
+    } else if (status.status === 'needs_apply') {
       recentNeedsApply++;
-      skipReasonCounts[status.reason] = (skipReasonCounts[status.reason] || 0) + (status.count || 1);
-    } else if (status.status === "failed") {
+      skipReasonCounts[status.reason] =
+        (skipReasonCounts[status.reason] || 0) + (status.count || 1);
+    } else if (status.status === 'failed') {
       metrics.candidatesByClassifier.failed++;
     } else {
       metrics.candidatesByClassifier.thresholdMissing++;
@@ -75,7 +76,9 @@ export function aggregateMetrics(prs, timestamp) {
     totalMergedPRs > 0 ? (recentClean / totalMergedPRs) * 100 : 0;
 
   // Update candidatesByClassifier
-  metrics.candidatesByClassifier.skippedWithReason = Object.values(skipReasonCounts).reduce((a, b) => a + b, 0);
+  metrics.candidatesByClassifier.skippedWithReason = Object.values(
+    skipReasonCounts,
+  ).reduce((a, b) => a + b, 0);
 
   // Update recent trend
   metrics.trends.recent.data.metrics.totalMergedPRs = recentPRs.length;
@@ -85,16 +88,17 @@ export function aggregateMetrics(prs, timestamp) {
   // Classify historical PRs
   let historicalClean = 0;
   let historicalNeedsApply = 0;
-  let historicalSkipped = 0;
+  let _historicalSkipped = 0;
   for (const pr of historicalPRs) {
     const status = classifyPRCleanupStatus(pr);
-    if (status.status === "clean") {
+    if (status.status === 'clean') {
       historicalClean++;
-    } else if (status.status === "needs_apply") {
+    } else if (status.status === 'needs_apply') {
       historicalNeedsApply++;
-      historicalSkipped += status.count || 1;
+      _historicalSkipped += status.count || 1;
       // Also count skip reasons from historical PRs for complete frequency analysis
-      skipReasonCounts[status.reason] = (skipReasonCounts[status.reason] || 0) + (status.count || 1);
+      skipReasonCounts[status.reason] =
+        (skipReasonCounts[status.reason] || 0) + (status.count || 1);
     }
   }
 
@@ -112,17 +116,17 @@ export function aggregateMetrics(prs, timestamp) {
     reason,
     count,
   }));
-  
+
   // Ensure we always have 3 entries (pad with defaults if needed)
   const defaultReasons = [
-    { reason: "review-thread-unresolved", count: 0 },
-    { reason: "operational-marker-present", count: 0 },
-    { reason: "held-by-maintainer", count: 0 },
+    { reason: 'review-thread-unresolved', count: 0 },
+    { reason: 'operational-marker-present', count: 0 },
+    { reason: 'held-by-maintainer', count: 0 },
   ];
-  
+
   while (metrics.topSkipReasons.length < 3) {
     const nextDefault = defaultReasons.find(
-      (dr) => !metrics.topSkipReasons.some((tr) => tr.reason === dr.reason)
+      (dr) => !metrics.topSkipReasons.some((tr) => tr.reason === dr.reason),
     );
     if (nextDefault) {
       metrics.topSkipReasons.push({ ...nextDefault });
@@ -148,12 +152,12 @@ function classifyPRCleanupStatus(pr) {
   }
 
   if (candidates.length === 0) {
-    return { status: "clean", reason: null };
+    return { status: 'clean', reason: null };
   }
 
   return {
-    status: "needs_apply",
-    reason: "operational-marker-present",
+    status: 'needs_apply',
+    reason: 'operational-marker-present',
     count: candidates.length,
   };
 }
@@ -162,7 +166,9 @@ function classifyPRCleanupStatus(pr) {
  * Check if text is an operational marker
  */
 function isOperationalMarker(body) {
-  return /<!--\s*(review-watermark|review-baseline|claimed-by|unclaimed-by|advisory-wait)/.test(body);
+  return /<!--\s*(review-watermark|review-baseline|claimed-by|unclaimed-by|advisory-wait)/.test(
+    body,
+  );
 }
 
 /**
@@ -173,21 +179,21 @@ function parseArgs(argv) {
     owner: null,
     repo: null,
     since: null,
-    format: "json",
+    format: 'json',
     help: false,
   };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--owner") {
+    if (arg === '--owner') {
       args.owner = argv[++i];
-    } else if (arg === "--repo") {
+    } else if (arg === '--repo') {
       args.repo = argv[++i];
-    } else if (arg === "--since") {
+    } else if (arg === '--since') {
       args.since = argv[++i];
-    } else if (arg === "--format") {
+    } else if (arg === '--format') {
       args.format = argv[++i];
-    } else if (arg === "--help" || arg === "-h") {
+    } else if (arg === '--help' || arg === '-h') {
       args.help = true;
     } else {
       throw new Error(`unknown argument: ${arg}`);
@@ -201,13 +207,17 @@ function parseArgs(argv) {
  * Get current GitHub repository info from git
  */
 function getRepoInfo() {
-  const remoteUrl = execSync("git config --get remote.origin.url")
+  const remoteUrl = execFileSync('git', [
+    'config',
+    '--get',
+    'remote.origin.url',
+  ])
     .toString()
     .trim();
-  
+
   const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)(\.git)?$/);
   if (!match) {
-    throw new Error("Unable to extract owner/repo from git remote");
+    throw new Error('Unable to extract owner/repo from git remote');
   }
 
   return {
@@ -220,7 +230,7 @@ function getRepoInfo() {
  * Metric schema definition
  */
 export const METRIC_SCHEMA = {
-  version: "1.0",
+  version: '1.0',
   timestamp: null,
   repository: { owner: null, name: null },
   summary: {
@@ -236,9 +246,9 @@ export const METRIC_SCHEMA = {
     failed: 0,
   },
   topSkipReasons: [
-    { reason: "review-thread-unresolved", count: 0 },
-    { reason: "operational-marker-present", count: 0 },
-    { reason: "held-by-maintainer", count: 0 },
+    { reason: 'review-thread-unresolved', count: 0 },
+    { reason: 'operational-marker-present', count: 0 },
+    { reason: 'held-by-maintainer', count: 0 },
   ],
   trends: {
     recent: {
@@ -288,15 +298,15 @@ export async function generateMetrics(args, mockPRs = null) {
   metrics.repository.owner = args.owner || repoInfo.owner;
   metrics.repository.name = args.repo || repoInfo.repo;
   metrics.timestamp = timestamp;
-  
+
   // Set date ranges
   const now = new Date(timestamp);
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  
+
   metrics.trends.recent.data.startDate = sevenDaysAgo.toISOString();
   metrics.trends.recent.data.endDate = now.toISOString();
   metrics.trends.historical.data.beforeDate = sevenDaysAgo.toISOString();
-  
+
   // In production, this would call an actual API to fetch merged PRs
   // and aggregate their cleanup status. For now, return the template.
   return metrics;
@@ -314,17 +324,19 @@ function formatJSON(metrics) {
  */
 function formatCSV(metrics) {
   const lines = [];
-  lines.push("Cleanup Hygiene Report");
-  lines.push(`Repository,${metrics.repository.owner}/${metrics.repository.name}`);
+  lines.push('Cleanup Hygiene Report');
+  lines.push(
+    `Repository,${metrics.repository.owner}/${metrics.repository.name}`,
+  );
   lines.push(`Timestamp,${metrics.timestamp}`);
-  lines.push("");
-  lines.push("Metric,Value");
+  lines.push('');
+  lines.push('Metric,Value');
   lines.push(`Total Merged PRs,${metrics.summary.totalMergedPRs}`);
   lines.push(`Clean,${metrics.summary.clean}`);
   lines.push(`Needs Apply,${metrics.summary.needsApply}`);
   lines.push(`Clean Percentage,${metrics.summary.cleanPercentage.toFixed(2)}%`);
 
-  return lines.join("\n");
+  return lines.join('\n');
 }
 
 /**
@@ -359,11 +371,11 @@ async function main() {
     }
 
     const metrics = await generateMetrics(args);
-    let output = "";
+    let output = '';
 
-    if (args.format === "json") {
+    if (args.format === 'json') {
       output = formatJSON(metrics);
-    } else if (args.format === "csv") {
+    } else if (args.format === 'csv') {
       output = formatCSV(metrics);
     } else {
       throw new Error(`unknown format: ${args.format}`);

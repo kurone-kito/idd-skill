@@ -1,17 +1,21 @@
-import { parseProjectCommandRows } from "./policy-helpers.mjs";
+import { parseProjectCommandRows } from './policy-helpers.mjs';
 
-export { inspectHelperRuntimeConfig, normalizePolicyConfig, resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
+export {
+  inspectHelperRuntimeConfig,
+  normalizePolicyConfig,
+  resolveCollaboratorMarkerTrust,
+} from './policy-helpers.mjs';
 
 const COMMAND_KEYS = [
-  "install-deps",
-  "fix-validate",
-  "pre-push-validate",
-  "post-fix-validate",
+  'install-deps',
+  'fix-validate',
+  'pre-push-validate',
+  'post-fix-validate',
 ];
 
 const POLICY_FIELD_ROWS = new Map([
-  ["issueScope", "issue-scope"],
-  ["orphanFirstPolicy", "orphan-first-policy"],
+  ['issueScope', 'issue-scope'],
+  ['orphanFirstPolicy', 'orphan-first-policy'],
 ]);
 
 export function collectPolicyConfigDrift(config, overviewText) {
@@ -64,7 +68,7 @@ export function collectPolicyConfigDrift(config, overviewText) {
 }
 
 function hasOwn(value, key) {
-  return Object.prototype.hasOwnProperty.call(value ?? {}, key);
+  return Object.hasOwn(value ?? {}, key);
 }
 
 export function collectRootMarkdownAllowlistViolations(repoFiles, config) {
@@ -72,7 +76,7 @@ export function collectRootMarkdownAllowlistViolations(repoFiles, config) {
     return [];
   }
 
-  const id = config.id ?? "root-markdown-allowlist";
+  const id = config.id ?? 'root-markdown-allowlist';
   const allowedEntries = config.allowed ?? [];
   if (!Array.isArray(allowedEntries)) {
     return [`${id}: allowed must be an array of root Markdown file names`];
@@ -80,7 +84,7 @@ export function collectRootMarkdownAllowlistViolations(repoFiles, config) {
   const allowed = new Set(allowedEntries);
   const violations = [];
   for (const file of repoFiles) {
-    if (file.includes("/") || !/\.md$/i.test(file)) {
+    if (file.includes('/') || !/\.md$/i.test(file)) {
       continue;
     }
     if (!allowed.has(file)) {

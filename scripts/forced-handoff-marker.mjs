@@ -1,26 +1,25 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
-
-import {
-  parsePaginatedGhNdjson,
-  renderForcedHandoffComment,
-  summarizeClaimValidation,
-} from "./protocol-helpers.mjs";
-import { resolveCollaboratorMarkerTrust } from "./policy-helpers.mjs";
+import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
-} from "./collaborator-permission.mjs";
+} from './collaborator-permission.mjs';
+import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
+import {
+  parsePaginatedGhNdjson,
+  renderForcedHandoffComment,
+  summarizeClaimValidation,
+} from './protocol-helpers.mjs';
 
 export function generateSuccessorIds(baseAgentId) {
   return {
-    newAgentId: String(baseAgentId || "idd-agent"),
-    newClaimId: `claim-${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+    newAgentId: String(baseAgentId || 'idd-agent'),
+    newClaimId: `claim-${randomUUID().replace(/-/g, '').slice(0, 16)}`,
   };
 }
 
@@ -38,7 +37,7 @@ export function planHandoff(issueComments, linkedPrs, options = {}) {
 
   const resolveOpts = {
     isAuthorizedForcedHandoff:
-      typeof isAuthorizedForcedHandoff === "function"
+      typeof isAuthorizedForcedHandoff === 'function'
         ? isAuthorizedForcedHandoff
         : () => false,
   };
@@ -51,13 +50,13 @@ export function planHandoff(issueComments, linkedPrs, options = {}) {
   );
 
   if (!firstPassClaim) {
-    throw new Error("issue has no active trusted claim");
+    throw new Error('issue has no active trusted claim');
   }
 
   const matchingPrs = (linkedPrs ?? []).filter(
-    (pr) => String(pr.headRefName ?? "") === firstPassClaim.branch,
+    (pr) => String(pr.headRefName ?? '') === firstPassClaim.branch,
   );
-  const contextScope = matchingPrs.length > 0 ? "issue-plus-pr" : "issue-only";
+  const contextScope = matchingPrs.length > 0 ? 'issue-plus-pr' : 'issue-only';
   const prReferences = matchingPrs.map((pr) => String(pr.number));
 
   if (prNumber !== undefined) {
@@ -65,7 +64,9 @@ export function planHandoff(issueComments, linkedPrs, options = {}) {
     if (!prReferences.includes(prRef)) {
       throw new Error(
         `PR #${prNumber} does not match any open PR on claim branch ${firstPassClaim.branch}` +
-          (prReferences.length > 0 ? `; expected one of: ${prReferences.join(", ")}` : ""),
+          (prReferences.length > 0
+            ? `; expected one of: ${prReferences.join(', ')}`
+            : ''),
       );
     }
   }
@@ -74,7 +75,7 @@ export function planHandoff(issueComments, linkedPrs, options = {}) {
   // expectedLinkedPrs filter so that prior issue-only forced-handoff markers
   // are correctly rejected for PR-scoped claim replay.
   let activeClaim = firstPassClaim;
-  if (contextScope === "issue-plus-pr") {
+  if (contextScope === 'issue-plus-pr') {
     const expectedLinkedPrs =
       prNumber !== undefined ? [String(prNumber)] : prReferences;
     const filteredClaim = resolveHelperActiveClaim(
@@ -98,7 +99,7 @@ export function planHandoff(issueComments, linkedPrs, options = {}) {
     // Validate the approving actor before rendering the marker body so that
     // plan output cannot preview a marker that claim resolution would reject.
     const authorized =
-      typeof isAuthorizedForcedHandoff !== "function" ||
+      typeof isAuthorizedForcedHandoff !== 'function' ||
       isAuthorizedForcedHandoff(forcedBy);
     if (authorized) {
       const resolvedLinkedPr =
@@ -109,7 +110,7 @@ export function planHandoff(issueComments, linkedPrs, options = {}) {
         newAgentId: successorIds.newAgentId,
         newClaimId: successorIds.newClaimId,
         branch: activeClaim.branch,
-        ...(contextScope === "issue-plus-pr" && resolvedLinkedPr
+        ...(contextScope === 'issue-plus-pr' && resolvedLinkedPr
           ? { linkedPr: resolvedLinkedPr }
           : {}),
         forcedBy,
@@ -140,41 +141,83 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   if (!args.issueNumber) {
-    throw new Error("missing required --issue <number> argument");
+    throw new Error('missing required --issue <number> argument');
   }
   if (!args.forcedBy) {
-    throw new Error("missing required --forced-by <actor> argument");
+    throw new Error('missing required --forced-by <actor> argument');
   }
   if (!args.reason) {
-    throw new Error("missing required --reason <text> argument");
+    throw new Error('missing required --reason <text> argument');
   }
 
   if (args.plan) {
-    const repoRef = args.repo ?? ghText(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
+    const repoRef =
+      args.repo ??
+      ghText([
+        'repo',
+        'view',
+        '--json',
+        'nameWithOwner',
+        '--jq',
+        '.nameWithOwner',
+      ]);
     const { owner, name } = parseOwnerRepo(repoRef);
-    const issueComments = ghJson(["api", "--paginate", `repos/${owner}/${name}/issues/${args.issueNumber}/comments`], true);
-    const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
-    const trustedMarkerLogins = buildTrustedMarkerLogins(owner, name, viewerLogin, args.trustedMarkerLogins, issueComments);
+    const issueComments = ghJson(
+      [
+        'api',
+        '--paginate',
+        `repos/${owner}/${name}/issues/${args.issueNumber}/comments`,
+      ],
+      true,
+    );
+    const viewerLogin = safeGhText([
+      'api',
+      'user',
+      '--jq',
+      '.login',
+    ]).toLowerCase();
+    const trustedMarkerLogins = buildTrustedMarkerLogins(
+      owner,
+      name,
+      viewerLogin,
+      args.trustedMarkerLogins,
+      issueComments,
+    );
     const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
     const permissionCache = new Map();
 
-    const tempClaim = resolveHelperActiveClaim(issueComments, trustedMarkerLogins, {
-      isAuthorizedForcedHandoff: (forcedBy) =>
-        isAuthorizedForcedHandoffActor(owner, name, forcedBy, forcedHandoffAuthorityPolicy, permissionCache),
-    });
+    const tempClaim = resolveHelperActiveClaim(
+      issueComments,
+      trustedMarkerLogins,
+      {
+        isAuthorizedForcedHandoff: (forcedBy) =>
+          isAuthorizedForcedHandoffActor(
+            owner,
+            name,
+            forcedBy,
+            forcedHandoffAuthorityPolicy,
+            permissionCache,
+          ),
+      },
+    );
 
     let linkedPrs = [];
     if (tempClaim) {
       linkedPrs = ghJson([
-        "pr", "list",
-        "--repo", `${owner}/${name}`,
-        "--head", tempClaim.branch,
-        "--state", "open",
-        "--json", "number,headRefName",
+        'pr',
+        'list',
+        '--repo',
+        `${owner}/${name}`,
+        '--head',
+        tempClaim.branch,
+        '--state',
+        'open',
+        '--json',
+        'number,headRefName',
       ]);
     }
 
-    const modeEnabled = readForcedHandoffMode() === "human-gated";
+    const modeEnabled = readForcedHandoffMode() === 'human-gated';
     const plan = planHandoff(issueComments, linkedPrs, {
       newAgentId: args.newAgentId,
       newClaimId: args.newClaimId,
@@ -184,12 +227,23 @@ export function main(argv = process.argv.slice(2)) {
       timestamp: args.timestamp,
       trustedMarkerLogins,
       isAuthorizedForcedHandoff: (forcedBy) =>
-        isAuthorizedForcedHandoffActor(owner, name, forcedBy, forcedHandoffAuthorityPolicy, permissionCache),
+        isAuthorizedForcedHandoffActor(
+          owner,
+          name,
+          forcedBy,
+          forcedHandoffAuthorityPolicy,
+          permissionCache,
+        ),
     });
 
     console.log(
       JSON.stringify(
-        { repository: `${owner}/${name}`, issueNumber: args.issueNumber, modeEnabled, ...plan },
+        {
+          repository: `${owner}/${name}`,
+          issueNumber: args.issueNumber,
+          modeEnabled,
+          ...plan,
+        },
         null,
         2,
       ),
@@ -198,35 +252,71 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   if (!args.newAgentId) {
-    throw new Error("missing required --new-agent-id <id> argument");
+    throw new Error('missing required --new-agent-id <id> argument');
   }
   if (!args.newClaimId) {
-    throw new Error("missing required --new-claim-id <id> argument");
+    throw new Error('missing required --new-claim-id <id> argument');
   }
 
-  const repoRef = args.repo ?? ghText(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
+  const repoRef =
+    args.repo ??
+    ghText([
+      'repo',
+      'view',
+      '--json',
+      'nameWithOwner',
+      '--jq',
+      '.nameWithOwner',
+    ]);
   const { owner, name } = parseOwnerRepo(repoRef);
-  if (readForcedHandoffMode() !== "human-gated") {
-    throw new Error("forced-handoff mode is not human-gated; marker generation is disabled");
+  if (readForcedHandoffMode() !== 'human-gated') {
+    throw new Error(
+      'forced-handoff mode is not human-gated; marker generation is disabled',
+    );
   }
-  const issueComments = ghJson(["api", "--paginate", `repos/${owner}/${name}/issues/${args.issueNumber}/comments`], true);
-  const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
-  const trustedMarkerLogins = buildTrustedMarkerLogins(owner, name, viewerLogin, args.trustedMarkerLogins, issueComments);
+  const issueComments = ghJson(
+    [
+      'api',
+      '--paginate',
+      `repos/${owner}/${name}/issues/${args.issueNumber}/comments`,
+    ],
+    true,
+  );
+  const viewerLogin = safeGhText([
+    'api',
+    'user',
+    '--jq',
+    '.login',
+  ]).toLowerCase();
+  const trustedMarkerLogins = buildTrustedMarkerLogins(
+    owner,
+    name,
+    viewerLogin,
+    args.trustedMarkerLogins,
+    issueComments,
+  );
   const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
   const permissionCache = new Map();
-  const activeClaim = resolveHelperActiveClaim(issueComments, trustedMarkerLogins, {
-    expectedLinkedPrs: args.prNumber
-      ? [String(args.prNumber), `https://github.com/${owner}/${name}/pull/${args.prNumber}`]
-      : [],
-    isAuthorizedForcedHandoff:
-      (forcedBy) => isAuthorizedForcedHandoffActor(
-        owner,
-        name,
-        forcedBy,
-        forcedHandoffAuthorityPolicy,
-        permissionCache,
-      ),
-  });
+  const activeClaim = resolveHelperActiveClaim(
+    issueComments,
+    trustedMarkerLogins,
+    {
+      expectedLinkedPrs: args.prNumber
+        ? [
+            String(args.prNumber),
+            `https://github.com/${owner}/${name}/pull/${args.prNumber}`,
+          ]
+        : [],
+      isAuthorizedForcedHandoff: (forcedBy) =>
+        isAuthorizedForcedHandoffActor(
+          owner,
+          name,
+          forcedBy,
+          forcedHandoffAuthorityPolicy,
+          permissionCache,
+        ),
+    },
+  );
 
   if (!activeClaim) {
     throw new Error(`issue #${args.issueNumber} has no active trusted claim`);
@@ -246,20 +336,20 @@ export function main(argv = process.argv.slice(2)) {
     );
   }
 
-  let linkedPr = "";
+  let linkedPr = '';
   if (args.prNumber) {
     const pr = ghJson([
-      "pr",
-      "view",
-        String(args.prNumber),
-        "-R",
-        `${owner}/${name}`,
-        "--json",
-        "headRefName,url",
-        "--jq",
-      ".",
+      'pr',
+      'view',
+      String(args.prNumber),
+      '-R',
+      `${owner}/${name}`,
+      '--json',
+      'headRefName,url',
+      '--jq',
+      '.',
     ]);
-    const headRefName = String(pr.headRefName ?? "");
+    const headRefName = String(pr.headRefName ?? '');
     if (headRefName !== activeClaim.branch) {
       throw new Error(
         `PR #${args.prNumber} head branch ${headRefName} does not match active claim branch ${activeClaim.branch}`,
@@ -278,14 +368,14 @@ export function main(argv = process.argv.slice(2)) {
     forcedBy: args.forcedBy,
     reason: args.reason,
     timestamp: args.timestamp ?? currentIsoTimestamp(),
-    contextScope: linkedPr ? "issue-plus-pr" : "issue-only",
+    contextScope: linkedPr ? 'issue-plus-pr' : 'issue-only',
   };
 
   const commentBody = renderForcedHandoffComment(payload);
-  if (args.format === "json") {
+  if (args.format === 'json') {
     console.log(
       JSON.stringify(
-          {
+        {
           repository: `${owner}/${name}`,
           issueNumber: args.issueNumber,
           activeClaim,
@@ -301,7 +391,11 @@ export function main(argv = process.argv.slice(2)) {
   }
 }
 
-export function resolveHelperActiveClaim(issueComments, trustedMarkerLogins, options = {}) {
+export function resolveHelperActiveClaim(
+  issueComments,
+  trustedMarkerLogins,
+  options = {},
+) {
   const trustedSources = Array.isArray(trustedMarkerLogins)
     ? trustedMarkerLogins
     : trustedMarkerLogins instanceof Set
@@ -309,7 +403,11 @@ export function resolveHelperActiveClaim(issueComments, trustedMarkerLogins, opt
       : splitCsv(trustedMarkerLogins);
   const trustedLogins = new Set(
     trustedSources
-      .map((login) => String(login ?? "").trim().toLowerCase())
+      .map((login) =>
+        String(login ?? '')
+          .trim()
+          .toLowerCase(),
+      )
       .filter(Boolean),
   );
   const summary = summarizeClaimValidation(
@@ -319,7 +417,7 @@ export function resolveHelperActiveClaim(issueComments, trustedMarkerLogins, opt
       forcedHandoffEnabled: true,
       expectedLinkedPrs: options.expectedLinkedPrs ?? [],
       isAuthorizedForcedHandoff:
-        typeof options.isAuthorizedForcedHandoff === "function"
+        typeof options.isAuthorizedForcedHandoff === 'function'
           ? options.isAuthorizedForcedHandoff
           : () => false,
     },
@@ -330,50 +428,56 @@ export function resolveHelperActiveClaim(issueComments, trustedMarkerLogins, opt
 
 function parseArgs(argv) {
   const parsed = {
-    format: "text",
-    trustedMarkerLogins: "",
+    format: 'text',
+    trustedMarkerLogins: '',
   };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     switch (token) {
-      case "--issue":
-        parsed.issueNumber = parsePositiveInteger(readValue(argv, ++index, token), token);
+      case '--issue':
+        parsed.issueNumber = parsePositiveInteger(
+          readValue(argv, ++index, token),
+          token,
+        );
         break;
-      case "--pr":
-        parsed.prNumber = parsePositiveInteger(readValue(argv, ++index, token), token);
+      case '--pr':
+        parsed.prNumber = parsePositiveInteger(
+          readValue(argv, ++index, token),
+          token,
+        );
         break;
-      case "--new-agent-id":
+      case '--new-agent-id':
         parsed.newAgentId = readValue(argv, ++index, token);
         break;
-      case "--new-claim-id":
+      case '--new-claim-id':
         parsed.newClaimId = readValue(argv, ++index, token);
         break;
-      case "--forced-by":
+      case '--forced-by':
         parsed.forcedBy = readValue(argv, ++index, token);
         break;
-      case "--reason":
+      case '--reason':
         parsed.reason = readValue(argv, ++index, token);
         break;
-      case "--timestamp":
+      case '--timestamp':
         parsed.timestamp = readValue(argv, ++index, token);
         break;
-      case "--trusted-marker-logins":
+      case '--trusted-marker-logins':
         parsed.trustedMarkerLogins = readValue(argv, ++index, token);
         break;
-      case "--repo":
+      case '--repo':
         parsed.repo = readValue(argv, ++index, token);
         break;
-      case "--format":
+      case '--format':
         parsed.format = readValue(argv, ++index, token);
-        if (parsed.format !== "text" && parsed.format !== "json") {
+        if (parsed.format !== 'text' && parsed.format !== 'json') {
           throw new Error(`unsupported --format value: ${parsed.format}`);
         }
         break;
-      case "--plan":
+      case '--plan':
         parsed.plan = true;
         break;
-      case "--help":
-      case "-h":
+      case '--help':
+      case '-h':
         parsed.help = true;
         break;
       default:
@@ -383,35 +487,51 @@ function parseArgs(argv) {
   return parsed;
 }
 
-function buildTrustedMarkerLogins(owner, repo, viewerLogin, cliLogins, issueComments) {
+function buildTrustedMarkerLogins(
+  owner,
+  repo,
+  viewerLogin,
+  cliLogins,
+  issueComments,
+) {
   const configured = [
     viewerLogin,
     ...splitCsv(cliLogins),
     ...splitCsv(process.env.IDD_TRUSTED_MARKER_ACTORS),
   ];
   if (!readCollaboratorTrustEnabled()) {
-    return new Set(configured.filter(Boolean).map((login) => login.toLowerCase()));
+    return new Set(
+      configured.filter(Boolean).map((login) => login.toLowerCase()),
+    );
   }
 
-  const trusted = new Set(configured.filter(Boolean).map((login) => login.toLowerCase()));
+  const trusted = new Set(
+    configured.filter(Boolean).map((login) => login.toLowerCase()),
+  );
   const permissionCache = new Map();
   const uniqueLogins = new Set(
     issueComments
-      .map((comment) => String(comment.user?.login ?? "").toLowerCase())
+      .map((comment) => String(comment.user?.login ?? '').toLowerCase())
       .filter(Boolean),
   );
   for (const login of uniqueLogins) {
     if (trusted.has(login)) {
       continue;
     }
-    const permission = permissionCache.get(login) ?? safeGhText([
-      "api",
-      `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-      "--jq",
-      ".permission",
-    ]).toLowerCase();
+    const permission =
+      permissionCache.get(login) ??
+      safeGhText([
+        'api',
+        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
+        '--jq',
+        '.permission',
+      ]).toLowerCase();
     permissionCache.set(login, permission);
-    if (permission === "admin" || permission === "maintain" || permission === "write") {
+    if (
+      permission === 'admin' ||
+      permission === 'maintain' ||
+      permission === 'write'
+    ) {
       trusted.add(login);
     }
   }
@@ -420,23 +540,23 @@ function buildTrustedMarkerLogins(owner, repo, viewerLogin, cliLogins, issueComm
 
 function normalizeIssueComment(comment) {
   return {
-    body: comment.body ?? "",
-    createdAt: comment.created_at ?? "",
+    body: comment.body ?? '',
+    createdAt: comment.created_at ?? '',
     author: {
-      login: comment.user?.login ?? "",
+      login: comment.user?.login ?? '',
     },
   };
 }
 
 function splitCsv(value) {
-  return String(value ?? "")
-    .split(",")
+  return String(value ?? '')
+    .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
 }
 
 function isTruthy(value) {
-  return /^(1|true|yes)$/i.test(String(value ?? "").trim());
+  return /^(1|true|yes)$/i.test(String(value ?? '').trim());
 }
 
 function readValue(argv, index, name) {
@@ -448,7 +568,7 @@ function readValue(argv, index, name) {
 }
 
 export function parsePositiveInteger(value, flag) {
-  const raw = String(value ?? "").trim();
+  const raw = String(value ?? '').trim();
   if (!/^[1-9]\d*$/.test(raw)) {
     throw new Error(`invalid ${flag} value: ${value}`);
   }
@@ -456,7 +576,7 @@ export function parsePositiveInteger(value, flag) {
 }
 
 function parseOwnerRepo(value) {
-  const repo = String(value ?? "").trim();
+  const repo = String(value ?? '').trim();
   const match = repo.match(/^([^/\s]+)\/([^/\s]+)$/);
   if (!match) {
     throw new Error(`invalid --repo value: ${value} (expected owner/name)`);
@@ -473,28 +593,30 @@ function ghJson(args, slurp = false) {
     // gh api with --paginate and --jq '.[]' emits one JSON object per line.
     // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
     // via apt, so keep the NDJSON-compatible form here.
-    finalArgs.splice(1, 0, "--jq", ".[]");
-    return parsePaginatedGhNdjson(execFileSync("gh", finalArgs, { encoding: "utf8" }));
+    finalArgs.splice(1, 0, '--jq', '.[]');
+    return parsePaginatedGhNdjson(
+      execFileSync('gh', finalArgs, { encoding: 'utf8' }),
+    );
   }
-  return JSON.parse(execFileSync("gh", finalArgs, { encoding: "utf8" }));
+  return JSON.parse(execFileSync('gh', finalArgs, { encoding: 'utf8' }));
 }
 
 function ghText(args) {
-  return execFileSync("gh", args, { encoding: "utf8" }).trim();
+  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
 }
 
 function safeGhText(args) {
   try {
     return ghText(args);
   } catch {
-    return "";
+    return '';
   }
 }
 
 function readCollaboratorTrustEnabled() {
   try {
     return resolveCollaboratorMarkerTrust(
-      JSON.parse(readFileSync(".github/idd/config.json", "utf8")),
+      JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
       process.env.IDD_TRUST_COLLABORATOR_MARKERS,
     );
   } catch {
@@ -504,7 +626,7 @@ function readCollaboratorTrustEnabled() {
 }
 
 export function currentIsoTimestamp() {
-  return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 function printUsage() {
@@ -530,6 +652,9 @@ Environment:
 `);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   main();
 }

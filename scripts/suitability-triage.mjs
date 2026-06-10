@@ -1,54 +1,57 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
+import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // cspell:ignore AKIA baprs xoxbaprs
 
-const BLOCKED_LABELS = new Set(["status:blocked-by-human", "status:needs-decision"]);
+const BLOCKED_LABELS = new Set([
+  'status:blocked-by-human',
+  'status:needs-decision',
+]);
 
 const CHECKS = [
   {
-    id: "repository_fit",
-    name: "Repository Fit",
-    failureOutcome: "out-of-scope",
+    id: 'repository_fit',
+    name: 'Repository Fit',
+    failureOutcome: 'out-of-scope',
     evaluate: checkRepositoryFit,
   },
   {
-    id: "coherence",
-    name: "Issue Coherence",
-    failureOutcome: "unclear",
+    id: 'coherence',
+    name: 'Issue Coherence',
+    failureOutcome: 'unclear',
     evaluate: checkCoherence,
   },
   {
-    id: "trust_safety",
-    name: "Trust/Safety",
-    failureOutcome: "invalid",
+    id: 'trust_safety',
+    name: 'Trust/Safety',
+    failureOutcome: 'invalid',
     evaluate: checkTrustSafety,
   },
   {
-    id: "duplicate_or_superseded",
-    name: "Duplicate or Superseded Work",
-    failureOutcome: "duplicate",
+    id: 'duplicate_or_superseded',
+    name: 'Duplicate or Superseded Work',
+    failureOutcome: 'duplicate',
     evaluate: checkDuplicateOrSuperseded,
   },
   {
-    id: "actionability",
-    name: "Actionability",
-    failureOutcome: "needs-decision",
+    id: 'actionability',
+    name: 'Actionability',
+    failureOutcome: 'needs-decision',
     evaluate: checkActionability,
   },
   {
-    id: "autonomy",
-    name: "Autonomy",
-    failureOutcome: "blocked-by-human",
+    id: 'autonomy',
+    name: 'Autonomy',
+    failureOutcome: 'blocked-by-human',
     evaluate: checkAutonomy,
   },
   {
-    id: "verifiability",
-    name: "Verifiability",
-    failureOutcome: "needs-decision",
+    id: 'verifiability',
+    name: 'Verifiability',
+    failureOutcome: 'needs-decision',
     evaluate: checkVerifiability,
   },
 ];
@@ -68,16 +71,24 @@ const UNSAFE_PATTERNS = [
 ];
 
 const EXECUTION_VERB_PATTERN = /\b(run|execute|paste|install|invoke)\b/i;
-const EXTERNAL_COORDINATION_PATTERN = /\b(cross-repo|cross repo|external repo|another repo|upstream change|maintainer of)\b/i;
-const EXTERNAL_SYSTEM_ACCESS_PATTERN = /\b(requires?|need(?:s)?|must|depends on)\b[\s\S]{0,120}\b((?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog)[\s\S]{0,40}(?:access|credentials?|login|permission|sign-?in)|(?:access|credentials?|login|permission|sign-?in)[\s\S]{0,40}(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog))\b/i;
-const DUPLICATE_DECLARATION_PATTERN = /\b(duplicate of|superseded by)\s*#\d+\b/gi;
+const EXTERNAL_COORDINATION_PATTERN =
+  /\b(cross-repo|cross repo|external repo|another repo|upstream change|maintainer of)\b/i;
+const EXTERNAL_SYSTEM_ACCESS_PATTERN =
+  /\b(requires?|need(?:s)?|must|depends on)\b[\s\S]{0,120}\b((?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog)[\s\S]{0,40}(?:access|credentials?|login|permission|sign-?in)|(?:access|credentials?|login|permission|sign-?in)[\s\S]{0,40}(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog))\b/i;
+const DUPLICATE_DECLARATION_PATTERN =
+  /\b(duplicate of|superseded by)\s*#\d+\b/gi;
 const DUPLICATE_NEGATION_PATTERN = /\b(not|no|avoid)\b[\s\S]{0,30}$/i;
-const SUBJECTIVE_SUBJECT_PATTERN = /\b(maintainer|stakeholder|human|opinion|judgment|judgement|ux|feel)\b/i;
+const SUBJECTIVE_SUBJECT_PATTERN =
+  /\b(maintainer|stakeholder|human|opinion|judgment|judgement|ux|feel)\b/i;
 const SUBJECTIVE_GATE_PATTERN = /\b(approval|sign-?off|decision|preference)\b/i;
-const OUTCOME_SIGNAL_PATTERN = /\b(pass|fail|result|output|contains|include|present|required|objective|measurable|deterministic)\b/i;
-const EXPLICIT_UNSAFE_DIRECTIVE_PATTERN = /\b(execute|run|paste|install|invoke)\b[\s\S]{0,100}(?:this|untrusted|user-provided|user input|from user|from the user)\b/i;
-const NEGATION_PATTERN = /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
-const POLICY_OVERRIDE_PATTERN = /\b(ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)\b[\s\S]{0,60}\b(repo|repository|policy|workflow|idd|process|check|gate|requirement)\b/i;
+const OUTCOME_SIGNAL_PATTERN =
+  /\b(pass|fail|result|output|contains|include|present|required|objective|measurable|deterministic)\b/i;
+const EXPLICIT_UNSAFE_DIRECTIVE_PATTERN =
+  /\b(execute|run|paste|install|invoke)\b[\s\S]{0,100}(?:this|untrusted|user-provided|user input|from user|from the user)\b/i;
+const NEGATION_PATTERN =
+  /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
+const POLICY_OVERRIDE_PATTERN =
+  /\b(ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)\b[\s\S]{0,60}\b(repo|repository|policy|workflow|idd|process|check|gate|requirement)\b/i;
 const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 
 if (isCliExecution()) {
@@ -89,7 +100,9 @@ export function evaluateSuitability(issue, options = {}) {
   const context = {
     issue: normalized,
     repository: normalizeRepository(options.repository),
-    duplicateCandidates: normalizeDuplicateCandidates(options.duplicateCandidates),
+    duplicateCandidates: normalizeDuplicateCandidates(
+      options.duplicateCandidates,
+    ),
     trustSafetyAmbiguous: Boolean(options.trustSafetyAmbiguous),
   };
 
@@ -99,7 +112,7 @@ export function evaluateSuitability(issue, options = {}) {
     checks.push({
       id: check.id,
       name: check.name,
-      result: result.pass ? "pass" : "fail",
+      result: result.pass ? 'pass' : 'fail',
       evidence: result.evidence,
     });
     if (!result.pass) {
@@ -114,7 +127,7 @@ export function evaluateSuitability(issue, options = {}) {
 
   return {
     passed: true,
-    outcome: "ready",
+    outcome: 'ready',
     failedCheck: null,
     checks,
   };
@@ -125,17 +138,18 @@ export function checkRepositoryFit(context) {
   if (!repository) {
     return {
       pass: true,
-      evidence: "Repository scope was not provided; check treated as pass.",
+      evidence: 'Repository scope was not provided; check treated as pass.',
     };
   }
 
   const body = issue.body;
   const crossRepoLinks = [];
-  const regex = /https?:\/\/github\.com\/([^/\s]+)\/([^/\s#?]+)\/(?:issues|pull)\/\d+/gi;
+  const regex =
+    /https?:\/\/github\.com\/([^/\s]+)\/([^/\s#?]+)\/(?:issues|pull)\/\d+/gi;
   let match = regex.exec(body);
   while (match) {
-    const owner = (match[1] ?? "").toLowerCase();
-    const repo = (match[2] ?? "").toLowerCase();
+    const owner = (match[1] ?? '').toLowerCase();
+    const repo = (match[2] ?? '').toLowerCase();
     if (owner !== repository.owner || repo !== repository.repo) {
       crossRepoLinks.push(match[0]);
     }
@@ -144,21 +158,23 @@ export function checkRepositoryFit(context) {
   if (crossRepoLinks.length > 0 && EXTERNAL_COORDINATION_PATTERN.test(body)) {
     return {
       pass: false,
-      evidence: `Cross-repository references detected: ${crossRepoLinks.join(", ")}`,
+      evidence: `Cross-repository references detected: ${crossRepoLinks.join(', ')}`,
     };
   }
   if (EXTERNAL_SYSTEM_ACCESS_PATTERN.test(body)) {
     return {
       pass: false,
-      evidence: "Issue requires external system access beyond repository scope.",
+      evidence:
+        'Issue requires external system access beyond repository scope.',
     };
   }
 
   return {
     pass: true,
-    evidence: crossRepoLinks.length > 0
-      ? "Cross-repository links appear contextual; no explicit external coordination signal detected."
-      : "No out-of-repository scope signals detected.",
+    evidence:
+      crossRepoLinks.length > 0
+        ? 'Cross-repository links appear contextual; no explicit external coordination signal detected.'
+        : 'No out-of-repository scope signals detected.',
   };
 }
 
@@ -170,18 +186,18 @@ export function checkCoherence(context) {
   if (title.length < 5 || body.length < 20) {
     return {
       pass: false,
-      evidence: "Issue title/body is too short to infer reliable intent.",
+      evidence: 'Issue title/body is too short to infer reliable intent.',
     };
   }
   if (/<<<<<<<|=======|>>>>>>>/.test(body)) {
     return {
       pass: false,
-      evidence: "Issue body contains unresolved conflict markers.",
+      evidence: 'Issue body contains unresolved conflict markers.',
     };
   }
   return {
     pass: true,
-    evidence: "Issue body is structurally coherent and interpretable.",
+    evidence: 'Issue body is structurally coherent and interpretable.',
   };
 }
 
@@ -192,7 +208,7 @@ export function checkTrustSafety(context) {
   if (trustSafetyAmbiguous) {
     return {
       pass: false,
-      evidence: "Trust/safety evaluation marked ambiguous; failing closed.",
+      evidence: 'Trust/safety evaluation marked ambiguous; failing closed.',
     };
   }
 
@@ -209,7 +225,7 @@ export function checkTrustSafety(context) {
     const match = corpus.match(POLICY_OVERRIDE_PATTERN);
     return {
       pass: false,
-      evidence: `Policy-override directive detected: "${match?.[0] ?? ""}". Untrusted policy-manipulation instructions cannot be processed.`,
+      evidence: `Policy-override directive detected: "${match?.[0] ?? ''}". Untrusted policy-manipulation instructions cannot be processed.`,
     };
   }
 
@@ -218,7 +234,7 @@ export function checkTrustSafety(context) {
     const match = corpus.match(EXPLICIT_UNSAFE_DIRECTIVE_PATTERN);
     return {
       pass: false,
-      evidence: `Explicit unsafe execution directive detected: "${match?.[0] ?? ""}". Cannot execute untrusted user-provided instructions.`,
+      evidence: `Explicit unsafe execution directive detected: "${match?.[0] ?? ''}". Cannot execute untrusted user-provided instructions.`,
     };
   }
 
@@ -227,20 +243,28 @@ export function checkTrustSafety(context) {
     const unsafeMatch = corpus.match(matchedUnsafe);
     const unsafeIndex = unsafeMatch?.index ?? -1;
     const contextStart = Math.max(0, unsafeIndex - 140);
-    const contextEnd = Math.min(corpus.length, unsafeIndex + (unsafeMatch?.[0]?.length ?? 0) + 40);
-    const localContext = unsafeIndex >= 0 ? corpus.slice(contextStart, contextEnd) : corpus;
+    const contextEnd = Math.min(
+      corpus.length,
+      unsafeIndex + (unsafeMatch?.[0]?.length ?? 0) + 40,
+    );
+    const localContext =
+      unsafeIndex >= 0 ? corpus.slice(contextStart, contextEnd) : corpus;
     const directivePattern = new RegExp(
       `${EXECUTION_VERB_PATTERN.source}[\\s\\S]{0,80}${matchedUnsafe.source}`,
-      "i",
+      'i',
     );
     const negatedDirectivePattern = new RegExp(
       `\\b(do not|don't|never|avoid)\\s+(?:run|execute|paste|install|invoke)\\b[^\\n.!?]{0,60}${matchedUnsafe.source}`,
-      "i",
+      'i',
     );
-    if (!directivePattern.test(localContext) || negatedDirectivePattern.test(localContext)) {
+    if (
+      !directivePattern.test(localContext) ||
+      negatedDirectivePattern.test(localContext)
+    ) {
       return {
         pass: true,
-        evidence: "Unsafe command string appears as context only; no execution directive detected.",
+        evidence:
+          'Unsafe command string appears as context only; no execution directive detected.',
       };
     }
     return {
@@ -251,7 +275,7 @@ export function checkTrustSafety(context) {
 
   return {
     pass: true,
-    evidence: "No trust/safety blockers detected.",
+    evidence: 'No trust/safety blockers detected.',
   };
 }
 
@@ -261,7 +285,7 @@ export function checkDuplicateOrSuperseded(context) {
 
   const declarations = [...body.matchAll(DUPLICATE_DECLARATION_PATTERN)];
   for (const declaration of declarations) {
-    const matched = declaration[0] ?? "";
+    const matched = declaration[0] ?? '';
     const index = declaration.index ?? 0;
     const prefix = body.slice(Math.max(0, index - 30), index);
     if (DUPLICATE_NEGATION_PATTERN.test(prefix)) {
@@ -292,7 +316,7 @@ export function checkDuplicateOrSuperseded(context) {
     if (candidate.number === issue.number) {
       return false;
     }
-    if (candidate.state === "CLOSED") {
+    if (candidate.state === 'CLOSED') {
       return false;
     }
     const sim = computeSimilarity(exactTitle, normalizeText(candidate.title));
@@ -307,9 +331,10 @@ export function checkDuplicateOrSuperseded(context) {
 
   return {
     pass: true,
-    evidence: duplicateCandidates.length === 0
-      ? "No duplicate candidate matched."
-      : `Checked ${duplicateCandidates.length} duplicate candidates; no exact or near match.`,
+    evidence:
+      duplicateCandidates.length === 0
+        ? 'No duplicate candidate matched.'
+        : `Checked ${duplicateCandidates.length} duplicate candidates; no exact or near match.`,
   };
 }
 
@@ -343,20 +368,22 @@ function levenshteinDistance(str1, str2) {
 export function checkActionability(context) {
   const { issue } = context;
   const body = issue.body;
-  const hasAcceptance = /\bAcceptance Criteria\b|\bOutput\b|\bDeliverables\b/i.test(body);
+  const hasAcceptance =
+    /\bAcceptance Criteria\b|\bOutput\b|\bDeliverables\b/i.test(body);
   const hasChecklist = /^\s*[-*]\s+\[[ xX]\]/m.test(body);
   const hasSteps = /^\s*\d+\.\s+/m.test(body);
 
   if (hasAcceptance || hasChecklist || hasSteps) {
     return {
       pass: true,
-      evidence: "Issue defines actionable scope and verifiable delivery details.",
+      evidence:
+        'Issue defines actionable scope and verifiable delivery details.',
     };
   }
 
   return {
     pass: false,
-    evidence: "Issue lacks concrete actionable scope or acceptance detail.",
+    evidence: 'Issue lacks concrete actionable scope or acceptance detail.',
   };
 }
 
@@ -376,46 +403,60 @@ export function checkAutonomy(context) {
 
   // Negation-aware parsing for external coordination and human decision requirements
   const coordinationMatches = [
-    ...body.matchAll(/\brequires (?:maintainer|human|stakeholder) (?:decision|approval|sign-?off)\b/gi),
-    ...body.matchAll(/\bstakeholder\b[\s\S]{0,80}\b(sign-?off|approval|decision)\b/gi),
+    ...body.matchAll(
+      /\brequires (?:maintainer|human|stakeholder) (?:decision|approval|sign-?off)\b/gi,
+    ),
+    ...body.matchAll(
+      /\bstakeholder\b[\s\S]{0,80}\b(sign-?off|approval|decision)\b/gi,
+    ),
   ];
 
   for (const match of coordinationMatches) {
-    const matchedText = match[0] ?? "";
+    const matchedText = match[0] ?? '';
     const matchIndex = match.index ?? 0;
     const contextBefore = body.slice(Math.max(0, matchIndex - 60), matchIndex);
-    const contextAfter = body.slice(matchIndex + matchedText.length, Math.min(body.length, matchIndex + matchedText.length + 60));
+    const contextAfter = body.slice(
+      matchIndex + matchedText.length,
+      Math.min(body.length, matchIndex + matchedText.length + 60),
+    );
 
     // Check if negated (either before or immediately after)
-    if (NEGATION_PATTERN.test(contextBefore) || NEGATION_PATTERN.test(contextAfter)) {
+    if (
+      NEGATION_PATTERN.test(contextBefore) ||
+      NEGATION_PATTERN.test(contextAfter)
+    ) {
       // This is a negated non-requirement; skip this match
       continue;
     }
 
     return {
       pass: false,
-      evidence: "Issue explicitly requires external human coordination or approval.",
+      evidence:
+        'Issue explicitly requires external human coordination or approval.',
     };
   }
 
   return {
     pass: true,
-    evidence: "No external coordination blockers detected.",
+    evidence: 'No external coordination blockers detected.',
   };
 }
 
 export function checkVerifiability(context) {
   const { issue } = context;
   const body = issue.body;
-  const hasVerificationChannel = /\btests?\b|\bverification\b|\bvalidate\b|\blint\b|\bci\b/i.test(body);
-  
+  const hasVerificationChannel =
+    /\btests?\b|\bverification\b|\bvalidate\b|\blint\b|\bci\b/i.test(body);
+
   // Check for substantive objective criteria, not just empty headings
   let hasObjectiveCriteria = false;
-  
+
   // Check for "Acceptance Criteria" with substantive content after it
   const acceptanceCriteriaMatch = body.match(ACCEPTANCE_CRITERIA_PATTERN);
   if (acceptanceCriteriaMatch) {
-    const indexAfter = (acceptanceCriteriaMatch.index ?? 0) + (acceptanceCriteriaMatch[0]?.length ?? 0);
+    const indexAfter =
+      (acceptanceCriteriaMatch.index ?? 0) +
+      (acceptanceCriteriaMatch[0]?.length ?? 0);
     const contentAfter = body.slice(indexAfter, indexAfter + 500).trim();
     // Require either a list (starting with - or *) or numbered content with outcome signals
     if (/^[-*]\s+/.test(contentAfter) || /^\d+\.\s+/.test(contentAfter)) {
@@ -428,14 +469,19 @@ export function checkVerifiability(context) {
 
   // Alternative: check for numbered steps with outcome signals or checklists
   if (!hasObjectiveCriteria) {
-    const hasNumSteps = /^\s*\d+\.\s+/m.test(body) && OUTCOME_SIGNAL_PATTERN.test(body);
-    const hasChecklist = /^\s*[-*]\s+\[[ xX]\]/m.test(body) && OUTCOME_SIGNAL_PATTERN.test(body);
+    const hasNumSteps =
+      /^\s*\d+\.\s+/m.test(body) && OUTCOME_SIGNAL_PATTERN.test(body);
+    const hasChecklist =
+      /^\s*[-*]\s+\[[ xX]\]/m.test(body) && OUTCOME_SIGNAL_PATTERN.test(body);
     hasObjectiveCriteria = hasNumSteps || hasChecklist;
   }
 
   // Fallback: check for "Output", "Deliverables", or "Verification" keywords with signal words
   if (!hasObjectiveCriteria) {
-    hasObjectiveCriteria = /\b(?:Output|Deliverables|Verification)\b[\s\S]{0,300}(?:must|should|required|contains|includes|result)/i.test(body);
+    hasObjectiveCriteria =
+      /\b(?:Output|Deliverables|Verification)\b[\s\S]{0,300}(?:must|should|required|contains|includes|result)/i.test(
+        body,
+      );
   }
 
   const hasObjectiveSignals = hasVerificationChannel || hasObjectiveCriteria;
@@ -443,24 +489,34 @@ export function checkVerifiability(context) {
   if (!hasObjectiveSignals) {
     return {
       pass: false,
-      evidence: "Issue does not provide objective verification signals or substantive acceptance criteria.",
+      evidence:
+        'Issue does not provide objective verification signals or substantive acceptance criteria.',
     };
   }
   const hasSubjectiveApproval = (() => {
     const lines = body.split(/\r?\n/);
-    return lines.some((line) => SUBJECTIVE_SUBJECT_PATTERN.test(line) && SUBJECTIVE_GATE_PATTERN.test(line))
-      || /\b(approval|sign-?off|decision|preference)\b[\s\S]{0,80}\b(maintainer|stakeholder|human|opinion|judgment|judgement|ux|feel)\b/i.test(body);
+    return (
+      lines.some(
+        (line) =>
+          SUBJECTIVE_SUBJECT_PATTERN.test(line) &&
+          SUBJECTIVE_GATE_PATTERN.test(line),
+      ) ||
+      /\b(approval|sign-?off|decision|preference)\b[\s\S]{0,80}\b(maintainer|stakeholder|human|opinion|judgment|judgement|ux|feel)\b/i.test(
+        body,
+      )
+    );
   })();
   if (hasSubjectiveApproval) {
     return {
       pass: false,
-      evidence: "Issue success depends on subjective approval or judgment.",
+      evidence: 'Issue success depends on subjective approval or judgment.',
     };
   }
 
   return {
     pass: true,
-    evidence: "Issue includes objective verification language and substantive criteria.",
+    evidence:
+      'Issue includes objective verification language and substantive criteria.',
   };
 }
 
@@ -471,15 +527,18 @@ function runCli() {
     process.exit(0);
   }
   if (!Number.isInteger(args.issue) || args.issue <= 0) {
-    throw new Error("--issue is required and must be a positive integer");
+    throw new Error('--issue is required and must be a positive integer');
   }
   if (args.token) {
     process.env.GH_TOKEN = args.token;
     process.env.GITHUB_TOKEN = args.token;
   }
 
-  const owner = args.owner || ghText(["repo", "view", "--json", "owner", "--jq", ".owner.login"]);
-  const repo = args.repo || ghText(["repo", "view", "--json", "name", "--jq", ".name"]);
+  const owner =
+    args.owner ||
+    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+  const repo =
+    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
   const repoRef = `${owner}/${repo}`;
 
   const issue = fetchIssue(repoRef, args.issue);
@@ -503,10 +562,10 @@ function runCli() {
     checks: args.verbose
       ? result.checks
       : result.checks.map((check) => ({
-        id: check.id,
-        name: check.name,
-        result: check.result,
-      })),
+          id: check.id,
+          name: check.name,
+          result: check.result,
+        })),
   };
 
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
@@ -515,9 +574,9 @@ function runCli() {
 function parseArgs(argv) {
   const parsed = {
     issue: null,
-    token: "",
-    owner: "",
-    repo: "",
+    token: '',
+    owner: '',
+    repo: '',
     verbose: false,
     help: false,
   };
@@ -525,31 +584,31 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
-    if (token === "--issue") {
-      parsed.issue = Number.parseInt(String(value ?? ""), 10);
+    if (token === '--issue') {
+      parsed.issue = Number.parseInt(String(value ?? ''), 10);
       index += 1;
       continue;
     }
-    if (token === "--owner") {
-      parsed.owner = value ?? "";
+    if (token === '--owner') {
+      parsed.owner = value ?? '';
       index += 1;
       continue;
     }
-    if (token === "--token") {
-      parsed.token = value ?? "";
+    if (token === '--token') {
+      parsed.token = value ?? '';
       index += 1;
       continue;
     }
-    if (token === "--repo") {
-      parsed.repo = value ?? "";
+    if (token === '--repo') {
+      parsed.repo = value ?? '';
       index += 1;
       continue;
     }
-    if (token === "--verbose") {
+    if (token === '--verbose') {
       parsed.verbose = true;
       continue;
     }
-    if (token === "--help" || token === "-h") {
+    if (token === '--help' || token === '-h') {
       parsed.help = true;
       continue;
     }
@@ -578,20 +637,24 @@ Output schema:
 function normalizeIssue(issue) {
   return {
     number: Number.parseInt(String(issue.number), 10),
-    title: String(issue.title ?? ""),
-    body: String(issue.body ?? ""),
-    state: String(issue.state ?? ""),
+    title: String(issue.title ?? ''),
+    body: String(issue.body ?? ''),
+    state: String(issue.state ?? ''),
     labels: normalizeLabels(issue.labels),
-    url: String(issue.url ?? issue.html_url ?? ""),
+    url: String(issue.url ?? issue.html_url ?? ''),
   };
 }
 
 function normalizeRepository(repository) {
-  if (!repository || typeof repository !== "object") {
+  if (!repository || typeof repository !== 'object') {
     return null;
   }
-  const owner = String(repository.owner ?? "").trim().toLowerCase();
-  const repo = String(repository.repo ?? "").trim().toLowerCase();
+  const owner = String(repository.owner ?? '')
+    .trim()
+    .toLowerCase();
+  const repo = String(repository.repo ?? '')
+    .trim()
+    .toLowerCase();
   if (!owner || !repo) {
     return null;
   }
@@ -602,12 +665,16 @@ function normalizeDuplicateCandidates(candidates) {
   if (!Array.isArray(candidates)) {
     return [];
   }
-  return candidates.map((candidate) => ({
-    number: Number.parseInt(String(candidate.number), 10),
-    title: String(candidate.title ?? ""),
-    state: String(candidate.state ?? ""),
-    url: String(candidate.url ?? candidate.html_url ?? ""),
-  })).filter((candidate) => Number.isInteger(candidate.number) && candidate.number > 0);
+  return candidates
+    .map((candidate) => ({
+      number: Number.parseInt(String(candidate.number), 10),
+      title: String(candidate.title ?? ''),
+      state: String(candidate.state ?? ''),
+      url: String(candidate.url ?? candidate.html_url ?? ''),
+    }))
+    .filter(
+      (candidate) => Number.isInteger(candidate.number) && candidate.number > 0,
+    );
 }
 
 function normalizeLabels(labels) {
@@ -615,35 +682,34 @@ function normalizeLabels(labels) {
     return [];
   }
   return labels
-    .map((label) => (typeof label === "string" ? label : label?.name ?? ""))
+    .map((label) => (typeof label === 'string' ? label : (label?.name ?? '')))
     .map((label) => label.trim().toLowerCase())
     .filter(Boolean);
 }
 
 function normalizeText(value) {
-  return String(value ?? "").trim().toLowerCase();
+  return String(value ?? '')
+    .trim()
+    .toLowerCase();
 }
 
 function fetchIssue(repoRef, issueNumber) {
-  const issue = ghJson([
-    "api",
-    `repos/${repoRef}/issues/${issueNumber}`,
-  ]);
+  const issue = ghJson(['api', `repos/${repoRef}/issues/${issueNumber}`]);
   return normalizeIssue(issue);
 }
 
 function fetchDuplicateCandidates(repoRef, issue) {
-  const escapedTitle = issue.title.replaceAll("\"", "\\\"");
+  const escapedTitle = issue.title.replaceAll('"', '\\"');
   const query = `repo:${repoRef} in:title "${escapedTitle}"`;
   const payload = ghJson([
-    "api",
+    'api',
     `search/issues?q=${encodeURIComponent(query)}&per_page=50`,
   ]);
   return normalizeDuplicateCandidates(payload.items ?? []);
 }
 
 function ghJson(args) {
-  return JSON.parse(runGh(args).trim() || "{}");
+  return JSON.parse(runGh(args).trim() || '{}');
 }
 
 function ghText(args) {
@@ -652,13 +718,13 @@ function ghText(args) {
 
 function runGh(args) {
   try {
-    return execFileSync("gh", args, {
-      encoding: "utf8",
+    return execFileSync('gh', args, {
+      encoding: 'utf8',
       timeout: 30_000,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    const stderr = String(error?.stderr ?? "").trim();
+    const stderr = String(error?.stderr ?? '').trim();
     if (stderr) {
       throw new Error(`gh command failed: ${stderr}`);
     }
@@ -667,5 +733,8 @@ function runGh(args) {
 }
 
 function isCliExecution() {
-  return process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+  return (
+    process.argv[1] &&
+    fileURLToPath(import.meta.url) === resolve(process.argv[1])
+  );
 }

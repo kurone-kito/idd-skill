@@ -1,44 +1,51 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
-import { readAdvisoryWaitPolicy } from "./advisory-wait-policy.mjs";
+import { readAdvisoryWaitPolicy } from './advisory-wait-policy.mjs';
 import {
   buildAdvisoryWaitSummary,
   normalizeTrustedMarkerLogins,
   parsePaginatedGhNdjson,
   resolveTrustedMarkerActors,
-} from "./protocol-helpers.mjs";
+} from './protocol-helpers.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.prNumber) {
-  throw new Error("missing required --pr <number> argument");
+  throw new Error('missing required --pr <number> argument');
 }
 
-const owner = args.owner || ghText(["repo", "view", "--json", "owner", "--jq", ".owner.login"]);
-const repo = args.repo || ghText(["repo", "view", "--json", "name", "--jq", ".name"]);
+const owner =
+  args.owner ||
+  ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+const repo =
+  args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
 const repoRef = `${owner}/${repo}`;
-const viewerLogin = safeGhText(["api", "user", "--jq", ".login"]).toLowerCase();
-const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } = resolveTrustedMarkerActors({
-  flagValue: args.trustedMarkerLogins,
-  envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-  config: loadIddConfig(),
-});
+const viewerLogin = safeGhText(['api', 'user', '--jq', '.login']).toLowerCase();
+const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
+  resolveTrustedMarkerActors({
+    flagValue: args.trustedMarkerLogins,
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+    config: loadIddConfig(),
+  });
 
 const prHeadSha = ghText([
-  "pr",
-  "view",
+  'pr',
+  'view',
   String(args.prNumber),
-  "-R",
+  '-R',
   repoRef,
-  "--json",
-  "headRefOid",
-  "--jq",
-  ".headRefOid",
+  '--json',
+  'headRefOid',
+  '--jq',
+  '.headRefOid',
 ]);
 
-const reviews = ghApiJson(`repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`, true);
+const reviews = ghApiJson(
+  `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
+  true,
+);
 const requestedReviewers = ghApiJson(
   `repos/${owner}/${repo}/pulls/${args.prNumber}/requested_reviewers`,
   false,
@@ -46,14 +53,16 @@ const requestedReviewers = ghApiJson(
 const timelineEvents = ghApiJson(
   `repos/${owner}/${repo}/issues/${args.prNumber}/timeline`,
   true,
-  ["-H", "Accept: application/vnd.github+json"],
+  ['-H', 'Accept: application/vnd.github+json'],
 );
 const comments = ghApiJson(
   `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
   true,
 );
 
-const collaboratorTrustEnabled = isTruthy(process.env.IDD_TRUST_COLLABORATOR_MARKERS);
+const collaboratorTrustEnabled = isTruthy(
+  process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+);
 const trustedMarkerLogins = normalizeTrustedMarkerLogins([
   viewerLogin,
   ...configuredTrustedActors,
@@ -72,7 +81,7 @@ const summary = buildAdvisoryWaitSummary(
     comments: comments.map(normalizeComment),
   },
   {
-    now: args.now || new Date().toISOString().replace(".000Z", "Z"),
+    now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
     requestCap: advisoryWaitPolicy.requestCap,
     pendingWindowMinutes: advisoryWaitPolicy.pendingWindowMinutes,
     settledWindowMinutes: advisoryWaitPolicy.settledWindowMinutes,
@@ -85,48 +94,56 @@ const summary = buildAdvisoryWaitSummary(
   },
 );
 
-process.stdout.write(`${
-  JSON.stringify({ ...summary, trustedMarkerActors: configuredTrustedActors, trustedMarkerActorsSource }, null, 2)
-}\n`);
+process.stdout.write(
+  `${JSON.stringify(
+    {
+      ...summary,
+      trustedMarkerActors: configuredTrustedActors,
+      trustedMarkerActorsSource,
+    },
+    null,
+    2,
+  )}\n`,
+);
 
 function parseArgs(argv) {
   const parsed = {
     prNumber: null,
-    owner: "",
-    repo: "",
-    trustedMarkerLogins: "",
-    now: "",
+    owner: '',
+    repo: '',
+    trustedMarkerLogins: '',
+    now: '',
   };
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
-    if (token === "--pr") {
-      parsed.prNumber = Number.parseInt(value ?? "", 10);
+    if (token === '--pr') {
+      parsed.prNumber = Number.parseInt(value ?? '', 10);
       index += 1;
       continue;
     }
-    if (token === "--owner") {
-      parsed.owner = value ?? "";
+    if (token === '--owner') {
+      parsed.owner = value ?? '';
       index += 1;
       continue;
     }
-    if (token === "--repo") {
-      parsed.repo = value ?? "";
+    if (token === '--repo') {
+      parsed.repo = value ?? '';
       index += 1;
       continue;
     }
-    if (token === "--trusted-marker-logins") {
-      parsed.trustedMarkerLogins = value ?? "";
+    if (token === '--trusted-marker-logins') {
+      parsed.trustedMarkerLogins = value ?? '';
       index += 1;
       continue;
     }
-    if (token === "--now") {
-      parsed.now = value ?? "";
+    if (token === '--now') {
+      parsed.now = value ?? '';
       index += 1;
       continue;
     }
-    if (token === "--help" || token === "-h") {
+    if (token === '--help' || token === '-h') {
       printHelp();
       process.exit(0);
     }
@@ -148,71 +165,81 @@ function printHelp() {
 
 function normalizeComment(comment) {
   return {
-    author: { login: comment.user?.login ?? "" },
-    body: comment.body ?? "",
-    createdAt: comment.created_at ?? "",
+    author: { login: comment.user?.login ?? '' },
+    body: comment.body ?? '',
+    createdAt: comment.created_at ?? '',
   };
 }
 
 function resolveTrustedCollaboratorMarkerLogins(owner, repo, comments) {
-  const advisoryAuthors = [...new Set(
-    comments
-      .filter((comment) => advisoryMarkerComment(comment.body ?? ""))
-      .map((comment) => comment.user?.login ?? "")
-      .filter(Boolean),
-  )];
+  const advisoryAuthors = [
+    ...new Set(
+      comments
+        .filter((comment) => advisoryMarkerComment(comment.body ?? ''))
+        .map((comment) => comment.user?.login ?? '')
+        .filter(Boolean),
+    ),
+  ];
 
   return advisoryAuthors.filter((login) => {
     const permission = safeGhText([
-      "api",
+      'api',
       `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-      "--jq",
-      ".permission",
+      '--jq',
+      '.permission',
     ]).toLowerCase();
 
-    return permission === "admin" || permission === "maintain" || permission === "write";
+    return (
+      permission === 'admin' ||
+      permission === 'maintain' ||
+      permission === 'write'
+    );
   });
 }
 
 function advisoryMarkerComment(body) {
-  const normalized = String(body ?? "");
-  return normalized.startsWith("advisory-wait:")
-    || normalized.startsWith("advisory-wait-recovery:")
-    || normalized.startsWith("<!-- advisory-wait:");
+  const normalized = String(body ?? '');
+  return (
+    normalized.startsWith('advisory-wait:') ||
+    normalized.startsWith('advisory-wait-recovery:') ||
+    normalized.startsWith('<!-- advisory-wait:')
+  );
 }
 
 function isTruthy(value) {
-  return /^(1|true|yes)$/i.test(String(value ?? "").trim());
+  return /^(1|true|yes)$/i.test(String(value ?? '').trim());
 }
 
 function loadIddConfig() {
   try {
-    return JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
   } catch {
     return null;
   }
 }
 
 function ghText(args) {
-  return execFileSync("gh", args, { encoding: "utf8" }).trim();
+  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
 }
 
 function safeGhText(args) {
   try {
     return ghText(args);
   } catch {
-    return "";
+    return '';
   }
 }
 
 function ghApiJson(path, paginate = false, extraArgs = []) {
-  const args = ["api", path, ...extraArgs];
+  const args = ['api', path, ...extraArgs];
   if (paginate) {
     // gh api with --paginate and --jq '.[]' emits one JSON object per line.
     // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
     // via apt, so keep the NDJSON-compatible form here.
-    args.splice(1, 0, "--paginate", "--jq", ".[]");
-    return parsePaginatedGhNdjson(execFileSync("gh", args, { encoding: "utf8" }));
+    args.splice(1, 0, '--paginate', '--jq', '.[]');
+    return parsePaginatedGhNdjson(
+      execFileSync('gh', args, { encoding: 'utf8' }),
+    );
   }
-  return JSON.parse(execFileSync("gh", args, { encoding: "utf8" }));
+  return JSON.parse(execFileSync('gh', args, { encoding: 'utf8' }));
 }

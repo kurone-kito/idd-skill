@@ -1,40 +1,47 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
+import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   isStaleAt,
   parseClaimComment,
   resolveActiveClaim,
-} from "./protocol-helpers.mjs";
-import { normalizePolicyConfig } from "./policy-helpers.mjs";
-import { isAuthorizedForcedHandoffActor } from "./collaborator-permission.mjs";
+} from './protocol-helpers.mjs';
 
 const DEFAULT_STALE_AGE_MS = 24 * 60 * 60 * 1000;
-const LEGACY_CLAIM_PATTERN = /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
-const LEGACY_RELEASE_PATTERN = /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
+const LEGACY_CLAIM_PATTERN =
+  /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
+const LEGACY_RELEASE_PATTERN =
+  /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 
 if (isCliExecution()) {
   runCli();
 }
 
 export function evaluateResumeClaimRouting(input, options = {}) {
-  const nowIso = normalizeIso(input.now) ?? normalizeIso(new Date().toISOString());
+  const nowIso =
+    normalizeIso(input.now) ?? normalizeIso(new Date().toISOString());
   const staleAgeMs = normalizeStaleAgeMs(input.staleAgeMs);
-  const trustedAuthor = typeof options.isTrustedAuthor === "function"
-    ? options.isTrustedAuthor
-    : () => true;
-  const isForcedHandoffEnabled = typeof options.isForcedHandoffEnabled === "function"
-    ? options.isForcedHandoffEnabled
-    : () => false;
-  const isAuthorizedForcedHandoff = typeof options.isAuthorizedForcedHandoff === "function"
-    ? options.isAuthorizedForcedHandoff
-    : () => false;
+  const trustedAuthor =
+    typeof options.isTrustedAuthor === 'function'
+      ? options.isTrustedAuthor
+      : () => true;
+  const isForcedHandoffEnabled =
+    typeof options.isForcedHandoffEnabled === 'function'
+      ? options.isForcedHandoffEnabled
+      : () => false;
+  const isAuthorizedForcedHandoff =
+    typeof options.isAuthorizedForcedHandoff === 'function'
+      ? options.isAuthorizedForcedHandoff
+      : () => false;
 
-  const events = normalizeEvents(input.events).filter((event) => trustedAuthor(event.author?.login ?? ""));
+  const events = normalizeEvents(input.events).filter((event) =>
+    trustedAuthor(event.author?.login ?? ''),
+  );
   const state = resolveClaimState(events, nowIso, staleAgeMs, {
     isForcedHandoffEnabled,
     isAuthorizedForcedHandoff,
@@ -48,52 +55,52 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     : null;
 
   const warnings = [...state.warnings];
-  let routeState = "unclaimed";
-  let action = "re_claim";
-  let reason = "no-active-claim";
+  let routeState = 'unclaimed';
+  let action = 're_claim';
+  let reason = 'no-active-claim';
 
-  if (state.mode === "legacy-only") {
+  if (state.mode === 'legacy-only') {
     if (!state.legacyClaim) {
-      routeState = "unclaimed";
-      action = "re_claim";
-      reason = "legacy-absent";
+      routeState = 'unclaimed';
+      action = 're_claim';
+      reason = 'legacy-absent';
     } else if (state.legacyReleased) {
-      routeState = "unclaimed";
-      action = "re_claim";
-      reason = "legacy-released";
+      routeState = 'unclaimed';
+      action = 're_claim';
+      reason = 'legacy-released';
     } else if (isStaleByAge(state.legacyClaim.createdAt, nowIso, staleAgeMs)) {
-      routeState = "stale";
-      action = "takeover";
-      reason = "legacy-claim-stale";
+      routeState = 'stale';
+      action = 'takeover';
+      reason = 'legacy-claim-stale';
     } else {
-      routeState = "non_inheritable";
-      action = "stop";
-      reason = "legacy-claim-non-stale";
+      routeState = 'non_inheritable';
+      action = 'stop';
+      reason = 'legacy-claim-non-stale';
     }
   } else if (!state.activeClaim) {
-    routeState = "unclaimed";
-    action = "re_claim";
-    reason = "no-active-claim";
+    routeState = 'unclaimed';
+    action = 're_claim';
+    reason = 'no-active-claim';
   } else if (laterCompetingClaim) {
-    routeState = "disputed";
-    action = "stop";
-    reason = "later-competing-claim";
+    routeState = 'disputed';
+    action = 'stop';
+    reason = 'later-competing-claim';
   } else if (claimIdChecked && claimIdChecked === state.activeClaim.claimId) {
-    routeState = "already_owned";
-    action = "keep";
-    reason = "claim-id-match";
+    routeState = 'already_owned';
+    action = 'keep';
+    reason = 'claim-id-match';
   } else if (claimIdChecked && sameSecondContenders.includes(claimIdChecked)) {
-    routeState = "disputed";
-    action = "stop";
-    reason = "same-second-claim-tie-break-loss";
+    routeState = 'disputed';
+    action = 'stop';
+    reason = 'same-second-claim-tie-break-loss';
   } else if (isStaleByAge(state.activeClaim.createdAt, nowIso, staleAgeMs)) {
-    routeState = "stale";
-    action = "takeover";
-    reason = "active-claim-stale";
+    routeState = 'stale';
+    action = 'takeover';
+    reason = 'active-claim-stale';
   } else {
-    routeState = "non_inheritable";
-    action = "stop";
-    reason = "active-claim-non-stale";
+    routeState = 'non_inheritable';
+    action = 'stop';
+    reason = 'active-claim-non-stale';
   }
 
   return {
@@ -101,30 +108,31 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     action,
     reason,
     claim_id_checked: claimIdChecked || null,
-    active_claim: routeState === "unclaimed"
-      ? null
-      : state.activeClaim
-      ? {
-        agent_id: state.activeClaim.agentId,
-        claim_id: state.activeClaim.claimId,
-        created_at: state.activeClaim.createdAt,
-        branch: state.activeClaim.branch,
-      }
-      : state.legacyClaim
-        ? {
-          agent_id: state.legacyClaim.agentId,
-          claim_id: null,
-          created_at: state.legacyClaim.createdAt,
-          branch: state.legacyClaim.branch,
-        }
-        : null,
+    active_claim:
+      routeState === 'unclaimed'
+        ? null
+        : state.activeClaim
+          ? {
+              agent_id: state.activeClaim.agentId,
+              claim_id: state.activeClaim.claimId,
+              created_at: state.activeClaim.createdAt,
+              branch: state.activeClaim.branch,
+            }
+          : state.legacyClaim
+            ? {
+                agent_id: state.legacyClaim.agentId,
+                claim_id: null,
+                created_at: state.legacyClaim.createdAt,
+                branch: state.legacyClaim.branch,
+              }
+            : null,
     stale_age_ms: staleAgeMs,
     now: nowIso,
     warnings,
     evidence: {
       trusted_event_count: events.length,
-      new_format_claim_seen: state.mode === "new-format",
-      legacy_claim_seen: state.mode === "legacy-only",
+      new_format_claim_seen: state.mode === 'new-format',
+      legacy_claim_seen: state.mode === 'legacy-only',
       same_second_contenders: sameSecondContenders,
       later_competing_claim: laterCompetingClaim,
     },
@@ -138,51 +146,60 @@ function runCli() {
     process.exit(0);
   }
   if (!Number.isInteger(args.issue) || args.issue <= 0) {
-    throw new Error("--issue is required and must be a positive integer");
+    throw new Error('--issue is required and must be a positive integer');
   }
   if (args.token) {
     process.env.GH_TOKEN = args.token;
     process.env.GITHUB_TOKEN = args.token;
   }
 
-  const owner = args.owner || ghText(["repo", "view", "--json", "owner", "--jq", ".owner.login"]);
-  const repo = args.repo || ghText(["repo", "view", "--json", "name", "--jq", ".name"]);
+  const owner =
+    args.owner ||
+    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+  const repo =
+    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
   const repository = `${owner}/${repo}`;
   const policy = loadPolicy(args.policy, { strict: Boolean(args.policy) });
   const staleAgeMs = args.staleAgeMs > 0 ? args.staleAgeMs : policy.staleAgeMs;
   const trustedLogins = resolveTrustedLogins({
     fromArgs: args.trustedMarkerLogins,
     fromPolicy: policy.trustedMarkerActors,
-    currentLogin: ghText(["api", "user", "--jq", ".login"]),
+    currentLogin: ghText(['api', 'user', '--jq', '.login']),
   });
   const trustedSet = new Set(trustedLogins.map((login) => login.toLowerCase()));
   const comments = fetchIssueComments(repository, args.issue);
-  const issue = ghJson(["api", `repos/${repository}/issues/${args.issue}`]);
-  const forcedHandoffEnabled = policy.forcedHandoff.mode === "human-gated";
+  const issue = ghJson(['api', `repos/${repository}/issues/${args.issue}`]);
+  const forcedHandoffEnabled = policy.forcedHandoff.mode === 'human-gated';
   const forcedHandoffAuthorityPolicy = policy.forcedHandoff.authorityPolicy;
   const permissionCache = new Map();
 
   const result = evaluateResumeClaimRouting(
     {
       events: comments.map((comment) => ({
-        body: comment.body ?? "",
-        createdAt: comment.created_at ?? "",
-        author: { login: comment.user?.login ?? "" },
+        body: comment.body ?? '',
+        createdAt: comment.created_at ?? '',
+        author: { login: comment.user?.login ?? '' },
       })),
       claimId: args.claimId,
       staleAgeMs,
       now: args.now || undefined,
     },
     {
-      isTrustedAuthor: (login) => trustedSet.has(String(login ?? "").trim().toLowerCase()),
+      isTrustedAuthor: (login) =>
+        trustedSet.has(
+          String(login ?? '')
+            .trim()
+            .toLowerCase(),
+        ),
       isForcedHandoffEnabled: () => forcedHandoffEnabled,
-      isAuthorizedForcedHandoff: (forcedBy) => isAuthorizedForcedHandoffActor(
-        owner,
-        repo,
-        forcedBy,
-        forcedHandoffAuthorityPolicy,
-        permissionCache,
-      ),
+      isAuthorizedForcedHandoff: (forcedBy) =>
+        isAuthorizedForcedHandoffActor(
+          owner,
+          repo,
+          forcedBy,
+          forcedHandoffAuthorityPolicy,
+          permissionCache,
+        ),
     },
   );
 
@@ -190,9 +207,9 @@ function runCli() {
     repository: { owner, repo },
     issue: {
       number: Number.parseInt(String(issue.number), 10),
-      title: String(issue.title ?? ""),
-      state: String(issue.state ?? ""),
-      url: String(issue.html_url ?? issue.url ?? ""),
+      title: String(issue.title ?? ''),
+      state: String(issue.state ?? ''),
+      url: String(issue.html_url ?? issue.url ?? ''),
     },
     policy: {
       source: policy.source,
@@ -207,18 +224,21 @@ function runCli() {
 }
 
 function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
-  const isForcedHandoffEnabled = typeof options.isForcedHandoffEnabled === "function"
-    ? options.isForcedHandoffEnabled
-    : () => false;
-  const isAuthorizedForcedHandoff = typeof options.isAuthorizedForcedHandoff === "function"
-    ? options.isAuthorizedForcedHandoff
-    : () => false;
+  const isForcedHandoffEnabled =
+    typeof options.isForcedHandoffEnabled === 'function'
+      ? options.isForcedHandoffEnabled
+      : () => false;
+  const isAuthorizedForcedHandoff =
+    typeof options.isAuthorizedForcedHandoff === 'function'
+      ? options.isAuthorizedForcedHandoff
+      : () => false;
 
   // hasNewFormatClaim drives the new-format vs legacy-only mode. Detect
   // it by scanning before delegating to the canonical parser so the
   // wrapper can return the right legacy-fallback shape.
   const hasNewFormatClaim = events.some(
-    (event) => parseClaimComment(event.body ?? "", event.createdAt ?? "") !== null,
+    (event) =>
+      parseClaimComment(event.body ?? '', event.createdAt ?? '') !== null,
   );
 
   const warnings = [];
@@ -228,19 +248,19 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
     );
   };
   const onIgnoredForcedHandoff = ({ reason, forcedHandoff, event }) => {
-    if (reason === "mode-disabled") {
+    if (reason === 'mode-disabled') {
       warnings.push(
         `ignored forced-handoff for ${forcedHandoff.oldClaimId}: forced-handoff mode is not enabled`,
       );
       return;
     }
-    if (reason === "author-forced-by-mismatch") {
+    if (reason === 'author-forced-by-mismatch') {
       warnings.push(
-        `ignored forced-handoff for ${forcedHandoff.oldClaimId}: comment author ${event.author?.login ?? "(unknown)"} does not match forcedBy ${forcedHandoff.forcedBy}`,
+        `ignored forced-handoff for ${forcedHandoff.oldClaimId}: comment author ${event.author?.login ?? '(unknown)'} does not match forcedBy ${forcedHandoff.forcedBy}`,
       );
       return;
     }
-    if (reason === "forced-by-unauthorized") {
+    if (reason === 'forced-by-unauthorized') {
       warnings.push(
         `ignored forced-handoff for ${forcedHandoff.oldClaimId}: forcedBy ${forcedHandoff.forcedBy} is not an authorized maintainer`,
       );
@@ -249,25 +269,25 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
 
   const activeClaim = hasNewFormatClaim
     ? resolveActiveClaim(events, {
-      isTrustedAuthor: () => true, // events were already filtered by caller
-      isForcedHandoffEnabled,
-      isAuthorizedForcedHandoff,
-      isStale: (activeCreatedAt, nextCreatedAt) =>
-        isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs),
-      // Resume routing enforces the rule-7 author/forcedBy binding to
-      // block the same-identity self-signed hijack path. Other callers
-      // of summarizeClaimValidation default to off because they may
-      // receive maintainer-authorized handoffs posted by a separate
-      // automation actor on behalf of the maintainer.
-      requireAuthorMatchesForcedBy: true,
-      onAnomalousHeartbeat,
-      onIgnoredForcedHandoff,
-    })
+        isTrustedAuthor: () => true, // events were already filtered by caller
+        isForcedHandoffEnabled,
+        isAuthorizedForcedHandoff,
+        isStale: (activeCreatedAt, nextCreatedAt) =>
+          isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs),
+        // Resume routing enforces the rule-7 author/forcedBy binding to
+        // block the same-identity self-signed hijack path. Other callers
+        // of summarizeClaimValidation default to off because they may
+        // receive maintainer-authorized handoffs posted by a separate
+        // automation actor on behalf of the maintainer.
+        requireAuthorMatchesForcedBy: true,
+        onAnomalousHeartbeat,
+        onIgnoredForcedHandoff,
+      })
     : null;
 
   if (hasNewFormatClaim) {
     return {
-      mode: "new-format",
+      mode: 'new-format',
       activeClaim,
       warnings,
       legacyClaim: null,
@@ -278,7 +298,7 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
   const orderedEvents = [...events].sort(compareEvents);
   const legacy = resolveLegacyClaimState(orderedEvents, nowIso, staleAgeMs);
   return {
-    mode: "legacy-only",
+    mode: 'legacy-only',
     activeClaim: null,
     warnings,
     legacyClaim: legacy.claim,
@@ -298,10 +318,10 @@ function resolveLegacyClaimState(orderedEvents) {
     }
     const release = parseLegacyReleaseComment(event.body, event.createdAt);
     if (
-      release
-      && latestClaim
-      && release.agentId === latestClaim.agentId
-      && compareIso(release.createdAt, latestClaim.createdAt) > 0
+      release &&
+      latestClaim &&
+      release.agentId === latestClaim.agentId &&
+      compareIso(release.createdAt, latestClaim.createdAt) > 0
     ) {
       latestMatchingRelease = release;
     }
@@ -351,7 +371,9 @@ function findLaterCompetingClaim(events, activeClaim) {
 }
 
 function parseLegacyClaimComment(body, createdAt) {
-  const match = String(body ?? "").trimEnd().match(LEGACY_CLAIM_PATTERN);
+  const match = String(body ?? '')
+    .trimEnd()
+    .match(LEGACY_CLAIM_PATTERN);
   if (!match) {
     return null;
   }
@@ -363,7 +385,9 @@ function parseLegacyClaimComment(body, createdAt) {
 }
 
 function parseLegacyReleaseComment(body, createdAt) {
-  const match = String(body ?? "").trimEnd().match(LEGACY_RELEASE_PATTERN);
+  const match = String(body ?? '')
+    .trimEnd()
+    .match(LEGACY_RELEASE_PATTERN);
   if (!match) {
     return null;
   }
@@ -379,9 +403,11 @@ function normalizeEvents(events) {
   }
   return events
     .map((event) => ({
-      body: String(event?.body ?? ""),
+      body: String(event?.body ?? ''),
       createdAt: normalizeIso(event?.createdAt ?? event?.created_at),
-      author: { login: String(event?.author?.login ?? event?.user?.login ?? "") },
+      author: {
+        login: String(event?.author?.login ?? event?.user?.login ?? ''),
+      },
     }))
     .filter((event) => event.createdAt !== null);
 }
@@ -389,7 +415,11 @@ function normalizeEvents(events) {
 function compareEvents(left, right) {
   const leftSecond = toSecond(left.createdAt);
   const rightSecond = toSecond(right.createdAt);
-  if (leftSecond !== null && rightSecond !== null && leftSecond !== rightSecond) {
+  if (
+    leftSecond !== null &&
+    rightSecond !== null &&
+    leftSecond !== rightSecond
+  ) {
     return leftSecond - rightSecond;
   }
   if (leftSecond !== null && rightSecond === null) {
@@ -410,71 +440,71 @@ function compareEvents(left, right) {
 function parseArgs(argv) {
   const parsed = {
     issue: null,
-    owner: "",
-    repo: "",
-    token: "",
-    claimId: "",
-    now: "",
-    policy: "",
+    owner: '',
+    repo: '',
+    token: '',
+    claimId: '',
+    now: '',
+    policy: '',
     staleAgeMs: 0,
-    trustedMarkerLogins: "",
+    trustedMarkerLogins: '',
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
     const requireValue = () => {
-      if (value === undefined || String(value).startsWith("--")) {
+      if (value === undefined || String(value).startsWith('--')) {
         throw new Error(`missing value for argument: ${token}`);
       }
       return value;
     };
-    if (token === "--issue") {
+    if (token === '--issue') {
       parsed.issue = Number.parseInt(String(requireValue()), 10);
       index += 1;
       continue;
     }
-    if (token === "--owner") {
+    if (token === '--owner') {
       parsed.owner = requireValue();
       index += 1;
       continue;
     }
-    if (token === "--repo") {
+    if (token === '--repo') {
       parsed.repo = requireValue();
       index += 1;
       continue;
     }
-    if (token === "--token") {
+    if (token === '--token') {
       parsed.token = requireValue();
       index += 1;
       continue;
     }
-    if (token === "--claim-id") {
+    if (token === '--claim-id') {
       parsed.claimId = requireValue();
       index += 1;
       continue;
     }
-    if (token === "--now") {
+    if (token === '--now') {
       parsed.now = requireValue();
       index += 1;
       continue;
     }
-    if (token === "--policy") {
+    if (token === '--policy') {
       parsed.policy = requireValue();
       index += 1;
       continue;
     }
-    if (token === "--stale-age-ms") {
+    if (token === '--stale-age-ms') {
       parsed.staleAgeMs = Number.parseInt(String(requireValue()), 10);
       index += 1;
       continue;
     }
-    if (token === "--trusted-marker-logins") {
+    if (token === '--trusted-marker-logins') {
       parsed.trustedMarkerLogins = requireValue();
       index += 1;
       continue;
     }
-    if (token === "--help" || token === "-h") {
+    if (token === '--help' || token === '-h') {
       parsed.help = true;
       continue;
     }
@@ -502,7 +532,7 @@ function fetchIssueComments(repository, issueNumber) {
   const pageSize = 100;
   for (let page = 1; ; page += 1) {
     const pageItems = ghJson([
-      "api",
+      'api',
       `repos/${repository}/issues/${issueNumber}/comments?per_page=${pageSize}&page=${page}`,
     ]);
     comments.push(...pageItems);
@@ -514,15 +544,21 @@ function fetchIssueComments(repository, issueNumber) {
 }
 
 function loadPolicy(policyPath, { strict = false } = {}) {
-  const source = policyPath ? resolve(process.cwd(), policyPath) : resolve(process.cwd(), ".github/idd/config.json");
+  const source = policyPath
+    ? resolve(process.cwd(), policyPath)
+    : resolve(process.cwd(), '.github/idd/config.json');
   try {
-    const config = JSON.parse(readFileSync(source, "utf8"));
+    const config = JSON.parse(readFileSync(source, 'utf8'));
     const normalized = normalizePolicyConfig(config);
     return {
       source,
-      staleAgeMs: parseDurationToMs(config?.claimTiming?.staleAge) ?? DEFAULT_STALE_AGE_MS,
+      staleAgeMs:
+        parseDurationToMs(config?.claimTiming?.staleAge) ??
+        DEFAULT_STALE_AGE_MS,
       trustedMarkerActors: Array.isArray(config?.trustedMarkerActors)
-        ? config.trustedMarkerActors.map((value) => String(value ?? "").trim()).filter(Boolean)
+        ? config.trustedMarkerActors
+            .map((value) => String(value ?? '').trim())
+            .filter(Boolean)
         : [],
       forcedHandoff: {
         mode: normalized.forcedHandoff.mode,
@@ -531,7 +567,9 @@ function loadPolicy(policyPath, { strict = false } = {}) {
     };
   } catch (error) {
     if (strict) {
-      throw new Error(`failed to load policy from ${source}: ${String(error?.message ?? error)}`);
+      throw new Error(
+        `failed to load policy from ${source}: ${String(error?.message ?? error)}`,
+      );
     }
     const normalized = normalizePolicyConfig({});
     return {
@@ -547,27 +585,33 @@ function loadPolicy(policyPath, { strict = false } = {}) {
 }
 
 function parseDurationToMs(value) {
-  const text = String(value ?? "").trim();
+  const text = String(value ?? '').trim();
   if (!text) {
     return null;
   }
-  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i.exec(text);
+  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i.exec(
+    text,
+  );
   if (!match) {
     return null;
   }
-  const days = Number.parseInt(match[1] ?? "0", 10);
-  const hours = Number.parseInt(match[2] ?? "0", 10);
-  const minutes = Number.parseInt(match[3] ?? "0", 10);
-  const seconds = Number.parseInt(match[4] ?? "0", 10);
-  return ((((days * 24) + hours) * 60 + minutes) * 60 + seconds) * 1000;
+  const days = Number.parseInt(match[1] ?? '0', 10);
+  const hours = Number.parseInt(match[2] ?? '0', 10);
+  const minutes = Number.parseInt(match[3] ?? '0', 10);
+  const seconds = Number.parseInt(match[4] ?? '0', 10);
+  return (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
 }
 
 function resolveTrustedLogins({ fromArgs, fromPolicy, currentLogin }) {
-  const fromCsv = String(fromArgs ?? "")
-    .split(",")
+  const fromCsv = String(fromArgs ?? '')
+    .split(',')
     .map((value) => value.trim())
     .filter(Boolean);
-  const merged = [...fromCsv, ...(fromPolicy ?? []), String(currentLogin ?? "").trim()]
+  const merged = [
+    ...fromCsv,
+    ...(fromPolicy ?? []),
+    String(currentLogin ?? '').trim(),
+  ]
     .map((value) => value.toLowerCase())
     .filter(Boolean);
   return [...new Set(merged)];
@@ -584,8 +628,8 @@ function isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs) {
   if (staleAgeMs === DEFAULT_STALE_AGE_MS) {
     return isStaleAt(activeCreatedAt, nextCreatedAt);
   }
-  const start = Date.parse(activeCreatedAt ?? "");
-  const end = Date.parse(nextCreatedAt ?? "");
+  const start = Date.parse(activeCreatedAt ?? '');
+  const end = Date.parse(nextCreatedAt ?? '');
   if (!Number.isFinite(start) || !Number.isFinite(end)) {
     return false;
   }
@@ -600,12 +644,12 @@ function normalizeIso(value) {
   if (Number.isNaN(date.getTime())) {
     return null;
   }
-  return date.toISOString().replace(/\.\d{3}Z$/, "Z");
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 function compareIso(left, right) {
-  const leftTime = Date.parse(String(left ?? ""));
-  const rightTime = Date.parse(String(right ?? ""));
+  const leftTime = Date.parse(String(left ?? ''));
+  const rightTime = Date.parse(String(right ?? ''));
   if (!Number.isFinite(leftTime) || !Number.isFinite(rightTime)) {
     return 0;
   }
@@ -613,7 +657,7 @@ function compareIso(left, right) {
 }
 
 function toSecond(iso) {
-  const milliseconds = Date.parse(String(iso ?? ""));
+  const milliseconds = Date.parse(String(iso ?? ''));
   if (!Number.isFinite(milliseconds)) {
     return null;
   }
@@ -621,12 +665,12 @@ function toSecond(iso) {
 }
 
 function normalizeToken(value) {
-  const token = String(value ?? "").trim();
-  return token.length > 0 ? token : "";
+  const token = String(value ?? '').trim();
+  return token.length > 0 ? token : '';
 }
 
 function ghJson(args) {
-  return JSON.parse(runGh(args).trim() || "[]");
+  return JSON.parse(runGh(args).trim() || '[]');
 }
 
 function ghText(args) {
@@ -635,13 +679,13 @@ function ghText(args) {
 
 function runGh(args) {
   try {
-    return execFileSync("gh", args, {
-      encoding: "utf8",
+    return execFileSync('gh', args, {
+      encoding: 'utf8',
       timeout: 30_000,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    const stderr = String(error?.stderr ?? "").trim();
+    const stderr = String(error?.stderr ?? '').trim();
     if (stderr) {
       throw new Error(`gh command failed: ${stderr}`);
     }
@@ -650,5 +694,8 @@ function runGh(args) {
 }
 
 function isCliExecution() {
-  return process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+  return (
+    process.argv[1] &&
+    fileURLToPath(import.meta.url) === resolve(process.argv[1])
+  );
 }

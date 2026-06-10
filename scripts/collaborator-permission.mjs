@@ -11,12 +11,12 @@
 // roadmap #745 / #748 / #754. Single source of truth so the next
 // behavioural change lands in one place rather than five.
 
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
-import { normalizePolicyConfig } from "./policy-helpers.mjs";
+import { normalizePolicyConfig } from './policy-helpers.mjs';
 
-const DEFAULT_POLICY_PATH = ".github/idd/config.json";
+const DEFAULT_POLICY_PATH = '.github/idd/config.json';
 
 /**
  * Fetch a collaborator's permission triple from the GitHub
@@ -34,28 +34,34 @@ const DEFAULT_POLICY_PATH = ".github/idd/config.json";
  * script share lookups, but separate scripts don't share state.
  */
 export function collaboratorPermission(owner, repo, login, cache) {
-  const normalizedLogin = String(login ?? "").trim().toLowerCase();
+  const normalizedLogin = String(login ?? '')
+    .trim()
+    .toLowerCase();
   // Scope the cache key by repository so a single Map can be safely
   // reused across owner/repo pairs without cross-repo poisoning of
   // authorization decisions.
   const cacheKey = `${owner}/${repo}:${normalizedLogin}`;
-  if (cache && cache.has(cacheKey)) {
+  if (cache?.has(cacheKey)) {
     return cache.get(cacheKey);
   }
-  let permission = "";
-  let roleName = "";
+  let permission = '';
+  let roleName = '';
   try {
     const raw = execFileSync(
-      "gh",
+      'gh',
       [
-        "api",
+        'api',
         `repos/${owner}/${repo}/collaborators/${encodeURIComponent(normalizedLogin)}/permission`,
       ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
     );
     const parsed = JSON.parse(raw);
-    permission = String(parsed?.permission ?? "").trim().toLowerCase();
-    roleName = String(parsed?.role_name ?? "").trim().toLowerCase();
+    permission = String(parsed?.permission ?? '')
+      .trim()
+      .toLowerCase();
+    roleName = String(parsed?.role_name ?? '')
+      .trim()
+      .toLowerCase();
   } catch {
     // both stay empty
   }
@@ -81,20 +87,37 @@ export function collaboratorPermission(owner, repo, login, cache) {
  *     `role_name` may be a custom string) still satisfy the loose
  *     policy via the legacy field.
  */
-export function isAuthorizedForcedHandoffActor(owner, repo, login, policy, cache) {
-  const normalized = String(login ?? "").trim().toLowerCase();
+export function isAuthorizedForcedHandoffActor(
+  owner,
+  repo,
+  login,
+  policy,
+  cache,
+) {
+  const normalized = String(login ?? '')
+    .trim()
+    .toLowerCase();
   if (!normalized) {
     return false;
   }
-  const { permission, roleName } = collaboratorPermission(owner, repo, normalized, cache);
-  if (policy === "all-write-permission-actors") {
-    return roleName === "admin"
-      || roleName === "maintain"
-      || roleName === "write"
-      || permission === "admin"
-      || permission === "write";
+  const { permission, roleName } = collaboratorPermission(
+    owner,
+    repo,
+    normalized,
+    cache,
+  );
+  if (policy === 'all-write-permission-actors') {
+    return (
+      roleName === 'admin' ||
+      roleName === 'maintain' ||
+      roleName === 'write' ||
+      permission === 'admin' ||
+      permission === 'write'
+    );
   }
-  return roleName === "admin" || roleName === "maintain" || permission === "admin";
+  return (
+    roleName === 'admin' || roleName === 'maintain' || permission === 'admin'
+  );
 }
 
 /**
@@ -107,7 +130,7 @@ export function isAuthorizedForcedHandoffActor(owner, repo, login, policy, cache
 export function readForcedHandoffPolicy(configPath = DEFAULT_POLICY_PATH) {
   let raw;
   try {
-    raw = JSON.parse(readFileSync(configPath, "utf8"));
+    raw = JSON.parse(readFileSync(configPath, 'utf8'));
   } catch {
     raw = {};
   }
@@ -130,6 +153,8 @@ export function readForcedHandoffMode(configPath = DEFAULT_POLICY_PATH) {
  * Convenience helper that returns the forcedHandoff authority policy
  * string from the configured policy file.
  */
-export function readForcedHandoffAuthorityPolicy(configPath = DEFAULT_POLICY_PATH) {
+export function readForcedHandoffAuthorityPolicy(
+  configPath = DEFAULT_POLICY_PATH,
+) {
   return readForcedHandoffPolicy(configPath).authorityPolicy;
 }

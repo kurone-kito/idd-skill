@@ -1,23 +1,26 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   buildAuthoringLabelWarning,
   resolveAuthoringGuardPolicy,
-} from "./authoring-label-guard.mjs";
+} from './authoring-label-guard.mjs';
 import {
   DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
   rankAndRouteBySuitability,
-} from "./autopilot-suitability.mjs";
+} from './autopilot-suitability.mjs';
 
-const DEFAULT_MARKER_PREFIX = "idd-skill";
-const BLOCKED_LABELS = new Set(["status:blocked-by-human", "status:needs-decision"]);
+const DEFAULT_MARKER_PREFIX = 'idd-skill';
+const BLOCKED_LABELS = new Set([
+  'status:blocked-by-human',
+  'status:needs-decision',
+]);
 
 if (isCliExecution()) {
   runCli();
@@ -25,88 +28,111 @@ if (isCliExecution()) {
 
 export function extractBlockedByReferences(body) {
   const references = [];
-  const regex = /^\s*Blocked by #(\d+)\b.*$/gmi;
-  let match = regex.exec(body ?? "");
+  const regex = /^\s*Blocked by #(\d+)\b.*$/gim;
+  let match = regex.exec(body ?? '');
   while (match) {
     const number = Number.parseInt(match[1], 10);
     if (Number.isInteger(number) && number > 0) {
       references.push(number);
     }
-    match = regex.exec(body ?? "");
+    match = regex.exec(body ?? '');
   }
   return references;
 }
 
 export function getOrphanFirstPolicy(config) {
-  if (!config || typeof config !== "object") {
-    return "none";
+  if (!config || typeof config !== 'object') {
+    return 'none';
   }
 
   const commands = config.commands;
-  if (commands && typeof commands === "object" && typeof commands["orphan-first-policy"] === "string") {
-    return commands["orphan-first-policy"];
+  if (
+    commands &&
+    typeof commands === 'object' &&
+    typeof commands['orphan-first-policy'] === 'string'
+  ) {
+    return commands['orphan-first-policy'];
   }
 
-  if (typeof config.orphanFirstPolicy === "string") {
+  if (typeof config.orphanFirstPolicy === 'string') {
     return config.orphanFirstPolicy;
   }
 
-  return "none";
+  return 'none';
 }
 
 export function classifyIssue(issue, options) {
   const labels = new Set(normalizeLabels(issue.labels));
-  const body = String(issue.body ?? "");
+  const body = String(issue.body ?? '');
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
-  const authoringLabelName = normalizeAuthoringLabelName(options.authoringLabelName);
-  const roadmapMarkerRegex = createMarkerRegex(markerPrefix, "roadmap-id");
-  const blockedMarkerRegex = createMarkerRegex(markerPrefix, "blocked-by");
+  const authoringLabelName = normalizeAuthoringLabelName(
+    options.authoringLabelName,
+  );
+  const roadmapMarkerRegex = createMarkerRegex(markerPrefix, 'roadmap-id');
+  const blockedMarkerRegex = createMarkerRegex(markerPrefix, 'blocked-by');
 
   if (roadmapMarkerRegex.test(body)) {
-    return { orphan: false, reason: "roadmap_marker" };
+    return { orphan: false, reason: 'roadmap_marker' };
   }
 
   if (blockedMarkerRegex.test(body)) {
-    return { orphan: false, reason: "blocked_by_marker" };
+    return { orphan: false, reason: 'blocked_by_marker' };
   }
 
   const blockedLabel = [...labels].find((label) => BLOCKED_LABELS.has(label));
   if (blockedLabel) {
-    return { orphan: false, reason: "blocked_label", details: blockedLabel };
+    return { orphan: false, reason: 'blocked_label', details: blockedLabel };
   }
 
   if (labels.has(authoringLabelName)) {
-    return { orphan: false, reason: "authoring_label", details: authoringLabelName };
+    return {
+      orphan: false,
+      reason: 'authoring_label',
+      details: authoringLabelName,
+    };
   }
 
   const refs = extractBlockedByReferences(body);
   if (refs.length === 0) {
-    return { orphan: true, reason: "orphan" };
+    return { orphan: true, reason: 'orphan' };
   }
 
   const unresolved = [];
   for (const ref of refs) {
-    const state = resolveIssueState(ref, options.issueStateByNumber, options.fetchIssueStateByNumber);
-    if ((state ?? "").toUpperCase() === "OPEN") {
-      return { orphan: false, reason: "blocked_by_open_reference", details: ref };
+    const state = resolveIssueState(
+      ref,
+      options.issueStateByNumber,
+      options.fetchIssueStateByNumber,
+    );
+    if ((state ?? '').toUpperCase() === 'OPEN') {
+      return {
+        orphan: false,
+        reason: 'blocked_by_open_reference',
+        details: ref,
+      };
     }
-    if (state === "UNRESOLVABLE") {
+    if (state === 'UNRESOLVABLE') {
       unresolved.push(ref);
     }
   }
 
   if (unresolved.length > 0) {
-    return { orphan: false, reason: "unresolvable_reference", details: unresolved };
+    return {
+      orphan: false,
+      reason: 'unresolvable_reference',
+      details: unresolved,
+    };
   }
 
-  return { orphan: true, reason: "blocked_references_closed" };
+  return { orphan: true, reason: 'blocked_references_closed' };
 }
 
 export function filterOrphanIssues(issues, options = {}) {
   const issueStateByNumber = new Map(options.issueStateByNumber ?? []);
-  const fetchIssueStateByNumber = typeof options.fetchIssueStateByNumber === "function"
-    ? options.fetchIssueStateByNumber
-    : () => "UNRESOLVABLE";
+  const fetchIssueStateByNumber =
+    typeof options.fetchIssueStateByNumber === 'function'
+      ? options.fetchIssueStateByNumber
+      : () => 'UNRESOLVABLE';
   const filtered = {
     roadmap_marker: [],
     blocked_by_marker: [],
@@ -132,25 +158,28 @@ export function filterOrphanIssues(issues, options = {}) {
       state: issue.state,
       reason: result.reason,
       details: result.details ?? null,
-      url: issue.url ?? "",
+      url: issue.url ?? '',
     };
 
-    if (result.reason === "unresolvable_reference") {
+    if (result.reason === 'unresolvable_reference') {
       for (const number of result.details ?? []) {
         unresolvable.push({
           issue: issue.number,
           reference: number,
-          reason: "issue-not-found-or-inaccessible",
+          reason: 'issue-not-found-or-inaccessible',
         });
       }
     }
-    if (result.reason === "authoring_label") {
+    if (result.reason === 'authoring_label') {
       const warning = buildAuthoringLabelWarning({
         issueNumber: issue.number,
         labelName: result.details,
-        labelEvents: resolveIssueLabelEvents(issue, options.fetchLabelEventsByIssueNumber),
+        labelEvents: resolveIssueLabelEvents(
+          issue,
+          options.fetchLabelEventsByIssueNumber,
+        ),
         now: options.now ?? new Date(),
-        staleAgeMs: options.authoringStaleAgeMs ?? (4 * 60 * 60 * 1000),
+        staleAgeMs: options.authoringStaleAgeMs ?? 4 * 60 * 60 * 1000,
       });
       if (warning) {
         warnings.push(warning);
@@ -163,8 +192,11 @@ export function filterOrphanIssues(issues, options = {}) {
         title: issue.title,
         state: issue.state,
         reason: result.reason,
-        url: issue.url ?? "",
-        autopilotSuitability: parseAutopilotSuitability(issue.body, options.markerPrefix),
+        url: issue.url ?? '',
+        autopilotSuitability: parseAutopilotSuitability(
+          issue.body,
+          options.markerPrefix,
+        ),
       });
       continue;
     }
@@ -179,9 +211,12 @@ export function filterOrphanIssues(issues, options = {}) {
   // discovery the low-score issues stay selectable, just ranked last.
   // Advisory throughout — the A4.5/A5 gates still run on any selected
   // candidate, and unscored issues are never routed out (fail-safe).
-  const orphansByNumber = [...orphans].sort((left, right) => left.number - right.number);
+  const orphansByNumber = [...orphans].sort(
+    (left, right) => left.number - right.number,
+  );
   const { ranked, routedToHuman } = rankAndRouteBySuitability(orphansByNumber, {
-    floor: options.autopilotSuitabilityFloor ?? DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
+    floor:
+      options.autopilotSuitabilityFloor ?? DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
     enabled: options.autopilotSuitabilityEnabled !== false,
     routeBelowFloor: options.autopilot === true,
     getScore: (orphan) => orphan.autopilotSuitability,
@@ -192,7 +227,10 @@ export function filterOrphanIssues(issues, options = {}) {
     orphans: ranked.length,
     routed_to_human: routedToHuman.length,
     filtered: Object.fromEntries(
-      Object.entries(filtered).map(([reason, entries]) => [reason, entries.length]),
+      Object.entries(filtered).map(([reason, entries]) => [
+        reason,
+        entries.length,
+      ]),
     ),
     unresolvable: unresolvable.length,
   };
@@ -214,18 +252,25 @@ function runCli() {
     process.exit(0);
   }
 
-  const owner = args.owner || ghText(["repo", "view", "--json", "owner", "--jq", ".owner.login"]);
-  const repo = args.repo || ghText(["repo", "view", "--json", "name", "--jq", ".name"]);
+  const owner =
+    args.owner ||
+    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+  const repo =
+    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
   const repoRef = `${owner}/${repo}`;
   const policy = loadPolicy(args.policy);
 
   const openIssues = fetchOpenIssues(repoRef);
-  const openStateByNumber = new Map(openIssues.map((issue) => [issue.number, issue.state]));
+  const openStateByNumber = new Map(
+    openIssues.map((issue) => [issue.number, issue.state]),
+  );
 
   const result = filterOrphanIssues(openIssues, {
     issueStateByNumber: openStateByNumber,
-    fetchIssueStateByNumber: (issueNumber) => fetchIssueState(repoRef, issueNumber),
-    fetchLabelEventsByIssueNumber: (issueNumber) => fetchIssueLabelEvents(repoRef, issueNumber),
+    fetchIssueStateByNumber: (issueNumber) =>
+      fetchIssueState(repoRef, issueNumber),
+    fetchLabelEventsByIssueNumber: (issueNumber) =>
+      fetchIssueLabelEvents(repoRef, issueNumber),
     markerPrefix: policy.markerPrefix,
     authoringLabelName: policy.authoringLabelName,
     authoringStaleAgeMs: policy.authoringStaleAgeMs,
@@ -257,52 +302,52 @@ function runCli() {
 
 function parseArgs(argv) {
   const parsed = {
-    owner: "",
-    repo: "",
-    policy: "",
+    owner: '',
+    repo: '',
+    policy: '',
     pr: null,
     help: false,
-    now: "",
+    now: '',
     autopilot: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
-    if (token === "--owner") {
-      parsed.owner = value ?? "";
+    if (token === '--owner') {
+      parsed.owner = value ?? '';
       index += 1;
       continue;
     }
-    if (token === "--repo") {
-      parsed.repo = value ?? "";
+    if (token === '--repo') {
+      parsed.repo = value ?? '';
       index += 1;
       continue;
     }
-    if (token === "--policy") {
-      parsed.policy = value ?? "";
+    if (token === '--policy') {
+      parsed.policy = value ?? '';
       index += 1;
       continue;
     }
-    if (token === "--pr") {
-      const parsedNumber = Number.parseInt(String(value ?? ""), 10);
+    if (token === '--pr') {
+      const parsedNumber = Number.parseInt(String(value ?? ''), 10);
       if (!Number.isInteger(parsedNumber) || parsedNumber <= 0) {
-        throw new Error(`invalid --pr value: ${value ?? ""}`);
+        throw new Error(`invalid --pr value: ${value ?? ''}`);
       }
       parsed.pr = parsedNumber;
       index += 1;
       continue;
     }
-    if (token === "--now") {
-      parsed.now = value ?? "";
+    if (token === '--now') {
+      parsed.now = value ?? '';
       index += 1;
       continue;
     }
-    if (token === "--autopilot") {
+    if (token === '--autopilot') {
       parsed.autopilot = true;
       continue;
     }
-    if (token === "--help" || token === "-h") {
+    if (token === '--help' || token === '-h') {
       parsed.help = true;
       continue;
     }
@@ -345,10 +390,12 @@ as no score: the issue stays in orphans and is never routed out.
 }
 
 function loadPolicy(policyPath) {
-  const defaultPath = resolve(process.cwd(), ".github/idd/config.json");
-  const targetPath = policyPath ? resolve(process.cwd(), policyPath) : defaultPath;
+  const defaultPath = resolve(process.cwd(), '.github/idd/config.json');
+  const targetPath = policyPath
+    ? resolve(process.cwd(), policyPath)
+    : defaultPath;
   try {
-    const config = JSON.parse(readFileSync(targetPath, "utf8"));
+    const config = JSON.parse(readFileSync(targetPath, 'utf8'));
     const authoringPolicy = resolveAuthoringGuardPolicy(config);
     return {
       source: targetPath,
@@ -364,7 +411,7 @@ function loadPolicy(policyPath) {
     const authoringPolicy = resolveAuthoringGuardPolicy({});
     return {
       source: targetPath,
-      orphanFirstPolicy: "none",
+      orphanFirstPolicy: 'none',
       markerPrefix: DEFAULT_MARKER_PREFIX,
       authoringLabelName: authoringPolicy.labelName,
       authoringStaleAge: authoringPolicy.staleAge,
@@ -378,7 +425,9 @@ function loadPolicy(policyPath) {
 function resolveAutopilotSuitabilityFloor(config) {
   // Delegate range/default validation to the shared normalizer so the
   // 1-5 rule and the default cannot drift between modules.
-  return normalizeAutopilotSuitabilityFloor(config?.autopilotSuitability?.floor);
+  return normalizeAutopilotSuitabilityFloor(
+    config?.autopilotSuitability?.floor,
+  );
 }
 
 function resolveAutopilotSuitabilityEnabled(config) {
@@ -388,12 +437,12 @@ function resolveAutopilotSuitabilityEnabled(config) {
 function normalizeIssue(issue) {
   return {
     number: Number.parseInt(String(issue.number), 10),
-    title: issue.title ?? "",
-    state: issue.state ?? "",
+    title: issue.title ?? '',
+    state: issue.state ?? '',
     labels: normalizeLabels(issue.labels),
     labelEvents: Array.isArray(issue.labelEvents) ? issue.labelEvents : [],
-    body: issue.body ?? "",
-    url: issue.url ?? issue.html_url ?? "",
+    body: issue.body ?? '',
+    url: issue.url ?? issue.html_url ?? '',
   };
 }
 
@@ -401,7 +450,7 @@ function resolveIssueLabelEvents(issue, fetchLabelEventsByIssueNumber) {
   if (Array.isArray(issue.labelEvents) && issue.labelEvents.length > 0) {
     return issue.labelEvents;
   }
-  if (typeof fetchLabelEventsByIssueNumber !== "function") {
+  if (typeof fetchLabelEventsByIssueNumber !== 'function') {
     return [];
   }
   try {
@@ -417,15 +466,19 @@ function normalizeLabels(labels) {
   }
   return labels
     .map((label) => {
-      if (typeof label === "string") {
+      if (typeof label === 'string') {
         return label;
       }
-      return label?.name ?? "";
+      return label?.name ?? '';
     })
     .filter(Boolean);
 }
 
-function resolveIssueState(number, issueStateByNumber, fetchIssueStateByNumber) {
+function resolveIssueState(
+  number,
+  issueStateByNumber,
+  fetchIssueStateByNumber,
+) {
   if (issueStateByNumber.has(number)) {
     return issueStateByNumber.get(number);
   }
@@ -437,19 +490,19 @@ function resolveIssueState(number, issueStateByNumber, fetchIssueStateByNumber) 
 function fetchIssueState(repoRef, issueNumber) {
   try {
     const state = ghText([
-      "issue",
-      "view",
+      'issue',
+      'view',
       String(issueNumber),
-      "--repo",
+      '--repo',
       repoRef,
-      "--json",
-      "state",
-      "--jq",
-      ".state",
+      '--json',
+      'state',
+      '--jq',
+      '.state',
     ]);
-    return state || "UNRESOLVABLE";
+    return state || 'UNRESOLVABLE';
   } catch {
-    return "UNRESOLVABLE";
+    return 'UNRESOLVABLE';
   }
 }
 
@@ -458,10 +511,10 @@ function fetchIssueLabelEvents(repoRef, issueNumber) {
   const pageSize = 100;
   for (let page = 1; ; page += 1) {
     const rawPage = ghJson([
-      "api",
+      'api',
       `repos/${repoRef}/issues/${issueNumber}/timeline?per_page=${pageSize}&page=${page}`,
     ]);
-    events.push(...rawPage.filter((event) => event?.event === "labeled"));
+    events.push(...rawPage.filter((event) => event?.event === 'labeled'));
     if (rawPage.length < pageSize) {
       break;
     }
@@ -470,7 +523,7 @@ function fetchIssueLabelEvents(repoRef, issueNumber) {
 }
 
 function ghJson(args) {
-  return JSON.parse(runGh(args).trim() || "[]");
+  return JSON.parse(runGh(args).trim() || '[]');
 }
 
 function ghText(args) {
@@ -479,13 +532,13 @@ function ghText(args) {
 
 function runGh(args) {
   try {
-    return execFileSync("gh", args, {
-      encoding: "utf8",
+    return execFileSync('gh', args, {
+      encoding: 'utf8',
       timeout: 30_000,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    const stderr = String(error?.stderr ?? "").trim();
+    const stderr = String(error?.stderr ?? '').trim();
     if (stderr) {
       throw new Error(`gh command failed: ${stderr}`);
     }
@@ -494,26 +547,34 @@ function runGh(args) {
 }
 
 function isCliExecution() {
-  return process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+  return (
+    process.argv[1] &&
+    fileURLToPath(import.meta.url) === resolve(process.argv[1])
+  );
 }
 
 function createMarkerRegex(prefix, suffix) {
-  return new RegExp(`<!--\\s*${escapeRegex(prefix)}-${suffix}\\b[\\s\\S]*?-->`, "i");
+  return new RegExp(
+    `<!--\\s*${escapeRegex(prefix)}-${suffix}\\b[\\s\\S]*?-->`,
+    'i',
+  );
 }
 
 function normalizeMarkerPrefix(prefix) {
-  if (typeof prefix !== "string" || prefix.length === 0) {
+  if (typeof prefix !== 'string' || prefix.length === 0) {
     return DEFAULT_MARKER_PREFIX;
   }
   return prefix;
 }
 
 function normalizeAuthoringLabelName(labelName) {
-  return typeof labelName === "string" && labelName.length > 0 ? labelName : "status:authoring";
+  return typeof labelName === 'string' && labelName.length > 0
+    ? labelName
+    : 'status:authoring';
 }
 
 function escapeRegex(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function fetchOpenIssues(repoRef) {
@@ -521,7 +582,7 @@ function fetchOpenIssues(repoRef) {
   const pageSize = 100;
   for (let page = 1; ; page += 1) {
     const rawPage = ghJson([
-      "api",
+      'api',
       `repos/${repoRef}/issues?state=open&per_page=${pageSize}&page=${page}`,
     ]);
     const pageItems = rawPage
