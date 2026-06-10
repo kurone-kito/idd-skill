@@ -600,8 +600,6 @@ files) on every change. It is opt-in — add a workflow such as:
 name: IDD doctor health gate
 on:
   pull_request:
-  push:
-    branches: ['**', '!main']
 permissions:
   contents: read
 jobs:

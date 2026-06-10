@@ -489,7 +489,8 @@ Decision points:
 
 This repository exposes `.github/workflows/pnpm-boundary.yml` as both:
 
-- a normal CI workflow (`push` and `pull_request`)
+- a normal CI workflow (`pull_request`-triggered, so each check runs
+  exactly once per change)
 - a reusable workflow (`workflow_call`) for downstream repositories
 
 The job shape is imported from

@@ -1,10 +1,11 @@
 name: Pnpm boundary guard
+# CI topology (#832): pull_request is the only CI trigger for this
+# repository so each check runs exactly once per change; workflow_call
+# remains for downstream callers. This workflow runs the full
+# `pnpm run lint:minimum` suite once with installed dependencies; the
+# bare-node subset intentionally also runs in lint.yml.
 on:
   pull_request:
-  push:
-    branches:
-      - "**"
-      - "!main"
   workflow_call:
     inputs:
       runner:
@@ -31,6 +32,11 @@ permissions:
   contents: read
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
+  # For this repository's own pull_request runs the ref is always a PR
+  # merge ref, so this evaluates to true (same effect as lint.yml's
+  # unconditional setting). The conditional stays for workflow_call
+  # callers: github.ref then reflects the caller's ref, which may be a
+  # long-lived branch where auto-cancelling in-flight runs is unwanted.
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 jobs:
   pnpm-boundary:
