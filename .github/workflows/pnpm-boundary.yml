@@ -1,10 +1,11 @@
 name: Pnpm boundary guard
+# CI topology (#832): pull_request is the only CI trigger for this
+# repository so each check runs exactly once per change; workflow_call
+# remains for downstream callers. This workflow runs the full
+# `pnpm run lint:minimum` suite once with installed dependencies; the
+# bare-node subset intentionally also runs in lint.yml.
 on:
   pull_request:
-  push:
-    branches:
-      - "**"
-      - "!main"
   workflow_call:
     inputs:
       runner:
@@ -31,7 +32,9 @@ permissions:
   contents: read
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+  # Always true: with pull_request-only triggers every ref is a PR merge
+  # ref, and callee-level concurrency is ignored under workflow_call.
+  cancel-in-progress: true
 jobs:
   pnpm-boundary:
     # Imported from kurone-kito/pnpm-project-template push workflow shape
