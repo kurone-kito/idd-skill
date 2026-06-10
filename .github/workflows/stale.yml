@@ -9,7 +9,7 @@ jobs:
   stale:
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/stale@v10
+      - uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10.3.0
         with:
           # IDD rationale: StaleBot is a visibility tool only. The stale
           # label is a human signal; closing is reserved for humans and
