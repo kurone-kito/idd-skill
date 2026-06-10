@@ -547,6 +547,30 @@
       "source": "idd-template/.github/instructions/idd-overview-appendix.instructions.md",
       "target": ".github/instructions/idd-overview-appendix.instructions.md",
       "mode": "exact"
+    },
+    {
+      "id": "claude-skills-issue-authoring-skill",
+      "source": "skills/issue-authoring/SKILL.md",
+      "target": ".claude/skills/issue-authoring/SKILL.md",
+      "mode": "exact"
+    },
+    {
+      "id": "claude-skills-issue-authoring-contract",
+      "source": "skills/issue-authoring/references/contract.md",
+      "target": ".claude/skills/issue-authoring/references/contract.md",
+      "mode": "exact"
+    },
+    {
+      "id": "claude-skills-issue-authoring-draft-patterns",
+      "source": "skills/issue-authoring/references/draft-patterns.md",
+      "target": ".claude/skills/issue-authoring/references/draft-patterns.md",
+      "mode": "exact"
+    },
+    {
+      "id": "claude-skills-issue-authoring-workflow-boundary",
+      "source": "skills/issue-authoring/references/workflow-boundary.md",
+      "target": ".claude/skills/issue-authoring/references/workflow-boundary.md",
+      "mode": "exact"
     }
   ],
   "forbiddenPatterns": [

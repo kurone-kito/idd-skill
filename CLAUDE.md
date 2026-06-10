@@ -67,3 +67,12 @@ Open `.github/instructions/idd-overview-core.instructions.md` and the
 relevant phase file before starting work. See
 [docs/idd-workflow.md](docs/idd-workflow.md) for the cross-agent
 entry path and phase routing.
+
+## Issue-authoring skill (dogfooded)
+
+`.claude/skills/issue-authoring/` is a generated, byte-identical copy
+of the canonical bundle at `skills/issue-authoring/`, so Claude Code
+auto-discovers the skill in this repository. Edit the canonical
+bundle, never the copy: `node scripts/sync-docs.mjs --apply`
+regenerates it and `node scripts/audit-docs.mjs --check` fails on
+drift.

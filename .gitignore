@@ -127,8 +127,10 @@ node_modules/
 pnpm-lock.yaml.*
 
 ### AI Agents ###
-# Claude Code local config
-.claude/
+# Claude Code local config, except the tracked dogfooded skill copies
+# (generated from skills/ by scripts/sync-docs.mjs; see issue #838)
+.claude/*
+!.claude/skills/
 
 # OpenAI Codex sandbox
 .codex/
