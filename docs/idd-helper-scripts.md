@@ -639,6 +639,12 @@ Interpretation rules:
   `threads`, `unrepliedComments`, `reviewerStates`,
   `advisoryWait` (including the effective advisory policy fields), `ci`,
   `claim`, and optional `dispositionEvidence`
+- Authoritative phase role: the live `pre-merge-readiness` run on the
+  current HEAD is the **authoritative source for the final-merge CI and
+  activity fields** at F2/F3. The `review-activity-snapshot` helper builds
+  the **E-phase** activity universe (E1) for review currency; do not reuse
+  its CI/activity values as the F-phase merge decision (they can diverge in
+  the pre-merge window)
 - `reviewerStates.codeownerSelfApproval` diagnoses whether CODEOWNER
   approval can be satisfied by an eligible non-author owner or an
   applicable ruleset or classic pull-request bypass. `deadlock` and

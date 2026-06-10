@@ -326,6 +326,17 @@ across human reviews and advisory bot surfaces (Copilot, CodeRabbit,
 Codex connectors, CI bots); "one bot says clean" is never sufficient by
 itself.
 
+**Authoritative source for the final-merge fields.** Bind every CI and
+activity value in this checklist to the **live `pre-merge-readiness` run on
+the current HEAD** — that helper is the authoritative source for the
+F2/F3 merge decision. The `review-activity-snapshot` helper builds the
+**E-phase** activity universe (E1) and must **not** be reused as the
+F-phase merge decision: the two can disagree in the window just before
+merge ("ci-pass-drift"), so reading CI/activity from the E-phase snapshot
+instead of the live pre-merge run risks merging on stale evidence. See
+[IDD helper script evaluation](idd-helper-scripts.md) for each helper's
+phase role.
+
 ## Review Policy Profiles
 
 The execution loop is cross-agent, while PR review policy is a
