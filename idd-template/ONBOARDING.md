@@ -598,6 +598,15 @@ CI checks out a detached HEAD), so worktree enforcement stays local — the
 `core.hooksPath` hook above, the cwd-vs-claim gate, and
 `idd-doctor --strict` run on a developer's machine.
 
+**Branch-glob vs CI-trigger.** Put PR-gating checks in the
+`pull_request`-triggered workflow (as above). A `push` workflow filtered to a
+**top-level branch glob** such as `'*'` silently skips the slash-namespaced
+IDD branches (`issue/*`, `roadmap-audit/*`): a single-star glob does not match
+across the `/`, so a gating job placed only under `on: push` with `'*'` never
+runs on IDD branches. Use `pull_request` triggers (which fire on the PR
+regardless of branch name), or a push filter that matches the slash namespace
+(`'**'` or `'issue/**'`), for any check that must gate IDD pull requests.
+
 ---
 
 ## Step 3 — Record policy decisions
