@@ -1,8 +1,14 @@
 # GitHub Pages Readiness Strategy
 
 This page records the low-cost path for turning the `docs/` reference
-manual into a public GitHub Pages site later. It is a planning note, not
-an instruction to enable Pages in this issue.
+manual into a public GitHub Pages site later. It is a planning note for
+the docs site, which remains deferred.
+
+**Current state**: GitHub Pages is enabled with the Actions build type,
+publishing **only** `schemas/` so the canonical `$id`/`$schema` URLs
+under `https://kurone-kito.github.io/idd-skill/schemas/` resolve (see
+`.github/workflows/pages.yml`). The docs-site decisions below are
+unchanged by that schemas-only publication.
 
 ## Decision
 
@@ -76,7 +82,7 @@ traffic or maintainer feedback:
 
 This strategy does not:
 
-- enable GitHub Pages
+- publish `docs/` (or any non-schema path) to the Pages site
 - add a custom domain
 - add a site framework or generated build step
 - replace `idd-template/` as the portable package
