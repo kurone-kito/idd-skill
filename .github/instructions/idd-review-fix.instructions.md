@@ -110,6 +110,11 @@ re-review:
 gh pr edit {pr-number} --add-reviewer {reviewer-login}
 ```
 
+For an **advisory bot**, pass the bot's reviewer **slug** to this
+add-reviewer command (the reliable trigger). The REST `requested_reviewers`
+endpoint called with a bot's **display name** silently no-ops and wastes a
+full advisory-wait cycle, so do not use that path to request a re-review.
+
 **Copilot**: after every push, regardless of any reviewer's state,
 request a Copilot re-review if Copilot has not yet reviewed the current
 HEAD SHA. Subject to the configured Copilot re-review request cap

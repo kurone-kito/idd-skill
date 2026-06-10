@@ -344,6 +344,31 @@ Route based on `branchState` from the helper (or `mergeable` /
    commits).
 6. Return to `idd-review-snapshot.instructions.md` (E1).
 
+## Advisory courtesy-ack convergence
+
+A trusted advisory bot may reply with a courtesy/acknowledgement comment
+after dispositions are posted (e.g. "thanks for confirming"). Because the
+reply advances the PR's `updatedAt`, a naive review-currency re-check can
+re-stale the watermark and loop the review/snapshot cycle without end if the
+bot keeps acking.
+
+**Rule**: once a `**Accepted**` / `**Rejected**` disposition exists for every
+`ReviewItems_snapshot` item at the **current HEAD SHA**, a later **ack-only**
+comment from a configured trusted advisory bot does **not** reopen the review
+loop. Bind the merge to the current HEAD SHA and proceed rather than chasing a
+moving watermark.
+
+An **ack-only** comment is one from a trusted advisory bot (the configured
+advisory-bot / trusted-marker identity) that, relative to the current HEAD,
+opens no new review thread, carries no `CHANGES_REQUESTED`, and raises no new
+actionable finding. A comment that adds a thread, requests changes, or raises a
+new finding is **not** ack-only and re-opens the loop normally.
+
+**Worked example**: after you disposition a CodeRabbit thread `**Rejected**`,
+CodeRabbit replies "Thanks for confirming." on that same thread. No new thread
+or finding is introduced, so the `updatedAt` advance is ignored: do not re-run
+E1; continue to F-phase on the current HEAD SHA.
+
 ## Review item classes
 
 During E-phase review triage, classify each ReviewItems_snapshot item
