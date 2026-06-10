@@ -1141,3 +1141,25 @@ checks as a repository-local convention:
 Keep this guidance tool-neutral: it is keyed on "numeric-prefix versioning plus
 out-of-band apply", not on any specific database or migration framework. Do not
 wire it into the default F-phase merge gate.
+
+## Optional: CI cost discipline on billed runners
+
+This is an **optional** appendix for adopters running on metered or private
+Actions runners. The core, cross-agent workflow does not require it.
+
+IDD's frequent **main-into-feature re-sync cadence** is the dominant driver of
+CI minutes — every sync re-runs the PR's checks. Uncached container builds and
+per-PR multi-arch builds compound it. Levers to control the cost:
+
+- **Gate heavy jobs behind a paths-filter** so expensive builds run only when
+  the paths they cover actually change.
+- **Cache build layers** (image layer cache, dependency cache) so re-syncs
+  reuse prior work instead of rebuilding from scratch.
+- **Keep multi-arch / publish jobs on integration-branch pushes only**, not on
+  every PR head, so per-PR cost stays low.
+- Remember that **re-sync cadence is the main cost lever**: the
+  merge-from-`main` freshness model trades CI minutes for merge safety, so tune
+  the heavy jobs rather than loosening the freshness gate.
+
+These are repository-local optimizations; they do not change the IDD merge gate
+or the cross-agent workflow.
