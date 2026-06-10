@@ -32,9 +32,12 @@ permissions:
   contents: read
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Always true: with pull_request-only triggers every ref is a PR merge
-  # ref, and callee-level concurrency is ignored under workflow_call.
-  cancel-in-progress: true
+  # For this repository's own pull_request runs the ref is always a PR
+  # merge ref, so this evaluates to true (same effect as lint.yml's
+  # unconditional setting). The conditional stays for workflow_call
+  # callers: github.ref then reflects the caller's ref, which may be a
+  # long-lived branch where auto-cancelling in-flight runs is unwanted.
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 jobs:
   pnpm-boundary:
     # Imported from kurone-kito/pnpm-project-template push workflow shape
