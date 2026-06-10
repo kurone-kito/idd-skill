@@ -290,6 +290,12 @@ unresolvable references before passing to A3.
 
 ## A3 — Filter to ready-to-start
 
+Under concurrency, check a candidate's **active-claim eligibility** (the
+non-stale claim filter below) **first**, before investing in its viability
+or scope analysis: a parallel agent may already hold the issue, and scope
+work that displaces the claim check produces redundant PRs. The claim check
+is cheap — run it first per candidate.
+
 From A2, keep only issues that satisfy **all** of the following:
 
 - No `status:blocked-by-human` or `status:needs-decision` label
