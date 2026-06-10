@@ -25,7 +25,7 @@ jobs:
       # local-only primary-worktree-HEAD check never false-positives on a
       # push-event checkout, where actions/checkout would otherwise leave
       # HEAD on the issue/* branch and trip the (enabled) worktree guard.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.sha }}
           # Read-only health check: no need to persist the token in git config.
