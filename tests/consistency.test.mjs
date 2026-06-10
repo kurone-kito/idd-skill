@@ -613,17 +613,17 @@ test('package.json version stays aligned with the shipped iddVersion', () => {
     readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
   );
   for (const configPath of [
-    '../.github/idd/config.json',
-    '../idd-template/.github/idd/config.json',
+    '.github/idd/config.json',
+    'idd-template/.github/idd/config.json',
   ]) {
     const config = JSON.parse(
-      readFileSync(new URL(configPath, import.meta.url), 'utf8'),
+      readFileSync(new URL(`../${configPath}`, import.meta.url), 'utf8'),
     );
     assert.equal(
       packageJson.version,
       config.iddVersion,
       `package.json version (${packageJson.version}) must equal iddVersion ` +
-        `(${config.iddVersion}) in ${configPath.replace('../', '')}`,
+        `(${config.iddVersion}) in ${configPath}`,
     );
   }
 });
