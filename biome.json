@@ -1,0 +1,33 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.16/schema.json",
+  "extends": ["@kurone-kito/biome-config"],
+  "files": {
+    "includes": [
+      "scripts/**/*.mjs",
+      "bin/**/*.mjs",
+      "tests/**/*.mjs",
+      "idd-template/scripts/**/*.mjs"
+    ]
+  },
+  "linter": {
+    "rules": {
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "child_process": {
+                "importNames": ["execSync"],
+                "message": "Use execFileSync for injection safety; execSync is banned."
+              },
+              "node:child_process": {
+                "importNames": ["execSync"],
+                "message": "Use execFileSync for injection safety; execSync is banned."
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
