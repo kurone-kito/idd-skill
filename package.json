@@ -35,8 +35,8 @@
   "scripts": {
     "prepare": "husky",
     "lint": "pnpm run lint:minimum",
-    "lint:minimum": "node scripts/audit-docs.mjs --check && dprint check \"**/*.md\" && node --test tests/*.mjs && node scripts/verify-workshop-integrity.mjs --format table && cspell lint \"**\" --no-progress && markdownlint-cli2 \"**/*.md\"",
-    "lint:fix": "dprint fmt \"**/*.md\" && markdownlint-cli2 --fix \"**/*.md\" && markdownlint-cli2 \"**/*.md\" && cspell lint \"**\" --no-progress",
+    "lint:minimum": "node scripts/audit-docs.mjs --check && biome check && dprint check \"**/*.md\" && node --test tests/*.mjs && node scripts/verify-workshop-integrity.mjs --format table && cspell lint \"**\" --no-progress && markdownlint-cli2 \"**/*.md\"",
+    "lint:fix": "biome check --write && dprint fmt \"**/*.md\" && markdownlint-cli2 --fix \"**/*.md\" && markdownlint-cli2 \"**/*.md\" && cspell lint \"**\" --no-progress",
     "test": "pnpm run test:scripts",
     "test:scripts": "node --test tests/*.mjs",
     "docs:sync": "node scripts/sync-docs.mjs --apply",
