@@ -938,6 +938,17 @@ export function diffReviewSnapshot(snapshot, live) {
   const liveMax = normalizeComparableTimestamp(live.maxActivityUpdatedAt);
   const snapshotCount = Number(snapshot.totalItemCount ?? 0);
   const liveCount = Number(live.totalItemCount ?? 0);
+  // Structural ack-only carve-out (#858): when the only activity newer
+  // than the snapshot is post-disposition advisory-bot acknowledgement
+  // evidence, fall back to the effective values instead of re-opening.
+  // Absent evidence keeps the legacy behavior unchanged (fail-closed).
+  const ackItems = Array.isArray(live.ackOnly?.items) ? live.ackOnly.items : [];
+  const ackEvidencePresent =
+    live.ackOnly?.dispositionsPresent === true && ackItems.length > 0;
+  const effectiveMax = normalizeComparableTimestamp(
+    live.effective?.maxActivityUpdatedAt ?? 'none',
+  );
+  let ackOnlyApplied = false;
   if (snapshotMax === 'none' && liveCount > 0) {
     return { route: 'return-to-e1', reason: 'snapshot-was-empty-now-nonempty' };
   }
@@ -953,10 +964,32 @@ export function diffReviewSnapshot(snapshot, live) {
     typeof liveMax === 'number' &&
     liveMax > snapshotMax
   ) {
-    return { route: 'return-to-e1', reason: 'newer-activity' };
+    const effectiveCurrent =
+      ackEvidencePresent &&
+      typeof live.effective === 'object' &&
+      live.effective !== null &&
+      (effectiveMax === 'none' ||
+        (typeof effectiveMax === 'number' && effectiveMax <= snapshotMax));
+    if (!effectiveCurrent) {
+      return { route: 'return-to-e1', reason: 'newer-activity' };
+    }
+    ackOnlyApplied = true;
   }
   if (liveCount > snapshotCount) {
-    return { route: 'return-to-e1', reason: 'same-timestamp-count-growth' };
+    // Only ack comments newer than the snapshot max may explain count
+    // growth; older acks were already inside the snapshot's count.
+    const ackNewerCount = ackItems.filter(
+      (item) =>
+        item.kind === 'comment' &&
+        isValidIsoTimestamp(item.activityAt) &&
+        typeof snapshotMax === 'number' &&
+        compareIsoTimestamps(item.activityAt, snapshot.maxActivityUpdatedAt) >
+          0,
+    ).length;
+    if (!(ackEvidencePresent && liveCount - ackNewerCount <= snapshotCount)) {
+      return { route: 'return-to-e1', reason: 'same-timestamp-count-growth' };
+    }
+    ackOnlyApplied = true;
   }
 
   const snapshotCi = normalizeComparableTimestamp(
@@ -972,7 +1005,10 @@ export function diffReviewSnapshot(snapshot, live) {
     return { route: 'return-to-e1', reason: 'ci-pass-drift' };
   }
 
-  return { route: 'proceed', reason: 'snapshot-current' };
+  return {
+    route: 'proceed',
+    reason: ackOnlyApplied ? 'ack-only-post-disposition' : 'snapshot-current',
+  };
 }
 
 export function classifyReviewThreadForGate(thread, options = {}) {
@@ -1319,6 +1355,32 @@ function trustedMarkerActorTokens(value) {
   return Array.isArray(value) ? value : String(value ?? '').split(',');
 }
 
+export function resolveAdvisoryBotLogins({
+  flagValue = '',
+  envValue = '',
+  config = null,
+} = {}) {
+  const fromFlag = normalizeTrustedMarkerLogins(
+    trustedMarkerActorTokens(flagValue),
+  );
+  if (fromFlag.length > 0) {
+    return { logins: fromFlag, source: 'flag' };
+  }
+  const fromEnv = normalizeTrustedMarkerLogins(
+    trustedMarkerActorTokens(envValue),
+  );
+  if (fromEnv.length > 0) {
+    return { logins: fromEnv, source: 'env' };
+  }
+  const fromConfig = normalizeTrustedMarkerLogins(
+    Array.isArray(config?.advisoryBotLogins) ? config.advisoryBotLogins : [],
+  );
+  if (fromConfig.length > 0) {
+    return { logins: fromConfig, source: 'config' };
+  }
+  return { logins: [], source: 'none' };
+}
+
 export function deriveIddAgentLogins({
   viewerLogin = '',
   iddAgentLogins = [],
@@ -1563,6 +1625,30 @@ export function buildActivitySnapshotSummary(
       )
       .filter(Boolean),
   );
+  const advisoryBotLogins = new Set(
+    normalizeTrustedMarkerLogins(options.advisoryBotLogins ?? []),
+  );
+  const dispositionAuthorLogins = new Set(
+    normalizeTrustedMarkerLogins(options.dispositionAuthorLogins ?? []),
+  );
+  // An advisory bot can never anchor "dispositions exist": its own
+  // **Accepted**/**Rejected**-shaped replies must not start the
+  // post-disposition window that classifies its later acks.
+  for (const login of advisoryBotLogins) {
+    dispositionAuthorLogins.delete(login);
+  }
+  const isAdvisoryBot = (login) =>
+    advisoryBotLogins.has(
+      String(login ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+  const isDispositionAuthor = (login) =>
+    dispositionAuthorLogins.has(
+      String(login ?? '')
+        .trim()
+        .toLowerCase(),
+    );
 
   const filteredComments = comments.filter((comment) => {
     if (!trustedMarkerLogins.has((comment.author?.login ?? '').toLowerCase())) {
@@ -1570,6 +1656,106 @@ export function buildActivitySnapshotSummary(
     }
     return operationalMarkerPrefixByStart(comment.body ?? '') === null;
   });
+
+  // Structural ack-only evidence (#858): the posting moment of the latest
+  // disposition by a configured disposition author opens the window;
+  // comments and resolved-thread replies are classified per item below.
+  // Dispositions are not SHA-bound here — the head-changed check in
+  // diffReviewSnapshot plus the unchanged disposition-evidence and
+  // unreplied-comment gates backstop that residual.
+  const dispositionCreatedAts = [
+    ...filteredComments
+      .filter(
+        (comment) =>
+          isDispositionAuthor(comment.author?.login) &&
+          isDispositionComment(comment),
+      )
+      .map((comment) => comment.createdAt),
+    ...threads.flatMap((thread) =>
+      (thread.comments?.nodes ?? [])
+        .filter(
+          (comment) =>
+            isDispositionAuthor(comment.author?.login) &&
+            isDispositionComment(comment),
+        )
+        .map((comment) => comment.createdAt),
+    ),
+  ].filter(isValidIsoTimestamp);
+  const latestDispositionAt = maxIsoTimestamp(dispositionCreatedAts) ?? null;
+
+  const isAckOnlyComment = (comment) => {
+    if (!latestDispositionAt) {
+      return false;
+    }
+    if (!isAdvisoryBot(comment.author?.login)) {
+      return false;
+    }
+    if (isDispositionComment(comment)) {
+      return false;
+    }
+    const activityAt = comment.updatedAt ?? comment.createdAt;
+    if (!isValidIsoTimestamp(activityAt)) {
+      return false;
+    }
+    return compareIsoTimestamps(activityAt, latestDispositionAt) > 0;
+  };
+  const ackOnlyComments = filteredComments.filter(isAckOnlyComment);
+  const ackOnlyCommentSet = new Set(ackOnlyComments);
+
+  // On a resolved thread whose latest reply chain contains a disposition,
+  // later advisory-bot replies are structurally ack-only; the effective
+  // thread activity is recomputed from the remaining replies. Reopened
+  // (unresolved) threads always keep their raw activity.
+  const threadEffective = threads.map((thread) => {
+    const nodes = thread.comments?.nodes ?? [];
+    const threadDispositionAt =
+      maxIsoTimestamp(
+        nodes
+          .filter(
+            (comment) =>
+              isDispositionAuthor(comment.author?.login) &&
+              isDispositionComment(comment),
+          )
+          .map((comment) => comment.createdAt)
+          .filter(isValidIsoTimestamp),
+      ) ?? null;
+    // Per-reply attribution needs the reply timeline: when a caller
+    // populates thread.updatedAt we cannot tell whether it reflects an
+    // ack or substantive activity, so fail closed and keep raw activity
+    // (production normalizers blank thread.updatedAt to opt in).
+    if (
+      !thread.isResolved ||
+      !threadDispositionAt ||
+      isValidIsoTimestamp(thread.updatedAt ?? '')
+    ) {
+      return { activityAt: threadActivityAt(thread), ackReplies: [] };
+    }
+    const ackReplies = nodes.filter((comment) => {
+      if (!isAdvisoryBot(comment.author?.login)) {
+        return false;
+      }
+      if (isDispositionComment(comment)) {
+        return false;
+      }
+      const activityAt = effectiveThreadCommentActivityAt(comment);
+      return (
+        isValidIsoTimestamp(activityAt) &&
+        compareIsoTimestamps(activityAt, threadDispositionAt) > 0
+      );
+    });
+    if (ackReplies.length === 0) {
+      return { activityAt: threadActivityAt(thread), ackReplies: [] };
+    }
+    const ackReplySet = new Set(ackReplies);
+    const keptActivities = nodes
+      .filter((comment) => !ackReplySet.has(comment))
+      .flatMap((comment) => [comment.updatedAt, comment.createdAt])
+      .filter(isValidIsoTimestamp);
+    return { activityAt: maxIsoTimestamp(keptActivities), ackReplies };
+  });
+  const ackOnlyThreadReplies = threadEffective.flatMap(
+    (entry) => entry.ackReplies,
+  );
 
   const commentActivities = filteredComments
     .map((comment) => comment.updatedAt ?? comment.createdAt)
@@ -1606,6 +1792,30 @@ export function buildActivitySnapshotSummary(
       ...threadActivities,
     ]) ?? 'none';
 
+  const effectiveCommentActivities = filteredComments
+    .filter((comment) => !ackOnlyCommentSet.has(comment))
+    .map((comment) => comment.updatedAt ?? comment.createdAt)
+    .filter(isValidIsoTimestamp);
+  const effectiveThreadActivities = threadEffective
+    .map((entry) => entry.activityAt)
+    .filter(isValidIsoTimestamp);
+  const effectiveMaxActivityUpdatedAt =
+    maxIsoTimestamp([
+      ...effectiveCommentActivities,
+      ...reviewActivities,
+      ...effectiveThreadActivities,
+    ]) ?? 'none';
+
+  const describeAckItem = (kind, comment, activityAt) => ({
+    kind,
+    id: String(comment.id ?? ''),
+    author: String(comment.author?.login ?? '')
+      .trim()
+      .toLowerCase(),
+    activityAt: isValidIsoTimestamp(activityAt) ? activityAt : 'none',
+    bodyPreview: String(comment.body ?? '').slice(0, 120),
+  });
+
   return {
     totalItemCount: filteredComments.length + reviews.length + threads.length,
     maxActivityUpdatedAt,
@@ -1615,6 +1825,36 @@ export function buildActivitySnapshotSummary(
       comments: filteredComments.length,
       reviews: reviews.length,
       threads: threads.length,
+    },
+    ackOnly: {
+      advisoryBotLogins: [...advisoryBotLogins].sort(),
+      source: String(options.advisoryBotLoginsSource ?? 'none'),
+      dispositionsPresent: Boolean(latestDispositionAt),
+      latestDispositionAt: latestDispositionAt ?? 'none',
+      items: [
+        ...ackOnlyComments.map((comment) =>
+          describeAckItem(
+            'comment',
+            comment,
+            comment.updatedAt ?? comment.createdAt,
+          ),
+        ),
+        ...ackOnlyThreadReplies.map((comment) =>
+          describeAckItem(
+            'thread-reply',
+            comment,
+            effectiveThreadCommentActivityAt(comment),
+          ),
+        ),
+      ],
+    },
+    effective: {
+      maxActivityUpdatedAt: effectiveMaxActivityUpdatedAt,
+      totalItemCount:
+        filteredComments.length -
+        ackOnlyComments.length +
+        reviews.length +
+        threads.length,
     },
   };
 }
@@ -2778,7 +3018,12 @@ export function buildPreMergeReadinessSummary(
       threads,
       checks,
     },
-    { trustedMarkerLogins },
+    {
+      trustedMarkerLogins,
+      advisoryBotLogins,
+      advisoryBotLoginsSource: options.advisoryBotLoginsSource,
+      dispositionAuthorLogins: iddAgentLogins,
+    },
   );
   const watermark = resolveLatestReviewWatermark(comments, {
     expectedClaimId: options.expectedClaimId,
@@ -2901,6 +3146,8 @@ export function buildPreMergeReadinessSummary(
         latestCiCompletedAt: liveSnapshot.latestCiCompletedAt,
         latestPassingCiCompletedAt: liveSnapshot.latestPassingCiCompletedAt,
         counts: liveSnapshot.counts,
+        ackOnly: liveSnapshot.ackOnly,
+        effective: liveSnapshot.effective,
       },
       comparisonRoute: reviewCurrency.route,
       comparisonReason: reviewCurrency.reason,

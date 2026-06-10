@@ -16,6 +16,7 @@ import {
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   parsePaginatedGhNdjson,
+  resolveAdvisoryBotLogins,
   resolveCodeownersForFiles,
   resolveRulesetDetailPath,
   resolveTrustedMarkerActors,
@@ -43,15 +44,19 @@ const viewerAppSlug = safeGhText([
   '--jq',
   '.slug // .app_slug // empty',
 ]).toLowerCase();
+const iddConfig = loadIddConfig();
 const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
   resolveTrustedMarkerActors({
     flagValue: args.trustedMarkerLogins,
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-    config: loadIddConfig(),
+    config: iddConfig,
   });
-const advisoryBotLogins = normalizeTrustedMarkerLogins(
-  splitCsv(args.advisoryBotLogins),
-);
+const { logins: advisoryBotLogins, source: advisoryBotLoginsSource } =
+  resolveAdvisoryBotLogins({
+    flagValue: args.advisoryBotLogins,
+    envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
+    config: iddConfig,
+  });
 
 const pr = ghJson([
   'pr',
@@ -183,6 +188,7 @@ const summary = buildPreMergeReadinessSummary(
     trustedMarkerLogins,
     iddAgentLogins,
     advisoryBotLogins,
+    advisoryBotLoginsSource,
     prAuthorLogin,
     expectedClaimId: args.expectedClaimId,
     expectedAgentId: args.expectedAgentId,

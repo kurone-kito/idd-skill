@@ -21,11 +21,15 @@
   "properties": {
     "protocolVersion": {
       "type": "string",
-      "enum": ["1"]
+      "enum": [
+        "1"
+      ]
     },
     "decisionAuthority": {
       "type": "string",
-      "enum": ["instructions"]
+      "enum": [
+        "instructions"
+      ]
     },
     "prHeadSha": {
       "type": "string",
@@ -98,7 +102,9 @@
             "maxActivityUpdatedAt",
             "latestCiCompletedAt",
             "latestPassingCiCompletedAt",
-            "counts"
+            "counts",
+            "ackOnly",
+            "effective"
           ],
           "additionalProperties": false,
           "properties": {
@@ -120,19 +126,125 @@
             },
             "counts": {
               "type": "object",
-              "required": ["comments", "reviews", "threads"],
+              "required": [
+                "comments",
+                "reviews",
+                "threads"
+              ],
               "additionalProperties": false,
               "properties": {
-                "comments": { "type": "integer", "minimum": 0 },
-                "reviews": { "type": "integer", "minimum": 0 },
-                "threads": { "type": "integer", "minimum": 0 }
+                "comments": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "reviews": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "threads": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "ackOnly": {
+              "type": "object",
+              "required": [
+                "advisoryBotLogins",
+                "source",
+                "dispositionsPresent",
+                "latestDispositionAt",
+                "items"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "advisoryBotLogins": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "flag",
+                    "env",
+                    "config",
+                    "none"
+                  ]
+                },
+                "dispositionsPresent": {
+                  "type": "boolean"
+                },
+                "latestDispositionAt": {
+                  "type": "string",
+                  "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "id",
+                      "author",
+                      "activityAt",
+                      "bodyPreview"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "comment",
+                          "thread-reply"
+                        ]
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "author": {
+                        "type": "string"
+                      },
+                      "activityAt": {
+                        "type": "string",
+                        "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$"
+                      },
+                      "bodyPreview": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "effective": {
+              "type": "object",
+              "required": [
+                "maxActivityUpdatedAt",
+                "totalItemCount"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "maxActivityUpdatedAt": {
+                  "type": "string",
+                  "pattern": "^(none|\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z)$"
+                },
+                "totalItemCount": {
+                  "type": "integer",
+                  "minimum": 0
+                }
               }
             }
           }
         },
         "comparisonRoute": {
           "type": "string",
-          "enum": ["proceed", "return-to-e1"]
+          "enum": [
+            "proceed",
+            "return-to-e1"
+          ]
         },
         "comparisonReason": {
           "type": "string",
@@ -153,17 +265,38 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "unresolvedCount": { "type": "integer", "minimum": 0 },
-        "actionableCount": { "type": "integer", "minimum": 0 },
-        "awaitingReviewerCount": { "type": "integer", "minimum": 0 },
-        "amdBlockingCount": { "type": "integer", "minimum": 0 },
-        "conversationResolveAgentCount": { "type": "integer", "minimum": 0 },
-        "conversationResolveAuthorCount": { "type": "integer", "minimum": 0 },
+        "unresolvedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "actionableCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "awaitingReviewerCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "amdBlockingCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "conversationResolveAgentCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "conversationResolveAuthorCount": {
+          "type": "integer",
+          "minimum": 0
+        },
         "classifications": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id", "classification"],
+            "required": [
+              "id",
+              "classification"
+            ],
             "additionalProperties": false,
             "properties": {
               "id": {
@@ -187,25 +320,44 @@
     },
     "unrepliedComments": {
       "type": "object",
-      "required": ["count", "items"],
+      "required": [
+        "count",
+        "items"
+      ],
       "additionalProperties": false,
       "properties": {
-        "count": { "type": "integer", "minimum": 0 },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
         "items": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id", "authorLogin", "createdAt", "bodyPreview"],
+            "required": [
+              "id",
+              "authorLogin",
+              "createdAt",
+              "bodyPreview"
+            ],
             "additionalProperties": false,
             "properties": {
-              "id": { "type": "string", "minLength": 1 },
-              "authorLogin": { "type": "string", "minLength": 1 },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "authorLogin": {
+                "type": "string",
+                "minLength": 1
+              },
               "createdAt": {
                 "type": "string",
                 "format": "date-time",
                 "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
               },
-              "bodyPreview": { "type": "string" }
+              "bodyPreview": {
+                "type": "string"
+              }
             }
           }
         }
@@ -233,29 +385,53 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "reviewDecision": { "type": "string" },
-        "requiredApprovingReviewCount": { "type": "integer", "minimum": 0 },
-        "requireCodeOwnerReview": { "type": "boolean" },
-        "requiresConversationResolution": { "type": "boolean" },
+        "reviewDecision": {
+          "type": "string"
+        },
+        "requiredApprovingReviewCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "requireCodeOwnerReview": {
+          "type": "boolean"
+        },
+        "requiresConversationResolution": {
+          "type": "boolean"
+        },
         "requiredReviewerLogins": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "requiredReviewerTeams": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "codeownerUserLogins": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "codeownerTeamSlugs": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "unmatchedCodeownerFiles": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "latestByAuthor": {
           "type": "array",
@@ -272,23 +448,44 @@
             ],
             "additionalProperties": false,
             "properties": {
-              "login": { "type": "string", "minLength": 1 },
-              "state": { "type": "string", "minLength": 1 },
+              "login": {
+                "type": "string",
+                "minLength": 1
+              },
+              "state": {
+                "type": "string",
+                "minLength": 1
+              },
               "submittedAt": {
                 "type": "string",
                 "format": "date-time",
                 "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
               },
-              "isHuman": { "type": "boolean" },
-              "isAdvisoryBot": { "type": "boolean" },
-              "isCodeowner": { "type": "boolean" },
-              "isRequiredReviewer": { "type": "boolean" }
+              "isHuman": {
+                "type": "boolean"
+              },
+              "isAdvisoryBot": {
+                "type": "boolean"
+              },
+              "isCodeowner": {
+                "type": "boolean"
+              },
+              "isRequiredReviewer": {
+                "type": "boolean"
+              }
             }
           }
         },
-        "humanApprovedCount": { "type": "integer", "minimum": 0 },
-        "requiredApprovalsSatisfied": { "type": "boolean" },
-        "codeownerApprovalSatisfied": { "type": "boolean" },
+        "humanApprovedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "requiredApprovalsSatisfied": {
+          "type": "boolean"
+        },
+        "codeownerApprovalSatisfied": {
+          "type": "boolean"
+        },
         "codeownerSelfApproval": {
           "type": "object",
           "required": [
@@ -307,35 +504,76 @@
           "properties": {
             "status": {
               "type": "string",
-              "enum": ["not_applicable", "clear", "possible_deadlock", "deadlock"]
+              "enum": [
+                "not_applicable",
+                "clear",
+                "possible_deadlock",
+                "deadlock"
+              ]
             },
-            "reason": { "type": "string", "minLength": 1 },
-            "prAuthorLogin": { "type": "string" },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "prAuthorLogin": {
+              "type": "string"
+            },
             "directCodeownerUserLogins": {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             },
             "codeownerTeamSlugs": {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             },
-            "requireCodeOwnerReview": { "type": "boolean" },
-            "codeownerApprovalSatisfied": { "type": "boolean" },
-            "bypassDetected": { "type": "boolean" },
+            "requireCodeOwnerReview": {
+              "type": "boolean"
+            },
+            "codeownerApprovalSatisfied": {
+              "type": "boolean"
+            },
+            "bypassDetected": {
+              "type": "boolean"
+            },
             "bypassMode": {
               "type": "string",
-              "enum": ["none", "pull_request", "always", "exempt", "mixed"]
+              "enum": [
+                "none",
+                "pull_request",
+                "always",
+                "exempt",
+                "mixed"
+              ]
             },
             "currentUserCanBypass": {
               "type": "string",
-              "enum": ["unknown", "never", "always", "pull_requests_only", "exempt", "mixed"]
+              "enum": [
+                "unknown",
+                "never",
+                "always",
+                "pull_requests_only",
+                "exempt",
+                "mixed"
+              ]
             }
           }
         },
-        "humanChangesRequestedCount": { "type": "integer", "minimum": 0 },
+        "humanChangesRequestedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
         "blockingChangesRequestedLogins": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       }
     },
@@ -384,24 +622,54 @@
           "type": "string",
           "pattern": "^$|^[0-9a-f]{40}$"
         },
-        "copilotPending": { "type": "boolean" },
-        "copilotPendingCoversHead": { "type": "boolean" },
-        "sameHeadMarkerPresent": { "type": "boolean" },
+        "copilotPending": {
+          "type": "boolean"
+        },
+        "copilotPendingCoversHead": {
+          "type": "boolean"
+        },
+        "sameHeadMarkerPresent": {
+          "type": "boolean"
+        },
         "earliestSameHeadAt": {
           "type": "string",
           "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
         },
-        "sameHeadMarkerCount": { "type": "integer", "minimum": 0 },
-        "requestMarkerCount": { "type": "integer", "minimum": 0 },
-        "requestCap": { "type": "integer", "minimum": 1 },
-        "pendingWindowMinutes": { "type": "number", "exclusiveMinimum": 0 },
-        "settledWindowMinutes": { "type": "number", "exclusiveMinimum": 0 },
-        "pollIntervalMinutes": { "type": "number", "exclusiveMinimum": 0 },
+        "sameHeadMarkerCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "requestMarkerCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "requestCap": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pendingWindowMinutes": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "settledWindowMinutes": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "pollIntervalMinutes": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
         "capExhaustedRoute": {
           "type": "string",
-          "enum": ["phase-specific", "hold"]
+          "enum": [
+            "phase-specific",
+            "hold"
+          ]
         },
-        "elapsedMinutes": { "type": "integer", "minimum": 0 }
+        "elapsedMinutes": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "ci": {
@@ -422,40 +690,84 @@
       "properties": {
         "status": {
           "type": "string",
-          "enum": ["missing", "success", "pending", "failed", "unknown"]
+          "enum": [
+            "missing",
+            "success",
+            "pending",
+            "failed",
+            "unknown"
+          ]
         },
-        "noRequiredChecksConfigured": { "type": "boolean" },
+        "noRequiredChecksConfigured": {
+          "type": "boolean"
+        },
         "presentRunConclusion": {
           "type": "string",
-          "enum": ["all-passing", "some-failing", "pending", "none"]
+          "enum": [
+            "all-passing",
+            "some-failing",
+            "pending",
+            "none"
+          ]
         },
-        "requiredCheckCount": { "type": "integer", "minimum": 0 },
-        "generatedRequiredCheckCount": { "type": "integer", "minimum": 0 },
-        "requiredChecksGenerated": { "type": "boolean" },
-        "requiredChecksPassing": { "type": "boolean" },
+        "requiredCheckCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "generatedRequiredCheckCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "requiredChecksGenerated": {
+          "type": "boolean"
+        },
+        "requiredChecksPassing": {
+          "type": "boolean"
+        },
         "requiredCheckNames": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "missingRequiredCheckNames": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "checks": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["name", "state", "completedAt", "required"],
+            "required": [
+              "name",
+              "state",
+              "completedAt",
+              "required"
+            ],
             "additionalProperties": false,
             "properties": {
-              "name": { "type": "string", "minLength": 1 },
-              "state": { "type": "string", "minLength": 1 },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "state": {
+                "type": "string",
+                "minLength": 1
+              },
               "completedAt": {
                 "type": "string",
                 "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
               },
-              "required": { "type": "boolean" },
-              "coveredByWaiver": { "type": "boolean" }
+              "required": {
+                "type": "boolean"
+              },
+              "coveredByWaiver": {
+                "type": "boolean"
+              }
             }
           }
         }
@@ -474,29 +786,58 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "expectedClaimId": { "type": "string" },
-        "expectedAgentId": { "type": "string" },
-        "activeClaimPresent": { "type": "boolean" },
+        "expectedClaimId": {
+          "type": "string"
+        },
+        "expectedAgentId": {
+          "type": "string"
+        },
+        "activeClaimPresent": {
+          "type": "boolean"
+        },
         "activeClaim": {
           "type": "object",
-          "required": ["agentId", "claimId", "supersedes", "branch", "createdAt"],
+          "required": [
+            "agentId",
+            "claimId",
+            "supersedes",
+            "branch",
+            "createdAt"
+          ],
           "additionalProperties": false,
           "properties": {
-            "agentId": { "type": "string" },
-            "claimId": { "type": "string" },
-            "supersedes": { "type": "string" },
-            "branch": { "type": "string" },
+            "agentId": {
+              "type": "string"
+            },
+            "claimId": {
+              "type": "string"
+            },
+            "supersedes": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
             "createdAt": {
               "type": "string",
               "pattern": "^$|^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
             }
           }
         },
-        "matchesExpectedClaim": { "type": "boolean" },
-        "claimLost": { "type": "boolean" },
+        "matchesExpectedClaim": {
+          "type": "boolean"
+        },
+        "claimLost": {
+          "type": "boolean"
+        },
         "reason": {
           "type": "string",
-          "enum": ["match", "missing-active-claim", "claim-id-mismatch", "agent-id-mismatch"]
+          "enum": [
+            "match",
+            "missing-active-claim",
+            "claim-id-mismatch",
+            "agent-id-mismatch"
+          ]
         }
       }
     },
@@ -515,30 +856,58 @@
       "properties": {
         "route": {
           "type": "string",
-          "enum": ["proceed", "return-to-e1"]
+          "enum": [
+            "proceed",
+            "return-to-e1"
+          ]
         },
         "reason": {
           "type": "string",
-          "enum": ["complete", "missing-disposition-evidence"]
+          "enum": [
+            "complete",
+            "missing-disposition-evidence"
+          ]
         },
-        "blockingCount": { "type": "integer", "minimum": 0 },
-        "missingRegularCommentCount": { "type": "integer", "minimum": 0 },
-        "missingThreadCount": { "type": "integer", "minimum": 0 },
+        "blockingCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missingRegularCommentCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missingThreadCount": {
+          "type": "integer",
+          "minimum": 0
+        },
         "missingRegularComments": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id", "authorLogin", "createdAt", "bodyPreview"],
+            "required": [
+              "id",
+              "authorLogin",
+              "createdAt",
+              "bodyPreview"
+            ],
             "additionalProperties": false,
             "properties": {
-              "id": { "type": "string", "minLength": 1 },
-              "authorLogin": { "type": "string", "minLength": 1 },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "authorLogin": {
+                "type": "string",
+                "minLength": 1
+              },
               "createdAt": {
                 "type": "string",
                 "format": "date-time",
                 "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
               },
-              "bodyPreview": { "type": "string" }
+              "bodyPreview": {
+                "type": "string"
+              }
             }
           }
         },
@@ -546,11 +915,20 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id", "isResolved", "reason"],
+            "required": [
+              "id",
+              "isResolved",
+              "reason"
+            ],
             "additionalProperties": false,
             "properties": {
-              "id": { "type": "string", "minLength": 1 },
-              "isResolved": { "type": "boolean" },
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "isResolved": {
+                "type": "boolean"
+              },
               "reason": {
                 "type": "string",
                 "enum": [
@@ -566,20 +944,40 @@
     },
     "waiverEvidence": {
       "type": "object",
-      "required": ["valid", "expired", "wrongHead", "wrongClaim", "unauthorized", "malformed"],
+      "required": [
+        "valid",
+        "expired",
+        "wrongHead",
+        "wrongClaim",
+        "unauthorized",
+        "malformed"
+      ],
       "additionalProperties": false,
       "properties": {
         "valid": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["authorLogin", "checkSelector", "reason", "expiresAt"],
+            "required": [
+              "authorLogin",
+              "checkSelector",
+              "reason",
+              "expiresAt"
+            ],
             "additionalProperties": false,
             "properties": {
-              "authorLogin": { "type": "string" },
-              "checkSelector": { "type": "string" },
-              "reason": { "type": "string" },
-              "expiresAt": { "type": "string" }
+              "authorLogin": {
+                "type": "string"
+              },
+              "checkSelector": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "expiresAt": {
+                "type": "string"
+              }
             }
           }
         },
@@ -587,12 +985,22 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["authorLogin", "checkSelector", "expiresAt"],
+            "required": [
+              "authorLogin",
+              "checkSelector",
+              "expiresAt"
+            ],
             "additionalProperties": false,
             "properties": {
-              "authorLogin": { "type": "string" },
-              "checkSelector": { "type": "string" },
-              "expiresAt": { "type": "string" }
+              "authorLogin": {
+                "type": "string"
+              },
+              "checkSelector": {
+                "type": "string"
+              },
+              "expiresAt": {
+                "type": "string"
+              }
             }
           }
         },
@@ -600,12 +1008,22 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["authorLogin", "checkSelector", "waiverHeadSha"],
+            "required": [
+              "authorLogin",
+              "checkSelector",
+              "waiverHeadSha"
+            ],
             "additionalProperties": false,
             "properties": {
-              "authorLogin": { "type": "string" },
-              "checkSelector": { "type": "string" },
-              "waiverHeadSha": { "type": "string" }
+              "authorLogin": {
+                "type": "string"
+              },
+              "checkSelector": {
+                "type": "string"
+              },
+              "waiverHeadSha": {
+                "type": "string"
+              }
             }
           }
         },
@@ -613,12 +1031,22 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["authorLogin", "checkSelector", "waiverClaimId"],
+            "required": [
+              "authorLogin",
+              "checkSelector",
+              "waiverClaimId"
+            ],
             "additionalProperties": false,
             "properties": {
-              "authorLogin": { "type": "string" },
-              "checkSelector": { "type": "string" },
-              "waiverClaimId": { "type": "string" }
+              "authorLogin": {
+                "type": "string"
+              },
+              "checkSelector": {
+                "type": "string"
+              },
+              "waiverClaimId": {
+                "type": "string"
+              }
             }
           }
         },
@@ -626,12 +1054,22 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["authorLogin", "checkSelector", "expiresAt"],
+            "required": [
+              "authorLogin",
+              "checkSelector",
+              "expiresAt"
+            ],
             "additionalProperties": false,
             "properties": {
-              "authorLogin": { "type": "string" },
-              "checkSelector": { "type": "string" },
-              "expiresAt": { "type": "string" }
+              "authorLogin": {
+                "type": "string"
+              },
+              "checkSelector": {
+                "type": "string"
+              },
+              "expiresAt": {
+                "type": "string"
+              }
             }
           }
         },
@@ -639,11 +1077,18 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["authorLogin", "bodyPreview"],
+            "required": [
+              "authorLogin",
+              "bodyPreview"
+            ],
             "additionalProperties": false,
             "properties": {
-              "authorLogin": { "type": "string" },
-              "bodyPreview": { "type": "string" }
+              "authorLogin": {
+                "type": "string"
+              },
+              "bodyPreview": {
+                "type": "string"
+              }
             }
           }
         }

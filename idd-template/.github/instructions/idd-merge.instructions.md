@@ -56,6 +56,12 @@ Before any mutating action in F3, apply the
      after F2's snapshot; if `{f2-latest-ci-completed-at}` is `none`,
      any current CI pass triggers re-evaluation).
 
+   The structural ack-only carve-out from F2 applies here verbatim:
+   newer activity or count growth that the helper evidence proves to be
+   post-disposition advisory-bot acknowledgement only
+   (`ack-only-post-disposition`) does not force the return to E1; all
+   other triggers above are unaffected.
+
    From that same final fetch, compute `F3_UNRESOLVED_ACTIONABLE_COUNT`
    using the exact F2 unresolved-thread rule and exceptions
    (non-awaiting-reviewer unresolved threads only; awaiting-reviewer

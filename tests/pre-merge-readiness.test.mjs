@@ -26,6 +26,7 @@ const readinessSchema = loadJson('schemas/pre-merge-readiness.schema.json');
 
 for (const fixtureName of [
   'clean',
+  'ack-only-current',
   'stale-watermark',
   'unresolved-thread',
   'changes-requested',

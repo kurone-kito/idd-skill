@@ -3,13 +3,31 @@
     "prHeadSha": "1111111111111111111111111111111111111111",
     "comments": [
       {
-        "id": "watermark-thread",
+        "id": "watermark-clean",
         "author": {
           "login": "kurone-kito"
         },
-        "body": "<!-- review-watermark: github-copilot-cli claim-123 1111111111111111111111111111111111111111 2026-05-11T23:56:00Z 3 2026-05-11T23:57:00Z -->\n\n_github-copilot-cli: review triage snapshot — IDD automation marker. Do not edit._",
+        "body": "<!-- review-watermark: github-copilot-cli claim-123 1111111111111111111111111111111111111111 2026-05-11T23:56:00Z 5 2026-05-11T23:57:00Z -->\n\n_github-copilot-cli: review triage snapshot — IDD automation marker. Do not edit._",
         "createdAt": "2026-05-11T23:58:00Z",
         "updatedAt": "2026-05-11T23:58:00Z"
+      },
+      {
+        "id": 9001,
+        "author": {
+          "login": "kurone-kito"
+        },
+        "body": "**Accepted** — advisory summary confirmed; no action required.",
+        "createdAt": "2026-05-11T23:55:30Z",
+        "updatedAt": "2026-05-11T23:55:30Z"
+      },
+      {
+        "id": 9002,
+        "author": {
+          "login": "coderabbitai[bot]"
+        },
+        "body": "Thanks for confirming!",
+        "createdAt": "2026-05-11T23:50:00Z",
+        "updatedAt": "2026-05-11T23:59:00Z"
       }
     ],
     "reviews": [
@@ -36,7 +54,7 @@
     ],
     "threads": [
       {
-        "id": "thread-actionable",
+        "id": "thread-awaiting",
         "isResolved": false,
         "updatedAt": "",
         "reviewerReopenedAt": "",
@@ -47,13 +65,13 @@
           "nodes": [
             {
               "author": {
-                "login": "reviewer"
+                "login": "kurone-kito"
               },
-              "body": "Please tighten this guard.",
+              "body": "Fixed in the latest commit.",
               "createdAt": "2026-05-11T23:56:00Z",
               "updatedAt": "2026-05-11T23:56:00Z",
               "pullRequestReview": {
-                "id": "review-2"
+                "id": "review-1"
               }
             }
           ]
@@ -113,13 +131,16 @@
     "iddAgentLogins": [
       "kurone-kito"
     ],
-    "advisoryBotLogins": [],
+    "advisoryBotLogins": [
+      "coderabbitai[bot]"
+    ],
     "prAuthorLogin": "contributor",
     "expectedClaimId": "claim-123",
     "expectedAgentId": "github-copilot-cli",
     "viewerLogin": "kurone-kito",
     "configuredTrustedActors": [],
-    "collaboratorTrustEnabled": false
+    "collaboratorTrustEnabled": false,
+    "advisoryBotLoginsSource": "config"
   },
   "expected": {
     "protocolVersion": "1",
@@ -133,52 +154,69 @@
         "claimId": "claim-123",
         "headSha": "1111111111111111111111111111111111111111",
         "maxActivityUpdatedAt": "2026-05-11T23:56:00Z",
-        "totalItemCount": 3,
+        "totalItemCount": 5,
         "latestCiCompletedAt": "2026-05-11T23:57:00Z",
         "createdAt": "2026-05-11T23:58:00Z"
       },
       "live": {
-        "totalItemCount": 3,
-        "maxActivityUpdatedAt": "2026-05-11T23:56:00Z",
+        "totalItemCount": 5,
+        "maxActivityUpdatedAt": "2026-05-11T23:59:00Z",
         "latestCiCompletedAt": "2026-05-11T23:57:00Z",
         "latestPassingCiCompletedAt": "2026-05-11T23:57:00Z",
         "counts": {
-          "comments": 0,
+          "comments": 2,
           "reviews": 2,
           "threads": 1
         },
         "ackOnly": {
-          "advisoryBotLogins": [],
-          "source": "none",
-          "dispositionsPresent": false,
-          "latestDispositionAt": "none",
-          "items": []
+          "advisoryBotLogins": [
+            "coderabbitai[bot]"
+          ],
+          "source": "config",
+          "dispositionsPresent": true,
+          "latestDispositionAt": "2026-05-11T23:55:30Z",
+          "items": [
+            {
+              "kind": "comment",
+              "id": "9002",
+              "author": "coderabbitai[bot]",
+              "activityAt": "2026-05-11T23:59:00Z",
+              "bodyPreview": "Thanks for confirming!"
+            }
+          ]
         },
         "effective": {
           "maxActivityUpdatedAt": "2026-05-11T23:56:00Z",
-          "totalItemCount": 3
+          "totalItemCount": 4
         }
       },
       "comparisonRoute": "proceed",
-      "comparisonReason": "snapshot-current"
+      "comparisonReason": "ack-only-post-disposition"
     },
     "threads": {
       "unresolvedCount": 1,
-      "actionableCount": 1,
-      "awaitingReviewerCount": 0,
+      "actionableCount": 0,
+      "awaitingReviewerCount": 1,
       "amdBlockingCount": 0,
       "conversationResolveAgentCount": 0,
       "conversationResolveAuthorCount": 0,
       "classifications": [
         {
-          "id": "thread-actionable",
-          "classification": "actionable-blocking"
+          "id": "thread-awaiting",
+          "classification": "awaiting-reviewer"
         }
       ]
     },
     "unrepliedComments": {
-      "count": 0,
-      "items": []
+      "count": 1,
+      "items": [
+        {
+          "id": "9002",
+          "authorLogin": "coderabbitai[bot]",
+          "createdAt": "2026-05-11T23:50:00Z",
+          "bodyPreview": "Thanks for confirming!"
+        }
+      ]
     },
     "reviewerStates": {
       "reviewDecision": "APPROVED",

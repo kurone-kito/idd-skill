@@ -191,6 +191,168 @@ test('malformed forced-handoff comments remain visible activity', () => {
   assert.equal(summary.maxActivityUpdatedAt, '2026-05-10T10:40:00Z');
 });
 
+test('classifies post-disposition advisory-bot comments as ack-only', () => {
+  const summary = buildActivitySnapshotSummary(
+    {
+      comments: [
+        {
+          id: 'C-1',
+          author: { login: 'idd-bot' },
+          body: '**Rejected** — rate-limit notice is not a completed review.',
+          createdAt: '2026-05-10T10:00:00Z',
+          updatedAt: '2026-05-10T10:00:00Z',
+        },
+        {
+          id: 'C-2',
+          author: { login: 'advisory-bot' },
+          body: 'Thanks for confirming!',
+          createdAt: '2026-05-10T09:00:00Z',
+          updatedAt: '2026-05-10T10:05:00Z',
+        },
+      ],
+      reviews: [],
+      threads: [],
+      checks: [],
+    },
+    {
+      trustedMarkerLogins: ['idd-bot'],
+      advisoryBotLogins: ['advisory-bot'],
+      advisoryBotLoginsSource: 'config',
+      dispositionAuthorLogins: ['idd-bot'],
+    },
+  );
+
+  assert.equal(summary.ackOnly.dispositionsPresent, true);
+  assert.equal(summary.ackOnly.latestDispositionAt, '2026-05-10T10:00:00Z');
+  assert.equal(summary.ackOnly.source, 'config');
+  assert.deepEqual(
+    summary.ackOnly.items.map((item) => [item.kind, item.id]),
+    [['comment', 'C-2']],
+  );
+  assert.equal(summary.maxActivityUpdatedAt, '2026-05-10T10:05:00Z');
+  assert.equal(summary.effective.maxActivityUpdatedAt, '2026-05-10T10:00:00Z');
+  assert.equal(summary.totalItemCount, 2);
+  assert.equal(summary.effective.totalItemCount, 1);
+});
+
+test('ack-only classification fails closed without config or dispositions', () => {
+  const comments = [
+    {
+      id: 'C-1',
+      author: { login: 'advisory-bot' },
+      body: 'Thanks for confirming!',
+      createdAt: '2026-05-10T10:05:00Z',
+      updatedAt: '2026-05-10T10:05:00Z',
+    },
+  ];
+
+  const unconfigured = buildActivitySnapshotSummary(
+    { comments, reviews: [], threads: [], checks: [] },
+    {
+      trustedMarkerLogins: ['idd-bot'],
+      dispositionAuthorLogins: ['idd-bot'],
+    },
+  );
+  assert.deepEqual(unconfigured.ackOnly.items, []);
+  assert.equal(
+    unconfigured.effective.maxActivityUpdatedAt,
+    unconfigured.maxActivityUpdatedAt,
+  );
+
+  const noDisposition = buildActivitySnapshotSummary(
+    { comments, reviews: [], threads: [], checks: [] },
+    {
+      trustedMarkerLogins: ['idd-bot'],
+      advisoryBotLogins: ['advisory-bot'],
+      dispositionAuthorLogins: ['idd-bot'],
+    },
+  );
+  assert.equal(noDisposition.ackOnly.dispositionsPresent, false);
+  assert.deepEqual(noDisposition.ackOnly.items, []);
+
+  const botSelfDisposition = buildActivitySnapshotSummary(
+    {
+      comments: [
+        {
+          id: 'C-0',
+          author: { login: 'advisory-bot' },
+          body: '**Accepted** — looks good.',
+          createdAt: '2026-05-10T09:00:00Z',
+          updatedAt: '2026-05-10T09:00:00Z',
+        },
+        ...comments,
+      ],
+      reviews: [],
+      threads: [],
+      checks: [],
+    },
+    {
+      trustedMarkerLogins: ['idd-bot'],
+      advisoryBotLogins: ['advisory-bot'],
+      dispositionAuthorLogins: ['idd-bot', 'advisory-bot'],
+    },
+  );
+  assert.equal(botSelfDisposition.ackOnly.dispositionsPresent, false);
+  assert.deepEqual(botSelfDisposition.ackOnly.items, []);
+});
+
+test('resolved-thread advisory acks are excluded from effective activity', () => {
+  const buildThread = (isResolved) => ({
+    id: 'THREAD-1',
+    isResolved,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'TC-1',
+          author: { login: 'advisory-bot' },
+          body: 'Consider tightening this check.',
+          createdAt: '2026-05-10T09:00:00Z',
+          updatedAt: '2026-05-10T09:00:00Z',
+        },
+        {
+          id: 'TC-2',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** — fixed in abc1234.',
+          createdAt: '2026-05-10T10:00:00Z',
+          updatedAt: '2026-05-10T10:00:00Z',
+        },
+        {
+          id: 'TC-3',
+          author: { login: 'advisory-bot' },
+          body: 'Thanks for confirming!',
+          createdAt: '2026-05-10T10:05:00Z',
+          updatedAt: '2026-05-10T10:05:00Z',
+        },
+      ],
+    },
+  });
+  const options = {
+    trustedMarkerLogins: ['idd-bot'],
+    advisoryBotLogins: ['advisory-bot'],
+    dispositionAuthorLogins: ['idd-bot'],
+  };
+
+  const resolved = buildActivitySnapshotSummary(
+    { comments: [], reviews: [], threads: [buildThread(true)], checks: [] },
+    options,
+  );
+  assert.equal(resolved.maxActivityUpdatedAt, '2026-05-10T10:05:00Z');
+  assert.equal(resolved.effective.maxActivityUpdatedAt, '2026-05-10T10:00:00Z');
+  assert.deepEqual(
+    resolved.ackOnly.items.map((item) => [item.kind, item.id]),
+    [['thread-reply', 'TC-3']],
+  );
+
+  const reopened = buildActivitySnapshotSummary(
+    { comments: [], reviews: [], threads: [buildThread(false)], checks: [] },
+    options,
+  );
+  assert.equal(reopened.effective.maxActivityUpdatedAt, '2026-05-10T10:05:00Z');
+  assert.deepEqual(reopened.ackOnly.items, []);
+});
+
 test('activity snapshot ignores pending check sentinel timestamps', () => {
   const summary = buildActivitySnapshotSummary(
     {

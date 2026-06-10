@@ -71,6 +71,15 @@
         "minLength": 1
       }
     },
+    "advisoryBotLogins": {
+      "type": "array",
+      "description": "GitHub logins of advisory review bots whose post-disposition acknowledgement comments may be classified as structurally ack-only by the helper evidence layer. Optional; absence disables the classification (fail-closed).",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
     "workshop": {
       "type": "object",
       "additionalProperties": false,

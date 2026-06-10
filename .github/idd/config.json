@@ -1,6 +1,6 @@
 {
   "$schema": "https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json",
-  "iddVersion": "0.2.0",
+  "iddVersion": "0.3.0",
   "markerPrefix": "idd-skill",
   "mergePolicy": "fully_autonomous_merge",
   "reviewPolicy": "copilot-advisory",
@@ -9,7 +9,13 @@
     "staleAge": "PT24H",
     "heartbeatInterval": "PT12H"
   },
-  "trustedMarkerActors": ["kurone-kito"],
+  "trustedMarkerActors": [
+    "kurone-kito"
+  ],
+  "advisoryBotLogins": [
+    "coderabbitai[bot]",
+    "chatgpt-codex-connector[bot]"
+  ],
   "workshop": {
     "exampleRepository": "kurone-kito/vrc-event-calendar"
   },

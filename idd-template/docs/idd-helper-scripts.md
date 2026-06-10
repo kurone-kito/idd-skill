@@ -634,12 +634,24 @@ Interpretation rules:
 - Snapshot command: `node scripts/review-activity-snapshot.mjs`
   with `--pr <pr-number>` and
   `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`
+  (optionally `--advisory-bot-logins "<bot-1>,<bot-2>"`; the identity
+  also resolves from `IDD_ADVISORY_BOT_LOGINS` or the config
+  `advisoryBotLogins` field, with the source echoed in
+  `ackOnly.source`)
 - Stable E1/F2/F3 snapshot tuple: `headSha`,
   `maxActivityUpdatedAt`, `totalItemCount`,
   `latestPassingCiCompletedAt`, and `counts`
 - Additional CI completion field: `latestCiCompletedAt` reports the
   latest terminal run of any state; watermark and merge-gate checks use
   `latestPassingCiCompletedAt`
+- Structural ack-only evidence (requires a current helper copy): the
+  snapshot and `reviewCurrency.live` emit `ackOnly` (configured bots,
+  source, `dispositionsPresent`, `latestDispositionAt`, per-item list)
+  and `effective` activity values; `comparisonReason:
+  ack-only-post-disposition` marks a review-currency pass that relied
+  on them. The semantic residual stays with the agent per the
+  courtesy-ack convergence rule, and the disposition-evidence and
+  unreplied-comment gates are unaffected
 - Readiness command: `node scripts/pre-merge-readiness.mjs`
   with `--pr <pr-number>`, `--claim-issue <issue-number>`,
   `--claim-id <claim-id>`, and
