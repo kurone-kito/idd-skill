@@ -49,3 +49,17 @@ test("unprotected + pending runs: presentRunConclusion is pending", () => {
   assert.equal(r.noRequiredChecksConfigured, true);
   assert.equal(r.presentRunConclusion, "pending");
 });
+
+// A pinned/indeterminate required-check source (workflows rule, or an app-pinned
+// classic check with no enumerable context) must NOT be reported as "no required
+// checks configured" — there may be required checks we cannot enumerate, so F2
+// must stay conservative rather than fall back to verifying raw run conclusions.
+test("a workflows-based required-check rule is not treated as no-required-checks", () => {
+  const r = summarizeRequiredChecks([], [{ type: "workflows", parameters: {} }], {});
+  assert.equal(r.noRequiredChecksConfigured, false);
+});
+
+test("an app-pinned classic required check with no context is not no-required-checks", () => {
+  const r = summarizeRequiredChecks([], [], { required_status_checks: { checks: [{ context: "", app_id: 1 }] } });
+  assert.equal(r.noRequiredChecksConfigured, false);
+});

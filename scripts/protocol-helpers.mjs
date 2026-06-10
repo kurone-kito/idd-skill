@@ -1795,7 +1795,8 @@ export function summarizeRequiredChecks(checks = [], branchRules = [], branchPro
 
   return {
     status,
-    noRequiredChecksConfigured: requiredCheckNames.length === 0,
+    noRequiredChecksConfigured: requiredCheckNames.length === 0
+      && !branchReviewRequirements.requiredCheckSourcePinned,
     presentRunConclusion: resolvePresentRunConclusion(normalizedChecks),
     requiredCheckCount: requiredCheckNames.length,
     generatedRequiredCheckCount: matchedRequiredChecks.length,
