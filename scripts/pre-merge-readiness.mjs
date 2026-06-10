@@ -44,17 +44,18 @@ const viewerAppSlug = safeGhText([
   '--jq',
   '.slug // .app_slug // empty',
 ]).toLowerCase();
+const iddConfig = loadIddConfig();
 const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
   resolveTrustedMarkerActors({
     flagValue: args.trustedMarkerLogins,
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-    config: loadIddConfig(),
+    config: iddConfig,
   });
 const { logins: advisoryBotLogins, source: advisoryBotLoginsSource } =
   resolveAdvisoryBotLogins({
     flagValue: args.advisoryBotLogins,
     envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
-    config: loadIddConfig(),
+    config: iddConfig,
   });
 
 const pr = ghJson([

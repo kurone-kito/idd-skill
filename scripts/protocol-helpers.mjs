@@ -966,6 +966,8 @@ export function diffReviewSnapshot(snapshot, live) {
   ) {
     const effectiveCurrent =
       ackEvidencePresent &&
+      typeof live.effective === 'object' &&
+      live.effective !== null &&
       (effectiveMax === 'none' ||
         (typeof effectiveMax === 'number' && effectiveMax <= snapshotMax));
     if (!effectiveCurrent) {
@@ -1717,7 +1719,15 @@ export function buildActivitySnapshotSummary(
           .map((comment) => comment.createdAt)
           .filter(isValidIsoTimestamp),
       ) ?? null;
-    if (!thread.isResolved || !threadDispositionAt) {
+    // Per-reply attribution needs the reply timeline: when a caller
+    // populates thread.updatedAt we cannot tell whether it reflects an
+    // ack or substantive activity, so fail closed and keep raw activity
+    // (production normalizers blank thread.updatedAt to opt in).
+    if (
+      !thread.isResolved ||
+      !threadDispositionAt ||
+      isValidIsoTimestamp(thread.updatedAt ?? '')
+    ) {
       return { activityAt: threadActivityAt(thread), ackReplies: [] };
     }
     const ackReplies = nodes.filter((comment) => {

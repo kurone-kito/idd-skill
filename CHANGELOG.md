@@ -12,6 +12,36 @@ from 0.2.0 onward is also published as an annotated `v<iddVersion>`
 git tag once its release pull request merges; 0.1.0 predates the tag
 discipline and has no tag.
 
+## [0.3.0] - 2026-06-11
+
+Structural ack-only review-currency evidence release.
+
+### Added
+
+- Structural classification of post-disposition advisory-bot
+  acknowledgements in the helper evidence layer: the activity snapshot
+  and `pre-merge-readiness` emit `ackOnly` (configured bots, trust
+  source, per-item list) and `effective` activity values, and the
+  review-currency comparison proceeds with reason
+  `ack-only-post-disposition` when the only newer activity is that
+  evidence. The semantic residual stays with the agent, and the
+  disposition-evidence and unreplied-comment gates are unchanged.
+- Optional `advisoryBotLogins` policy field
+  (`schemas/policy.schema.json`) plus the
+  `--advisory-bot-logins` flag / `IDD_ADVISORY_BOT_LOGINS` environment
+  ladder for `review-activity-snapshot` and `pre-merge-readiness`;
+  absence keeps the classification disabled (fail-closed).
+- Structural ack-only carve-out paragraphs in the F2 review-currency
+  bullet, the F3 final-fetch list, and the advisory courtesy-ack
+  convergence section of the distributed instructions.
+
+### Changed
+
+- `schemas/pre-merge-readiness.schema.json` now requires the `ackOnly`
+  and `effective` evidence under `reviewCurrency.live`; validating
+  output from older helper copies against the published schema fails
+  until the helpers are re-synced.
+
 ## [0.2.0] - 2026-06-07
 
 Worktree-guard enforcement release.
