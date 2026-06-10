@@ -4,7 +4,10 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { collectPolicyConfigDrift } from "./consistency-helpers.mjs";
+import {
+  collectPolicyConfigDrift,
+  collectRootMarkdownAllowlistViolations,
+} from "./consistency-helpers.mjs";
 
 const root = process.cwd();
 const manifestPath = "audit/sync-manifest.json";
@@ -29,6 +32,7 @@ checkSyncPairs(manifest.syncPairs ?? []);
 checkInstructionSizeBudgets(manifest.instructionSizeBudgets ?? null);
 checkBundleBudgets(manifest.bundleBudgets ?? []);
 checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
+checkRootMarkdownAllowlist(manifest.rootMarkdownAllowlist ?? null);
 checkConfigInstructionDrift();
 
 if (errors.length > 0) {
@@ -289,6 +293,10 @@ function checkForbiddenPatterns(patterns) {
       }
     }
   }
+}
+
+function checkRootMarkdownAllowlist(config) {
+  errors.push(...collectRootMarkdownAllowlistViolations(repoFiles, config));
 }
 
 function checkConfigInstructionDrift() {

@@ -580,5 +580,17 @@
       "pattern": "\\b(thirteen|13)\\s+`?idd-\\*\\.instructions\\.md`?\\s+files\\b",
       "message": "Avoid hard-coded IDD instruction file counts. Use a generated block or count-free wording."
     }
-  ]
+  ],
+  "rootMarkdownAllowlist": {
+    "id": "root-markdown-allowlist",
+    "allowed": [
+      "AGENTS.md",
+      "CHANGELOG.md",
+      "CLAUDE.md",
+      "GEMINI.md",
+      "README.ja.md",
+      "README.md",
+      "SECURITY.md"
+    ]
+  }
 }
