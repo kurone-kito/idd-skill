@@ -54,7 +54,8 @@ const FLAG_CONCEPTS = [
   },
   {
     // force-handoff.mjs is intentionally absent: its sole '--pr' literal is
-    // an error-message label inside an interactive prompt, not a parsed flag.
+    // the error-message label used when validating the interactively
+    // prompted PR number, not a parsed CLI flag.
     concept: 'pull request number',
     canonical: '--pr',
     helpers: [
