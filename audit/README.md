@@ -40,3 +40,17 @@ new allowed concrete mapping, add a `concreted` sync pair with a
 `structure` and document why in the pair's `note` field. For generated
 file lists, update the manifest paths or globs first, then rerun the
 audit so the marked block can be refreshed deliberately.
+
+## Bundle Budgets
+
+The `bundleBudgets` entries cap the combined byte size of the
+instruction files loaded together on each phase path (discovery,
+resume, work, review, and merge), so context re-bloat fails the audit
+instead of silently degrading unattended loops.
+
+Each `limitBytes` value encodes at most roughly 10% headroom over the
+bundle size measured when the entry was added or last adjusted.
+**Ratchet rule**: raising any `limitBytes` value requires an explicit
+callout in the pull request description explaining why the growth is
+justified; shrinking a limit after an instruction diet needs no
+callout.

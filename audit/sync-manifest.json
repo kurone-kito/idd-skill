@@ -172,6 +172,44 @@
         ".github/instructions/idd-resume.instructions.md"
       ],
       "limitBytes": 46000
+    },
+    {
+      "id": "bundle-work",
+      "description": "Work path: idd-overview-core + idd-overview-appendix + idd-work",
+      "files": [
+        ".github/instructions/idd-overview-core.instructions.md",
+        ".github/instructions/idd-overview-appendix.instructions.md",
+        ".github/instructions/idd-work.instructions.md"
+      ],
+      "limitBytes": 34900
+    },
+    {
+      "id": "bundle-review",
+      "description": "Review path: idd-overview-core + idd-overview-appendix + idd-review-snapshot + idd-review-triage + idd-review-fix + idd-advisory-wait + idd-ci",
+      "files": [
+        ".github/instructions/idd-overview-core.instructions.md",
+        ".github/instructions/idd-overview-appendix.instructions.md",
+        ".github/instructions/idd-review-snapshot.instructions.md",
+        ".github/instructions/idd-review-triage.instructions.md",
+        ".github/instructions/idd-review-fix.instructions.md",
+        ".github/instructions/idd-advisory-wait.instructions.md",
+        ".github/instructions/idd-ci.instructions.md"
+      ],
+      "limitBytes": 92400
+    },
+    {
+      "id": "bundle-merge",
+      "description": "Merge path: idd-overview-core + idd-overview-appendix + idd-pre-merge + idd-merge-handoff + idd-merge + idd-advisory-wait + idd-ci",
+      "files": [
+        ".github/instructions/idd-overview-core.instructions.md",
+        ".github/instructions/idd-overview-appendix.instructions.md",
+        ".github/instructions/idd-pre-merge.instructions.md",
+        ".github/instructions/idd-merge-handoff.instructions.md",
+        ".github/instructions/idd-merge.instructions.md",
+        ".github/instructions/idd-advisory-wait.instructions.md",
+        ".github/instructions/idd-ci.instructions.md"
+      ],
+      "limitBytes": 80600
     }
   ],
   "syncPairs": [
