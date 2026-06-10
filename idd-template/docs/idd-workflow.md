@@ -389,7 +389,7 @@ following optional helper scripts:
   and AW outcome reporting)
 - `scripts/external-check-waiver.mjs` (maintainer dry-run/apply facade
   for canonical external-check waiver comments on the current PR head;
-  added in this release)
+  added in 0.2.0)
 - `scripts/pre-merge-readiness.mjs` (read-only F2/F3 readiness evidence
   collection)
 - `scripts/review-disposition-verify.mjs` (read-only E7 disposition

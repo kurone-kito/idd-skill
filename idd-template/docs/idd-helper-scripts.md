@@ -41,7 +41,7 @@ In the idd-skill source repository, the following optional helpers were adopted:
 - `scripts/branch-conflict-state.mjs` for read-only branch conflict and
   synchronization state classification; used by D/E/F routing to decide
   whether `merge-main`, `hold-unknown`, or no action is needed without
-  mutating the worktree or PR branch (added in this release)
+  mutating the worktree or PR branch (added in 0.2.0)
 
 **Review & Merge Phase Helpers:**
 
