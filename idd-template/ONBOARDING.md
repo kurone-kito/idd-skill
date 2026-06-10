@@ -55,6 +55,30 @@ a new repository.
 > First-time adopters can ignore this section — the flow below already
 > references the new file.
 
+### Re-importing: import named gaps, not a blind resync
+
+When you pull a newer upstream template into a repository that already adopted
+IDD, treat the upgrade as a **named-gap import**, not a blind resync:
+
+1. **Resolve placeholders first** so the new template carries your repository's
+   real values, not upstream defaults.
+2. **Reconcile only the enumerated gaps** — the specific changes between your
+   current version and the new template — **against your recorded local policy**
+   (the policy section from Step 3). Do not overwrite intentional local
+   divergence with upstream defaults; a blind file-for-file resync silently
+   reverts your customizations.
+3. Re-apply the Step 2 file import for the changed files, then re-run the
+   Step 6 verification checklist and `idd-doctor` after reconciling.
+
+When you then audit whether re-imported roadmap work is actually done, judge
+**completion by auditing the implementation against the acceptance criteria**,
+not by a child issue's closed state — a skeleton or scaffold PR can merge and
+close a child while leaving its acceptance criteria unimplemented. See the
+roadmap-audit rule in
+`.github/instructions/idd-roadmap-audit.instructions.md` (compare the roadmap
+success criteria against the merged PRs; do not infer completion from
+checkbox state alone).
+
 ## What you are setting up
 
 IDD is a multi-agent GitHub automation workflow. Agents work through a
