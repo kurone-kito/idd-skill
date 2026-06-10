@@ -80,6 +80,9 @@ also serve as the source for a future GitHub Pages site.
 - [GitHub Pages readiness strategy](pages-strategy.md) records the
   low-cost publication path and the reasons Pages is preferred over Wiki
   for the primary public reference.
+- [Claude Code skill strategy](claude-skill-strategy.md) records the
+  design evaluation and go/no-go criteria for packaging the IDD
+  execution loop as a Claude Code skill.
 
 ## Language Policy
 
