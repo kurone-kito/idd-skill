@@ -303,6 +303,17 @@ Node.js helper path.
 - `instructions-only`: keep helper dependencies, helper files, and helper
   wrapper scripts out of the target repository entirely.
 
+**Authoritative invocation surface per profile.** Under `vendored-node`, the
+canonical invocation is `node scripts/<name>.mjs`; the package-manager / `npx`
+`bin/` facade (the `idd-*` bin wrappers) is **redundant** in this profile and
+may be skipped — keeping it only adds a second surface to align with the
+instruction files for no portability gain. Under `package-manager` and
+`ephemeral-npx`, the `bin/` facade (`idd-*` bins, invoked through the
+`package.json` scripts or `npx`) **is** the authoritative surface and should be
+retained. `instructions-only` uses neither. When an instruction shows a
+`node scripts/...` command, resolve it to your profile's authoritative surface
+rather than maintaining both.
+
 To switch profiles later, rerun the manifest with both
 `--profile <target-profile>` and `--from-profile <current-profile>`. The
 switch section reports the files, dependency entries, and `package.json`
