@@ -146,7 +146,7 @@ test('config-only resolution passes the author gate end to end', () => {
       },
     );
 
-    assert.notEqual(result.status, 2, result.stderr);
+    assert.equal(result.status, 1, result.stderr);
     const report = JSON.parse(result.stdout);
     assert.equal(report.trustedMarkerActorsSource, 'config');
     assert.deepEqual(report.trustedMarkerActors, ['kurone-kito']);

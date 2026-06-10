@@ -168,7 +168,10 @@ async function buildReport(owner, repo, prNumber, options = {}) {
     prUrl: pr.url,
     merged: pr.merged,
     mode: 'dry-run',
-    trustedMarkerActors: [...configuredTrust.actors].sort(),
+    trustedMarkerActors: normalizeTrustedMarkerLogins([
+      currentViewerLogin(),
+      ...configuredTrust.actors,
+    ]),
     trustedMarkerActorsSources: [
       ...(currentViewerLogin() ? ['viewer'] : []),
       ...configuredTrust.sources,

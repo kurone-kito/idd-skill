@@ -71,7 +71,10 @@ In the idd-skill source repository, the following optional helpers were adopted:
   viewer, flag (where accepted), `IDD_TRUSTED_MARKER_ACTORS`, and the
   config `trustedMarkerActors` list — with the optional
   collaborator-permission trust; their JSON evidence reports the
-  resolved list plus the plural `trustedMarkerActorsSources` mix, so
+  resolved viewer-plus-configured list and the plural
+  `trustedMarkerActorsSources` mix (collaborator trust is evaluated
+  lazily per author and surfaces as `collaboratorTrustEnabled` /
+  the `collaborators` source tag rather than in the list), so
   config-listed actors widen trust explicitly while
   collaborator-permission trust stays opt-in
   (`IDD_TRUST_COLLABORATOR_MARKERS` / `trustCollaboratorMarkers`)
