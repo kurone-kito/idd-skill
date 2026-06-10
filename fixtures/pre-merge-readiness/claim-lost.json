@@ -7,7 +7,7 @@
         "author": {
           "login": "kurone-kito"
         },
-        "body": "<!-- review-watermark: github-copilot-cli claim-123 1111111111111111111111111111111111111111 2026-05-11T23:56:00Z 3 2026-05-11T23:57:00Z -->\n\n_github-copilot-cli: review triage snapshot \u2014 IDD automation marker. Do not edit._",
+        "body": "<!-- review-watermark: github-copilot-cli claim-123 1111111111111111111111111111111111111111 2026-05-11T23:56:00Z 3 2026-05-11T23:57:00Z -->\n\n_github-copilot-cli: review triage snapshot — IDD automation marker. Do not edit._",
         "createdAt": "2026-05-11T23:58:00Z",
         "updatedAt": "2026-05-11T23:58:00Z"
       }
@@ -92,7 +92,7 @@
     "timelineEvents": [],
     "claimEvents": [
       {
-        "body": "<!-- claimed-by: github-copilot-cli claim-999 supersedes: none 2026-05-11T23:30:00Z branch: issue/309-pre-merge-readiness -->\n\n_github-copilot-cli: issue claim \u2014 IDD automation marker. Do not edit._",
+        "body": "<!-- claimed-by: github-copilot-cli claim-999 supersedes: none 2026-05-11T23:30:00Z branch: issue/309-pre-merge-readiness -->\n\n_github-copilot-cli: issue claim — IDD automation marker. Do not edit._",
         "createdAt": "2026-05-11T23:30:00Z",
         "author": {
           "login": "kurone-kito"
@@ -146,6 +146,17 @@
           "comments": 0,
           "reviews": 2,
           "threads": 1
+        },
+        "ackOnly": {
+          "advisoryBotLogins": [],
+          "source": "none",
+          "dispositionsPresent": false,
+          "latestDispositionAt": "none",
+          "items": []
+        },
+        "effective": {
+          "maxActivityUpdatedAt": "2026-05-11T23:56:00Z",
+          "totalItemCount": 3
         }
       },
       "comparisonRoute": "proceed",

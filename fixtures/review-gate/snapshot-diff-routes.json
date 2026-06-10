@@ -188,5 +188,245 @@
       "route": "return-to-e1",
       "reason": "newer-activity"
     }
+  },
+  {
+    "name": "proceed when the only newer activity is a post-disposition ack edit",
+    "snapshot": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestPassingCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "live": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:05Z",
+      "totalItemCount": 5,
+      "latestPassingCiCompletedAt": "2026-05-11T08:05:00Z",
+      "ackOnly": {
+        "advisoryBotLogins": [
+          "advisory-bot"
+        ],
+        "source": "config",
+        "dispositionsPresent": true,
+        "latestDispositionAt": "2026-05-11T07:59:00Z",
+        "items": [
+          {
+            "kind": "comment",
+            "id": "C-ACK",
+            "author": "advisory-bot",
+            "activityAt": "2026-05-11T08:00:05Z",
+            "bodyPreview": "Thanks for confirming!"
+          }
+        ]
+      },
+      "effective": {
+        "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+        "totalItemCount": 5
+      }
+    },
+    "expected": {
+      "route": "proceed",
+      "reason": "ack-only-post-disposition"
+    }
+  },
+  {
+    "name": "proceed when count growth is fully explained by new ack comments",
+    "snapshot": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestPassingCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "live": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:05Z",
+      "totalItemCount": 6,
+      "latestPassingCiCompletedAt": "2026-05-11T08:05:00Z",
+      "ackOnly": {
+        "advisoryBotLogins": [
+          "advisory-bot"
+        ],
+        "source": "config",
+        "dispositionsPresent": true,
+        "latestDispositionAt": "2026-05-11T07:59:00Z",
+        "items": [
+          {
+            "kind": "comment",
+            "id": "C-ACK",
+            "author": "advisory-bot",
+            "activityAt": "2026-05-11T08:00:05Z",
+            "bodyPreview": "Thanks for confirming!"
+          }
+        ]
+      },
+      "effective": {
+        "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+        "totalItemCount": 5
+      }
+    },
+    "expected": {
+      "route": "proceed",
+      "reason": "ack-only-post-disposition"
+    }
+  },
+  {
+    "name": "return to E1 when newer activity has no disposition evidence",
+    "snapshot": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestPassingCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "live": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:05Z",
+      "totalItemCount": 5,
+      "latestPassingCiCompletedAt": "2026-05-11T08:05:00Z",
+      "ackOnly": {
+        "advisoryBotLogins": [
+          "advisory-bot"
+        ],
+        "source": "config",
+        "dispositionsPresent": false,
+        "latestDispositionAt": "none",
+        "items": [
+          {
+            "kind": "comment",
+            "id": "C-ACK",
+            "author": "advisory-bot",
+            "activityAt": "2026-05-11T08:00:05Z",
+            "bodyPreview": "Thanks for confirming!"
+          }
+        ]
+      },
+      "effective": {
+        "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+        "totalItemCount": 5
+      }
+    },
+    "expected": {
+      "route": "return-to-e1",
+      "reason": "newer-activity"
+    }
+  },
+  {
+    "name": "return to E1 when effective activity is still newer than the snapshot",
+    "snapshot": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestPassingCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "live": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:10Z",
+      "totalItemCount": 5,
+      "latestPassingCiCompletedAt": "2026-05-11T08:05:00Z",
+      "ackOnly": {
+        "advisoryBotLogins": [
+          "advisory-bot"
+        ],
+        "source": "config",
+        "dispositionsPresent": true,
+        "latestDispositionAt": "2026-05-11T07:59:00Z",
+        "items": [
+          {
+            "kind": "comment",
+            "id": "C-ACK",
+            "author": "advisory-bot",
+            "activityAt": "2026-05-11T08:00:05Z",
+            "bodyPreview": "Thanks for confirming!"
+          }
+        ]
+      },
+      "effective": {
+        "maxActivityUpdatedAt": "2026-05-11T08:00:10Z",
+        "totalItemCount": 5
+      }
+    },
+    "expected": {
+      "route": "return-to-e1",
+      "reason": "newer-activity"
+    }
+  },
+  {
+    "name": "return to E1 when count growth exceeds the new ack comments",
+    "snapshot": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestPassingCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "live": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:05Z",
+      "totalItemCount": 7,
+      "latestPassingCiCompletedAt": "2026-05-11T08:05:00Z",
+      "ackOnly": {
+        "advisoryBotLogins": [
+          "advisory-bot"
+        ],
+        "source": "config",
+        "dispositionsPresent": true,
+        "latestDispositionAt": "2026-05-11T07:59:00Z",
+        "items": [
+          {
+            "kind": "comment",
+            "id": "C-ACK",
+            "author": "advisory-bot",
+            "activityAt": "2026-05-11T08:00:05Z",
+            "bodyPreview": "Thanks for confirming!"
+          }
+        ]
+      },
+      "effective": {
+        "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+        "totalItemCount": 6
+      }
+    },
+    "expected": {
+      "route": "return-to-e1",
+      "reason": "same-timestamp-count-growth"
+    }
+  },
+  {
+    "name": "return to E1 on CI drift even when activity is ack-only",
+    "snapshot": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+      "totalItemCount": 5,
+      "latestPassingCiCompletedAt": "2026-05-11T08:05:00Z"
+    },
+    "live": {
+      "headSha": "abc123",
+      "maxActivityUpdatedAt": "2026-05-11T08:00:05Z",
+      "totalItemCount": 5,
+      "latestPassingCiCompletedAt": "2026-05-11T08:09:00Z",
+      "ackOnly": {
+        "advisoryBotLogins": [
+          "advisory-bot"
+        ],
+        "source": "config",
+        "dispositionsPresent": true,
+        "latestDispositionAt": "2026-05-11T07:59:00Z",
+        "items": [
+          {
+            "kind": "comment",
+            "id": "C-ACK",
+            "author": "advisory-bot",
+            "activityAt": "2026-05-11T08:00:05Z",
+            "bodyPreview": "Thanks for confirming!"
+          }
+        ]
+      },
+      "effective": {
+        "maxActivityUpdatedAt": "2026-05-11T08:00:00Z",
+        "totalItemCount": 5
+      }
+    },
+    "expected": {
+      "route": "return-to-e1",
+      "reason": "ci-pass-drift"
+    }
   }
 ]

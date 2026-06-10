@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 
 import {
   buildActivitySnapshotSummary,
+  resolveAdvisoryBotLogins,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mjs';
 
@@ -19,11 +20,18 @@ const owner =
 const repo =
   args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
 const repoRef = `${owner}/${repo}`;
+const iddConfig = loadIddConfig();
 const { actors: trustedMarkerLogins, source: trustedMarkerActorsSource } =
   resolveTrustedMarkerActors({
     flagValue: args.trustedMarkerLogins,
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-    config: loadIddConfig(),
+    config: iddConfig,
+  });
+const { logins: advisoryBotLogins, source: advisoryBotLoginsSource } =
+  resolveAdvisoryBotLogins({
+    flagValue: args.advisoryBotLogins,
+    envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
+    config: iddConfig,
   });
 
 const headSha = ghText([
@@ -68,7 +76,14 @@ const summary = buildActivitySnapshotSummary(
     threads: threads.map(normalizeThread),
     checks,
   },
-  { trustedMarkerLogins },
+  {
+    trustedMarkerLogins,
+    advisoryBotLogins,
+    advisoryBotLoginsSource,
+    // Advisory bots are excluded from disposition authorship inside the
+    // summary builder, so the trusted-marker set is a safe default here.
+    dispositionAuthorLogins: trustedMarkerLogins,
+  },
 );
 
 process.stdout.write(
@@ -82,6 +97,8 @@ process.stdout.write(
       latestCiCompletedAt: summary.latestCiCompletedAt,
       latestPassingCiCompletedAt: summary.latestPassingCiCompletedAt,
       counts: summary.counts,
+      ackOnly: summary.ackOnly,
+      effective: summary.effective,
     },
     null,
     2,
@@ -102,6 +119,7 @@ function parseArgs(argv) {
     owner: '',
     repo: '',
     trustedMarkerLogins: '',
+    advisoryBotLogins: '',
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -127,6 +145,11 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (token === '--advisory-bot-logins') {
+      parsed.advisoryBotLogins = value ?? '';
+      index += 1;
+      continue;
+    }
     if (token === '--help' || token === '-h') {
       printHelp();
       process.exit(0);
@@ -143,7 +166,7 @@ function parseArgs(argv) {
 
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/review-activity-snapshot.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>]
+  node scripts/review-activity-snapshot.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <login1,login2>]
 `);
 }
 

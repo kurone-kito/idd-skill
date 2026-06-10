@@ -9,7 +9,13 @@
     "staleAge": "PT24H",
     "heartbeatInterval": "PT12H"
   },
-  "trustedMarkerActors": ["kurone-kito"],
+  "trustedMarkerActors": [
+    "kurone-kito"
+  ],
+  "advisoryBotLogins": [
+    "coderabbitai[bot]",
+    "chatgpt-codex-connector[bot]"
+  ],
   "workshop": {
     "exampleRepository": "kurone-kito/vrc-event-calendar"
   },

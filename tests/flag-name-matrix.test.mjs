@@ -91,7 +91,7 @@ const FLAG_CONCEPTS = [
   {
     concept: 'advisory bot logins',
     canonical: '--advisory-bot-logins',
-    helpers: ['pre-merge-readiness.mjs'],
+    helpers: ['pre-merge-readiness.mjs', 'review-activity-snapshot.mjs'],
   },
 ];
 

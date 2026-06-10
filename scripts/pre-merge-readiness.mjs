@@ -16,6 +16,7 @@ import {
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   parsePaginatedGhNdjson,
+  resolveAdvisoryBotLogins,
   resolveCodeownersForFiles,
   resolveRulesetDetailPath,
   resolveTrustedMarkerActors,
@@ -49,9 +50,12 @@ const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
     config: loadIddConfig(),
   });
-const advisoryBotLogins = normalizeTrustedMarkerLogins(
-  splitCsv(args.advisoryBotLogins),
-);
+const { logins: advisoryBotLogins, source: advisoryBotLoginsSource } =
+  resolveAdvisoryBotLogins({
+    flagValue: args.advisoryBotLogins,
+    envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
+    config: loadIddConfig(),
+  });
 
 const pr = ghJson([
   'pr',
@@ -183,6 +187,7 @@ const summary = buildPreMergeReadinessSummary(
     trustedMarkerLogins,
     iddAgentLogins,
     advisoryBotLogins,
+    advisoryBotLoginsSource,
     prAuthorLogin,
     expectedClaimId: args.expectedClaimId,
     expectedAgentId: args.expectedAgentId,

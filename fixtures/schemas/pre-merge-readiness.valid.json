@@ -23,6 +23,19 @@
         "comments": 0,
         "reviews": 2,
         "threads": 1
+      },
+      "ackOnly": {
+        "advisoryBotLogins": [
+          "coderabbitai[bot]"
+        ],
+        "source": "config",
+        "dispositionsPresent": true,
+        "latestDispositionAt": "2026-05-11T23:56:00Z",
+        "items": []
+      },
+      "effective": {
+        "maxActivityUpdatedAt": "2026-05-11T23:56:00Z",
+        "totalItemCount": 3
       }
     },
     "comparisonRoute": "proceed",
@@ -53,7 +66,9 @@
     "requiresConversationResolution": false,
     "requiredReviewerLogins": [],
     "requiredReviewerTeams": [],
-    "codeownerUserLogins": ["owner-reviewer"],
+    "codeownerUserLogins": [
+      "owner-reviewer"
+    ],
     "codeownerTeamSlugs": [],
     "unmatchedCodeownerFiles": [],
     "latestByAuthor": [
@@ -83,7 +98,9 @@
       "status": "not_applicable",
       "reason": "codeowner-approval-satisfied",
       "prAuthorLogin": "pr-author",
-      "directCodeownerUserLogins": ["owner-reviewer"],
+      "directCodeownerUserLogins": [
+        "owner-reviewer"
+      ],
       "codeownerTeamSlugs": [],
       "requireCodeOwnerReview": true,
       "codeownerApprovalSatisfied": true,
@@ -119,7 +136,9 @@
     "generatedRequiredCheckCount": 1,
     "requiredChecksGenerated": true,
     "requiredChecksPassing": true,
-    "requiredCheckNames": ["lint"],
+    "requiredCheckNames": [
+      "lint"
+    ],
     "missingRequiredCheckNames": [],
     "checks": [
       {
