@@ -13,6 +13,9 @@ permissions:
   contents: read
 jobs:
   deploy:
+    # Guard workflow_dispatch runs from non-main refs: the published
+    # $id/$schema surface must never diverge from main.
+    if: github.ref == 'refs/heads/main'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
