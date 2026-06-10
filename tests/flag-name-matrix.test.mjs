@@ -25,9 +25,10 @@ function readScript(name) {
 
 // One canonical CLI flag name per shared concept. `helpers` is the explicit set
 // of scripts that accept the concept, so the test catches a canonical flag being
-// renamed or removed (not only a stray deprecated alias). A `deprecated` name
-// may be kept as an alias for one release but must always warn on stderr and
-// coexist with the canonical flag.
+// renamed or removed (not only a stray deprecated alias). The optional
+// `deprecated` name may be kept as an alias for one release but must always
+// warn on stderr and coexist with the canonical flag; concepts without an
+// alias declare only the canonical spelling.
 const FLAG_CONCEPTS = [
   {
     concept: 'claim id',
@@ -51,6 +52,56 @@ const FLAG_CONCEPTS = [
       'pre-merge-readiness.mjs',
     ],
   },
+  {
+    // force-handoff.mjs is intentionally absent: its sole '--pr' literal is
+    // an error-message label inside an interactive prompt, not a parsed flag.
+    concept: 'pull request number',
+    canonical: '--pr',
+    helpers: [
+      'advisory-wait-state.mjs',
+      'audit-pr-cleanup.mjs',
+      'branch-conflict-state.mjs',
+      'discover-orphan-filter.mjs',
+      'external-check-waiver.mjs',
+      'forced-handoff-marker.mjs',
+      'live-status-digest.mjs',
+      'pre-merge-readiness.mjs',
+      'review-activity-snapshot.mjs',
+      'stalled-session-quiet-check.mjs',
+    ],
+  },
+  {
+    concept: 'trusted marker logins',
+    canonical: '--trusted-marker-logins',
+    helpers: [
+      'advisory-wait-state.mjs',
+      'forced-handoff-marker.mjs',
+      'minimize-superseded-markers.mjs',
+      'pre-merge-readiness.mjs',
+      'resume-claim-routing.mjs',
+      'review-activity-snapshot.mjs',
+    ],
+  },
+  {
+    concept: 'IDD agent logins',
+    canonical: '--idd-agent-logins',
+    helpers: ['pre-merge-readiness.mjs'],
+  },
+  {
+    concept: 'advisory bot logins',
+    canonical: '--advisory-bot-logins',
+    helpers: ['pre-merge-readiness.mjs'],
+  },
+];
+
+// Known near-miss spellings a future helper might plausibly introduce.
+// Keep this list small and mapped to the canonical flag the guard names.
+const NEAR_MISS_VARIANTS = [
+  { variant: '--pr-number', canonical: '--pr' },
+  { variant: '--pull-request', canonical: '--pr' },
+  { variant: '--trusted-actors', canonical: '--trusted-marker-logins' },
+  { variant: '--agent-logins', canonical: '--idd-agent-logins' },
+  { variant: '--bot-logins', canonical: '--advisory-bot-logins' },
 ];
 
 for (const { concept, canonical, deprecated, helpers } of FLAG_CONCEPTS) {
@@ -63,6 +114,10 @@ for (const { concept, canonical, deprecated, helpers } of FLAG_CONCEPTS) {
       );
     }
   });
+
+  if (!deprecated) {
+    continue;
+  }
 
   test(`no helper accepts ${deprecated} without the canonical ${canonical}`, () => {
     for (const file of scriptFiles) {
@@ -95,6 +150,20 @@ for (const { concept, canonical, deprecated, helpers } of FLAG_CONCEPTS) {
     }
   });
 }
+
+test('no helper introduces a near-miss variant of a canonical flag', () => {
+  for (const file of scriptFiles) {
+    const src = readScript(file);
+    for (const { variant, canonical } of NEAR_MISS_VARIANTS) {
+      if (includesQuotedFlag(src, variant)) {
+        assert.ok(
+          includesQuotedFlag(src, canonical),
+          `${file} quotes ${variant}; use the canonical ${canonical} (or accept both)`,
+        );
+      }
+    }
+  }
+});
 
 test('pre-merge-readiness accepts both canonical and deprecated claim/agent flags', () => {
   const src = readScript('pre-merge-readiness.mjs');
