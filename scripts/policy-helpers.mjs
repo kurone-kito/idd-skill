@@ -1,25 +1,37 @@
 const HELPER_RUNTIME_PROFILES = new Set([
-  "package-manager",
-  "vendored-node",
-  "ephemeral-npx",
-  "instructions-only",
+  'package-manager',
+  'vendored-node',
+  'ephemeral-npx',
+  'instructions-only',
 ]);
-const HELPER_RUNTIME_KEYS = new Set(["profile"]);
-const ISSUE_SCOPES = new Set(["roadmap", "roadmap-first", "orphan-first"]);
-const ORPHAN_FIRST_POLICIES = new Set(["none", "maintainer-approved", "public-disabled"]);
-const APPROVAL_ACTOR_POLICIES = new Set(["owners-and-maintainers-only", "all-write-permission-actors"]);
-const FORCED_HANDOFF_MODES = new Set(["disabled", "human-gated"]);
-const ADVISORY_CAP_ROUTES = new Set(["phase-specific", "hold"]);
-const EXTERNAL_CHECK_WAIVER_MODES = new Set(["disabled", "maintainer-authorized"]);
-const CHECK_SELECTOR_MATCH_MODES = new Set(["exact", "glob"]);
+const HELPER_RUNTIME_KEYS = new Set(['profile']);
+const ISSUE_SCOPES = new Set(['roadmap', 'roadmap-first', 'orphan-first']);
+const ORPHAN_FIRST_POLICIES = new Set([
+  'none',
+  'maintainer-approved',
+  'public-disabled',
+]);
+const APPROVAL_ACTOR_POLICIES = new Set([
+  'owners-and-maintainers-only',
+  'all-write-permission-actors',
+]);
+const FORCED_HANDOFF_MODES = new Set(['disabled', 'human-gated']);
+const ADVISORY_CAP_ROUTES = new Set(['phase-specific', 'hold']);
+const EXTERNAL_CHECK_WAIVER_MODES = new Set([
+  'disabled',
+  'maintainer-authorized',
+]);
+const CHECK_SELECTOR_MATCH_MODES = new Set(['exact', 'glob']);
 const LEGACY_ADVISORY_CAP_ROUTE_ALIASES = new Map([
-  ["phase-default", "phase-specific"],
-  ["strict-hold", "hold"],
+  ['phase-default', 'phase-specific'],
+  ['strict-hold', 'hold'],
 ]);
-const CI_RERUN_POLICIES = new Set(["rerun-once"]);
-const LABEL_FRESHNESS_MODES = new Set(["presence-only", "event-freshness"]);
-const ISO_DURATION_RE = /^P(?=\d|T\d)(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$/;
-const ADVISORY_WHOLE_MINUTE_DURATION_RE = /^P(?=(?:\d+D|T\d+[HM]))(?=.*(?:[1-9]\d*[DHM]))(?:\d+D)?(?:T(?=\d+[HM])(?:\d+H)?(?:\d+M)?)?$/;
+const CI_RERUN_POLICIES = new Set(['rerun-once']);
+const LABEL_FRESHNESS_MODES = new Set(['presence-only', 'event-freshness']);
+const ISO_DURATION_RE =
+  /^P(?=\d|T\d)(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$/;
+const ADVISORY_WHOLE_MINUTE_DURATION_RE =
+  /^P(?=(?:\d+D|T\d+[HM]))(?=.*(?:[1-9]\d*[DHM]))(?:\d+D)?(?:T(?=\d+[HM])(?:\d+H)?(?:\d+M)?)?$/;
 const DURATION_RE =
   /^P(?:(?<days>\d+)D)?(?:T(?:(?<hours>\d+)H)?(?:(?<minutes>\d+)M)?(?:(?<seconds>\d+)S)?)?$/;
 const SECOND_MS = 1000;
@@ -28,31 +40,31 @@ const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
 export const POLICY_DEFAULTS = Object.freeze({
-  issueScope: "roadmap-first",
-  orphanFirstPolicy: "none",
+  issueScope: 'roadmap-first',
+  orphanFirstPolicy: 'none',
   skipIssueAuthorApprovalGate: false,
-  maintainerApprovalActorPolicy: "owners-and-maintainers-only",
+  maintainerApprovalActorPolicy: 'owners-and-maintainers-only',
   stallRecovery: Object.freeze({
-    quietWindow: "PT30M",
+    quietWindow: 'PT30M',
   }),
   forcedHandoff: Object.freeze({
-    mode: "disabled",
-    authorityPolicy: "owners-and-maintainers-only",
+    mode: 'disabled',
+    authorityPolicy: 'owners-and-maintainers-only',
   }),
   markerTrust: Object.freeze({
     allowCollaboratorMarkers: false,
   }),
   advisoryWait: Object.freeze({
     requestCap: 30,
-    pendingWindow: "PT30M",
-    settledWindow: "PT10M",
-    pollInterval: "PT2M",
-    capExhaustedRoute: "phase-specific",
+    pendingWindow: 'PT30M',
+    settledWindow: 'PT10M',
+    pollInterval: 'PT2M',
+    capExhaustedRoute: 'phase-specific',
   }),
   ciWait: Object.freeze({
-    runningTimeout: "PT30M",
-    generationTimeout: "PT10M",
-    rerunPolicy: "rerun-once",
+    runningTimeout: 'PT30M',
+    generationTimeout: 'PT10M',
+    rerunPolicy: 'rerun-once',
   }),
   ciGate: Object.freeze({
     externalChecks: Object.freeze({
@@ -60,33 +72,33 @@ export const POLICY_DEFAULTS = Object.freeze({
       waivable: Object.freeze([]),
     }),
     externalCheckWaivers: Object.freeze({
-      mode: "disabled",
-      authorityPolicy: "owners-and-maintainers-only",
-      maxValidity: "PT24H",
+      mode: 'disabled',
+      authorityPolicy: 'owners-and-maintainers-only',
+      maxValidity: 'PT24H',
     }),
   }),
   discover: Object.freeze({
     activeClaimPreScanBatchSize: 10,
   }),
   claim: Object.freeze({
-    verifySettleDelay: "PT5S",
+    verifySettleDelay: 'PT5S',
   }),
   critiqueLoop: Object.freeze({
     cPhaseLowSeveritySkipAfter: 3,
     e10NoProgressHoldAfter: 3,
   }),
   reviewEscalation: Object.freeze({
-    changesRequestedFirstEscalation: "PT24H",
-    changesRequestedSecondEscalation: "PT48H",
+    changesRequestedFirstEscalation: 'PT24H',
+    changesRequestedSecondEscalation: 'PT48H',
   }),
   approvalSignals: Object.freeze({
-    readyLabelName: "idd:ready",
-    labelFreshnessMode: "presence-only",
+    readyLabelName: 'idd:ready',
+    labelFreshnessMode: 'presence-only',
   }),
   issueAuthoring: Object.freeze({
     maxClarificationRounds: 3,
-    authoringLabelName: "status:authoring",
-    authoringStaleAge: "PT4H",
+    authoringLabelName: 'status:authoring',
+    authoringStaleAge: 'PT4H',
   }),
 });
 
@@ -103,60 +115,72 @@ export function parseProjectCommandRows(text) {
 }
 
 export function inspectHelperRuntimeConfig(config) {
-  if (typeof config !== "object" || config === null || Array.isArray(config)) {
-    return { status: "invalid", reason: "config must be a non-null object" };
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    return { status: 'invalid', reason: 'config must be a non-null object' };
   }
 
-  if (!hasOwn(config, "helperRuntime")) {
-    return { status: "absent" };
+  if (!hasOwn(config, 'helperRuntime')) {
+    return { status: 'absent' };
   }
 
   const helperRuntime = config.helperRuntime;
-  if (typeof helperRuntime !== "object" || helperRuntime === null || Array.isArray(helperRuntime)) {
-    return { status: "invalid", reason: "helperRuntime must be an object when present" };
+  if (
+    typeof helperRuntime !== 'object' ||
+    helperRuntime === null ||
+    Array.isArray(helperRuntime)
+  ) {
+    return {
+      status: 'invalid',
+      reason: 'helperRuntime must be an object when present',
+    };
   }
 
-  const unexpectedKeys = Object.keys(helperRuntime).filter((key) => !HELPER_RUNTIME_KEYS.has(key));
+  const unexpectedKeys = Object.keys(helperRuntime).filter(
+    (key) => !HELPER_RUNTIME_KEYS.has(key),
+  );
   if (unexpectedKeys.length > 0) {
     return {
-      status: "invalid",
-      reason: `unsupported helperRuntime keys: ${unexpectedKeys.join(", ")}`,
+      status: 'invalid',
+      reason: `unsupported helperRuntime keys: ${unexpectedKeys.join(', ')}`,
     };
   }
 
   const profile = helperRuntime.profile;
-  if (typeof profile !== "string" || profile.length === 0) {
-    return { status: "invalid", reason: "helperRuntime.profile must be a non-empty string" };
+  if (typeof profile !== 'string' || profile.length === 0) {
+    return {
+      status: 'invalid',
+      reason: 'helperRuntime.profile must be a non-empty string',
+    };
   }
 
   if (!HELPER_RUNTIME_PROFILES.has(profile)) {
     return {
-      status: "invalid",
+      status: 'invalid',
       reason: `unsupported helperRuntime.profile "${profile}"`,
     };
   }
 
-  return { status: "ok", profile };
+  return { status: 'ok', profile };
 }
 
 export function normalizePolicyConfig(config) {
-  if (typeof config !== "object" || config === null || Array.isArray(config)) {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
     return clone(POLICY_DEFAULTS);
   }
 
   const forcedHandoffAuthorityAlias = firstAcceptedString(
     APPROVAL_ACTOR_POLICIES,
     config?.forcedHandoff?.authorityPolicy,
-    config?.["forced-handoff"]?.authorityPolicy,
+    config?.['forced-handoff']?.authorityPolicy,
     config?.forcedHandoffAuthority,
-    config?.["forced-handoff-authority"],
+    config?.['forced-handoff-authority'],
   );
   const forcedHandoffModeAlias = firstAcceptedString(
     FORCED_HANDOFF_MODES,
     config?.forcedHandoff?.mode,
-    config?.["forced-handoff"]?.mode,
+    config?.['forced-handoff']?.mode,
     config?.forcedHandoffMode,
-    config?.["forced-handoff-mode"],
+    config?.['forced-handoff-mode'],
   );
   const markerTrustAlias = firstBoolean(
     config?.markerTrust?.allowCollaboratorMarkers,
@@ -165,7 +189,11 @@ export function normalizePolicyConfig(config) {
   );
 
   return {
-    issueScope: parseEnum(config?.issueScope, ISSUE_SCOPES, POLICY_DEFAULTS.issueScope),
+    issueScope: parseEnum(
+      config?.issueScope,
+      ISSUE_SCOPES,
+      POLICY_DEFAULTS.issueScope,
+    ),
     orphanFirstPolicy: parseEnum(
       config?.orphanFirstPolicy,
       ORPHAN_FIRST_POLICIES,
@@ -178,10 +206,17 @@ export function normalizePolicyConfig(config) {
       POLICY_DEFAULTS.maintainerApprovalActorPolicy,
     ),
     stallRecovery: {
-      quietWindow: parseDuration(config?.stallRecovery?.quietWindow, POLICY_DEFAULTS.stallRecovery.quietWindow),
+      quietWindow: parseDuration(
+        config?.stallRecovery?.quietWindow,
+        POLICY_DEFAULTS.stallRecovery.quietWindow,
+      ),
     },
     forcedHandoff: {
-      mode: parseEnum(forcedHandoffModeAlias, FORCED_HANDOFF_MODES, POLICY_DEFAULTS.forcedHandoff.mode),
+      mode: parseEnum(
+        forcedHandoffModeAlias,
+        FORCED_HANDOFF_MODES,
+        POLICY_DEFAULTS.forcedHandoff.mode,
+      ),
       authorityPolicy: parseEnum(
         forcedHandoffAuthorityAlias,
         APPROVAL_ACTOR_POLICIES,
@@ -189,10 +224,15 @@ export function normalizePolicyConfig(config) {
       ),
     },
     markerTrust: {
-      allowCollaboratorMarkers: markerTrustAlias ?? POLICY_DEFAULTS.markerTrust.allowCollaboratorMarkers,
+      allowCollaboratorMarkers:
+        markerTrustAlias ??
+        POLICY_DEFAULTS.markerTrust.allowCollaboratorMarkers,
     },
     advisoryWait: {
-      requestCap: parsePositiveInteger(config?.advisoryWait?.requestCap, POLICY_DEFAULTS.advisoryWait.requestCap),
+      requestCap: parsePositiveInteger(
+        config?.advisoryWait?.requestCap,
+        POLICY_DEFAULTS.advisoryWait.requestCap,
+      ),
       pendingWindow: parseAdvisoryWholeMinuteDuration(
         config?.advisoryWait?.pendingWindow,
         POLICY_DEFAULTS.advisoryWait.pendingWindow,
@@ -211,12 +251,19 @@ export function normalizePolicyConfig(config) {
       ),
     },
     ciWait: {
-      runningTimeout: parseDuration(config?.ciWait?.runningTimeout, POLICY_DEFAULTS.ciWait.runningTimeout),
+      runningTimeout: parseDuration(
+        config?.ciWait?.runningTimeout,
+        POLICY_DEFAULTS.ciWait.runningTimeout,
+      ),
       generationTimeout: parseDuration(
         config?.ciWait?.generationTimeout,
         POLICY_DEFAULTS.ciWait.generationTimeout,
       ),
-      rerunPolicy: parseEnum(config?.ciWait?.rerunPolicy, CI_RERUN_POLICIES, POLICY_DEFAULTS.ciWait.rerunPolicy),
+      rerunPolicy: parseEnum(
+        config?.ciWait?.rerunPolicy,
+        CI_RERUN_POLICIES,
+        POLICY_DEFAULTS.ciWait.rerunPolicy,
+      ),
     },
     ciGate: {
       externalChecks: {
@@ -306,7 +353,7 @@ export function normalizePolicyConfig(config) {
   };
 }
 
-export function resolveCollaboratorMarkerTrust(config, envValue = "") {
+export function resolveCollaboratorMarkerTrust(config, envValue = '') {
   if (hasConfiguredCollaboratorMarkerTrust(config)) {
     return normalizePolicyConfig(config).markerTrust.allowCollaboratorMarkers;
   }
@@ -314,18 +361,19 @@ export function resolveCollaboratorMarkerTrust(config, envValue = "") {
 }
 
 export function parseIsoDurationToMs(value) {
-  if (typeof value !== "string") {
+  if (typeof value !== 'string') {
     return null;
   }
   const match = DURATION_RE.exec(value.trim());
   if (!match) {
     return null;
   }
-  const days = Number.parseInt(match.groups.days ?? "0", 10);
-  const hours = Number.parseInt(match.groups.hours ?? "0", 10);
-  const minutes = Number.parseInt(match.groups.minutes ?? "0", 10);
-  const seconds = Number.parseInt(match.groups.seconds ?? "0", 10);
-  const totalMs = (days * DAY_MS) + (hours * HOUR_MS) + (minutes * MINUTE_MS) + (seconds * SECOND_MS);
+  const days = Number.parseInt(match.groups.days ?? '0', 10);
+  const hours = Number.parseInt(match.groups.hours ?? '0', 10);
+  const minutes = Number.parseInt(match.groups.minutes ?? '0', 10);
+  const seconds = Number.parseInt(match.groups.seconds ?? '0', 10);
+  const totalMs =
+    days * DAY_MS + hours * HOUR_MS + minutes * MINUTE_MS + seconds * SECOND_MS;
   return totalMs > 0 ? totalMs : null;
 }
 
@@ -349,10 +397,12 @@ export function getReviewEscalationChangesRequestedPolicy(config = {}) {
   const resolvedSecondEscalationMs = Number.isFinite(secondEscalationMs)
     ? secondEscalationMs
     : defaultSecondEscalationMs;
-  const defaultPostEscalationMs = defaultSecondEscalationMs - defaultFirstEscalationMs;
-  const resolvedPostEscalationMs = resolvedSecondEscalationMs > resolvedFirstEscalationMs
-    ? resolvedSecondEscalationMs - resolvedFirstEscalationMs
-    : defaultPostEscalationMs;
+  const defaultPostEscalationMs =
+    defaultSecondEscalationMs - defaultFirstEscalationMs;
+  const resolvedPostEscalationMs =
+    resolvedSecondEscalationMs > resolvedFirstEscalationMs
+      ? resolvedSecondEscalationMs - resolvedFirstEscalationMs
+      : defaultPostEscalationMs;
 
   return {
     escalateAfterMs: resolvedFirstEscalationMs,
@@ -364,27 +414,27 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function firstString(...values) {
+function _firstString(...values) {
   for (const value of values) {
-    if (typeof value === "string" && value.length > 0) {
+    if (typeof value === 'string' && value.length > 0) {
       return value;
     }
   }
-  return "";
+  return '';
 }
 
 function firstAcceptedString(accepted, ...values) {
   for (const value of values) {
-    if (typeof value === "string" && accepted.has(value)) {
+    if (typeof value === 'string' && accepted.has(value)) {
       return value;
     }
   }
-  return "";
+  return '';
 }
 
 function firstBoolean(...values) {
   for (const value of values) {
-    if (typeof value === "boolean") {
+    if (typeof value === 'boolean') {
       return value;
     }
   }
@@ -392,28 +442,31 @@ function firstBoolean(...values) {
 }
 
 function parseEnum(value, accepted, fallback) {
-  if (typeof value === "string" && accepted.has(value)) {
+  if (typeof value === 'string' && accepted.has(value)) {
     return value;
   }
   return fallback;
 }
 
 function parseDuration(value, fallback) {
-  if (typeof value === "string" && ISO_DURATION_RE.test(value)) {
+  if (typeof value === 'string' && ISO_DURATION_RE.test(value)) {
     return value;
   }
   return fallback;
 }
 
 function parseAdvisoryWholeMinuteDuration(value, fallback) {
-  if (typeof value === "string" && ADVISORY_WHOLE_MINUTE_DURATION_RE.test(value)) {
+  if (
+    typeof value === 'string' &&
+    ADVISORY_WHOLE_MINUTE_DURATION_RE.test(value)
+  ) {
     return value;
   }
   return fallback;
 }
 
 function parseAdvisoryCapRoute(value, fallback) {
-  if (typeof value === "string") {
+  if (typeof value === 'string') {
     if (ADVISORY_CAP_ROUTES.has(value)) {
       return value;
     }
@@ -423,7 +476,9 @@ function parseAdvisoryCapRoute(value, fallback) {
 }
 
 function parsePositiveDuration(value, fallback) {
-  return typeof value === "string" && ISO_DURATION_RE.test(value) && parseIsoDurationToMs(value) !== null
+  return typeof value === 'string' &&
+    ISO_DURATION_RE.test(value) &&
+    parseIsoDurationToMs(value) !== null
     ? value
     : fallback;
 }
@@ -433,7 +488,7 @@ function parsePositiveInteger(value, fallback) {
 }
 
 function parseNonEmptyString(value, fallback) {
-  return typeof value === "string" && value.length > 0 ? value : fallback;
+  return typeof value === 'string' && value.length > 0 ? value : fallback;
 }
 
 function parseCheckSelectors(value, fallback) {
@@ -443,29 +498,33 @@ function parseCheckSelectors(value, fallback) {
 
   const normalized = [];
   for (const entry of value) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
       return clone(fallback);
     }
 
     const entryKeys = Object.keys(entry);
-    if (entryKeys.some((key) => key !== "selector" && key !== "matchMode")) {
+    if (entryKeys.some((key) => key !== 'selector' && key !== 'matchMode')) {
       return clone(fallback);
     }
 
-    const selector = parseNonEmptyString(entry.selector, "");
+    const selector = parseNonEmptyString(entry.selector, '');
     if (!selector) {
       return clone(fallback);
     }
 
-    if (hasOwn(entry, "matchMode")) {
-      if (typeof entry.matchMode !== "string" || !CHECK_SELECTOR_MATCH_MODES.has(entry.matchMode)) {
+    if (hasOwn(entry, 'matchMode')) {
+      if (
+        typeof entry.matchMode !== 'string' ||
+        !CHECK_SELECTOR_MATCH_MODES.has(entry.matchMode)
+      ) {
         return clone(fallback);
       }
     }
 
     normalized.push({
       selector,
-      matchMode: typeof entry.matchMode === "string" ? entry.matchMode : "exact",
+      matchMode:
+        typeof entry.matchMode === 'string' ? entry.matchMode : 'exact',
     });
   }
 
@@ -473,15 +532,17 @@ function parseCheckSelectors(value, fallback) {
 }
 
 function hasConfiguredCollaboratorMarkerTrust(config) {
-  return typeof config?.markerTrust?.allowCollaboratorMarkers === "boolean"
-    || typeof config?.markerTrustAllowCollaboratorMarkers === "boolean"
-    || typeof config?.allowCollaboratorMarkers === "boolean";
+  return (
+    typeof config?.markerTrust?.allowCollaboratorMarkers === 'boolean' ||
+    typeof config?.markerTrustAllowCollaboratorMarkers === 'boolean' ||
+    typeof config?.allowCollaboratorMarkers === 'boolean'
+  );
 }
 
 function isTruthy(value) {
-  return /^(1|true|yes)$/i.test(String(value ?? "").trim());
+  return /^(1|true|yes)$/i.test(String(value ?? '').trim());
 }
 
 function hasOwn(value, key) {
-  return Object.prototype.hasOwnProperty.call(value ?? {}, key);
+  return Object.hasOwn(value ?? {}, key);
 }

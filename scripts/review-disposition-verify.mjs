@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
-import { pathToFileURL } from "node:url";
-import { resolve } from "node:path";
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const MARKER_ACCEPTED_RE = /^\*\*Accepted\*\*\s+—/;
 const MARKER_REJECTED_RE = /^\*\*Rejected\*\*\s+—/;
-const MARKER_REJECTION_CONFIRMED_RE = /^\*\*Rejection confirmed by maintainer\*\*\s+—/;
+const MARKER_REJECTION_CONFIRMED_RE =
+  /^\*\*Rejection confirmed by maintainer\*\*\s+—/;
 const MARKER_AMD_RE = /^\*\*Awaiting maintainer decision\*\*\s+—/;
 
 if (isMainModule(import.meta.url)) {
@@ -16,7 +17,7 @@ if (isMainModule(import.meta.url)) {
   }
 
   if (args.items === null) {
-    throw new Error("--items is required");
+    throw new Error('--items is required');
   }
 
   let rawItems;
@@ -24,19 +25,27 @@ if (isMainModule(import.meta.url)) {
     const parsed = JSON.parse(args.items);
     if (Array.isArray(parsed)) {
       rawItems = parsed;
-    } else if (parsed !== null && typeof parsed === "object" && "items" in parsed) {
+    } else if (
+      parsed !== null &&
+      typeof parsed === 'object' &&
+      'items' in parsed
+    ) {
       if (parsed.items === null) {
-        throw new Error("--items JSON object has 'items: null'; expected an array");
+        throw new Error(
+          "--items JSON object has 'items: null'; expected an array",
+        );
       }
       rawItems = parsed.items ?? [];
     } else {
       throw new Error("--items JSON object must have an 'items' key");
     }
   } catch (err) {
-    if (err.message.includes("--items")) {
+    if (err.message.includes('--items')) {
       throw err;
     }
-    throw new Error("--items must be a valid JSON array or object with an 'items' key");
+    throw new Error(
+      "--items must be a valid JSON array or object with an 'items' key",
+    );
   }
 
   const result = verifyDispositions(rawItems);
@@ -69,12 +78,12 @@ if (isMainModule(import.meta.url)) {
  */
 export function verifyDispositions(items) {
   if (!Array.isArray(items)) {
-    throw new TypeError("items must be an array");
+    throw new TypeError('items must be an array');
   }
   if (items.length === 0) {
     return {
       passed: true,
-      summary: "No items to verify.",
+      summary: 'No items to verify.',
       totalCount: 0,
       passedCount: 0,
       failedCount: 0,
@@ -84,10 +93,10 @@ export function verifyDispositions(items) {
 
   const results = items.map((item) => {
     const normalized = normalizeItem(item);
-    if (normalized.path === "A") {
+    if (normalized.path === 'A') {
       return checkPathAItem(normalized);
     }
-    if (normalized.path === "B") {
+    if (normalized.path === 'B') {
       return checkPathBItem(normalized);
     }
     return {
@@ -100,7 +109,9 @@ export function verifyDispositions(items) {
         threadResolutionCorrect: null,
       },
       passed: false,
-      issues: [`Unknown path value: ${JSON.stringify(normalized.path)}. Expected "A" or "B".`],
+      issues: [
+        `Unknown path value: ${JSON.stringify(normalized.path)}. Expected "A" or "B".`,
+      ],
     };
   });
 
@@ -108,8 +119,8 @@ export function verifyDispositions(items) {
   const failedCount = results.length - passedCount;
   const passed = failedCount === 0;
   const summary = passed
-    ? `All ${results.length} item${results.length === 1 ? "" : "s"} verified.`
-    : `${failedCount} of ${results.length} item${results.length === 1 ? "" : "s"} failed E7 verification.`;
+    ? `All ${results.length} item${results.length === 1 ? '' : 's'} verified.`
+    : `${failedCount} of ${results.length} item${results.length === 1 ? '' : 's'} failed E7 verification.`;
 
   return {
     passed,
@@ -126,18 +137,21 @@ export function verifyDispositions(items) {
  * Returns "accepted" | "rejected" | "awaiting_maintainer" | null.
  */
 export function classifyMarker(text) {
-  if (typeof text !== "string" || text.trim() === "") {
+  if (typeof text !== 'string' || text.trim() === '') {
     return null;
   }
   const trimmed = text.trim();
   if (MARKER_ACCEPTED_RE.test(trimmed)) {
-    return "accepted";
+    return 'accepted';
   }
-  if (MARKER_REJECTED_RE.test(trimmed) || MARKER_REJECTION_CONFIRMED_RE.test(trimmed)) {
-    return "rejected";
+  if (
+    MARKER_REJECTED_RE.test(trimmed) ||
+    MARKER_REJECTION_CONFIRMED_RE.test(trimmed)
+  ) {
+    return 'rejected';
   }
   if (MARKER_AMD_RE.test(trimmed)) {
-    return "awaiting_maintainer";
+    return 'awaiting_maintainer';
   }
   return null;
 }
@@ -160,76 +174,92 @@ export function checkPathAItem(item) {
   };
   const issues = [];
 
-  const validDecisions = new Set(["accepted", "rejected", "awaiting_maintainer"]);
+  const validDecisions = new Set([
+    'accepted',
+    'rejected',
+    'awaiting_maintainer',
+  ]);
   if (decision === null) {
     checks.decisionRecorded = false;
-    issues.push("PATH A item has no recorded decision (null).");
-    return makeResult(id, "A", checks, issues);
+    issues.push('PATH A item has no recorded decision (null).');
+    return makeResult(id, 'A', checks, issues);
   }
   if (!validDecisions.has(decision)) {
     checks.decisionRecorded = false;
     issues.push(`Unknown decision value: ${JSON.stringify(decision)}.`);
-    return makeResult(id, "A", checks, issues);
+    return makeResult(id, 'A', checks, issues);
   }
   checks.decisionRecorded = true;
 
-  if (decision === "accepted") {
-    return makeResult(id, "A", checks, issues);
+  if (decision === 'accepted') {
+    return makeResult(id, 'A', checks, issues);
   }
 
-  const markerType = classifyMarker(markerReply ?? "");
+  const markerType = classifyMarker(markerReply ?? '');
 
-  if (decision === "rejected") {
-    const markerPresent = markerType === "rejected";
+  if (decision === 'rejected') {
+    const markerPresent = markerType === 'rejected';
     checks.markerPresent = markerPresent;
     checks.markerMatchesDecision = markerPresent;
     if (!markerPresent) {
-      issues.push("PATH A Rejected item is missing the required `**Rejected** — {reason}` marker reply.");
+      issues.push(
+        'PATH A Rejected item is missing the required `**Rejected** — {reason}` marker reply.',
+      );
     }
 
-    if (type === "review_thread") {
+    if (type === 'review_thread') {
       const resolutionCorrect = threadResolved === true;
       checks.threadResolutionCorrect = resolutionCorrect;
       if (!resolutionCorrect) {
-        issues.push("PATH A Rejected review_thread must be resolved after posting the rejection reply.");
+        issues.push(
+          'PATH A Rejected review_thread must be resolved after posting the rejection reply.',
+        );
       }
     } else {
       if (threadResolved !== null) {
         checks.threadResolutionCorrect = false;
-        issues.push(`Non-thread item (type: ${type}) has unexpected non-null threadResolved: ${JSON.stringify(threadResolved)}.`);
+        issues.push(
+          `Non-thread item (type: ${type}) has unexpected non-null threadResolved: ${JSON.stringify(threadResolved)}.`,
+        );
       } else {
         checks.threadResolutionCorrect = true;
       }
     }
-    return makeResult(id, "A", checks, issues);
+    return makeResult(id, 'A', checks, issues);
   }
 
-  if (decision === "awaiting_maintainer") {
-    const markerPresent = markerType === "awaiting_maintainer";
+  if (decision === 'awaiting_maintainer') {
+    const markerPresent = markerType === 'awaiting_maintainer';
     checks.markerPresent = markerPresent;
     checks.markerMatchesDecision = markerPresent;
     if (!markerPresent) {
-      issues.push("PATH A AMD item is missing the required `**Awaiting maintainer decision** — {reasoning}` marker reply.");
+      issues.push(
+        'PATH A AMD item is missing the required `**Awaiting maintainer decision** — {reasoning}` marker reply.',
+      );
     }
 
-    if (type === "review_thread") {
+    if (type === 'review_thread') {
       const resolutionCorrect = threadResolved === false;
       checks.threadResolutionCorrect = resolutionCorrect;
       if (!resolutionCorrect) {
-        issues.push("PATH A AMD review_thread must NOT be resolved (leave unresolved so F2 gate blocks merge).");
+        issues.push(
+          'PATH A AMD review_thread must NOT be resolved (leave unresolved so F2 gate blocks merge).',
+        );
       }
     } else {
       if (threadResolved !== null) {
         checks.threadResolutionCorrect = false;
-        issues.push(`Non-thread AMD item (type: ${type}) has unexpected non-null threadResolved: ${JSON.stringify(threadResolved)}.`);
+        issues.push(
+          `Non-thread AMD item (type: ${type}) has unexpected non-null threadResolved: ${JSON.stringify(threadResolved)}.`,
+        );
       } else {
         checks.threadResolutionCorrect = true;
       }
     }
-    return makeResult(id, "A", checks, issues);
+    return makeResult(id, 'A', checks, issues);
   }
 
-  return makeResult(id, "A", checks, issues);
+  return makeResult(id, 'A', checks, issues);
 }
 
 /**
@@ -249,46 +279,56 @@ export function checkPathBItem(item) {
   };
   const issues = [];
 
-  const validDecisions = new Set(["accepted", "rejected"]);
+  const validDecisions = new Set(['accepted', 'rejected']);
   if (decision === null) {
     checks.decisionRecorded = false;
-    issues.push("PATH B item has no recorded decision (null).");
-    return makeResult(id, "B", checks, issues);
+    issues.push('PATH B item has no recorded decision (null).');
+    return makeResult(id, 'B', checks, issues);
   }
   if (!validDecisions.has(decision)) {
     checks.decisionRecorded = false;
-    issues.push(`PATH B decision must be "accepted" or "rejected"; got: ${JSON.stringify(decision)}.`);
-    return makeResult(id, "B", checks, issues);
+    issues.push(
+      `PATH B decision must be "accepted" or "rejected"; got: ${JSON.stringify(decision)}.`,
+    );
+    return makeResult(id, 'B', checks, issues);
   }
   checks.decisionRecorded = true;
 
-  const markerType = classifyMarker(markerReply ?? "");
-  const markerPresent = markerType === "accepted" || markerType === "rejected";
+  const markerType = classifyMarker(markerReply ?? '');
+  const markerPresent = markerType === 'accepted' || markerType === 'rejected';
   const markerMatchesDecision = markerType === decision;
   checks.markerPresent = markerPresent;
   checks.markerMatchesDecision = markerMatchesDecision;
   if (!markerPresent) {
-    issues.push("PATH B item is missing the required `**Accepted** — ...` or `**Rejected** — ...` marker reply.");
+    issues.push(
+      'PATH B item is missing the required `**Accepted** — ...` or `**Rejected** — ...` marker reply.',
+    );
   } else if (!markerMatchesDecision) {
-    issues.push(`PATH B marker type (${markerType}) does not match recorded decision (${decision}).`);
+    issues.push(
+      `PATH B marker type (${markerType}) does not match recorded decision (${decision}).`,
+    );
   }
 
-  if (type === "review_thread") {
+  if (type === 'review_thread') {
     const resolutionCorrect = threadResolved === true;
     checks.threadResolutionCorrect = resolutionCorrect;
     if (!resolutionCorrect) {
-      issues.push("PATH B review_thread must be resolved immediately after posting the marker.");
+      issues.push(
+        'PATH B review_thread must be resolved immediately after posting the marker.',
+      );
     }
   } else {
     if (threadResolved !== null) {
       checks.threadResolutionCorrect = false;
-      issues.push(`Non-thread PATH B item (type: ${type}) has unexpected non-null threadResolved: ${JSON.stringify(threadResolved)}.`);
+      issues.push(
+        `Non-thread PATH B item (type: ${type}) has unexpected non-null threadResolved: ${JSON.stringify(threadResolved)}.`,
+      );
     } else {
       checks.threadResolutionCorrect = true;
     }
   }
 
-  return makeResult(id, "B", checks, issues);
+  return makeResult(id, 'B', checks, issues);
 }
 
 function makeResult(id, path, checks, issues) {
@@ -303,14 +343,19 @@ function makeResult(id, path, checks, issues) {
 
 function normalizeItem(item) {
   return {
-    id: String(item?.id ?? ""),
-    path: typeof item?.path === "string" ? item.path.toUpperCase() : item?.path,
-    type: typeof item?.type === "string" ? item.type : null,
-    decision: typeof item?.decision === "string" ? item.decision.toLowerCase() : null,
-    markerReply: typeof item?.markerReply === "string" ? item.markerReply : null,
-    threadResolved: item?.threadResolved === true ? true
-      : item?.threadResolved === false ? false
-        : null,
+    id: String(item?.id ?? ''),
+    path: typeof item?.path === 'string' ? item.path.toUpperCase() : item?.path,
+    type: typeof item?.type === 'string' ? item.type : null,
+    decision:
+      typeof item?.decision === 'string' ? item.decision.toLowerCase() : null,
+    markerReply:
+      typeof item?.markerReply === 'string' ? item.markerReply : null,
+    threadResolved:
+      item?.threadResolved === true
+        ? true
+        : item?.threadResolved === false
+          ? false
+          : null,
   };
 }
 
@@ -319,15 +364,15 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
-    if (token === "--items") {
-      if (value === undefined || value.startsWith("-")) {
-        throw new Error("--items requires a JSON value");
+    if (token === '--items') {
+      if (value === undefined || value.startsWith('-')) {
+        throw new Error('--items requires a JSON value');
       }
       parsed.items = value;
       index += 1;
       continue;
     }
-    if (token === "--help" || token === "-h") {
+    if (token === '--help' || token === '-h') {
       parsed.help = true;
       continue;
     }

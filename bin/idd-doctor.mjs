@@ -1,5 +1,5 @@
 #!/usr/bin/env node
 
-import { runHelper } from "./run-helper.mjs";
+import { runHelper } from './run-helper.mjs';
 
-runHelper("../scripts/idd-doctor.mjs");
+runHelper('../scripts/idd-doctor.mjs');

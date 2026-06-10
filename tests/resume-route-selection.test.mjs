@@ -1,24 +1,24 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
 
 import {
   classifyBranchState,
   countLatestChangesRequestedByReviewer,
   recoverJsonFromGhFailure,
   selectResumeRoute,
-} from "../scripts/resume-route-selection.mjs";
+} from '../scripts/resume-route-selection.mjs';
 
-test("routes D4 when no PR and required checks are not generated", () => {
+test('routes D4 when no PR and required checks are not generated', () => {
   const result = selectResumeRoute({
     prExists: false,
     requiredChecksGenerated: false,
     hasUnpushedCommits: false,
     worktreeDirty: false,
   });
-  assert.equal(result.route, "D4");
+  assert.equal(result.route, 'D4');
 });
 
-test("routes stop when multiple matching open PRs are detected", () => {
+test('routes stop when multiple matching open PRs are detected', () => {
   const result = selectResumeRoute({
     prAmbiguous: true,
     prExists: false,
@@ -26,31 +26,31 @@ test("routes stop when multiple matching open PRs are detected", () => {
     hasUnpushedCommits: true,
     worktreeDirty: false,
   });
-  assert.equal(result.route, "stop");
-  assert.equal(result.reason, "multiple-open-prs-for-issue");
+  assert.equal(result.route, 'stop');
+  assert.equal(result.reason, 'multiple-open-prs-for-issue');
 });
 
-test("routes D1 when no PR and clean worktree has unpushed commits", () => {
+test('routes D1 when no PR and clean worktree has unpushed commits', () => {
   const result = selectResumeRoute({
     prExists: false,
     requiredChecksGenerated: false,
     hasUnpushedCommits: true,
     worktreeDirty: false,
   });
-  assert.equal(result.route, "D1");
+  assert.equal(result.route, 'D1');
 });
 
-test("routes D4 when no PR and worktree is dirty", () => {
+test('routes D4 when no PR and worktree is dirty', () => {
   const result = selectResumeRoute({
     prExists: false,
     requiredChecksGenerated: false,
     hasUnpushedCommits: true,
     worktreeDirty: true,
   });
-  assert.equal(result.route, "D4");
+  assert.equal(result.route, 'D4');
 });
 
-test("routes D4 when PR exists, CI is running, and no reviews exist", () => {
+test('routes D4 when PR exists, CI is running, and no reviews exist', () => {
   const result = selectResumeRoute({
     prExists: true,
     requiredChecksGenerated: true,
@@ -58,10 +58,10 @@ test("routes D4 when PR exists, CI is running, and no reviews exist", () => {
     reviewExists: false,
     reviewPending: false,
   });
-  assert.equal(result.route, "D4");
+  assert.equal(result.route, 'D4');
 });
 
-test("routes E15 when PR exists, CI is running, and reviews exist", () => {
+test('routes E15 when PR exists, CI is running, and reviews exist', () => {
   const result = selectResumeRoute({
     prExists: true,
     requiredChecksGenerated: true,
@@ -69,10 +69,10 @@ test("routes E15 when PR exists, CI is running, and reviews exist", () => {
     reviewExists: true,
     reviewPending: true,
   });
-  assert.equal(result.route, "E15");
+  assert.equal(result.route, 'E15');
 });
 
-test("routes E1 when PR exists, CI succeeded, and reviews are pending", () => {
+test('routes E1 when PR exists, CI succeeded, and reviews are pending', () => {
   const result = selectResumeRoute({
     prExists: true,
     requiredChecksGenerated: true,
@@ -80,73 +80,73 @@ test("routes E1 when PR exists, CI succeeded, and reviews are pending", () => {
     reviewExists: true,
     reviewPending: true,
   });
-  assert.equal(result.route, "E1");
+  assert.equal(result.route, 'E1');
 });
 
-test("routes F2 when PR exists, CI succeeded, no pending reviews, and branch is clean", () => {
+test('routes F2 when PR exists, CI succeeded, no pending reviews, and branch is clean', () => {
   const result = selectResumeRoute({
     prExists: true,
     requiredChecksGenerated: true,
     ciSuccess: true,
     reviewExists: false,
     reviewPending: false,
-    branchState: "clean",
+    branchState: 'clean',
   });
-  assert.equal(result.route, "F2");
+  assert.equal(result.route, 'F2');
 });
 
-test("routes F1 when PR exists, CI succeeded, no pending reviews, and branch is behind without conflict", () => {
+test('routes F1 when PR exists, CI succeeded, no pending reviews, and branch is behind without conflict', () => {
   const result = selectResumeRoute({
     prExists: true,
     requiredChecksGenerated: true,
     ciSuccess: true,
     reviewExists: false,
     reviewPending: false,
-    branchState: "behind-no-conflict",
+    branchState: 'behind-no-conflict',
   });
-  assert.equal(result.route, "F1");
-  assert.equal(result.reason, "pr-ci-success-branch-behind-no-conflict");
+  assert.equal(result.route, 'F1');
+  assert.equal(result.reason, 'pr-ci-success-branch-behind-no-conflict');
 });
 
-test("routes Esync when PR exists, CI succeeded, no pending reviews, and branch has content conflict", () => {
+test('routes Esync when PR exists, CI succeeded, no pending reviews, and branch has content conflict', () => {
   const result = selectResumeRoute({
     prExists: true,
     requiredChecksGenerated: true,
     ciSuccess: true,
     reviewExists: false,
     reviewPending: false,
-    branchState: "content-conflict",
+    branchState: 'content-conflict',
   });
-  assert.equal(result.route, "Esync");
+  assert.equal(result.route, 'Esync');
 });
 
-test("routes stop when PR exists, CI succeeded, no pending reviews, and branch state is dirty", () => {
+test('routes stop when PR exists, CI succeeded, no pending reviews, and branch state is dirty', () => {
   const result = selectResumeRoute({
     prExists: true,
     requiredChecksGenerated: true,
     ciSuccess: true,
     reviewExists: false,
     reviewPending: false,
-    branchState: "dirty",
+    branchState: 'dirty',
   });
-  assert.equal(result.route, "stop");
-  assert.equal(result.reason, "pr-ci-success-branch-dirty-or-unknown");
+  assert.equal(result.route, 'stop');
+  assert.equal(result.reason, 'pr-ci-success-branch-dirty-or-unknown');
 });
 
-test("routes stop when PR exists, CI succeeded, no pending reviews, and branch state is unknown", () => {
+test('routes stop when PR exists, CI succeeded, no pending reviews, and branch state is unknown', () => {
   const result = selectResumeRoute({
     prExists: true,
     requiredChecksGenerated: true,
     ciSuccess: true,
     reviewExists: false,
     reviewPending: false,
-    branchState: "unknown",
+    branchState: 'unknown',
   });
-  assert.equal(result.route, "stop");
-  assert.equal(result.reason, "pr-ci-success-branch-dirty-or-unknown");
+  assert.equal(result.route, 'stop');
+  assert.equal(result.reason, 'pr-ci-success-branch-dirty-or-unknown');
 });
 
-test("routes F2 when PR exists, CI succeeded, no pending reviews, and branchState is not provided (defaults to clean)", () => {
+test('routes F2 when PR exists, CI succeeded, no pending reviews, and branchState is not provided (defaults to clean)', () => {
   const result = selectResumeRoute({
     prExists: true,
     requiredChecksGenerated: true,
@@ -154,10 +154,10 @@ test("routes F2 when PR exists, CI succeeded, no pending reviews, and branchStat
     reviewExists: false,
     reviewPending: false,
   });
-  assert.equal(result.route, "F2");
+  assert.equal(result.route, 'F2');
 });
 
-test("routes E15 when PR exists, CI fails, and reviews exist", () => {
+test('routes E15 when PR exists, CI fails, and reviews exist', () => {
   const result = selectResumeRoute({
     prExists: true,
     requiredChecksGenerated: true,
@@ -165,81 +165,90 @@ test("routes E15 when PR exists, CI fails, and reviews exist", () => {
     reviewExists: true,
     reviewPending: true,
   });
-  assert.equal(result.route, "E15");
+  assert.equal(result.route, 'E15');
 });
 
-test("routes E15 when PR exists, required checks are not generated, and reviews exist", () => {
+test('routes E15 when PR exists, required checks are not generated, and reviews exist', () => {
   const result = selectResumeRoute({
     prExists: true,
     requiredChecksGenerated: false,
     reviewExists: true,
   });
-  assert.equal(result.route, "E15");
+  assert.equal(result.route, 'E15');
 });
 
-test("classifyBranchState returns clean for CLEAN mergeStateStatus", () => {
+test('classifyBranchState returns clean for CLEAN mergeStateStatus', () => {
   assert.equal(
-    classifyBranchState({ mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" }),
-    "clean",
+    classifyBranchState({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' }),
+    'clean',
   );
 });
 
-test("classifyBranchState returns behind-no-conflict for BEHIND mergeStateStatus", () => {
+test('classifyBranchState returns behind-no-conflict for BEHIND mergeStateStatus', () => {
   assert.equal(
-    classifyBranchState({ mergeable: "MERGEABLE", mergeStateStatus: "BEHIND" }),
-    "behind-no-conflict",
+    classifyBranchState({ mergeable: 'MERGEABLE', mergeStateStatus: 'BEHIND' }),
+    'behind-no-conflict',
   );
 });
 
-test("classifyBranchState returns content-conflict for CONFLICTING mergeable", () => {
+test('classifyBranchState returns content-conflict for CONFLICTING mergeable', () => {
   assert.equal(
-    classifyBranchState({ mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }),
-    "content-conflict",
+    classifyBranchState({
+      mergeable: 'CONFLICTING',
+      mergeStateStatus: 'DIRTY',
+    }),
+    'content-conflict',
   );
 });
 
-test("classifyBranchState returns dirty for DIRTY mergeStateStatus", () => {
+test('classifyBranchState returns dirty for DIRTY mergeStateStatus', () => {
   assert.equal(
-    classifyBranchState({ mergeable: "MERGEABLE", mergeStateStatus: "DIRTY" }),
-    "dirty",
+    classifyBranchState({ mergeable: 'MERGEABLE', mergeStateStatus: 'DIRTY' }),
+    'dirty',
   );
 });
 
-test("classifyBranchState returns clean for BLOCKED MERGEABLE (non-git-conflict block)", () => {
+test('classifyBranchState returns clean for BLOCKED MERGEABLE (non-git-conflict block)', () => {
   assert.equal(
-    classifyBranchState({ mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" }),
-    "clean",
+    classifyBranchState({
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'BLOCKED',
+    }),
+    'clean',
   );
 });
 
-test("classifyBranchState returns unknown for null/missing state", () => {
-  assert.equal(classifyBranchState(null), "unknown");
-  assert.equal(classifyBranchState({}), "unknown");
-  assert.equal(classifyBranchState({ mergeable: "UNKNOWN", mergeStateStatus: "" }), "unknown");
+test('classifyBranchState returns unknown for null/missing state', () => {
+  assert.equal(classifyBranchState(null), 'unknown');
+  assert.equal(classifyBranchState({}), 'unknown');
+  assert.equal(
+    classifyBranchState({ mergeable: 'UNKNOWN', mergeStateStatus: '' }),
+    'unknown',
+  );
 });
 
 test("counts CHANGES_REQUESTED using each reviewer's latest gating state", () => {
   const count = countLatestChangesRequestedByReviewer([
     {
-      user: { login: "alice" },
-      state: "CHANGES_REQUESTED",
-      submitted_at: "2026-05-12T10:00:00Z",
+      user: { login: 'alice' },
+      state: 'CHANGES_REQUESTED',
+      submitted_at: '2026-05-12T10:00:00Z',
     },
     {
-      user: { login: "alice" },
-      state: "APPROVED",
-      submitted_at: "2026-05-12T11:00:00Z",
+      user: { login: 'alice' },
+      state: 'APPROVED',
+      submitted_at: '2026-05-12T11:00:00Z',
     },
     {
-      user: { login: "bob" },
-      state: "CHANGES_REQUESTED",
-      submitted_at: "2026-05-12T09:00:00Z",
+      user: { login: 'bob' },
+      state: 'CHANGES_REQUESTED',
+      submitted_at: '2026-05-12T09:00:00Z',
     },
   ]);
   assert.equal(count, 1);
 });
 
-test("recovers empty required-check set from gh pr checks failure", () => {
+test('recovers empty required-check set from gh pr checks failure', () => {
   const recovered = recoverJsonFromGhFailure(
     { stderr: "no required checks reported on the 'main' branch" },
     { allowNoRequiredChecks: true },

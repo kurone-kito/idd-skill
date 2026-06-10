@@ -1,4 +1,8 @@
-import { POLICY_DEFAULTS, normalizePolicyConfig, parseIsoDurationToMs } from "./policy-helpers.mjs";
+import {
+  normalizePolicyConfig,
+  POLICY_DEFAULTS,
+  parseIsoDurationToMs,
+} from './policy-helpers.mjs';
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -6,11 +10,15 @@ const DAY_MS = 24 * HOUR_MS;
 
 export function resolveAuthoringGuardPolicy(config) {
   const normalized = normalizePolicyConfig(config);
-  const fallbackMs = parseIsoDurationToMs(POLICY_DEFAULTS.issueAuthoring.authoringStaleAge);
+  const fallbackMs = parseIsoDurationToMs(
+    POLICY_DEFAULTS.issueAuthoring.authoringStaleAge,
+  );
   return {
     labelName: normalized.issueAuthoring.authoringLabelName,
     staleAge: normalized.issueAuthoring.authoringStaleAge,
-    staleAgeMs: parseIsoDurationToMs(normalized.issueAuthoring.authoringStaleAge) ?? fallbackMs,
+    staleAgeMs:
+      parseIsoDurationToMs(normalized.issueAuthoring.authoringStaleAge) ??
+      fallbackMs,
   };
 }
 
@@ -26,14 +34,14 @@ export function buildAuthoringLabelWarning({
     return {
       issueNumber,
       labelName,
-      status: "timestamp_unavailable",
+      status: 'timestamp_unavailable',
       labeledAt: null,
       ageMs: null,
       staleAgeMs,
       message:
         `Warning: Issue #${issueNumber} carries the authoring label, ` +
-        "but the labeled event timestamp could not be resolved; " +
-        "the stale-authoring age could not be checked.",
+        'but the labeled event timestamp could not be resolved; ' +
+        'the stale-authoring age could not be checked.',
     };
   }
 
@@ -47,7 +55,7 @@ export function buildAuthoringLabelWarning({
   return {
     issueNumber,
     labelName,
-    status: "stale",
+    status: 'stale',
     labeledAt,
     ageMs,
     staleAgeMs,
@@ -58,12 +66,12 @@ export function buildAuthoringLabelWarning({
 }
 
 export function findLatestLabeledAt(events, labelName) {
-  let latest = "";
+  let latest = '';
   for (const event of events ?? []) {
     if (!isMatchingLabeledEvent(event, labelName)) {
       continue;
     }
-    const createdAt = String(event.created_at ?? event.createdAt ?? "");
+    const createdAt = String(event.created_at ?? event.createdAt ?? '');
     if (!createdAt || Number.isNaN(Date.parse(createdAt))) {
       continue;
     }
@@ -90,13 +98,14 @@ export function formatElapsedDuration(durationMs) {
   if (minutes > 0 || parts.length === 0) {
     parts.push(`${minutes}m`);
   }
-  return parts.join(" ");
+  return parts.join(' ');
 }
 
 function isMatchingLabeledEvent(event, labelName) {
-  if (!event || event.event !== "labeled") {
+  if (event?.event !== 'labeled') {
     return false;
   }
-  const eventLabel = typeof event.label === "string" ? event.label : event.label?.name;
+  const eventLabel =
+    typeof event.label === 'string' ? event.label : event.label?.name;
   return eventLabel === labelName;
 }

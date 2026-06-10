@@ -1,17 +1,17 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { parseProjectCommandRows } from "./idd-doctor.mjs";
+import { parseProjectCommandRows } from './idd-doctor.mjs';
 
-const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const TEMPLATE_OVERVIEW_PATH =
-  "idd-template/.github/instructions/idd-overview-core.instructions.md";
+  'idd-template/.github/instructions/idd-overview-core.instructions.md';
 const COMMAND_ROWS = [
-  "fix-validate",
-  "pre-push-validate",
-  "post-fix-validate",
-  "install-deps",
+  'fix-validate',
+  'pre-push-validate',
+  'post-fix-validate',
+  'install-deps',
 ];
 const FORBIDDEN_TOKEN = /\bpnpm\b/i;
 
@@ -23,7 +23,7 @@ const FORBIDDEN_TOKEN = /\bpnpm\b/i;
 export function findPnpmCommandLeaks(overviewText) {
   const rows = parseProjectCommandRows(overviewText);
   return COMMAND_ROWS.flatMap((name) => {
-    const command = rows.get(name) ?? "";
+    const command = rows.get(name) ?? '';
     if (!command || !FORBIDDEN_TOKEN.test(command)) return [];
     return [`${name}: contains forbidden token "pnpm" (${command})`];
   });
@@ -35,7 +35,7 @@ export function findPnpmCommandLeaks(overviewText) {
  * @returns {{ ok: boolean, errors: string[] }}
  */
 export function checkPnpmBoundary(root = ROOT) {
-  const text = readFileSync(join(root, TEMPLATE_OVERVIEW_PATH), "utf8");
+  const text = readFileSync(join(root, TEMPLATE_OVERVIEW_PATH), 'utf8');
   const errors = findPnpmCommandLeaks(text);
   return { ok: errors.length === 0, errors };
 }
@@ -43,11 +43,11 @@ export function checkPnpmBoundary(root = ROOT) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = checkPnpmBoundary();
   if (!result.ok) {
-    console.error("pnpm boundary check failed:");
+    console.error('pnpm boundary check failed:');
     for (const error of result.errors) {
       console.error(`- ${error}`);
     }
     process.exit(1);
   }
-  console.log("pnpm boundary check passed.");
+  console.log('pnpm boundary check passed.');
 }

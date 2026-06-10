@@ -1,46 +1,53 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
-import { buildActivitySnapshotSummary, resolveTrustedMarkerActors } from "./protocol-helpers.mjs";
+import {
+  buildActivitySnapshotSummary,
+  resolveTrustedMarkerActors,
+} from './protocol-helpers.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.prNumber) {
-  throw new Error("missing required --pr <number> argument");
+  throw new Error('missing required --pr <number> argument');
 }
 
-const owner = args.owner || ghText(["repo", "view", "--json", "owner", "--jq", ".owner.login"]);
-const repo = args.repo || ghText(["repo", "view", "--json", "name", "--jq", ".name"]);
+const owner =
+  args.owner ||
+  ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+const repo =
+  args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
 const repoRef = `${owner}/${repo}`;
-const { actors: trustedMarkerLogins, source: trustedMarkerActorsSource } = resolveTrustedMarkerActors({
-  flagValue: args.trustedMarkerLogins,
-  envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-  config: loadIddConfig(),
-});
+const { actors: trustedMarkerLogins, source: trustedMarkerActorsSource } =
+  resolveTrustedMarkerActors({
+    flagValue: args.trustedMarkerLogins,
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+    config: loadIddConfig(),
+  });
 
 const headSha = ghText([
-  "pr",
-  "view",
+  'pr',
+  'view',
   String(args.prNumber),
-  "-R",
+  '-R',
   repoRef,
-  "--json",
-  "headRefOid",
-  "--jq",
-  ".headRefOid",
+  '--json',
+  'headRefOid',
+  '--jq',
+  '.headRefOid',
 ]);
 const checks = ghJson(
   [
-    "pr",
-    "checks",
+    'pr',
+    'checks',
     String(args.prNumber),
-    "-R",
+    '-R',
     repoRef,
-    "--json",
-    "name,state,completedAt",
-    "--jq",
-    ".",
+    '--json',
+    'name,state,completedAt',
+    '--jq',
+    '.',
   ],
   { allowStatuses: [1, 8] },
 );
@@ -64,20 +71,26 @@ const summary = buildActivitySnapshotSummary(
   { trustedMarkerLogins },
 );
 
-process.stdout.write(`${JSON.stringify({
-  headSha,
-  trustedMarkerActors: trustedMarkerLogins,
-  trustedMarkerActorsSource,
-  totalItemCount: summary.totalItemCount,
-  maxActivityUpdatedAt: summary.maxActivityUpdatedAt,
-  latestCiCompletedAt: summary.latestCiCompletedAt,
-  latestPassingCiCompletedAt: summary.latestPassingCiCompletedAt,
-  counts: summary.counts,
-}, null, 2)}\n`);
+process.stdout.write(
+  `${JSON.stringify(
+    {
+      headSha,
+      trustedMarkerActors: trustedMarkerLogins,
+      trustedMarkerActorsSource,
+      totalItemCount: summary.totalItemCount,
+      maxActivityUpdatedAt: summary.maxActivityUpdatedAt,
+      latestCiCompletedAt: summary.latestCiCompletedAt,
+      latestPassingCiCompletedAt: summary.latestPassingCiCompletedAt,
+      counts: summary.counts,
+    },
+    null,
+    2,
+  )}\n`,
+);
 
 function loadIddConfig() {
   try {
-    return JSON.parse(readFileSync(".github/idd/config.json", "utf8"));
+    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
   } catch {
     return null;
   }
@@ -86,35 +99,35 @@ function loadIddConfig() {
 function parseArgs(argv) {
   const parsed = {
     prNumber: null,
-    owner: "",
-    repo: "",
-    trustedMarkerLogins: "",
+    owner: '',
+    repo: '',
+    trustedMarkerLogins: '',
   };
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
-    if (token === "--pr") {
-      parsed.prNumber = Number.parseInt(value ?? "", 10);
+    if (token === '--pr') {
+      parsed.prNumber = Number.parseInt(value ?? '', 10);
       index += 1;
       continue;
     }
-    if (token === "--owner") {
-      parsed.owner = value ?? "";
+    if (token === '--owner') {
+      parsed.owner = value ?? '';
       index += 1;
       continue;
     }
-    if (token === "--repo") {
-      parsed.repo = value ?? "";
+    if (token === '--repo') {
+      parsed.repo = value ?? '';
       index += 1;
       continue;
     }
-    if (token === "--trusted-marker-logins") {
-      parsed.trustedMarkerLogins = value ?? "";
+    if (token === '--trusted-marker-logins') {
+      parsed.trustedMarkerLogins = value ?? '';
       index += 1;
       continue;
     }
-    if (token === "--help" || token === "-h") {
+    if (token === '--help' || token === '-h') {
       printHelp();
       process.exit(0);
     }
@@ -136,20 +149,20 @@ function printHelp() {
 
 function normalizeComment(comment) {
   return {
-    author: { login: comment.user?.login ?? "" },
-    body: comment.body ?? "",
-    createdAt: comment.created_at ?? "",
-    updatedAt: comment.updated_at ?? comment.created_at ?? "",
+    author: { login: comment.user?.login ?? '' },
+    body: comment.body ?? '',
+    createdAt: comment.created_at ?? '',
+    updatedAt: comment.updated_at ?? comment.created_at ?? '',
   };
 }
 
 function normalizeReview(review) {
   return {
-    author: { login: review.user?.login ?? "" },
-    state: review.state ?? "",
-    submittedAt: review.submitted_at ?? "",
-    createdAt: review.submitted_at ?? "",
-    updatedAt: review.updated_at ?? review.submitted_at ?? "",
+    author: { login: review.user?.login ?? '' },
+    state: review.state ?? '',
+    submittedAt: review.submitted_at ?? '',
+    createdAt: review.submitted_at ?? '',
+    updatedAt: review.updated_at ?? review.submitted_at ?? '',
   };
 }
 
@@ -157,14 +170,16 @@ function normalizeThread(thread) {
   return {
     id: thread.id,
     isResolved: Boolean(thread.isResolved),
-    updatedAt: "",
+    updatedAt: '',
     comments: {
-      pageInfo: { hasNextPage: Boolean(thread.comments?.pageInfo?.hasNextPage) },
+      pageInfo: {
+        hasNextPage: Boolean(thread.comments?.pageInfo?.hasNextPage),
+      },
       nodes: (thread.comments?.nodes ?? []).map((comment) => ({
-        author: { login: comment.author?.login ?? "" },
-        body: comment.body ?? "",
-        createdAt: comment.createdAt ?? "",
-        updatedAt: comment.updatedAt ?? comment.createdAt ?? "",
+        author: { login: comment.author?.login ?? '' },
+        body: comment.body ?? '',
+        createdAt: comment.createdAt ?? '',
+        updatedAt: comment.updatedAt ?? comment.createdAt ?? '',
         pullRequestReview: { id: comment.pullRequestReview?.id ?? null },
       })),
     },
@@ -213,7 +228,10 @@ function fetchReviewThreads(owner, repo, prNumber) {
     for (const thread of reviewThreads?.nodes ?? []) {
       if (thread.comments?.pageInfo?.hasNextPage) {
         thread.comments.nodes.push(
-          ...fetchThreadCommentPages(thread.id, thread.comments.pageInfo.endCursor),
+          ...fetchThreadCommentPages(
+            thread.id,
+            thread.comments.pageInfo.endCursor,
+          ),
         );
         thread.comments.pageInfo.hasNextPage = false;
       }
@@ -257,29 +275,31 @@ function fetchThreadCommentPages(threadId, afterCursor) {
 
     const comments = payload?.data?.node?.comments;
     nodes.push(...(comments?.nodes ?? []));
-    cursor = comments?.pageInfo?.hasNextPage ? comments.pageInfo.endCursor : null;
+    cursor = comments?.pageInfo?.hasNextPage
+      ? comments.pageInfo.endCursor
+      : null;
   }
 
   return nodes;
 }
 
 function ghGraphql(query, variables) {
-  const args = ["api", "graphql", "-f", `query=${query}`];
+  const args = ['api', 'graphql', '-f', `query=${query}`];
   for (const [key, value] of Object.entries(variables)) {
     if (value === null || value === undefined) {
       continue;
     }
-    if (typeof value === "number") {
-      args.push("-F", `${key}=${value}`);
+    if (typeof value === 'number') {
+      args.push('-F', `${key}=${value}`);
       continue;
     }
-    args.push("-f", `${key}=${value}`);
+    args.push('-f', `${key}=${value}`);
   }
-  return JSON.parse(runGh(args).trim() || "{}");
+  return JSON.parse(runGh(args).trim() || '{}');
 }
 
 function ghJson(args, options = {}) {
-  return JSON.parse(runGh(args, options).trim() || "[]");
+  return JSON.parse(runGh(args, options).trim() || '[]');
 }
 
 function ghText(args) {
@@ -287,13 +307,16 @@ function ghText(args) {
 }
 
 function ghApiJson(path, paginate = false, fields = null) {
-  const args = ["api", path];
+  const args = ['api', path];
   if (paginate) {
-    args.push("--paginate");
+    args.push('--paginate');
   }
   if (fields) {
     for (const [key, value] of Object.entries(fields)) {
-      args.push("-f", `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`);
+      args.push(
+        '-f',
+        `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`,
+      );
     }
   }
   const raw = runGh(args).trim();
@@ -302,7 +325,7 @@ function ghApiJson(path, paginate = false, fields = null) {
   }
   if (paginate) {
     const chunks = raw
-      .split("\n")
+      .split('\n')
       .map((line) => line.trim())
       .filter(Boolean)
       .map((line) => JSON.parse(line));
@@ -313,11 +336,11 @@ function ghApiJson(path, paginate = false, fields = null) {
 
 function runGh(args, options = {}) {
   try {
-    return execFileSync("gh", args, { encoding: "utf8" });
+    return execFileSync('gh', args, { encoding: 'utf8' });
   } catch (error) {
     const status = Number(error?.status ?? -1);
     if ((options.allowStatuses ?? []).includes(status)) {
-      const stdout = String(error?.stdout ?? "");
+      const stdout = String(error?.stdout ?? '');
       if (/^\s*[[{]/.test(stdout)) {
         return stdout;
       }

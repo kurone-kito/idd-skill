@@ -1,71 +1,83 @@
-import { readFileSync } from "node:fs";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import assert from "node:assert/strict";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { test } from "node:test";
-
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import {
+  readAdvisoryWaitPolicy,
+  resolveAdvisoryWaitPolicy,
+} from '../scripts/advisory-wait-policy.mjs';
 import {
   buildAdvisoryWaitSummary,
   classifyCiChecks,
   operationalMarkerPrefix,
   unsafeTextReason,
-} from "../scripts/protocol-helpers.mjs";
-import {
-  readAdvisoryWaitPolicy,
-  resolveAdvisoryWaitPolicy,
-} from "../scripts/advisory-wait-policy.mjs";
-import { loadJson, validate } from "../scripts/validate-schemas.mjs";
+} from '../scripts/protocol-helpers.mjs';
+import { loadJson, validate } from '../scripts/validate-schemas.mjs';
 
-const ciSuccess = readJson("fixtures/ci/success.json");
-const ciPending = readJson("fixtures/ci/pending.json");
-const ciFailed = readJson("fixtures/ci/failed.json");
-const ciMixed = readJson("fixtures/ci/mixed.json");
-const ciSkippedNeutral = readJson("fixtures/ci/skipped-neutral.json");
-const advisoryWaitSchema = loadJson("schemas/advisory-wait-state.schema.json");
+const ciSuccess = readJson('fixtures/ci/success.json');
+const ciPending = readJson('fixtures/ci/pending.json');
+const ciFailed = readJson('fixtures/ci/failed.json');
+const ciMixed = readJson('fixtures/ci/mixed.json');
+const ciSkippedNeutral = readJson('fixtures/ci/skipped-neutral.json');
+const advisoryWaitSchema = loadJson('schemas/advisory-wait-state.schema.json');
 
-test("classifies CI check states for advisory wait decisions", () => {
-  assert.equal(classifyCiChecks(ciSuccess).status, "success");
-  assert.equal(classifyCiChecks(ciPending).status, "pending");
-  assert.equal(classifyCiChecks(ciFailed).status, "failed");
-  assert.equal(classifyCiChecks(ciMixed).status, "unknown");
-  assert.equal(classifyCiChecks(ciSkippedNeutral).status, "success");
+test('classifies CI check states for advisory wait decisions', () => {
+  assert.equal(classifyCiChecks(ciSuccess).status, 'success');
+  assert.equal(classifyCiChecks(ciPending).status, 'pending');
+  assert.equal(classifyCiChecks(ciFailed).status, 'failed');
+  assert.equal(classifyCiChecks(ciMixed).status, 'unknown');
+  assert.equal(classifyCiChecks(ciSkippedNeutral).status, 'success');
 });
 
-test("detects operational marker prefixes", () => {
+test('detects operational marker prefixes', () => {
   assert.equal(
-    operationalMarkerPrefix("<!-- review-watermark: agent claim sha 2026-05-09T00:00:00Z 0 none -->\n\n_foo: review triage snapshot — IDD automation marker. Do not edit._"),
-    "<!-- review-watermark:",
+    operationalMarkerPrefix(
+      '<!-- review-watermark: agent claim sha 2026-05-09T00:00:00Z 0 none -->\n\n_foo: review triage snapshot — IDD automation marker. Do not edit._',
+    ),
+    '<!-- review-watermark:',
   );
   assert.equal(
-    operationalMarkerPrefix("<!-- review-baseline: agent claim sha -->\n\n_foo: critique baseline — IDD automation marker. Do not edit._"),
-    "<!-- review-baseline:",
+    operationalMarkerPrefix(
+      '<!-- review-baseline: agent claim sha -->\n\n_foo: critique baseline — IDD automation marker. Do not edit._',
+    ),
+    '<!-- review-baseline:',
   );
   assert.equal(
-    operationalMarkerPrefix("advisory-wait: agent 0123456789abcdef0123456789abcdef01234567 2026-05-09T00:00:00Z"),
-    "advisory-wait:",
+    operationalMarkerPrefix(
+      'advisory-wait: agent 0123456789abcdef0123456789abcdef01234567 2026-05-09T00:00:00Z',
+    ),
+    'advisory-wait:',
   );
   assert.equal(
-    operationalMarkerPrefix("  advisory-wait: agent 0123456789abcdef0123456789abcdef01234567 2026-05-09T00:00:00Z"),
+    operationalMarkerPrefix(
+      '  advisory-wait: agent 0123456789abcdef0123456789abcdef01234567 2026-05-09T00:00:00Z',
+    ),
     null,
   );
 });
 
-test("flags unsafe text reasons for failed states", () => {
-  assert.equal(unsafeTextReason("CI failure is blocking merge"), "contains failed-CI context");
-  assert.equal(unsafeTextReason("The failed checks need attention"), "contains failed-CI context");
-  assert.equal(unsafeTextReason("SUCCESS"), null);
+test('flags unsafe text reasons for failed states', () => {
+  assert.equal(
+    unsafeTextReason('CI failure is blocking merge'),
+    'contains failed-CI context',
+  );
+  assert.equal(
+    unsafeTextReason('The failed checks need attention'),
+    'contains failed-CI context',
+  );
+  assert.equal(unsafeTextReason('SUCCESS'), null);
 });
 
 for (const fixtureName of [
-  "satisfied",
-  "request-needed",
-  "recovery-needed",
-  "cap-exhausted",
-  "wait",
-  "untrusted-marker",
-  "pending-covers-head-force-push",
-  "recovery-markers-excluded",
+  'satisfied',
+  'request-needed',
+  'recovery-needed',
+  'cap-exhausted',
+  'wait',
+  'untrusted-marker',
+  'pending-covers-head-force-push',
+  'recovery-markers-excluded',
 ]) {
   test(`advisory wait fixture: ${fixtureName}`, () => {
     const fixture = readJson(`fixtures/advisory-wait/${fixtureName}.json`);
@@ -93,15 +105,24 @@ for (const fixtureName of [
     assert.equal(summary.outcome, expected.outcome);
     assert.equal(summary.lastCopilotCommit, expected.lastCopilotCommit);
     assert.equal(summary.copilotPending, expected.copilotPending);
-    assert.equal(summary.copilotPendingCoversHead, expected.copilotPendingCoversHead);
+    assert.equal(
+      summary.copilotPendingCoversHead,
+      expected.copilotPendingCoversHead,
+    );
     assert.equal(summary.sameHeadMarkerPresent, expected.sameHeadMarkerPresent);
     assert.equal(summary.sameHeadMarkerCount, expected.sameHeadMarkerCount);
     assert.equal(summary.requestMarkerCount, expected.requestMarkerCount);
     assert.equal(summary.requestCap, input.requestCap ?? 30);
-    assert.equal(summary.pendingWindowMinutes, input.pendingWindowMinutes ?? 30);
-    assert.equal(summary.settledWindowMinutes, input.settledWindowMinutes ?? 10);
+    assert.equal(
+      summary.pendingWindowMinutes,
+      input.pendingWindowMinutes ?? 30,
+    );
+    assert.equal(
+      summary.settledWindowMinutes,
+      input.settledWindowMinutes ?? 10,
+    );
     assert.equal(summary.pollIntervalMinutes, 2);
-    assert.equal(summary.capExhaustedRoute, "phase-specific");
+    assert.equal(summary.capExhaustedRoute, 'phase-specific');
     assert.equal(summary.earliestSameHeadAt, expected.earliestSameHeadAt);
     assert.equal(summary.elapsedMinutes, expected.elapsedMinutes);
     assert.equal(
@@ -124,115 +145,132 @@ for (const fixtureName of [
   });
 }
 
-test("advisory wait policy resolves defaults, explicit values, and fail-safe fallbacks", () => {
+test('advisory wait policy resolves defaults, explicit values, and fail-safe fallbacks', () => {
   assert.deepEqual(resolveAdvisoryWaitPolicy({}), {
     requestCap: 30,
     pendingWindowMinutes: 30,
     settledWindowMinutes: 10,
     pollIntervalMinutes: 2,
-    capExhaustedRoute: "phase-specific",
+    capExhaustedRoute: 'phase-specific',
   });
 
-  assert.deepEqual(resolveAdvisoryWaitPolicy({
-    advisoryWait: {
+  assert.deepEqual(
+    resolveAdvisoryWaitPolicy({
+      advisoryWait: {
+        requestCap: 12,
+        pendingWindow: 'PT45M',
+        settledWindow: 'PT15M',
+        pollInterval: 'PT3M',
+        capExhaustedRoute: 'hold',
+      },
+    }),
+    {
       requestCap: 12,
-      pendingWindow: "PT45M",
-      settledWindow: "PT15M",
-      pollInterval: "PT3M",
-      capExhaustedRoute: "hold",
+      pendingWindowMinutes: 45,
+      settledWindowMinutes: 15,
+      pollIntervalMinutes: 3,
+      capExhaustedRoute: 'hold',
     },
-  }), {
-    requestCap: 12,
-    pendingWindowMinutes: 45,
-    settledWindowMinutes: 15,
-    pollIntervalMinutes: 3,
-    capExhaustedRoute: "hold",
-  });
+  );
 
-  assert.deepEqual(resolveAdvisoryWaitPolicy({
-    advisoryWait: {
-      requestCap: 0,
-      pendingWindow: "P1DT",
-      settledWindow: "PT",
-      pollInterval: "P",
-      capExhaustedRoute: "merge-anyway",
+  assert.deepEqual(
+    resolveAdvisoryWaitPolicy({
+      advisoryWait: {
+        requestCap: 0,
+        pendingWindow: 'P1DT',
+        settledWindow: 'PT',
+        pollInterval: 'P',
+        capExhaustedRoute: 'merge-anyway',
+      },
+    }),
+    {
+      requestCap: 30,
+      pendingWindowMinutes: 30,
+      settledWindowMinutes: 10,
+      pollIntervalMinutes: 2,
+      capExhaustedRoute: 'phase-specific',
     },
-  }), {
-    requestCap: 30,
-    pendingWindowMinutes: 30,
-    settledWindowMinutes: 10,
-    pollIntervalMinutes: 2,
-    capExhaustedRoute: "phase-specific",
-  });
+  );
 
-  assert.deepEqual(resolveAdvisoryWaitPolicy({
-    advisoryWait: {
-      requestCap: "1",
-      pendingWindow: "pt1m",
-      settledWindow: " PT5M ",
-      pollInterval: "pt3m",
-      capExhaustedRoute: " hold ",
+  assert.deepEqual(
+    resolveAdvisoryWaitPolicy({
+      advisoryWait: {
+        requestCap: '1',
+        pendingWindow: 'pt1m',
+        settledWindow: ' PT5M ',
+        pollInterval: 'pt3m',
+        capExhaustedRoute: ' hold ',
+      },
+    }),
+    {
+      requestCap: 30,
+      pendingWindowMinutes: 30,
+      settledWindowMinutes: 10,
+      pollIntervalMinutes: 2,
+      capExhaustedRoute: 'phase-specific',
     },
-  }), {
-    requestCap: 30,
-    pendingWindowMinutes: 30,
-    settledWindowMinutes: 10,
-    pollIntervalMinutes: 2,
-    capExhaustedRoute: "phase-specific",
-  });
+  );
 
-  assert.deepEqual(resolveAdvisoryWaitPolicy({
-    advisoryWait: {
-      pendingWindow: "PT0M",
-      settledWindow: "PT60S",
-      pollInterval: "PT90S",
+  assert.deepEqual(
+    resolveAdvisoryWaitPolicy({
+      advisoryWait: {
+        pendingWindow: 'PT0M',
+        settledWindow: 'PT60S',
+        pollInterval: 'PT90S',
+      },
+    }),
+    {
+      requestCap: 30,
+      pendingWindowMinutes: 30,
+      settledWindowMinutes: 10,
+      pollIntervalMinutes: 2,
+      capExhaustedRoute: 'phase-specific',
     },
-  }), {
-    requestCap: 30,
-    pendingWindowMinutes: 30,
-    settledWindowMinutes: 10,
-    pollIntervalMinutes: 2,
-    capExhaustedRoute: "phase-specific",
-  });
+  );
 
-  assert.deepEqual(resolveAdvisoryWaitPolicy({
-    advisoryWait: {
-      pendingWindow: "PT30S",
-      settledWindow: "PT30S",
-      pollInterval: "PT90S",
+  assert.deepEqual(
+    resolveAdvisoryWaitPolicy({
+      advisoryWait: {
+        pendingWindow: 'PT30S',
+        settledWindow: 'PT30S',
+        pollInterval: 'PT90S',
+      },
+    }),
+    {
+      requestCap: 30,
+      pendingWindowMinutes: 30,
+      settledWindowMinutes: 10,
+      pollIntervalMinutes: 2,
+      capExhaustedRoute: 'phase-specific',
     },
-  }), {
-    requestCap: 30,
-    pendingWindowMinutes: 30,
-    settledWindowMinutes: 10,
-    pollIntervalMinutes: 2,
-    capExhaustedRoute: "phase-specific",
-  });
+  );
 });
 
-test("advisory wait policy only applies file overrides from schema-valid policy config", () => {
-  const root = mkdtempSync(join(tmpdir(), "idd-advisory-policy-"));
-  const validPath = join(root, "policy.valid.json");
-  const invalidPath = join(root, "policy.invalid.json");
-  const validConfig = JSON.parse(JSON.stringify(loadJson("fixtures/schemas/policy.valid.json")));
+test('advisory wait policy only applies file overrides from schema-valid policy config', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-advisory-policy-'));
+  const validPath = join(root, 'policy.valid.json');
+  const invalidPath = join(root, 'policy.invalid.json');
+  const validConfig = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
 
   validConfig.advisoryWait = {
     requestCap: 12,
-    pendingWindow: "PT45M",
-    settledWindow: "PT15M",
-    pollInterval: "PT3M",
-    capExhaustedRoute: "hold",
+    pendingWindow: 'PT45M',
+    settledWindow: 'PT15M',
+    pollInterval: 'PT3M',
+    capExhaustedRoute: 'hold',
   };
 
-  writeFileSync(validPath, JSON.stringify(validConfig), "utf8");
+  writeFileSync(validPath, JSON.stringify(validConfig), 'utf8');
   writeFileSync(
     invalidPath,
     JSON.stringify({
       advisoryWait: {
-        pendingWindow: "PT1M",
+        pendingWindow: 'PT1M',
       },
     }),
-    "utf8",
+    'utf8',
   );
 
   assert.deepEqual(readAdvisoryWaitPolicy(validPath), {
@@ -240,7 +278,7 @@ test("advisory wait policy only applies file overrides from schema-valid policy 
     pendingWindowMinutes: 45,
     settledWindowMinutes: 15,
     pollIntervalMinutes: 3,
-    capExhaustedRoute: "hold",
+    capExhaustedRoute: 'hold',
   });
 
   assert.deepEqual(readAdvisoryWaitPolicy(invalidPath), {
@@ -248,38 +286,43 @@ test("advisory wait policy only applies file overrides from schema-valid policy 
     pendingWindowMinutes: 30,
     settledWindowMinutes: 10,
     pollIntervalMinutes: 2,
-    capExhaustedRoute: "phase-specific",
+    capExhaustedRoute: 'phase-specific',
   });
 });
 
-test("advisory wait summary normalizes invalid direct options to defaults", () => {
-  const fixture = readJson("fixtures/advisory-wait/request-needed.json");
-  const summary = buildAdvisoryWaitSummary({
-    prHeadSha: fixture.input.prHeadSha,
-    reviews: fixture.input.reviews,
-    requestedReviewers: fixture.input.requestedReviewers,
-    timelineEvents: fixture.input.timelineEvents,
-    comments: fixture.input.comments,
-  }, {
-    now: fixture.input.now,
-    requestCap: 0,
-    pendingWindowMinutes: -45,
-    settledWindowMinutes: 0,
-    pollIntervalMinutes: -3,
-    capExhaustedRoute: "merge-anyway",
-    trustedMarkerLogins: fixture.input.trustedMarkerLogins,
-    viewerLogin: fixture.input.viewerLogin,
-    configuredTrustedActors: fixture.input.configuredTrustedActors,
-    collaboratorTrustEnabled: fixture.input.collaboratorTrustEnabled,
-  });
+test('advisory wait summary normalizes invalid direct options to defaults', () => {
+  const fixture = readJson('fixtures/advisory-wait/request-needed.json');
+  const summary = buildAdvisoryWaitSummary(
+    {
+      prHeadSha: fixture.input.prHeadSha,
+      reviews: fixture.input.reviews,
+      requestedReviewers: fixture.input.requestedReviewers,
+      timelineEvents: fixture.input.timelineEvents,
+      comments: fixture.input.comments,
+    },
+    {
+      now: fixture.input.now,
+      requestCap: 0,
+      pendingWindowMinutes: -45,
+      settledWindowMinutes: 0,
+      pollIntervalMinutes: -3,
+      capExhaustedRoute: 'merge-anyway',
+      trustedMarkerLogins: fixture.input.trustedMarkerLogins,
+      viewerLogin: fixture.input.viewerLogin,
+      configuredTrustedActors: fixture.input.configuredTrustedActors,
+      collaboratorTrustEnabled: fixture.input.collaboratorTrustEnabled,
+    },
+  );
 
   assert.equal(summary.requestCap, 30);
   assert.equal(summary.pendingWindowMinutes, 30);
   assert.equal(summary.settledWindowMinutes, 10);
   assert.equal(summary.pollIntervalMinutes, 2);
-  assert.equal(summary.capExhaustedRoute, "phase-specific");
+  assert.equal(summary.capExhaustedRoute, 'phase-specific');
 });
 
 function readJson(relativePath) {
-  return JSON.parse(readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8"));
+  return JSON.parse(
+    readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8'),
+  );
 }

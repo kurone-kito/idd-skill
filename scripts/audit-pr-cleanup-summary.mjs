@@ -1,7 +1,10 @@
 export function computeReportSummary(report) {
-  const alreadyMinimized = report.skipped.filter((skip) => skip.isMinimized).length;
-  const viewerCanMinimize = report.candidates.length
-    + report.skipped.filter((skip) => skip.viewerCanMinimize).length;
+  const alreadyMinimized = report.skipped.filter(
+    (skip) => skip.isMinimized,
+  ).length;
+  const viewerCanMinimize =
+    report.candidates.length +
+    report.skipped.filter((skip) => skip.viewerCanMinimize).length;
   const viewerCannotMinimize = report.skipped.filter(
     (skip) => !skip.isMinimized && !skip.viewerCanMinimize,
   ).length;
@@ -11,35 +14,38 @@ export function computeReportSummary(report) {
     skipped: report.skipped.length,
     applied: report.applied.length,
     failed: report.failed.length,
-    "already-minimized": alreadyMinimized,
-    "viewer-can-minimize": viewerCanMinimize,
-    "viewer-cannot-minimize": viewerCannotMinimize,
+    'already-minimized': alreadyMinimized,
+    'viewer-can-minimize': viewerCanMinimize,
+    'viewer-cannot-minimize': viewerCannotMinimize,
   };
 
-  if (report.mode === "dry-run") {
+  if (report.mode === 'dry-run') {
     if (report.candidates.length > 0) {
-      report.status = "needs-apply";
+      report.status = 'needs-apply';
     } else if (viewerCannotMinimize > 0) {
-      report.status = "permission-blocked";
+      report.status = 'permission-blocked';
     } else {
-      report.status = "clean";
+      report.status = 'clean';
     }
     return;
   }
 
-  if (report.mode === "apply") {
+  if (report.mode === 'apply') {
     if (report.failed.length > 0) {
-      report.status = "failed";
+      report.status = 'failed';
       return;
     }
-    if (report.applied.length > 0 && report.candidates.length === report.applied.length) {
-      report.status = "applied";
+    if (
+      report.applied.length > 0 &&
+      report.candidates.length === report.applied.length
+    ) {
+      report.status = 'applied';
       return;
     }
     if (report.applied.length > 0) {
-      report.status = "incomplete";
+      report.status = 'incomplete';
       return;
     }
-    report.status = report.candidates.length === 0 ? "clean" : "incomplete";
+    report.status = report.candidates.length === 0 ? 'clean' : 'incomplete';
   }
 }

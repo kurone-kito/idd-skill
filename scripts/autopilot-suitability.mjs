@@ -10,7 +10,7 @@
 // suitability gate or the A5 claim safety checks, which still run on
 // whatever candidate is selected.
 
-const DEFAULT_MARKER_PREFIX = "idd-skill";
+const DEFAULT_MARKER_PREFIX = 'idd-skill';
 export const DEFAULT_AUTOPILOT_SUITABILITY_FLOOR = 3;
 
 /**
@@ -23,15 +23,19 @@ export const DEFAULT_AUTOPILOT_SUITABILITY_FLOOR = 3;
  * values. A null score must never cause an issue to be skipped; the
  * caller evaluates it the normal way.
  */
-export function parseAutopilotSuitability(body, markerPrefix = DEFAULT_MARKER_PREFIX) {
-  const prefix = typeof markerPrefix === "string" && markerPrefix.length > 0
-    ? markerPrefix
-    : DEFAULT_MARKER_PREFIX;
+export function parseAutopilotSuitability(
+  body,
+  markerPrefix = DEFAULT_MARKER_PREFIX,
+) {
+  const prefix =
+    typeof markerPrefix === 'string' && markerPrefix.length > 0
+      ? markerPrefix
+      : DEFAULT_MARKER_PREFIX;
   const regex = new RegExp(
     `<!--\\s*${escapeRegex(prefix)}-autopilot-suitability:\\s*([^\\s>]+)\\s*-->`,
-    "gi",
+    'gi',
   );
-  const text = String(body ?? "");
+  const text = String(body ?? '');
   const values = new Set();
   let sawInvalid = false;
   let match = regex.exec(text);
@@ -92,7 +96,8 @@ export function normalizeAutopilotSuitabilityFloor(floor) {
  */
 export function rankAndRouteBySuitability(items, options = {}) {
   const list = Array.isArray(items) ? [...items] : [];
-  const getScore = typeof options.getScore === "function" ? options.getScore : () => null;
+  const getScore =
+    typeof options.getScore === 'function' ? options.getScore : () => null;
   if (options.enabled === false) {
     return { ranked: list, routedToHuman: [] };
   }
@@ -107,7 +112,11 @@ export function rankAndRouteBySuitability(items, options = {}) {
   // what the caller's getScore returns.
   const scored = list.map((item, index) => {
     const raw = getScore(item);
-    return { item, index, score: isAutopilotSuitabilityScore(raw) ? raw : null };
+    return {
+      item,
+      index,
+      score: isAutopilotSuitabilityScore(raw) ? raw : null,
+    };
   });
 
   const routedToHuman = [];
@@ -121,8 +130,11 @@ export function rankAndRouteBySuitability(items, options = {}) {
   }
 
   const ranked = eligible
-    .sort((left, right) =>
-      ((right.score ?? floor) - (left.score ?? floor)) || (left.index - right.index))
+    .sort(
+      (left, right) =>
+        (right.score ?? floor) - (left.score ?? floor) ||
+        left.index - right.index,
+    )
     .map((entry) => entry.item);
 
   return { ranked, routedToHuman: routedToHuman.map((entry) => entry.item) };
@@ -137,5 +149,5 @@ export function isAutopilotSuitabilityScore(value) {
 }
 
 function escapeRegex(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

@@ -1,60 +1,60 @@
 #!/usr/bin/env node
 
 const DEFAULT_CANONICAL_PHASE_IDS = [
-  "A0",
-  "A0_O",
-  "A0_T",
-  "A1",
-  "A1_5",
-  "A2",
-  "A3",
-  "A3_5",
-  "A4",
-  "A4_5",
-  "A5",
-  "B1",
-  "B2",
-  "B3",
-  "C1",
-  "C2",
-  "C3",
-  "C4",
-  "C5",
-  "C6",
-  "D1",
-  "D2",
-  "D3",
-  "D4",
-  "E1",
-  "E2",
-  "E3",
-  "E4",
-  "E5",
-  "E6",
-  "E7",
-  "E8",
-  "E9",
-  "E10",
-  "E11",
-  "E12",
-  "E13",
-  "E14",
-  "E15",
-  "F1",
-  "F2",
-  "F2_5",
-  "F3",
-  "F4",
-  "F5",
+  'A0',
+  'A0_O',
+  'A0_T',
+  'A1',
+  'A1_5',
+  'A2',
+  'A3',
+  'A3_5',
+  'A4',
+  'A4_5',
+  'A5',
+  'B1',
+  'B2',
+  'B3',
+  'C1',
+  'C2',
+  'C3',
+  'C4',
+  'C5',
+  'C6',
+  'D1',
+  'D2',
+  'D3',
+  'D4',
+  'E1',
+  'E2',
+  'E3',
+  'E4',
+  'E5',
+  'E6',
+  'E7',
+  'E8',
+  'E9',
+  'E10',
+  'E11',
+  'E12',
+  'E13',
+  'E14',
+  'E15',
+  'F1',
+  'F2',
+  'F2_5',
+  'F3',
+  'F4',
+  'F5',
 ];
 
 const DEFAULT_LEGACY_ALIASES = {
-  A0_O: ["A0-O", "A0O"],
-  A0_T: ["A0-T", "A0T"],
-  A1_5: ["A1.5", "A1-5", "A15"],
-  A3_5: ["A3.5", "A3-5", "A35"],
-  A4_5: ["A4.5", "A4-5", "A45"],
-  F2_5: ["F2.5", "F2-5", "F25"],
+  A0_O: ['A0-O', 'A0O'],
+  A0_T: ['A0-T', 'A0T'],
+  A1_5: ['A1.5', 'A1-5', 'A15'],
+  A3_5: ['A3.5', 'A3-5', 'A35'],
+  A4_5: ['A4.5', 'A4-5', 'A45'],
+  F2_5: ['F2.5', 'F2-5', 'F25'],
 };
 
 if (isCliExecution()) {
@@ -79,7 +79,7 @@ export function createPhaseIdResolver({
     const normalized = normalizePhaseIdToken(candidate, { allowEmpty: false });
     if (!isCanonicalToken(normalized)) {
       throw buildResolverError(
-        "invalid_canonical_phase_id",
+        'invalid_canonical_phase_id',
         `Canonical phase ID must be alphanumeric with underscores: ${candidate}`,
       );
     }
@@ -91,10 +91,12 @@ export function createPhaseIdResolver({
   }
 
   for (const [canonical, aliases] of Object.entries(legacyAliases ?? {})) {
-    const normalizedCanonical = normalizePhaseIdToken(canonical, { allowEmpty: false });
+    const normalizedCanonical = normalizePhaseIdToken(canonical, {
+      allowEmpty: false,
+    });
     if (!canonicalByKey.has(normalizedCanonical)) {
       throw buildResolverError(
-        "unknown_canonical_phase_id",
+        'unknown_canonical_phase_id',
         `Legacy aliases reference unknown canonical phase ID: ${canonical}`,
       );
     }
@@ -124,10 +126,10 @@ export function createPhaseIdResolver({
     }));
   if (ambiguousAliases.length > 0) {
     throw buildResolverError(
-      "ambiguous_alias_configuration",
+      'ambiguous_alias_configuration',
       `Legacy alias map contains ambiguous entries: ${ambiguousAliases
-        .map((entry) => `${entry.alias}=>${entry.canonicalPhaseIds.join("|")}`)
-        .join(", ")}`,
+        .map((entry) => `${entry.alias}=>${entry.canonicalPhaseIds.join('|')}`)
+        .join(', ')}`,
       { ambiguousAliases },
     );
   }
@@ -141,18 +143,23 @@ export function createPhaseIdResolver({
     legacyAliasMap,
     resolve(rawInput) {
       const aliasInputKey = normalizeAliasToken(rawInput);
-      const normalizedInput = normalizePhaseIdToken(rawInput, { allowEmpty: false });
-      if (!isSupportedInputToken(String(rawInput ?? ""))) {
+      const normalizedInput = normalizePhaseIdToken(rawInput, {
+        allowEmpty: false,
+      });
+      if (!isSupportedInputToken(String(rawInput ?? ''))) {
         throw buildResolverError(
-          "invalid_phase_id",
+          'invalid_phase_id',
           `Phase ID contains unsupported characters: ${String(rawInput)}`,
         );
       }
 
-      if (isCanonicalToken(aliasInputKey) && canonicalByKey.has(aliasInputKey)) {
+      if (
+        isCanonicalToken(aliasInputKey) &&
+        canonicalByKey.has(aliasInputKey)
+      ) {
         return {
           canonicalPhaseId: canonicalByKey.get(aliasInputKey),
-          matchedBy: "canonical",
+          matchedBy: 'canonical',
           normalizedInput,
         };
       }
@@ -161,13 +168,13 @@ export function createPhaseIdResolver({
       if (aliasCanonical) {
         return {
           canonicalPhaseId: aliasCanonical,
-          matchedBy: "legacy-alias",
+          matchedBy: 'legacy-alias',
           normalizedInput,
         };
       }
 
       throw buildResolverError(
-        "unknown_phase_id",
+        'unknown_phase_id',
         `Unknown phase ID: ${String(rawInput)} (normalized: ${normalizedInput})`,
         { normalizedInput },
       );
@@ -176,15 +183,15 @@ export function createPhaseIdResolver({
 }
 
 export function normalizePhaseIdToken(input, { allowEmpty = true } = {}) {
-  const source = String(input ?? "");
+  const source = String(input ?? '');
   const normalized = source
     .trim()
     .toUpperCase()
-    .replace(/[.\-/:\\\s]+/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
+    .replace(/[.\-/:\\\s]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
   if (!allowEmpty && normalized.length === 0) {
-    throw buildResolverError("invalid_phase_id", "Phase ID must not be empty.");
+    throw buildResolverError('invalid_phase_id', 'Phase ID must not be empty.');
   }
   return normalized;
 }
@@ -196,7 +203,7 @@ function runCli() {
     process.exit(0);
   }
   if (!args.phaseId) {
-    throw new Error("--phase-id is required");
+    throw new Error('--phase-id is required');
   }
 
   const resolver = createPhaseIdResolver();
@@ -214,7 +221,7 @@ function runCli() {
 
 function parseArgs(argv) {
   const parsed = {
-    phaseId: "",
+    phaseId: '',
     verbose: false,
     help: false,
   };
@@ -223,21 +230,21 @@ function parseArgs(argv) {
     const token = argv[index];
     const value = argv[index + 1];
     const requireValue = () => {
-      if (value === undefined || String(value).startsWith("--")) {
+      if (value === undefined || String(value).startsWith('--')) {
         throw new Error(`missing value for argument: ${token}`);
       }
       return value;
     };
-    if (token === "--phase-id") {
+    if (token === '--phase-id') {
       parsed.phaseId = requireValue();
       index += 1;
       continue;
     }
-    if (token === "--verbose") {
+    if (token === '--verbose') {
       parsed.verbose = true;
       continue;
     }
-    if (token === "--help" || token === "-h") {
+    if (token === '--help' || token === '-h') {
       parsed.help = true;
       continue;
     }
@@ -250,13 +257,13 @@ function parseArgs(argv) {
 function printHelp() {
   process.stdout.write(
     [
-      "Usage: node scripts/phase-id-resolver.mjs --phase-id <value> [--verbose]",
-      "",
-      "Resolve an IDD phase identifier to its canonical machine-facing ID.",
-      "Legacy aliases (e.g. A4.5, A4-5) are normalized to canonical IDs (e.g. A4_5).",
-    ].join("\n"),
+      'Usage: node scripts/phase-id-resolver.mjs --phase-id <value> [--verbose]',
+      '',
+      'Resolve an IDD phase identifier to its canonical machine-facing ID.',
+      'Legacy aliases (e.g. A4.5, A4-5) are normalized to canonical IDs (e.g. A4_5).',
+    ].join('\n'),
   );
-  process.stdout.write("\n");
+  process.stdout.write('\n');
 }
 
 function isCanonicalToken(token) {
@@ -268,7 +275,10 @@ function isSupportedInputToken(rawInput) {
 }
 
 function normalizeAliasToken(input) {
-  return String(input ?? "").trim().toUpperCase().replace(/\s+/g, " ");
+  return String(input ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, ' ');
 }
 
 function buildResolverError(code, message, details = {}) {
