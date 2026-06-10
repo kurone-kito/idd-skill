@@ -212,6 +212,8 @@
     },
     "ci": {
       "status": "success",
+      "noRequiredChecksConfigured": false,
+      "presentRunConclusion": "all-passing",
       "requiredCheckCount": 1,
       "generatedRequiredCheckCount": 1,
       "requiredChecksGenerated": true,

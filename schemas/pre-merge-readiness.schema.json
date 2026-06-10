@@ -408,6 +408,8 @@
       "type": "object",
       "required": [
         "status",
+        "noRequiredChecksConfigured",
+        "presentRunConclusion",
         "requiredCheckCount",
         "generatedRequiredCheckCount",
         "requiredChecksGenerated",
@@ -421,6 +423,11 @@
         "status": {
           "type": "string",
           "enum": ["missing", "success", "pending", "failed", "unknown"]
+        },
+        "noRequiredChecksConfigured": { "type": "boolean" },
+        "presentRunConclusion": {
+          "type": "string",
+          "enum": ["all-passing", "some-failing", "pending", "none"]
         },
         "requiredCheckCount": { "type": "integer", "minimum": 0 },
         "generatedRequiredCheckCount": { "type": "integer", "minimum": 0 },
