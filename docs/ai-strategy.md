@@ -33,6 +33,8 @@ in this project.
 
 - Treat this file as a human-facing strategy note, not as the primary
   instruction file for any agent.
+- For the deferred question of packaging the IDD execution loop as a
+  Claude Code skill, see [claude-skill-strategy.md](claude-skill-strategy.md).
 - When updating AI guidance, review `README.md`,
   `.github/copilot-instructions.md`, `AGENTS.md`, `CLAUDE.md`, and
   `GEMINI.md` together.
