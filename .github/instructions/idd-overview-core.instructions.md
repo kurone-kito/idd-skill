@@ -183,6 +183,22 @@ When in scope, run:
    worktree-HEAD symptom that this gate catches at mutation time) and
    either remove the stale primary-HEAD branch or rerun B1 cleanly in
    a fresh worktree.
+4. Also assert the worktree is **on the claimed branch**:
+   `git branch --show-current` must equal the active claim's `branch:`
+   value. Under concurrency a worktree can be in the right directory but
+   switched onto a different branch; if the current branch differs, stop
+   and report — do not `add`, `commit`, or `push` from a worktree that is
+   not on the claimed branch.
+
+**Recovery if a commit already landed on the wrong branch.** If this gate
+or `idd-doctor` finds that a commit already landed on the wrong branch —
+typically the primary worktree's `main`, or another issue's branch —
+recover by **cherry-picking** the misplaced commit onto the correct issue
+branch (in its own sibling worktree), then restore the contaminated branch
+to its intended state (e.g. `git reset --hard` the contaminated branch back
+to its upstream). Do **not** force-push the contaminated branch as a
+shortcut: preserve that branch's real history and move only the misplaced
+commit.
 
 Out of scope and explicitly **not** blocked:
 
