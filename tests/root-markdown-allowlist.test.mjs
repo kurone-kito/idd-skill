@@ -63,6 +63,19 @@ test("a missing manifest section disables the check", () => {
   );
 });
 
+test("a non-array allowed value fails cleanly instead of throwing", () => {
+  for (const allowed of [42, {}, "README.md"]) {
+    const violations = collectRootMarkdownAllowlistViolations(
+      ["README.md"],
+      { id: "root-markdown-allowlist", allowed },
+    );
+
+    assert.deepEqual(violations, [
+      "root-markdown-allowlist: allowed must be an array of root Markdown file names",
+    ]);
+  }
+});
+
 test("the real manifest allowlists exactly the intentional root documents", () => {
   const manifest = JSON.parse(readFileSync(MANIFEST_URL, "utf8"));
   const allowed = manifest.rootMarkdownAllowlist?.allowed ?? [];

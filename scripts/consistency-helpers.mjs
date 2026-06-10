@@ -73,7 +73,11 @@ export function collectRootMarkdownAllowlistViolations(repoFiles, config) {
   }
 
   const id = config.id ?? "root-markdown-allowlist";
-  const allowed = new Set(config.allowed ?? []);
+  const allowedEntries = config.allowed ?? [];
+  if (!Array.isArray(allowedEntries)) {
+    return [`${id}: allowed must be an array of root Markdown file names`];
+  }
+  const allowed = new Set(allowedEntries);
   const violations = [];
   for (const file of repoFiles) {
     if (file.includes("/") || !/\.md$/i.test(file)) {
