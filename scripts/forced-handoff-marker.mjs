@@ -14,6 +14,7 @@ import {
   parsePaginatedGhNdjson,
   renderForcedHandoffComment,
   summarizeClaimValidation,
+  unionTrustedMarkerActorSources,
 } from './protocol-helpers.mjs';
 
 export function generateSuccessorIds(baseAgentId) {
@@ -176,13 +177,14 @@ export function main(argv = process.argv.slice(2)) {
       '--jq',
       '.login',
     ]).toLowerCase();
-    const trustedMarkerLogins = buildTrustedMarkerLogins(
-      owner,
-      name,
-      viewerLogin,
-      args.trustedMarkerLogins,
-      issueComments,
-    );
+    const { logins: trustedMarkerLogins, sources: trustedMarkerActorsSources } =
+      buildTrustedMarkerLogins(
+        owner,
+        name,
+        viewerLogin,
+        args.trustedMarkerLogins,
+        issueComments,
+      );
     const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
     const permissionCache = new Map();
 
@@ -242,6 +244,8 @@ export function main(argv = process.argv.slice(2)) {
           repository: `${owner}/${name}`,
           issueNumber: args.issueNumber,
           modeEnabled,
+          trustedMarkerActors: [...trustedMarkerLogins].sort(),
+          trustedMarkerActorsSources,
           ...plan,
         },
         null,
@@ -288,13 +292,14 @@ export function main(argv = process.argv.slice(2)) {
     '--jq',
     '.login',
   ]).toLowerCase();
-  const trustedMarkerLogins = buildTrustedMarkerLogins(
-    owner,
-    name,
-    viewerLogin,
-    args.trustedMarkerLogins,
-    issueComments,
-  );
+  const { logins: trustedMarkerLogins, sources: trustedMarkerActorsSources } =
+    buildTrustedMarkerLogins(
+      owner,
+      name,
+      viewerLogin,
+      args.trustedMarkerLogins,
+      issueComments,
+    );
   const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
   const permissionCache = new Map();
   const activeClaim = resolveHelperActiveClaim(
@@ -378,6 +383,8 @@ export function main(argv = process.argv.slice(2)) {
         {
           repository: `${owner}/${name}`,
           issueNumber: args.issueNumber,
+          trustedMarkerActors: [...trustedMarkerLogins].sort(),
+          trustedMarkerActorsSources,
           activeClaim,
           payload,
           commentBody,
@@ -494,26 +501,35 @@ function buildTrustedMarkerLogins(
   cliLogins,
   issueComments,
 ) {
-  const configured = [
-    viewerLogin,
-    ...splitCsv(cliLogins),
-    ...splitCsv(process.env.IDD_TRUSTED_MARKER_ACTORS),
-  ];
-  if (!readCollaboratorTrustEnabled()) {
-    return new Set(
-      configured.filter(Boolean).map((login) => login.toLowerCase()),
-    );
+  // Parse the config once and share it between the actor union and the
+  // collaborator-trust toggle.
+  const config = loadIddConfig();
+  const sources = [];
+  if (String(viewerLogin ?? '').trim()) {
+    sources.push('viewer');
+  }
+  const flagActors = splitCsv(cliLogins);
+  if (flagActors.length > 0) {
+    sources.push('flag');
+  }
+  const union = unionTrustedMarkerActorSources({
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+    config,
+    extraActors: [viewerLogin, ...flagActors],
+  });
+  sources.push(...union.sources);
+  const trusted = new Set(union.actors);
+  if (!readCollaboratorTrustEnabled(config)) {
+    return { logins: trusted, sources };
   }
 
-  const trusted = new Set(
-    configured.filter(Boolean).map((login) => login.toLowerCase()),
-  );
   const permissionCache = new Map();
   const uniqueLogins = new Set(
     issueComments
       .map((comment) => String(comment.user?.login ?? '').toLowerCase())
       .filter(Boolean),
   );
+  let collaboratorAdded = false;
   for (const login of uniqueLogins) {
     if (trusted.has(login)) {
       continue;
@@ -533,9 +549,21 @@ function buildTrustedMarkerLogins(
       permission === 'write'
     ) {
       trusted.add(login);
+      collaboratorAdded = true;
     }
   }
-  return trusted;
+  if (collaboratorAdded) {
+    sources.push('collaborators');
+  }
+  return { logins: trusted, sources };
+}
+
+function loadIddConfig() {
+  try {
+    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 function normalizeIssueComment(comment) {
@@ -613,10 +641,10 @@ function safeGhText(args) {
   }
 }
 
-function readCollaboratorTrustEnabled() {
+function readCollaboratorTrustEnabled(config = null) {
   try {
     return resolveCollaboratorMarkerTrust(
-      JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
+      config ?? JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
       process.env.IDD_TRUST_COLLABORATOR_MARKERS,
     );
   } catch {
@@ -648,6 +676,7 @@ Options:
 
 Environment:
   IDD_TRUSTED_MARKER_ACTORS        comma-separated trusted bot/app logins
+                                   (combined with config.json trustedMarkerActors)
   IDD_TRUST_COLLABORATOR_MARKERS   set true to trust Write/Maintain/Admin collaborators
 `);
 }
