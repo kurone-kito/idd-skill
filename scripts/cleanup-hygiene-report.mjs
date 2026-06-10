@@ -6,7 +6,7 @@
  * Generates metrics for trend reporting and CI audit purposes.
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
 /**
  * Aggregate cleanup metrics from PR data
@@ -207,7 +207,11 @@ function parseArgs(argv) {
  * Get current GitHub repository info from git
  */
 function getRepoInfo() {
-  const remoteUrl = execSync('git config --get remote.origin.url')
+  const remoteUrl = execFileSync('git', [
+    'config',
+    '--get',
+    'remote.origin.url',
+  ])
     .toString()
     .trim();
 
