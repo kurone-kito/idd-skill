@@ -1112,3 +1112,32 @@ For further details, see:
 - `idd-overview-core.instructions.md` for the always-loaded pointer that
   keeps the forced-handoff policy discoverable to agents.
 - `docs/policy-constants.md` for distributed policy defaults.
+
+## Optional: out-of-band schema migration safety
+
+This is an **optional, adopter-conditional** appendix. It applies **only when
+your schema migrations are versioned by a numeric/monotonic prefix and applied
+out-of-band** — at merge or deploy — rather than by PR CI. If PR CI applies
+your migrations, or you do not use prefix-versioned migrations, skip this
+section entirely: it is **not** part of the default IDD merge gate, and the
+core, stack-neutral workflow does not depend on it.
+
+Under parallel worktrees, two concurrent runs can each author a new migration
+with the **same version prefix**. PR CI usually does not apply migrations, so
+the collision stays invisible until the out-of-band apply fails at deploy — a
+duplicate primary key can wedge the pipeline for hours.
+
+When migrations are applied out-of-band, adopters can add two conditional
+checks as a repository-local convention:
+
+1. **Before authoring a migration**, confirm the latest committed migration
+   version on the integration branch and number the new migration strictly
+   above it (re-check just before pushing, since a sibling run may have landed
+   one meanwhile).
+2. **Before merge**, dry-run the migration inside a transaction that is rolled
+   back, so a version collision or a broken migration is caught locally rather
+   than at out-of-band apply time.
+
+Keep this guidance tool-neutral: it is keyed on "numeric-prefix versioning plus
+out-of-band apply", not on any specific database or migration framework. Do not
+wire it into the default F-phase merge gate.
