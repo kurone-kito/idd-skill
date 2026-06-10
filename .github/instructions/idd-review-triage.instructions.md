@@ -67,6 +67,31 @@ Record a path-specific disposition for every item:
 Accepted PATH B items do **not** enter review-fix. They are fully
 handled in E6-E7.
 
+**Verify before accept (PATH B).** A PATH B advisory often asserts a fact
+about the runtime, CI, or an artifact (for example "this needs a CI-token
+permission", "this config leaks a credential", or "the artifact checksum
+format is wrong"). Before you `Accept` such an item, **verify the claim
+against the live runtime / artifact / CI run**, not against the comment text
+alone:
+
+- If the claim is confirmed on the live evidence, `Accept` and act on it.
+- If the claim is **false on the live evidence**, disposition it `Rejected`
+  and cite the contradicting evidence (the actual run conclusion, the real
+  file contents, the real artifact). A verified-false advisory is a reasoned
+  rejection, not an action item.
+
+**Reasoned-rejection convergence.** The iterate-to-zero loop may converge by
+reasoned rejection of truly peripheral or verified-false items; it does not
+require a code change for every comment. Record the reason in the disposition
+reply so the rejection is auditable. Confident bots still produce
+false positives, so "a bot raised it" is never sufficient to force a change.
+
+**Worked example.** A bot flags a "credential leak" on a config-only file.
+You open the file, confirm it holds only public placeholders with no secret,
+and reply starting exactly with `**Rejected**` — e.g.
+`**Rejected** — verified: the flagged file contains only public
+placeholders; no credential is present.`
+
 ## E6 — Post disposition replies
 
 Apply the reply rules below after E5 records a disposition.
