@@ -608,7 +608,7 @@ function readText(relativePath) {
   return readFileSync(new URL(relativePath, FIXTURE_ROOT), 'utf8');
 }
 
-test('package.json version stays aligned with the shipped iddVersion', () => {
+test('package.json version stays aligned with iddVersion in the shipped and template configs', () => {
   const packageJson = JSON.parse(
     readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
   );

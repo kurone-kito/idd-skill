@@ -7,8 +7,10 @@ The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 version values follow the semantic-versioning intent described in
 [Customizing IDD](docs/customization.md#template-version-and-staleness)
-(`iddVersion` in `.github/idd/config.json`). Each released version is
-also published as an annotated `v<iddVersion>` git tag.
+(`iddVersion` in `.github/idd/config.json`). Each released version
+from 0.2.0 onward is also published as an annotated `v<iddVersion>`
+git tag once its release pull request merges; 0.1.0 predates the tag
+discipline and has no tag.
 
 ## [0.2.0] - 2026-06-07
 
@@ -47,3 +49,6 @@ Initial release of the distributed IDD workflow template
 - Optional helper scripts for evidence collection (claim routing,
   review snapshots, advisory wait, pre-merge readiness, cleanup).
 - The issue-authoring skill bundle and workflow documentation.
+
+[0.2.0]: https://github.com/kurone-kito/idd-skill/releases/tag/v0.2.0
+[0.1.0]: https://github.com/kurone-kito/idd-skill/commit/f90a198f1750d674b9df452c35439806fb835dcd
