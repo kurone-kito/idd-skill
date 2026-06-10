@@ -62,7 +62,11 @@ distributed IDD workflow a repository imported.
   matter to an adopter who re-syncs. Follow semantic-versioning intent: a
   new opt-in capability or hardening is a minor bump; a breaking change
   to existing defaults is a major bump. Keep the template config and this
-  repository's own `.github/idd/config.json` on the same value.
+  repository's own `.github/idd/config.json` on the same value. Every
+  `iddVersion` bump also requires a matching `CHANGELOG.md` entry in the
+  same pull request, and an annotated `v<iddVersion>` git tag pushed to
+  the source repository after the bump PR merges, so adopters can diff
+  against a concrete release ref instead of a raw commit SHA.
 - **Adopters** can compare their `iddVersion` against the source release
   to see whether a re-sync is worthwhile. Because the value only moves
   when maintainers bump it, it is a coarse signal — so `idd-doctor` also
