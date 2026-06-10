@@ -112,6 +112,16 @@ Codex connectors, and CI bots).
     `{latest-ci-completed-at}` in the watermark (a new CI run completed
     after E1's snapshot; if watermark value is `none`, any current CI
     pass triggers re-evaluation).
+
+  Structural ack-only carve-out: when the only trigger above is newer
+  activity or count growth, and the helper evidence proves it consists
+  solely of post-disposition acknowledgements from the configured
+  advisory bots (`reviewCurrency.live.ackOnly` items with the
+  `effective` values current; `comparisonReason:
+  ack-only-post-disposition`), the advisory courtesy-ack convergence
+  rule in `idd-review-triage.instructions.md` applies: do not return to
+  E1 for that activity alone. The agent still confirms the semantic
+  residual, and every other trigger and gate is unaffected.
 - **Advisory bot wait** (restart-safe enforcement): `PR_HEAD_SHA` is
   already available from the review-currency check above. Apply the
   advisory-wait protocol (`idd-advisory-wait.instructions.md`):

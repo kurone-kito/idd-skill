@@ -394,6 +394,16 @@ CodeRabbit replies "Thanks for confirming." on that same thread. No new thread
 or finding is introduced, so the `updatedAt` advance is ignored: do not re-run
 E1; continue to F-phase on the current HEAD SHA.
 
+**Helper evidence**: when helper runtime is enabled and the advisory-bot
+identity is configured (`advisoryBotLogins` in `.github/idd/config.json`,
+the `--advisory-bot-logins` flag, or `IDD_ADVISORY_BOT_LOGINS`), the
+activity-snapshot and `pre-merge-readiness` evidence emits the structural
+part of this classification (`ackOnly` items, `effective` activity values,
+and `comparisonReason: ack-only-post-disposition`). The agent still owns
+the semantic residual — confirming the ack raises no new actionable
+finding — and the evidence never weakens the disposition-evidence or
+unreplied-comment gates, which remain the backstop.
+
 ## Review item classes
 
 During E-phase review triage, classify each ReviewItems_snapshot item
