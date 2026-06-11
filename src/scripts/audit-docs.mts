@@ -4,26 +4,109 @@
 // The scripts/audit-docs.mjs copy is generated from the .mts source named
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { RootMarkdownAllowlistConfig } from './consistency-helpers.mts';
 import {
   collectPolicyConfigDrift,
   collectRootMarkdownAllowlistViolations,
-} from './consistency-helpers.mjs';
+} from './consistency-helpers.mts';
+
+interface ReadmePair {
+  id: string;
+  files?: string[];
+  pairedChange?: boolean;
+  languageLinks?: { file: string; text: string }[];
+  structure?: string;
+}
+
+interface FileSet {
+  id: string;
+  sourceGlob: string;
+  targetGlob: string;
+  match?: string;
+  requireSyncPairs?: boolean;
+  allowExtraTargets?: boolean;
+  requiredBasenames?: string[];
+}
+
+interface GeneratedBlock {
+  id: string;
+  file: string;
+  language?: string;
+  paths?: string[];
+  sourceGlobs?: string[];
+  stripPrefix?: string;
+}
+
+interface ShellFileList {
+  id: string;
+  file: string;
+  generatedBlock: string;
+  stripPrefix?: string;
+}
+
+interface SyncPair {
+  id: string;
+  mode: string;
+  source: string;
+  target: string;
+  replacements?: { from: string; to: string }[];
+  reference?: string;
+  requiredText?: string[];
+  requiredPatterns?: string[];
+}
+
+interface InstructionSizeBudgets {
+  id?: string;
+  glob?: string;
+  alwaysLoadedPattern?: string;
+  alwaysLoadedLimitBytes?: number;
+  phaseLimitBytes?: number;
+}
+
+interface BundleBudget {
+  id?: string;
+  files?: string[];
+  limitBytes?: number | string;
+}
+
+interface ForbiddenPattern {
+  id: string;
+  glob: string;
+  pattern: string;
+  message: string;
+}
+
+interface AuditManifest {
+  readmePairs?: ReadmePair[];
+  fileSets?: FileSet[];
+  generatedBlocks?: GeneratedBlock[];
+  shellFileLists?: ShellFileList[];
+  syncPairs?: SyncPair[];
+  instructionSizeBudgets?: InstructionSizeBudgets | null;
+  bundleBudgets?: BundleBudget[];
+  forbiddenPatterns?: ForbiddenPattern[];
+  rootMarkdownAllowlist?: RootMarkdownAllowlistConfig | null;
+}
 
 const root = process.cwd();
 const manifestPath = 'audit/sync-manifest.json';
 const args = new Set(process.argv.slice(2));
+
 if (!args.has('--check')) {
   console.error('usage: node scripts/audit-docs.mjs --check');
   process.exit(2);
 }
-const errors = [];
-const notices = [];
-const manifest = JSON.parse(readText(manifestPath));
+
+const errors: string[] = [];
+const notices: string[] = [];
+const manifest = JSON.parse(readText(manifestPath)) as AuditManifest;
 const repoFiles = listRepoFiles();
 const changedFiles = listChangedFiles();
+
 checkReadmePairs(manifest.readmePairs ?? []);
 checkFileSets(manifest.fileSets ?? [], manifest.syncPairs ?? []);
 checkGeneratedBlocks(manifest.generatedBlocks ?? []);
@@ -38,6 +121,7 @@ checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
 checkRootMarkdownAllowlist(manifest.rootMarkdownAllowlist ?? null);
 checkConfigInstructionDrift();
 checkGeneratedSourcePairs();
+
 if (errors.length > 0) {
   console.error('documentation audit failed:');
   for (const error of errors) {
@@ -53,10 +137,12 @@ if (errors.length > 0) {
   }
   process.exit(1);
 }
+
 for (const notice of notices) {
   console.log(`notice: ${notice}`);
 }
 console.log('documentation audit passed');
+
 // Structural pairing guard for the TypeScript migration: every
 // `src/**/*.mts` source must have its generated `.mjs` artifact committed,
 // and every banner-marked generated `.mjs` must have its source. This is a
@@ -65,6 +151,7 @@ console.log('documentation audit passed');
 function checkGeneratedSourcePairs() {
   const bannerPattern = /^\/\/ idd-generated-from:\s*(\S+)/m;
   const repoFileSet = new Set(repoFiles);
+
   // Forward direction: each source has its generated counterpart.
   for (const source of globFiles('src/**/*.mts')) {
     const emitted = emittedPathForSource(source);
@@ -80,6 +167,7 @@ function checkGeneratedSourcePairs() {
       );
     }
   }
+
   // Reverse direction: each banner-marked artifact has its source, and the
   // banner resolves back to this exact file.
   for (const emitted of [
@@ -105,7 +193,8 @@ function checkGeneratedSourcePairs() {
     }
   }
 }
-function emittedPathForSource(source) {
+
+function emittedPathForSource(source: string): string | null {
   if (
     !source.endsWith('.mts') ||
     !(source.startsWith('src/scripts/') || source.startsWith('src/bin/'))
@@ -114,16 +203,19 @@ function emittedPathForSource(source) {
   }
   return source.slice('src/'.length).replace(/\.mts$/, '.mjs');
 }
-function checkReadmePairs(pairs) {
+
+function checkReadmePairs(pairs: ReadmePair[]) {
   for (const pair of pairs) {
     const [first, second] = pair.files ?? [];
     if (!first || !second) {
       errors.push(`${pair.id}: README pair must contain exactly two files`);
       continue;
     }
+
     if (pair.pairedChange) {
       checkPairedChange(pair.id, first, second);
     }
+
     for (const link of pair.languageLinks ?? []) {
       const text = readText(link.file);
       if (!text.includes(link.text)) {
@@ -132,6 +224,7 @@ function checkReadmePairs(pairs) {
         );
       }
     }
+
     if (pair.structure === 'heading-levels') {
       const firstLevels = headingSignature(readText(first), {
         levelsOnly: true,
@@ -147,32 +240,38 @@ function checkReadmePairs(pairs) {
     }
   }
 }
-function checkPairedChange(id, first, second) {
+
+function checkPairedChange(id: string, first: string, second: string) {
   if (changedFiles === null) {
     notices.push(
       `${id}: skipped paired-change check because no git comparison base was available`,
     );
     return;
   }
+
   const firstChanged = changedFiles.has(first);
   const secondChanged = changedFiles.has(second);
   if (firstChanged !== secondChanged) {
     errors.push(`${id}: ${first} and ${second} must be changed together`);
   }
 }
-function checkFileSets(fileSets, syncPairs) {
+
+function checkFileSets(fileSets: FileSet[], syncPairs: SyncPair[]) {
   const coveredSyncPairs = new Set(
     syncPairs.map((pair) => `${pair.source}\0${pair.target}`),
   );
+
   for (const fileSet of fileSets) {
     const sourceFiles = globFiles(fileSet.sourceGlob);
     const targetFiles = globFiles(fileSet.targetGlob);
+
     if (fileSet.match !== 'basename') {
       errors.push(
         `${fileSet.id}: unsupported file set match mode ${fileSet.match}`,
       );
       continue;
     }
+
     const sourceNames = new Set(sourceFiles.map((file) => basename(file)));
     const targetNames = new Set(targetFiles.map((file) => basename(file)));
     const sourceByName = new Map(
@@ -181,6 +280,7 @@ function checkFileSets(fileSets, syncPairs) {
     const targetByName = new Map(
       targetFiles.map((file) => [basename(file), file]),
     );
+
     for (const sourceName of sourceNames) {
       if (!targetNames.has(sourceName)) {
         errors.push(`${fileSet.id}: target is missing ${sourceName}`);
@@ -196,6 +296,7 @@ function checkFileSets(fileSets, syncPairs) {
         }
       }
     }
+
     if (!fileSet.allowExtraTargets) {
       for (const targetName of targetNames) {
         if (!sourceNames.has(targetName)) {
@@ -203,6 +304,7 @@ function checkFileSets(fileSets, syncPairs) {
         }
       }
     }
+
     for (const requiredName of fileSet.requiredBasenames ?? []) {
       if (!targetNames.has(requiredName)) {
         errors.push(
@@ -212,7 +314,8 @@ function checkFileSets(fileSets, syncPairs) {
     }
   }
 }
-function checkGeneratedBlocks(blocks) {
+
+function checkGeneratedBlocks(blocks: GeneratedBlock[]) {
   for (const block of blocks) {
     const text = readText(block.file);
     const startMarker = `<!-- audit:generated id=${block.id} -->`;
@@ -228,6 +331,7 @@ function checkGeneratedBlocks(blocks) {
       errors.push(`${block.id}: ${block.file} is missing ${endMarker}`);
       continue;
     }
+
     const expected = renderGeneratedBlock(block);
     const actual = normalizeText(text.slice(innerStart, end));
     if (actual !== expected) {
@@ -235,14 +339,20 @@ function checkGeneratedBlocks(blocks) {
     }
   }
 }
-function checkShellFileLists(lists, generatedBlocks) {
+
+function checkShellFileLists(
+  lists: ShellFileList[],
+  generatedBlocks: GeneratedBlock[],
+) {
   const blockById = new Map(generatedBlocks.map((block) => [block.id, block]));
+
   for (const list of lists) {
     const sourceBlock = blockById.get(list.generatedBlock);
     if (!sourceBlock) {
       errors.push(`${list.id}: unknown generated block ${list.generatedBlock}`);
       continue;
     }
+
     const text = readText(list.file);
     const marker = `<!-- audit:shell-list id=${list.id} -->`;
     const markerIndex = text.indexOf(marker);
@@ -250,6 +360,7 @@ function checkShellFileLists(lists, generatedBlocks) {
       errors.push(`${list.id}: ${list.file} is missing ${marker}`);
       continue;
     }
+
     const code = nextFencedCodeBlock(
       text,
       markerIndex + marker.length,
@@ -258,6 +369,7 @@ function checkShellFileLists(lists, generatedBlocks) {
     if (code === null) {
       continue;
     }
+
     const actual = extractShellForFiles(code, list.id);
     const strip = list.stripPrefix ?? sourceBlock.stripPrefix;
     const expected = resolveBlockFiles(sourceBlock).map((file) =>
@@ -268,20 +380,23 @@ function checkShellFileLists(lists, generatedBlocks) {
     }
   }
 }
-function renderGeneratedBlock(block) {
+
+function renderGeneratedBlock(block: GeneratedBlock): string {
   const files = resolveBlockFiles(block);
   const renderedFiles = files.map((file) =>
     stripPrefix(file, block.stripPrefix),
   );
   return `\n\n\`\`\`${block.language ?? 'text'}\n${renderedFiles.join('\n')}\n\`\`\`\n\n`;
 }
-function resolveBlockFiles(block) {
+
+function resolveBlockFiles(block: GeneratedBlock): string[] {
   const files = block.paths
     ? [...block.paths]
     : uniqueSorted((block.sourceGlobs ?? []).flatMap(globFiles));
   const actualFiles = uniqueSorted(
     (block.sourceGlobs ?? []).flatMap(globFiles),
   );
+
   if (block.paths && block.sourceGlobs) {
     const expectedSet = new Set(block.paths);
     for (const actual of actualFiles) {
@@ -297,19 +412,23 @@ function resolveBlockFiles(block) {
       }
     }
   }
+
   return files;
 }
-function checkSyncPairs(pairs) {
+
+function checkSyncPairs(pairs: SyncPair[]) {
   for (const pair of pairs) {
     if (pair.mode === 'contains') {
       checkContainsPair(pair);
       continue;
     }
+
     const source = applyReplacements(
       readText(pair.source),
       pair.replacements ?? [],
     );
     const target = readText(pair.target);
+
     if (pair.mode === 'exact' || pair.mode === 'concreted') {
       if (normalizeText(source) !== normalizeText(target)) {
         errors.push(
@@ -318,6 +437,7 @@ function checkSyncPairs(pairs) {
       }
       continue;
     }
+
     if (pair.mode === 'structure') {
       const sourceSignature = headingSignature(source, { levelsOnly: false });
       const targetSignature = headingSignature(target, { levelsOnly: false });
@@ -328,13 +448,16 @@ function checkSyncPairs(pairs) {
       }
       continue;
     }
+
     errors.push(`${pair.id}: unsupported sync mode ${pair.mode}`);
   }
 }
-function checkContainsPair(pair) {
+
+function checkContainsPair(pair: SyncPair) {
   if (pair.reference) {
     readText(pair.reference);
   }
+
   const target = readText(pair.target);
   for (const requiredText of pair.requiredText ?? []) {
     if (!target.includes(requiredText)) {
@@ -352,7 +475,8 @@ function checkContainsPair(pair) {
     }
   }
 }
-function checkForbiddenPatterns(patterns) {
+
+function checkForbiddenPatterns(patterns: ForbiddenPattern[]) {
   for (const pattern of patterns) {
     const regex = new RegExp(pattern.pattern, 'i');
     const files = globFiles(pattern.glob);
@@ -364,9 +488,13 @@ function checkForbiddenPatterns(patterns) {
     }
   }
 }
-function checkRootMarkdownAllowlist(config) {
+
+function checkRootMarkdownAllowlist(
+  config: RootMarkdownAllowlistConfig | null,
+) {
   errors.push(...collectRootMarkdownAllowlistViolations(repoFiles, config));
 }
+
 function checkConfigInstructionDrift() {
   const pairs = [
     {
@@ -379,6 +507,7 @@ function checkConfigInstructionDrift() {
         'idd-template/.github/instructions/idd-overview-core.instructions.md',
     },
   ];
+
   for (const pair of pairs) {
     const hasConfig = repoFiles.includes(pair.configPath);
     const hasOverview = repoFiles.includes(pair.overviewPath);
@@ -391,13 +520,15 @@ function checkConfigInstructionDrift() {
       );
       continue;
     }
-    let config;
+
+    let config: unknown;
     try {
       config = JSON.parse(readText(pair.configPath));
     } catch {
       errors.push(`${pair.configPath} is not valid JSON`);
       continue;
     }
+
     const drifts = collectPolicyConfigDrift(
       config,
       readText(pair.overviewPath),
@@ -416,17 +547,19 @@ function checkConfigInstructionDrift() {
       );
       continue;
     }
+
     notices.push(
       `${pair.configPath} matches ${pair.overviewPath} command and scope defaults`,
     );
   }
 }
-function buildRemediation(currentErrors) {
+
+function buildRemediation(currentErrors: string[]): string[] {
   if (!containsMirrorDrift(currentErrors)) {
     return [];
   }
   const syncCommand = detectSyncCommand();
-  const lines = [];
+  const lines: string[] = [];
   if (syncCommand) {
     lines.push(
       `run \`${syncCommand}\` to refresh mirrored files from canonical sources`,
@@ -439,17 +572,22 @@ function buildRemediation(currentErrors) {
   lines.push('re-run `node scripts/audit-docs.mjs --check`');
   return lines;
 }
-function containsMirrorDrift(currentErrors) {
+
+function containsMirrorDrift(currentErrors: string[]): boolean {
   return currentErrors.some((error) =>
     /generated block .* is stale|shell file list .* is stale| and .* differ in (exact|concreted) mode|heading structure differs between|target is missing|target has unexpected|is missing a syncPairs entry|manifest paths omit|manifest path does not exist or match globs/.test(
       error,
     ),
   );
 }
-function detectSyncCommand() {
+
+function detectSyncCommand(): string {
   if (repoFiles.includes('package.json')) {
     try {
-      const packageJson = JSON.parse(readText('package.json'));
+      const packageJson = JSON.parse(readText('package.json')) as {
+        scripts?: Record<string, unknown>;
+        packageManager?: unknown;
+      };
       if (typeof packageJson.scripts?.['docs:sync'] === 'string') {
         const command = docsSyncCommandByPackageManager(
           packageJson.packageManager,
@@ -467,7 +605,8 @@ function detectSyncCommand() {
   }
   return '';
 }
-function docsSyncCommandByPackageManager(packageManager) {
+
+function docsSyncCommandByPackageManager(packageManager: unknown): string {
   const name =
     typeof packageManager === 'string' ? packageManager.split('@')[0] : '';
   switch (name) {
@@ -483,10 +622,12 @@ function docsSyncCommandByPackageManager(packageManager) {
       return '';
   }
 }
-function checkInstructionSizeBudgets(config) {
+
+function checkInstructionSizeBudgets(config: InstructionSizeBudgets | null) {
   if (!config) {
     return;
   }
+
   const id = config.id ?? 'instruction-size-budgets';
   const files = globFiles(
     config.glob ?? '.github/instructions/idd-*.instructions.md',
@@ -500,6 +641,7 @@ function checkInstructionSizeBudgets(config) {
     changedFiles === null
       ? files
       : files.filter((file) => changedFiles.has(file));
+
   for (const file of candidates) {
     const text = readText(file);
     const bytes = Buffer.byteLength(text, 'utf8');
@@ -507,12 +649,15 @@ function checkInstructionSizeBudgets(config) {
     const limit = alwaysLoaded ? alwaysLoadedLimitBytes : phaseLimitBytes;
     if (bytes > limit) {
       errors.push(
-        `${id}: ${file} is ${bytes} bytes (limit ${limit}; ${alwaysLoaded ? 'always-loaded' : 'phase'})`,
+        `${id}: ${file} is ${bytes} bytes (limit ${limit}; ${
+          alwaysLoaded ? 'always-loaded' : 'phase'
+        })`,
       );
     }
   }
 }
-function checkBundleBudgets(budgets) {
+
+function checkBundleBudgets(budgets: BundleBudget[]) {
   for (const budget of budgets) {
     const id = budget.id ?? 'bundle-budget';
     const files = budget.files ?? [];
@@ -533,13 +678,18 @@ function checkBundleBudgets(budgets) {
     }
   }
 }
-function listChangedFiles() {
-  const candidates = [];
+
+function listChangedFiles(): Set<string> | null {
+  const candidates: string[][] = [];
   const eventPath = process.env.GITHUB_EVENT_PATH;
   let eventBefore = '';
+
   if (eventPath) {
     try {
-      const event = JSON.parse(readFileSync(eventPath, 'utf8'));
+      const event = JSON.parse(readFileSync(eventPath, 'utf8')) as {
+        pull_request?: { base?: { sha?: string } };
+        before?: string;
+      };
       if (event.pull_request?.base?.sha) {
         candidates.push([`${event.pull_request.base.sha}...HEAD`]);
       }
@@ -547,9 +697,12 @@ function listChangedFiles() {
         eventBefore = event.before;
       }
     } catch (error) {
-      notices.push(`could not read GitHub event payload: ${error.message}`);
+      notices.push(
+        `could not read GitHub event payload: ${(error as Error).message}`,
+      );
     }
   }
+
   if (process.env.GITHUB_BASE_REF) {
     candidates.push([`origin/${process.env.GITHUB_BASE_REF}...HEAD`]);
   }
@@ -563,6 +716,7 @@ function listChangedFiles() {
   ) {
     candidates.push([`${process.env.GITHUB_EVENT_BEFORE}...HEAD`]);
   }
+
   for (const args of candidates) {
     try {
       const output = git(['diff', '--name-only', ...args]);
@@ -573,9 +727,11 @@ function listChangedFiles() {
       // Try the next comparison base.
     }
   }
+
   return null;
 }
-function withWorkingTreeChanges(files) {
+
+function withWorkingTreeChanges(files: Set<string>): Set<string> {
   for (const args of [
     ['diff', '--name-only'],
     ['diff', '--cached', '--name-only'],
@@ -591,7 +747,8 @@ function withWorkingTreeChanges(files) {
   }
   return files;
 }
-function listRepoFiles() {
+
+function listRepoFiles(): string[] {
   const output = git([
     'ls-files',
     '--cached',
@@ -600,11 +757,13 @@ function listRepoFiles() {
   ]);
   return output.split(/\r?\n/).filter(Boolean).sort();
 }
-function globFiles(pattern) {
+
+function globFiles(pattern: string): string[] {
   const regex = globToRegExp(pattern);
   return repoFiles.filter((file) => regex.test(file)).sort();
 }
-function globToRegExp(pattern) {
+
+function globToRegExp(pattern: string): RegExp {
   let source = '^';
   for (let index = 0; index < pattern.length; index += 1) {
     const char = pattern[index];
@@ -626,9 +785,14 @@ function globToRegExp(pattern) {
   }
   return new RegExp(`${source}$`);
 }
-function headingSignature(text, { levelsOnly }) {
-  const headings = [];
+
+function headingSignature(
+  text: string,
+  { levelsOnly }: { levelsOnly: boolean },
+): string {
+  const headings: string[] = [];
   let inFence = false;
+
   for (const line of normalizeText(text).split('\n')) {
     if (/^\s*```/.test(line)) {
       inFence = !inFence;
@@ -645,29 +809,41 @@ function headingSignature(text, { levelsOnly }) {
     const heading = normalizeHeading(match[2]);
     headings.push(levelsOnly ? `${level}` : `${level}:${heading}`);
   }
+
   return headings.join('\n');
 }
-function normalizeHeading(heading) {
+
+function normalizeHeading(heading: string): string {
   return heading
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
 }
-function applyReplacements(text, replacements) {
+
+function applyReplacements(
+  text: string,
+  replacements: { from: string; to: string }[],
+): string {
   let result = text;
   for (const replacement of replacements) {
     result = result.split(replacement.from).join(replacement.to);
   }
   return result;
 }
-function stripGeneratedBlocks(text) {
+
+function stripGeneratedBlocks(text: string): string {
   return normalizeText(text).replace(
     /<!-- audit:generated id=[^>]+ -->[\s\S]*?<!-- \/audit:generated -->/g,
     '',
   );
 }
-function nextFencedCodeBlock(text, startIndex, id) {
+
+function nextFencedCodeBlock(
+  text: string,
+  startIndex: number,
+  id: string,
+): string | null {
   const fenceStart = text.indexOf('```', startIndex);
   if (fenceStart === -1) {
     errors.push(`${id}: missing fenced code block after marker`);
@@ -685,7 +861,8 @@ function nextFencedCodeBlock(text, startIndex, id) {
   }
   return text.slice(codeStart + 1, fenceEnd);
 }
-function extractShellForFiles(code, id) {
+
+function extractShellForFiles(code: string, id: string): string[] {
   const lines = code.split('\n');
   const loopStart = lines.findIndex((line) => line.trim() === 'for FILE in \\');
   if (loopStart === -1) {
@@ -699,7 +876,8 @@ function extractShellForFiles(code, id) {
     errors.push(`${id}: missing "do" after FILE loop`);
     return [];
   }
-  const files = [];
+
+  const files: string[] = [];
   for (const line of lines.slice(loopStart + 1, loopEnd)) {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -714,7 +892,8 @@ function extractShellForFiles(code, id) {
   }
   return files;
 }
-function stripPrefix(file, prefix) {
+
+function stripPrefix(file: string, prefix: string | undefined): string {
   if (!prefix) {
     return file;
   }
@@ -724,33 +903,39 @@ function stripPrefix(file, prefix) {
   }
   return file.slice(prefix.length);
 }
-function readText(file) {
+
+function readText(file: string): string {
   try {
     return normalizeText(readFileSync(join(root, file), 'utf8'));
   } catch (error) {
-    const candidate = error;
+    const candidate = error as { code?: string; message?: string };
     errors.push(
       `${file}: could not read file (${candidate.code ?? candidate.message})`,
     );
     return '';
   }
 }
-function normalizeText(text) {
+
+function normalizeText(text: string): string {
   return text.replace(/\r\n?/g, '\n');
 }
-function git(args) {
+
+function git(args: string[]): string {
   return execFileSync('git', args, {
     cwd: root,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
-function basename(file) {
+
+function basename(file: string): string {
   return file.slice(file.lastIndexOf('/') + 1);
 }
-function uniqueSorted(values) {
+
+function uniqueSorted(values: string[]): string[] {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
-function escapeRegExp(value) {
+
+function escapeRegExp(value: string): string {
   return value.replace(/[\\^$+?.()|[\]{}]/g, '\\$&');
 }

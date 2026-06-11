@@ -4,31 +4,122 @@
 // The scripts/discover-orphan-filter.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
 import {
   buildAuthoringLabelWarning,
   resolveAuthoringGuardPolicy,
-} from './authoring-label-guard.mjs';
+} from './authoring-label-guard.mts';
 import {
   DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
   rankAndRouteBySuitability,
-} from './autopilot-suitability.mjs';
+} from './autopilot-suitability.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 const BLOCKED_LABELS = new Set([
   'status:blocked-by-human',
   'status:needs-decision',
 ]);
+
+/** Reasons that keep an issue out of the orphan candidate list. */
+export type OrphanFilteredReason =
+  | 'roadmap_marker'
+  | 'blocked_by_marker'
+  | 'blocked_label'
+  | 'authoring_label'
+  | 'blocked_by_open_reference'
+  | 'unresolvable_reference';
+
+/** Classification verdict for one issue in the orphan filter. */
+export type OrphanClassification =
+  | {
+      orphan: true;
+      reason: 'orphan' | 'blocked_references_closed';
+      details?: undefined;
+    }
+  | {
+      orphan: false;
+      reason: 'roadmap_marker' | 'blocked_by_marker';
+      details?: undefined;
+    }
+  | {
+      orphan: false;
+      reason: 'blocked_label' | 'authoring_label';
+      details: string;
+    }
+  | { orphan: false; reason: 'blocked_by_open_reference'; details: number }
+  | { orphan: false; reason: 'unresolvable_reference'; details: number[] };
+
+interface OrphanIssueInput {
+  number: number;
+  title?: unknown;
+  state?: unknown;
+  labels?: unknown;
+  labelEvents?: unknown;
+  body?: unknown;
+  url?: unknown;
+}
+
+interface ClassifyIssueOptions {
+  issueStateByNumber: Map<number, string>;
+  fetchIssueStateByNumber: (issueNumber: number) => string;
+  markerPrefix?: unknown;
+  authoringLabelName?: unknown;
+}
+
+interface FilterOrphanIssuesOptions {
+  issueStateByNumber?: Iterable<[number, string]>;
+  fetchIssueStateByNumber?: (issueNumber: number) => string;
+  fetchLabelEventsByIssueNumber?: (issueNumber: number) => unknown[];
+  markerPrefix?: unknown;
+  authoringLabelName?: unknown;
+  authoringStaleAgeMs?: number;
+  autopilotSuitabilityFloor?: number;
+  autopilotSuitabilityEnabled?: boolean;
+  autopilot?: boolean;
+  now?: Date | string;
+}
+
+interface FilteredIssueEntry {
+  number: number;
+  title: unknown;
+  state: unknown;
+  reason: OrphanFilteredReason;
+  details: string | number | number[] | null;
+  url: unknown;
+}
+
+interface OrphanCandidate {
+  number: number;
+  title: unknown;
+  state: unknown;
+  reason: string;
+  url: unknown;
+  autopilotSuitability: number | null;
+}
+
+interface ParsedArgs {
+  owner: string;
+  repo: string;
+  policy: string;
+  pr: number | null;
+  help: boolean;
+  now: string;
+  autopilot: boolean;
+}
+
 if (isCliExecution()) {
   runCli();
 }
-export function extractBlockedByReferences(body) {
-  const references = [];
+
+export function extractBlockedByReferences(body: unknown): number[] {
+  const references: number[] = [];
   const regex = /^\s*Blocked by #(\d+)\b.*$/gim;
   let match = regex.exec(String(body ?? ''));
   while (match) {
@@ -40,25 +131,35 @@ export function extractBlockedByReferences(body) {
   }
   return references;
 }
-export function getOrphanFirstPolicy(config) {
+
+export function getOrphanFirstPolicy(config: unknown): string {
   if (!config || typeof config !== 'object') {
     return 'none';
   }
-  const commands = config.commands;
+
+  const commands = (config as { commands?: unknown }).commands;
   if (
     commands &&
     typeof commands === 'object' &&
-    typeof commands['orphan-first-policy'] === 'string'
+    typeof (commands as Record<string, unknown>)['orphan-first-policy'] ===
+      'string'
   ) {
-    return commands['orphan-first-policy'];
+    return (commands as Record<string, string>)['orphan-first-policy'];
   }
-  const orphanFirstPolicy = config.orphanFirstPolicy;
+
+  const orphanFirstPolicy = (config as { orphanFirstPolicy?: unknown })
+    .orphanFirstPolicy;
   if (typeof orphanFirstPolicy === 'string') {
     return orphanFirstPolicy;
   }
+
   return 'none';
 }
-export function classifyIssue(issue, options) {
+
+export function classifyIssue(
+  issue: OrphanIssueInput,
+  options: ClassifyIssueOptions,
+): OrphanClassification {
   const labels = new Set(normalizeLabels(issue.labels));
   const body = String(issue.body ?? '');
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
@@ -67,16 +168,20 @@ export function classifyIssue(issue, options) {
   );
   const roadmapMarkerRegex = createMarkerRegex(markerPrefix, 'roadmap-id');
   const blockedMarkerRegex = createMarkerRegex(markerPrefix, 'blocked-by');
+
   if (roadmapMarkerRegex.test(body)) {
     return { orphan: false, reason: 'roadmap_marker' };
   }
+
   if (blockedMarkerRegex.test(body)) {
     return { orphan: false, reason: 'blocked_by_marker' };
   }
+
   const blockedLabel = [...labels].find((label) => BLOCKED_LABELS.has(label));
   if (blockedLabel) {
     return { orphan: false, reason: 'blocked_label', details: blockedLabel };
   }
+
   if (labels.has(authoringLabelName)) {
     return {
       orphan: false,
@@ -84,11 +189,13 @@ export function classifyIssue(issue, options) {
       details: authoringLabelName,
     };
   }
+
   const refs = extractBlockedByReferences(body);
   if (refs.length === 0) {
     return { orphan: true, reason: 'orphan' };
   }
-  const unresolved = [];
+
+  const unresolved: number[] = [];
   for (const ref of refs) {
     const state = resolveIssueState(
       ref,
@@ -106,6 +213,7 @@ export function classifyIssue(issue, options) {
       unresolved.push(ref);
     }
   }
+
   if (unresolved.length > 0) {
     return {
       orphan: false,
@@ -113,15 +221,20 @@ export function classifyIssue(issue, options) {
       details: unresolved,
     };
   }
+
   return { orphan: true, reason: 'blocked_references_closed' };
 }
-export function filterOrphanIssues(issues, options = {}) {
+
+export function filterOrphanIssues(
+  issues: OrphanIssueInput[],
+  options: FilterOrphanIssuesOptions = {},
+) {
   const issueStateByNumber = new Map(options.issueStateByNumber ?? []);
   const fetchIssueStateByNumber =
     typeof options.fetchIssueStateByNumber === 'function'
       ? options.fetchIssueStateByNumber
       : () => 'UNRESOLVABLE';
-  const filtered = {
+  const filtered: Record<OrphanFilteredReason, FilteredIssueEntry[]> = {
     roadmap_marker: [],
     blocked_by_marker: [],
     blocked_label: [],
@@ -129,9 +242,14 @@ export function filterOrphanIssues(issues, options = {}) {
     blocked_by_open_reference: [],
     unresolvable_reference: [],
   };
-  const orphans = [];
-  const unresolvable = [];
-  const warnings = [];
+  const orphans: OrphanCandidate[] = [];
+  const unresolvable: {
+    issue: number;
+    reference: number;
+    reason: string;
+  }[] = [];
+  const warnings: { issueNumber: number; message: string }[] = [];
+
   for (const issue of issues) {
     const result = classifyIssue(issue, {
       issueStateByNumber,
@@ -139,6 +257,7 @@ export function filterOrphanIssues(issues, options = {}) {
       markerPrefix: options.markerPrefix,
       authoringLabelName: options.authoringLabelName,
     });
+
     if (result.reason === 'unresolvable_reference') {
       for (const number of result.details ?? []) {
         unresolvable.push({
@@ -163,6 +282,7 @@ export function filterOrphanIssues(issues, options = {}) {
         warnings.push(warning);
       }
     }
+
     if (result.orphan) {
       orphans.push({
         number: issue.number,
@@ -179,7 +299,8 @@ export function filterOrphanIssues(issues, options = {}) {
       });
       continue;
     }
-    const entry = {
+
+    const entry: FilteredIssueEntry = {
       number: issue.number,
       title: issue.title,
       state: issue.state,
@@ -189,6 +310,7 @@ export function filterOrphanIssues(issues, options = {}) {
     };
     filtered[result.reason].push(entry);
   }
+
   // Rank the orphan candidate list by authored autopilot-suitability
   // score. Pre-sort by issue number so equal scores resolve by lowest
   // number (the Step 2 tie-break) rather than by API fetch order.
@@ -206,6 +328,7 @@ export function filterOrphanIssues(issues, options = {}) {
     routeBelowFloor: options.autopilot === true,
     getScore: (orphan) => orphan.autopilotSuitability,
   });
+
   const counts = {
     scanned: issues.length,
     orphans: ranked.length,
@@ -218,6 +341,7 @@ export function filterOrphanIssues(issues, options = {}) {
     ),
     unresolvable: unresolvable.length,
   };
+
   return {
     orphans: ranked,
     routed_to_human: routedToHuman,
@@ -227,12 +351,14 @@ export function filterOrphanIssues(issues, options = {}) {
     counts,
   };
 }
+
 function runCli() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
     process.exit(0);
   }
+
   const owner =
     args.owner ||
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
@@ -240,10 +366,14 @@ function runCli() {
     args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
   const repoRef = `${owner}/${repo}`;
   const policy = loadPolicy(args.policy);
+
   const openIssues = fetchOpenIssues(repoRef);
   const openStateByNumber = new Map(
-    openIssues.map((issue) => [issue.number, String(issue.state)]),
+    openIssues.map(
+      (issue) => [issue.number, String(issue.state)] as [number, string],
+    ),
   );
+
   const result = filterOrphanIssues(openIssues, {
     issueStateByNumber: openStateByNumber,
     fetchIssueStateByNumber: (issueNumber) =>
@@ -258,6 +388,7 @@ function runCli() {
     autopilot: args.autopilot,
     now: args.now || new Date(),
   });
+
   const output = {
     repository: { owner, repo },
     diagnostics: {
@@ -274,10 +405,12 @@ function runCli() {
     },
     ...result,
   };
+
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
-function parseArgs(argv) {
-  const parsed = {
+
+function parseArgs(argv: string[]): ParsedArgs {
+  const parsed: ParsedArgs = {
     owner: '',
     repo: '',
     policy: '',
@@ -286,6 +419,7 @@ function parseArgs(argv) {
     now: '',
     autopilot: false,
   };
+
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
@@ -330,6 +464,7 @@ function parseArgs(argv) {
   }
   return parsed;
 }
+
 function printHelp() {
   process.stdout.write(`Usage:
   node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>] [--pr <number>] [--now <ISO8601>] [--autopilot]
@@ -362,13 +497,16 @@ stay in orphans, ranked last. A missing or out-of-range score is treated
 as no score: the issue stays in orphans and is never routed out.
 `);
 }
-function loadPolicy(policyPath) {
+
+function loadPolicy(policyPath: string) {
   const defaultPath = resolve(process.cwd(), '.github/idd/config.json');
   const targetPath = policyPath
     ? resolve(process.cwd(), policyPath)
     : defaultPath;
   try {
-    const config = JSON.parse(readFileSync(targetPath, 'utf8'));
+    const config = JSON.parse(readFileSync(targetPath, 'utf8')) as {
+      markerPrefix?: unknown;
+    };
     const authoringPolicy = resolveAuthoringGuardPolicy(config);
     return {
       source: targetPath,
@@ -394,17 +532,33 @@ function loadPolicy(policyPath) {
     };
   }
 }
-function resolveAutopilotSuitabilityFloor(config) {
+
+function resolveAutopilotSuitabilityFloor(config: unknown): number {
   // Delegate range/default validation to the shared normalizer so the
   // 1-5 rule and the default cannot drift between modules.
   return normalizeAutopilotSuitabilityFloor(
-    config?.autopilotSuitability?.floor,
+    (config as { autopilotSuitability?: { floor?: unknown } } | null)
+      ?.autopilotSuitability?.floor,
   );
 }
-function resolveAutopilotSuitabilityEnabled(config) {
-  return config?.autopilotSuitability?.enabled !== false;
+
+function resolveAutopilotSuitabilityEnabled(config: unknown): boolean {
+  return (
+    (config as { autopilotSuitability?: { enabled?: unknown } } | null)
+      ?.autopilotSuitability?.enabled !== false
+  );
 }
-function normalizeIssue(issue) {
+
+function normalizeIssue(issue: {
+  number?: unknown;
+  title?: unknown;
+  state?: unknown;
+  labels?: unknown;
+  labelEvents?: unknown;
+  body?: unknown;
+  url?: unknown;
+  html_url?: unknown;
+}) {
   return {
     number: Number.parseInt(String(issue.number), 10),
     title: issue.title ?? '',
@@ -415,7 +569,11 @@ function normalizeIssue(issue) {
     url: issue.url ?? issue.html_url ?? '',
   };
 }
-function resolveIssueLabelEvents(issue, fetchLabelEventsByIssueNumber) {
+
+function resolveIssueLabelEvents(
+  issue: OrphanIssueInput,
+  fetchLabelEventsByIssueNumber?: (issueNumber: number) => unknown[],
+) {
   if (Array.isArray(issue.labelEvents) && issue.labelEvents.length > 0) {
     return issue.labelEvents;
   }
@@ -428,7 +586,8 @@ function resolveIssueLabelEvents(issue, fetchLabelEventsByIssueNumber) {
     return [];
   }
 }
-function normalizeLabels(labels) {
+
+function normalizeLabels(labels: unknown): string[] {
   if (!Array.isArray(labels)) {
     return [];
   }
@@ -437,15 +596,16 @@ function normalizeLabels(labels) {
       if (typeof label === 'string') {
         return label;
       }
-      return String(label?.name ?? '');
+      return String((label as { name?: unknown } | null)?.name ?? '');
     })
     .filter(Boolean);
 }
+
 function resolveIssueState(
-  number,
-  issueStateByNumber,
-  fetchIssueStateByNumber,
-) {
+  number: number,
+  issueStateByNumber: Map<number, string>,
+  fetchIssueStateByNumber: (issueNumber: number) => string,
+): string | undefined {
   if (issueStateByNumber.has(number)) {
     return issueStateByNumber.get(number);
   }
@@ -453,7 +613,8 @@ function resolveIssueState(
   issueStateByNumber.set(number, state);
   return state;
 }
-function fetchIssueState(repoRef, issueNumber) {
+
+function fetchIssueState(repoRef: string, issueNumber: number): string {
   try {
     const state = ghText([
       'issue',
@@ -471,28 +632,36 @@ function fetchIssueState(repoRef, issueNumber) {
     return 'UNRESOLVABLE';
   }
 }
-function fetchIssueLabelEvents(repoRef, issueNumber) {
-  const events = [];
+
+function fetchIssueLabelEvents(repoRef: string, issueNumber: number) {
+  const events: unknown[] = [];
   const pageSize = 100;
   for (let page = 1; ; page += 1) {
     const rawPage = ghJson([
       'api',
       `repos/${repoRef}/issues/${issueNumber}/timeline?per_page=${pageSize}&page=${page}`,
     ]);
-    events.push(...rawPage.filter((event) => event?.event === 'labeled'));
+    events.push(
+      ...rawPage.filter(
+        (event) => (event as { event?: unknown } | null)?.event === 'labeled',
+      ),
+    );
     if (rawPage.length < pageSize) {
       break;
     }
   }
   return events;
 }
-function ghJson(args) {
+
+function ghJson(args: string[]): unknown[] {
   return JSON.parse(runGh(args).trim() || '[]');
 }
-function ghText(args) {
+
+function ghText(args: string[]): string {
   return runGh(args).trim();
 }
-function runGh(args) {
+
+function runGh(args: string[]): string {
   try {
     return execFileSync('gh', args, {
       encoding: 'utf8',
@@ -500,41 +669,49 @@ function runGh(args) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    const stderr = String(error?.stderr ?? '').trim();
+    const stderr = String(
+      (error as { stderr?: unknown } | null)?.stderr ?? '',
+    ).trim();
     if (stderr) {
       throw new Error(`gh command failed: ${stderr}`);
     }
     throw error;
   }
 }
-function isCliExecution() {
+
+function isCliExecution(): boolean {
   return Boolean(
     process.argv[1] &&
       fileURLToPath(import.meta.url) === resolve(process.argv[1]),
   );
 }
-function createMarkerRegex(prefix, suffix) {
+
+function createMarkerRegex(prefix: string, suffix: string): RegExp {
   return new RegExp(
     `<!--\\s*${escapeRegex(prefix)}-${suffix}\\b[\\s\\S]*?-->`,
     'i',
   );
 }
-function normalizeMarkerPrefix(prefix) {
+
+function normalizeMarkerPrefix(prefix: unknown): string {
   if (typeof prefix !== 'string' || prefix.length === 0) {
     return DEFAULT_MARKER_PREFIX;
   }
   return prefix;
 }
-function normalizeAuthoringLabelName(labelName) {
+
+function normalizeAuthoringLabelName(labelName: unknown): string {
   return typeof labelName === 'string' && labelName.length > 0
     ? labelName
     : 'status:authoring';
 }
-function escapeRegex(value) {
+
+function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
-function fetchOpenIssues(repoRef) {
-  const issues = [];
+
+function fetchOpenIssues(repoRef: string) {
+  const issues: ReturnType<typeof normalizeIssue>[] = [];
   const pageSize = 100;
   for (let page = 1; ; page += 1) {
     const rawPage = ghJson([
@@ -542,8 +719,15 @@ function fetchOpenIssues(repoRef) {
       `repos/${repoRef}/issues?state=open&per_page=${pageSize}&page=${page}`,
     ]);
     const pageItems = rawPage
-      .filter((item) => item?.pull_request === undefined)
-      .map((item) => normalizeIssue(item));
+      .filter(
+        (item) =>
+          (item as { pull_request?: unknown } | null)?.pull_request ===
+          undefined,
+      )
+      .map((item) =>
+        normalizeIssue(item as Parameters<typeof normalizeIssue>[0]),
+      );
+
     issues.push(...pageItems);
     if (rawPage.length < pageSize) {
       break;
