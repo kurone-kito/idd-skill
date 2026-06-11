@@ -53,6 +53,9 @@ import {
 //
 // Depth limit: parity is asserted for top-level `properties` keys only;
 // nested object shapes are covered by the fixture + `satisfies` pair.
+// Optionality limit: parity compares key NAMES, not requiredness — a
+// schema-required field whose type-side counterpart is optional is not
+// flagged here; the runtime fixture validation partially compensates.
 // ---------------------------------------------------------------------------
 
 /** Structural view of a loaded JSON Schema document. */
@@ -355,7 +358,7 @@ export const policyConfigKeys = [
 
 // PreMergeReadinessReport is index-signature typed (its summary builder
 // returns `Record<string, unknown>` plus a handful of named fields), so
-// `keyof` collapses to `string`: the `satisfies` below is vacuous and no
+// `keyof` collapses to `string | number`: the `satisfies` below is vacuous and no
 // compile-time exhaustiveness witness is possible for this entry. The
 // runtime parity test against the schema's `properties` keys still
 // catches schema-side drift; type-side drift is not detectable until the
@@ -792,7 +795,15 @@ const stalledSessionQuietCheckFixture = {
   reason: 'no-activity-in-window',
   evidence: {
     activity_count_in_window: 0,
-    blocking_activities: [],
+    // One element on purpose: it exercises (and pins) the nested
+    // never-validating timestamp union, so a partial schema fix cannot
+    // leave real documents failing while the suite stays green.
+    blocking_activities: [
+      {
+        type: 'review-comment',
+        timestamp: '2026-06-11T00:00:00Z',
+      },
+    ],
     has_heartbeat_in_window: false,
     has_ci_running: false,
     has_pr_head_movement: false,
@@ -880,6 +891,7 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
       '$.policy.claim_created_at: expected type "string,null", got "null"',
       '$.latest_activity: expected type "string,null", got "null"',
       '$.latest_activity_type: expected type "string,null", got "null"',
+      '$.evidence.blocking_activities[0].timestamp: expected type "string,null", got "string"',
     ],
     fixture: stalledSessionQuietCheckFixture,
   },
@@ -960,13 +972,17 @@ test('the only non-schema file in schemas/ is the phase-graph data file', () => 
 
 for (const entry of SCHEMA_TYPE_MAP) {
   test(`${entry.schemaFile}: schema keywords are validator-supported (gaps pinned)`, () => {
-    const errors = checkSchemaKeywords(loadSchema(entry));
-    assert.deepEqual(errors, [...(entry.knownKeywordGaps ?? [])]);
+    // Sort both sides: the pinned SET stays strict while key-traversal
+    // order inside the validator cannot make the pin brittle.
+    const errors = [...checkSchemaKeywords(loadSchema(entry))].sort();
+    assert.deepEqual(errors, [...(entry.knownKeywordGaps ?? [])].sort());
   });
 
   test(`${entry.schemaFile}: canonical ${entry.exportedType} fixture validates against the schema`, () => {
-    const errors = validate(schemaShapeOf(entry), loadSchema(entry));
-    assert.deepEqual(errors, [...(entry.knownValidationGaps ?? [])]);
+    const errors = [
+      ...validate(schemaShapeOf(entry), loadSchema(entry)),
+    ].sort();
+    assert.deepEqual(errors, [...(entry.knownValidationGaps ?? [])].sort());
   });
 
   test(`${entry.schemaFile}: top-level properties match the ${entry.exportedType} key list`, () => {
