@@ -19,11 +19,32 @@
  * confidence from silently-ignored constraints.
  */
 
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = fileURLToPath(new URL('..', import.meta.url));
+// Resolve the repository root by walking up to the nearest package.json.
+// This is location-independent, so it returns the same root whether this
+// module runs as the emitted scripts/validate-schemas.mjs (one level
+// deep), the src/scripts/validate-schemas.mts source under Node
+// type-stripping (two levels deep), or is imported by another module —
+// a fixed `..` from import.meta.url would resolve to src/ for the source.
+function resolveRepoRoot(fromUrl: string): string {
+  let dir = dirname(fileURLToPath(fromUrl));
+  for (let depth = 0; depth < 16; depth += 1) {
+    if (existsSync(join(dir, 'package.json'))) {
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  return dir;
+}
+
+const ROOT = resolveRepoRoot(import.meta.url);
 
 interface SchemaNode {
   type?: string;
