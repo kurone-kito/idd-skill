@@ -658,11 +658,13 @@ test('planHandoff and generateSuccessorIds — integration fixture', () => {
   ];
 
   const trustedLogins = ['kurone-kito', 'github-copilot-cli-old'];
+  const authorizeKuroneKito = (actor) => actor === 'kurone-kito';
 
   const resultIssueOnly = planHandoff(issueComments, [], {
     trustedMarkerLogins: trustedLogins,
     forcedBy: 'kurone-kito',
     reason: 'operator-approved-recovery',
+    isAuthorizedForcedHandoff: authorizeKuroneKito,
   });
 
   assert.equal(resultIssueOnly.contextScope, 'issue-only');
@@ -692,6 +694,7 @@ test('planHandoff and generateSuccessorIds — integration fixture', () => {
     trustedMarkerLogins: trustedLogins,
     forcedBy: 'kurone-kito',
     reason: 'operator-approved-recovery',
+    isAuthorizedForcedHandoff: authorizeKuroneKito,
   });
 
   assert.equal(resultWithPr.contextScope, 'issue-plus-pr');
@@ -712,6 +715,7 @@ test('planHandoff and generateSuccessorIds — integration fixture', () => {
         trustedMarkerLogins: trustedLogins,
         forcedBy: 'kurone-kito',
         reason: 'operator-approved-recovery',
+        isAuthorizedForcedHandoff: authorizeKuroneKito,
       }),
     /PR #999 does not match any open PR on claim branch issue\/496-feat-force-handoff-derive-live-pr/,
   );
@@ -761,6 +765,47 @@ test('planHandoff omits markerBody when forcedBy actor is not authorized', () =>
   assert.ok(
     result.successorIds.newAgentId,
     'successorIds should still be generated',
+  );
+});
+
+test('planHandoff fails closed for the marker preview when no authorizer callback is supplied', () => {
+  const planClaimBody = [
+    '<!-- claimed-by: github-copilot-cli-old claim-plan-test-old supersedes: none 2026-05-13T10:00:00Z branch: issue/496-feat-force-handoff-derive-live-pr -->',
+    '',
+    '_github-copilot-cli-old: issue claim — IDD automation marker. Do not edit._',
+  ].join('\n');
+
+  const issueComments = [
+    {
+      body: planClaimBody,
+      created_at: '2026-05-13T10:00:00Z',
+      user: { login: 'kurone-kito' },
+    },
+  ];
+
+  const baseOptions = {
+    trustedMarkerLogins: ['kurone-kito', 'github-copilot-cli-old'],
+    forcedBy: 'kurone-kito',
+    reason: 'operator-approved-recovery',
+  };
+
+  // Missing callback must be treated as unauthorized for the preview,
+  // matching the fail-closed default used during claim resolution.
+  const withoutCallback = planHandoff(issueComments, [], baseOptions);
+  assert.equal(
+    withoutCallback.markerBody,
+    null,
+    'markerBody should be null when no authorizer callback is supplied',
+  );
+
+  // An authorizing callback leaves the rendering behavior unchanged.
+  const withCallback = planHandoff(issueComments, [], {
+    ...baseOptions,
+    isAuthorizedForcedHandoff: (actor) => actor === 'kurone-kito',
+  });
+  assert.ok(
+    withCallback.markerBody,
+    'markerBody should render when the forcedBy actor is authorized',
   );
 });
 
