@@ -38,6 +38,7 @@ words:
   - pylint
   - pytest
   - pyproject
+  - tsfile
   - unpushed
   - unreplied
   - unrouted

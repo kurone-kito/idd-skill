@@ -1,13 +1,18 @@
 # TypeScript helper sources
 
-The IDD helper logic is written in TypeScript. The **only hand-edited
-JavaScript surface is `src/**/*.mts`**; the `scripts/*.mjs` and
-`bin/*.mjs` files that ship to adopters are generated from those sources
-and committed to the repository.
+The IDD helper logic is **migrating to TypeScript**, one
+dependency-ordered wave at a time. For every helper that has already been
+converted, the source of truth is its `src/**/*.mts` file, and the
+matching `scripts/*.mjs` / `bin/*.mjs` artifact is generated from it and
+committed to the repository. Helpers that have not been converted yet
+remain hand-edited `.mjs` until their wave lands. When the migration
+completes, `src/**/*.mts` will be the only hand-edited JavaScript surface.
 
-> **Edit the `.mts` source, never the generated `.mjs`.** A direct edit
-> to a generated file is overwritten on the next build and is rejected by
-> the drift guard in CI.
+> **For a converted helper, edit the `.mts` source, never the generated
+> `.mjs`.** A direct edit to a generated file is overwritten on the next
+> build and is rejected by the drift guard in CI. A `.mjs` with no
+> `src/**/*.mts` counterpart is still hand-edited; convert it in its
+> migration wave rather than hand-editing a generated file.
 
 ## Why generated `.mjs` are committed
 
