@@ -14,7 +14,7 @@ const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
-interface LabelEvent {
+export interface LabelEvent {
   event?: unknown;
   label?: unknown;
   created_at?: unknown;

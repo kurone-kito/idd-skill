@@ -4,6 +4,7 @@
 // The scripts/idd-doctor.mjs copy is generated from the .mts source named
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
@@ -11,11 +12,11 @@ import { fileURLToPath } from 'node:url';
 import {
   isAutopilotSuitabilityScore,
   normalizeAutopilotSuitabilityFloor,
-} from './autopilot-suitability.mjs';
+} from './autopilot-suitability.mts';
 import {
   inspectHelperRuntimeConfig,
   parseProjectCommandRows,
-} from './policy-helpers.mjs';
+} from './policy-helpers.mts';
 
 const WORKSHOP_ENTRY_POINTS = ['README.md', 'README.ja.md', 'docs/index.md'];
 const WORKSHOP_REL_PATH = 'docs/workshop';
@@ -26,6 +27,83 @@ const WORKSHOP_LINK_TARGET_PATTERNS = [
 const BASE64_PATTERN = /^[A-Za-z0-9+/=\s]+$/;
 
 export { parseProjectCommandRows };
+
+/** Aggregated doctor findings for one repository root. */
+export interface DoctorReport {
+  root: string;
+  errors: string[];
+  warnings: string[];
+  passes: string[];
+}
+
+/** Options accepted by `runDoctor`. */
+export interface DoctorOptions {
+  root: string;
+  requireGithub?: boolean;
+  cleanupBacklogWindowDays?: number;
+  cleanupBacklogWarnThreshold?: number;
+  workshopCrossRefAllowMissing?: string[];
+  strict?: boolean;
+}
+
+/** Verdict for one primary-worktree HEAD classification. */
+export interface PrimaryHeadClassification {
+  isB1Violation: boolean;
+  kind: 'unknown' | 'other' | 'issue' | 'roadmap-audit' | 'implementation';
+}
+
+/** One reportable finding about the primary-worktree HEAD. */
+export interface WorktreeHeadFinding {
+  level: 'error' | 'warning';
+  message: string;
+}
+
+/** Marker prefixes extracted from one instruction file. */
+export interface MarkerPrefixSets {
+  roadmap: string[];
+  blockedBy: string[];
+}
+
+/** Outcome of the marker-prefix consistency evaluation. */
+export type MarkerPrefixConsistency =
+  | { skip: true; error?: undefined; prefix?: undefined }
+  | { skip?: undefined; error: string; prefix?: undefined }
+  | { skip?: undefined; error?: undefined; prefix: string };
+
+/** Backlog verdict for the post-merge cleanup check. */
+export interface CleanupBacklogVerdict {
+  count: number;
+  warn: boolean;
+  examples: number[];
+}
+
+interface SuitabilityIssueInput {
+  number?: unknown;
+  body?: unknown;
+  labels?: unknown;
+}
+
+interface SuitabilityMarkerDetection {
+  present: boolean;
+  value: number | null;
+  malformed: boolean;
+}
+
+type CommandResult =
+  | { ok: true; stdout: string }
+  | { ok: false; code: number | undefined; stderr: string };
+
+interface DoctorCliArgs {
+  root: string;
+  json: boolean;
+  help: boolean;
+  requireGithub: boolean;
+  strict: boolean;
+  cleanupBacklogWindowDays?: number;
+  cleanupBacklogWarnThreshold?: number;
+  workshopCrossRefAllowMissing?: string[];
+}
+
 export function runDoctor({
   root,
   requireGithub,
@@ -33,15 +111,16 @@ export function runDoctor({
   cleanupBacklogWarnThreshold,
   workshopCrossRefAllowMissing,
   strict,
-}) {
+}: DoctorOptions): DoctorReport {
   const files = listFiles(root);
   const textFiles = files.filter(isTextLikeFile);
-  const report = {
+  const report: DoctorReport = {
     root,
     errors: [],
     warnings: [],
     passes: [],
   };
+
   checkRequiredFiles(files, report);
   checkPlaceholders(root, textFiles, report);
   const markerPrefix = checkMarkerPrefixes(root, report);
@@ -81,25 +160,34 @@ export function runDoctor({
     { requireGithub, markerPrefix },
     report,
   );
+
   return report;
 }
+
 /**
  * Classify each open issue's authored autopilot-suitability marker and
  * emit warning strings for contradictions, without any I/O. Exported
  * for unit testing. Issues are `{ number, body, labels }` where labels
  * are strings or `{ name }` objects.
  */
-export function evaluateAutopilotSuitabilityConsistency(issues, options = {}) {
+export function evaluateAutopilotSuitabilityConsistency(
+  issues: unknown,
+  options: { floor?: unknown; markerPrefix?: unknown } = {},
+): { warnings: string[] } {
   const floor = normalizeAutopilotSuitabilityFloor(options.floor);
   const prefix =
     typeof options.markerPrefix === 'string' && options.markerPrefix.length > 0
       ? options.markerPrefix
       : 'idd-skill';
-  const warnings = [];
-  for (const issue of Array.isArray(issues) ? issues : []) {
+  const warnings: string[] = [];
+  for (const issue of (Array.isArray(issues)
+    ? issues
+    : []) as SuitabilityIssueInput[]) {
     const labelNames = new Set(
-      (issue?.labels ?? []).map((label) =>
-        typeof label === 'string' ? label : (label?.name ?? ''),
+      ((issue?.labels ?? []) as unknown[]).map((label) =>
+        typeof label === 'string'
+          ? label
+          : ((label as { name?: unknown } | null)?.name ?? ''),
       ),
     );
     const blockedByHuman = labelNames.has('status:blocked-by-human');
@@ -130,7 +218,11 @@ export function evaluateAutopilotSuitabilityConsistency(issues, options = {}) {
   }
   return { warnings };
 }
-function detectAutopilotSuitabilityMarker(body, prefix) {
+
+function detectAutopilotSuitabilityMarker(
+  body: unknown,
+  prefix: string,
+): SuitabilityMarkerDetection {
   const regex = new RegExp(
     `<!--\\s*${escapeRegex(prefix)}-autopilot-suitability:\\s*([^\\s>]+)\\s*-->`,
     'gi',
@@ -148,13 +240,19 @@ function detectAutopilotSuitabilityMarker(body, prefix) {
   }
   return { present: true, value: [...distinct][0], malformed: false };
 }
-function checkAutopilotSuitabilityConsistency(root, options, report) {
+
+function checkAutopilotSuitabilityConsistency(
+  root: string,
+  options: { requireGithub?: boolean; markerPrefix: string | null },
+  report: DoctorReport,
+) {
   const requireGithub = options.requireGithub === true;
-  const recordGhFailure = (message) => {
+  const recordGhFailure = (message: string) => {
     if (requireGithub) {
       report.errors.push(`autopilot-suitability consistency check: ${message}`);
     }
   };
+
   const list = runCommand(
     'gh',
     [
@@ -173,7 +271,7 @@ function checkAutopilotSuitabilityConsistency(root, options, report) {
     recordGhFailure('gh issue list unavailable');
     return;
   }
-  let issues;
+  let issues: unknown;
   try {
     issues = JSON.parse(list.stdout);
   } catch {
@@ -183,15 +281,17 @@ function checkAutopilotSuitabilityConsistency(root, options, report) {
   if (!Array.isArray(issues) || issues.length === 0) {
     return;
   }
-  let floor;
+
+  let floor: unknown;
   try {
     const config = JSON.parse(
       readFileSync(join(root, '.github/idd/config.json'), 'utf8'),
-    );
+    ) as { autopilotSuitability?: { floor?: unknown } } | null;
     floor = config?.autopilotSuitability?.floor;
   } catch {
     floor = undefined;
   }
+
   const { warnings } = evaluateAutopilotSuitabilityConsistency(issues, {
     floor,
     markerPrefix: options.markerPrefix,
@@ -200,7 +300,8 @@ function checkAutopilotSuitabilityConsistency(root, options, report) {
     report.warnings.push(warning);
   }
 }
-export function parsePrimaryWorktreePath(porcelain) {
+
+export function parsePrimaryWorktreePath(porcelain: string): string | null {
   const lines = porcelain.split('\n');
   for (const line of lines) {
     const match = line.match(/^worktree (.+)$/);
@@ -210,17 +311,19 @@ export function parsePrimaryWorktreePath(porcelain) {
   }
   return null;
 }
+
 export const DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS = [
   'issue/*',
   'roadmap-audit/*',
 ];
+
 /**
  * Convert a shell-style branch glob to an anchored RegExp, matching the
  * core.hooksPath hook's POSIX `case` semantics: `*` (any run), `?` (any
  * one character), and bracket expressions (`[...]`, `[!...]`/`[^...]`).
  * A malformed glob yields a never-matching RegExp rather than throwing.
  */
-function branchGlobToRegExp(pattern) {
+function branchGlobToRegExp(pattern: string): RegExp {
   let out = '^';
   let i = 0;
   while (i < pattern.length) {
@@ -262,10 +365,11 @@ function branchGlobToRegExp(pattern) {
     return /(?!)/; // malformed glob: never matches, never crashes
   }
 }
+
 export function classifyPrimaryHead(
-  branch,
-  patterns = DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS,
-) {
+  branch: unknown,
+  patterns: string[] = DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS,
+): PrimaryHeadClassification {
   if (typeof branch !== 'string' || branch.length === 0) {
     return { isB1Violation: false, kind: 'unknown' };
   }
@@ -286,11 +390,13 @@ export function classifyPrimaryHead(
   }
   return { isB1Violation: true, kind: 'implementation' };
 }
-export function findPlaceholders(text) {
+
+export function findPlaceholders(text: string): string[] {
   return [...text.matchAll(/\{\{\s*[A-Za-z0-9_-]+\s*\}\}/g)].map(
     (match) => match[0],
   );
 }
+
 /**
  * Find unresolved `{{…}}` placeholders in one file's text. Markdown docs
  * under `docs/` legitimately *document* placeholder names inside code
@@ -299,14 +405,15 @@ export function findPlaceholders(text) {
  * examples may contain unsubstituted placeholders inside inline code or
  * HTML comments) is scanned raw, so a real leftover is still detected.
  */
-export function scanFileForPlaceholders(file, text) {
+export function scanFileForPlaceholders(file: string, text: string): string[] {
   const documentsPlaceholders =
     file.startsWith('docs/') && file.endsWith('.md');
   return findPlaceholders(
     documentsPlaceholders ? stripMarkdownNonText(text) : text,
   );
 }
-export function extractMarkerPrefixes(text) {
+
+export function extractMarkerPrefixes(text: string): MarkerPrefixSets {
   // The negative lookahead keeps each match to a complete marker token
   // (e.g. `idd-skill-blocked-by:` or `idd-skill-roadmap-id`), so a
   // prose/heading slug such as
@@ -327,7 +434,8 @@ export function extractMarkerPrefixes(text) {
     blockedBy: unique(blockedBy),
   };
 }
-function checkRequiredFiles(_files, report) {
+
+function checkRequiredFiles(_files: string[], report: DoctorReport) {
   const required = [
     '.github/instructions/idd-overview-core.instructions.md',
     '.github/instructions/idd-discover.instructions.md',
@@ -356,18 +464,21 @@ function checkRequiredFiles(_files, report) {
     'docs/permissions.md',
     'docs/policy-constants.md',
   ];
+
   const profileFiles = [
     'profiles/README.md',
     'profiles/human-required/README.md',
     'profiles/no-advisory/README.md',
     'profiles/external-bot/README.md',
   ];
+
   const missingRequired = required.filter(
     (file) => !exists(join(report.root, file)),
   );
   const missingProfiles = profileFiles.filter(
     (file) => !exists(join(report.root, file)),
   );
+
   if (missingRequired.length > 0) {
     report.errors.push(
       `missing required IDD files: ${missingRequired.join(', ')}`,
@@ -375,6 +486,7 @@ function checkRequiredFiles(_files, report) {
   } else {
     report.passes.push('required instruction and reference files are present');
   }
+
   if (missingProfiles.length > 0) {
     report.warnings.push(
       `missing non-default profile files (expected for adopters): ${missingProfiles.join(', ')}`,
@@ -383,7 +495,12 @@ function checkRequiredFiles(_files, report) {
     report.passes.push('profile artifacts are present');
   }
 }
-function checkPlaceholders(root, files, report) {
+
+function checkPlaceholders(
+  root: string,
+  files: string[],
+  report: DoctorReport,
+) {
   const distributionSource =
     exists(join(root, 'idd-template/ONBOARDING.md')) &&
     exists(join(root, 'audit/sync-manifest.json'));
@@ -397,7 +514,8 @@ function checkPlaceholders(root, files, report) {
   if (distributionSource) {
     excludedPrefixes.push('.github/instructions/', 'audit/');
   }
-  const hits = [];
+  const hits: string[] = [];
+
   for (const file of files) {
     if (excludedPrefixes.some((prefix) => file.startsWith(prefix))) {
       continue;
@@ -415,6 +533,7 @@ function checkPlaceholders(root, files, report) {
     }
     hits.push(`${file}: ${unique(placeholders).join(', ')}`);
   }
+
   if (hits.length > 0) {
     report.errors.push(
       `unresolved placeholders found: ${hits.slice(0, 10).join(' | ')}`,
@@ -423,7 +542,11 @@ function checkPlaceholders(root, files, report) {
   }
   report.passes.push('no unresolved {{...}} placeholders in IDD-managed files');
 }
-function checkMarkerPrefixes(root, report) {
+
+function checkMarkerPrefixes(
+  root: string,
+  report: DoctorReport,
+): string | null {
   const discoverPath = join(
     root,
     '.github/instructions/idd-discover.instructions.md',
@@ -443,6 +566,7 @@ function checkMarkerPrefixes(root, report) {
     );
     return null;
   }
+
   const result = evaluateMarkerPrefixConsistency(
     extractMarkerPrefixes(discover),
     extractMarkerPrefixes(overview),
@@ -462,6 +586,7 @@ function checkMarkerPrefixes(root, report) {
   );
   return result.prefix ?? null;
 }
+
 /**
  * Decide whether the marker prefixes extracted from the discover and
  * overview instruction files are valid and consistent. Pure (no I/O), so
@@ -473,9 +598,9 @@ function checkMarkerPrefixes(root, report) {
  * `b-blocked-by`).
  */
 export function evaluateMarkerPrefixConsistency(
-  discoverPrefixes,
-  overviewPrefixes,
-) {
+  discoverPrefixes: MarkerPrefixSets,
+  overviewPrefixes: MarkerPrefixSets,
+): MarkerPrefixConsistency {
   const allPrefixes = unique([
     ...discoverPrefixes.roadmap,
     ...discoverPrefixes.blockedBy,
@@ -493,7 +618,7 @@ export function evaluateMarkerPrefixConsistency(
   }
   // Compare only populated sets so a file that does not reference these
   // markers at all imposes no constraint.
-  const consistent = (left, right) =>
+  const consistent = (left: string[], right: string[]) =>
     left.length === 0 || right.length === 0 || sameMembers(left, right);
   if (!consistent(discoverPrefixes.roadmap, discoverPrefixes.blockedBy)) {
     return {
@@ -525,7 +650,11 @@ export function evaluateMarkerPrefixConsistency(
   }
   return { prefix: allPrefixes[0] };
 }
-function checkProjectCommands(root, report) {
+
+function checkProjectCommands(
+  root: string,
+  report: DoctorReport,
+): Map<string, string> | null {
   const path = join(
     root,
     '.github/instructions/idd-overview-core.instructions.md',
@@ -539,6 +668,7 @@ function checkProjectCommands(root, report) {
     );
     return null;
   }
+
   const commands = parseProjectCommandRows(text);
   const requiredRows = [
     'fix-validate',
@@ -553,6 +683,7 @@ function checkProjectCommands(root, report) {
     );
     return null;
   }
+
   const noOps = requiredRows.filter((row) => commands.get(row) === 'true');
   if (noOps.length === requiredRows.length) {
     report.warnings.push(
@@ -563,18 +694,21 @@ function checkProjectCommands(root, report) {
   }
   return commands;
 }
+
 function checkCommandResidueAndConsistency(
-  root,
-  markerPrefix,
-  projectCommands,
-  report,
+  root: string,
+  markerPrefix: string | null,
+  projectCommands: Map<string, string> | null,
+  report: DoctorReport,
 ) {
   if (!(projectCommands instanceof Map)) {
     return;
   }
+
   const policyCommands = loadPolicyCommands(root);
   const policyCommandMap =
-    policyCommands instanceof Map ? policyCommands : new Map();
+    policyCommands instanceof Map ? policyCommands : new Map<string, string>();
+
   const sharedKeys = unique(
     [...policyCommandMap.keys()].filter((key) => projectCommands.has(key)),
   ).sort();
@@ -593,6 +727,7 @@ function checkCommandResidueAndConsistency(
       );
     }
   }
+
   if (typeof markerPrefix !== 'string' || markerPrefix.length === 0) {
     report.warnings.push(
       'toolchain residue checks skipped because marker prefix could not be resolved',
@@ -602,11 +737,12 @@ function checkCommandResidueAndConsistency(
   if (markerPrefix === 'idd-skill') {
     return;
   }
-  const residueMessages = new Set();
+
+  const residueMessages = new Set<string>();
   for (const [source, commands] of [
     ['.github/idd/config.json', policyCommandMap],
     ['overview project commands table', projectCommands],
-  ]) {
+  ] as [string, Map<string, string>][]) {
     for (const [key, value] of commands.entries()) {
       const normalized = normalizeCommandValue(value);
       if (normalized === null) {
@@ -625,32 +761,39 @@ function checkCommandResidueAndConsistency(
     report.warnings.push(message);
   }
 }
-function loadPolicyCommands(root) {
+
+function loadPolicyCommands(root: string): Map<string, string> | null {
   const configPath = join(root, '.github/idd/config.json');
   if (!exists(configPath)) {
     return null;
   }
-  let parsed;
+
+  let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(configPath, 'utf8'));
   } catch {
     return null;
   }
-  const commands = parsed?.commands;
+  const commands = (parsed as { commands?: unknown } | null)?.commands;
   if (!commands || typeof commands !== 'object' || Array.isArray(commands)) {
     return null;
   }
+
   return new Map(
-    Object.entries(commands).filter((entry) => typeof entry[1] === 'string'),
+    Object.entries(commands).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string',
+    ),
   );
 }
-function normalizeCommandValue(value) {
+
+function normalizeCommandValue(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null;
   }
   return value.trim();
 }
-function isConcreteCommandValue(value) {
+
+function isConcreteCommandValue(value: string | null): boolean {
   if (typeof value !== 'string' || value.length === 0) {
     return false;
   }
@@ -659,7 +802,8 @@ function isConcreteCommandValue(value) {
   }
   return !/\{\{\s*[A-Za-z0-9_-]+\s*\}\}/.test(value);
 }
-function findToolchainResidueToken(value) {
+
+function findToolchainResidueToken(value: string): string | null {
   for (const token of ['dprint', 'markdownlint-cli2', 'cspell']) {
     if (new RegExp(`\\b${escapeRegex(token)}\\b`, 'i').test(value)) {
       return token;
@@ -667,10 +811,12 @@ function findToolchainResidueToken(value) {
   }
   return null;
 }
-function escapeRegex(value) {
+
+function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
-function checkPolicySignals(root, report) {
+
+function checkPolicySignals(root: string, report: DoctorReport) {
   const files = [
     'README.md',
     'README.ja.md',
@@ -686,6 +832,7 @@ function checkPolicySignals(root, report) {
   const corpus = existing
     .map((file) => readFileSync(join(root, file), 'utf8'))
     .join('\n');
+
   const mergePolicies = [
     'fully_autonomous_merge',
     'human_merge',
@@ -696,6 +843,7 @@ function checkPolicySignals(root, report) {
   } else {
     report.passes.push('merge policy signal found');
   }
+
   const reviewPolicySignals = [
     'copilot advisory',
     'no-advisory',
@@ -713,20 +861,24 @@ function checkPolicySignals(root, report) {
     report.passes.push('review policy signal found');
   }
 }
-function checkHelperRuntimeConfig(root, report) {
+
+function checkHelperRuntimeConfig(root: string, report: DoctorReport) {
   const candidates = ['.github/idd/config.json', 'idd-policy.json'];
+
   for (const file of candidates) {
     const absolutePath = join(root, file);
     if (!exists(absolutePath)) {
       continue;
     }
-    let config;
+
+    let config: unknown;
     try {
       config = JSON.parse(readFileSync(absolutePath, 'utf8'));
     } catch {
       report.errors.push(`${file} is not valid JSON`);
       continue;
     }
+
     const helperRuntime = inspectHelperRuntimeConfig(config);
     if (helperRuntime.status === 'absent') {
       report.passes.push(
@@ -743,7 +895,8 @@ function checkHelperRuntimeConfig(root, report) {
     );
   }
 }
-function checkAgentEntryFiles(root, report) {
+
+function checkAgentEntryFiles(root: string, report: DoctorReport) {
   for (const file of ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md']) {
     const absolutePath = join(root, file);
     if (!exists(absolutePath)) {
@@ -762,7 +915,8 @@ function checkAgentEntryFiles(root, report) {
     report.passes.push(`${file} references docs/idd-workflow.md`);
   }
 }
-function checkTemplateVersionSignal(root, report) {
+
+function checkTemplateVersionSignal(root: string, report: DoctorReport) {
   const candidates = [
     '.github/idd/config.json',
     'idd-policy.json',
@@ -785,27 +939,29 @@ function checkTemplateVersionSignal(root, report) {
     'template version signal not found (iddVersion/template version)',
   );
 }
-export function readWorktreeGuardEnabled(root) {
+
+export function readWorktreeGuardEnabled(root: string): boolean {
   try {
     const config = JSON.parse(
       readFileSync(join(root, '.github/idd/config.json'), 'utf8'),
-    );
+    ) as { worktreeGuard?: { enabled?: unknown } } | null;
     return config?.worktreeGuard?.enabled === true;
   } catch {
     return false;
   }
 }
+
 /**
  * Read `worktreeGuard.branchPatterns` from the repo config, falling back
  * to the default implementation-branch globs when the key is absent,
  * empty, or malformed. Matches the core.hooksPath hook so idd-doctor and
  * the hook agree on which branches the guard covers.
  */
-export function readWorktreeGuardBranchPatterns(root) {
+export function readWorktreeGuardBranchPatterns(root: string): string[] {
   try {
     const config = JSON.parse(
       readFileSync(join(root, '.github/idd/config.json'), 'utf8'),
-    );
+    ) as { worktreeGuard?: { branchPatterns?: unknown } } | null;
     const patterns = config?.worktreeGuard?.branchPatterns;
     if (
       Array.isArray(patterns) &&
@@ -819,6 +975,7 @@ export function readWorktreeGuardBranchPatterns(root) {
   }
   return DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS;
 }
+
 /**
  * Decide which worktree-hardening signals are missing from the consuming
  * repository's imported files. Pure (no I/O): each argument is the file's
@@ -826,8 +983,16 @@ export function readWorktreeGuardBranchPatterns(root) {
  * skipped, not reported, so this never double-reports a missing required
  * file). Returns a list of human-readable missing-signal labels.
  */
-export function findMissingWorktreeHardening({ work, core, doctor } = {}) {
-  const missing = [];
+export function findMissingWorktreeHardening({
+  work,
+  core,
+  doctor,
+}: {
+  work?: string | null;
+  core?: string | null;
+  doctor?: string | null;
+} = {}): string[] {
+  const missing: string[] = [];
   if (typeof work === 'string') {
     if (!/^###\s+Anti-patterns\b/m.test(work)) {
       missing.push('idd-work B1 Anti-patterns section');
@@ -857,8 +1022,9 @@ export function findMissingWorktreeHardening({ work, core, doctor } = {}) {
   }
   return missing;
 }
-function checkWorktreeHardeningPresence(root, report) {
-  const read = (relativePath) => {
+
+function checkWorktreeHardeningPresence(root: string, report: DoctorReport) {
+  const read = (relativePath: string) => {
     try {
       return readFileSync(join(root, relativePath), 'utf8');
     } catch {
@@ -879,7 +1045,12 @@ function checkWorktreeHardeningPresence(root, report) {
       '.github/instructions/idd-work.instructions.md.',
   );
 }
-function checkPrimaryWorktreeHead(root, report, options = {}) {
+
+function checkPrimaryWorktreeHead(
+  root: string,
+  report: DoctorReport,
+  options: { enforce?: boolean } = {},
+) {
   const listResult = runCommand(
     'git',
     ['worktree', 'list', '--porcelain'],
@@ -888,10 +1059,12 @@ function checkPrimaryWorktreeHead(root, report, options = {}) {
   if (!listResult.ok) {
     return;
   }
+
   const primaryPath = parsePrimaryWorktreePath(listResult.stdout);
   if (!primaryPath) {
     return;
   }
+
   const headResult = runCommand(
     'git',
     ['-C', primaryPath, 'rev-parse', '--abbrev-ref', 'HEAD'],
@@ -900,6 +1073,7 @@ function checkPrimaryWorktreeHead(root, report, options = {}) {
   if (!headResult.ok) {
     return;
   }
+
   const branch = headResult.stdout.trim();
   const classification = classifyPrimaryHead(
     branch,
@@ -920,6 +1094,7 @@ function checkPrimaryWorktreeHead(root, report, options = {}) {
     report.warnings.push(finding.message);
   }
 }
+
 /**
  * Decide whether a primary-worktree HEAD classification is a finding and,
  * if so, at what level. Pure (no I/O) so it can be unit-tested directly.
@@ -928,11 +1103,11 @@ function checkPrimaryWorktreeHead(root, report, options = {}) {
  * passed; it promotes the finding from a warning to a blocking error.
  */
 export function classifyWorktreeHeadFinding(
-  classification,
-  branch,
-  primaryPath,
-  enforce,
-) {
+  classification: PrimaryHeadClassification | null | undefined,
+  branch: string,
+  primaryPath: string,
+  enforce: boolean,
+): WorktreeHeadFinding | null {
   if (!classification?.isB1Violation) {
     return null;
   }
@@ -950,7 +1125,11 @@ export function classifyWorktreeHeadFinding(
     message: `primary worktree HEAD is on ${kindLabel} (${branch}) at ${primaryPath} — ${severity}. See B1 in .github/instructions/idd-work.instructions.md.`,
   };
 }
-export function computeWindowStartIso(now, windowDays) {
+
+export function computeWindowStartIso(
+  now: unknown,
+  windowDays: unknown,
+): string | null {
   const ms = Number(windowDays) * 24 * 60 * 60 * 1000;
   if (!Number.isFinite(ms) || ms <= 0) {
     return null;
@@ -973,7 +1152,11 @@ export function computeWindowStartIso(now, windowDays) {
     return null;
   }
 }
-export function classifyBacklog(missingPrNumbers, warnThreshold) {
+
+export function classifyBacklog(
+  missingPrNumbers: unknown,
+  warnThreshold: unknown,
+): CleanupBacklogVerdict {
   const count = Array.isArray(missingPrNumbers) ? missingPrNumbers.length : 0;
   const thresholdNumber = Number(warnThreshold);
   const safeThreshold =
@@ -984,25 +1167,36 @@ export function classifyBacklog(missingPrNumbers, warnThreshold) {
     count,
     warn: count > safeThreshold,
     examples: Array.isArray(missingPrNumbers)
-      ? missingPrNumbers.slice(0, 5)
+      ? (missingPrNumbers.slice(0, 5) as number[])
       : [],
   };
 }
-function checkPostMergeCleanupBacklog(root, options, report) {
+
+function checkPostMergeCleanupBacklog(
+  root: string,
+  options: {
+    windowDays: number;
+    warnThreshold: number;
+    requireGithub?: boolean;
+  },
+  report: DoctorReport,
+) {
   const windowDays = options.windowDays;
   const warnThreshold = options.warnThreshold;
   const requireGithub = options.requireGithub === true;
+
   // Soft GitHub-API failures (gh missing, no token, repo view fails,
   // pr list fails) are silent by default — same pattern as the other
   // doctor GitHub-readiness checks — and only surface as errors when
   // the operator passed --require-github. Per-PR evidence-fetch
   // failures are still always reported because they materially change
   // the backlog count.
-  const recordGhFailure = (message) => {
+  const recordGhFailure = (message: string) => {
     if (requireGithub) {
       report.errors.push(`post-merge cleanup backlog check: ${message}`);
     }
   };
+
   const repoView = runCommand(
     'gh',
     ['repo', 'view', '--json', 'owner,name'],
@@ -1012,7 +1206,7 @@ function checkPostMergeCleanupBacklog(root, options, report) {
     recordGhFailure('gh repo view unavailable');
     return;
   }
-  let parsed;
+  let parsed: { owner?: { login?: string }; name?: string };
   try {
     parsed = JSON.parse(repoView.stdout);
   } catch {
@@ -1025,6 +1219,7 @@ function checkPostMergeCleanupBacklog(root, options, report) {
     recordGhFailure('gh repo view did not return owner/name');
     return;
   }
+
   const sinceIso = computeWindowStartIso(Date.now(), windowDays);
   if (!sinceIso) {
     report.warnings.push(
@@ -1032,6 +1227,7 @@ function checkPostMergeCleanupBacklog(root, options, report) {
     );
     return;
   }
+
   const search = runCommand(
     'gh',
     [
@@ -1054,7 +1250,7 @@ function checkPostMergeCleanupBacklog(root, options, report) {
     recordGhFailure(`merged-PR list query failed for ${owner}/${repo}`);
     return;
   }
-  let mergedPrs;
+  let mergedPrs: unknown;
   try {
     mergedPrs = JSON.parse(search.stdout);
   } catch {
@@ -1066,10 +1262,11 @@ function checkPostMergeCleanupBacklog(root, options, report) {
   if (!Array.isArray(mergedPrs) || mergedPrs.length === 0) {
     return;
   }
-  const missing = [];
-  const evidenceFailures = [];
+
+  const missing: number[] = [];
+  const evidenceFailures: number[] = [];
   for (const pr of mergedPrs) {
-    const number = pr?.number;
+    const number = (pr as { number?: unknown } | null)?.number;
     if (!Number.isInteger(number)) {
       continue;
     }
@@ -1085,7 +1282,7 @@ function checkPostMergeCleanupBacklog(root, options, report) {
       root,
     );
     if (!evidence.ok) {
-      evidenceFailures.push(number);
+      evidenceFailures.push(number as number);
       continue;
     }
     const matchLines = String(evidence.stdout)
@@ -1093,9 +1290,10 @@ function checkPostMergeCleanupBacklog(root, options, report) {
       .map((line) => line.trim())
       .filter((line) => line.length > 0);
     if (matchLines.length === 0) {
-      missing.push(number);
+      missing.push(number as number);
     }
   }
+
   if (evidenceFailures.length > 0) {
     const evidenceMessage =
       `post-merge cleanup evidence query failed for ${evidenceFailures.length} merged PR(s) ` +
@@ -1110,22 +1308,28 @@ function checkPostMergeCleanupBacklog(root, options, report) {
       report.warnings.push(evidenceMessage);
     }
   }
+
   const verdict = classifyBacklog(missing, warnThreshold);
   if (!verdict.warn) {
     return;
   }
+
   const examplesText = verdict.examples.map((n) => `#${n}`).join(', ');
   report.warnings.push(
     `post-merge cleanup backlog: ${verdict.count} merged PRs in the last ${windowDays} days lack F4 cleanup evidence (warn threshold: ${warnThreshold}). Examples: ${examplesText}. Remediation: see docs/idd-comment-minimization.md or run \`node scripts/audit-pr-cleanup.mjs --pr <N> --apply --skip-claim-check\`.`,
   );
 }
-export function findMissingWorkshopReferences(entryFiles, allowMissing) {
+
+export function findMissingWorkshopReferences(
+  entryFiles: { path: string; content: string | null }[],
+  allowMissing: unknown,
+): string[] {
   const allowSet = new Set(
     (Array.isArray(allowMissing) ? allowMissing : []).map((path) =>
       String(path),
     ),
   );
-  const missing = [];
+  const missing: string[] = [];
   for (const entry of entryFiles) {
     if (allowSet.has(entry.path)) {
       continue;
@@ -1143,7 +1347,8 @@ export function findMissingWorkshopReferences(entryFiles, allowMissing) {
   }
   return missing;
 }
-export function containsWorkshopReference(content) {
+
+export function containsWorkshopReference(content: unknown): boolean {
   if (typeof content !== 'string' || content.length === 0) {
     return false;
   }
@@ -1154,7 +1359,7 @@ export function containsWorkshopReference(content) {
   // form per CommonMark inline-link grammar.
   const linkPattern =
     /\[[^\]\n]*\]\(\s*([^()\s]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
-  let match;
+  let match: RegExpExecArray | null;
   // biome-ignore lint/suspicious/noAssignInExpressions: canonical regex-exec iteration idiom
   while ((match = linkPattern.exec(stripped)) !== null) {
     const target = match[1];
@@ -1165,9 +1370,10 @@ export function containsWorkshopReference(content) {
   }
   return false;
 }
-function stripFencedCodeBlocks(content) {
+
+function stripFencedCodeBlocks(content: string): string {
   const lines = String(content).split(/\r?\n/);
-  const out = [];
+  const out: string[] = [];
   let inFence = false;
   for (const line of lines) {
     if (/^\s*(```|~~~)/.test(line)) {
@@ -1179,7 +1385,8 @@ function stripFencedCodeBlocks(content) {
   }
   return out.join('\n');
 }
-function matchesWorkshopPath(target) {
+
+function matchesWorkshopPath(target: string): boolean {
   const cleaned = String(target)
     .replace(/^\.\/+/, '')
     .replace(/^\/+/, '');
@@ -1190,6 +1397,7 @@ function matchesWorkshopPath(target) {
   }
   return false;
 }
+
 // Verifies that the workshop publication is discoverable from every
 // known entry point (README.md, README.ja.md, docs/index.md).
 // Skipped silently when docs/workshop/ does not exist (adopter repos
@@ -1197,7 +1405,11 @@ function matchesWorkshopPath(target) {
 // repository's back-link is intentionally out of scope here because
 // verifying it requires fetching a remote repository's README; that
 // is a separate concern under the helper-runtime profile work.
-function checkWorkshopCrossReferences(root, options, report) {
+function checkWorkshopCrossReferences(
+  root: string,
+  options: { allowMissing?: string[] },
+  report: DoctorReport,
+) {
   const allowMissing = options.allowMissing ?? [];
   const workshopDir = resolve(root, WORKSHOP_REL_PATH);
   if (!existsSync(workshopDir)) {
@@ -1221,6 +1433,7 @@ function checkWorkshopCrossReferences(root, options, report) {
     );
   }
 }
+
 // Returns a regex that matches a URL **pathname** of shape
 // `/<slug>/(<segments>/)*docs/workshop(/|$|[?#])`. Anchored to
 // `^/<slug>/` so the slug must occupy the first two path segments
@@ -1236,11 +1449,12 @@ function checkWorkshopCrossReferences(root, options, report) {
 // validation, URL token cleanup, and root-relative target
 // extraction; do not use this pattern against a full URL or
 // external host token.
-export function backLinkPatternFor(repoSlug) {
+export function backLinkPatternFor(repoSlug: unknown): RegExp {
   const escSlug = String(repoSlug).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`^/${escSlug}/(?:[^?#]*?/)?docs/workshop(?:/|$|[?#])`, 'i');
 }
-export function stripMarkdownNonText(content) {
+
+export function stripMarkdownNonText(content: unknown): string {
   if (typeof content !== 'string') return '';
   let s = content;
   // Order matters: strip code regions FIRST so a literal `<!--`
@@ -1255,23 +1469,24 @@ export function stripMarkdownNonText(content) {
   // payloads like `<!--<!-- x --> -->` fully collapse rather than
   // leaving `<!--` fragments after a single pass — satisfies
   // CodeQL's incomplete-multi-character sanitization rule.
-  let prev;
+  let prev: string;
   do {
     prev = s;
     s = s.replace(/<!--[\s\S]*?-->/g, '');
   } while (s !== prev);
   return s;
 }
+
 // Per CommonMark §4.5: an opening fence may have up to 3 leading
 // spaces; the opening backtick fence info string MUST NOT contain
 // backticks (the tilde fence info string may contain anything); a
 // closing fence must use the same fence character, have a length
 // at least the opening length, and may have a different indent
 // (still <= 3 spaces) and trailing whitespace only.
-function stripFencesPreservingLines(content) {
+function stripFencesPreservingLines(content: string): string {
   const lines = String(content).split(/\r?\n/);
-  const out = [];
-  let fence = null;
+  const out: string[] = [];
+  let fence: { char: string; length: number } | null = null;
   for (const line of lines) {
     const m = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
     if (m) {
@@ -1308,15 +1523,16 @@ function stripFencesPreservingLines(content) {
   }
   return out.join('\n');
 }
+
 // CommonMark §4.4 indented code blocks: at least 4 leading spaces
 // (or one tab), preceded by a blank line. Indented lines that are
 // recognizable list items (`-`, `*`, `+`, or `\d+\.` after the
 // leading whitespace) stay as text — loose-list nested items can
 // otherwise be misread as code. We only blank lines that follow a
 // blank or already-blanked line and do not look like list items.
-function stripIndentedCodeBlocksPreservingLines(content) {
+function stripIndentedCodeBlocksPreservingLines(content: string): string {
   const lines = String(content).split(/\r?\n/);
-  const out = [];
+  const out: string[] = [];
   let prevBlank = true;
   let inBlock = false;
   for (const line of lines) {
@@ -1344,7 +1560,11 @@ function stripIndentedCodeBlocksPreservingLines(content) {
   }
   return out.join('\n');
 }
-export function containsExampleRepoBackLink(readmeContent, repoSlug) {
+
+export function containsExampleRepoBackLink(
+  readmeContent: unknown,
+  repoSlug: unknown,
+): boolean {
   if (typeof readmeContent !== 'string' || readmeContent.length === 0) {
     return false;
   }
@@ -1364,11 +1584,11 @@ export function containsExampleRepoBackLink(readmeContent, repoSlug) {
   const stripped = imagedStripped;
   // Absolute http(s) URLs.
   const urlPattern = /https?:\/\/[^\s<>)\]"']+/gi;
-  let match;
+  let match: RegExpExecArray | null;
   // biome-ignore lint/suspicious/noAssignInExpressions: canonical regex-exec iteration idiom
   while ((match = urlPattern.exec(stripped)) !== null) {
     const token = match[0].replace(/[.,;:!?]+$/, '');
-    let url;
+    let url: URL;
     try {
       url = new URL(token);
     } catch {
@@ -1397,6 +1617,7 @@ export function containsExampleRepoBackLink(readmeContent, repoSlug) {
   }
   return false;
 }
+
 // Runtime / skip semantics live on the check function below, not on
 // the helpers above. `checkWorkshopExampleRepoBackLink` reads the
 // example-repo coordinates from `.github/idd/config.json`
@@ -1404,12 +1625,14 @@ export function containsExampleRepoBackLink(readmeContent, repoSlug) {
 // silently when the local docs/workshop/ is absent, the config
 // field is unset, or the gh fetch fails. Soft fetch failures
 // escalate to errors under `--require-github`.
+
 const PUBLIC_GITHUB_HOSTS = new Set([
   'github.com',
   'www.github.com',
   'raw.githubusercontent.com',
 ]);
-export function isGithubBackLinkHost(host) {
+
+export function isGithubBackLinkHost(host: unknown): boolean {
   const lower = String(host ?? '').toLowerCase();
   if (PUBLIC_GITHUB_HOSTS.has(lower)) return true;
   // Any other host must be declared explicitly in
@@ -1425,7 +1648,8 @@ export function isGithubBackLinkHost(host) {
     .filter(Boolean);
   return extra.includes(lower);
 }
-export function decodeGithubReadmeBase64(content) {
+
+export function decodeGithubReadmeBase64(content: unknown): string | null {
   if (typeof content !== 'string') return null;
   const compact = content.replace(/\s+/g, '');
   if (compact.length === 0) return null;
@@ -1438,7 +1662,7 @@ export function decodeGithubReadmeBase64(content) {
   // character-class check above but fails the length check here.
   if (compact.length % 4 !== 0) return null;
   if (!BASE64_PATTERN.test(content)) return null;
-  let decoded;
+  let decoded: string;
   try {
     decoded = Buffer.from(compact, 'base64').toString('utf8');
   } catch {
@@ -1453,13 +1677,19 @@ export function decodeGithubReadmeBase64(content) {
   }
   return decoded;
 }
-function checkWorkshopExampleRepoBackLink(root, options, report) {
+
+function checkWorkshopExampleRepoBackLink(
+  root: string,
+  options: { requireGithub?: boolean },
+  report: DoctorReport,
+) {
   const requireGithub = options.requireGithub === true;
   const workshopDir = resolve(root, WORKSHOP_REL_PATH);
   if (!existsSync(workshopDir)) return;
+
   const configPath = resolve(root, '.github/idd/config.json');
   if (!existsSync(configPath)) return;
-  let config;
+  let config: { workshop?: { exampleRepository?: unknown } } | null;
   try {
     config = JSON.parse(readFileSync(configPath, 'utf8'));
   } catch {
@@ -1481,11 +1711,13 @@ function checkWorkshopExampleRepoBackLink(root, options, report) {
     }
     return;
   }
-  const recordSoftFailure = (message) => {
+
+  const recordSoftFailure = (message: string) => {
     if (requireGithub) {
       report.errors.push(`workshop example-repo back-link check: ${message}`);
     }
   };
+
   // Resolve this repo's slug from gh repo view so the back-link
   // pattern matches the correct owner / name even when the
   // configured GitHub origin differs from local assumptions.
@@ -1498,7 +1730,7 @@ function checkWorkshopExampleRepoBackLink(root, options, report) {
     recordSoftFailure(`gh repo view unavailable`);
     return;
   }
-  let viewer;
+  let viewer: { owner?: { login?: string }; name?: string };
   try {
     viewer = JSON.parse(repoView.stdout);
   } catch {
@@ -1512,6 +1744,7 @@ function checkWorkshopExampleRepoBackLink(root, options, report) {
     return;
   }
   const repoSlug = `${owner}/${name}`;
+
   // `repos/<owner>/<repo>/readme` returns whatever GitHub considers
   // the canonical README (README.md, README.rst, README, case
   // variants), so the check works for repos that do not name their
@@ -1540,13 +1773,19 @@ function checkWorkshopExampleRepoBackLink(root, options, report) {
     recordSoftFailure(`${exampleRepo} README content was not valid base64`);
     return;
   }
+
   if (!containsExampleRepoBackLink(decoded, repoSlug)) {
     report.warnings.push(
       `workshop example-repo back-link missing: ${exampleRepo} README does not contain a link whose target matches ${repoSlug}/.../docs/workshop. See acceptance criteria on issue #611 (CP-E).`,
     );
   }
 }
-function checkGithubReadiness(root, requireGithub, report) {
+
+function checkGithubReadiness(
+  root: string,
+  requireGithub: boolean | undefined,
+  report: DoctorReport,
+) {
   const repoView = runCommand(
     'gh',
     ['repo', 'view', '--json', 'owner,name,defaultBranchRef'],
@@ -1561,7 +1800,12 @@ function checkGithubReadiness(root, requireGithub, report) {
     }
     return;
   }
-  let parsed;
+
+  let parsed: {
+    owner?: { login?: string };
+    name?: string;
+    defaultBranchRef?: { name?: string };
+  };
   try {
     parsed = JSON.parse(repoView.stdout);
   } catch {
@@ -1574,6 +1818,7 @@ function checkGithubReadiness(root, requireGithub, report) {
     }
     return;
   }
+
   const owner = parsed.owner?.login;
   const repo = parsed.name;
   const branch = parsed.defaultBranchRef?.name;
@@ -1587,6 +1832,7 @@ function checkGithubReadiness(root, requireGithub, report) {
     }
     return;
   }
+
   const protection = runCommand(
     'gh',
     ['api', `repos/${owner}/${repo}/branches/${branch}/protection`],
@@ -1601,7 +1847,11 @@ function checkGithubReadiness(root, requireGithub, report) {
     }
     return;
   }
-  let protectionJson;
+
+  let protectionJson: {
+    required_status_checks?: { contexts?: string[]; strict?: boolean };
+    required_pull_request_reviews?: unknown;
+  };
   try {
     protectionJson = JSON.parse(protection.stdout);
   } catch {
@@ -1613,6 +1863,7 @@ function checkGithubReadiness(root, requireGithub, report) {
     }
     return;
   }
+
   const requiredChecks = protectionJson.required_status_checks?.contexts ?? [];
   const strict = protectionJson.required_status_checks?.strict ?? false;
   if (requiredChecks.length === 0) {
@@ -1624,6 +1875,7 @@ function checkGithubReadiness(root, requireGithub, report) {
       `required status checks configured on ${branch} (${requiredChecks.length}, strict=${strict})`,
     );
   }
+
   const reviewConfig = protectionJson.required_pull_request_reviews;
   if (!reviewConfig) {
     report.warnings.push(
@@ -1633,7 +1885,12 @@ function checkGithubReadiness(root, requireGithub, report) {
     report.passes.push('required pull request review policy is configured');
   }
 }
-function runCommand(command, argv, cwd) {
+
+function runCommand(
+  command: string,
+  argv: string[],
+  cwd: string,
+): CommandResult {
   try {
     const stdout = execFileSync(command, argv, {
       cwd,
@@ -1642,7 +1899,10 @@ function runCommand(command, argv, cwd) {
     });
     return { ok: true, stdout };
   } catch (error) {
-    const candidate = error;
+    const candidate = error as {
+      status?: number;
+      stderr?: { toString?: () => string };
+    };
     return {
       ok: false,
       code: candidate.status,
@@ -1650,14 +1910,16 @@ function runCommand(command, argv, cwd) {
     };
   }
 }
-function parseArgs(argv) {
-  const args = {
+
+function parseArgs(argv: string[]): DoctorCliArgs {
+  const args: DoctorCliArgs = {
     root: process.cwd(),
     json: false,
     help: false,
     requireGithub: false,
     strict: false,
   };
+
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--json') {
@@ -1729,9 +1991,11 @@ function parseArgs(argv) {
     }
     throw new Error(`unknown argument: ${arg}`);
   }
+
   return args;
 }
-function printHumanReport(report) {
+
+function printHumanReport(report: DoctorReport) {
   console.log(`IDD doctor report (${report.root})`);
   for (const pass of report.passes) {
     console.log(`PASS  ${pass}`);
@@ -1750,6 +2014,7 @@ function printHumanReport(report) {
   }
   console.log(`\nresult: passed (${report.warnings.length} warning(s))`);
 }
+
 function printUsage() {
   console.log(`usage: node scripts/idd-doctor.mjs [options]
 
@@ -1771,7 +2036,8 @@ very large or rate-limited repos consider raising the warn
 threshold or shortening the window.
 `);
 }
-function listFiles(root) {
+
+function listFiles(root: string): string[] {
   const gitList = runCommand(
     'git',
     ['ls-files', '--cached', '--others', '--exclude-standard'],
@@ -1784,8 +2050,9 @@ function listFiles(root) {
     .map((absolutePath) => relative(root, absolutePath))
     .sort();
 }
-function walk(directory) {
-  const entries = [];
+
+function walk(directory: string): string[] {
+  const entries: string[] = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (entry.name === '.git') {
       continue;
@@ -1801,20 +2068,24 @@ function walk(directory) {
   }
   return entries;
 }
-function exists(path) {
+
+function exists(path: string): boolean {
   try {
     return statSync(path).isFile();
   } catch {
     return false;
   }
 }
-function isTextLikeFile(file) {
+
+function isTextLikeFile(file: string): boolean {
   return /\.(md|txt|yml|yaml|json|mjs|js|ts|sh)$/.test(file);
 }
-function unique(values) {
+
+function unique<T>(values: T[]): T[] {
   return [...new Set(values)];
 }
-function sameMembers(left, right) {
+
+function sameMembers(left: string[], right: string[]): boolean {
   const leftSet = new Set(left);
   const rightSet = new Set(right);
   if (leftSet.size !== rightSet.size) {
@@ -1827,22 +2098,26 @@ function sameMembers(left, right) {
   }
   return true;
 }
-function isMainModule(moduleUrl) {
+
+function isMainModule(moduleUrl: string): boolean {
   if (!process.argv[1]) {
     return false;
   }
   return fileURLToPath(moduleUrl) === resolve(process.argv[1]);
 }
+
 // Run as a CLI only after the whole module (including consts used by the
 // checks above) has finished evaluating. Keeping this block at the end of
 // the file avoids a temporal-dead-zone crash when runDoctor reaches a check
 // that reads a `const` declared later in the file.
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
+
   if (args.help) {
     printUsage();
     process.exit(0);
   }
+
   const report = runDoctor({
     root: resolve(args.root),
     requireGithub: args.requireGithub,
@@ -1851,10 +2126,12 @@ if (isMainModule(import.meta.url)) {
     workshopCrossRefAllowMissing: args.workshopCrossRefAllowMissing,
     strict: args.strict,
   });
+
   if (args.json) {
     console.log(JSON.stringify(report, null, 2));
   } else {
     printHumanReport(report);
   }
+
   process.exit(report.errors.length > 0 ? 1 : 0);
 }

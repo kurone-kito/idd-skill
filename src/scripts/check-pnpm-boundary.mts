@@ -3,15 +3,17 @@
 // The scripts/check-pnpm-boundary.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseProjectCommandRows } from './idd-doctor.mjs';
+
+import { parseProjectCommandRows } from './idd-doctor.mts';
 
 // Resolve the repository root by walking up to the nearest package.json,
 // so the default works whether this module runs as the emitted
 // scripts/check-pnpm-boundary.mjs or directly from src/scripts/.
-function resolveRepoRoot(fromUrl) {
+function resolveRepoRoot(fromUrl: string): string {
   let dir = dirname(fileURLToPath(fromUrl));
   for (let depth = 0; depth < 16; depth += 1) {
     if (existsSync(join(dir, 'package.json'))) {
@@ -25,6 +27,7 @@ function resolveRepoRoot(fromUrl) {
   }
   return dir;
 }
+
 const ROOT = resolveRepoRoot(import.meta.url);
 const TEMPLATE_OVERVIEW_PATH =
   'idd-template/.github/instructions/idd-overview-core.instructions.md';
@@ -35,8 +38,9 @@ const COMMAND_ROWS = [
   'install-deps',
 ];
 const FORBIDDEN_TOKEN = /\bpnpm\b/i;
+
 /** Find pnpm leaks in template Project commands rows. */
-export function findPnpmCommandLeaks(overviewText) {
+export function findPnpmCommandLeaks(overviewText: string): string[] {
   const rows = parseProjectCommandRows(overviewText);
   return COMMAND_ROWS.flatMap((name) => {
     const command = rows.get(name) ?? '';
@@ -44,12 +48,17 @@ export function findPnpmCommandLeaks(overviewText) {
     return [`${name}: contains forbidden token "pnpm" (${command})`];
   });
 }
+
 /** Check distributable template boundary in the current repository. */
-export function checkPnpmBoundary(root = ROOT) {
+export function checkPnpmBoundary(root: string = ROOT): {
+  ok: boolean;
+  errors: string[];
+} {
   const text = readFileSync(join(root, TEMPLATE_OVERVIEW_PATH), 'utf8');
   const errors = findPnpmCommandLeaks(text);
   return { ok: errors.length === 0, errors };
 }
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = checkPnpmBoundary();
   if (!result.ok) {
