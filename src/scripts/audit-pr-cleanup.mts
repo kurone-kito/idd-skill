@@ -4,15 +4,19 @@
 // The scripts/audit-pr-cleanup.mjs copy is generated from the .mts source named
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { computeReportSummary } from './audit-pr-cleanup-summary.mjs';
+import type { CleanupReport } from './audit-pr-cleanup-summary.mts';
+import { computeReportSummary } from './audit-pr-cleanup-summary.mts';
+import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
-} from './collaborator-permission.mjs';
-import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
+} from './collaborator-permission.mts';
+import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
+import type { ClaimValidationSummary } from './protocol-helpers.mts';
 import {
   classifyRegularBotComment,
   hasFreshDisposition,
@@ -25,49 +29,212 @@ import {
   summarizeClaimValidation,
   unionTrustedMarkerActorSources,
   unsafeTextReason,
-} from './protocol-helpers.mjs';
+} from './protocol-helpers.mts';
+
+/** Author reference embedded in GraphQL payloads. */
+interface GqlAuthorPayload {
+  login?: string | null;
+}
+
+/** Minimizable GraphQL node fields shared by every subject type. */
+interface MinimizableNode {
+  id: string;
+  url: string;
+  isMinimized?: boolean | null;
+  minimizedReason?: string | null;
+  viewerCanMinimize?: boolean | null;
+}
+
+/** PR issue-comment node from the comments connection. */
+interface IssueCommentNode extends MinimizableNode {
+  body: string;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  author?: GqlAuthorPayload | null;
+}
+
+/** PR review node from the reviews connection. */
+interface ReviewNode extends MinimizableNode {
+  body?: string | null;
+  state?: string | null;
+  submittedAt?: string | null;
+  author?: GqlAuthorPayload | null;
+}
+
+/** Review-thread reply node from the reviewThreads connection. */
+interface ThreadCommentNode extends MinimizableNode {
+  body?: string | null;
+  createdAt?: string | null;
+  author?: GqlAuthorPayload | null;
+  pullRequestReview?: { id?: string | null } | null;
+}
+
+/** Review-thread node from the reviewThreads connection. */
+interface ReviewThreadNode {
+  id?: string | null;
+  isResolved?: boolean | null;
+  comments?: {
+    pageInfo?: { hasNextPage?: boolean | null } | null;
+    nodes?: ThreadCommentNode[] | null;
+  } | null;
+}
+
+/** Pull-request node fields consumed by this helper. */
+interface PullRequestNode {
+  number?: number | null;
+  url: string;
+  merged: boolean;
+}
+
+/** Minimized-comment node returned by the minimizeComment mutation. */
+interface MinimizedCommentNode {
+  __typename?: string;
+  id?: string;
+  url?: string;
+  isMinimized: boolean;
+  minimizedReason: string | null;
+}
+
+/** Paginated GraphQL connection payload. */
+interface ConnectionPayload<TNode> {
+  nodes?: TNode[] | null;
+  pageInfo?: { hasNextPage?: boolean | null; endCursor?: string | null } | null;
+}
+
+/** GraphQL error entry. */
+interface GraphqlErrorEntry {
+  message?: string | null;
+}
+
+/** Error-routing options for the GraphQL helpers. */
+interface GraphqlCallOptions {
+  throwOnError?: boolean;
+}
+
+/** Report subject derived from a minimizable node. */
+type SubjectInfo = {
+  subjectId: string;
+  url: string;
+  type: string;
+  classifier: string;
+  viewerCanMinimize: boolean;
+  isMinimized: boolean;
+  minimizedReason: string | null;
+};
+
+/** Report row: a subject plus per-disposition metadata. */
+type ReportRow = SubjectInfo & {
+  markerPrefix?: string;
+  author?: string;
+  threadId?: string | null;
+  associatedThreads?: number;
+  unresolvedThreads?: number;
+  missingDispositionThreads?: number;
+  reason?: string;
+  skipReason?: string;
+  error?: string;
+};
+
+/** Aggregated per-review thread stats from {@link indexThreadsByReview}. */
+interface AssociatedThreadStats {
+  total: number;
+  unresolved: number;
+  missingDisposition: number;
+  incomplete: boolean;
+  threadIds: (string | null | undefined)[];
+}
+
+/** Full cleanup-audit report emitted by this helper. */
+interface CleanupAuditReport extends CleanupReport {
+  repository: string;
+  pr: number;
+  prUrl: string;
+  merged: boolean;
+  mode: string;
+  trustedMarkerActors: string[];
+  trustedMarkerActorsSources: string[];
+  collaboratorTrustEnabled: boolean;
+  candidates: ReportRow[];
+  skipped: ReportRow[];
+  applied: ReportRow[];
+  failed: ReportRow[];
+  summary: Record<string, number> | null;
+  status: string | null;
+}
+
+/** Active claim resolved from the trusted claim-marker stream. */
+type ActiveClaim = ClaimValidationSummary['activeClaim'];
+
+/** Parsed CLI arguments. */
+interface CleanupArgs {
+  format: string;
+  help?: boolean;
+  pr?: string;
+  repo?: string;
+  dryRun?: boolean;
+  apply?: boolean;
+  claimIssue?: string;
+  claimId?: string;
+  agentId?: string;
+  skipClaimCheck?: boolean;
+}
 
 const TRUSTED_MARKER_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
-const trustedMarkerAuthorCache = new Map();
-const collaboratorPermissionCache = new Map();
-let cachedConfiguredTrustedMarkerActorSources = null;
-let cachedCurrentViewerLogin = null;
+const trustedMarkerAuthorCache = new Map<string, boolean>();
+const collaboratorPermissionCache: CollaboratorPermissionCache = new Map();
+let cachedConfiguredTrustedMarkerActorSources: {
+  actors: Set<string>;
+  sources: string[];
+} | null = null;
+let cachedCurrentViewerLogin: string | null = null;
+
 const args = parseArgs(process.argv.slice(2));
+
 if (args.help) {
   printUsage();
   process.exit(0);
 }
+
 if (!args.pr) {
   fail('missing required --pr <number>');
 }
+
 if (args.apply && args.dryRun) {
   fail('choose only one of --dry-run or --apply');
 }
+
 if (!args.apply) {
   args.dryRun = true;
 }
+
 if (args.apply && args.skipClaimCheck && (args.claimIssue || args.claimId)) {
   fail(
     '--skip-claim-check cannot be combined with --claim-issue or --claim-id',
   );
 }
+
 if (args.apply && !args.skipClaimCheck && (!args.claimIssue || !args.claimId)) {
   fail(
     '--apply requires --claim-issue and --claim-id, or explicit --skip-claim-check',
   );
 }
+
 const repository = args.repo ?? detectRepository();
 const [owner, repo] = parseRepository(repository);
+
 const prNumber = parsePositiveInteger(args.pr, '--pr');
 const claimContext = {
   expectedLinkedPrs: buildExpectedLinkedPrReferences(owner, repo, prNumber),
 };
+
 if (args.claimIssue) {
   args.claimIssue = String(
     parsePositiveInteger(args.claimIssue, '--claim-issue'),
   );
 }
+
 const report = await buildReport(owner, repo, prNumber);
+
 if (args.apply) {
   report.mode = 'apply';
   for (const candidate of report.candidates) {
@@ -84,7 +251,7 @@ if (args.apply) {
       } catch (error) {
         report.failed.push({
           ...candidate,
-          error: error.message,
+          error: (error as Error).message,
         });
         break;
       }
@@ -113,7 +280,7 @@ if (args.apply) {
         } catch (error) {
           report.failed.push({
             ...freshCandidate,
-            error: error.message,
+            error: (error as Error).message,
           });
           break;
         }
@@ -130,27 +297,36 @@ if (args.apply) {
     } catch (error) {
       report.failed.push({
         ...candidate,
-        error: error.message,
+        error: (error as Error).message,
       });
     }
   }
+
   computeReportSummary(report);
   if (report.failed.length > 0) {
     writeReport(report, args.format);
     process.exit(1);
   }
 }
+
 computeReportSummary(report);
 writeReport(report, args.format);
-async function buildReport(owner, repo, prNumber, options = {}) {
+
+async function buildReport(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  options: GraphqlCallOptions = {},
+): Promise<CleanupAuditReport> {
   const pr = fetchPullRequest(owner, repo, prNumber, options);
   const comments = fetchIssueComments(owner, repo, prNumber, options);
   const reviews = fetchReviews(owner, repo, prNumber, options);
   const threads = fetchReviewThreads(owner, repo, prNumber, options);
   const threadIndex = indexThreadsByReview(threads);
   const latestGatingReviews = indexLatestGatingReviewsByAuthor(reviews);
+
   const configuredTrust = configuredTrustedMarkerActorSources();
-  const report = {
+  const report: CleanupAuditReport = {
     repository: `${owner}/${repo}`,
     pr: prNumber,
     prUrl: pr.url,
@@ -172,18 +348,22 @@ async function buildReport(owner, repo, prNumber, options = {}) {
     summary: null,
     status: null,
   };
+
   for (const comment of comments) {
     if (evaluateOperationalComment(comment, pr, report, owner, repo)) {
       continue;
     }
     evaluateRegularBotComment(comment, comments, threads, pr, report);
   }
+
   for (const thread of threads) {
     evaluateReviewComments(thread, pr, latestGatingReviews, report);
   }
+
   for (const review of reviews) {
     evaluateReviewParent(review, pr, threadIndex, latestGatingReviews, report);
   }
+
   // Collaborator trust is evaluated lazily per author; record it in the
   // source mix only when the collaborator path actually trusted someone
   // during this report's evaluation.
@@ -193,40 +373,56 @@ async function buildReport(owner, repo, prNumber, options = {}) {
   ) {
     report.trustedMarkerActorsSources.push('collaborators');
   }
+
   return report;
 }
-function evaluateOperationalComment(comment, pr, report, owner, repo) {
+
+function evaluateOperationalComment(
+  comment: IssueCommentNode,
+  pr: PullRequestNode,
+  report: CleanupAuditReport,
+  owner: string,
+  repo: string,
+): boolean {
   const prefix = operationalMarkerPrefix(comment.body);
   if (!prefix) {
     return false;
   }
+
   const subject = subjectFromNode(comment, 'IssueComment', 'OUTDATED');
   const author = comment.author?.login ?? '';
+
   if (!isTrustedMarkerAuthor(owner, repo, author)) {
     addSkipped(report, subject, 'operational marker author is not trusted');
     return true;
   }
+
   if (prefix === '<!-- forced-handoff:') {
     addSkipped(report, subject, 'forced-handoff markers remain audit evidence');
     return true;
   }
+
   if (!pr.merged) {
     addSkipped(report, subject, 'PR is not merged');
     return true;
   }
+
   const unsafeReason = unsafeTextReason(comment.body);
   if (unsafeReason) {
     addSkipped(report, subject, unsafeReason);
     return true;
   }
+
   if (comment.isMinimized) {
     addSkipped(report, subject, 'already minimized');
     return true;
   }
+
   if (!comment.viewerCanMinimize) {
     addSkipped(report, subject, 'viewer cannot minimize this comment');
     return true;
   }
+
   report.candidates.push({
     ...subject,
     markerPrefix: prefix,
@@ -234,34 +430,47 @@ function evaluateOperationalComment(comment, pr, report, owner, repo) {
   });
   return true;
 }
-function evaluateRegularBotComment(comment, comments, threads, pr, report) {
+
+function evaluateRegularBotComment(
+  comment: IssueCommentNode,
+  comments: IssueCommentNode[],
+  threads: ReviewThreadNode[],
+  pr: PullRequestNode,
+  report: CleanupAuditReport,
+): void {
   const author = comment.author?.login ?? '';
   if (!isKnownReviewBot(author)) {
     return;
   }
+
   const classification = classifyRegularBotComment(comment, comments, threads);
   const subject = subjectFromNode(
     comment,
     'IssueComment',
     classification?.classifier ?? 'RESOLVED',
   );
+
   if (!pr.merged) {
     addSkipped(report, subject, 'PR is not merged');
     return;
   }
+
   const unsafeReason = unsafeTextReason(comment.body ?? '');
   if (unsafeReason) {
     addSkipped(report, subject, unsafeReason);
     return;
   }
+
   if (comment.isMinimized) {
     addSkipped(report, subject, 'already minimized');
     return;
   }
+
   if (!comment.viewerCanMinimize) {
     addSkipped(report, subject, 'viewer cannot minimize this comment');
     return;
   }
+
   if (!classification) {
     addSkipped(
       report,
@@ -270,47 +479,57 @@ function evaluateRegularBotComment(comment, comments, threads, pr, report) {
     );
     return;
   }
+
   report.candidates.push({
     ...subject,
     author,
     reason: classification.reason,
   });
 }
+
 function evaluateReviewParent(
-  review,
-  pr,
-  threadIndex,
-  latestGatingReviews,
-  report,
-) {
+  review: ReviewNode,
+  pr: PullRequestNode,
+  threadIndex: Map<string, AssociatedThreadStats>,
+  latestGatingReviews: ReturnType<typeof indexLatestGatingReviewsByAuthor>,
+  report: CleanupAuditReport,
+): void {
   const author = review.author?.login ?? '';
   if (!isKnownReviewBot(author)) {
     return;
   }
+
   const subject = subjectFromNode(review, 'PullRequestReview', 'RESOLVED');
-  const associated = threadIndex.get(review.id) ?? {
-    total: 0,
-    unresolved: 0,
-    threadIds: [],
-  };
+  const associated =
+    threadIndex.get(review.id) ??
+    ({
+      total: 0,
+      unresolved: 0,
+      threadIds: [] as (string | null | undefined)[],
+    } as AssociatedThreadStats);
   const latestGatingReview = latestGatingReviews.get(author.toLowerCase());
+
   if (!pr.merged) {
     addSkipped(report, subject, 'PR is not merged');
     return;
   }
+
   const unsafeReason = unsafeTextReason(review.body ?? '');
   if (unsafeReason) {
     addSkipped(report, subject, unsafeReason);
     return;
   }
+
   if (review.isMinimized) {
     addSkipped(report, subject, 'already minimized');
     return;
   }
+
   if (!review.viewerCanMinimize) {
     addSkipped(report, subject, 'viewer cannot minimize this review');
     return;
   }
+
   if (
     review.state === 'CHANGES_REQUESTED' ||
     latestGatingReview?.state === 'CHANGES_REQUESTED'
@@ -322,10 +541,12 @@ function evaluateReviewParent(
     );
     return;
   }
+
   if (associated.total === 0) {
     addSkipped(report, subject, 'review has no associated review threads');
     return;
   }
+
   if (associated.incomplete) {
     addSkipped(
       report,
@@ -339,6 +560,7 @@ function evaluateReviewParent(
     );
     return;
   }
+
   if (associated.unresolved > 0) {
     addSkipped(
       report,
@@ -352,6 +574,7 @@ function evaluateReviewParent(
     );
     return;
   }
+
   if (associated.missingDisposition > 0) {
     addSkipped(
       report,
@@ -365,6 +588,7 @@ function evaluateReviewParent(
     );
     return;
   }
+
   report.candidates.push({
     ...subject,
     author,
@@ -375,45 +599,58 @@ function evaluateReviewParent(
       'known bot review parent with all associated review threads resolved',
   });
 }
-function evaluateReviewComments(thread, pr, latestGatingReviews, report) {
+
+function evaluateReviewComments(
+  thread: ReviewThreadNode,
+  pr: PullRequestNode,
+  latestGatingReviews: ReturnType<typeof indexLatestGatingReviewsByAuthor>,
+  report: CleanupAuditReport,
+): void {
   for (const comment of thread.comments?.nodes ?? []) {
     evaluateReviewComment(comment, thread, pr, latestGatingReviews, report);
   }
 }
+
 function evaluateReviewComment(
-  comment,
-  thread,
-  pr,
-  latestGatingReviews,
-  report,
-) {
+  comment: ThreadCommentNode,
+  thread: ReviewThreadNode,
+  pr: PullRequestNode,
+  latestGatingReviews: ReturnType<typeof indexLatestGatingReviewsByAuthor>,
+  report: CleanupAuditReport,
+): void {
   const author = comment.author?.login ?? '';
   if (!isKnownReviewBot(author) || isDispositionComment(comment)) {
     return;
   }
+
   const subject = subjectFromNode(
     comment,
     'PullRequestReviewComment',
     'RESOLVED',
   );
   const latestGatingReview = latestGatingReviews.get(author.toLowerCase());
+
   if (!pr.merged) {
     addSkipped(report, subject, 'PR is not merged');
     return;
   }
+
   const unsafeReason = unsafeTextReason(comment.body ?? '');
   if (unsafeReason) {
     addSkipped(report, subject, unsafeReason);
     return;
   }
+
   if (comment.isMinimized) {
     addSkipped(report, subject, 'already minimized');
     return;
   }
+
   if (!comment.viewerCanMinimize) {
     addSkipped(report, subject, 'viewer cannot minimize this review comment');
     return;
   }
+
   if (latestGatingReview?.state === 'CHANGES_REQUESTED') {
     addSkipped(
       report,
@@ -422,6 +659,7 @@ function evaluateReviewComment(
     );
     return;
   }
+
   if (!thread.isResolved) {
     addSkipped(
       report,
@@ -430,6 +668,7 @@ function evaluateReviewComment(
     );
     return;
   }
+
   if (thread.comments?.pageInfo?.hasNextPage) {
     addSkipped(
       report,
@@ -438,6 +677,7 @@ function evaluateReviewComment(
     );
     return;
   }
+
   if (!hasFreshDisposition(thread)) {
     addSkipped(
       report,
@@ -446,6 +686,7 @@ function evaluateReviewComment(
     );
     return;
   }
+
   report.candidates.push({
     ...subject,
     author,
@@ -453,7 +694,12 @@ function evaluateReviewComment(
     reason: 'known bot feedback comment in a resolved review thread',
   });
 }
-function subjectFromNode(node, type, classifier) {
+
+function subjectFromNode(
+  node: MinimizableNode,
+  type: string,
+  classifier: string,
+): SubjectInfo {
   return {
     subjectId: node.id,
     url: node.url,
@@ -464,13 +710,24 @@ function subjectFromNode(node, type, classifier) {
     minimizedReason: node.minimizedReason || null,
   };
 }
-function addSkipped(report, subject, reason) {
+
+function addSkipped(
+  report: CleanupAuditReport,
+  subject: ReportRow,
+  reason: string,
+): void {
   report.skipped.push({
     ...subject,
     skipReason: reason,
   });
 }
-function fetchPullRequest(owner, repo, number, options = {}) {
+
+function fetchPullRequest(
+  owner: string,
+  repo: string,
+  number: number,
+  options: GraphqlCallOptions = {},
+): PullRequestNode {
   const query = `query($owner:String!,$repo:String!,$number:Int!){
     repository(owner:$owner,name:$repo){
       pullRequest(number:$number){
@@ -480,14 +737,24 @@ function fetchPullRequest(owner, repo, number, options = {}) {
       }
     }
   }`;
-  const result = ghGraphql(query, { owner, repo, number }, options);
+  const result = ghGraphql(query, { owner, repo, number }, options) as {
+    data?: {
+      repository?: { pullRequest?: PullRequestNode | null } | null;
+    } | null;
+  };
   const pr = result.data?.repository?.pullRequest;
   if (!pr) {
     handleGraphqlFailure(`PR #${number} was not found`, options);
   }
   return pr;
 }
-function fetchIssueComments(owner, repo, number, options = {}) {
+
+function fetchIssueComments(
+  owner: string,
+  repo: string,
+  number: number,
+  options: GraphqlCallOptions = {},
+): IssueCommentNode[] {
   const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
     repository(owner:$owner,name:$repo){
       pullRequest(number:$number){
@@ -512,12 +779,24 @@ function fetchIssueComments(owner, repo, number, options = {}) {
     query,
     { owner, repo, number },
     (data) => {
-      return data.repository.pullRequest.comments;
+      return (
+        data as {
+          repository: {
+            pullRequest: { comments: ConnectionPayload<IssueCommentNode> };
+          };
+        }
+      ).repository.pullRequest.comments;
     },
     options,
   );
 }
-function fetchReviews(owner, repo, number, options = {}) {
+
+function fetchReviews(
+  owner: string,
+  repo: string,
+  number: number,
+  options: GraphqlCallOptions = {},
+): ReviewNode[] {
   const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
     repository(owner:$owner,name:$repo){
       pullRequest(number:$number){
@@ -542,12 +821,24 @@ function fetchReviews(owner, repo, number, options = {}) {
     query,
     { owner, repo, number },
     (data) => {
-      return data.repository.pullRequest.reviews;
+      return (
+        data as {
+          repository: {
+            pullRequest: { reviews: ConnectionPayload<ReviewNode> };
+          };
+        }
+      ).repository.pullRequest.reviews;
     },
     options,
   );
 }
-function fetchReviewThreads(owner, repo, number, options = {}) {
+
+function fetchReviewThreads(
+  owner: string,
+  repo: string,
+  number: number,
+  options: GraphqlCallOptions = {},
+): ReviewThreadNode[] {
   const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
     repository(owner:$owner,name:$repo){
       pullRequest(number:$number){
@@ -579,20 +870,40 @@ function fetchReviewThreads(owner, repo, number, options = {}) {
     query,
     { owner, repo, number },
     (data) => {
-      return data.repository.pullRequest.reviewThreads;
+      return (
+        data as {
+          repository: {
+            pullRequest: {
+              reviewThreads: ConnectionPayload<ReviewThreadNode>;
+            };
+          };
+        }
+      ).repository.pullRequest.reviewThreads;
     },
     options,
   );
 }
-function fetchConnection(query, baseVariables, pickConnection, options = {}) {
-  const nodes = [];
-  let after = null;
+
+function fetchConnection<TNode>(
+  query: string,
+  baseVariables: Record<string, string | number>,
+  pickConnection: (
+    data: unknown,
+  ) => ConnectionPayload<TNode> | null | undefined,
+  options: GraphqlCallOptions = {},
+): TNode[] {
+  const nodes: TNode[] = [];
+  let after: string | null | undefined = null;
+
   do {
-    const variables = { ...baseVariables };
+    const variables: Record<string, string | number> = { ...baseVariables };
     if (after) {
       variables.after = after;
     }
-    const result = ghGraphql(query, variables, options);
+    const result = ghGraphql(query, variables, options) as {
+      data?: unknown;
+      errors?: GraphqlErrorEntry[] | null;
+    };
     if (result.errors?.length) {
       handleGraphqlFailure(
         `GraphQL connection query failed: ${formatGraphqlErrors(result.errors)}; ${formatGraphqlContext(query, variables)}`,
@@ -617,14 +928,20 @@ function fetchConnection(query, baseVariables, pickConnection, options = {}) {
       ? connection.pageInfo.endCursor
       : null;
   } while (after);
+
   return nodes;
 }
-function formatGraphqlErrors(errors) {
+
+function formatGraphqlErrors(errors: GraphqlErrorEntry[]): string {
   return errors
     .map((error) => error.message ?? JSON.stringify(error))
     .join('; ');
 }
-function formatGraphqlContext(query, variables) {
+
+function formatGraphqlContext(
+  query: string,
+  variables: Record<string, string | number | null | undefined>,
+): string {
   const compactQuery = query.replace(/\s+/g, ' ').trim();
   const queryPreview =
     compactQuery.length > 240
@@ -632,7 +949,11 @@ function formatGraphqlContext(query, variables) {
       : compactQuery;
   return `query=${queryPreview}; variables=${JSON.stringify(variables)}`;
 }
-function minimizeComment(subjectId, classifier) {
+
+function minimizeComment(
+  subjectId: string,
+  classifier: string,
+): MinimizedCommentNode {
   const query = `mutation($id:ID!,$classifier:ReportedContentClassifiers!){
     minimizeComment(input:{subjectId:$id,classifier:$classifier}){
       minimizedComment{
@@ -647,7 +968,14 @@ function minimizeComment(subjectId, classifier) {
     query,
     { id: subjectId, classifier },
     { throwOnError: true },
-  );
+  ) as {
+    data?: {
+      minimizeComment?: {
+        minimizedComment?: MinimizedCommentNode | null;
+      } | null;
+    } | null;
+    errors?: GraphqlErrorEntry[] | null;
+  };
   if (result.errors?.length) {
     throw new Error(
       `GraphQL mutation failed: ${formatGraphqlErrors(result.errors)}; ${formatGraphqlContext(query, { id: subjectId, classifier })}`,
@@ -661,7 +989,14 @@ function minimizeComment(subjectId, classifier) {
   }
   return minimized;
 }
-async function revalidateCandidate(owner, repo, prNumber, candidate, report) {
+
+async function revalidateCandidate(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  candidate: ReportRow,
+  report: CleanupAuditReport,
+): Promise<ReportRow | null> {
   const freshReport = await buildReport(owner, repo, prNumber, {
     throwOnError: true,
   });
@@ -674,6 +1009,7 @@ async function revalidateCandidate(owner, repo, prNumber, candidate, report) {
   if (freshCandidate) {
     return freshCandidate;
   }
+
   const skipped = freshReport.skipped.find((current) => {
     return (
       current.subjectId === candidate.subjectId &&
@@ -687,14 +1023,15 @@ async function revalidateCandidate(owner, repo, prNumber, candidate, report) {
   );
   return null;
 }
+
 function assertActiveClaim(
-  owner,
-  repo,
-  issueNumber,
-  agentId,
-  claimId,
-  options = {},
-) {
+  owner: string,
+  repo: string,
+  issueNumber: string | undefined,
+  agentId: string | undefined,
+  claimId: string | undefined,
+  options: { expectedLinkedPrs?: string[] } = {},
+): void {
   const active = readActiveClaim(owner, repo, issueNumber, options);
   if (
     !active ||
@@ -707,7 +1044,13 @@ function assertActiveClaim(
     );
   }
 }
-function readActiveClaim(owner, repo, issueNumber, options = {}) {
+
+function readActiveClaim(
+  owner: string,
+  repo: string,
+  issueNumber: string | undefined,
+  options: { expectedLinkedPrs?: string[] } = {},
+): ActiveClaim | null {
   const result = JSON.parse(
     execFileSync(
       'gh',
@@ -722,12 +1065,22 @@ function readActiveClaim(owner, repo, issueNumber, options = {}) {
       ],
       { encoding: 'utf8' },
     ),
-  );
+  ) as {
+    comments?:
+      | {
+          body?: string | null;
+          createdAt?: string | null;
+          author?: GqlAuthorPayload | null;
+        }[]
+      | null;
+  };
+
   const comments = (result.comments ?? []).map((comment) => ({
     body: comment.body ?? '',
     createdAt: comment.createdAt ?? '',
     author: { login: comment.author?.login ?? '' },
   }));
+
   // Read the authority policy once per call; the
   // isAuthorizedForcedHandoff callback may fire multiple times during
   // claim parsing and re-reading .github/idd/config.json on each call
@@ -746,9 +1099,15 @@ function readActiveClaim(owner, repo, issueNumber, options = {}) {
         collaboratorPermissionCache,
       ),
   });
+
   return summary.activeClaimPresent ? summary.activeClaim : null;
 }
-function buildExpectedLinkedPrReferences(owner, repo, prNumber) {
+
+function buildExpectedLinkedPrReferences(
+  owner: string,
+  repo: string,
+  prNumber: number,
+): string[] {
   const normalized = String(prNumber ?? '').trim();
   if (!normalized) {
     return [];
@@ -759,7 +1118,12 @@ function buildExpectedLinkedPrReferences(owner, repo, prNumber) {
     `https://github.com/${owner}/${repo}/pull/${normalized}`,
   ];
 }
-function resolveTrustedMarkerLogins(owner, repo, comments) {
+
+function resolveTrustedMarkerLogins(
+  owner: string,
+  repo: string,
+  comments: { author?: { login?: string | null } | null }[],
+): string[] {
   return normalizeTrustedMarkerLogins(
     comments
       .map((comment) => comment.author?.login ?? '')
@@ -767,10 +1131,16 @@ function resolveTrustedMarkerLogins(owner, repo, comments) {
       .filter((login) => isTrustedMarkerAuthor(owner, repo, login)),
   );
 }
-function isTrustedMarkerAuthor(owner, repo, login) {
+
+function isTrustedMarkerAuthor(
+  owner: string,
+  repo: string,
+  login: string,
+): boolean {
   if (!login) {
     return false;
   }
+
   const normalized = login.toLowerCase();
   if (normalized === currentViewerLogin()) {
     return true;
@@ -778,13 +1148,16 @@ function isTrustedMarkerAuthor(owner, repo, login) {
   if (configuredTrustedMarkerAuthors().has(normalized)) {
     return true;
   }
+
   if (!trustCollaboratorMarkers()) {
     return false;
   }
+
   const cacheKey = `${owner}/${repo}:${normalized}`;
   if (trustedMarkerAuthorCache.has(cacheKey)) {
     return trustedMarkerAuthorCache.get(cacheKey) ?? false;
   }
+
   let trusted = false;
   try {
     const permission = execFileSync(
@@ -803,13 +1176,16 @@ function isTrustedMarkerAuthor(owner, repo, login) {
   } catch {
     trusted = false;
   }
+
   trustedMarkerAuthorCache.set(cacheKey, trusted);
   return trusted;
 }
-function currentViewerLogin() {
+
+function currentViewerLogin(): string {
   if (cachedCurrentViewerLogin !== null) {
     return cachedCurrentViewerLogin;
   }
+
   try {
     cachedCurrentViewerLogin = execFileSync(
       'gh',
@@ -823,13 +1199,20 @@ function currentViewerLogin() {
   }
   return cachedCurrentViewerLogin;
 }
-function configuredTrustedMarkerActorSources() {
+
+function configuredTrustedMarkerActorSources(): {
+  actors: Set<string>;
+  sources: string[];
+} {
   if (cachedConfiguredTrustedMarkerActorSources) {
     return cachedConfiguredTrustedMarkerActorSources;
   }
-  let config = null;
+
+  let config: { trustedMarkerActors?: unknown } | null = null;
   try {
-    config = JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
+    config = JSON.parse(readFileSync('.github/idd/config.json', 'utf8')) as {
+      trustedMarkerActors?: unknown;
+    };
   } catch {
     config = null;
   }
@@ -843,10 +1226,12 @@ function configuredTrustedMarkerActorSources() {
   };
   return cachedConfiguredTrustedMarkerActorSources;
 }
-function configuredTrustedMarkerAuthors() {
+
+function configuredTrustedMarkerAuthors(): Set<string> {
   return configuredTrustedMarkerActorSources().actors;
 }
-function trustCollaboratorMarkers() {
+
+function trustCollaboratorMarkers(): boolean {
   try {
     return resolveCollaboratorMarkerTrust(
       JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
@@ -859,7 +1244,12 @@ function trustCollaboratorMarkers() {
     process.env.IDD_TRUST_COLLABORATOR_MARKERS ?? '',
   );
 }
-function ghGraphql(query, variables, options = {}) {
+
+function ghGraphql(
+  query: string,
+  variables: Record<string, string | number | null | undefined>,
+  options: GraphqlCallOptions = {},
+): unknown {
   const commandArgs = ['api', 'graphql', '-f', `query=${query}`];
   for (const [key, value] of Object.entries(variables)) {
     if (value === undefined || value === null) {
@@ -871,13 +1261,20 @@ function ghGraphql(query, variables, options = {}) {
       commandArgs.push('-f', `${key}=${value}`);
     }
   }
+
   try {
     return JSON.parse(execFileSync('gh', commandArgs, { encoding: 'utf8' }));
   } catch (error) {
-    const e = error;
+    const e = error as {
+      stdout?: unknown;
+      stderr?: unknown;
+      message?: unknown;
+    };
     const stdout = String(e.stdout ?? '').trim();
     const stderr = String(e.stderr ?? '').trim();
-    const response = parseJsonOrNull(stdout);
+    const response = parseJsonOrNull(stdout) as {
+      errors?: GraphqlErrorEntry[] | null;
+    } | null;
     if (response?.errors?.length) {
       handleGraphqlFailure(
         `GraphQL request failed: ${formatGraphqlErrors(response.errors)}; ${formatGraphqlContext(query, variables)}`,
@@ -890,20 +1287,26 @@ function ghGraphql(query, variables, options = {}) {
     );
   }
 }
-function handleGraphqlFailure(message, options) {
+
+function handleGraphqlFailure(
+  message: string,
+  options: GraphqlCallOptions,
+): never {
   if (options.throwOnError) {
     throw new Error(message);
   }
   fail(message);
 }
-function parseJsonOrNull(value) {
+
+function parseJsonOrNull(value: string): unknown {
   try {
     return JSON.parse(value);
   } catch {
     return null;
   }
 }
-function detectRepository() {
+
+function detectRepository(): string {
   if (process.env.GITHUB_REPOSITORY) {
     return process.env.GITHUB_REPOSITORY;
   }
@@ -915,7 +1318,8 @@ function detectRepository() {
     },
   ).trim();
 }
-function parseRepository(value) {
+
+function parseRepository(value: string): [string, string] {
   const parts = value.split('/');
   if (
     parts.length !== 2 ||
@@ -923,13 +1327,15 @@ function parseRepository(value) {
   ) {
     fail(`invalid repository ${value}; expected owner/name`);
   }
-  return parts;
+  return parts as [string, string];
 }
-function writeReport(report, format) {
+
+function writeReport(report: CleanupAuditReport, format: string): void {
   if (format === 'json') {
     console.log(`${JSON.stringify(report, null, 2)}\n`);
     return;
   }
+
   // Print summary header
   if (report.summary) {
     console.log(
@@ -937,6 +1343,7 @@ function writeReport(report, format) {
     );
     console.log('');
   }
+
   printRows('candidates', report.candidates);
   printRows('skipped', report.skipped);
   if (report.applied.length > 0) {
@@ -946,7 +1353,8 @@ function writeReport(report, format) {
     printRows('failed', report.failed);
   }
 }
-function printRows(label, rows) {
+
+function printRows(label: string, rows: ReportRow[]): void {
   console.log(`${label}: ${rows.length}`);
   if (rows.length === 0) {
     return;
@@ -978,10 +1386,12 @@ function printRows(label, rows) {
     );
   }
 }
-function parseArgs(argv) {
-  const parsed = {
+
+function parseArgs(argv: string[]): CleanupArgs {
+  const parsed: CleanupArgs = {
     format: 'json',
   };
+
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     switch (arg) {
@@ -1023,22 +1433,26 @@ function parseArgs(argv) {
         fail(`unknown argument ${arg}`);
     }
   }
+
   return parsed;
 }
-function readValue(argv, index, flag) {
+
+function readValue(argv: string[], index: number, flag: string): string {
   const value = argv[index];
   if (!value || value.startsWith('--')) {
     fail(`${flag} requires a value`);
   }
   return value;
 }
-function parsePositiveInteger(value, flag) {
+
+function parsePositiveInteger(value: string, flag: string): number {
   if (!/^[1-9]\d*$/.test(value)) {
     fail(`${flag} must be a positive integer`);
   }
   return Number.parseInt(value, 10);
 }
-function printUsage() {
+
+function printUsage(): void {
   console.log(`usage: node scripts/audit-pr-cleanup.mjs --pr <number> [options]
 
 Options:
@@ -1058,7 +1472,8 @@ Environment:
   IDD_TRUST_COLLABORATOR_MARKERS    set true to trust Write/Maintain/Admin collaborators
 `);
 }
-function fail(message) {
+
+function fail(message: string): never {
   console.error(`error: ${message}`);
   process.exit(2);
 }

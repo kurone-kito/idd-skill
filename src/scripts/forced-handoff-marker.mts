@@ -4,29 +4,111 @@
 // The scripts/forced-handoff-marker.mjs copy is generated from the .mts source named
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
-} from './collaborator-permission.mjs';
-import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
+} from './collaborator-permission.mts';
+import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
+import type { ClaimValidationSummary } from './protocol-helpers.mts';
 import {
   parsePaginatedGhNdjson,
   renderForcedHandoffComment,
   summarizeClaimValidation,
   unionTrustedMarkerActorSources,
-} from './protocol-helpers.mjs';
-export function generateSuccessorIds(baseAgentId) {
+} from './protocol-helpers.mts';
+
+/** Author reference embedded in GitHub REST payloads. */
+interface GhAuthorPayload {
+  login?: string | null;
+}
+
+/** Issue comment payload fields consumed by this helper. */
+interface IssueCommentPayload {
+  body?: string | null;
+  created_at?: string | null;
+  user?: GhAuthorPayload | null;
+}
+
+/** Linked-PR row returned by `gh pr list --json number,headRefName`. */
+interface LinkedPrPayload {
+  number?: number | string | null;
+  headRefName?: string | null;
+}
+
+/** Active claim resolved from the trusted claim-marker stream. */
+type ActiveClaim = ClaimValidationSummary['activeClaim'];
+
+/** Trusted-marker login collection accepted by the claim resolver. */
+type TrustedMarkerLoginsInput =
+  | unknown[]
+  | Set<string>
+  | string
+  | null
+  | undefined;
+
+/** Options accepted by {@link planHandoff}. */
+interface PlanHandoffOptions {
+  newAgentId?: string;
+  newClaimId?: string;
+  prNumber?: number;
+  forcedBy?: string;
+  reason?: string;
+  timestamp?: string;
+  trustedMarkerLogins?: TrustedMarkerLoginsInput;
+  isAuthorizedForcedHandoff?: (forcedBy: string) => boolean;
+}
+
+/** Successor identifiers generated for a forced handoff. */
+interface SuccessorIds {
+  newAgentId: string;
+  newClaimId: string;
+}
+
+/** Structured execution plan returned by {@link planHandoff}. */
+interface HandoffPlan {
+  activeClaim: ActiveClaim;
+  branch: string;
+  contextScope: string;
+  prReferences: string[];
+  markerBody: string | null;
+  successorIds: SuccessorIds;
+}
+
+/** Parsed CLI arguments. */
+interface ForcedHandoffMarkerArgs {
+  format: string;
+  trustedMarkerLogins: string;
+  issueNumber?: number;
+  prNumber?: number;
+  newAgentId?: string;
+  newClaimId?: string;
+  forcedBy?: string;
+  reason?: string;
+  timestamp?: string;
+  repo?: string;
+  plan?: boolean;
+  help?: boolean;
+}
+
+export function generateSuccessorIds(baseAgentId: unknown): SuccessorIds {
   return {
     newAgentId: String(baseAgentId || 'idd-agent'),
     newClaimId: `claim-${randomUUID().replace(/-/g, '').slice(0, 16)}`,
   };
 }
-export function planHandoff(issueComments, linkedPrs, options = {}) {
+
+export function planHandoff(
+  issueComments: IssueCommentPayload[],
+  linkedPrs: LinkedPrPayload[] | null | undefined,
+  options: PlanHandoffOptions = {},
+): HandoffPlan {
   const {
     newAgentId,
     newClaimId,
@@ -37,26 +119,31 @@ export function planHandoff(issueComments, linkedPrs, options = {}) {
     trustedMarkerLogins,
     isAuthorizedForcedHandoff,
   } = options;
+
   const resolveOpts = {
     isAuthorizedForcedHandoff:
       typeof isAuthorizedForcedHandoff === 'function'
         ? isAuthorizedForcedHandoff
         : () => false,
   };
+
   // First pass: resolve without PR filter to obtain the claim branch.
   const firstPassClaim = resolveHelperActiveClaim(
     issueComments,
     trustedMarkerLogins ?? [],
     resolveOpts,
   );
+
   if (!firstPassClaim) {
     throw new Error('issue has no active trusted claim');
   }
+
   const matchingPrs = (linkedPrs ?? []).filter(
     (pr) => String(pr.headRefName ?? '') === firstPassClaim.branch,
   );
   const contextScope = matchingPrs.length > 0 ? 'issue-plus-pr' : 'issue-only';
   const prReferences = matchingPrs.map((pr) => String(pr.number));
+
   if (prNumber !== undefined) {
     const prRef = String(prNumber);
     if (!prReferences.includes(prRef)) {
@@ -68,6 +155,7 @@ export function planHandoff(issueComments, linkedPrs, options = {}) {
       );
     }
   }
+
   // Second pass: when an open PR is part of the plan, re-resolve with an
   // expectedLinkedPrs filter so that prior issue-only forced-handoff markers
   // are correctly rejected for PR-scoped claim replay.
@@ -84,12 +172,14 @@ export function planHandoff(issueComments, linkedPrs, options = {}) {
       activeClaim = filteredClaim;
     }
   }
+
   const generated = generateSuccessorIds(activeClaim.agentId);
   const successorIds = {
     newAgentId: newAgentId ?? generated.newAgentId,
     newClaimId: newClaimId ?? generated.newClaimId,
   };
-  let markerBody = null;
+
+  let markerBody: string | null = null;
   if (forcedBy && reason) {
     // Validate the approving actor before rendering the marker body so that
     // plan output cannot preview a marker that claim resolution would reject.
@@ -116,6 +206,7 @@ export function planHandoff(issueComments, linkedPrs, options = {}) {
       markerBody = renderForcedHandoffComment(payload);
     }
   }
+
   return {
     activeClaim,
     branch: activeClaim.branch,
@@ -125,12 +216,15 @@ export function planHandoff(issueComments, linkedPrs, options = {}) {
     successorIds,
   };
 }
-export function main(argv = process.argv.slice(2)) {
+
+export function main(argv: string[] = process.argv.slice(2)): void {
   const args = parseArgs(argv);
+
   if (args.help) {
     printUsage();
     return;
   }
+
   if (!args.issueNumber) {
     throw new Error('missing required --issue <number> argument');
   }
@@ -140,6 +234,7 @@ export function main(argv = process.argv.slice(2)) {
   if (!args.reason) {
     throw new Error('missing required --reason <text> argument');
   }
+
   if (args.plan) {
     const repoRef =
       args.repo ??
@@ -159,7 +254,7 @@ export function main(argv = process.argv.slice(2)) {
         `repos/${owner}/${name}/issues/${args.issueNumber}/comments`,
       ],
       true,
-    );
+    ) as IssueCommentPayload[];
     const viewerLogin = safeGhText([
       'api',
       'user',
@@ -175,7 +270,8 @@ export function main(argv = process.argv.slice(2)) {
         issueComments,
       );
     const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
-    const permissionCache = new Map();
+    const permissionCache: CollaboratorPermissionCache = new Map();
+
     const tempClaim = resolveHelperActiveClaim(
       issueComments,
       trustedMarkerLogins,
@@ -190,7 +286,8 @@ export function main(argv = process.argv.slice(2)) {
           ),
       },
     );
-    let linkedPrs = [];
+
+    let linkedPrs: LinkedPrPayload[] = [];
     if (tempClaim) {
       linkedPrs = ghJson([
         'pr',
@@ -203,8 +300,9 @@ export function main(argv = process.argv.slice(2)) {
         'open',
         '--json',
         'number,headRefName',
-      ]);
+      ]) as LinkedPrPayload[];
     }
+
     const modeEnabled = readForcedHandoffMode() === 'human-gated';
     const plan = planHandoff(issueComments, linkedPrs, {
       newAgentId: args.newAgentId,
@@ -223,6 +321,7 @@ export function main(argv = process.argv.slice(2)) {
           permissionCache,
         ),
     });
+
     console.log(
       JSON.stringify(
         {
@@ -239,12 +338,14 @@ export function main(argv = process.argv.slice(2)) {
     );
     return;
   }
+
   if (!args.newAgentId) {
     throw new Error('missing required --new-agent-id <id> argument');
   }
   if (!args.newClaimId) {
     throw new Error('missing required --new-claim-id <id> argument');
   }
+
   const repoRef =
     args.repo ??
     ghText([
@@ -268,7 +369,7 @@ export function main(argv = process.argv.slice(2)) {
       `repos/${owner}/${name}/issues/${args.issueNumber}/comments`,
     ],
     true,
-  );
+  ) as IssueCommentPayload[];
   const viewerLogin = safeGhText([
     'api',
     'user',
@@ -284,7 +385,7 @@ export function main(argv = process.argv.slice(2)) {
       issueComments,
     );
   const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
-  const permissionCache = new Map();
+  const permissionCache: CollaboratorPermissionCache = new Map();
   const activeClaim = resolveHelperActiveClaim(
     issueComments,
     trustedMarkerLogins,
@@ -305,9 +406,11 @@ export function main(argv = process.argv.slice(2)) {
         ),
     },
   );
+
   if (!activeClaim) {
     throw new Error(`issue #${args.issueNumber} has no active trusted claim`);
   }
+
   if (
     !isAuthorizedForcedHandoffActor(
       owner,
@@ -321,6 +424,7 @@ export function main(argv = process.argv.slice(2)) {
       `--forced-by actor ${args.forcedBy} is not authorized under ${forcedHandoffAuthorityPolicy}`,
     );
   }
+
   let linkedPr = '';
   if (args.prNumber) {
     const pr = ghJson([
@@ -333,7 +437,7 @@ export function main(argv = process.argv.slice(2)) {
       'headRefName,url',
       '--jq',
       '.',
-    ]);
+    ]) as { headRefName?: unknown };
     const headRefName = String(pr.headRefName ?? '');
     if (headRefName !== activeClaim.branch) {
       throw new Error(
@@ -342,6 +446,7 @@ export function main(argv = process.argv.slice(2)) {
     }
     linkedPr = String(args.prNumber);
   }
+
   const payload = {
     oldAgentId: activeClaim.agentId,
     oldClaimId: activeClaim.claimId,
@@ -354,6 +459,7 @@ export function main(argv = process.argv.slice(2)) {
     timestamp: args.timestamp ?? currentIsoTimestamp(),
     contextScope: linkedPr ? 'issue-plus-pr' : 'issue-only',
   };
+
   const commentBody = renderForcedHandoffComment(payload);
   if (args.format === 'json') {
     console.log(
@@ -375,11 +481,15 @@ export function main(argv = process.argv.slice(2)) {
     console.log(commentBody);
   }
 }
+
 export function resolveHelperActiveClaim(
-  issueComments,
-  trustedMarkerLogins,
-  options = {},
-) {
+  issueComments: IssueCommentPayload[],
+  trustedMarkerLogins: TrustedMarkerLoginsInput,
+  options: {
+    expectedLinkedPrs?: string[];
+    isAuthorizedForcedHandoff?: (forcedBy: string) => boolean;
+  } = {},
+): ActiveClaim | null {
   const trustedSources = Array.isArray(trustedMarkerLogins)
     ? trustedMarkerLogins
     : trustedMarkerLogins instanceof Set
@@ -406,10 +516,12 @@ export function resolveHelperActiveClaim(
           : () => false,
     },
   );
+
   return summary.activeClaimPresent ? summary.activeClaim : null;
 }
-function parseArgs(argv) {
-  const parsed = {
+
+function parseArgs(argv: string[]): ForcedHandoffMarkerArgs {
+  const parsed: ForcedHandoffMarkerArgs = {
     format: 'text',
     trustedMarkerLogins: '',
   };
@@ -468,17 +580,18 @@ function parseArgs(argv) {
   }
   return parsed;
 }
+
 function buildTrustedMarkerLogins(
-  owner,
-  repo,
-  viewerLogin,
-  cliLogins,
-  issueComments,
-) {
+  owner: string,
+  repo: string,
+  viewerLogin: string,
+  cliLogins: string,
+  issueComments: IssueCommentPayload[],
+): { logins: Set<string>; sources: string[] } {
   // Parse the config once and share it between the actor union and the
   // collaborator-trust toggle.
   const config = loadIddConfig();
-  const sources = [];
+  const sources: string[] = [];
   if (String(viewerLogin ?? '').trim()) {
     sources.push('viewer');
   }
@@ -496,7 +609,8 @@ function buildTrustedMarkerLogins(
   if (!readCollaboratorTrustEnabled(config)) {
     return { logins: trusted, sources };
   }
-  const permissionCache = new Map();
+
+  const permissionCache = new Map<string, string>();
   const uniqueLogins = new Set(
     issueComments
       .map((comment) => String(comment.user?.login ?? '').toLowerCase())
@@ -530,14 +644,22 @@ function buildTrustedMarkerLogins(
   }
   return { logins: trusted, sources };
 }
-function loadIddConfig() {
+
+function loadIddConfig(): { trustedMarkerActors?: unknown } | null {
   try {
-    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
+    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8')) as {
+      trustedMarkerActors?: unknown;
+    };
   } catch {
     return null;
   }
 }
-function normalizeIssueComment(comment) {
+
+function normalizeIssueComment(comment: IssueCommentPayload): {
+  body: string;
+  createdAt: string;
+  author: { login: string };
+} {
   return {
     body: comment.body ?? '',
     createdAt: comment.created_at ?? '',
@@ -546,30 +668,35 @@ function normalizeIssueComment(comment) {
     },
   };
 }
-function splitCsv(value) {
+
+function splitCsv(value: unknown): string[] {
   return String(value ?? '')
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
 }
-function isTruthy(value) {
+
+function isTruthy(value: unknown): boolean {
   return /^(1|true|yes)$/i.test(String(value ?? '').trim());
 }
-function readValue(argv, index, name) {
+
+function readValue(argv: string[], index: number, name: string): string {
   const value = argv[index];
   if (value === undefined) {
     throw new Error(`missing value for ${name}`);
   }
   return value;
 }
-export function parsePositiveInteger(value, flag) {
+
+export function parsePositiveInteger(value: unknown, flag: string): number {
   const raw = String(value ?? '').trim();
   if (!/^[1-9]\d*$/.test(raw)) {
     throw new Error(`invalid ${flag} value: ${value}`);
   }
   return Number(raw);
 }
-function parseOwnerRepo(value) {
+
+function parseOwnerRepo(value: unknown): { owner: string; name: string } {
   const repo = String(value ?? '').trim();
   const match = repo.match(/^([^/\s]+)\/([^/\s]+)$/);
   if (!match) {
@@ -580,7 +707,8 @@ function parseOwnerRepo(value) {
     name: match[2],
   };
 }
-function ghJson(args, slurp = false) {
+
+function ghJson(args: string[], slurp = false): unknown {
   const finalArgs = [...args];
   if (slurp) {
     // gh api with --paginate and --jq '.[]' emits one JSON object per line.
@@ -593,17 +721,20 @@ function ghJson(args, slurp = false) {
   }
   return JSON.parse(execFileSync('gh', finalArgs, { encoding: 'utf8' }));
 }
-function ghText(args) {
+
+function ghText(args: string[]): string {
   return execFileSync('gh', args, { encoding: 'utf8' }).trim();
 }
-function safeGhText(args) {
+
+function safeGhText(args: string[]): string {
   try {
     return ghText(args);
   } catch {
     return '';
   }
 }
-function readCollaboratorTrustEnabled(config = null) {
+
+function readCollaboratorTrustEnabled(config: unknown = null): boolean {
   try {
     return resolveCollaboratorMarkerTrust(
       config ?? JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
@@ -614,10 +745,12 @@ function readCollaboratorTrustEnabled(config = null) {
   }
   return isTruthy(process.env.IDD_TRUST_COLLABORATOR_MARKERS);
 }
-export function currentIsoTimestamp() {
+
+export function currentIsoTimestamp(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
-function printUsage() {
+
+function printUsage(): void {
   console.log(`usage: node scripts/forced-handoff-marker.mjs --issue <number> [options]
 
 Options:
@@ -640,6 +773,7 @@ Environment:
   IDD_TRUST_COLLABORATOR_MARKERS   set true to trust Write/Maintain/Admin collaborators
 `);
 }
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
