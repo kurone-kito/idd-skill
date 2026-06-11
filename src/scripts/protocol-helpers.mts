@@ -3,14 +3,455 @@
 // The scripts/protocol-helpers.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
 import { Buffer } from 'node:buffer';
-import { normalizeAdvisoryWaitRuntimeOptions } from './advisory-wait-policy.mjs';
-import { getReviewEscalationChangesRequestedPolicy } from './policy-helpers.mjs';
+import { normalizeAdvisoryWaitRuntimeOptions } from './advisory-wait-policy.mts';
+import { getReviewEscalationChangesRequestedPolicy } from './policy-helpers.mts';
+
+// ---------------------------------------------------------------------------
+// Structural input shapes (GitHub REST/GraphQL payloads as consumed here).
+// ---------------------------------------------------------------------------
+
+/** Author reference embedded in GitHub comment/review payloads. */
+interface AuthorRef {
+  login?: string | null;
+}
+
+/** Issue/PR comment as consumed by the protocol helpers. */
+interface CommentLike {
+  id?: string | number | null;
+  body?: string | null;
+  author?: AuthorRef | null;
+  user?: AuthorRef | null;
+  createdAt?: string | null;
+  created_at?: string | null;
+  updatedAt?: string | null;
+  updated_at?: string | null;
+  html_url?: string | null;
+  url?: string | null;
+}
+
+/** Review-thread reply node (GraphQL `reviewThreads` comment). */
+interface ThreadCommentLike {
+  id?: string | number | null;
+  body?: string | null;
+  author?: AuthorRef | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  pullRequestReview?: { id?: string | null } | null;
+}
+
+/** Review thread (GraphQL `reviewThreads` node). */
+interface ThreadLike {
+  id?: string | null;
+  isResolved?: boolean | null;
+  updatedAt?: string | null;
+  reviewerReopenedAt?: string | null;
+  comments?: {
+    nodes?: ThreadCommentLike[] | null;
+    pageInfo?: { hasNextPage?: boolean | null } | null;
+  } | null;
+}
+
+/** PR review object (REST or GraphQL shape). */
+interface ReviewLike {
+  state?: string | null;
+  author?: AuthorRef | null;
+  user?: AuthorRef | null;
+  submittedAt?: string | null;
+  submitted_at?: string | null;
+  updatedAt?: string | null;
+  updated_at?: string | null;
+  createdAt?: string | null;
+  commitId?: string | null;
+  commit_id?: string | null;
+}
+
+/** CI status-check entry. */
+interface CheckLike {
+  name?: string | null;
+  state?: string | null;
+  completedAt?: string | null;
+}
+
+/** PR timeline event as consumed by the Copilot-coverage helpers. */
+interface TimelineEventLike {
+  event?: string | null;
+  sha?: string | null;
+  commit_id?: string | null;
+  requested_reviewer?: AuthorRef | null;
+}
+
+/** Requested reviewer entry (login string or reviewer object). */
+type RequestedReviewerLike =
+  | string
+  | { login?: string | null; user?: AuthorRef | null }
+  | null
+  | undefined;
+
+/** Identity fields shared by required-reviewer references. */
+interface RequiredReviewerRef {
+  type?: unknown;
+  id?: unknown;
+  login?: unknown;
+  slug?: unknown;
+  team?: unknown;
+  name?: unknown;
+}
+
+/** Required-reviewer rule entry (string or nested reviewer object). */
+type RequiredReviewerLike =
+  | string
+  | (RequiredReviewerRef & {
+      reviewer?: RequiredReviewerRef | null;
+      minimum_approvals?: unknown;
+      min_approvals?: unknown;
+      file_patterns?: unknown[] | null;
+      filePatterns?: unknown[] | null;
+    })
+  | null
+  | undefined;
+
+/** Required status-check entry in rules or classic protection payloads. */
+type RawRequiredCheckLike =
+  | string
+  | {
+      app_id?: unknown;
+      integration_id?: unknown;
+      source?: unknown;
+      context?: unknown;
+      name?: unknown;
+      check?: unknown;
+    }
+  | null
+  | undefined;
+
+/** Check-bearing parameters object (rules or classic protection). */
+interface RequiredCheckParametersLike {
+  required_status_checks?: RawRequiredCheckLike[] | null;
+  required_checks?: RawRequiredCheckLike[] | null;
+  checks?: RawRequiredCheckLike[] | null;
+  contexts?: RawRequiredCheckLike[] | null;
+}
+
+/** Branch rule entry from the rules API. */
+interface BranchRuleLike {
+  type?: string | null;
+  ruleset_id?: unknown;
+  ruleset_source_type?: unknown;
+  source_type?: unknown;
+  ruleset_source?: unknown;
+  source?: unknown;
+  parameters?:
+    | (RequiredCheckParametersLike & {
+        required_approving_review_count?: unknown;
+        require_code_owner_review?: unknown;
+        required_review_thread_resolution?: unknown;
+        required_reviewers?: RequiredReviewerLike[] | null;
+      })
+    | null;
+}
+
+/** Branch ruleset entry from the rulesets API. */
+interface BranchRulesetLike {
+  id?: unknown;
+  ruleset_id?: unknown;
+  current_user_can_bypass?: unknown;
+}
+
+/** Classic branch-protection payload. */
+interface BranchProtectionLike {
+  required_pull_request_reviews?: {
+    require_code_owner_reviews?: unknown;
+    require_code_owner_review?: unknown;
+    required_approving_review_count?: unknown;
+    bypass_pull_request_allowances?: {
+      users?: (string | { login?: unknown } | null)[] | null;
+      teams?: (string | { slug?: unknown } | null)[] | null;
+      apps?: (string | { slug?: unknown; app_slug?: unknown } | null)[] | null;
+    } | null;
+  } | null;
+  required_conversation_resolution?: { enabled?: unknown } | null;
+  required_status_checks?: RequiredCheckParametersLike | null;
+}
+
+/** Parsed CODEOWNERS rule line. */
+interface CodeownersRule {
+  pattern: string;
+  users: string[];
+  teams: string[];
+  emails: string[];
+}
+
+/** Operational marker matcher entry. */
+interface OperationalMarker {
+  label: string;
+  pattern: RegExp;
+  startPattern?: RegExp;
+}
+
+/** Live-status digest field inputs (validated at render time). */
+interface LiveStatusDigestFields {
+  phase?: unknown;
+  claim?: unknown;
+  branch?: unknown;
+  lastChecked?: unknown;
+  openBlockers?: unknown;
+  nextAction?: unknown;
+  authoritativeBy?: unknown;
+}
+
+/** Inputs for the advisory-wait outcome state machine. */
+interface AdvisoryWaitOutcomeInput {
+  lastCopilotCommit?: string | null;
+  prHeadSha?: string | null;
+  copilotPending?: boolean;
+  copilotPendingCoversHead?: boolean;
+  sameHeadMarkerPresent?: boolean;
+  requestMarkerCount: number;
+  elapsedMinutes: number;
+  requestCap?: number;
+  pendingWindowMinutes?: number;
+  settledWindowMinutes?: number;
+}
+
+/** Normalized required-reviewer requirement row. */
+interface ReviewerRequirement {
+  identity: string;
+  minimumApprovals: number;
+  filePatterns: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Protocol data shapes crossing module boundaries.
+// ---------------------------------------------------------------------------
+
+/** Parsed `<!-- claimed-by: ... -->` claim marker. */
+export interface ParsedClaimMarker {
+  agentId: string;
+  claimId: string;
+  supersedes: string;
+  branch: string;
+  createdAt: string;
+}
+
+/** Parsed `<!-- unclaimed-by: ... -->` release marker. */
+export interface ParsedReleaseMarker {
+  agentId: string;
+  claimId: string;
+}
+
+/** Parsed `<!-- forced-handoff: {...} -->` marker payload. */
+export interface ParsedForcedHandoffMarker {
+  oldAgentId: string;
+  oldClaimId: string;
+  newAgentId: string;
+  newClaimId: string;
+  branch: string;
+  linkedPr?: string;
+  forcedBy: string;
+  reason: string;
+  timestamp: string;
+  contextScope: string;
+  createdAt?: string;
+}
+
+/** Parsed `<!-- idd-external-check-waiver: ... -->` marker. */
+export interface ParsedExternalCheckWaiver {
+  agentId: string;
+  claimId: string;
+  headSha: string;
+  checkSelector: string;
+  reason: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
+/** Parsed `<!-- review-watermark: ... -->` marker. */
+export interface ParsedReviewWatermark {
+  agentId: string;
+  claimId: string;
+  headSha: string;
+  maxActivityUpdatedAt: string;
+  totalItemCount: number;
+  latestCiCompletedAt: string;
+  createdAt: string;
+}
+
+/** Classification of a standalone advisory-bot comment. */
+export interface CommentClassification {
+  classifier: 'RESOLVED' | 'OUTDATED';
+  reason: string;
+}
+
+/** Generic route decision returned by the gate evaluators. */
+export interface RouteDecision {
+  route: string;
+  reason: string;
+}
+
+/** Trusted-marker actor resolution with its provenance. */
+export interface TrustedMarkerActorResolution {
+  actors: string[];
+  source: 'flag' | 'env' | 'config' | 'none';
+}
+
+/** Union of trusted-marker actors collected across sources. */
+export interface TrustedMarkerActorSourceMix {
+  actors: string[];
+  sources: string[];
+}
+
+/** Advisory-bot login resolution with its provenance. */
+export interface AdvisoryBotLoginResolution {
+  logins: string[];
+  source: 'flag' | 'env' | 'config' | 'none';
+}
+
+/** External-check waiver evidence grouped by validity bucket. */
+export interface ExternalCheckWaiverEvidence {
+  valid: {
+    authorLogin: string;
+    checkSelector: string;
+    reason: string;
+    expiresAt: string;
+  }[];
+  expired: { authorLogin: string; checkSelector: string; expiresAt: string }[];
+  wrongHead: {
+    authorLogin: string;
+    checkSelector: string;
+    waiverHeadSha: string;
+  }[];
+  wrongClaim: {
+    authorLogin: string;
+    checkSelector: string;
+    waiverClaimId: string;
+  }[];
+  unauthorized: {
+    authorLogin: string;
+    checkSelector: string;
+    expiresAt: string;
+  }[];
+  malformed: { authorLogin: string; bodyPreview: string }[];
+}
+
+/** Classification outcome for a single review thread at the gate. */
+export interface ReviewThreadGateClassification {
+  classification:
+    | 'resolved'
+    | 'actionable-blocking'
+    | 'amd-blocking'
+    | 'awaiting-reviewer'
+    | 'conversation-resolve-agent'
+    | 'conversation-resolve-author';
+}
+
+/** Aggregated review-thread gate counts. */
+export interface ReviewThreadsGateSummary {
+  actionableCount: number;
+  awaitingReviewerCount: number;
+  amdBlockingCount: number;
+  conversationResolveAgentCount: number;
+  conversationResolveAuthorCount: number;
+  classifications: {
+    id: string | null | undefined;
+    classification: ReviewThreadGateClassification['classification'];
+  }[];
+}
+
+/** Unreplied regular-comment summary for the merge gate. */
+export interface RegularCommentsGateSummary {
+  count: number;
+  items: {
+    id: string;
+    authorLogin: string;
+    createdAt: string;
+    bodyPreview: string;
+  }[];
+}
+
+/** Disposition-evidence gate outcome (E7 evidence at F2/F3). */
+export interface DispositionEvidenceSummary {
+  route: 'return-to-e1' | 'proceed';
+  reason: string;
+  blockingCount: number;
+  missingRegularCommentCount: number;
+  missingThreadCount: number;
+  missingRegularComments: {
+    id: string;
+    authorLogin: string;
+    createdAt: string;
+    bodyPreview: string;
+  }[];
+  missingThreads: { id: string; isResolved: boolean; reason: string }[];
+}
+
+/** Advisory-wait marker counts split by marker-author trust. */
+export interface AdvisoryWaitMarkerSummary {
+  sameHeadMarkerPresent: boolean;
+  earliestSameHeadAt: string;
+  sameHeadMarkerCount: number;
+  requestMarkerCount: number;
+  trustedSameHeadMarkerCount: number;
+  untrustedSameHeadMarkerCount: number;
+  trustedRequestMarkerCount: number;
+  untrustedRequestMarkerCount: number;
+}
+
+/** Claim-validation outcome for the merge gate. */
+export interface ClaimValidationSummary {
+  expectedClaimId: string;
+  expectedAgentId: string;
+  activeClaimPresent: boolean;
+  activeClaim: {
+    agentId: string;
+    claimId: string;
+    supersedes: string;
+    branch: string;
+    createdAt: string;
+  };
+  matchesExpectedClaim: boolean;
+  claimLost: boolean;
+  reason: string;
+}
+
+/** Claim-stream resolution callbacks and policies. */
+interface ClaimResolutionOptions {
+  isTrustedAuthor?: (login: string) => boolean;
+  isForcedHandoffEnabled?: (
+    forcedHandoff: ParsedForcedHandoffMarker,
+    event: CommentLike,
+  ) => boolean;
+  isAuthorizedForcedHandoff?: (
+    forcedBy: string,
+    forcedHandoff: ParsedForcedHandoffMarker,
+    event: CommentLike,
+  ) => boolean;
+  isStale?: (activeCreatedAt: string, nextCreatedAt: string) => boolean;
+  requireAuthorMatchesForcedBy?: boolean;
+  onAnomalousHeartbeat?: (info: {
+    agentId: string;
+    claimId: string;
+    activeBranch: string;
+    heartbeatBranch: string;
+    createdAt: string | null | undefined;
+  }) => void;
+  onIgnoredForcedHandoff?: (info: {
+    reason: string;
+    forcedHandoff: ParsedForcedHandoffMarker;
+    event: CommentLike;
+  }) => void;
+}
+
+/** Fully-defaulted form of {@link ClaimResolutionOptions}. */
+type NormalizedClaimResolutionOptions = Required<ClaimResolutionOptions>;
 
 const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
 const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)`;
+
 export const LIVE_STATUS_DIGEST_MARKER = '<!-- idd-live-status: current -->';
-const OPERATIONAL_MARKERS = [
+
+const OPERATIONAL_MARKERS: OperationalMarker[] = [
   {
     label: '<!-- claimed-by:',
     pattern:
@@ -57,6 +498,7 @@ const OPERATIONAL_MARKERS = [
     startPattern: /^<!--\s*idd-external-check-waiver:/i,
   },
 ];
+
 const IDD_AGENT_DERIVED_MARKERS = new Set([
   '<!-- claimed-by:',
   '<!-- unclaimed-by:',
@@ -66,12 +508,14 @@ const IDD_AGENT_DERIVED_MARKERS = new Set([
   'advisory-wait-recovery:',
   '<!-- advisory-wait:',
 ]);
+
 const REVIEW_BOT_LOGINS = new Set([
   'coderabbitai',
   'coderabbitai[bot]',
   'chatgpt-codex-connector',
   'chatgpt-codex-connector[bot]',
 ]);
+
 const UNSAFE_TEXT_RULES = [
   {
     pattern: /\*\*Awaiting maintainer decision\*\*/i,
@@ -90,7 +534,8 @@ const UNSAFE_TEXT_RULES = [
 const AMD_MARKER_PATTERN = /^\*\*Awaiting maintainer decision\*\*/i;
 const FORCED_HANDOFF_CONTEXT_SCOPES = new Set(['issue-only', 'issue-plus-pr']);
 const FORCED_HANDOFF_LINKED_PR_PATTERN = /^(?:[1-9]\d*|https?:\/\/[^\s<>"]+)$/;
-export function parsePaginatedGhNdjson(raw) {
+
+export function parsePaginatedGhNdjson(raw: unknown): unknown[] {
   const text = String(raw ?? '').trim();
   if (!text) {
     return [];
@@ -99,11 +544,15 @@ export function parsePaginatedGhNdjson(raw) {
     .split(/\r?\n/)
     .filter((line) => line.trim().length > 0)
     .flatMap((line) => {
-      const value = JSON.parse(line);
+      const value: unknown = JSON.parse(line);
       return Array.isArray(value) ? value : [value];
     });
 }
-export function parseClaimComment(body, createdAt) {
+
+export function parseClaimComment(
+  body: string,
+  createdAt: string,
+): ParsedClaimMarker | null {
   const match = body
     .trimEnd()
     .match(
@@ -123,7 +572,8 @@ export function parseClaimComment(body, createdAt) {
     createdAt,
   };
 }
-export function parseReleaseComment(body) {
+
+export function parseReleaseComment(body: string): ParsedReleaseMarker | null {
   const match = body
     .trimEnd()
     .match(
@@ -140,16 +590,22 @@ export function parseReleaseComment(body) {
     claimId: match[2],
   };
 }
-export function parseForcedHandoffComment(body, createdAt) {
+
+export function parseForcedHandoffComment(
+  body: string,
+  createdAt: string,
+): ParsedForcedHandoffMarker | null {
   const trimmed = body.trimStart().trimEnd();
   const markerMatch = trimmed.match(/^<!--\s*forced-handoff:\s*/i);
   if (!markerMatch) {
     return null;
   }
+
   const markerEnd = trimmed.indexOf('-->');
   if (markerEnd < 0) {
     return null;
   }
+
   const visibleNote = trimmed.slice(markerEnd + 3);
   const visibleText = visibleNote
     .replace(/<!--[\s\S]*?-->/g, ' ')
@@ -158,20 +614,27 @@ export function parseForcedHandoffComment(body, createdAt) {
   if (!visibleText) {
     return null;
   }
+
   const payloadText = trimmed.slice(markerMatch[0].length, markerEnd).trim();
-  let payload;
+  let payload: unknown;
   try {
     payload = JSON.parse(payloadText);
   } catch {
     return null;
   }
+
   return normalizeForcedHandoffPayload(payload, { createdAt });
 }
-export function normalizeForcedHandoffPayload(payload, options = {}) {
+
+export function normalizeForcedHandoffPayload(
+  payload: unknown,
+  options: { createdAt?: unknown } = {},
+): ParsedForcedHandoffMarker | null {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     return null;
   }
-  const record = payload;
+  const record = payload as Record<string, unknown>;
+
   if (
     hasConflictingPayloadAliases(record, 'oldAgentId', 'old-agent-id') ||
     hasConflictingPayloadAliases(record, 'oldClaimId', 'old-claim-id') ||
@@ -183,6 +646,7 @@ export function normalizeForcedHandoffPayload(payload, options = {}) {
   ) {
     return null;
   }
+
   const oldAgentId = normalizeNonWhitespaceToken(
     pickPayloadValue(record, 'oldAgentId', 'old-agent-id'),
   );
@@ -212,6 +676,7 @@ export function normalizeForcedHandoffPayload(payload, options = {}) {
     pickPayloadValue(record, 'linkedPr', 'linked-pr'),
   );
   const createdAt = normalizeSecondPrecisionIsoTimestamp(options.createdAt);
+
   if (
     !oldAgentId ||
     !oldClaimId ||
@@ -225,15 +690,19 @@ export function normalizeForcedHandoffPayload(payload, options = {}) {
   ) {
     return null;
   }
+
   if (oldClaimId === newClaimId) {
     return null;
   }
+
   if (contextScope === 'issue-plus-pr' && !linkedPr) {
     return null;
   }
+
   if (contextScope === 'issue-only' && linkedPr) {
     return null;
   }
+
   return {
     oldAgentId,
     oldClaimId,
@@ -248,11 +717,13 @@ export function normalizeForcedHandoffPayload(payload, options = {}) {
     ...(createdAt ? { createdAt } : {}),
   };
 }
-export function renderForcedHandoffConsentNote(payload) {
+
+export function renderForcedHandoffConsentNote(payload: unknown): string {
   const normalized = normalizeForcedHandoffPayload(payload);
   if (!normalized) {
     throw new Error('invalid forced handoff payload');
   }
+
   if (normalized.contextScope === 'issue-plus-pr') {
     const linkedPr = normalized.linkedPr ?? '';
     const prReference = /^\d+$/.test(linkedPr) ? `#${linkedPr}` : linkedPr;
@@ -265,6 +736,7 @@ export function renderForcedHandoffConsentNote(payload) {
       'reassigns ownership.',
     ].join('\n');
   }
+
   return [
     `Forced handoff approved by ${normalized.forcedBy}. I verified that the current`,
     'owning session or agent is unavailable. This transfers ownership away',
@@ -274,11 +746,13 @@ export function renderForcedHandoffConsentNote(payload) {
     'reassigns ownership.',
   ].join('\n');
 }
-export function renderForcedHandoffComment(payload) {
+
+export function renderForcedHandoffComment(payload: unknown): string {
   const normalized = normalizeForcedHandoffPayload(payload);
   if (!normalized) {
     throw new Error('invalid forced handoff payload');
   }
+
   const markerPayload = {
     'old-agent-id': normalized.oldAgentId,
     'old-claim-id': normalized.oldClaimId,
@@ -291,9 +765,11 @@ export function renderForcedHandoffComment(payload) {
     timestamp: normalized.timestamp,
     'context-scope': normalized.contextScope,
   };
+
   return `<!-- forced-handoff: ${JSON.stringify(markerPayload)} -->\n\n${renderForcedHandoffConsentNote(normalized)}`;
 }
-function normalizeExternalCheckWaiverField(value) {
+
+function normalizeExternalCheckWaiverField(value: unknown): string {
   if (typeof value !== 'string') {
     return '';
   }
@@ -308,24 +784,48 @@ function normalizeExternalCheckWaiverField(value) {
   }
   return trimmed;
 }
-function encodeExternalCheckWaiverField(value) {
+
+function encodeExternalCheckWaiverField(value: string): string {
   return encodeURIComponent(value);
 }
-function decodeExternalCheckWaiverField(value) {
+
+function decodeExternalCheckWaiverField(value: unknown): string {
   try {
     return decodeURIComponent(String(value ?? '').trim());
   } catch {
     return '';
   }
 }
-function renderExternalCheckWaiverNote(normalized) {
+
+function renderExternalCheckWaiverNote(normalized: {
+  actor?: unknown;
+  checkSelector: string;
+  reason: string;
+  expiresAt: string;
+}): string {
   const actor = normalizeNonWhitespaceToken(normalized.actor) || 'idd-operator';
   return [
     `_${actor}: external check waiver for IDD F phase on \`${normalized.checkSelector}\``,
     `until \`${normalized.expiresAt}\` (reason: ${normalized.reason})._`,
   ].join(' ');
 }
-export function renderExternalCheckWaiverComment(payload) {
+
+export function renderExternalCheckWaiverComment(
+  payload:
+    | {
+        agentId?: unknown;
+        claimId?: unknown;
+        headSha?: unknown;
+        checkSelector?: unknown;
+        check?: unknown;
+        reason?: unknown;
+        expiresAt?: unknown;
+        expires?: unknown;
+        actor?: unknown;
+      }
+    | null
+    | undefined,
+): string {
   const agentId = normalizeNonWhitespaceToken(payload?.agentId);
   const claimId = normalizeNonWhitespaceToken(payload?.claimId);
   const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
@@ -336,6 +836,7 @@ export function renderExternalCheckWaiverComment(payload) {
   const expiresAt = normalizeIsoTimestamp(
     payload?.expiresAt ?? payload?.expires,
   );
+
   if (
     !agentId ||
     !claimId ||
@@ -346,8 +847,10 @@ export function renderExternalCheckWaiverComment(payload) {
   ) {
     throw new Error('invalid external check waiver payload');
   }
+
   const encodedCheck = encodeExternalCheckWaiverField(checkSelector);
   const encodedReason = encodeExternalCheckWaiverField(reason);
+
   return [
     `<!-- idd-external-check-waiver: ${agentId} ${claimId} ${headSha} check:${encodedCheck} reason:${encodedReason} expires:${expiresAt} -->`,
     '',
@@ -359,7 +862,8 @@ export function renderExternalCheckWaiverComment(payload) {
     }),
   ].join('\n');
 }
-function matchCheckSelectorLocal(name, selector) {
+
+function matchCheckSelectorLocal(name: unknown, selector: unknown): boolean {
   const n = String(name ?? '').trim();
   const s = String(selector ?? '').trim();
   if (!n || !s) return false;
@@ -369,28 +873,37 @@ function matchCheckSelectorLocal(name, selector) {
   }
   return n === s;
 }
+
 export function summarizeExternalCheckWaivers(
-  comments,
+  comments: CommentLike[] | null | undefined,
   {
     prHeadSha = '',
     activeClaimId = '',
     trustedMarkerLogins = [],
     now = '',
+  }: {
+    prHeadSha?: string;
+    activeClaimId?: unknown;
+    trustedMarkerLogins?: unknown[];
+    now?: string;
   } = {},
-) {
+): ExternalCheckWaiverEvidence {
   const trustedSet = new Set(normalizeTrustedMarkerLogins(trustedMarkerLogins));
   const nowMs = isValidIsoTimestamp(now) ? new Date(now).getTime() : Date.now();
   const headShaLower = String(prHeadSha).toLowerCase();
   const activeClaimLower = String(activeClaimId);
-  const valid = [];
-  const expired = [];
-  const wrongHead = [];
-  const wrongClaim = [];
-  const unauthorized = [];
-  const malformed = [];
+
+  const valid: ExternalCheckWaiverEvidence['valid'] = [];
+  const expired: ExternalCheckWaiverEvidence['expired'] = [];
+  const wrongHead: ExternalCheckWaiverEvidence['wrongHead'] = [];
+  const wrongClaim: ExternalCheckWaiverEvidence['wrongClaim'] = [];
+  const unauthorized: ExternalCheckWaiverEvidence['unauthorized'] = [];
+  const malformed: ExternalCheckWaiverEvidence['malformed'] = [];
+
   for (const comment of comments ?? []) {
     const body = String(comment?.body ?? '');
     if (!body.includes('idd-external-check-waiver')) continue;
+
     const authorLogin = String(
       comment?.author?.login ?? comment?.user?.login ?? '',
     )
@@ -398,10 +911,12 @@ export function summarizeExternalCheckWaivers(
       .toLowerCase();
     const createdAt = String(comment?.created_at ?? comment?.createdAt ?? '');
     const parsed = parseExternalCheckWaiverComment(body, createdAt);
+
     if (!parsed) {
       malformed.push({ authorLogin, bodyPreview: body.slice(0, 120) });
       continue;
     }
+
     if (!trustedSet.has(authorLogin)) {
       unauthorized.push({
         authorLogin,
@@ -410,6 +925,7 @@ export function summarizeExternalCheckWaivers(
       });
       continue;
     }
+
     if (headShaLower && parsed.headSha !== headShaLower) {
       wrongHead.push({
         authorLogin,
@@ -418,6 +934,7 @@ export function summarizeExternalCheckWaivers(
       });
       continue;
     }
+
     if (activeClaimLower && parsed.claimId !== activeClaimLower) {
       wrongClaim.push({
         authorLogin,
@@ -426,6 +943,7 @@ export function summarizeExternalCheckWaivers(
       });
       continue;
     }
+
     const expiresMs = new Date(parsed.expiresAt).getTime();
     if (!Number.isFinite(expiresMs) || expiresMs <= nowMs) {
       expired.push({
@@ -435,6 +953,7 @@ export function summarizeExternalCheckWaivers(
       });
       continue;
     }
+
     valid.push({
       authorLogin,
       checkSelector: parsed.checkSelector,
@@ -442,9 +961,14 @@ export function summarizeExternalCheckWaivers(
       expiresAt: parsed.expiresAt,
     });
   }
+
   return { valid, expired, wrongHead, wrongClaim, unauthorized, malformed };
 }
-export function parseExternalCheckWaiverComment(body, createdAt) {
+
+export function parseExternalCheckWaiverComment(
+  body: string,
+  createdAt: string,
+): ParsedExternalCheckWaiver | null {
   const match = body
     .trimEnd()
     .match(
@@ -456,6 +980,7 @@ export function parseExternalCheckWaiverComment(body, createdAt) {
   if (!match) {
     return null;
   }
+
   const checkSelector = normalizeExternalCheckWaiverField(
     decodeExternalCheckWaiverField(match[4]),
   );
@@ -466,6 +991,7 @@ export function parseExternalCheckWaiverComment(body, createdAt) {
   if (!checkSelector || !reason || !expiresAt) {
     return null;
   }
+
   return {
     agentId: match[1],
     claimId: match[2],
@@ -476,7 +1002,11 @@ export function parseExternalCheckWaiverComment(body, createdAt) {
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
   };
 }
-export function parseReviewWatermarkComment(body, createdAt) {
+
+export function parseReviewWatermarkComment(
+  body: string,
+  createdAt: string,
+): ParsedReviewWatermark | null {
   const match = body
     .trimEnd()
     .match(
@@ -488,6 +1018,7 @@ export function parseReviewWatermarkComment(body, createdAt) {
   if (!match) {
     return null;
   }
+
   const maxActivityUpdatedAt = match[4];
   const latestCiCompletedAt = match[6];
   if (
@@ -502,10 +1033,12 @@ export function parseReviewWatermarkComment(body, createdAt) {
   ) {
     return null;
   }
+
   const totalItemCount = Number.parseInt(match[5], 10);
   if (!Number.isInteger(totalItemCount) || totalItemCount < 0) {
     return null;
   }
+
   return {
     agentId: match[1],
     claimId: match[2],
@@ -516,7 +1049,8 @@ export function parseReviewWatermarkComment(body, createdAt) {
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
   };
 }
-export function operationalMarkerPrefix(body) {
+
+export function operationalMarkerPrefix(body: string): string | null {
   const normalized = body.trimEnd();
   const marker = OPERATIONAL_MARKERS.find((candidate) =>
     candidate.pattern.test(normalized),
@@ -532,7 +1066,8 @@ export function operationalMarkerPrefix(body) {
   }
   return marker.label;
 }
-export function operationalMarkerPrefixByStart(body) {
+
+export function operationalMarkerPrefixByStart(body: string): string | null {
   const normalized = body.trimStart();
   const marker = OPERATIONAL_MARKERS.find(
     (candidate) =>
@@ -550,12 +1085,16 @@ export function operationalMarkerPrefixByStart(body) {
   }
   return marker.label;
 }
-export function findLiveStatusDigestComments(comments) {
+
+export function findLiveStatusDigestComments(
+  comments: CommentLike[],
+): CommentLike[] {
   return comments.filter((comment) => {
     return firstLine(comment.body ?? '') === LIVE_STATUS_DIGEST_MARKER;
   });
 }
-export function renderLiveStatusDigest(fields) {
+
+export function renderLiveStatusDigest(fields: LiveStatusDigestFields): string {
   const normalized = normalizeLiveStatusDigestFields(fields);
   return `${LIVE_STATUS_DIGEST_MARKER}
 
@@ -570,9 +1109,14 @@ export function renderLiveStatusDigest(fields) {
 | Authoritative by | ${escapeMarkdownTableCell(normalized.authoritativeBy)} |
 `;
 }
-export function planLiveStatusDigestUpsert(comments, fields) {
+
+export function planLiveStatusDigestUpsert(
+  comments: CommentLike[],
+  fields: LiveStatusDigestFields,
+) {
   const matches = findLiveStatusDigestComments(comments);
   const nextBody = renderLiveStatusDigest(fields);
+
   if (matches.length > 1) {
     return {
       action: 'duplicate',
@@ -591,6 +1135,7 @@ export function planLiveStatusDigestUpsert(comments, fields) {
       ].join(' '),
     };
   }
+
   if (matches.length === 0) {
     return {
       action: 'create',
@@ -599,6 +1144,7 @@ export function planLiveStatusDigestUpsert(comments, fields) {
       duplicates: [],
     };
   }
+
   const [current] = matches;
   if (sameDigestBody(current.body ?? '', nextBody)) {
     return {
@@ -610,6 +1156,7 @@ export function planLiveStatusDigestUpsert(comments, fields) {
       duplicates: [],
     };
   }
+
   return {
     action: 'update',
     canApply: true,
@@ -619,7 +1166,8 @@ export function planLiveStatusDigestUpsert(comments, fields) {
     duplicates: [],
   };
 }
-export function unsafeTextReason(body) {
+
+export function unsafeTextReason(body: string): string | null {
   for (const rule of UNSAFE_TEXT_RULES) {
     if (rule.pattern.test(body)) {
       return rule.reason;
@@ -627,26 +1175,36 @@ export function unsafeTextReason(body) {
   }
   return null;
 }
-export function isKnownReviewBot(login) {
+
+export function isKnownReviewBot(login: string): boolean {
   const normalized = login.toLowerCase();
   return (
     REVIEW_BOT_LOGINS.has(normalized) ||
     normalized.startsWith('copilot-pull-request-reviewer')
   );
 }
-export function isCodeRabbitLogin(login) {
+
+export function isCodeRabbitLogin(login: string): boolean {
   const normalized = login.toLowerCase();
   return normalized === 'coderabbitai' || normalized === 'coderabbitai[bot]';
 }
-export function classifyRegularBotComment(comment, comments, threads) {
+
+export function classifyRegularBotComment(
+  comment: CommentLike,
+  comments: CommentLike[],
+  threads: ThreadLike[],
+): CommentClassification | null {
   const author = comment.author?.login ?? '';
   if (!isCodeRabbitLogin(author)) {
     return null;
   }
+
   if (hasUnresolvedKnownBotThreads(threads)) {
     return null;
   }
+
   const body = (comment.body ?? '').trimStart();
+
   if (
     body.startsWith(
       '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->',
@@ -670,6 +1228,7 @@ export function classifyRegularBotComment(comment, comments, threads) {
     }
     return null;
   }
+
   if (
     body.startsWith('<!-- This is an auto-generated reply by CodeRabbit -->')
   ) {
@@ -684,10 +1243,15 @@ export function classifyRegularBotComment(comment, comments, threads) {
       };
     }
   }
+
   return null;
 }
-export function indexLatestGatingReviewsByAuthor(reviews) {
-  const index = new Map();
+
+export function indexLatestGatingReviewsByAuthor(reviews: ReviewLike[]) {
+  const index = new Map<
+    string,
+    ReviewLike & { submittedAt: string; submitted_at: string }
+  >();
   for (const review of reviews) {
     const state = String(review.state ?? '');
     if (state === 'COMMENTED' || state === 'PENDING') {
@@ -716,14 +1280,26 @@ export function indexLatestGatingReviewsByAuthor(reviews) {
   }
   return index;
 }
-export function indexThreadsByReview(threads) {
-  const index = new Map();
+
+export function indexThreadsByReview(threads: ThreadLike[]) {
+  const index = new Map<
+    string,
+    {
+      total: number;
+      unresolved: number;
+      missingDisposition: number;
+      incomplete: boolean;
+      threadIds: (string | null | undefined)[];
+    }
+  >();
+
   for (const thread of threads) {
     const reviewIds = new Set(
       (thread.comments?.nodes ?? [])
         .map((comment) => comment.pullRequestReview?.id)
-        .filter(Boolean),
+        .filter(Boolean) as string[],
     );
+
     for (const reviewId of reviewIds) {
       const current = index.get(reviewId) ?? {
         total: 0,
@@ -746,9 +1322,19 @@ export function indexThreadsByReview(threads) {
       index.set(reviewId, current);
     }
   }
+
   return index;
 }
-export function routeRejectedChangesRequestedReview(input) {
+
+export function routeRejectedChangesRequestedReview(input: {
+  policyConfig?: unknown;
+  reviewState?: string | null;
+  reviewerDisposition?: string | null;
+  maintainerDisposition?: string | null;
+  now?: string | null;
+  rejectionCommentCreatedAt?: string | null;
+  escalationCommentCreatedAt?: string | null;
+}): RouteDecision {
   const escalationPolicy = getReviewEscalationChangesRequestedPolicy(
     input?.policyConfig ?? {},
   );
@@ -758,6 +1344,7 @@ export function routeRejectedChangesRequestedReview(input) {
     firstEscalationWindowMs + postEscalationWindowMs,
   );
   const firstWindowLabel = formatDurationLabel(firstEscalationWindowMs);
+
   const reviewState = String(input.reviewState ?? '');
   if (reviewState !== 'CHANGES_REQUESTED') {
     return {
@@ -765,6 +1352,7 @@ export function routeRejectedChangesRequestedReview(input) {
       reason: 'changes-requested state already cleared',
     };
   }
+
   const reviewerDisposition = String(input.reviewerDisposition ?? 'none');
   if (reviewerDisposition === 'disagreed') {
     return {
@@ -787,6 +1375,7 @@ export function routeRejectedChangesRequestedReview(input) {
         'reviewer agreement alone does not clear a changes-requested state',
     };
   }
+
   const maintainerDisposition = String(input.maintainerDisposition ?? 'none');
   if (maintainerDisposition === 'agreed-state-unchanged') {
     return {
@@ -795,6 +1384,7 @@ export function routeRejectedChangesRequestedReview(input) {
         'maintainer agreement does not clear the original changes-requested state',
     };
   }
+
   const elapsedMs =
     Date.parse(input.now ?? '') -
     Date.parse(input.rejectionCommentCreatedAt ?? '');
@@ -805,12 +1395,14 @@ export function routeRejectedChangesRequestedReview(input) {
         'elapsed time cannot be computed for the rejected changes-requested review',
     };
   }
+
   if (elapsedMs < firstEscalationWindowMs) {
     return {
       route: 'hold-before-escalation',
       reason: `still within the first ${firstWindowLabel} after the rejection reply`,
     };
   }
+
   const escalationElapsedMs =
     Date.parse(input.now ?? '') -
     Date.parse(input.escalationCommentCreatedAt ?? '');
@@ -831,7 +1423,8 @@ export function routeRejectedChangesRequestedReview(input) {
     reason: `the changes-requested review is still blocking after ${totalWindowLabel} with no escalation response`,
   };
 }
-function formatDurationLabel(milliseconds) {
+
+function formatDurationLabel(milliseconds: number): string {
   if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
     return '0 minutes';
   }
@@ -846,10 +1439,35 @@ function formatDurationLabel(milliseconds) {
   const seconds = milliseconds / 1000;
   return `${seconds} second${seconds === 1 ? '' : 's'}`;
 }
-export function diffReviewSnapshot(snapshot, live) {
+
+export function diffReviewSnapshot(
+  snapshot: {
+    headSha?: string | null;
+    maxActivityUpdatedAt?: string | null;
+    totalItemCount?: number | string | null;
+    latestPassingCiCompletedAt?: string | null;
+    latestCiCompletedAt?: string | null;
+  },
+  live: {
+    headSha?: string | null;
+    maxActivityUpdatedAt?: string | null;
+    totalItemCount?: number | string | null;
+    latestPassingCiCompletedAt?: string | null;
+    latestCiCompletedAt?: string | null;
+    ackOnly?: {
+      items?: { kind?: string | null; activityAt?: string | null }[] | null;
+      dispositionsPresent?: boolean | null;
+    } | null;
+    effective?: {
+      maxActivityUpdatedAt?: string | null;
+      totalItemCount?: number | null;
+    } | null;
+  },
+): RouteDecision {
   if (String(live.headSha ?? '') !== String(snapshot.headSha ?? '')) {
     return { route: 'return-to-e1', reason: 'head-changed' };
   }
+
   const snapshotMax = normalizeComparableTimestamp(
     snapshot.maxActivityUpdatedAt,
   );
@@ -909,6 +1527,7 @@ export function diffReviewSnapshot(snapshot, live) {
     }
     ackOnlyApplied = true;
   }
+
   const snapshotCi = normalizeComparableTimestamp(
     snapshot.latestPassingCiCompletedAt ?? snapshot.latestCiCompletedAt,
   );
@@ -921,18 +1540,28 @@ export function diffReviewSnapshot(snapshot, live) {
   if (snapshotCi !== liveCi) {
     return { route: 'return-to-e1', reason: 'ci-pass-drift' };
   }
+
   return {
     route: 'proceed',
     reason: ackOnlyApplied ? 'ack-only-post-disposition' : 'snapshot-current',
   };
 }
-export function classifyReviewThreadForGate(thread, options = {}) {
+
+export function classifyReviewThreadForGate(
+  thread: ThreadLike,
+  options: {
+    iddAgentLogins?: unknown[] | null;
+    prAuthorLogin?: string | null;
+    requiresConversationResolution?: boolean;
+  } = {},
+): ReviewThreadGateClassification {
   if (thread.isResolved) {
     return { classification: 'resolved' };
   }
   if (thread.comments?.pageInfo?.hasNextPage) {
     return { classification: 'actionable-blocking' };
   }
+
   const comments = thread.comments?.nodes ?? [];
   const latestComment = comments.at(-1) ?? null;
   const latestCommentAt = normalizeComparableTimestamp(
@@ -973,25 +1602,38 @@ export function classifyReviewThreadForGate(thread, options = {}) {
       const authorLogin = String(comment.author?.login ?? '').toLowerCase();
       return !iddAgentLogins.has(authorLogin) && authorLogin !== prAuthorLogin;
     });
+
   if (amdAwaitsMaintainer) {
     return { classification: 'amd-blocking' };
   }
+
   if (!(latestIsIddAgent || latestIsPrAuthor)) {
     return { classification: 'actionable-blocking' };
   }
+
   if (reopenedAfterLatestComment) {
     return { classification: 'actionable-blocking' };
   }
+
   if (options.requiresConversationResolution) {
     if (latestIsIddAgent) {
       return { classification: 'conversation-resolve-agent' };
     }
     return { classification: 'conversation-resolve-author' };
   }
+
   return { classification: 'awaiting-reviewer' };
 }
-export function summarizeReviewThreadsForGate(threads, options = {}) {
-  const summary = {
+
+export function summarizeReviewThreadsForGate(
+  threads: ThreadLike[],
+  options: {
+    iddAgentLogins?: unknown[] | null;
+    prAuthorLogin?: string | null;
+    requiresConversationResolution?: boolean;
+  } = {},
+): ReviewThreadsGateSummary {
+  const summary: ReviewThreadsGateSummary = {
     actionableCount: 0,
     awaitingReviewerCount: 0,
     amdBlockingCount: 0,
@@ -999,15 +1641,18 @@ export function summarizeReviewThreadsForGate(threads, options = {}) {
     conversationResolveAuthorCount: 0,
     classifications: [],
   };
+
   for (const thread of threads) {
     const result = classifyReviewThreadForGate(thread, options);
     if (result.classification === 'resolved') {
       continue;
     }
+
     summary.classifications.push({
       id: thread.id,
       classification: result.classification,
     });
+
     if (result.classification === 'actionable-blocking') {
       summary.actionableCount += 1;
       continue;
@@ -1031,16 +1676,22 @@ export function summarizeReviewThreadsForGate(threads, options = {}) {
       summary.conversationResolveAuthorCount += 1;
     }
   }
+
   return summary;
 }
-function inferReviewerReopenedAt(thread) {
+
+function inferReviewerReopenedAt(thread: ThreadLike): string {
   const explicit = String(thread.reviewerReopenedAt ?? '');
   if (isValidIsoTimestamp(explicit)) {
     return explicit;
   }
   return '';
 }
-export function hasFreshDisposition(thread, options = {}) {
+
+export function hasFreshDisposition(
+  thread: ThreadLike,
+  options: { isDispositionAuthor?: (login: string) => boolean } = {},
+): boolean {
   // IMPORTANT: The default disposition-author predicate rejects known bots but accepts any human.
   // For F2/F3 merge-gate contexts (E7 disposition evidence), callers MUST pass
   // options.isDispositionAuthor with an IDD-scoped predicate (e.g., via summarizeDispositionEvidenceForGate).
@@ -1050,7 +1701,7 @@ export function hasFreshDisposition(thread, options = {}) {
   const dispositionAuthorPredicate =
     typeof options.isDispositionAuthor === 'function'
       ? options.isDispositionAuthor
-      : (login) => !isKnownReviewBot(login);
+      : (login: string) => !isKnownReviewBot(login);
   const comments = thread.comments?.nodes ?? [];
   const latestFeedbackAt = maxIsoTimestamp(
     comments
@@ -1066,6 +1717,7 @@ export function hasFreshDisposition(thread, options = {}) {
       .map((comment) => effectiveThreadCommentActivityAt(comment))
       .filter(isValidIsoTimestamp),
   );
+
   return comments.some((comment) => {
     const authorLogin = String(comment.author?.login ?? '')
       .trim()
@@ -1087,24 +1739,31 @@ export function hasFreshDisposition(thread, options = {}) {
     );
   });
 }
-export function isDispositionComment(comment) {
+
+export function isDispositionComment(comment: {
+  body?: string | null;
+}): boolean {
   const body = (comment.body ?? '').trimEnd();
   return body.startsWith('**Accepted**') || body.startsWith('**Rejected**');
 }
-export function isIddDispositionComment(comment) {
+
+export function isIddDispositionComment(comment: CommentLike): boolean {
   const author = comment.author?.login ?? '';
   return isDispositionComment(comment) && !isKnownReviewBot(author);
 }
-export function classifyCiChecks(checks) {
+
+export function classifyCiChecks(checks: CheckLike[]) {
   const normalized = checks.map((check) => ({
     name: check.name,
     state: String(check.state ?? '').toUpperCase(),
     completedAt: check.completedAt ?? null,
   }));
+
   const failed = normalized.filter((check) => check.state === 'FAILURE');
   if (failed.length > 0) {
     return { status: 'failed', failed };
   }
+
   const pending = normalized.filter((check) => {
     return (
       check.state === 'QUEUED' ||
@@ -1115,18 +1774,21 @@ export function classifyCiChecks(checks) {
   if (pending.length > 0) {
     return { status: 'pending', pending };
   }
+
   const passing = normalized.filter((check) => {
     return ['SUCCESS', 'SKIPPED', 'NEUTRAL', 'NOT_APPLICABLE'].includes(
       check.state,
     );
   });
+
   return {
     status: passing.length === normalized.length ? 'success' : 'unknown',
     passing,
     unknown: normalized.filter((check) => !passing.includes(check)),
   };
 }
-export function isCopilotReviewerLogin(login) {
+
+export function isCopilotReviewerLogin(login: unknown): boolean {
   const normalized = String(login ?? '')
     .trim()
     .toLowerCase();
@@ -1135,7 +1797,8 @@ export function isCopilotReviewerLogin(login) {
     normalized.startsWith('copilot-pull-request-reviewer')
   );
 }
-export function findLastCopilotReviewCommit(reviews) {
+
+export function findLastCopilotReviewCommit(reviews: ReviewLike[]): string {
   const latest = reviews
     .filter((review) =>
       isCopilotReviewerLogin(review.user?.login ?? review.author?.login ?? ''),
@@ -1148,9 +1811,13 @@ export function findLastCopilotReviewCommit(reviews) {
       compareIsoTimestamps(left.submittedAt, right.submittedAt),
     )
     .at(-1);
+
   return latest?.commitId ?? '';
 }
-export function isCopilotPending(requestedReviewers) {
+
+export function isCopilotPending(
+  requestedReviewers: RequestedReviewerLike[],
+): boolean {
   return requestedReviewers.some((reviewer) => {
     if (typeof reviewer === 'string') {
       return isCopilotReviewerLogin(reviewer);
@@ -1160,9 +1827,14 @@ export function isCopilotPending(requestedReviewers) {
     );
   });
 }
-export function computeCopilotPendingCoversHead(timelineEvents, prHeadSha) {
+
+export function computeCopilotPendingCoversHead(
+  timelineEvents: TimelineEventLike[],
+  prHeadSha: string,
+): boolean {
   let headIndex = -1;
   let requestIndex = -1;
+
   timelineEvents.forEach((event, index) => {
     const eventName = String(event?.event ?? '');
     if (eventName === 'committed') {
@@ -1172,6 +1844,7 @@ export function computeCopilotPendingCoversHead(timelineEvents, prHeadSha) {
       }
       return;
     }
+
     if (eventName === 'review_requested') {
       const reviewerLogin = event?.requested_reviewer?.login ?? '';
       if (isCopilotReviewerLogin(reviewerLogin)) {
@@ -1179,9 +1852,13 @@ export function computeCopilotPendingCoversHead(timelineEvents, prHeadSha) {
       }
     }
   });
+
   return headIndex !== -1 && requestIndex !== -1 && requestIndex > headIndex;
 }
-export function normalizeTrustedMarkerLogins(logins) {
+
+export function normalizeTrustedMarkerLogins(
+  logins: unknown[] | null | undefined,
+): string[] {
   return [
     ...new Set(
       (logins ?? [])
@@ -1194,6 +1871,7 @@ export function normalizeTrustedMarkerLogins(logins) {
     ),
   ].sort();
 }
+
 /**
  * Resolve the trusted marker actors for a read-only evidence helper.
  *
@@ -1208,7 +1886,11 @@ export function resolveTrustedMarkerActors({
   flagValue = '',
   envValue = '',
   config = null,
-} = {}) {
+}: {
+  flagValue?: string | string[];
+  envValue?: string | string[];
+  config?: { trustedMarkerActors?: unknown } | null;
+} = {}): TrustedMarkerActorResolution {
   const fromFlag = normalizeTrustedMarkerLogins(
     trustedMarkerActorTokens(flagValue),
   );
@@ -1231,17 +1913,24 @@ export function resolveTrustedMarkerActors({
   }
   return { actors: [], source: 'none' };
 }
-function trustedMarkerActorTokens(value) {
+
+function trustedMarkerActorTokens(value: unknown): unknown[] {
   return Array.isArray(value) ? value : String(value ?? '').split(',');
 }
+
 export function unionTrustedMarkerActorSources({
   envValue = '',
   config = null,
   extraActors = [],
   extraSource = '',
-} = {}) {
-  const sources = [];
-  const actors = [];
+}: {
+  envValue?: string | string[];
+  config?: { trustedMarkerActors?: unknown } | null;
+  extraActors?: unknown[];
+  extraSource?: string;
+} = {}): TrustedMarkerActorSourceMix {
+  const sources: string[] = [];
+  const actors: string[] = [];
   const extras = normalizeTrustedMarkerLogins(extraActors);
   if (extras.length > 0) {
     actors.push(...extras);
@@ -1267,11 +1956,16 @@ export function unionTrustedMarkerActorSources({
   }
   return { actors: normalizeTrustedMarkerLogins(actors), sources };
 }
+
 export function resolveAdvisoryBotLogins({
   flagValue = '',
   envValue = '',
   config = null,
-} = {}) {
+}: {
+  flagValue?: string | string[];
+  envValue?: string | string[];
+  config?: { advisoryBotLogins?: unknown } | null;
+} = {}): AdvisoryBotLoginResolution {
   const fromFlag = normalizeTrustedMarkerLogins(
     trustedMarkerActorTokens(flagValue),
   );
@@ -1292,16 +1986,23 @@ export function resolveAdvisoryBotLogins({
   }
   return { logins: [], source: 'none' };
 }
+
 export function deriveIddAgentLogins({
   viewerLogin = '',
   iddAgentLogins = [],
   trustedMarkerLogins = [],
   operationalComments = [],
-} = {}) {
+}: {
+  viewerLogin?: string;
+  iddAgentLogins?: unknown[] | null;
+  trustedMarkerLogins?: unknown[] | null;
+  operationalComments?: CommentLike[] | null;
+} = {}): string[] {
   const trustedLogins = new Set(
     normalizeTrustedMarkerLogins(trustedMarkerLogins),
   );
   const derivedLogins = [viewerLogin, ...(iddAgentLogins ?? [])];
+
   for (const comment of operationalComments ?? []) {
     const authorLogin = String(
       comment?.author?.login ?? comment?.user?.login ?? '',
@@ -1319,13 +2020,15 @@ export function deriveIddAgentLogins({
     }
     derivedLogins.push(authorLogin);
   }
+
   return normalizeTrustedMarkerLogins(derivedLogins);
 }
+
 export function summarizeAdvisoryWaitMarkers(
-  comments,
-  prHeadSha,
-  trustedMarkerLogins,
-) {
+  comments: CommentLike[],
+  prHeadSha: string,
+  trustedMarkerLogins: unknown[] | null | undefined,
+): AdvisoryWaitMarkerSummary {
   const trustedLogins = new Set(
     normalizeTrustedMarkerLogins(trustedMarkerLogins),
   );
@@ -1334,6 +2037,7 @@ export function summarizeAdvisoryWaitMarkers(
   let trustedRequestMarkerCount = 0;
   let untrustedSameHeadMarkerCount = 0;
   let untrustedRequestMarkerCount = 0;
+
   for (const comment of comments) {
     const body = String(comment?.body ?? '').trimEnd();
     const login = String(comment?.author?.login ?? comment?.user?.login ?? '')
@@ -1342,6 +2046,7 @@ export function summarizeAdvisoryWaitMarkers(
     const trusted = trustedLogins.has(login);
     const isSameHeadMarker = advisoryWaitMarkerMatchesHead(body, prHeadSha);
     const isRequestMarker = advisoryWaitRequestMarker(body);
+
     if (isSameHeadMarker) {
       if (trusted) {
         trustedSameHeadMarkerCount += 1;
@@ -1359,6 +2064,7 @@ export function summarizeAdvisoryWaitMarkers(
         untrustedSameHeadMarkerCount += 1;
       }
     }
+
     if (isRequestMarker) {
       if (trusted) {
         trustedRequestMarkerCount += 1;
@@ -1367,6 +2073,7 @@ export function summarizeAdvisoryWaitMarkers(
       }
     }
   }
+
   return {
     sameHeadMarkerPresent: trustedSameHeadMarkerCount > 0,
     earliestSameHeadAt,
@@ -1378,12 +2085,17 @@ export function summarizeAdvisoryWaitMarkers(
     untrustedRequestMarkerCount,
   };
 }
-export function evaluateAdvisoryWaitOutcome(input) {
+
+export function evaluateAdvisoryWaitOutcome(
+  input: AdvisoryWaitOutcomeInput,
+): string {
   const { requestCap, pendingWindowMinutes, settledWindowMinutes } =
     normalizeAdvisoryWaitRuntimeOptions(input);
+
   if (input.lastCopilotCommit === input.prHeadSha) {
     return 'SATISFIED';
   }
+
   if (input.copilotPending) {
     if (!input.sameHeadMarkerPresent) {
       return input.copilotPendingCoversHead
@@ -1394,19 +2106,25 @@ export function evaluateAdvisoryWaitOutcome(input) {
     }
     return input.elapsedMinutes >= pendingWindowMinutes ? 'SATISFIED' : 'WAIT';
   }
+
   if (!input.sameHeadMarkerPresent) {
     return input.requestMarkerCount >= requestCap
       ? 'CAP_EXHAUSTED'
       : 'REQUEST_NEEDED';
   }
+
   return input.elapsedMinutes >= settledWindowMinutes ? 'SATISFIED' : 'WAIT';
 }
-export function evaluateAdvisoryWaitF3Outcome(input) {
+
+export function evaluateAdvisoryWaitF3Outcome(
+  input: AdvisoryWaitOutcomeInput,
+): string {
   if (input.lastCopilotCommit === input.prHeadSha || !input.copilotPending) {
     return 'SATISFIED';
   }
   return evaluateAdvisoryWaitOutcome(input);
 }
+
 export function buildAdvisoryWaitSummary(
   {
     prHeadSha,
@@ -1414,8 +2132,25 @@ export function buildAdvisoryWaitSummary(
     requestedReviewers = [],
     timelineEvents = [],
     comments = [],
+  }: {
+    prHeadSha: string;
+    reviews?: ReviewLike[];
+    requestedReviewers?: RequestedReviewerLike[];
+    timelineEvents?: TimelineEventLike[];
+    comments?: CommentLike[];
   },
-  options = {},
+  options: {
+    now?: string;
+    trustedMarkerLogins?: unknown[] | null;
+    configuredTrustedActors?: unknown[] | null;
+    viewerLogin?: string | null;
+    collaboratorTrustEnabled?: boolean;
+    requestCap?: number;
+    pendingWindowMinutes?: number;
+    settledWindowMinutes?: number;
+    pollIntervalMinutes?: number;
+    capExhaustedRoute?: string;
+  } = {},
 ) {
   const now = String(options.now ?? '');
   if (!isValidIsoTimestamp(now)) {
@@ -1424,6 +2159,7 @@ export function buildAdvisoryWaitSummary(
   if (!/^[0-9a-f]{40}$/.test(String(prHeadSha ?? ''))) {
     throw new Error('prHeadSha must be a 40-character lowercase commit SHA');
   }
+
   const trustedMarkerLogins = normalizeTrustedMarkerLogins(
     options.trustedMarkerLogins ?? [],
   );
@@ -1451,6 +2187,7 @@ export function buildAdvisoryWaitSummary(
     pollIntervalMinutes,
     capExhaustedRoute,
   } = normalizeAdvisoryWaitRuntimeOptions(options);
+
   return {
     protocolVersion: '1',
     prHeadSha,
@@ -1506,9 +2243,25 @@ export function buildAdvisoryWaitSummary(
     },
   };
 }
+
 export function buildActivitySnapshotSummary(
-  { comments = [], reviews = [], threads = [], checks = [] },
-  options = {},
+  {
+    comments = [],
+    reviews = [],
+    threads = [],
+    checks = [],
+  }: {
+    comments?: CommentLike[];
+    reviews?: ReviewLike[];
+    threads?: ThreadLike[];
+    checks?: CheckLike[];
+  },
+  options: {
+    trustedMarkerLogins?: unknown[] | null;
+    advisoryBotLogins?: unknown[] | null;
+    dispositionAuthorLogins?: unknown[] | null;
+    advisoryBotLoginsSource?: unknown;
+  } = {},
 ) {
   const trustedMarkerLogins = new Set(
     (options.trustedMarkerLogins ?? [])
@@ -1531,24 +2284,26 @@ export function buildActivitySnapshotSummary(
   for (const login of advisoryBotLogins) {
     dispositionAuthorLogins.delete(login);
   }
-  const isAdvisoryBot = (login) =>
+  const isAdvisoryBot = (login: unknown) =>
     advisoryBotLogins.has(
       String(login ?? '')
         .trim()
         .toLowerCase(),
     );
-  const isDispositionAuthor = (login) =>
+  const isDispositionAuthor = (login: unknown) =>
     dispositionAuthorLogins.has(
       String(login ?? '')
         .trim()
         .toLowerCase(),
     );
+
   const filteredComments = comments.filter((comment) => {
     if (!trustedMarkerLogins.has((comment.author?.login ?? '').toLowerCase())) {
       return true;
     }
     return operationalMarkerPrefixByStart(comment.body ?? '') === null;
   });
+
   // Structural ack-only evidence (#858): the posting moment of the latest
   // disposition by a configured disposition author opens the window;
   // comments and resolved-thread replies are classified per item below.
@@ -1574,7 +2329,8 @@ export function buildActivitySnapshotSummary(
     ),
   ].filter(isValidIsoTimestamp);
   const latestDispositionAt = maxIsoTimestamp(dispositionCreatedAts) ?? null;
-  const isAckOnlyComment = (comment) => {
+
+  const isAckOnlyComment = (comment: CommentLike) => {
     if (!latestDispositionAt) {
       return false;
     }
@@ -1592,6 +2348,7 @@ export function buildActivitySnapshotSummary(
   };
   const ackOnlyComments = filteredComments.filter(isAckOnlyComment);
   const ackOnlyCommentSet = new Set(ackOnlyComments);
+
   // On a resolved thread whose latest reply chain contains a disposition,
   // later advisory-bot replies are structurally ack-only; the effective
   // thread activity is recomputed from the remaining replies. Reopened
@@ -1646,6 +2403,7 @@ export function buildActivitySnapshotSummary(
   const ackOnlyThreadReplies = threadEffective.flatMap(
     (entry) => entry.ackReplies,
   );
+
   const commentActivities = filteredComments
     .map((comment) => comment.updatedAt ?? comment.createdAt)
     .filter(isValidIsoTimestamp);
@@ -1655,10 +2413,12 @@ export function buildActivitySnapshotSummary(
   const threadActivities = threads
     .map((thread) => threadActivityAt(thread))
     .filter(isValidIsoTimestamp);
+
   const latestCiCompletedAt =
     maxIsoTimestamp(
       checks.map((check) => check.completedAt).filter(isCompletedCiTimestamp),
     ) ?? 'none';
+
   const latestPassingCiCompletedAt =
     maxIsoTimestamp(
       checks
@@ -1671,12 +2431,14 @@ export function buildActivitySnapshotSummary(
         .map((check) => check.completedAt)
         .filter(isCompletedCiTimestamp),
     ) ?? 'none';
+
   const maxActivityUpdatedAt =
     maxIsoTimestamp([
       ...commentActivities,
       ...reviewActivities,
       ...threadActivities,
     ]) ?? 'none';
+
   const effectiveCommentActivities = filteredComments
     .filter((comment) => !ackOnlyCommentSet.has(comment))
     .map((comment) => comment.updatedAt ?? comment.createdAt)
@@ -1690,7 +2452,12 @@ export function buildActivitySnapshotSummary(
       ...reviewActivities,
       ...effectiveThreadActivities,
     ]) ?? 'none';
-  const describeAckItem = (kind, comment, activityAt) => ({
+
+  const describeAckItem = (
+    kind: string,
+    comment: CommentLike | ThreadCommentLike,
+    activityAt: unknown,
+  ) => ({
     kind,
     id: String(comment.id ?? ''),
     author: String(comment.author?.login ?? '')
@@ -1699,6 +2466,7 @@ export function buildActivitySnapshotSummary(
     activityAt: isValidIsoTimestamp(activityAt) ? activityAt : 'none',
     bodyPreview: String(comment.body ?? '').slice(0, 120),
   });
+
   return {
     totalItemCount: filteredComments.length + reviews.length + threads.length,
     maxActivityUpdatedAt,
@@ -1741,14 +2509,23 @@ export function buildActivitySnapshotSummary(
     },
   };
 }
-export function resolveLatestReviewWatermark(comments, options = {}) {
+
+export function resolveLatestReviewWatermark(
+  comments: CommentLike[],
+  options: {
+    expectedClaimId?: unknown;
+    isTrustedAuthor?: (login: string) => boolean;
+  } = {},
+): ParsedReviewWatermark | null {
   const expectedClaimId = String(options.expectedClaimId ?? '').trim();
   const isTrustedAuthor = options.isTrustedAuthor ?? (() => true);
-  let latest = null;
+
+  let latest: ParsedReviewWatermark | null = null;
   for (const comment of comments) {
     if (!isTrustedAuthor(comment.author?.login ?? comment.user?.login ?? '')) {
       continue;
     }
+
     const parsed = parseReviewWatermarkComment(
       comment.body ?? '',
       comment.createdAt ?? comment.created_at ?? '',
@@ -1774,9 +2551,19 @@ export function resolveLatestReviewWatermark(comments, options = {}) {
       latest = parsed;
     }
   }
+
   return latest;
 }
-export function summarizeRegularCommentsForGate(comments, options = {}) {
+
+export function summarizeRegularCommentsForGate(
+  comments: CommentLike[],
+  options: {
+    iddAgentLogins?: unknown[] | null;
+    advisoryBotLogins?: unknown[] | null;
+    trustedMarkerLogins?: unknown[] | null;
+    threads?: ThreadLike[] | null;
+  } = {},
+): RegularCommentsGateSummary {
   const iddAgentLogins = new Set(
     normalizeTrustedMarkerLogins(options.iddAgentLogins ?? []),
   );
@@ -1787,6 +2574,7 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
     normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
   );
   const threads = Array.isArray(options.threads) ? options.threads : [];
+
   const normalized = comments
     .map((comment, inputIndex) => ({
       id: String(comment.id ?? ''),
@@ -1812,6 +2600,7 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
       return left.inputIndex - right.inputIndex;
     })
     .map((comment, sortedIndex) => ({ ...comment, sortedIndex }));
+
   const lastIddReplyAt = normalized.reduce((latestTimestamp, comment) => {
     if (
       isOperationalOrDigestCommentForGate(
@@ -1831,11 +2620,13 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
     }
     return latestTimestamp;
   }, '');
+
   const classificationComments = normalized.map((comment) => ({
     author: { login: comment.authorLogin },
     body: comment.body,
     createdAt: comment.createdAt,
   }));
+
   const items = normalized
     .filter(
       (comment) =>
@@ -1873,15 +2664,25 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
       createdAt: comment.createdAt,
       bodyPreview: buildBodyPreview(comment.body),
     }));
+
   return {
     count: items.length,
     items,
   };
 }
+
 export function summarizeDispositionEvidenceForGate(
-  { comments = [], threads = [] },
-  options = {},
-) {
+  {
+    comments = [],
+    threads = [],
+  }: { comments?: CommentLike[]; threads?: ThreadLike[] },
+  options: {
+    iddAgentLogins?: unknown[] | null;
+    advisoryBotLogins?: unknown[] | null;
+    trustedMarkerLogins?: unknown[] | null;
+    prAuthorLogin?: string | null;
+  } = {},
+): DispositionEvidenceSummary {
   const iddAgentLogins = new Set(
     normalizeTrustedMarkerLogins(options.iddAgentLogins ?? []),
   );
@@ -1894,6 +2695,7 @@ export function summarizeDispositionEvidenceForGate(
   const prAuthorLogin = String(options.prAuthorLogin ?? '')
     .trim()
     .toLowerCase();
+
   const normalizedComments = comments
     .map((comment, inputIndex) => ({
       id: String(comment.id ?? ''),
@@ -1919,11 +2721,13 @@ export function summarizeDispositionEvidenceForGate(
       return left.inputIndex - right.inputIndex;
     })
     .map((comment, sortedIndex) => ({ ...comment, sortedIndex }));
+
   const classificationComments = normalizedComments.map((comment) => ({
     author: { login: comment.authorLogin },
     body: comment.body,
     createdAt: comment.createdAt,
   }));
+
   const missingRegularComments = normalizedComments
     .filter(
       (comment) =>
@@ -1965,6 +2769,7 @@ export function summarizeDispositionEvidenceForGate(
       createdAt: comment.createdAt,
       bodyPreview: buildBodyPreview(comment.body),
     }));
+
   const missingThreads = (threads ?? [])
     .map((thread, index) => {
       const commentsInThread = thread.comments?.nodes ?? [];
@@ -2008,7 +2813,8 @@ export function summarizeDispositionEvidenceForGate(
           : 'unresolved-without-fresh-disposition',
       };
     })
-    .filter(Boolean);
+    .filter(Boolean) as DispositionEvidenceSummary['missingThreads'];
+
   const blockingCount = missingRegularComments.length + missingThreads.length;
   return {
     route: blockingCount > 0 ? 'return-to-e1' : 'proceed',
@@ -2020,22 +2826,25 @@ export function summarizeDispositionEvidenceForGate(
     missingThreads,
   };
 }
+
 export function summarizeBranchReviewRequirements(
-  branchRules = [],
-  branchProtection = {},
+  branchRules: BranchRuleLike[] = [],
+  branchProtection: BranchProtectionLike = {},
 ) {
-  const requiredCheckNames = new Set();
-  const requiredReviewerLogins = new Set();
-  const requiredReviewerTeams = new Set();
-  const requiredReviewerRequirements = [];
-  const classicBypassPullRequestUserLogins = new Set();
-  const classicBypassPullRequestTeamSlugs = new Set();
-  const classicBypassPullRequestAppSlugs = new Set();
+  const requiredCheckNames = new Set<string>();
+  const requiredReviewerLogins = new Set<string>();
+  const requiredReviewerTeams = new Set<string>();
+  const requiredReviewerRequirements: ReviewerRequirement[] = [];
+  const classicBypassPullRequestUserLogins = new Set<string>();
+  const classicBypassPullRequestTeamSlugs = new Set<string>();
+  const classicBypassPullRequestAppSlugs = new Set<string>();
+
   let requiredApprovingReviewCount = 0;
   let requireCodeOwnerReview = false;
   let classicRequireCodeOwnerReview = false;
   let requiresConversationResolution = false;
   let requiredCheckSourcePinned = false;
+
   for (const rule of branchRules) {
     if (rule?.type === 'pull_request') {
       const parameters = rule.parameters ?? {};
@@ -2048,6 +2857,7 @@ export function summarizeBranchReviewRequirements(
       requiresConversationResolution =
         requiresConversationResolution ||
         Boolean(parameters.required_review_thread_resolution);
+
       for (const reviewer of parameters.required_reviewers ?? []) {
         const requirement = extractRequiredReviewerRequirement(reviewer);
         if (!requirement.identity) {
@@ -2062,6 +2872,7 @@ export function summarizeBranchReviewRequirements(
       }
       continue;
     }
+
     if (rule?.type === 'required_status_checks') {
       const checkMetadata = summarizeRequiredCheckMetadata(
         rule.parameters ?? {},
@@ -2073,10 +2884,12 @@ export function summarizeBranchReviewRequirements(
       }
       continue;
     }
+
     if (rule?.type === 'workflows') {
       requiredCheckSourcePinned = true;
     }
   }
+
   const protectionReviews =
     branchProtection.required_pull_request_reviews ?? {};
   classicRequireCodeOwnerReview =
@@ -2112,6 +2925,7 @@ export function summarizeBranchReviewRequirements(
   requiresConversationResolution =
     requiresConversationResolution ||
     Boolean(branchProtection.required_conversation_resolution?.enabled);
+
   const protectionCheckMetadata = summarizeRequiredCheckMetadata(
     branchProtection.required_status_checks ?? {},
   );
@@ -2120,6 +2934,7 @@ export function summarizeBranchReviewRequirements(
   for (const name of protectionCheckMetadata.names) {
     requiredCheckNames.add(name);
   }
+
   return {
     requiredApprovingReviewCount,
     requireCodeOwnerReview,
@@ -2141,11 +2956,16 @@ export function summarizeBranchReviewRequirements(
     requiredCheckNames: [...requiredCheckNames].sort(),
   };
 }
+
 export function summarizeRequiredChecks(
-  checks = [],
-  branchRules = [],
-  branchProtection = {},
-  { waivers = null } = {},
+  checks: CheckLike[] = [],
+  branchRules: BranchRuleLike[] = [],
+  branchProtection: BranchProtectionLike = {},
+  {
+    waivers = null,
+  }: {
+    waivers?: { valid?: { checkSelector?: unknown }[] | null } | null;
+  } = {},
 ) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(
     branchRules,
@@ -2160,6 +2980,7 @@ export function summarizeRequiredChecks(
     'NEUTRAL',
     'NOT_APPLICABLE',
   ]);
+
   const normalizedChecks = checks.map((check) => {
     const name = String(check.name ?? '');
     const state = String(check.state ?? '').toUpperCase();
@@ -2173,6 +2994,7 @@ export function summarizeRequiredChecks(
       coveredByWaiver,
     };
   });
+
   const matchedRequiredChecks = normalizedChecks.filter((check) =>
     requiredCheckNameSet.has(check.name),
   );
@@ -2182,6 +3004,7 @@ export function summarizeRequiredChecks(
   const missingRequiredCheckNames = requiredCheckNames.filter(
     (name) => !presentNames.has(name),
   );
+
   let status = 'unknown';
   if (requiredCheckNames.length > 0) {
     const effectiveChecks = matchedRequiredChecks.map((c) =>
@@ -2199,6 +3022,7 @@ export function summarizeRequiredChecks(
       status = 'unknown';
     }
   }
+
   return {
     status,
     noRequiredChecksConfigured:
@@ -2224,11 +3048,19 @@ export function summarizeRequiredChecks(
     })),
   };
 }
+
 // Conclusion over *all* present check runs (waiver-covered runs count as
 // skipped), used for the F2 fallback when no required checks are configured:
 // an unprotected branch must not satisfy CI vacuously, so the gate inspects the
 // real run conclusions instead.
-function resolvePresentRunConclusion(normalizedChecks) {
+function resolvePresentRunConclusion(
+  normalizedChecks: {
+    name: string;
+    state: string;
+    completedAt: string;
+    coveredByWaiver: boolean;
+  }[],
+): string {
   if (normalizedChecks.length === 0) {
     return 'none';
   }
@@ -2244,11 +3076,16 @@ function resolvePresentRunConclusion(normalizedChecks) {
   }
   return 'some-failing';
 }
-export function resolveCodeownersForFiles(codeownersText, changedFiles = []) {
+
+export function resolveCodeownersForFiles(
+  codeownersText: unknown,
+  changedFiles: unknown[] = [],
+) {
   const rules = parseCodeownersRules(codeownersText);
   return collectCodeownersForFiles(rules, changedFiles);
 }
-export function selectCodeownersText(payloads = []) {
+
+export function selectCodeownersText(payloads: unknown[] = []): string {
   for (const payload of payloads) {
     if (
       !payload ||
@@ -2257,21 +3094,29 @@ export function selectCodeownersText(payloads = []) {
     ) {
       continue;
     }
-    const content = String(payload.content ?? '').replace(/\n/g, '');
+    const content = String(
+      (payload as { content?: unknown }).content ?? '',
+    ).replace(/\n/g, '');
     return Buffer.from(content, 'base64').toString('utf8');
   }
   return '';
 }
-function collectCodeownersForFiles(rules, changedFiles = []) {
-  const codeownerUsers = new Set();
-  const codeownerTeams = new Set();
-  const codeownerEmails = new Set();
-  const unmatchedFiles = [];
+
+function collectCodeownersForFiles(
+  rules: CodeownersRule[],
+  changedFiles: unknown[] = [],
+) {
+  const codeownerUsers = new Set<string>();
+  const codeownerTeams = new Set<string>();
+  const codeownerEmails = new Set<string>();
+  const unmatchedFiles: string[] = [];
+
   for (const filePath of changedFiles) {
     const normalizedPath = String(filePath ?? '').replace(/^\/+/, '');
     if (!normalizedPath) {
       continue;
     }
+
     const owners = findCodeownersForPath(rules, normalizedPath);
     if (!owners) {
       unmatchedFiles.push(normalizedPath);
@@ -2280,6 +3125,7 @@ function collectCodeownersForFiles(rules, changedFiles = []) {
     if (!hasCodeownerOwners(owners)) {
       continue;
     }
+
     for (const owner of owners.users) {
       codeownerUsers.add(owner);
     }
@@ -2290,6 +3136,7 @@ function collectCodeownersForFiles(rules, changedFiles = []) {
       codeownerEmails.add(owner);
     }
   }
+
   return {
     ruleCount: rules.length,
     changedFileCount: changedFiles.length,
@@ -2299,8 +3146,9 @@ function collectCodeownersForFiles(rules, changedFiles = []) {
     codeownerEmailAddresses: [...codeownerEmails].sort(),
   };
 }
+
 export function summarizeReviewerStates(
-  reviews = [],
+  reviews: ReviewLike[] = [],
   {
     reviewDecision = '',
     branchRules = [],
@@ -2314,6 +3162,19 @@ export function summarizeReviewerStates(
     viewerLogin = '',
     viewerTeamSlugs = [],
     viewerAppSlug = '',
+  }: {
+    reviewDecision?: string | null;
+    branchRules?: BranchRuleLike[];
+    branchRulesets?: BranchRulesetLike[];
+    branchProtection?: BranchProtectionLike;
+    codeownersText?: string;
+    changedFiles?: unknown[];
+    eligibleCodeownerUserLogins?: unknown[] | null;
+    advisoryBotLogins?: unknown[];
+    prAuthorLogin?: string | null;
+    viewerLogin?: string | null;
+    viewerTeamSlugs?: unknown[];
+    viewerAppSlug?: string | null;
   } = {},
 ) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(
@@ -2338,6 +3199,7 @@ export function summarizeReviewerStates(
           ),
         );
   const normalizedReviewDecision = String(reviewDecision ?? '');
+
   const latestByAuthor = [...indexLatestGatingReviewsByAuthor(reviews).values()]
     .map((review) => {
       const login = String(review.author?.login ?? '')
@@ -2357,11 +3219,13 @@ export function summarizeReviewerStates(
       };
     })
     .sort((left, right) => left.login.localeCompare(right.login));
+
   const blockingChangesRequestedLogins = latestByAuthor
     .filter((review) => {
       return review.state === 'CHANGES_REQUESTED' && !review.isAdvisoryBot;
     })
     .map((review) => review.login);
+
   const humanApprovedCount = latestByAuthor.filter((review) => {
     return review.isHuman && review.state === 'APPROVED';
   }).length;
@@ -2434,6 +3298,7 @@ export function summarizeReviewerStates(
     classicBypassPullRequestAppSlugs:
       branchReviewRequirements.classicBypassPullRequestAppSlugs,
   });
+
   return {
     reviewDecision: normalizedReviewDecision,
     requiredApprovingReviewCount:
@@ -2465,6 +3330,7 @@ export function summarizeReviewerStates(
     blockingChangesRequestedLogins,
   };
 }
+
 function summarizeCodeownerSelfApproval({
   requireCodeOwnerReview,
   codeownerApprovalSatisfied,
@@ -2483,6 +3349,24 @@ function summarizeCodeownerSelfApproval({
   classicBypassPullRequestUserLogins = [],
   classicBypassPullRequestTeamSlugs = [],
   classicBypassPullRequestAppSlugs = [],
+}: {
+  requireCodeOwnerReview: boolean;
+  codeownerApprovalSatisfied: boolean;
+  hasExplicitCodeownerMatches: boolean;
+  codeownerUserLogins?: unknown[];
+  eligibleCodeownerUserLogins?: unknown[] | null;
+  codeownerTeamSlugs?: unknown[];
+  codeownerEmailAddresses?: unknown[];
+  prAuthorLogin?: string | null;
+  viewerLogin?: string | null;
+  viewerTeamSlugs?: unknown[];
+  viewerAppSlug?: string | null;
+  branchRules?: BranchRuleLike[];
+  branchRulesets?: BranchRulesetLike[];
+  classicRequireCodeOwnerReview?: boolean;
+  classicBypassPullRequestUserLogins?: unknown[];
+  classicBypassPullRequestTeamSlugs?: unknown[];
+  classicBypassPullRequestAppSlugs?: unknown[];
 }) {
   const normalizedAuthor = String(prAuthorLogin ?? '')
     .trim()
@@ -2550,6 +3434,7 @@ function summarizeCodeownerSelfApproval({
     bypassMode: applicableBypassMode,
     currentUserCanBypass: bypass.currentUserCanBypass,
   };
+
   if (!requireCodeOwnerReview) {
     return base;
   }
@@ -2582,6 +3467,7 @@ function summarizeCodeownerSelfApproval({
       reason: 'pr-author-unknown',
     };
   }
+
   const allDirectUsersAreAuthor =
     eligibleDirectCodeownerUserLogins.length > 0 &&
     eligibleDirectCodeownerUserLogins.every(
@@ -2590,6 +3476,7 @@ function summarizeCodeownerSelfApproval({
   const hasNonAuthorDirectUser = eligibleDirectCodeownerUserLogins.some(
     (login) => login !== normalizedAuthor,
   );
+
   if (hasNonAuthorDirectUser) {
     return {
       ...base,
@@ -2621,15 +3508,17 @@ function summarizeCodeownerSelfApproval({
           : 'pr-author-is-only-eligible-direct-codeowner',
     };
   }
+
   return {
     ...base,
     status: 'possible_deadlock',
     reason: 'no-reviewable-codeowner-identity',
   };
 }
+
 function summarizeRulesetPullRequestBypass(
-  branchRulesets = [],
-  branchRules = [],
+  branchRulesets: BranchRulesetLike[] = [],
+  branchRules: BranchRuleLike[] = [],
 ) {
   const codeownerRulesetIds = new Set(
     (branchRules ?? [])
@@ -2695,7 +3584,13 @@ function summarizeRulesetPullRequestBypass(
     relevantRulesetCount: expectedRulesetCount,
   };
 }
-export function resolveRulesetDetailPath(owner, repo, rule, rulesetId) {
+
+export function resolveRulesetDetailPath(
+  owner: string,
+  repo: string,
+  rule: BranchRuleLike | null | undefined,
+  rulesetId: unknown,
+): string {
   const sourceType = String(
     rule?.ruleset_source_type ?? rule?.source_type ?? '',
   )
@@ -2715,7 +3610,28 @@ export function resolveRulesetDetailPath(owner, repo, rule, rulesetId) {
   }
   return `repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/rulesets/${rulesetId}`;
 }
-export function summarizeClaimValidation(claimEvents = [], options = {}) {
+
+export function summarizeClaimValidation(
+  claimEvents: CommentLike[] = [],
+  options: {
+    trustedMarkerLogins?: unknown[] | null;
+    authorizedForcedHandoffLogins?: unknown[] | null;
+    expectedLinkedPrs?: unknown[] | null;
+    expectedClaimId?: unknown;
+    expectedAgentId?: unknown;
+    isTrustedAuthor?: (login: string) => boolean;
+    forcedHandoffEnabled?: boolean;
+    isForcedHandoffEnabled?: (
+      forcedHandoff: ParsedForcedHandoffMarker,
+      event: CommentLike,
+    ) => boolean;
+    isAuthorizedForcedHandoff?: (
+      forcedBy: string,
+      forcedHandoff: ParsedForcedHandoffMarker,
+      event: CommentLike,
+    ) => boolean;
+  } = {},
+): ClaimValidationSummary {
   const trustedMarkerLogins = new Set(
     normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
   );
@@ -2732,18 +3648,19 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
   const trustedAuthorPredicate =
     typeof options.isTrustedAuthor === 'function'
       ? options.isTrustedAuthor
-      : (login) =>
+      : (login: string) =>
           trustedMarkerLogins.has(
             String(login ?? '')
               .trim()
               .toLowerCase(),
           );
+
   const activeClaim = resolveActiveClaim(claimEvents, {
     isTrustedAuthor: trustedAuthorPredicate,
     isForcedHandoffEnabled:
       typeof options.isForcedHandoffEnabled === 'function'
         ? options.isForcedHandoffEnabled
-        : (forcedHandoff) => {
+        : (forcedHandoff: ParsedForcedHandoffMarker) => {
             if (options.forcedHandoffEnabled !== true) {
               return false;
             }
@@ -2760,7 +3677,7 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
     isAuthorizedForcedHandoff:
       typeof options.isAuthorizedForcedHandoff === 'function'
         ? options.isAuthorizedForcedHandoff
-        : (forcedBy) => {
+        : (forcedBy: string) => {
             if (authorizedForcedHandoffLogins.size === 0) {
               return false;
             }
@@ -2771,6 +3688,7 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
             );
           },
   });
+
   let reason = 'match';
   if (!activeClaim) {
     reason = 'missing-active-claim';
@@ -2779,6 +3697,7 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
   } else if (expectedAgentId && activeClaim.agentId !== expectedAgentId) {
     reason = 'agent-id-mismatch';
   }
+
   return {
     expectedClaimId,
     expectedAgentId,
@@ -2795,6 +3714,7 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
     reason,
   };
 }
+
 export function buildPreMergeReadinessSummary(
   {
     prHeadSha,
@@ -2812,8 +3732,57 @@ export function buildPreMergeReadinessSummary(
     codeownersText = '',
     eligibleCodeownerUserLogins = null,
     reviewDecision = '',
+  }: {
+    prHeadSha: string;
+    comments?: CommentLike[];
+    reviews?: ReviewLike[];
+    threads?: ThreadLike[];
+    checks?: CheckLike[];
+    branchRules?: BranchRuleLike[];
+    branchRulesets?: BranchRulesetLike[];
+    branchProtection?: BranchProtectionLike;
+    requestedReviewers?: RequestedReviewerLike[];
+    timelineEvents?: TimelineEventLike[];
+    claimEvents?: CommentLike[];
+    changedFiles?: unknown[];
+    codeownersText?: string;
+    eligibleCodeownerUserLogins?: unknown[] | null;
+    reviewDecision?: string | null;
   },
-  options = {},
+  options: {
+    now?: string;
+    trustedMarkerLogins?: unknown[] | null;
+    iddAgentLogins?: unknown[] | null;
+    advisoryBotLogins?: unknown[] | null;
+    advisoryBotLoginsSource?: unknown;
+    prAuthorLogin?: string | null;
+    expectedClaimId?: unknown;
+    expectedAgentId?: unknown;
+    viewerLogin?: string | null;
+    viewerTeamSlugs?: unknown[];
+    viewerAppSlug?: string | null;
+    collaboratorTrustEnabled?: boolean;
+    configuredTrustedActors?: unknown[] | null;
+    forcedHandoffEnabled?: boolean;
+    expectedLinkedPrs?: unknown[] | null;
+    authorizedForcedHandoffLogins?: unknown[] | null;
+    isAuthorizedForcedHandoff?: (
+      forcedBy: string,
+      forcedHandoff: ParsedForcedHandoffMarker,
+      event: CommentLike,
+    ) => boolean;
+    isForcedHandoffEnabled?: (
+      forcedHandoff: ParsedForcedHandoffMarker,
+      event: CommentLike,
+    ) => boolean;
+    activeClaimId?: unknown;
+    includeDispositionEvidence?: boolean;
+    requestCap?: number;
+    pendingWindowMinutes?: number;
+    settledWindowMinutes?: number;
+    pollIntervalMinutes?: number;
+    capExhaustedRoute?: string;
+  } = {},
 ) {
   const now = String(options.now ?? '');
   if (!isValidIsoTimestamp(now)) {
@@ -2822,6 +3791,7 @@ export function buildPreMergeReadinessSummary(
   if (!/^[0-9a-f]{40}$/.test(String(prHeadSha ?? ''))) {
     throw new Error('prHeadSha must be a 40-character lowercase commit SHA');
   }
+
   const trustedMarkerLogins = normalizeTrustedMarkerLogins(
     options.trustedMarkerLogins ?? [],
   );
@@ -2854,7 +3824,7 @@ export function buildPreMergeReadinessSummary(
   );
   const watermark = resolveLatestReviewWatermark(comments, {
     expectedClaimId: options.expectedClaimId,
-    isTrustedAuthor: (login) =>
+    isTrustedAuthor: (login: string) =>
       trustedMarkerLogins.includes(
         String(login ?? '')
           .trim()
@@ -2938,6 +3908,7 @@ export function buildPreMergeReadinessSummary(
   const ci = summarizeRequiredChecks(checks, branchRules, branchProtection, {
     waivers: waiverEvidence,
   });
+
   const dispositionEvidence = options.includeDispositionEvidence
     ? summarizeDispositionEvidenceForGate(
         { comments, threads },
@@ -2949,7 +3920,11 @@ export function buildPreMergeReadinessSummary(
         },
       )
     : null;
-  const summary = {
+
+  const summary: { dispositionEvidence?: DispositionEvidenceSummary } & Record<
+    string,
+    unknown
+  > = {
     protocolVersion: '1',
     decisionAuthority: 'instructions',
     prHeadSha,
@@ -3011,12 +3986,15 @@ export function buildPreMergeReadinessSummary(
     claim,
     waiverEvidence,
   };
+
   if (dispositionEvidence) {
     summary.dispositionEvidence = dispositionEvidence;
   }
+
   return summary;
 }
-function normalizeLiveStatusDigestFields(fields) {
+
+function normalizeLiveStatusDigestFields(fields: LiveStatusDigestFields) {
   const normalized = {
     phase: normalizeDigestField(fields.phase, 'Phase'),
     claim: normalizeDigestField(fields.claim, 'Claim'),
@@ -3029,58 +4007,78 @@ function normalizeLiveStatusDigestFields(fields) {
       'Authoritative by',
     ),
   };
+
   if (!isValidIsoTimestamp(normalized.lastChecked)) {
     throw new Error('Last checked must be an ISO 8601 UTC timestamp');
   }
+
   return normalized;
 }
-function normalizeDigestField(value, label) {
+
+function normalizeDigestField(value: unknown, label: string): string {
   const normalized = String(value ?? '').trim();
   if (!normalized) {
     throw new Error(`${label} is required`);
   }
   return normalized;
 }
-function escapeMarkdownTableCell(value) {
+
+function escapeMarkdownTableCell(value: unknown): string {
   return String(value)
     .replaceAll('\\', '\\\\')
     .replaceAll('|', '\\|')
     .replace(/\r?\n/g, '<br>');
 }
-function firstLine(value) {
+
+function firstLine(value: unknown): string {
   return String(value)
     .replace(/^\uFEFF/, '')
     .split(/\r?\n/, 1)[0]
     .trimEnd();
 }
-function sameDigestBody(currentBody, nextBody) {
+
+function sameDigestBody(currentBody: string, nextBody: string): boolean {
   return currentBody.trimEnd() === nextBody.trimEnd();
 }
-export function isStaleAt(activeCreatedAt, nextCreatedAt) {
+
+export function isStaleAt(
+  activeCreatedAt: string,
+  nextCreatedAt: string,
+): boolean {
   const staleMs = 24 * 60 * 60 * 1000;
   return (
     new Date(nextCreatedAt).getTime() - new Date(activeCreatedAt).getTime() >=
     staleMs
   );
 }
-function compareClaimIds(left, right) {
+
+function compareClaimIds(left: string, right: string): number {
   if (left === right) {
     return 0;
   }
   return left < right ? -1 : 1;
 }
-function createdAtToTime(createdAt) {
+
+function createdAtToTime(createdAt: string | null | undefined): number | null {
   const time = new Date(createdAt ?? '').getTime();
   return Number.isFinite(time) ? time : null;
 }
-function createdAtToSecond(createdAt) {
+
+function createdAtToSecond(
+  createdAt: string | null | undefined,
+): number | null {
   const time = createdAtToTime(createdAt);
   if (time === null) {
     return null;
   }
   return Math.floor(time / 1000);
 }
-export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
+
+export function resolveActiveClaim(
+  events: CommentLike[],
+  isTrustedAuthor: ClaimResolutionOptions | ((login: string) => boolean) = () =>
+    true,
+): ParsedClaimMarker | null {
   const options = normalizeClaimResolutionOptions(isTrustedAuthor);
   const orderedEvents = events
     .map((event, index) => {
@@ -3107,6 +4105,7 @@ export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
       if (left.second === null && right.second !== null) {
         return 1;
       }
+
       if (
         left.second !== null &&
         right.second !== null &&
@@ -3116,6 +4115,7 @@ export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
       ) {
         return compareClaimIds(left.claimId, right.claimId);
       }
+
       if (
         left.time !== null &&
         right.time !== null &&
@@ -3123,26 +4123,35 @@ export function resolveActiveClaim(events, isTrustedAuthor = () => true) {
       ) {
         return left.time - right.time;
       }
+
       return left.index - right.index;
     })
     .map(({ event }) => event);
-  let active = null;
+
+  let active: ParsedClaimMarker | null = null;
   for (const event of orderedEvents) {
     active = applyClaimEvent(active, event, options);
   }
   return active;
 }
-export function applyClaimEvent(activeClaim, event, options = {}) {
+
+export function applyClaimEvent(
+  activeClaim: ParsedClaimMarker | null,
+  event: CommentLike,
+  options: ClaimResolutionOptions | ((login: string) => boolean) = {},
+): ParsedClaimMarker | null {
   const normalizedOptions = normalizeClaimResolutionOptions(options);
   const authorLogin = event.author?.login ?? '';
   if (!normalizedOptions.isTrustedAuthor(authorLogin)) {
     return activeClaim;
   }
+
   const claim = parseClaimComment(event.body ?? '', event.createdAt ?? '');
   if (claim) {
     if (!activeClaim) {
       return claim.supersedes === 'none' ? claim : null;
     }
+
     if (
       claim.agentId === activeClaim.agentId &&
       claim.claimId === activeClaim.claimId
@@ -3168,14 +4177,17 @@ export function applyClaimEvent(activeClaim, event, options = {}) {
         createdAt: event.createdAt ?? activeClaim.createdAt,
       };
     }
+
     if (
       claim.supersedes === activeClaim.claimId &&
       normalizedOptions.isStale(activeClaim.createdAt, event.createdAt ?? '')
     ) {
       return claim;
     }
+
     return activeClaim;
   }
+
   const release = parseReleaseComment(event.body ?? '');
   if (
     release &&
@@ -3185,6 +4197,7 @@ export function applyClaimEvent(activeClaim, event, options = {}) {
   ) {
     return null;
   }
+
   const forcedHandoff = parseForcedHandoffComment(
     event.body ?? '',
     event.createdAt ?? '',
@@ -3248,9 +4261,17 @@ export function applyClaimEvent(activeClaim, event, options = {}) {
       createdAt: forcedHandoff.createdAt ?? activeClaim.createdAt,
     };
   }
+
   return activeClaim;
 }
-function normalizeClaimResolutionOptions(optionsOrPredicate) {
+
+function normalizeClaimResolutionOptions(
+  optionsOrPredicate:
+    | ClaimResolutionOptions
+    | ((login: string) => boolean)
+    | null
+    | undefined,
+): NormalizedClaimResolutionOptions {
   if (typeof optionsOrPredicate === 'function') {
     return {
       isTrustedAuthor: optionsOrPredicate,
@@ -3262,6 +4283,7 @@ function normalizeClaimResolutionOptions(optionsOrPredicate) {
       onIgnoredForcedHandoff: () => {},
     };
   }
+
   const options = optionsOrPredicate ?? {};
   return {
     isTrustedAuthor:
@@ -3289,7 +4311,8 @@ function normalizeClaimResolutionOptions(optionsOrPredicate) {
         : () => {},
   };
 }
-function normalizeNonWhitespaceToken(value) {
+
+function normalizeNonWhitespaceToken(value: unknown): string {
   if (typeof value !== 'string') {
     return '';
   }
@@ -3304,7 +4327,11 @@ function normalizeNonWhitespaceToken(value) {
   }
   return trimmed;
 }
-function pickPayloadValue(payload, ...keys) {
+
+function pickPayloadValue(
+  payload: Record<string, unknown>,
+  ...keys: string[]
+): unknown {
   for (const key of keys) {
     if (Object.hasOwn(payload, key)) {
       return payload[key];
@@ -3312,23 +4339,31 @@ function pickPayloadValue(payload, ...keys) {
   }
   return undefined;
 }
-function hasConflictingPayloadAliases(payload, firstKey, secondKey) {
+
+function hasConflictingPayloadAliases(
+  payload: Record<string, unknown>,
+  firstKey: string,
+  secondKey: string,
+): boolean {
   if (!Object.hasOwn(payload, firstKey) || !Object.hasOwn(payload, secondKey)) {
     return false;
   }
+
   return (
     String(payload[firstKey] ?? '').trim() !==
     String(payload[secondKey] ?? '').trim()
   );
 }
-function normalizeBranchToken(value) {
+
+function normalizeBranchToken(value: unknown): string {
   const token = normalizeNonWhitespaceToken(value);
   if (!token || token.includes('>')) {
     return '';
   }
   return token;
 }
-function normalizeForcedHandoffReason(value) {
+
+function normalizeForcedHandoffReason(value: unknown): string {
   if (typeof value !== 'string') {
     return '';
   }
@@ -3338,7 +4373,8 @@ function normalizeForcedHandoffReason(value) {
   }
   return trimmed;
 }
-function normalizeLinkedPrReference(value) {
+
+function normalizeLinkedPrReference(value: unknown): string {
   const token = String(value ?? '').trim();
   if (!token) {
     return '';
@@ -3367,7 +4403,8 @@ function normalizeLinkedPrReference(value) {
   }
   return token.toLowerCase();
 }
-function normalizeIsoTimestamp(value) {
+
+function normalizeIsoTimestamp(value: unknown): string {
   if (typeof value !== 'string') {
     return '';
   }
@@ -3377,33 +4414,55 @@ function normalizeIsoTimestamp(value) {
   }
   return trimmed;
 }
-function normalizeSecondPrecisionIsoTimestamp(value) {
+
+function normalizeSecondPrecisionIsoTimestamp(value: unknown): string {
   const timestamp = normalizeIsoTimestamp(value);
   if (!timestamp || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(timestamp)) {
     return '';
   }
   return timestamp;
 }
-function normalizeContextScope(value) {
+
+function normalizeContextScope(value: unknown): string {
   if (typeof value !== 'string') {
     return '';
   }
   const trimmed = value.trim();
   return FORCED_HANDOFF_CONTEXT_SCOPES.has(trimmed) ? trimmed : '';
 }
-function normalizeLinkedPr(value) {
+
+function normalizeLinkedPr(value: unknown): string {
   const token = normalizeNonWhitespaceToken(value);
   if (!token || !FORCED_HANDOFF_LINKED_PR_PATTERN.test(token)) {
     return '';
   }
   return token;
 }
-export function classifyResumeRoutingCase(input, options = {}) {
+
+export function classifyResumeRoutingCase(
+  input: {
+    displacedByForcedHandoff?: boolean;
+    hasActiveClaim?: boolean;
+    claimOwnedBySession?: boolean;
+    rebaseInProgress?: boolean;
+    worktreeDirty?: boolean;
+    hasUsableForcedHandoffEvidence?: boolean;
+    claimAgeHours: number;
+    latestActivityAgeMinutes: number;
+    ciState?: string | null;
+  },
+  options: {
+    staleHours?: number;
+    stallMinutes?: number;
+    pendingCiStates?: string[] | null;
+    terminalSafeCiStates?: string[] | null;
+  } = {},
+): RouteDecision {
   const staleHours = Number.isFinite(options.staleHours)
-    ? options.staleHours
+    ? (options.staleHours as number)
     : 24;
   const stallMinutes = Number.isFinite(options.stallMinutes)
-    ? options.stallMinutes
+    ? (options.stallMinutes as number)
     : 30;
   const pendingCiStates = new Set(
     options.pendingCiStates ?? ['queued', 'in_progress', 'waiting', 'pending'],
@@ -3411,18 +4470,21 @@ export function classifyResumeRoutingCase(input, options = {}) {
   const terminalSafeCiStates = new Set(
     options.terminalSafeCiStates ?? ['success', 'none'],
   );
+
   if (input.displacedByForcedHandoff) {
     return {
       route: 'claim-lost-stop',
       reason: 'session was displaced by trusted forced-handoff evidence',
     };
   }
+
   if (!input.hasActiveClaim) {
     return {
       route: 'unclaimed-reclaim-required',
       reason: 'resume requires a fresh claim before continuation',
     };
   }
+
   if (input.claimOwnedBySession) {
     if (input.rebaseInProgress || input.worktreeDirty) {
       return {
@@ -3435,6 +4497,7 @@ export function classifyResumeRoutingCase(input, options = {}) {
       reason: 'owned claim with clean local state',
     };
   }
+
   if (input.hasUsableForcedHandoffEvidence) {
     return {
       route: 'forced-handoff-recovery',
@@ -3442,18 +4505,21 @@ export function classifyResumeRoutingCase(input, options = {}) {
         'trusted forced-handoff evidence takes precedence over stalled-session takeover',
     };
   }
+
   if (!Number.isFinite(input.claimAgeHours)) {
     return {
       route: 'hold-for-evidence',
       reason: 'claim age is missing for a non-owned claim',
     };
   }
+
   if (!Number.isFinite(input.latestActivityAgeMinutes)) {
     return {
       route: 'hold-for-evidence',
       reason: 'activity age is missing for a non-owned active claim',
     };
   }
+
   const ciState = String(input.ciState ?? 'none').toLowerCase();
   if (pendingCiStates.has(ciState)) {
     return {
@@ -3467,6 +4533,7 @@ export function classifyResumeRoutingCase(input, options = {}) {
       reason: 'CI is not in a terminal-safe state for stalled-claim recovery',
     };
   }
+
   if (input.claimAgeHours < staleHours) {
     if (input.latestActivityAgeMinutes >= stallMinutes) {
       return {
@@ -3479,18 +4546,24 @@ export function classifyResumeRoutingCase(input, options = {}) {
       reason: 'non-owned claim remains non-inheritable until stale',
     };
   }
+
   if (input.latestActivityAgeMinutes < stallMinutes) {
     return {
       route: 'hold-for-evidence',
       reason: `non-owned claim is stale but quiet-window evidence is < ${stallMinutes}m`,
     };
   }
+
   return {
     route: 'stale-claim-takeover',
     reason: `non-owned claim is stale at >= ${staleHours}h with quiet-window evidence >= ${stallMinutes}m`,
   };
 }
-function hasExplicitDispositionAfter(targetComment, comments) {
+
+function hasExplicitDispositionAfter(
+  targetComment: CommentLike,
+  comments: CommentLike[],
+): boolean {
   const targetTime = Date.parse(targetComment.createdAt ?? '');
   return comments.some((comment) => {
     const author = comment.author?.login ?? '';
@@ -3508,7 +4581,11 @@ function hasExplicitDispositionAfter(targetComment, comments) {
     );
   });
 }
-function normalizeGatingReviewTimestamp(review, state) {
+
+function normalizeGatingReviewTimestamp(
+  review: ReviewLike,
+  state: string,
+): string | null {
   const submittedAt = String(review.submittedAt ?? review.submitted_at ?? '');
   if (isValidIsoTimestamp(submittedAt)) {
     return submittedAt;
@@ -3526,8 +4603,9 @@ function normalizeGatingReviewTimestamp(review, state) {
   }
   return null;
 }
-function maxIsoTimestamp(values) {
-  let latest = null;
+
+function maxIsoTimestamp(values: unknown[]): string | null {
+  let latest: string | null = null;
   for (const value of values) {
     const normalized = String(value);
     if (!isValidIsoTimestamp(normalized)) {
@@ -3539,8 +4617,11 @@ function maxIsoTimestamp(values) {
   }
   return latest;
 }
-function summarizeRequiredCheckMetadata(parameters) {
-  const names = new Set();
+
+function summarizeRequiredCheckMetadata(
+  parameters: RequiredCheckParametersLike,
+) {
+  const names = new Set<string>();
   let sourcePinned = false;
   const rawChecks = [
     ...(parameters.required_status_checks ?? []),
@@ -3548,6 +4629,7 @@ function summarizeRequiredCheckMetadata(parameters) {
     ...(parameters.checks ?? []),
     ...(parameters.contexts ?? []),
   ];
+
   for (const rawCheck of rawChecks) {
     if (typeof rawCheck === 'string') {
       if (rawCheck.trim()) {
@@ -3555,6 +4637,7 @@ function summarizeRequiredCheckMetadata(parameters) {
       }
       continue;
     }
+
     if (
       isSourcePinnedRequirementId(rawCheck?.app_id) ||
       isSourcePinnedRequirementId(rawCheck?.integration_id) ||
@@ -3562,6 +4645,7 @@ function summarizeRequiredCheckMetadata(parameters) {
     ) {
       sourcePinned = true;
     }
+
     for (const candidate of [
       rawCheck?.context,
       rawCheck?.name,
@@ -3575,12 +4659,16 @@ function summarizeRequiredCheckMetadata(parameters) {
       }
     }
   }
+
   return {
     names: [...names].sort(),
     sourcePinned,
   };
 }
-function extractRequiredReviewerRequirement(reviewer) {
+
+function extractRequiredReviewerRequirement(
+  reviewer: RequiredReviewerLike,
+): ReviewerRequirement {
   const record = typeof reviewer === 'string' ? undefined : reviewer;
   const reviewerRef = record?.reviewer ?? {};
   const reviewerType = String(reviewerRef.type ?? record?.type ?? '')
@@ -3613,7 +4701,8 @@ function extractRequiredReviewerRequirement(reviewer) {
       .filter(Boolean),
   };
 }
-function parseCodeownersRules(codeownersText) {
+
+function parseCodeownersRules(codeownersText: unknown): CodeownersRule[] {
   return String(codeownersText ?? '')
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -3622,7 +4711,7 @@ function parseCodeownersRules(codeownersText) {
     .map((line) => {
       const tokens = tokenizeCodeownersLine(line);
       const pattern = tokens.shift() ?? '';
-      const ownerTokens = [];
+      const ownerTokens: string[] = [];
       for (const token of tokens) {
         if (token.startsWith('#')) {
           break;
@@ -3643,10 +4732,14 @@ function parseCodeownersRules(codeownersText) {
       }
       return { pattern, users, teams, emails };
     })
-    .filter(Boolean);
+    .filter(Boolean) as CodeownersRule[];
 }
-function findCodeownersForPath(rules, path) {
-  let latest = null;
+
+function findCodeownersForPath(
+  rules: CodeownersRule[],
+  path: string,
+): CodeownersRule | null {
+  let latest: CodeownersRule | null = null;
   for (const rule of rules) {
     if (matchesCodeownersPattern(rule.pattern, path)) {
       latest = rule;
@@ -3654,7 +4747,8 @@ function findCodeownersForPath(rules, path) {
   }
   return latest;
 }
-function matchesCodeownersPattern(pattern, path) {
+
+function matchesCodeownersPattern(pattern: unknown, path: unknown): boolean {
   const normalizedPattern = String(pattern ?? '').trim();
   const normalizedPath = String(path ?? '')
     .replace(/^\/+/, '')
@@ -3662,6 +4756,7 @@ function matchesCodeownersPattern(pattern, path) {
   if (!normalizedPattern || !normalizedPath) {
     return false;
   }
+
   let body = normalizedPattern;
   const anchored = body.startsWith('/');
   if (anchored) {
@@ -3675,12 +4770,15 @@ function matchesCodeownersPattern(pattern, path) {
     !trailingSlashPattern &&
     !lastSegment.includes('*') &&
     !lastSegment.includes('?');
+
   if (trailingSlashPattern) {
     body = `${body}**`;
   }
+
   if (anyDepthFromRoot) {
     body = body.slice(3);
   }
+
   const slashAnchored =
     anchored ||
     (rawBody.includes('/') && !anyDepthFromRoot && !trailingSlashPattern);
@@ -3713,9 +4811,14 @@ function matchesCodeownersPattern(pattern, path) {
     source += '(?:/.*)?';
   }
   source += '$';
+
   return new RegExp(source).test(normalizedPath);
 }
-function effectiveRegularCommentActivityAt(comment) {
+
+function effectiveRegularCommentActivityAt(comment: {
+  updatedAt?: unknown;
+  createdAt: string;
+}): string {
   const updatedAt = String(comment.updatedAt ?? '');
   if (
     isValidIsoTimestamp(updatedAt) &&
@@ -3725,14 +4828,17 @@ function effectiveRegularCommentActivityAt(comment) {
   }
   return comment.createdAt;
 }
-function isSourcePinnedRequirementId(value) {
+
+function isSourcePinnedRequirementId(value: unknown): boolean {
   const numeric = Number(value);
   return Number.isInteger(numeric) && numeric > 0;
 }
-function tokenizeCodeownersLine(line) {
-  const tokens = [];
+
+function tokenizeCodeownersLine(line: unknown): string[] {
+  const tokens: string[] = [];
   let current = '';
   let escaped = false;
+
   for (const character of String(line ?? '')) {
     if (escaped) {
       current += character;
@@ -3752,6 +4858,7 @@ function tokenizeCodeownersLine(line) {
     }
     current += character;
   }
+
   if (escaped) {
     current += '\\';
   }
@@ -3760,30 +4867,37 @@ function tokenizeCodeownersLine(line) {
   }
   return tokens;
 }
-function hasCodeownerOwners(rule) {
+
+function hasCodeownerOwners(rule: CodeownersRule | null | undefined): boolean {
   return (
     (rule?.users?.length ?? 0) > 0 ||
     (rule?.teams?.length ?? 0) > 0 ||
     (rule?.emails?.length ?? 0) > 0
   );
 }
-function isGateAdvisoryBotLogin(login, advisoryBotLogins) {
+
+function isGateAdvisoryBotLogin(
+  login: unknown,
+  advisoryBotLogins: Set<string>,
+): boolean {
   const normalized = String(login ?? '')
     .trim()
     .toLowerCase();
   return isKnownReviewBot(normalized) || advisoryBotLogins.has(normalized);
 }
-function _isOperationalOrDigestComment(body) {
+
+function _isOperationalOrDigestComment(body: string): boolean {
   return (
     operationalMarkerPrefix(body) !== null ||
     firstLine(body) === LIVE_STATUS_DIGEST_MARKER
   );
 }
+
 function isOperationalOrDigestCommentForGate(
-  body,
-  authorLogin,
-  trustedMarkerLogins,
-) {
+  body: string,
+  authorLogin: unknown,
+  trustedMarkerLogins: Set<string>,
+): boolean {
   const marker = operationalMarkerPrefix(body);
   if (marker === '<!-- forced-handoff:') {
     return trustedMarkerLogins.has(
@@ -3794,13 +4908,19 @@ function isOperationalOrDigestCommentForGate(
   }
   return marker !== null || firstLine(body) === LIVE_STATUS_DIGEST_MARKER;
 }
-function isValidForcedHandoffOperationalMarker(body) {
+
+function isValidForcedHandoffOperationalMarker(body: string): boolean {
   return parseForcedHandoffComment(body, '') !== null;
 }
-function buildBodyPreview(body) {
+
+function buildBodyPreview(body: unknown): string {
   return firstLine(String(body ?? '')).slice(0, 120);
 }
-function advisoryWaitMarkerMatchesHead(body, prHeadSha) {
+
+function advisoryWaitMarkerMatchesHead(
+  body: string,
+  prHeadSha: string,
+): boolean {
   return (
     new RegExp(`^advisory-wait: [^ ]+ ${escapeRegExp(prHeadSha)}(?: |$)`).test(
       body,
@@ -3813,13 +4933,16 @@ function advisoryWaitMarkerMatchesHead(body, prHeadSha) {
     ).test(body)
   );
 }
-function advisoryWaitRequestMarker(body) {
+
+function advisoryWaitRequestMarker(body: string): boolean {
   return /^advisory-wait:/.test(body) || /^<!-- advisory-wait:/.test(body);
 }
-function escapeRegExp(value) {
+
+function escapeRegExp(value: unknown): string {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
-function minutesBetweenIso(start, end) {
+
+function minutesBetweenIso(start: string, end: string): number {
   const startMs = Date.parse(start);
   const endMs = Date.parse(end);
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
@@ -3827,7 +4950,8 @@ function minutesBetweenIso(start, end) {
   }
   return Math.floor((endMs - startMs) / 60000);
 }
-function compareIsoTimestamps(left, right) {
+
+function compareIsoTimestamps(left: unknown, right: unknown): number {
   const leftComparable = normalizeComparableTimestamp(left);
   const rightComparable = normalizeComparableTimestamp(right);
   if (
@@ -3847,16 +4971,25 @@ function compareIsoTimestamps(left, right) {
   }
   return String(left ?? '').localeCompare(String(right ?? ''));
 }
-function threadActivityAt(thread) {
+
+function threadActivityAt(thread: ThreadLike): string | null | undefined {
   if (isValidIsoTimestamp(thread.updatedAt ?? '')) {
     return thread.updatedAt;
   }
+
   const commentTimes = (thread.comments?.nodes ?? [])
     .flatMap((comment) => [comment.updatedAt, comment.createdAt])
     .filter(isValidIsoTimestamp);
+
   return maxIsoTimestamp(commentTimes);
 }
-function effectiveThreadCommentActivityAt(comment) {
+
+function effectiveThreadCommentActivityAt(
+  comment:
+    | { updatedAt?: string | null; createdAt?: string | null }
+    | null
+    | undefined,
+): string {
   const updatedAt = String(comment?.updatedAt ?? '');
   if (isValidIsoTimestamp(updatedAt)) {
     return updatedAt;
@@ -3867,7 +5000,11 @@ function effectiveThreadCommentActivityAt(comment) {
   }
   return '';
 }
-function hasCompletedBotThreadDispositions(threads, loginPredicate) {
+
+function hasCompletedBotThreadDispositions(
+  threads: ThreadLike[],
+  loginPredicate: (login: string) => boolean,
+): boolean {
   const botThreads = threads.filter((thread) => {
     return (thread.comments?.nodes ?? []).some((comment) => {
       return (
@@ -3876,6 +5013,7 @@ function hasCompletedBotThreadDispositions(threads, loginPredicate) {
       );
     });
   });
+
   return (
     botThreads.length > 0 &&
     botThreads.every((thread) => {
@@ -3887,7 +5025,8 @@ function hasCompletedBotThreadDispositions(threads, loginPredicate) {
     })
   );
 }
-function hasUnresolvedKnownBotThreads(threads) {
+
+function hasUnresolvedKnownBotThreads(threads: ThreadLike[]): boolean {
   return threads.some((thread) => {
     if (thread.isResolved) {
       return false;
@@ -3900,17 +5039,20 @@ function hasUnresolvedKnownBotThreads(threads) {
     });
   });
 }
-function isValidIsoTimestamp(value) {
-  const time = Date.parse(value);
+
+function isValidIsoTimestamp(value: unknown): value is string {
+  const time = Date.parse(value as string);
   if (!Number.isFinite(time)) return false;
-  const normalize = (ts) => ts.replace('.000Z', 'Z');
-  return normalize(new Date(time).toISOString()) === normalize(value);
+  const normalize = (ts: string) => ts.replace('.000Z', 'Z');
+  return normalize(new Date(time).toISOString()) === normalize(value as string);
 }
-function isCompletedCiTimestamp(value) {
+
+function isCompletedCiTimestamp(value: unknown): boolean {
   const timestamp = String(value ?? '');
   return timestamp !== '0001-01-01T00:00:00Z' && isValidIsoTimestamp(timestamp);
 }
-function normalizeComparableTimestamp(value) {
+
+function normalizeComparableTimestamp(value: unknown): number | 'none' | null {
   const normalized = String(value ?? 'none');
   if (normalized === 'none') {
     return 'none';
