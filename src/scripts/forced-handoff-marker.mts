@@ -183,9 +183,9 @@ export function planHandoff(
   if (forcedBy && reason) {
     // Validate the approving actor before rendering the marker body so that
     // plan output cannot preview a marker that claim resolution would reject.
-    const authorized =
-      typeof isAuthorizedForcedHandoff !== 'function' ||
-      isAuthorizedForcedHandoff(forcedBy);
+    // Reuse the fail-closed-defaulted callback so a missing authorizer is
+    // unauthorized here exactly as it is during claim resolution.
+    const authorized = resolveOpts.isAuthorizedForcedHandoff(forcedBy);
     if (authorized) {
       const resolvedLinkedPr =
         prNumber !== undefined ? String(prNumber) : prReferences[0];
