@@ -313,7 +313,15 @@ Node.js helper path.
   assuming pnpm.
 - `vendored-node`: use the manifest's `managedFiles` list to copy the
   helper bundle into matching paths in the target repository, then run
-  the emitted local `node scripts/...` commands.
+  the emitted local `node scripts/...` commands. The profile output also
+  carries a `recommendedGitattributes` list — one
+  `<path> linguist-vendored` line per managed file — to append to the
+  adopter's `.gitattributes`, so the vendored bundle is treated as the
+  third-party code it is: `linguist-vendored` drops it from language
+  statistics and de-prioritizes it in code search. This is the
+  adopter-side counterpart of the source repository's own
+  `linguist-generated` artifacts; only `vendored-node` vends files, so
+  only it emits the recommendation.
 - `ephemeral-npx`: use the manifest's one-shot `npx --yes --package
   <helper-package-spec> idd-*` commands without copying helper files
   into the repository. The default helper package spec is an HTTPS
