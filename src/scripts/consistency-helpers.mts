@@ -216,7 +216,10 @@ export function collectTypeSuppressionViolations(
           .slice(at + TS_EXPECT_ERROR_TOKEN.length)
           .replace(/^\s*(?:--|—|:)?\s*/u, '')
           .trim();
-        if (trailing.length < 3) {
+        // Any non-empty trailing text counts as a reason (terse but
+        // legitimate reasons like an issue reference must pass); only a
+        // truly absent reason is a violation.
+        if (trailing.length === 0) {
           violations.push(
             `${id}: ${file.path}:${index + 1} has a ${TS_EXPECT_ERROR_TOKEN} directive without a same-line reason`,
           );

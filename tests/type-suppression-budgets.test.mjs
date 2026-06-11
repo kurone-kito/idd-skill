@@ -226,3 +226,34 @@ test('rejects malformed budget limits instead of failing open', () => {
 test('returns no violations when the config is absent', () => {
   assert.deepEqual(collectTypeSuppressionViolations([], null), []);
 });
+
+test('a terse same-line reason such as an issue reference is accepted', () => {
+  const files = [
+    {
+      path: 'src/scripts/sample.mts',
+      text: `// ${TS_EXPECT_ERROR} #1\nconst v = broken();\n`,
+    },
+  ];
+  assert.deepEqual(
+    collectTypeSuppressionViolations(files, {
+      ...BUDGET_ZERO,
+      tsExpectErrorLimit: 1,
+    }),
+    [],
+  );
+});
+
+test('a bare separator with no reason text is still a violation', () => {
+  const files = [
+    {
+      path: 'src/scripts/sample.mts',
+      text: `// ${TS_EXPECT_ERROR} --\nconst v = broken();\n`,
+    },
+  ];
+  const violations = collectTypeSuppressionViolations(files, {
+    ...BUDGET_ZERO,
+    tsExpectErrorLimit: 1,
+  });
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /without a same-line reason/);
+});
