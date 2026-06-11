@@ -7,6 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   buildAuthoringLabelWarning,
   resolveAuthoringGuardPolicy,
@@ -548,6 +549,7 @@ function isMainModule(metaUrl) {
   if (!metaUrl || !process.argv[1]) {
     return false;
   }
-  const scriptUrl = new URL(`file://${process.argv[1]}`);
-  return metaUrl === scriptUrl.href;
+  // Compare filesystem paths instead of building a file:// URL from
+  // argv[1], which mis-parses Windows drive-letter paths.
+  return fileURLToPath(metaUrl) === resolve(process.argv[1]);
 }

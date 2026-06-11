@@ -4,13 +4,31 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parseProjectCommandRows } from './idd-doctor.mts';
 
-const ROOT = fileURLToPath(new URL('..', import.meta.url));
+// Resolve the repository root by walking up to the nearest package.json,
+// so the default works whether this module runs as the emitted
+// scripts/check-pnpm-boundary.mjs or directly from src/scripts/.
+function resolveRepoRoot(fromUrl: string): string {
+  let dir = dirname(fileURLToPath(fromUrl));
+  for (let depth = 0; depth < 16; depth += 1) {
+    if (existsSync(join(dir, 'package.json'))) {
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  return dir;
+}
+
+const ROOT = resolveRepoRoot(import.meta.url);
 const TEMPLATE_OVERVIEW_PATH =
   'idd-template/.github/instructions/idd-overview-core.instructions.md';
 const COMMAND_ROWS = [
