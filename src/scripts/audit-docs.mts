@@ -8,10 +8,14 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { RootMarkdownAllowlistConfig } from './consistency-helpers.mts';
+import type {
+  RootMarkdownAllowlistConfig,
+  TypeSuppressionBudgetConfig,
+} from './consistency-helpers.mts';
 import {
   collectPolicyConfigDrift,
   collectRootMarkdownAllowlistViolations,
+  collectTypeSuppressionViolations,
 } from './consistency-helpers.mts';
 
 interface ReadmePair {
@@ -90,6 +94,7 @@ interface AuditManifest {
   bundleBudgets?: BundleBudget[];
   forbiddenPatterns?: ForbiddenPattern[];
   rootMarkdownAllowlist?: RootMarkdownAllowlistConfig | null;
+  typeSuppressionBudgets?: TypeSuppressionBudgetConfig | null;
 }
 
 const root = process.cwd();
@@ -119,6 +124,7 @@ checkInstructionSizeBudgets(manifest.instructionSizeBudgets ?? null);
 checkBundleBudgets(manifest.bundleBudgets ?? []);
 checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
 checkRootMarkdownAllowlist(manifest.rootMarkdownAllowlist ?? null);
+checkTypeSuppressionBudgets(manifest.typeSuppressionBudgets ?? null);
 checkConfigInstructionDrift();
 checkGeneratedSourcePairs();
 
@@ -493,6 +499,26 @@ function checkRootMarkdownAllowlist(
   config: RootMarkdownAllowlistConfig | null,
 ) {
   errors.push(...collectRootMarkdownAllowlistViolations(repoFiles, config));
+}
+
+// Type-suppression budget guard (ratchet, mirroring bundleBudgets): a
+// pure `node:` text scan so the bare-node lane enforces the budgets with
+// no typescript dependency. The collector lives in consistency-helpers so
+// it can be unit-tested without I/O.
+function checkTypeSuppressionBudgets(
+  config: TypeSuppressionBudgetConfig | null,
+) {
+  if (!config) {
+    return;
+  }
+  const globs = Array.isArray(config.globs)
+    ? config.globs.map((glob) => String(glob))
+    : [];
+  const files = uniqueSorted(globs.flatMap(globFiles)).map((path) => ({
+    path,
+    text: readText(path),
+  }));
+  errors.push(...collectTypeSuppressionViolations(files, config));
 }
 
 function checkConfigInstructionDrift() {

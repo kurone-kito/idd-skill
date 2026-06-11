@@ -60,6 +60,27 @@ bare-node lane additionally runs `node scripts/audit-docs.mjs --check`,
 whose pairing guard fails when a source is missing its generated artifact
 or a banner-marked artifact is missing its source.
 
+## Type-suppression budgets
+
+Strict mode only protects quality if suppressions do not accumulate, so
+`audit-docs --check` also enforces the `typeSuppressionBudgets` entry in
+`audit/sync-manifest.json` (a pure `node:` text scan, mirroring the
+`bundleBudgets` ratchet shape):
+
+- the `@ts-ignore` directive is forbidden outright — `@ts-expect-error`
+  is the only allowed escape because it self-expires when the error
+  disappears;
+- every `@ts-expect-error` must carry a same-line reason;
+- `@ts-expect-error` occurrences and explicit `any` occurrences across
+  `src/` and `tests/` are counted against the recorded budgets.
+
+The budgets record the **measured** current counts (zero at landing
+time). Ratchet rule: raising a limit requires an explicit callout in the
+PR description; lowering is always allowed. In the installed lane,
+Biome's `lint/suspicious/noExplicitAny` (enabled via the shared config's
+recommended set) is the precise `any` enforcement; the bare-node count is
+the install-free backstop.
+
 The migration converts modules in dependency-ordered waves; only the
 sources listed in `tsconfig.json`'s `include` set are type-checked, so
 unconverted hand-written `.mjs` stay untyped and CI is green throughout.

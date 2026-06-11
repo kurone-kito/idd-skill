@@ -1,0 +1,162 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+
+import { collectTypeSuppressionViolations } from '../scripts/consistency-helpers.mjs';
+
+// Fixture text is assembled from fragments so this test file's raw text
+// never contains the suppression tokens itself — the audit pipeline
+// scans tests/**/*.mjs, and a literal directive here would count
+// against the budgets this suite exists to protect.
+const TS_IGNORE = `@ts-${'ignore'}`;
+const TS_EXPECT_ERROR = `@ts-${'expect'}-error`;
+
+const BUDGET_ZERO = {
+  id: 'type-suppression-budgets',
+  globs: ['src/**/*.mts', 'tests/**/*.mjs'],
+  tsExpectErrorLimit: 0,
+  explicitAnyLimit: 0,
+};
+
+test('passes on a clean current-tree-shaped input', () => {
+  const files = [
+    {
+      path: 'src/scripts/sample.mts',
+      text: [
+        "import { x } from './x.mts';",
+        '// Fail-safe: any invalid token, or conflicting values, yields no score.',
+        'const value: unknown = x;',
+        "const text = ': any inside a string is not counted';",
+      ].join('\n'),
+    },
+  ];
+  assert.deepEqual(collectTypeSuppressionViolations(files, BUDGET_ZERO), []);
+});
+
+test(`fails when a ${TS_IGNORE} directive is introduced`, () => {
+  const files = [
+    {
+      path: 'src/scripts/sample.mts',
+      text: `// ${TS_IGNORE}\nconst v = broken();\n`,
+    },
+  ];
+  const violations = collectTypeSuppressionViolations(files, BUDGET_ZERO);
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /sample\.mts:1 uses the forbidden/);
+});
+
+test(`fails when a ${TS_EXPECT_ERROR} lacks a same-line reason`, () => {
+  const files = [
+    {
+      path: 'src/scripts/sample.mts',
+      text: `// ${TS_EXPECT_ERROR}\nconst v = broken();\n`,
+    },
+  ];
+  const violations = collectTypeSuppressionViolations(files, {
+    ...BUDGET_ZERO,
+    tsExpectErrorLimit: 1,
+  });
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /without a same-line reason/);
+});
+
+test(`accepts a within-budget ${TS_EXPECT_ERROR} with a reason`, () => {
+  const files = [
+    {
+      path: 'src/scripts/sample.mts',
+      text: `// ${TS_EXPECT_ERROR} -- upstream types lag the runtime shape\nconst v = broken();\n`,
+    },
+  ];
+  assert.deepEqual(
+    collectTypeSuppressionViolations(files, {
+      ...BUDGET_ZERO,
+      tsExpectErrorLimit: 1,
+    }),
+    [],
+  );
+});
+
+test(`fails when the ${TS_EXPECT_ERROR} budget is exceeded`, () => {
+  const files = [
+    {
+      path: 'src/scripts/sample.mts',
+      text: `// ${TS_EXPECT_ERROR} -- reason one\n// ${TS_EXPECT_ERROR} -- reason two\n`,
+    },
+  ];
+  const violations = collectTypeSuppressionViolations(files, {
+    ...BUDGET_ZERO,
+    tsExpectErrorLimit: 1,
+  });
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /2 .* exceed the recorded budget of 1/);
+});
+
+test('fails when the explicit any budget is exceeded', () => {
+  const files = [
+    {
+      path: 'src/scripts/sample.mts',
+      text: 'const v: any = parse();\nconst w = value as any;\nconst s = new Set<any>();\n',
+    },
+  ];
+  const violations = collectTypeSuppressionViolations(files, {
+    ...BUDGET_ZERO,
+    explicitAnyLimit: 2,
+  });
+  assert.equal(violations.length, 1);
+  assert.match(
+    violations[0],
+    /3 explicit any occurrence\(s\) exceed the recorded budget of 2/,
+  );
+});
+
+test('does not count any-like prose in comments or strings', () => {
+  const files = [
+    {
+      path: 'src/scripts/sample.mts',
+      text: [
+        '// setupRepo commits succeeding is the no-signing proof: any signing',
+        '/* block: any text here, even as any phrase */',
+        'const s = `template: any inside template`;',
+        "const t = 'literal as any literal';",
+      ].join('\n'),
+    },
+  ];
+  assert.deepEqual(collectTypeSuppressionViolations(files, BUDGET_ZERO), []);
+});
+
+test('counts occurrences across multiple files against one budget', () => {
+  const files = [
+    { path: 'src/scripts/a.mts', text: 'const a: any = 1;\n' },
+    { path: 'tests/b.test.mjs', text: 'const b = x as any;\n' },
+  ];
+  const violations = collectTypeSuppressionViolations(files, {
+    ...BUDGET_ZERO,
+    explicitAnyLimit: 1,
+  });
+  assert.equal(violations.length, 1);
+  assert.match(
+    violations[0],
+    /2 explicit any occurrence\(s\) exceed the recorded budget of 1/,
+  );
+});
+
+test('rejects malformed budget limits instead of failing open', () => {
+  const files = [];
+  assert.match(
+    collectTypeSuppressionViolations(files, {
+      ...BUDGET_ZERO,
+      tsExpectErrorLimit: -1,
+    })[0],
+    /tsExpectErrorLimit must be a non-negative integer/,
+  );
+  assert.match(
+    collectTypeSuppressionViolations(files, {
+      ...BUDGET_ZERO,
+      explicitAnyLimit: '0',
+    })[0],
+    /explicitAnyLimit must be a non-negative integer/,
+  );
+});
+
+test('returns no violations when the config is absent', () => {
+  assert.deepEqual(collectTypeSuppressionViolations([], null), []);
+});
