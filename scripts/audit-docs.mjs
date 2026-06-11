@@ -377,9 +377,20 @@ function checkTypeSuppressionBudgets(config) {
   if (!config) {
     return;
   }
+  // A present budget entry with missing or empty globs would scan zero
+  // files and report success — fail closed on the misconfiguration
+  // instead of silently passing a CI quality gate.
   const globs = Array.isArray(config.globs)
-    ? config.globs.map((glob) => String(glob))
+    ? config.globs
+        .map((glob) => String(glob))
+        .filter((glob) => glob.trim().length > 0)
     : [];
+  if (globs.length === 0) {
+    errors.push(
+      `${String(config.id ?? 'type-suppression-budgets')}: globs must be a non-empty array of glob strings`,
+    );
+    return;
+  }
   const files = uniqueSorted(globs.flatMap(globFiles)).map((path) => ({
     path,
     text: readText(path),
