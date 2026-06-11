@@ -19,13 +19,14 @@ import {
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   summarizeClaimValidation,
+  unionTrustedMarkerActorSources,
   unsafeTextReason,
 } from './protocol-helpers.mjs';
 
 const TRUSTED_MARKER_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
 const trustedMarkerAuthorCache = new Map();
 const collaboratorPermissionCache = new Map();
-let cachedConfiguredTrustedMarkerAuthors = null;
+let cachedConfiguredTrustedMarkerActorSources = null;
 let cachedCurrentViewerLogin = null;
 
 const args = parseArgs(process.argv.slice(2));
@@ -160,12 +161,22 @@ async function buildReport(owner, repo, prNumber, options = {}) {
   const threadIndex = indexThreadsByReview(threads);
   const latestGatingReviews = indexLatestGatingReviewsByAuthor(reviews);
 
+  const configuredTrust = configuredTrustedMarkerActorSources();
   const report = {
     repository: `${owner}/${repo}`,
     pr: prNumber,
     prUrl: pr.url,
     merged: pr.merged,
     mode: 'dry-run',
+    trustedMarkerActors: normalizeTrustedMarkerLogins([
+      currentViewerLogin(),
+      ...configuredTrust.actors,
+    ]),
+    trustedMarkerActorsSources: [
+      ...(currentViewerLogin() ? ['viewer'] : []),
+      ...configuredTrust.sources,
+    ],
+    collaboratorTrustEnabled: trustCollaboratorMarkers(),
     candidates: [],
     skipped: [],
     applied: [],
@@ -187,6 +198,16 @@ async function buildReport(owner, repo, prNumber, options = {}) {
 
   for (const review of reviews) {
     evaluateReviewParent(review, pr, threadIndex, latestGatingReviews, report);
+  }
+
+  // Collaborator trust is evaluated lazily per author; record it in the
+  // source mix only when the collaborator path actually trusted someone
+  // during this report's evaluation.
+  if (
+    report.collaboratorTrustEnabled &&
+    [...trustedMarkerAuthorCache.values()].some(Boolean)
+  ) {
+    report.trustedMarkerActorsSources.push('collaborators');
   }
 
   return report;
@@ -890,18 +911,30 @@ function currentViewerLogin() {
   return cachedCurrentViewerLogin;
 }
 
-function configuredTrustedMarkerAuthors() {
-  if (cachedConfiguredTrustedMarkerAuthors) {
-    return cachedConfiguredTrustedMarkerAuthors;
+function configuredTrustedMarkerActorSources() {
+  if (cachedConfiguredTrustedMarkerActorSources) {
+    return cachedConfiguredTrustedMarkerActorSources;
   }
 
-  cachedConfiguredTrustedMarkerAuthors = new Set(
-    (process.env.IDD_TRUSTED_MARKER_ACTORS ?? '')
-      .split(',')
-      .map((login) => login.trim().toLowerCase())
-      .filter(Boolean),
-  );
-  return cachedConfiguredTrustedMarkerAuthors;
+  let config = null;
+  try {
+    config = JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
+  } catch {
+    config = null;
+  }
+  const { actors, sources } = unionTrustedMarkerActorSources({
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+    config,
+  });
+  cachedConfiguredTrustedMarkerActorSources = {
+    actors: new Set(actors),
+    sources,
+  };
+  return cachedConfiguredTrustedMarkerActorSources;
+}
+
+function configuredTrustedMarkerAuthors() {
+  return configuredTrustedMarkerActorSources().actors;
 }
 
 function trustCollaboratorMarkers() {
@@ -1127,6 +1160,7 @@ Options:
 
 Environment:
   IDD_TRUSTED_MARKER_ACTORS         comma-separated trusted bot/app logins
+                                    (combined with config.json trustedMarkerActors)
   IDD_TRUST_COLLABORATOR_MARKERS    set true to trust Write/Maintain/Admin collaborators
 `);
 }

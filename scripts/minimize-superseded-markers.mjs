@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
 const ALLOWED_CLASSIFIERS = new Set(['OUTDATED', 'RESOLVED']);
 const ALLOWED_FORMATS = new Set(['json', 'table']);
@@ -43,10 +44,16 @@ if (isMainModule(import.meta.url)) {
     process.exit(2);
   }
 
-  const trustedSet = buildTrustedSet(args.trustedMarkerLogins);
+  const { actors: trustedActors, source: trustedMarkerActorsSource } =
+    resolveTrustedActors({
+      flagValue: args.trustedMarkerLogins,
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+      config: loadIddConfig(),
+    });
+  const trustedSet = new Set(trustedActors);
   if (trustedSet.size === 0 && !args.allowUntrusted) {
     console.error(
-      'error: no trusted marker logins supplied. Pass --trusted-marker-logins (or set IDD_TRUSTED_MARKER_ACTORS), or pass --allow-untrusted to explicitly opt out of the author gate.',
+      'error: no trusted marker logins supplied. Pass --trusted-marker-logins, set IDD_TRUSTED_MARKER_ACTORS, or list trustedMarkerActors in .github/idd/config.json; or pass --allow-untrusted to explicitly opt out of the author gate.',
     );
     process.exit(2);
   }
@@ -58,6 +65,8 @@ if (isMainModule(import.meta.url)) {
     apply: args.apply,
     allowUntrusted: args.allowUntrusted,
   });
+  report.trustedMarkerActors = [...trustedSet].sort();
+  report.trustedMarkerActorsSource = trustedMarkerActorsSource;
 
   if (args.format === 'table') {
     printTable(report);
@@ -309,12 +318,47 @@ export function normalizeTrustedMarkerLogins(logins) {
   ].sort();
 }
 
-function buildTrustedSet(logins) {
-  const list = String(logins ?? '')
+// Local flag > env > config ladder mirroring the shared
+// resolveTrustedMarkerActors() contract. This helper stays
+// self-contained because the template mirror ships without
+// protocol-helpers.mjs.
+export function resolveTrustedActors({
+  flagValue = '',
+  envValue = '',
+  config = null,
+} = {}) {
+  const fromFlag = normalizeTrustedMarkerLogins(splitLoginCsv(flagValue));
+  if (fromFlag.length > 0) {
+    return { actors: fromFlag, source: 'flag' };
+  }
+  const fromEnv = normalizeTrustedMarkerLogins(splitLoginCsv(envValue));
+  if (fromEnv.length > 0) {
+    return { actors: fromEnv, source: 'env' };
+  }
+  const fromConfig = normalizeTrustedMarkerLogins(
+    Array.isArray(config?.trustedMarkerActors)
+      ? config.trustedMarkerActors
+      : [],
+  );
+  if (fromConfig.length > 0) {
+    return { actors: fromConfig, source: 'config' };
+  }
+  return { actors: [], source: 'none' };
+}
+
+function splitLoginCsv(value) {
+  return String(value ?? '')
     .split(',')
     .map((login) => login.trim())
     .filter((login) => login.length > 0);
-  return new Set(normalizeTrustedMarkerLogins(list));
+}
+
+function loadIddConfig() {
+  try {
+    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 export function isTrustedAuthor(author, trustedSet) {
@@ -363,7 +407,7 @@ function parseArgs(argv) {
   const args = {
     subjectIds: [],
     classifier: 'OUTDATED',
-    trustedMarkerLogins: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+    trustedMarkerLogins: '',
     apply: false,
     allowUntrusted: false,
     format: 'json',
@@ -433,12 +477,13 @@ function printUsage() {
   console.log(
     `Usage: minimize-superseded-markers --subject-ids <id1,id2,...> [--classifier OUTDATED|RESOLVED] [--trusted-marker-logins login1,login2] [--allow-untrusted] [--apply] [--format json|table]
 
-The trusted-author gate is mandatory by default: pass a non-empty
---trusted-marker-logins list (or set IDD_TRUSTED_MARKER_ACTORS) so the
-helper rejects markers from untrusted GitHub actors. Use
---allow-untrusted only when you intentionally want to minimize markers
-regardless of author, and the caller has already verified the subject
-IDs are operationally safe to hide.`,
+The trusted-author gate is mandatory by default: supply trusted logins
+via --trusted-marker-logins, IDD_TRUSTED_MARKER_ACTORS, or the
+trustedMarkerActors list in .github/idd/config.json (flag > env >
+config precedence) so the helper rejects markers from untrusted GitHub
+actors. Use --allow-untrusted only when you intentionally want to
+minimize markers regardless of author, and the caller has already
+verified the subject IDs are operationally safe to hide.`,
   );
 }
 

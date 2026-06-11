@@ -1355,6 +1355,40 @@ function trustedMarkerActorTokens(value) {
   return Array.isArray(value) ? value : String(value ?? '').split(',');
 }
 
+export function unionTrustedMarkerActorSources({
+  envValue = '',
+  config = null,
+  extraActors = [],
+  extraSource = '',
+} = {}) {
+  const sources = [];
+  const actors = [];
+  const extras = normalizeTrustedMarkerLogins(extraActors);
+  if (extras.length > 0) {
+    actors.push(...extras);
+    if (extraSource) {
+      sources.push(extraSource);
+    }
+  }
+  const fromEnv = normalizeTrustedMarkerLogins(
+    trustedMarkerActorTokens(envValue),
+  );
+  if (fromEnv.length > 0) {
+    actors.push(...fromEnv);
+    sources.push('env');
+  }
+  const fromConfig = normalizeTrustedMarkerLogins(
+    Array.isArray(config?.trustedMarkerActors)
+      ? config.trustedMarkerActors
+      : [],
+  );
+  if (fromConfig.length > 0) {
+    actors.push(...fromConfig);
+    sources.push('config');
+  }
+  return { actors: normalizeTrustedMarkerLogins(actors), sources };
+}
+
 export function resolveAdvisoryBotLogins({
   flagValue = '',
   envValue = '',

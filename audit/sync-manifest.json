@@ -571,6 +571,12 @@
       "source": "skills/issue-authoring/references/workflow-boundary.md",
       "target": ".claude/skills/issue-authoring/references/workflow-boundary.md",
       "mode": "exact"
+    },
+    {
+      "id": "minimize-superseded-markers-helper",
+      "source": "idd-template/scripts/minimize-superseded-markers.mjs",
+      "target": "scripts/minimize-superseded-markers.mjs",
+      "mode": "exact"
     }
   ],
   "forbiddenPatterns": [

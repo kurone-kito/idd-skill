@@ -61,6 +61,25 @@ In the idd-skill source repository, the following optional helpers were adopted:
   `advisory-wait`, or `claimed-by` markers — called by E1 (Step 2),
   advisory-wait AW3-H, and claim takeover after the replacement
   marker is verified
+
+  Per-helper trust model: `minimize-superseded-markers` resolves its
+  trusted-author gate with the same `flag > env > config` ladder as the
+  evidence helpers (the singular `trustedMarkerActorsSource` names the
+  winning source) and stays self-contained so the template copy works
+  without `protocol-helpers.mjs`. `audit-pr-cleanup` and
+  `forced-handoff-marker` instead **union** the configured sources —
+  viewer, flag (where accepted), `IDD_TRUSTED_MARKER_ACTORS`, and the
+  config `trustedMarkerActors` list — with the optional
+  collaborator-permission trust; their JSON evidence reports the
+  resolved viewer-plus-configured list and the plural
+  `trustedMarkerActorsSources` mix. Collaborator trust never appears in
+  the list itself: both helpers add a `collaborators` source tag when
+  collaborator permission actually trusted an author, and
+  `audit-pr-cleanup` additionally reports the capability as
+  `collaboratorTrustEnabled`. Config-listed actors therefore widen
+  trust explicitly while collaborator-permission trust stays opt-in
+  (the `IDD_TRUST_COLLABORATOR_MARKERS` environment variable or the
+  `trustCollaboratorMarkers` config field)
 - `scripts/review-disposition-verify.mjs` for read-only E7 disposition
   marker presence verification across PATH A and PATH B items
 

@@ -314,8 +314,11 @@ claim may use `--skip-claim-check`, but ordinary IDD agents should not.
 
 During claim verification, the helper ignores `claimed-by` and
 `unclaimed-by` markers whose GitHub author is not trusted. By default,
-trusted marker authors are the current authenticated GitHub actor and
-the logins listed in `IDD_TRUSTED_MARKER_ACTORS`. Set
+trusted marker authors are the current authenticated GitHub actor plus
+the union of the logins listed in `IDD_TRUSTED_MARKER_ACTORS` and the
+`trustedMarkerActors` list in `.github/idd/config.json`; the resolved
+list and its source mix are emitted in the report
+(`trustedMarkerActors`, `trustedMarkerActorsSources`). Set
 `IDD_TRUST_COLLABORATOR_MARKERS=true` only when the repository
 explicitly allows any Write, Maintain, or Admin collaborator to post
 operational markers.
