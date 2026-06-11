@@ -40,6 +40,17 @@ interface QuietWindowResult {
   };
 }
 
+/**
+ * JSON state document printed by this CLI: repository / PR / policy
+ * context plus the quiet-window evaluation result
+ * (schemas/stalled-session-quiet-check.schema.json).
+ */
+export interface StalledSessionQuietCheckReport extends QuietWindowResult {
+  repository: { owner: string; repo: string };
+  pr: { number: number; title: string; head_sha: string; html_url: string };
+  policy: { quiet_window_ms: number; claim_created_at: string | null };
+}
+
 interface QuietArgs {
   pr: number | null;
   owner: string;
@@ -214,7 +225,7 @@ function runCli(): void {
     html_url?: unknown;
   };
 
-  const output = {
+  const output: StalledSessionQuietCheckReport = {
     repository: { owner, repo },
     pr: {
       number: Number(pr.number),

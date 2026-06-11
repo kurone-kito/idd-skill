@@ -23,7 +23,12 @@ interface BranchStateDerivation {
   mergeableSource: string;
 }
 
-interface BranchConflictResult {
+/**
+ * JSON state document printed by this CLI: the branch conflict and
+ * synchronization classification for one PR head
+ * (schemas/branch-conflict-state.schema.json).
+ */
+export interface BranchConflictResult {
   protocolVersion: string;
   prNumber: number;
   prHeadSha: string;
