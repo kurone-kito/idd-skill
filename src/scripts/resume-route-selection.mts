@@ -596,10 +596,13 @@ function fetchReviewThreads({
     if (!pageInfo?.hasNextPage) {
       break;
     }
-    cursor = pageInfo.endCursor;
-    if (!cursor) {
-      break;
+    // hasNextPage with a missing cursor would silently undercount
+    // unresolved threads; fail fast on the malformed payload instead,
+    // matching the other pagination loops in this cluster.
+    if (!pageInfo.endCursor) {
+      throw new Error('review thread pagination payload is missing endCursor');
     }
+    cursor = pageInfo.endCursor;
   }
   return threads;
 }
