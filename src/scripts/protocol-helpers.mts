@@ -193,7 +193,7 @@ interface OperationalMarker {
 }
 
 /** Live-status digest field inputs (validated at render time). */
-interface LiveStatusDigestFields {
+export interface LiveStatusDigestFields {
   phase?: unknown;
   claim?: unknown;
   branch?: unknown;
