@@ -4,32 +4,113 @@
 // The scripts/live-status-digest.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
   collaboratorPermission,
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
-} from './collaborator-permission.mjs';
-import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
+} from './collaborator-permission.mts';
+import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
 import {
   normalizeTrustedMarkerLogins,
   parsePaginatedGhNdjson,
   planLiveStatusDigestUpsert,
   summarizeClaimValidation,
-} from './protocol-helpers.mjs';
+} from './protocol-helpers.mts';
+
+/** Author reference embedded in GitHub REST payloads. */
+interface GhAuthorPayload {
+  login?: string | null;
+}
+
+/** Issue comment payload fields consumed by this helper. */
+interface IssueCommentRestPayload {
+  id?: string | number | null;
+  url?: string | null;
+  html_url?: string | null;
+  body?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  user?: GhAuthorPayload | null;
+}
+
+/** Parsed CLI arguments. */
+interface LiveStatusDigestArgs {
+  format: string;
+  help?: boolean;
+  issue?: string;
+  pr?: string;
+  repo?: string;
+  dryRun?: boolean;
+  apply?: boolean;
+  phase?: string;
+  claim?: string;
+  branch?: string;
+  lastChecked?: string;
+  openBlockers?: string;
+  nextAction?: string;
+  authoritativeBy?: string;
+  claimIssue?: string;
+  claimId?: string;
+  agentId?: string;
+  skipClaimCheck?: boolean;
+  includeBody?: boolean;
+}
+
+/** Duplicate-digest evidence row in the upsert plan and report. */
+interface LiveStatusDigestDuplicate {
+  id: string | number | null;
+  url: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+/** Upsert plan produced by `planLiveStatusDigestUpsert`. */
+interface LiveStatusDigestPlan {
+  action: string;
+  canApply: boolean;
+  body: string | null;
+  commentId?: string | number | null;
+  url?: string | null;
+  duplicates: LiveStatusDigestDuplicate[];
+  repairPath?: string;
+}
+
+/**
+ * JSON state document printed by this CLI: the live-status digest
+ * upsert plan/apply outcome for one issue or pull request.
+ */
+export interface LiveStatusDigestReport {
+  repository: string;
+  target: { type: 'issue' | 'pr'; number: number };
+  mode: 'apply' | 'dry-run';
+  action: string;
+  canApply: boolean;
+  commentId: string | number | null;
+  url: string | null;
+  duplicates: LiveStatusDigestDuplicate[];
+  repairPath: string | null;
+  applied: boolean;
+  body?: string | null;
+}
 
 const TRUSTED_MARKER_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
-const trustedMarkerAuthorCache = new Map();
-const collaboratorPermissionCache = new Map();
-let cachedConfiguredTrustedMarkerAuthors = null;
-let cachedCurrentViewerLogin = null;
+const trustedMarkerAuthorCache = new Map<string, boolean>();
+const collaboratorPermissionCache: CollaboratorPermissionCache = new Map();
+let cachedConfiguredTrustedMarkerAuthors: Set<string> | null = null;
+let cachedCurrentViewerLogin: string | null = null;
+
 const args = parseArgs(process.argv.slice(2));
+
 if (args.help) {
   printUsage();
   process.exit(0);
 }
+
 if (args.issue && args.pr) {
   fail('choose only one of --issue or --pr');
 }
@@ -52,6 +133,7 @@ if (args.apply && !args.skipClaimCheck && (!args.claimIssue || !args.claimId)) {
     '--apply requires --claim-issue and --claim-id, or explicit --skip-claim-check',
   );
 }
+
 const repository = args.repo ?? detectRepository();
 const [owner, repo] = parseRepository(repository);
 const targetType = args.issue ? 'issue' : 'pr';
@@ -69,11 +151,13 @@ const claimContext =
         ),
       }
     : {};
+
 if (args.claimIssue) {
   args.claimIssue = String(
     parsePositiveInteger(args.claimIssue, '--claim-issue'),
   );
 }
+
 const fields = {
   phase: args.phase,
   claim: args.claim,
@@ -83,14 +167,15 @@ const fields = {
   nextAction: args.nextAction,
   authoritativeBy: args.authoritativeBy,
 };
+
 const comments = fetchIssueComments(owner, repo, targetNumber);
-let planned;
+let planned: LiveStatusDigestPlan;
 try {
   planned = planLiveStatusDigestUpsert(comments, fields);
 } catch (error) {
-  fail(error.message);
+  fail((error as Error).message);
 }
-const report = {
+const report: LiveStatusDigestReport = {
   repository: `${owner}/${repo}`,
   target: {
     type: targetType,
@@ -106,10 +191,12 @@ const report = {
   applied: false,
   body: args.includeBody ? planned.body : undefined,
 };
+
 if (planned.action === 'duplicate') {
   writeReport(report, args.format);
   process.exit(1);
 }
+
 if (args.apply) {
   if (!args.skipClaimCheck) {
     try {
@@ -122,22 +209,24 @@ if (args.apply) {
         claimContext,
       );
     } catch (error) {
-      fail(error.message);
+      fail((error as Error).message);
     }
   }
+
   try {
     planned = planLiveStatusDigestUpsert(
       fetchIssueComments(owner, repo, targetNumber),
       fields,
     );
   } catch (error) {
-    fail(error.message);
+    fail((error as Error).message);
   }
   updateReportFromPlan(report, planned);
   if (planned.action === 'duplicate') {
     writeReport(report, args.format);
     process.exit(1);
   }
+
   if (planned.action === 'create') {
     const created = createIssueComment(owner, repo, targetNumber, planned.body);
     report.applied = true;
@@ -158,8 +247,13 @@ if (args.apply) {
     report.url = updated.html_url ?? updated.url ?? planned.url ?? null;
   }
 }
+
 writeReport(report, args.format);
-function updateReportFromPlan(report, planned) {
+
+function updateReportFromPlan(
+  report: LiveStatusDigestReport,
+  planned: LiveStatusDigestPlan,
+): void {
   report.action = planned.action;
   report.canApply = planned.canApply;
   report.commentId = planned.commentId ?? null;
@@ -170,7 +264,12 @@ function updateReportFromPlan(report, planned) {
     report.body = planned.body;
   }
 }
-function fetchIssueComments(owner, repo, number) {
+
+function fetchIssueComments(
+  owner: string,
+  repo: string,
+  number: number | string | undefined,
+) {
   // gh api with --paginate and --jq '.[]' emits one JSON object per line.
   // --slurp landed in gh v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0
   // via apt, so keep the NDJSON-compatible form here.
@@ -186,7 +285,7 @@ function fetchIssueComments(owner, repo, number) {
       ],
       { encoding: 'utf8' },
     ),
-  );
+  ) as IssueCommentRestPayload[];
   return result.map((comment) => ({
     id: comment.id,
     url: comment.url,
@@ -197,7 +296,13 @@ function fetchIssueComments(owner, repo, number) {
     author: { login: comment.user?.login ?? '' },
   }));
 }
-function createIssueComment(owner, repo, number, body) {
+
+function createIssueComment(
+  owner: string,
+  repo: string,
+  number: number,
+  body: string | null,
+) {
   return ghJson([
     'api',
     `repos/${owner}/${repo}/issues/${number}/comments`,
@@ -205,9 +310,19 @@ function createIssueComment(owner, repo, number, body) {
     'POST',
     '-f',
     `body=${body}`,
-  ]);
+  ]) as {
+    id?: string | number | null;
+    html_url?: string | null;
+    url?: string | null;
+  };
 }
-function updateIssueComment(owner, repo, commentId, body) {
+
+function updateIssueComment(
+  owner: string,
+  repo: string,
+  commentId: string | number,
+  body: string | null,
+) {
   return ghJson([
     'api',
     `repos/${owner}/${repo}/issues/comments/${commentId}`,
@@ -215,16 +330,21 @@ function updateIssueComment(owner, repo, commentId, body) {
     'PATCH',
     '-f',
     `body=${body}`,
-  ]);
+  ]) as {
+    id?: string | number | null;
+    html_url?: string | null;
+    url?: string | null;
+  };
 }
+
 function assertActiveClaim(
-  owner,
-  repo,
-  issueNumber,
-  agentId,
-  claimId,
-  options = {},
-) {
+  owner: string,
+  repo: string,
+  issueNumber: string | undefined,
+  agentId: string | undefined,
+  claimId: string | undefined,
+  options: { expectedLinkedPrs?: string[] } = {},
+): void {
   const active = readActiveClaim(owner, repo, issueNumber, options);
   if (
     !active ||
@@ -237,7 +357,13 @@ function assertActiveClaim(
     );
   }
 }
-function readActiveClaim(owner, repo, issueNumber, options = {}) {
+
+function readActiveClaim(
+  owner: string,
+  repo: string,
+  issueNumber: string | undefined,
+  options: { expectedLinkedPrs?: string[] } = {},
+) {
   const comments = fetchIssueComments(owner, repo, issueNumber).map(
     (comment) => {
       return {
@@ -247,6 +373,7 @@ function readActiveClaim(owner, repo, issueNumber, options = {}) {
       };
     },
   );
+
   // Read the authority policy once per call; the
   // isAuthorizedForcedHandoff callback may fire multiple times during
   // claim parsing and re-reading .github/idd/config.json on each call
@@ -265,9 +392,15 @@ function readActiveClaim(owner, repo, issueNumber, options = {}) {
         collaboratorPermissionCache,
       ),
   });
+
   return summary.activeClaimPresent ? summary.activeClaim : null;
 }
-function resolveTrustedMarkerLogins(owner, repo, comments) {
+
+function resolveTrustedMarkerLogins(
+  owner: string,
+  repo: string,
+  comments: { author?: GhAuthorPayload | null }[],
+): string[] {
   return normalizeTrustedMarkerLogins(
     comments
       .map((comment) => comment.author?.login ?? '')
@@ -275,7 +408,12 @@ function resolveTrustedMarkerLogins(owner, repo, comments) {
       .filter((login) => isTrustedMarkerAuthor(owner, repo, login)),
   );
 }
-function buildExpectedLinkedPrReferences(owner, repo, prNumber) {
+
+function buildExpectedLinkedPrReferences(
+  owner: string,
+  repo: string,
+  prNumber: number,
+): string[] {
   const normalized = String(prNumber ?? '').trim();
   if (!normalized) {
     return [];
@@ -286,10 +424,16 @@ function buildExpectedLinkedPrReferences(owner, repo, prNumber) {
     `https://github.com/${owner}/${repo}/pull/${normalized}`,
   ];
 }
-function isTrustedMarkerAuthor(owner, repo, login) {
+
+function isTrustedMarkerAuthor(
+  owner: string,
+  repo: string,
+  login: string,
+): boolean {
   if (!login) {
     return false;
   }
+
   const normalized = login.toLowerCase();
   if (normalized === currentViewerLogin()) {
     return true;
@@ -297,24 +441,30 @@ function isTrustedMarkerAuthor(owner, repo, login) {
   if (configuredTrustedMarkerAuthors().has(normalized)) {
     return true;
   }
+
   if (!trustCollaboratorMarkers()) {
     return false;
   }
+
   const cacheKey = `${owner}/${repo}:${normalized}`;
   if (trustedMarkerAuthorCache.has(cacheKey)) {
     return trustedMarkerAuthorCache.get(cacheKey) ?? false;
   }
+
   const trusted = TRUSTED_MARKER_PERMISSIONS.has(
     collaboratorPermission(owner, repo, normalized, collaboratorPermissionCache)
       .permission,
   );
+
   trustedMarkerAuthorCache.set(cacheKey, trusted);
   return trusted;
 }
-function currentViewerLogin() {
+
+function currentViewerLogin(): string {
   if (cachedCurrentViewerLogin !== null) {
     return cachedCurrentViewerLogin;
   }
+
   try {
     cachedCurrentViewerLogin = execFileSync(
       'gh',
@@ -328,10 +478,12 @@ function currentViewerLogin() {
   }
   return cachedCurrentViewerLogin;
 }
-function configuredTrustedMarkerAuthors() {
+
+function configuredTrustedMarkerAuthors(): Set<string> {
   if (cachedConfiguredTrustedMarkerAuthors) {
     return cachedConfiguredTrustedMarkerAuthors;
   }
+
   cachedConfiguredTrustedMarkerAuthors = new Set(
     (process.env.IDD_TRUSTED_MARKER_ACTORS ?? '')
       .split(',')
@@ -340,7 +492,8 @@ function configuredTrustedMarkerAuthors() {
   );
   return cachedConfiguredTrustedMarkerAuthors;
 }
-function trustCollaboratorMarkers() {
+
+function trustCollaboratorMarkers(): boolean {
   try {
     return resolveCollaboratorMarkerTrust(
       JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
@@ -353,7 +506,8 @@ function trustCollaboratorMarkers() {
     process.env.IDD_TRUST_COLLABORATOR_MARKERS ?? '',
   );
 }
-function detectRepository() {
+
+function detectRepository(): string {
   if (process.env.GITHUB_REPOSITORY) {
     return process.env.GITHUB_REPOSITORY;
   }
@@ -365,7 +519,8 @@ function detectRepository() {
     },
   ).trim();
 }
-function parseRepository(value) {
+
+function parseRepository(value: string): string[] {
   const parts = value.split('/');
   if (
     parts.length !== 2 ||
@@ -375,34 +530,43 @@ function parseRepository(value) {
   }
   return parts;
 }
-function ghJson(commandArgs) {
+
+function ghJson(commandArgs: string[]): unknown {
   try {
     return JSON.parse(execFileSync('gh', commandArgs, { encoding: 'utf8' }));
   } catch (error) {
-    const stdout = String(error.stdout ?? '').trim();
-    const stderr = String(error.stderr ?? '').trim();
-    const response = parseJsonOrNull(stdout);
+    const stdout = String((error as { stdout?: unknown }).stdout ?? '').trim();
+    const stderr = String((error as { stderr?: unknown }).stderr ?? '').trim();
+    const response = parseJsonOrNull(stdout) as {
+      message?: unknown;
+      errors?: unknown;
+    } | null;
     if (response?.message || response?.errors) {
       fail(`gh ${commandArgs.join(' ')} failed: ${JSON.stringify(response)}`);
     }
     if (response) {
       return response;
     }
-    fail(`gh ${commandArgs.join(' ')} failed: ${stderr || error.message}`);
+    fail(
+      `gh ${commandArgs.join(' ')} failed: ${stderr || (error as Error).message}`,
+    );
   }
 }
-function parseJsonOrNull(value) {
+
+function parseJsonOrNull(value: string): unknown {
   try {
     return JSON.parse(value);
   } catch {
     return null;
   }
 }
-function writeReport(report, format) {
+
+function writeReport(report: LiveStatusDigestReport, format: string): void {
   if (format === 'json') {
     console.log(`${JSON.stringify(report, null, 2)}\n`);
     return;
   }
+
   console.log(`mode\taction\tcanApply\tapplied\tcommentId\turl`);
   console.log(
     [
@@ -432,10 +596,12 @@ function writeReport(report, format) {
     console.log(`repairPath:\t${report.repairPath}`);
   }
 }
-function parseArgs(argv) {
-  const parsed = {
+
+function parseArgs(argv: string[]): LiveStatusDigestArgs {
+  const parsed: LiveStatusDigestArgs = {
     format: 'json',
   };
+
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     switch (arg) {
@@ -504,6 +670,7 @@ function parseArgs(argv) {
         fail(`unknown argument ${arg}`);
     }
   }
+
   for (const flag of [
     ['phase', '--phase'],
     ['claim', '--claim'],
@@ -511,32 +678,37 @@ function parseArgs(argv) {
     ['openBlockers', '--open-blockers'],
     ['nextAction', '--next-action'],
     ['authoritativeBy', '--authoritative-by'],
-  ]) {
+  ] as const) {
     if (!parsed[flag[0]]) {
       if (!parsed.help) {
         fail(`${flag[1]} is required`);
       }
     }
   }
+
   return parsed;
 }
-function readValue(argv, index, flag) {
+
+function readValue(argv: string[], index: number, flag: string): string {
   const value = argv[index];
   if (!value || value.startsWith('--')) {
     fail(`${flag} requires a value`);
   }
   return value;
 }
-function parsePositiveInteger(value, flag) {
+
+function parsePositiveInteger(value: string | undefined, flag: string): number {
   if (!value || !/^[1-9]\d*$/.test(value)) {
     fail(`${flag} must be a positive integer`);
   }
   return Number.parseInt(value, 10);
 }
-function currentIsoTimestamp() {
+
+function currentIsoTimestamp(): string {
   return new Date().toISOString().replace('.000Z', 'Z');
 }
-function printUsage() {
+
+function printUsage(): void {
   console.log(`usage: node scripts/live-status-digest.mjs (--issue <number> | --pr <number>) [options]
 
 Options:
@@ -563,7 +735,8 @@ Environment:
   IDD_TRUST_COLLABORATOR_MARKERS    set true to trust Write/Maintain/Admin collaborators
 `);
 }
-function fail(message) {
+
+function fail(message: string): never {
   console.error(`error: ${message}`);
   process.exit(2);
 }

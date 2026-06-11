@@ -4,18 +4,89 @@
 // The scripts/review-activity-snapshot.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+
 import {
   buildActivitySnapshotSummary,
   resolveAdvisoryBotLogins,
   resolveTrustedMarkerActors,
-} from './protocol-helpers.mjs';
+} from './protocol-helpers.mts';
+
+/** Author reference embedded in GitHub REST/GraphQL payloads. */
+interface GhAuthorPayload {
+  login?: string | null;
+}
+
+/** Issue comment payload fields consumed by this helper. */
+interface IssueCommentPayload {
+  body?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  user?: GhAuthorPayload | null;
+}
+
+/** PR review payload fields consumed by this helper. */
+interface ReviewPayload {
+  state?: string | null;
+  user?: GhAuthorPayload | null;
+  submitted_at?: string | null;
+  updated_at?: string | null;
+}
+
+/** CI status-check entry returned by `gh pr checks`. */
+interface CheckPayload {
+  name?: string | null;
+  state?: string | null;
+  completedAt?: string | null;
+}
+
+/** GraphQL pagination cursor block. */
+interface PageInfoPayload {
+  hasNextPage?: boolean | null;
+  endCursor?: string | null;
+}
+
+/** Review-thread reply node (GraphQL `reviewThreads` comment). */
+interface ThreadCommentPayload {
+  body?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  author?: GhAuthorPayload | null;
+  pullRequestReview?: { id?: string | null } | null;
+}
+
+/** Review thread (GraphQL `reviewThreads` node). */
+interface ReviewThreadPayload {
+  id?: string | null;
+  isResolved?: boolean | null;
+  comments?: {
+    pageInfo?: PageInfoPayload | null;
+    nodes: ThreadCommentPayload[];
+  } | null;
+}
+
+/** GraphQL `reviewThreads` connection payload. */
+interface ReviewThreadsConnectionPayload {
+  pageInfo?: PageInfoPayload | null;
+  nodes?: ReviewThreadPayload[] | null;
+}
+
+/** Parsed CLI arguments. */
+interface ReviewActivitySnapshotArgs {
+  prNumber: number | null;
+  owner: string;
+  repo: string;
+  trustedMarkerLogins: string;
+  advisoryBotLogins: string;
+}
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.prNumber) {
   throw new Error('missing required --pr <number> argument');
 }
+
 const owner =
   args.owner ||
   ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
@@ -35,6 +106,7 @@ const { logins: advisoryBotLogins, source: advisoryBotLoginsSource } =
     envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
     config: iddConfig,
   });
+
 const headSha = ghText([
   'pr',
   'view',
@@ -59,16 +131,17 @@ const checks = ghJson(
     '.',
   ],
   { allowStatuses: [1, 8] },
-);
+) as CheckPayload[];
 const reviews = ghApiJson(
   `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
   true,
-);
+) as ReviewPayload[];
 const comments = ghApiJson(
   `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
   true,
-);
+) as IssueCommentPayload[];
 const threads = fetchReviewThreads(owner, repo, args.prNumber);
+
 const summary = buildActivitySnapshotSummary(
   {
     comments: comments.map(normalizeComment),
@@ -85,6 +158,7 @@ const summary = buildActivitySnapshotSummary(
     dispositionAuthorLogins: trustedMarkerLogins,
   },
 );
+
 process.stdout.write(
   `${JSON.stringify(
     {
@@ -103,21 +177,30 @@ process.stdout.write(
     2,
   )}\n`,
 );
-function loadIddConfig() {
+
+function loadIddConfig(): {
+  trustedMarkerActors?: unknown;
+  advisoryBotLogins?: unknown;
+} | null {
   try {
-    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
+    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8')) as {
+      trustedMarkerActors?: unknown;
+      advisoryBotLogins?: unknown;
+    };
   } catch {
     return null;
   }
 }
-function parseArgs(argv) {
-  const parsed = {
+
+function parseArgs(argv: string[]): ReviewActivitySnapshotArgs {
+  const parsed: ReviewActivitySnapshotArgs = {
     prNumber: null,
     owner: '',
     repo: '',
     trustedMarkerLogins: '',
     advisoryBotLogins: '',
   };
+
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
@@ -152,17 +235,21 @@ function parseArgs(argv) {
     }
     throw new Error(`unknown argument: ${token}`);
   }
+
   if (!Number.isInteger(parsed.prNumber) || (parsed.prNumber ?? 0) < 1) {
     parsed.prNumber = null;
   }
+
   return parsed;
 }
-function printHelp() {
+
+function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/review-activity-snapshot.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <login1,login2>]
 `);
 }
-function normalizeComment(comment) {
+
+function normalizeComment(comment: IssueCommentPayload) {
   return {
     author: { login: comment.user?.login ?? '' },
     body: comment.body ?? '',
@@ -170,7 +257,8 @@ function normalizeComment(comment) {
     updatedAt: comment.updated_at ?? comment.created_at ?? '',
   };
 }
-function normalizeReview(review) {
+
+function normalizeReview(review: ReviewPayload) {
   return {
     author: { login: review.user?.login ?? '' },
     state: review.state ?? '',
@@ -179,7 +267,8 @@ function normalizeReview(review) {
     updatedAt: review.updated_at ?? review.submitted_at ?? '',
   };
 }
-function normalizeThread(thread) {
+
+function normalizeThread(thread: ReviewThreadPayload) {
   return {
     id: thread.id,
     isResolved: Boolean(thread.isResolved),
@@ -198,9 +287,15 @@ function normalizeThread(thread) {
     },
   };
 }
-function fetchReviewThreads(owner, repo, prNumber) {
-  const nodes = [];
-  let cursor = null;
+
+function fetchReviewThreads(
+  owner: string,
+  repo: string,
+  prNumber: number,
+): ReviewThreadPayload[] {
+  const nodes: ReviewThreadPayload[] = [];
+  let cursor: string | null | undefined = null;
+
   while (true) {
     const payload = ghGraphql(
       `
@@ -233,7 +328,16 @@ function fetchReviewThreads(owner, repo, prNumber) {
         number: Number.parseInt(String(prNumber), 10),
         cursor,
       },
-    );
+    ) as {
+      data?: {
+        repository?: {
+          pullRequest?: {
+            reviewThreads?: ReviewThreadsConnectionPayload | null;
+          } | null;
+        } | null;
+      } | null;
+    };
+
     const reviewThreads = payload?.data?.repository?.pullRequest?.reviewThreads;
     for (const thread of reviewThreads?.nodes ?? []) {
       if (thread.comments?.pageInfo?.hasNextPage) {
@@ -247,16 +351,23 @@ function fetchReviewThreads(owner, repo, prNumber) {
       }
     }
     nodes.push(...(reviewThreads?.nodes ?? []));
+
     if (!reviewThreads?.pageInfo?.hasNextPage) {
       break;
     }
     cursor = reviewThreads.pageInfo.endCursor;
   }
+
   return nodes;
 }
-function fetchThreadCommentPages(threadId, afterCursor) {
-  const nodes = [];
+
+function fetchThreadCommentPages(
+  threadId: string | null | undefined,
+  afterCursor: string | null | undefined,
+): ThreadCommentPayload[] {
+  const nodes: ThreadCommentPayload[] = [];
   let cursor = afterCursor;
+
   while (cursor) {
     const payload = ghGraphql(
       `
@@ -277,16 +388,31 @@ function fetchThreadCommentPages(threadId, afterCursor) {
           }
         }`,
       { id: threadId, cursor },
-    );
+    ) as {
+      data?: {
+        node?: {
+          comments?: {
+            pageInfo?: PageInfoPayload | null;
+            nodes?: ThreadCommentPayload[] | null;
+          } | null;
+        } | null;
+      } | null;
+    };
+
     const comments = payload?.data?.node?.comments;
     nodes.push(...(comments?.nodes ?? []));
     cursor = comments?.pageInfo?.hasNextPage
       ? comments.pageInfo.endCursor
       : null;
   }
+
   return nodes;
 }
-function ghGraphql(query, variables) {
+
+function ghGraphql(
+  query: string,
+  variables: Record<string, string | number | null | undefined>,
+): unknown {
   const args = ['api', 'graphql', '-f', `query=${query}`];
   for (const [key, value] of Object.entries(variables)) {
     if (value === null || value === undefined) {
@@ -300,13 +426,23 @@ function ghGraphql(query, variables) {
   }
   return JSON.parse(runGh(args).trim() || '{}');
 }
-function ghJson(args, options = {}) {
+
+function ghJson(
+  args: string[],
+  options: { allowStatuses?: number[] } = {},
+): unknown {
   return JSON.parse(runGh(args, options).trim() || '[]');
 }
-function ghText(args) {
+
+function ghText(args: string[]): string {
   return runGh(args).trim();
 }
-function ghApiJson(path, paginate = false, fields = null) {
+
+function ghApiJson(
+  path: string,
+  paginate = false,
+  fields: Record<string, unknown> | null = null,
+): unknown {
   const args = ['api', path];
   if (paginate) {
     args.push('--paginate');
@@ -328,18 +464,24 @@ function ghApiJson(path, paginate = false, fields = null) {
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean)
-      .map((line) => JSON.parse(line));
+      .map((line) => JSON.parse(line) as unknown);
     return chunks.flatMap((chunk) => (Array.isArray(chunk) ? chunk : [chunk]));
   }
   return JSON.parse(raw);
 }
-function runGh(args, options = {}) {
+
+function runGh(
+  args: string[],
+  options: { allowStatuses?: number[] } = {},
+): string {
   try {
     return execFileSync('gh', args, { encoding: 'utf8' });
   } catch (error) {
-    const status = Number(error?.status ?? -1);
+    const status = Number((error as { status?: unknown } | null)?.status ?? -1);
     if ((options.allowStatuses ?? []).includes(status)) {
-      const stdout = String(error?.stdout ?? '');
+      const stdout = String(
+        (error as { stdout?: unknown } | null)?.stdout ?? '',
+      );
       if (/^\s*[[{]/.test(stdout)) {
         return stdout;
       }
