@@ -5,6 +5,7 @@
   ],
   "files": {
     "includes": [
+      "src/**/*.mts",
       "scripts/**/*.mjs",
       "bin/**/*.mjs",
       "tests/**/*.mjs",

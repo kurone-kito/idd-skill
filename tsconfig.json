@@ -1,0 +1,28 @@
+{
+  // Type-check configuration for the IDD helper sources.
+  //
+  // Sources live in `src/**/*.mts` and are the only hand-edited JS
+  // surface; the committed `scripts/*.mjs` and `bin/*.mjs` artifacts are
+  // generated from them by `pnpm run build` (see `tsconfig.build.json`
+  // and `docs/typescript-sources.md`).
+  //
+  // The `include` set grows one conversion wave at a time, so unconverted
+  // hand-written `.mjs` files stay outside type-checking and CI is green
+  // throughout the migration.
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "esnext",
+    "lib": ["esnext"],
+    "types": ["node"],
+    "strict": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*.mts"]
+}

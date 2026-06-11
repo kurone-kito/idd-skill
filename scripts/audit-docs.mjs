@@ -37,6 +37,7 @@ checkBundleBudgets(manifest.bundleBudgets ?? []);
 checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
 checkRootMarkdownAllowlist(manifest.rootMarkdownAllowlist ?? null);
 checkConfigInstructionDrift();
+checkGeneratedSourcePairs();
 
 if (errors.length > 0) {
   console.error('documentation audit failed:');
@@ -58,6 +59,67 @@ for (const notice of notices) {
   console.log(`notice: ${notice}`);
 }
 console.log('documentation audit passed');
+
+// Structural pairing guard for the TypeScript migration: every
+// `src/**/*.mts` source must have its generated `.mjs` artifact committed,
+// and every banner-marked generated `.mjs` must have its source. This is a
+// pure-`node:` existence check (no TypeScript dependency) so it runs in the
+// install-free bare-node CI lane alongside the rest of the audit.
+function checkGeneratedSourcePairs() {
+  const bannerPattern = /^\/\/ idd-generated-from:\s*(\S+)/m;
+  const repoFileSet = new Set(repoFiles);
+
+  // Forward direction: each source has its generated counterpart.
+  for (const source of globFiles('src/**/*.mts')) {
+    const emitted = emittedPathForSource(source);
+    if (!emitted) {
+      errors.push(
+        `${source}: TypeScript helper sources must live under src/scripts/ or src/bin/ so the generated .mjs path is well-defined`,
+      );
+      continue;
+    }
+    if (!repoFileSet.has(emitted)) {
+      errors.push(
+        `${source}: missing generated artifact ${emitted}; run \`pnpm run build\` and commit the result`,
+      );
+    }
+  }
+
+  // Reverse direction: each banner-marked artifact has its source, and the
+  // banner resolves back to this exact file.
+  for (const emitted of [
+    ...globFiles('scripts/**/*.mjs'),
+    ...globFiles('bin/**/*.mjs'),
+  ]) {
+    const match = bannerPattern.exec(readText(emitted));
+    if (!match) {
+      continue;
+    }
+    const declaredSource = match[1];
+    if (!repoFileSet.has(declaredSource)) {
+      errors.push(
+        `${emitted}: generated-from banner names ${declaredSource}, which does not exist`,
+      );
+      continue;
+    }
+    const expectedEmitted = emittedPathForSource(declaredSource);
+    if (expectedEmitted !== emitted) {
+      errors.push(
+        `${emitted}: generated-from banner names ${declaredSource}, which maps to ${expectedEmitted ?? '(invalid source path)'}, not this file`,
+      );
+    }
+  }
+}
+
+function emittedPathForSource(source) {
+  if (
+    !source.endsWith('.mts') ||
+    !(source.startsWith('src/scripts/') || source.startsWith('src/bin/'))
+  ) {
+    return null;
+  }
+  return source.slice('src/'.length).replace(/\.mts$/, '.mjs');
+}
 
 function checkReadmePairs(pairs) {
   for (const pair of pairs) {
