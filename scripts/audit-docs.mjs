@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import {
   collectPolicyConfigDrift,
   collectRootMarkdownAllowlistViolations,
+  collectTypeSuppressionViolations,
 } from './consistency-helpers.mjs';
 
 const root = process.cwd();
@@ -36,6 +37,7 @@ checkInstructionSizeBudgets(manifest.instructionSizeBudgets ?? null);
 checkBundleBudgets(manifest.bundleBudgets ?? []);
 checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
 checkRootMarkdownAllowlist(manifest.rootMarkdownAllowlist ?? null);
+checkTypeSuppressionBudgets(manifest.typeSuppressionBudgets ?? null);
 checkConfigInstructionDrift();
 checkGeneratedSourcePairs();
 if (errors.length > 0) {
@@ -366,6 +368,36 @@ function checkForbiddenPatterns(patterns) {
 }
 function checkRootMarkdownAllowlist(config) {
   errors.push(...collectRootMarkdownAllowlistViolations(repoFiles, config));
+}
+// Type-suppression budget guard (ratchet, mirroring bundleBudgets): a
+// pure `node:` text scan so the bare-node lane enforces the budgets with
+// no typescript dependency. The collector lives in consistency-helpers so
+// it can be unit-tested without I/O.
+function checkTypeSuppressionBudgets(config) {
+  if (!config) {
+    return;
+  }
+  // A present budget entry with missing, empty, or non-string globs
+  // would scan zero (or the wrong) files and report success — fail
+  // closed on the misconfiguration instead of silently passing a CI
+  // quality gate. Non-string entries are rejected, not coerced: a
+  // stringified object would otherwise become a pseudo-glob matching
+  // nothing.
+  const rawGlobs = Array.isArray(config.globs) ? config.globs : [];
+  const globs = rawGlobs.filter(
+    (glob) => typeof glob === 'string' && glob.trim().length > 0,
+  );
+  if (globs.length === 0 || globs.length !== rawGlobs.length) {
+    errors.push(
+      `${String(config.id ?? 'type-suppression-budgets')}: globs must be a non-empty array of non-empty glob strings`,
+    );
+    return;
+  }
+  const files = uniqueSorted(globs.flatMap(globFiles)).map((path) => ({
+    path,
+    text: readText(path),
+  }));
+  errors.push(...collectTypeSuppressionViolations(files, config));
 }
 function checkConfigInstructionDrift() {
   const pairs = [
