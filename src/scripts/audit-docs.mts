@@ -511,17 +511,20 @@ function checkTypeSuppressionBudgets(
   if (!config) {
     return;
   }
-  // A present budget entry with missing or empty globs would scan zero
-  // files and report success — fail closed on the misconfiguration
-  // instead of silently passing a CI quality gate.
-  const globs = Array.isArray(config.globs)
-    ? config.globs
-        .map((glob) => String(glob))
-        .filter((glob) => glob.trim().length > 0)
-    : [];
-  if (globs.length === 0) {
+  // A present budget entry with missing, empty, or non-string globs
+  // would scan zero (or the wrong) files and report success — fail
+  // closed on the misconfiguration instead of silently passing a CI
+  // quality gate. Non-string entries are rejected, not coerced: a
+  // stringified object would otherwise become a pseudo-glob matching
+  // nothing.
+  const rawGlobs = Array.isArray(config.globs) ? config.globs : [];
+  const globs = rawGlobs.filter(
+    (glob): glob is string =>
+      typeof glob === 'string' && glob.trim().length > 0,
+  );
+  if (globs.length === 0 || globs.length !== rawGlobs.length) {
     errors.push(
-      `${String(config.id ?? 'type-suppression-budgets')}: globs must be a non-empty array of glob strings`,
+      `${String(config.id ?? 'type-suppression-budgets')}: globs must be a non-empty array of non-empty glob strings`,
     );
     return;
   }
