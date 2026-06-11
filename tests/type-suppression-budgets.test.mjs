@@ -139,6 +139,57 @@ test('counts occurrences across multiple files against one budget', () => {
   );
 });
 
+test('a string ending in a literal backslash does not blind the scan', () => {
+  // Regression: the '\\' idiom (string whose content is one backslash)
+  // must close the string state, so real code after it is still scanned
+  // and string interiors after it are still ignored.
+  const files = [
+    {
+      path: 'src/scripts/sample.mts',
+      text: [
+        "const sep = '\\\\';",
+        "const msg = 'value as any here';",
+        'const leak: any = parse();',
+      ].join('\n'),
+    },
+  ];
+  const violations = collectTypeSuppressionViolations(files, BUDGET_ZERO);
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /1 explicit any occurrence/);
+});
+
+test('regex literals containing quotes do not open phantom strings', () => {
+  const files = [
+    {
+      path: 'src/scripts/sample.mts',
+      text: [
+        'const re = /[\'"]/;',
+        'const classed = /[/]/;',
+        'function f(x) {',
+        '  return /["`]/.test(x);',
+        '}',
+        'const leak = value as any;',
+      ].join('\n'),
+    },
+  ];
+  const violations = collectTypeSuppressionViolations(files, BUDGET_ZERO);
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /1 explicit any occurrence/);
+});
+
+test('division is not mistaken for a regex literal', () => {
+  const files = [
+    {
+      path: 'src/scripts/sample.mts',
+      text: [
+        'const ratio = total / count;',
+        "const after = ratio / 2; const s = 'as any in string';",
+      ].join('\n'),
+    },
+  ];
+  assert.deepEqual(collectTypeSuppressionViolations(files, BUDGET_ZERO), []);
+});
+
 test('rejects malformed budget limits instead of failing open', () => {
   const files = [];
   assert.match(

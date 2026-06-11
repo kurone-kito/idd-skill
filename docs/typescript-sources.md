@@ -77,9 +77,9 @@ Strict mode only protects quality if suppressions do not accumulate, so
 The budgets record the **measured** current counts (zero at landing
 time). Ratchet rule: raising a limit requires an explicit callout in the
 PR description; lowering is always allowed. In the installed lane,
-Biome's `lint/suspicious/noExplicitAny` (enabled via the shared config's
-recommended set) is the precise `any` enforcement; the bare-node count is
-the install-free backstop.
+Biome's `lint/suspicious/noExplicitAny` (on via the recommended set)
+surfaces explicit `any` as a warning during development; this audit
+budget is the **blocking** enforcement in both CI lanes.
 
 The migration converts modules in dependency-ordered waves; only the
 sources listed in `tsconfig.json`'s `include` set are type-checked, so

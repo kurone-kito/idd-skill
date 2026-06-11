@@ -251,12 +251,32 @@ function normalizeBudgetLimit(value: unknown): number | null {
   return value;
 }
 
+// Words after which a `/` must start a regex literal, not division.
+const REGEX_PRECEDING_KEYWORDS = new Set([
+  'return',
+  'typeof',
+  'case',
+  'in',
+  'of',
+  'delete',
+  'void',
+  'instanceof',
+  'new',
+  'do',
+  'else',
+  'yield',
+  'await',
+]);
+
 // Text-level stripper for the explicit-`any` scan: blanks line comments,
-// block comments, and string/template-literal contents while preserving
-// line structure. An approximation (regex literals containing quote
-// characters can over-strip a short span), which is acceptable for a
-// budget backstop — the installed lane's Biome noExplicitAny rule is the
-// precise enforcement.
+// block comments, string/template-literal contents, and regex-literal
+// contents while preserving line structure. Escape sequences are
+// consumed as pairs so a string ending in a literal backslash closes
+// correctly, and regex literals (detected by the standard
+// last-significant-token heuristic, with bracket classes handled) cannot
+// open phantom strings. Template interpolation is the remaining
+// approximation: `${...}` code inside a template is stripped with the
+// template, so an explicit `any` inside an interpolation is not counted.
 function stripCommentsAndStrings(text: string): string {
   let out = '';
   let i = 0;
@@ -266,7 +286,13 @@ function stripCommentsAndStrings(text: string): string {
     | 'block-comment'
     | 'single'
     | 'double'
-    | 'template' = 'code';
+    | 'template'
+    | 'regex'
+    | 'regex-class' = 'code';
+  // Last non-whitespace character and last identifier word emitted in
+  // code state, used to decide whether `/` starts a regex literal.
+  let lastCodeChar = '';
+  let lastWord = '';
   while (i < text.length) {
     const ch = text[i];
     const next = text[i + 1];
@@ -279,6 +305,11 @@ function stripCommentsAndStrings(text: string): string {
       if (ch === '/' && next === '*') {
         state = 'block-comment';
         i += 2;
+        continue;
+      }
+      if (ch === '/' && regexCanStartAfter(lastCodeChar, lastWord)) {
+        state = 'regex';
+        i += 1;
         continue;
       }
       if (ch === "'") {
@@ -297,6 +328,10 @@ function stripCommentsAndStrings(text: string): string {
         continue;
       }
       out += ch;
+      if (!/\s/.test(ch)) {
+        lastCodeChar = ch;
+        lastWord = /[A-Za-z0-9_$]/.test(ch) ? lastWord + ch : '';
+      }
       i += 1;
       continue;
     }
@@ -308,27 +343,84 @@ function stripCommentsAndStrings(text: string): string {
       i += 1;
       continue;
     }
-    if (state === 'block-comment' && ch === '*' && next === '/') {
-      state = 'code';
+    if (state === 'block-comment') {
+      if (ch === '*' && next === '/') {
+        state = 'code';
+        i += 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    // Consume escape sequences as pairs in string and regex states so an
+    // escaped delimiter (or a literal backslash before the closing
+    // delimiter, e.g. '\\') cannot flip the state machine. Comments have
+    // no escapes. A line-continuation backslash still preserves the
+    // newline so line structure survives.
+    if (state !== 'line-comment' && ch === '\\') {
+      if (next === '\n') {
+        out += '\n';
+      }
       i += 2;
       continue;
     }
-    if (state === 'single' && ch === "'" && text[i - 1] !== '\\') {
+    if (state === 'single' && ch === "'") {
       state = 'code';
+      lastCodeChar = "'";
+      lastWord = '';
       i += 1;
       continue;
     }
-    if (state === 'double' && ch === '"' && text[i - 1] !== '\\') {
+    if (state === 'double' && ch === '"') {
       state = 'code';
+      lastCodeChar = '"';
+      lastWord = '';
       i += 1;
       continue;
     }
-    if (state === 'template' && ch === '`' && text[i - 1] !== '\\') {
+    if (state === 'template' && ch === '`') {
       state = 'code';
+      lastCodeChar = '`';
+      lastWord = '';
+      i += 1;
+      continue;
+    }
+    if (state === 'regex') {
+      if (ch === '[') {
+        state = 'regex-class';
+        i += 1;
+        continue;
+      }
+      if (ch === '/') {
+        state = 'code';
+        lastCodeChar = '/';
+        lastWord = '';
+        i += 1;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (state === 'regex-class' && ch === ']') {
+      state = 'regex';
       i += 1;
       continue;
     }
     i += 1;
   }
   return out;
+}
+
+// A `/` begins a regex literal when the previous significant token cannot
+// end an expression: at the start of the scan, after an operator or
+// opening punctuator, or after a keyword such as `return`. After an
+// identifier character, a closing bracket, or a literal it is division.
+function regexCanStartAfter(lastCodeChar: string, lastWord: string): boolean {
+  if (lastCodeChar === '') {
+    return true;
+  }
+  if (REGEX_PRECEDING_KEYWORDS.has(lastWord)) {
+    return true;
+  }
+  return !/[\w$)\]'"`/]/.test(lastCodeChar);
 }
