@@ -1,13 +1,16 @@
 #!/usr/bin/env node
+// idd-generated-from: src/scripts/cleanup-hygiene-report.mts
+//
+// The scripts/cleanup-hygiene-report.mjs copy is generated from the .mts
+// source named above by `pnpm run build`. Edit the .mts source, never the
+// generated .mjs. See docs/typescript-sources.md.
 /**
  * cleanup-hygiene-report.mjs
  *
  * Produces auditable cleanup hygiene snapshots for merged PRs.
  * Generates metrics for trend reporting and CI audit purposes.
  */
-
 import { execFileSync } from 'node:child_process';
-
 /**
  * Aggregate cleanup metrics from PR data
  *
@@ -19,72 +22,56 @@ export function aggregateMetrics(prs, timestamp) {
   if (!Array.isArray(prs)) {
     throw new Error('prs must be an array');
   }
-
   if (!timestamp || Number.isNaN(new Date(timestamp).getTime())) {
     throw new Error('timestamp must be a valid ISO 8601 date string');
   }
-
+  const prList = prs;
   const metrics = JSON.parse(JSON.stringify(METRIC_SCHEMA));
-
   metrics.timestamp = timestamp;
-
   // Set date ranges
   const now = new Date(timestamp);
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-
   metrics.trends.recent.data.startDate = sevenDaysAgo.toISOString();
   metrics.trends.recent.data.endDate = now.toISOString();
   metrics.trends.historical.data.beforeDate = sevenDaysAgo.toISOString();
-
   // Separate recent and historical PRs
-  const recentPRs = prs.filter((pr) => {
+  const recentPRs = prList.filter((pr) => {
     const mergedAt = new Date(pr.mergedAt);
     return !Number.isNaN(mergedAt.getTime()) && mergedAt >= sevenDaysAgo;
   });
-  const historicalPRs = prs.filter((pr) => {
+  const historicalPRs = prList.filter((pr) => {
     const mergedAt = new Date(pr.mergedAt);
     return !Number.isNaN(mergedAt.getTime()) && mergedAt < sevenDaysAgo;
   });
-
   // Classify recent PRs
   const skipReasonCounts = {};
   let recentClean = 0;
   let recentNeedsApply = 0;
-
   for (const pr of recentPRs) {
     const status = classifyPRCleanupStatus(pr);
-
     if (status.status === 'clean') {
       recentClean++;
-    } else if (status.status === 'needs_apply') {
+    } else {
       recentNeedsApply++;
       skipReasonCounts[status.reason] =
         (skipReasonCounts[status.reason] || 0) + (status.count || 1);
-    } else if (status.status === 'failed') {
-      metrics.candidatesByClassifier.failed++;
-    } else {
-      metrics.candidatesByClassifier.thresholdMissing++;
     }
   }
-
   // Update summary metrics (recent + historical)
-  const totalMergedPRs = prs.length;
+  const totalMergedPRs = prList.length;
   metrics.summary.totalMergedPRs = totalMergedPRs;
   metrics.summary.clean = recentClean;
   metrics.summary.needsApply = recentNeedsApply;
   metrics.summary.cleanPercentage =
     totalMergedPRs > 0 ? (recentClean / totalMergedPRs) * 100 : 0;
-
   // Update candidatesByClassifier
   metrics.candidatesByClassifier.skippedWithReason = Object.values(
     skipReasonCounts,
   ).reduce((a, b) => a + b, 0);
-
   // Update recent trend
   metrics.trends.recent.data.metrics.totalMergedPRs = recentPRs.length;
   metrics.trends.recent.data.metrics.clean = recentClean;
   metrics.trends.recent.data.metrics.needsApply = recentNeedsApply;
-
   // Classify historical PRs
   let historicalClean = 0;
   let historicalNeedsApply = 0;
@@ -101,29 +88,24 @@ export function aggregateMetrics(prs, timestamp) {
         (skipReasonCounts[status.reason] || 0) + (status.count || 1);
     }
   }
-
   metrics.trends.historical.data.metrics.totalMergedPRs = historicalPRs.length;
   metrics.trends.historical.data.metrics.clean = historicalClean;
   metrics.trends.historical.data.metrics.needsApply = historicalNeedsApply;
-
   // Populate top skip reasons (sorted by frequency)
   const sortedReasons = Object.entries(skipReasonCounts)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3);
-
   // Reset top skip reasons and populate from sorted data
   metrics.topSkipReasons = sortedReasons.map(([reason, count]) => ({
     reason,
     count,
   }));
-
   // Ensure we always have 3 entries (pad with defaults if needed)
   const defaultReasons = [
     { reason: 'review-thread-unresolved', count: 0 },
     { reason: 'operational-marker-present', count: 0 },
     { reason: 'held-by-maintainer', count: 0 },
   ];
-
   while (metrics.topSkipReasons.length < 3) {
     const nextDefault = defaultReasons.find(
       (dr) => !metrics.topSkipReasons.some((tr) => tr.reason === dr.reason),
@@ -134,43 +116,36 @@ export function aggregateMetrics(prs, timestamp) {
       break;
     }
   }
-
   return metrics;
 }
-
 /**
  * Classify a PR's cleanup status based on its comments
  */
 function classifyPRCleanupStatus(pr) {
   const comments = pr.comments || [];
   const candidates = [];
-
   for (const comment of comments) {
     if (isOperationalMarker(comment.body) && !comment.isMinimized) {
       candidates.push(comment);
     }
   }
-
   if (candidates.length === 0) {
     return { status: 'clean', reason: null };
   }
-
   return {
     status: 'needs_apply',
     reason: 'operational-marker-present',
     count: candidates.length,
   };
 }
-
 /**
  * Check if text is an operational marker
  */
 function isOperationalMarker(body) {
   return /<!--\s*(review-watermark|review-baseline|claimed-by|unclaimed-by|advisory-wait)/.test(
-    body,
+    String(body),
   );
 }
-
 /**
  * Parse CLI arguments
  */
@@ -182,7 +157,6 @@ function parseArgs(argv) {
     format: 'json',
     help: false,
   };
-
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--owner') {
@@ -199,10 +173,8 @@ function parseArgs(argv) {
       throw new Error(`unknown argument: ${arg}`);
     }
   }
-
   return args;
 }
-
 /**
  * Get current GitHub repository info from git
  */
@@ -214,18 +186,15 @@ function getRepoInfo() {
   ])
     .toString()
     .trim();
-
   const match = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)(\.git)?$/);
   if (!match) {
     throw new Error('Unable to extract owner/repo from git remote');
   }
-
   return {
     owner: match[1],
     repo: match[2],
   };
 }
-
 /**
  * Metric schema definition
  */
@@ -275,14 +244,12 @@ export const METRIC_SCHEMA = {
     },
   },
 };
-
 /**
  * Generate cleanup hygiene metrics
  * Optionally accepts mock PR data for testing
  */
 export async function generateMetrics(args, mockPRs = null) {
   const timestamp = new Date().toISOString();
-
   if (mockPRs !== null) {
     // Test mode: use mock data
     const metrics = aggregateMetrics(mockPRs, timestamp);
@@ -290,7 +257,6 @@ export async function generateMetrics(args, mockPRs = null) {
     if (args.repo) metrics.repository.name = args.repo;
     return metrics;
   }
-
   // Production mode: would query real PR data
   // For now, return empty metrics template with date ranges (requires full API integration)
   const metrics = JSON.parse(JSON.stringify(METRIC_SCHEMA));
@@ -298,27 +264,22 @@ export async function generateMetrics(args, mockPRs = null) {
   metrics.repository.owner = args.owner || repoInfo.owner;
   metrics.repository.name = args.repo || repoInfo.repo;
   metrics.timestamp = timestamp;
-
   // Set date ranges
   const now = new Date(timestamp);
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-
   metrics.trends.recent.data.startDate = sevenDaysAgo.toISOString();
   metrics.trends.recent.data.endDate = now.toISOString();
   metrics.trends.historical.data.beforeDate = sevenDaysAgo.toISOString();
-
   // In production, this would call an actual API to fetch merged PRs
   // and aggregate their cleanup status. For now, return the template.
   return metrics;
 }
-
 /**
  * Format output as JSON
  */
 function formatJSON(metrics) {
   return JSON.stringify(metrics, null, 2);
 }
-
 /**
  * Format output as CSV
  */
@@ -335,10 +296,8 @@ function formatCSV(metrics) {
   lines.push(`Clean,${metrics.summary.clean}`);
   lines.push(`Needs Apply,${metrics.summary.needsApply}`);
   lines.push(`Clean Percentage,${metrics.summary.cleanPercentage.toFixed(2)}%`);
-
   return lines.join('\n');
 }
-
 /**
  * Print usage
  */
@@ -357,22 +316,18 @@ Options:
   --help              Show this help message
   `);
 }
-
 /**
  * Main
  */
 async function main() {
   try {
     const args = parseArgs(process.argv.slice(2));
-
     if (args.help) {
       printUsage();
       process.exit(0);
     }
-
     const metrics = await generateMetrics(args);
     let output = '';
-
     if (args.format === 'json') {
       output = formatJSON(metrics);
     } else if (args.format === 'csv') {
@@ -380,12 +335,10 @@ async function main() {
     } else {
       throw new Error(`unknown format: ${args.format}`);
     }
-
     console.log(output);
   } catch (err) {
-    console.error(`Error: ${err.message}`);
+    console.error(`Error: ${err?.message}`);
     process.exit(1);
   }
 }
-
 main();

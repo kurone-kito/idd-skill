@@ -1,5 +1,9 @@
 #!/usr/bin/env node
-
+// idd-generated-from: src/scripts/verify-workshop-integrity.mts
+//
+// The scripts/verify-workshop-integrity.mjs copy is generated from the
+// .mts source named above by `pnpm run build`. Edit the .mts source,
+// never the generated .mjs. See docs/typescript-sources.md.
 import {
   existsSync,
   readdirSync,
@@ -19,7 +23,6 @@ import {
 
 const WORKSHOP_ROOTS = ['docs/workshop'];
 const WORKSHOP_ASSET_DIRS = ['docs/workshop/assets'];
-
 if (isMainModule(import.meta.url)) {
   let args;
   try {
@@ -32,10 +35,8 @@ if (isMainModule(import.meta.url)) {
     printUsage();
     process.exit(0);
   }
-
   const repoRoot = resolve(args.root);
-  const report = runVerification(repoRoot, args);
-
+  const report = runVerification(repoRoot);
   if (args.format === 'table') {
     printTable(report);
   } else {
@@ -43,7 +44,6 @@ if (isMainModule(import.meta.url)) {
   }
   process.exit(computeExitCode(report));
 }
-
 export function runVerification(repoRoot, options = {}) {
   const workshopRoots = options.workshopRoots ?? WORKSHOP_ROOTS;
   const files = [];
@@ -53,7 +53,6 @@ export function runVerification(repoRoot, options = {}) {
       collectMarkdown(abs, files);
     }
   }
-
   const fileContents = new Map();
   const fileMeta = new Map();
   for (const file of files) {
@@ -64,7 +63,6 @@ export function runVerification(repoRoot, options = {}) {
       refDefs: extractReferenceDefinitions(content),
     });
   }
-
   const report = {
     scanned: files.length,
     issues: [],
@@ -82,10 +80,13 @@ export function runVerification(repoRoot, options = {}) {
   const assetDirs = (options.assetDirs ?? WORKSHOP_ASSET_DIRS).map((dir) =>
     normalize(resolve(repoRoot, dir)),
   );
-
   for (const file of files) {
     const content = fileContents.get(file);
-    const { refDefs } = fileMeta.get(file);
+    const meta = fileMeta.get(file);
+    if (content === undefined || meta === undefined) {
+      continue;
+    }
+    const { refDefs } = meta;
     const refs = extractReferences(content, refDefs);
     for (const ref of refs) {
       if (ref.kind === 'image') {
@@ -147,7 +148,6 @@ export function runVerification(repoRoot, options = {}) {
   }
   return report;
 }
-
 // Strips fenced code blocks (``` and ~~~) before pattern scanning so
 // example Markdown inside code samples is never interpreted as a real
 // link or heading. Tracks both fence character and opening length so a
@@ -189,7 +189,6 @@ export function stripFencedCodeBlocks(content) {
   }
   return out.join('\n');
 }
-
 // Replaces HTML-comment regions (`<!-- ... -->`, possibly multi-line)
 // with whitespace, preserving newlines so offset → line numbers
 // remain accurate. Markdown links inside comments are not real.
@@ -198,7 +197,6 @@ export function stripHtmlComments(content) {
     match.replace(/[^\r\n]/g, ' '),
   );
 }
-
 // Strips inline code spans (`...`, ``...``, etc.) so
 // `[demo](./missing.md)` inside backticks is not extracted as a
 // real link. The lazy `[\s\S]+?` allows code spans to cross
@@ -212,7 +210,6 @@ export function stripInlineCodeSpans(content) {
       `${fence}${match.slice(fence.length, -fence.length).replace(/[^\r\n]/g, ' ')}${fence}`,
   );
 }
-
 export function extractReferenceDefinitions(markdown) {
   const stripped = stripHtmlComments(stripFencedCodeBlocks(markdown));
   const map = new Map();
@@ -232,7 +229,6 @@ export function extractReferenceDefinitions(markdown) {
   }
   return map;
 }
-
 export function extractReferences(markdown, refDefs = new Map()) {
   const refs = [];
   const stripped = stripHtmlComments(stripFencedCodeBlocks(markdown));
@@ -248,14 +244,12 @@ export function extractReferences(markdown, refDefs = new Map()) {
   extractAutolinksFromContent(sanitized, refs);
   return refs;
 }
-
 function maskBackslashEscapes(content) {
   // Replace \[, \], and \! with two-char filler so the link / image
   // / reference patterns do not consume them. Other escapes are left
   // intact.
   return String(content).replace(/\\([[\]!])/g, '  ');
 }
-
 function lineNumberAtOffset(content, offset) {
   let line = 1;
   const cap = Math.min(offset, content.length);
@@ -264,7 +258,6 @@ function lineNumberAtOffset(content, offset) {
   }
   return line;
 }
-
 function extractInlineFromContent(content, refs) {
   // CommonMark inline link / image. Link text may span newlines
   // (`[^\]]*` matches `\n`), but destinations and titles stay on
@@ -288,7 +281,6 @@ function extractInlineFromContent(content, refs) {
     });
   }
 }
-
 function extractAutolinksFromContent(content, refs) {
   // CommonMark autolink: <scheme://...>. We only validate the URL
   // syntax (no live HTTP), so we treat them as link references.
@@ -312,7 +304,6 @@ function extractAutolinksFromContent(content, refs) {
     });
   }
 }
-
 function collectAngleBracketDestinationRanges(content) {
   const ranges = [];
   // Inline link/image destination wrapped in <...>.
@@ -332,7 +323,6 @@ function collectAngleBracketDestinationRanges(content) {
   }
   return ranges;
 }
-
 function rangeOverlaps(ranges, start, end) {
   for (const [rangeStart, rangeEnd] of ranges) {
     if (start < rangeEnd && end > rangeStart) {
@@ -341,7 +331,6 @@ function rangeOverlaps(ranges, start, end) {
   }
   return false;
 }
-
 function extractReferenceStyleFromContent(content, refs, refDefs) {
   // [text][label] or ![alt][label]. Empty label (`[text][]`)
   // resolves against the text itself.
@@ -374,7 +363,6 @@ function extractReferenceStyleFromContent(content, refs, refDefs) {
     });
   }
 }
-
 function extractShortcutReferencesFromContent(content, refs, refDefs) {
   if (refDefs.size === 0) return;
   const definitionLineCheck = /^\s{0,3}\[[^\]]+\]:\s*\S+/;
@@ -405,14 +393,12 @@ function extractShortcutReferencesFromContent(content, refs, refDefs) {
     });
   }
 }
-
 function lineContaining(content, offset) {
   const lineStart = content.lastIndexOf('\n', offset - 1) + 1;
   const lineEndIdx = content.indexOf('\n', offset);
   const lineEnd = lineEndIdx === -1 ? content.length : lineEndIdx;
   return content.slice(lineStart, lineEnd);
 }
-
 export function extractHeadingSlugs(markdown) {
   const slugs = new Set();
   const counts = new Map();
@@ -448,7 +434,6 @@ export function extractHeadingSlugs(markdown) {
   }
   return slugs;
 }
-
 // GitHub heading slug algorithm (simplified): strip HTML tags,
 // drop most punctuation, lowercase, replace spaces with hyphens,
 // keep Unicode letters/digits, underscore, and hyphen. See
@@ -475,7 +460,6 @@ export function slugifyHeading(text) {
   s = s.replace(/^-+|-+$/g, '');
   return s;
 }
-
 export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
   const trimmed = String(target).trim();
   if (trimmed.length === 0) {
@@ -501,7 +485,6 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
       return { status: 'invalid-url', detail: error.message };
     }
   }
-
   let pathPart = trimmed;
   let anchorPart = '';
   const hashIndex = trimmed.indexOf('#');
@@ -509,28 +492,24 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
     pathPart = trimmed.slice(0, hashIndex);
     anchorPart = trimmed.slice(hashIndex + 1);
   }
-
   // Strip query string from the local path; existsSync does not
   // understand `?plain=1` and would falsely report missing.
   const queryIndex = pathPart.indexOf('?');
   if (queryIndex >= 0) {
     pathPart = pathPart.slice(0, queryIndex);
   }
-
   let decodedPath = pathPart;
   try {
     decodedPath = decodeURIComponent(pathPart);
   } catch {
     // Leave as-is when not valid percent-encoding.
   }
-
   let decodedAnchor = anchorPart;
   try {
     decodedAnchor = decodeURIComponent(anchorPart);
   } catch {
     // Leave as-is when not valid percent-encoding.
   }
-
   let resolvedPath;
   if (decodedPath.length === 0) {
     resolvedPath = fromFile;
@@ -540,7 +519,6 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
     resolvedPath = resolve(dirname(fromFile), decodedPath);
   }
   resolvedPath = normalize(resolvedPath);
-
   const repoRootNormalized = normalize(repoRoot);
   // Lexical containment first (catches `..` and root-relative
   // escapes before any disk I/O).
@@ -571,7 +549,6 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
       };
     }
   }
-
   if (!existsSync(resolvedPath)) {
     return {
       status: 'missing-file',
@@ -587,16 +564,13 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
       detail: 'anchor requested but target is a directory',
     };
   }
-
   if (anchorPart.length === 0) {
     return { status: 'ok', resolvedPath };
   }
-
   const isMarkdown = extname(resolvedPath).toLowerCase() === '.md';
   if (!isMarkdown) {
     return { status: 'ok', resolvedPath };
   }
-
   let meta = fileMeta.get(resolvedPath);
   if (!meta) {
     const content = readFileSync(resolvedPath, 'utf8');
@@ -614,7 +588,6 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
   }
   return { status: 'ok', resolvedPath };
 }
-
 export function checkAssetUnderAssetsDir(resolvedPath, assetDirs) {
   if (!Array.isArray(assetDirs) || assetDirs.length === 0) {
     return { ok: true };
@@ -629,17 +602,14 @@ export function checkAssetUnderAssetsDir(resolvedPath, assetDirs) {
     detail: `image target resolves outside ${assetDirs[0]}; image references should live under docs/workshop/assets/ or be absolute URLs`,
   };
 }
-
 function isInside(targetPath, rootPath) {
   if (targetPath === rootPath) return true;
   const rootWithSep = rootPath.endsWith(sep) ? rootPath : `${rootPath}${sep}`;
   return targetPath.startsWith(rootWithSep);
 }
-
 export function computeExitCode(report) {
   return report.issues.length > 0 ? 1 : 0;
 }
-
 function collectMarkdown(dir, out) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
@@ -650,7 +620,6 @@ function collectMarkdown(dir, out) {
     }
   }
 }
-
 function printTable(report) {
   console.log(
     `scanned: ${report.scanned}  links: ${report.counts.checkedLinks}  images: ${report.counts.checkedImages}  issues: ${report.issues.length}`,
@@ -661,9 +630,12 @@ function printTable(report) {
     );
   }
 }
-
 function parseArgs(argv) {
-  const args = { root: process.cwd(), format: 'table', help: false };
+  const args = {
+    root: process.cwd(),
+    format: 'table',
+    help: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--help' || arg === '-h') {
@@ -687,7 +659,6 @@ function parseArgs(argv) {
   }
   return args;
 }
-
 function printUsage() {
   console.log(`usage: node scripts/verify-workshop-integrity.mjs [options]
 
@@ -703,7 +674,6 @@ offline-safe). Targets that resolve outside the repository root via
 path traversal are reported as errors.
 `);
 }
-
 function isMainModule(metaUrl) {
   const entry = process.argv[1];
   if (!entry) return false;

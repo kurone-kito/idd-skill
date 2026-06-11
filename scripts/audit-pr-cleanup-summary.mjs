@@ -1,3 +1,8 @@
+// idd-generated-from: src/scripts/audit-pr-cleanup-summary.mts
+//
+// The scripts/audit-pr-cleanup-summary.mjs copy is generated from the
+// .mts source named above by `pnpm run build`. Edit the .mts source,
+// never the generated .mjs. See docs/typescript-sources.md.
 export function computeReportSummary(report) {
   const alreadyMinimized = report.skipped.filter(
     (skip) => skip.isMinimized,
@@ -8,7 +13,6 @@ export function computeReportSummary(report) {
   const viewerCannotMinimize = report.skipped.filter(
     (skip) => !skip.isMinimized && !skip.viewerCanMinimize,
   ).length;
-
   report.summary = {
     candidate: report.candidates.length,
     skipped: report.skipped.length,
@@ -18,7 +22,6 @@ export function computeReportSummary(report) {
     'viewer-can-minimize': viewerCanMinimize,
     'viewer-cannot-minimize': viewerCannotMinimize,
   };
-
   if (report.mode === 'dry-run') {
     if (report.candidates.length > 0) {
       report.status = 'needs-apply';
@@ -29,7 +32,6 @@ export function computeReportSummary(report) {
     }
     return;
   }
-
   if (report.mode === 'apply') {
     if (report.failed.length > 0) {
       report.status = 'failed';

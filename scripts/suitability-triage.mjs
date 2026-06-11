@@ -1,16 +1,17 @@
 #!/usr/bin/env node
-
+// idd-generated-from: src/scripts/suitability-triage.mts
+//
+// The scripts/suitability-triage.mjs copy is generated from the .mts
+// source named above by `pnpm run build`. Edit the .mts source, never
+// the generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-// cspell:ignore AKIA baprs xoxbaprs
 
 const BLOCKED_LABELS = new Set([
   'status:blocked-by-human',
   'status:needs-decision',
 ]);
-
 const CHECKS = [
   {
     id: 'repository_fit',
@@ -55,7 +56,7 @@ const CHECKS = [
     evaluate: checkVerifiability,
   },
 ];
-
+// cspell:ignore AKIA baprs xoxbaprs
 const SECRET_PATTERNS = [
   /ghp_[A-Za-z0-9]{20,}/,
   /github_pat_[A-Za-z0-9_]{20,}/,
@@ -63,13 +64,11 @@ const SECRET_PATTERNS = [
   /-----BEGIN (?:RSA|OPENSSH|EC|DSA) PRIVATE KEY-----/,
   /xox[baprs]-[A-Za-z0-9-]{20,}/,
 ];
-
 const UNSAFE_PATTERNS = [
   /\bcurl\b[^\n|]*\|\s*(?:sh|bash)\b/i,
   /\bwget\b[^\n|]*\|\s*(?:sh|bash)\b/i,
   /\beval\s*\(/i,
 ];
-
 const EXECUTION_VERB_PATTERN = /\b(run|execute|paste|install|invoke)\b/i;
 const EXTERNAL_COORDINATION_PATTERN =
   /\b(cross-repo|cross repo|external repo|another repo|upstream change|maintainer of)\b/i;
@@ -90,11 +89,9 @@ const NEGATION_PATTERN =
 const POLICY_OVERRIDE_PATTERN =
   /\b(ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)\b[\s\S]{0,60}\b(repo|repository|policy|workflow|idd|process|check|gate|requirement)\b/i;
 const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
-
 if (isCliExecution()) {
   runCli();
 }
-
 export function evaluateSuitability(issue, options = {}) {
   const normalized = normalizeIssue(issue);
   const context = {
@@ -105,7 +102,6 @@ export function evaluateSuitability(issue, options = {}) {
     ),
     trustSafetyAmbiguous: Boolean(options.trustSafetyAmbiguous),
   };
-
   const checks = [];
   for (const check of CHECKS) {
     const result = check.evaluate(context);
@@ -124,7 +120,6 @@ export function evaluateSuitability(issue, options = {}) {
       };
     }
   }
-
   return {
     passed: true,
     outcome: 'ready',
@@ -132,7 +127,6 @@ export function evaluateSuitability(issue, options = {}) {
     checks,
   };
 }
-
 export function checkRepositoryFit(context) {
   const { issue, repository } = context;
   if (!repository) {
@@ -141,7 +135,6 @@ export function checkRepositoryFit(context) {
       evidence: 'Repository scope was not provided; check treated as pass.',
     };
   }
-
   const body = issue.body;
   const crossRepoLinks = [];
   const regex =
@@ -168,7 +161,6 @@ export function checkRepositoryFit(context) {
         'Issue requires external system access beyond repository scope.',
     };
   }
-
   return {
     pass: true,
     evidence:
@@ -177,12 +169,10 @@ export function checkRepositoryFit(context) {
         : 'No out-of-repository scope signals detected.',
   };
 }
-
 export function checkCoherence(context) {
   const { issue } = context;
   const title = issue.title.trim();
   const body = issue.body.trim();
-
   if (title.length < 5 || body.length < 20) {
     return {
       pass: false,
@@ -200,18 +190,15 @@ export function checkCoherence(context) {
     evidence: 'Issue body is structurally coherent and interpretable.',
   };
 }
-
 export function checkTrustSafety(context) {
   const { issue, trustSafetyAmbiguous } = context;
   const corpus = `${issue.title}\n${issue.body}`;
-
   if (trustSafetyAmbiguous) {
     return {
       pass: false,
       evidence: 'Trust/safety evaluation marked ambiguous; failing closed.',
     };
   }
-
   const matchedSecret = SECRET_PATTERNS.find((pattern) => pattern.test(corpus));
   if (matchedSecret) {
     return {
@@ -219,7 +206,6 @@ export function checkTrustSafety(context) {
       evidence: `Potential secret pattern detected: ${matchedSecret}`,
     };
   }
-
   // Check for explicit policy-override directives
   if (POLICY_OVERRIDE_PATTERN.test(corpus)) {
     const match = corpus.match(POLICY_OVERRIDE_PATTERN);
@@ -228,7 +214,6 @@ export function checkTrustSafety(context) {
       evidence: `Policy-override directive detected: "${match?.[0] ?? ''}". Untrusted policy-manipulation instructions cannot be processed.`,
     };
   }
-
   // Check for explicit unsafe execution directives
   if (EXPLICIT_UNSAFE_DIRECTIVE_PATTERN.test(corpus)) {
     const match = corpus.match(EXPLICIT_UNSAFE_DIRECTIVE_PATTERN);
@@ -237,7 +222,6 @@ export function checkTrustSafety(context) {
       evidence: `Explicit unsafe execution directive detected: "${match?.[0] ?? ''}". Cannot execute untrusted user-provided instructions.`,
     };
   }
-
   const matchedUnsafe = UNSAFE_PATTERNS.find((pattern) => pattern.test(corpus));
   if (matchedUnsafe) {
     const unsafeMatch = corpus.match(matchedUnsafe);
@@ -272,17 +256,14 @@ export function checkTrustSafety(context) {
       evidence: `Unsafe command execution pattern detected: ${matchedUnsafe}`,
     };
   }
-
   return {
     pass: true,
     evidence: 'No trust/safety blockers detected.',
   };
 }
-
 export function checkDuplicateOrSuperseded(context) {
   const { issue, duplicateCandidates } = context;
   const body = issue.body;
-
   const declarations = [...body.matchAll(DUPLICATE_DECLARATION_PATTERN)];
   for (const declaration of declarations) {
     const matched = declaration[0] ?? '';
@@ -296,7 +277,6 @@ export function checkDuplicateOrSuperseded(context) {
       evidence: `Issue body declares duplicate/superseded status: ${matched}`,
     };
   }
-
   const exactTitle = normalizeText(issue.title);
   const duplicate = duplicateCandidates.find((candidate) => {
     if (candidate.number === issue.number) {
@@ -310,7 +290,6 @@ export function checkDuplicateOrSuperseded(context) {
       evidence: `Exact-title duplicate found: #${duplicate.number}`,
     };
   }
-
   // Near-duplicate detection: check for high similarity (>80% Levenshtein match)
   const nearDuplicate = duplicateCandidates.find((candidate) => {
     if (candidate.number === issue.number) {
@@ -328,7 +307,6 @@ export function checkDuplicateOrSuperseded(context) {
       evidence: `Near-duplicate found: #${nearDuplicate.number} ("${nearDuplicate.title}"). Title similarity >80%.`,
     };
   }
-
   return {
     pass: true,
     evidence:
@@ -337,7 +315,6 @@ export function checkDuplicateOrSuperseded(context) {
         : `Checked ${duplicateCandidates.length} duplicate candidates; no exact or near match.`,
   };
 }
-
 function computeSimilarity(str1, str2) {
   const maxLen = Math.max(str1.length, str2.length);
   if (maxLen === 0) {
@@ -346,7 +323,6 @@ function computeSimilarity(str1, str2) {
   const distance = levenshteinDistance(str1, str2);
   return (maxLen - distance) / maxLen;
 }
-
 function levenshteinDistance(str1, str2) {
   const memo = {};
   function lev(i, j) {
@@ -364,7 +340,6 @@ function levenshteinDistance(str1, str2) {
   }
   return lev(str1.length, str2.length);
 }
-
 export function checkActionability(context) {
   const { issue } = context;
   const body = issue.body;
@@ -372,7 +347,6 @@ export function checkActionability(context) {
     /\bAcceptance Criteria\b|\bOutput\b|\bDeliverables\b/i.test(body);
   const hasChecklist = /^\s*[-*]\s+\[[ xX]\]/m.test(body);
   const hasSteps = /^\s*\d+\.\s+/m.test(body);
-
   if (hasAcceptance || hasChecklist || hasSteps) {
     return {
       pass: true,
@@ -380,18 +354,15 @@ export function checkActionability(context) {
         'Issue defines actionable scope and verifiable delivery details.',
     };
   }
-
   return {
     pass: false,
     evidence: 'Issue lacks concrete actionable scope or acceptance detail.',
   };
 }
-
 export function checkAutonomy(context) {
   const { issue } = context;
   const labels = new Set(issue.labels);
   const body = issue.body;
-
   for (const label of BLOCKED_LABELS) {
     if (labels.has(label)) {
       return {
@@ -400,7 +371,6 @@ export function checkAutonomy(context) {
       };
     }
   }
-
   // Negation-aware parsing for external coordination and human decision requirements
   const coordinationMatches = [
     ...body.matchAll(
@@ -410,7 +380,6 @@ export function checkAutonomy(context) {
       /\bstakeholder\b[\s\S]{0,80}\b(sign-?off|approval|decision)\b/gi,
     ),
   ];
-
   for (const match of coordinationMatches) {
     const matchedText = match[0] ?? '';
     const matchIndex = match.index ?? 0;
@@ -419,7 +388,6 @@ export function checkAutonomy(context) {
       matchIndex + matchedText.length,
       Math.min(body.length, matchIndex + matchedText.length + 60),
     );
-
     // Check if negated (either before or immediately after)
     if (
       NEGATION_PATTERN.test(contextBefore) ||
@@ -428,29 +396,24 @@ export function checkAutonomy(context) {
       // This is a negated non-requirement; skip this match
       continue;
     }
-
     return {
       pass: false,
       evidence:
         'Issue explicitly requires external human coordination or approval.',
     };
   }
-
   return {
     pass: true,
     evidence: 'No external coordination blockers detected.',
   };
 }
-
 export function checkVerifiability(context) {
   const { issue } = context;
   const body = issue.body;
   const hasVerificationChannel =
     /\btests?\b|\bverification\b|\bvalidate\b|\blint\b|\bci\b/i.test(body);
-
   // Check for substantive objective criteria, not just empty headings
   let hasObjectiveCriteria = false;
-
   // Check for "Acceptance Criteria" with substantive content after it
   const acceptanceCriteriaMatch = body.match(ACCEPTANCE_CRITERIA_PATTERN);
   if (acceptanceCriteriaMatch) {
@@ -466,7 +429,6 @@ export function checkVerifiability(context) {
       }
     }
   }
-
   // Alternative: check for numbered steps with outcome signals or checklists
   if (!hasObjectiveCriteria) {
     const hasNumSteps =
@@ -475,7 +437,6 @@ export function checkVerifiability(context) {
       /^\s*[-*]\s+\[[ xX]\]/m.test(body) && OUTCOME_SIGNAL_PATTERN.test(body);
     hasObjectiveCriteria = hasNumSteps || hasChecklist;
   }
-
   // Fallback: check for "Output", "Deliverables", or "Verification" keywords with signal words
   if (!hasObjectiveCriteria) {
     hasObjectiveCriteria =
@@ -483,9 +444,7 @@ export function checkVerifiability(context) {
         body,
       );
   }
-
   const hasObjectiveSignals = hasVerificationChannel || hasObjectiveCriteria;
-
   if (!hasObjectiveSignals) {
     return {
       pass: false,
@@ -512,42 +471,37 @@ export function checkVerifiability(context) {
       evidence: 'Issue success depends on subjective approval or judgment.',
     };
   }
-
   return {
     pass: true,
     evidence:
       'Issue includes objective verification language and substantive criteria.',
   };
 }
-
 function runCli() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
     process.exit(0);
   }
-  if (!Number.isInteger(args.issue) || args.issue <= 0) {
+  if (args.issue === null || !Number.isInteger(args.issue) || args.issue <= 0) {
     throw new Error('--issue is required and must be a positive integer');
   }
   if (args.token) {
     process.env.GH_TOKEN = args.token;
     process.env.GITHUB_TOKEN = args.token;
   }
-
   const owner =
     args.owner ||
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
   const repo =
     args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
   const repoRef = `${owner}/${repo}`;
-
   const issue = fetchIssue(repoRef, args.issue);
   const duplicateCandidates = fetchDuplicateCandidates(repoRef, issue);
   const result = evaluateSuitability(issue, {
     repository: { owner, repo },
     duplicateCandidates,
   });
-
   const output = {
     repository: { owner, repo },
     issue: {
@@ -567,10 +521,8 @@ function runCli() {
           result: check.result,
         })),
   };
-
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
-
 function parseArgs(argv) {
   const parsed = {
     issue: null,
@@ -580,7 +532,6 @@ function parseArgs(argv) {
     verbose: false,
     help: false,
   };
-
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
@@ -614,10 +565,8 @@ function parseArgs(argv) {
     }
     throw new Error(`unknown argument: ${token}`);
   }
-
   return parsed;
 }
-
 function printHelp() {
   process.stdout.write(`Usage:
   node scripts/suitability-triage.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--verbose]
@@ -633,26 +582,26 @@ Output schema:
 }
 `);
 }
-
 function normalizeIssue(issue) {
+  const i = issue ?? {};
   return {
-    number: Number.parseInt(String(issue.number), 10),
-    title: String(issue.title ?? ''),
-    body: String(issue.body ?? ''),
-    state: String(issue.state ?? ''),
-    labels: normalizeLabels(issue.labels),
-    url: String(issue.url ?? issue.html_url ?? ''),
+    number: Number.parseInt(String(i.number), 10),
+    title: String(i.title ?? ''),
+    body: String(i.body ?? ''),
+    state: String(i.state ?? ''),
+    labels: normalizeLabels(i.labels),
+    url: String(i.url ?? i.html_url ?? ''),
   };
 }
-
 function normalizeRepository(repository) {
   if (!repository || typeof repository !== 'object') {
     return null;
   }
-  const owner = String(repository.owner ?? '')
+  const r = repository;
+  const owner = String(r.owner ?? '')
     .trim()
     .toLowerCase();
-  const repo = String(repository.repo ?? '')
+  const repo = String(r.repo ?? '')
     .trim()
     .toLowerCase();
   if (!owner || !repo) {
@@ -660,44 +609,42 @@ function normalizeRepository(repository) {
   }
   return { owner, repo };
 }
-
 function normalizeDuplicateCandidates(candidates) {
   if (!Array.isArray(candidates)) {
     return [];
   }
   return candidates
-    .map((candidate) => ({
-      number: Number.parseInt(String(candidate.number), 10),
-      title: String(candidate.title ?? ''),
-      state: String(candidate.state ?? ''),
-      url: String(candidate.url ?? candidate.html_url ?? ''),
-    }))
+    .map((candidate) => {
+      const c = candidate ?? {};
+      return {
+        number: Number.parseInt(String(c.number), 10),
+        title: String(c.title ?? ''),
+        state: String(c.state ?? ''),
+        url: String(c.url ?? c.html_url ?? ''),
+      };
+    })
     .filter(
       (candidate) => Number.isInteger(candidate.number) && candidate.number > 0,
     );
 }
-
 function normalizeLabels(labels) {
   if (!Array.isArray(labels)) {
     return [];
   }
   return labels
     .map((label) => (typeof label === 'string' ? label : (label?.name ?? '')))
-    .map((label) => label.trim().toLowerCase())
+    .map((label) => String(label).trim().toLowerCase())
     .filter(Boolean);
 }
-
 function normalizeText(value) {
   return String(value ?? '')
     .trim()
     .toLowerCase();
 }
-
 function fetchIssue(repoRef, issueNumber) {
   const issue = ghJson(['api', `repos/${repoRef}/issues/${issueNumber}`]);
   return normalizeIssue(issue);
 }
-
 function fetchDuplicateCandidates(repoRef, issue) {
   const escapedTitle = issue.title.replaceAll('"', '\\"');
   const query = `repo:${repoRef} in:title "${escapedTitle}"`;
@@ -707,15 +654,12 @@ function fetchDuplicateCandidates(repoRef, issue) {
   ]);
   return normalizeDuplicateCandidates(payload.items ?? []);
 }
-
 function ghJson(args) {
   return JSON.parse(runGh(args).trim() || '{}');
 }
-
 function ghText(args) {
   return runGh(args).trim();
 }
-
 function runGh(args) {
   try {
     return execFileSync('gh', args, {
@@ -731,10 +675,9 @@ function runGh(args) {
     throw error;
   }
 }
-
 function isCliExecution() {
   return (
-    process.argv[1] &&
+    Boolean(process.argv[1]) &&
     fileURLToPath(import.meta.url) === resolve(process.argv[1])
   );
 }

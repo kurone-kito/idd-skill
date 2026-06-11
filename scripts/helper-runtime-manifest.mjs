@@ -1,5 +1,9 @@
 #!/usr/bin/env node
-
+// idd-generated-from: src/scripts/helper-runtime-manifest.mts
+//
+// The scripts/helper-runtime-manifest.mjs copy is generated from the .mts
+// source named above by `pnpm run build`. Edit the .mts source, never the
+// generated .mjs. See docs/typescript-sources.md.
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,7 +26,6 @@ const SCRIPT_FILE_EXTENSIONS = ['.mjs', '.js', '.json'];
 const EXTRA_RUNTIME_FILES = new Map([
   ['scripts/advisory-wait-policy.mjs', ['schemas/policy.schema.json']],
 ]);
-
 const HELPER_COMMANDS = [
   {
     id: 'doctor',
@@ -240,15 +243,12 @@ const HELPER_COMMANDS = [
     contractPaths: ['schemas/branch-conflict-state.schema.json'],
   },
 ];
-
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
-
   if (args.help) {
     printHelp();
     process.exit(0);
   }
-
   const manifest = buildHelperRuntimeManifest({
     profile: args.profile,
     fromProfile: args.fromProfile,
@@ -256,10 +256,8 @@ if (isMainModule(import.meta.url)) {
     packageSpec: args.packageSpec,
     targetRoot: args.targetRoot,
   });
-
   process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
 }
-
 export function buildHelperRuntimeManifest({
   profile = '',
   fromProfile = '',
@@ -286,11 +284,9 @@ export function buildHelperRuntimeManifest({
     packageManager: normalizedPackageManager,
     packageSpec: normalizedPackageSpec,
   });
-
   const selectedProfiles = normalizedProfile
     ? { [normalizedProfile]: profileCatalog[normalizedProfile] }
     : profileCatalog;
-
   return {
     version: 1,
     sourceRepository: packageMetadata.repository,
@@ -313,7 +309,6 @@ export function buildHelperRuntimeManifest({
         : null,
   };
 }
-
 export function collectVendoredFiles(
   packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..'),
 ) {
@@ -322,7 +317,6 @@ export function collectVendoredFiles(
   );
   const visited = new Set();
   const managedFiles = new Set();
-
   while (queue.length > 0) {
     const current = queue.pop();
     if (!current || visited.has(current)) {
@@ -336,7 +330,6 @@ export function collectVendoredFiles(
         relativePath(packageRoot, resolve(packageRoot, extraFile)),
       );
     }
-
     const source = readFileSync(current, 'utf8');
     for (const specifier of findRelativeImports(source)) {
       const dependency = resolveRelativeImport(current, specifier);
@@ -346,7 +339,6 @@ export function collectVendoredFiles(
       queue.push(dependency);
     }
   }
-
   for (const command of HELPER_COMMANDS) {
     for (const contractPath of command.contractPaths ?? []) {
       managedFiles.add(
@@ -354,17 +346,14 @@ export function collectVendoredFiles(
       );
     }
   }
-
   return [...managedFiles].sort().map((targetPath) => ({
     sourcePath: targetPath,
     targetPath,
   }));
 }
-
 export function detectPackageManager(root = process.cwd()) {
   return collectHelperRuntimeEvidence(root).detectedPackageManager;
 }
-
 export function collectHelperRuntimeEvidence(root = process.cwd()) {
   const packageJsonPath = resolve(root, 'package.json');
   let declaredPackageManager = '';
@@ -384,7 +373,6 @@ export function collectHelperRuntimeEvidence(root = process.cwd()) {
       // Ignore parse errors here and fall back to lockfile detection.
     }
   }
-
   const lockfileMatches = [
     { filename: 'pnpm-lock.yaml', manager: 'pnpm' },
     { filename: 'package-lock.json', manager: 'npm' },
@@ -393,7 +381,6 @@ export function collectHelperRuntimeEvidence(root = process.cwd()) {
   const detectedPackageManager =
     declaredPackageManager ||
     (lockfileMatches.length === 1 ? lockfileMatches[0].manager : '');
-
   return {
     hasPackageJson,
     declaredPackageManager,
@@ -405,7 +392,6 @@ export function collectHelperRuntimeEvidence(root = process.cwd()) {
       !declaredPackageManager && lockfileMatches.length > 1,
   };
 }
-
 export function recommendHelperRuntimeProfile(root = process.cwd()) {
   const evidence = collectHelperRuntimeEvidence(root);
   if (evidence.detectedPackageManager) {
@@ -418,7 +404,6 @@ export function recommendHelperRuntimeProfile(root = process.cwd()) {
       evidence,
     };
   }
-
   if (evidence.ambiguousPackageManager) {
     return {
       profile: 'vendored-node',
@@ -428,13 +413,11 @@ export function recommendHelperRuntimeProfile(root = process.cwd()) {
       evidence,
     };
   }
-
   let reason = 'No supported package-manager evidence was detected.';
   if (evidence.packageJsonOnly) {
     reason =
       'package.json alone is not enough evidence to assume npm, another package manager, or a real Node.js helper path.';
   }
-
   return {
     profile: 'instructions-only',
     packageManager: '',
@@ -442,7 +425,6 @@ export function recommendHelperRuntimeProfile(root = process.cwd()) {
     evidence,
   };
 }
-
 function buildCommandCatalog() {
   return HELPER_COMMANDS.map((command) => ({
     id: command.id,
@@ -454,7 +436,6 @@ function buildCommandCatalog() {
     contractPaths: command.contractPaths ?? [],
   }));
 }
-
 export function resolveSourcePackageMetadata(
   packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..'),
 ) {
@@ -467,7 +448,6 @@ export function resolveSourcePackageMetadata(
   if (!existsSync(packageJsonPath)) {
     return fallback;
   }
-
   try {
     const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
     if (packageJson.name !== PACKAGE_NAME) {
@@ -482,7 +462,6 @@ export function resolveSourcePackageMetadata(
     return fallback;
   }
 }
-
 function normalizeRepository(repository) {
   if (typeof repository === 'string' && repository) {
     return repository;
@@ -497,7 +476,6 @@ function normalizeRepository(repository) {
   }
   return SOURCE_REPOSITORY;
 }
-
 function buildProfileCatalog({
   packageMetadata,
   managedFiles,
@@ -519,7 +497,6 @@ function buildProfileCatalog({
       `npx --yes --package ${packageSpec} ${command.binName}`,
     ]),
   );
-
   return {
     'package-manager': {
       profile: 'package-manager',
@@ -594,7 +571,6 @@ function buildProfileCatalog({
     },
   };
 }
-
 function buildSwitchPlan({ fromProfile, toProfile, profileCatalog }) {
   const from = profileCatalog[fromProfile];
   const to = profileCatalog[toProfile];
@@ -626,7 +602,6 @@ function buildSwitchPlan({ fromProfile, toProfile, profileCatalog }) {
     ),
   };
 }
-
 function subtractPaths(leftFiles, rightFiles) {
   const right = new Set(rightFiles.map((file) => file.targetPath));
   return leftFiles
@@ -634,7 +609,6 @@ function subtractPaths(leftFiles, rightFiles) {
     .map((file) => file.targetPath)
     .sort();
 }
-
 function buildPackageManagerInstallCommand(packageManager, packageSpec) {
   if (packageManager === 'npm') {
     return `npm install --save-dev ${packageSpec}`;
@@ -647,7 +621,6 @@ function buildPackageManagerInstallCommand(packageManager, packageSpec) {
   }
   throw new Error(`unsupported package manager: ${packageManager}`);
 }
-
 function parseArgs(argv) {
   const parsed = {
     help: false,
@@ -657,7 +630,6 @@ function parseArgs(argv) {
     packageSpec: '',
     targetRoot: '',
   };
-
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
@@ -667,7 +639,6 @@ function parseArgs(argv) {
       }
       return value;
     };
-
     if (token === '--help' || token === '-h') {
       parsed.help = true;
       continue;
@@ -697,13 +668,10 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
-
     throw new Error(`unknown argument: ${token}`);
   }
-
   return parsed;
 }
-
 function printHelp() {
   process.stdout.write(`usage: node scripts/helper-runtime-manifest.mjs [options]
 
@@ -716,11 +684,9 @@ Options:
   --help
 `);
 }
-
 function normalizePackageSpec(packageSpec) {
   return packageSpec || DEFAULT_PACKAGE_SPEC;
 }
-
 function normalizeProfile(profile) {
   if (!profile) {
     return '';
@@ -730,14 +696,12 @@ function normalizeProfile(profile) {
   }
   return profile;
 }
-
 function normalizeOptionalProfile(profile) {
   if (!profile) {
     return '';
   }
   return normalizeProfile(profile);
 }
-
 function normalizePackageManager(packageManager, profile) {
   if (!packageManager) {
     if (profile === 'package-manager') {
@@ -752,7 +716,6 @@ function normalizePackageManager(packageManager, profile) {
   }
   return packageManager;
 }
-
 function findRelativeImports(source) {
   const specifiers = new Set();
   const patterns = [
@@ -766,21 +729,17 @@ function findRelativeImports(source) {
   }
   return [...specifiers];
 }
-
 function resolveRelativeImport(fromFile, specifier) {
   const directory = dirname(fromFile);
   const basePath = resolve(directory, specifier);
   const candidates = existsSync(basePath)
     ? [basePath]
     : SCRIPT_FILE_EXTENSIONS.map((extension) => `${basePath}${extension}`);
-
   return candidates.find((candidate) => existsSync(candidate)) ?? '';
 }
-
 function relativePath(root, target) {
   return relative(root, target).replaceAll('\\', '/');
 }
-
 function isMainModule(moduleUrl) {
   if (!process.argv[1]) {
     return false;

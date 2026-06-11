@@ -1,5 +1,9 @@
 #!/usr/bin/env node
-
+// idd-generated-from: src/scripts/branch-conflict-state.mts
+//
+// The scripts/branch-conflict-state.mjs copy is generated from the .mts
+// source named above by `pnpm run build`. Edit the .mts source, never the
+// generated .mjs. See docs/typescript-sources.md.
 import { execFileSync, spawnSync } from 'node:child_process';
 
 if (isMainModule(import.meta.url)) {
@@ -11,24 +15,20 @@ if (isMainModule(import.meta.url)) {
   if (!args.prNumber) {
     throw new Error('missing required --pr <number> argument');
   }
-
   const owner =
     args.owner ||
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
   const repo =
     args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
-
   const result = await classifyBranchConflictState(args.prNumber, {
     owner,
     repo,
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
-
 export async function classifyBranchConflictState(prNumber, options = {}) {
   const { owner, repo, _testPrData, _skipGitProbe } = options;
   const notes = [];
-
   const prData = _testPrData ?? fetchPrData(owner, repo, prNumber);
   const prHeadSha = String(prData.headRefOid ?? '');
   const prBaseSha = String(prData.baseRefOid ?? '');
@@ -37,7 +37,6 @@ export async function classifyBranchConflictState(prNumber, options = {}) {
   const mergeable = prData.mergeable ?? null;
   const mergeStateStatus = prData.mergeStateStatus ?? null;
   const published = Boolean(prHeadSha);
-
   if (!prHeadSha || !prBaseSha) {
     return {
       protocolVersion: '1',
@@ -60,7 +59,6 @@ export async function classifyBranchConflictState(prNumber, options = {}) {
       },
     };
   }
-
   const { branchState, syncRecommendation, conflictFiles, mergeableSource } =
     deriveBranchState({
       prHeadSha,
@@ -74,7 +72,6 @@ export async function classifyBranchConflictState(prNumber, options = {}) {
       repo,
       skipGitProbe: Boolean(_skipGitProbe),
     });
-
   return {
     protocolVersion: '1',
     prNumber: Number(prNumber),
@@ -94,7 +91,6 @@ export async function classifyBranchConflictState(prNumber, options = {}) {
     },
   };
 }
-
 function deriveBranchState({
   prHeadSha,
   prBaseSha,
@@ -108,7 +104,6 @@ function deriveBranchState({
 }) {
   const mergeableNorm = String(mergeable ?? '').toUpperCase();
   const mergeStateNorm = String(mergeStateStatus ?? '').toUpperCase();
-
   if (mergeableNorm === 'CONFLICTING') {
     const probeResult = skipGitProbe
       ? []
@@ -127,7 +122,6 @@ function deriveBranchState({
       mergeableSource: 'github-mergeable',
     };
   }
-
   if (mergeStateNorm === 'DIRTY') {
     return {
       branchState: 'dirty',
@@ -136,7 +130,6 @@ function deriveBranchState({
       mergeableSource: 'github-merge-state',
     };
   }
-
   if (mergeableNorm === 'MERGEABLE' && mergeStateNorm === 'CLEAN') {
     return {
       branchState: 'clean',
@@ -145,7 +138,6 @@ function deriveBranchState({
       mergeableSource: 'github-mergeable',
     };
   }
-
   if (mergeStateNorm === 'BEHIND') {
     if (skipGitProbe) {
       return {
@@ -186,7 +178,6 @@ function deriveBranchState({
       mergeableSource: 'git-merge-tree',
     };
   }
-
   if (mergeableNorm === 'MERGEABLE') {
     return {
       branchState: 'clean',
@@ -195,7 +186,6 @@ function deriveBranchState({
       mergeableSource: 'github-mergeable',
     };
   }
-
   if (mergeableNorm === 'UNKNOWN' || !mergeableNorm) {
     notes.push(
       `Mergeable status is ${mergeable ?? 'null'}; unable to classify definitively.`,
@@ -207,7 +197,6 @@ function deriveBranchState({
       mergeableSource: 'none',
     };
   }
-
   notes.push(
     `Unrecognized mergeable=${mergeable} / mergeStateStatus=${mergeStateStatus}.`,
   );
@@ -218,7 +207,6 @@ function deriveBranchState({
     mergeableSource: 'none',
   };
 }
-
 function probeConflictFilesReadOnly(
   prHeadSha,
   prBaseSha,
@@ -268,7 +256,6 @@ function probeConflictFilesReadOnly(
     return null;
   }
 }
-
 function tryFetchBase(prBaseRef, owner, repo, notes) {
   if (!prBaseRef) return;
   try {
@@ -287,7 +274,6 @@ function tryFetchBase(prBaseRef, owner, repo, notes) {
     );
   }
 }
-
 export function parseConflictFiles(mergeTreeOutput) {
   const files = new Set();
   for (const line of mergeTreeOutput.split('\n')) {
@@ -314,7 +300,6 @@ export function parseConflictFiles(mergeTreeOutput) {
   }
   return [...files];
 }
-
 function fetchPrData(owner, repo, prNumber) {
   const raw = ghText([
     'pr',
@@ -333,17 +318,14 @@ function fetchPrData(owner, repo, prNumber) {
     throw new Error(`Failed to parse PR data for PR #${prNumber}`);
   }
 }
-
 function normalizeNullable(value) {
   if (value === null || value === undefined) return null;
   const s = String(value);
   return s === '' || s === 'null' || s === 'undefined' ? null : s;
 }
-
 function ghText(args) {
   return execFileSync('gh', args, { encoding: 'utf8' }).trim();
 }
-
 function gitText(args) {
   try {
     return execFileSync('git', args, {
@@ -354,7 +336,6 @@ function gitText(args) {
     return '';
   }
 }
-
 function isMainModule(metaUrl) {
   if (!process.argv[1]) {
     return false;
@@ -365,7 +346,6 @@ function isMainModule(metaUrl) {
     return false;
   }
 }
-
 function parseArgs(argv) {
   const args = { help: false, prNumber: null, owner: null, repo: null };
   for (let i = 0; i < argv.length; i++) {
@@ -381,7 +361,6 @@ function parseArgs(argv) {
   }
   return args;
 }
-
 function printUsage() {
   process.stdout.write(
     `Usage:\n  node scripts/branch-conflict-state.mjs --pr <number> [--owner <owner>] [--repo <repo>]\n`,

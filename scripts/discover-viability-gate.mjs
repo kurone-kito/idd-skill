@@ -1,5 +1,9 @@
 #!/usr/bin/env node
-
+// idd-generated-from: src/scripts/discover-viability-gate.mts
+//
+// The scripts/discover-viability-gate.mjs copy is generated from the .mts
+// source named above by `pnpm run build`. Edit the .mts source, never the
+// generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 
 const CRITERIA = [
@@ -19,7 +23,6 @@ const CRITERIA = [
     evaluate: evaluateAutonomousCompletion,
   },
 ];
-
 const BROAD_SCOPE_PATTERN =
   /\b(cross-cutting|cross cutting|across (?:many|multiple)|multiple subsystems?|repository-wide|entire repo|public interface|redesign|architecture|global refactor|large refactor)\b/i;
 const NARROW_SCOPE_PATTERN =
@@ -30,7 +33,6 @@ const SUBJECTIVE_VERIFICATION_PATTERN =
   /\b(feels?|looks? good|opinion|judgement?|ux call|maintainer preference|stakeholder preference|subjective)\b/i;
 const EXTERNAL_COORDINATION_PATTERN =
   /\b(external coordination|human decision|maintainer decision|stakeholder sign-?off|manual approval|waiting for (?:maintainer|stakeholder)|external system|third-?party access|credential|production access|cross-repo dependency)\b/i;
-
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
   if (args.issueNumbers.length === 0) {
@@ -38,7 +40,6 @@ if (isMainModule(import.meta.url)) {
       'missing required --issue <number> (repeatable) or --issues <n1,n2,...>',
     );
   }
-
   const owner =
     args.owner ||
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
@@ -47,14 +48,12 @@ if (isMainModule(import.meta.url)) {
   const summary = await evaluateDiscoverViability(args.issueNumbers, {
     loadIssue: buildIssueLoader(owner, repo),
   });
-
   if (args.csv) {
     process.stdout.write(renderCsv(summary));
   } else {
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   }
 }
-
 export async function evaluateDiscoverViability(issueNumbers, options = {}) {
   const { loadIssue } = options;
   if (typeof loadIssue !== 'function') {
@@ -62,10 +61,8 @@ export async function evaluateDiscoverViability(issueNumbers, options = {}) {
       'evaluateDiscoverViability requires loadIssue(issueNumber)',
     );
   }
-
   const viable = [];
   const discarded = [];
-
   for (const issueNumber of normalizeIssueNumbers(issueNumbers)) {
     const issue = await loadIssue(issueNumber);
     if (!issue) {
@@ -84,7 +81,6 @@ export async function evaluateDiscoverViability(issueNumbers, options = {}) {
       });
       continue;
     }
-
     const result = evaluateA4Viability(issue);
     if (result.passed) {
       viable.push({
@@ -100,7 +96,6 @@ export async function evaluateDiscoverViability(issueNumbers, options = {}) {
       criteria: result.criteria,
     });
   }
-
   return {
     viable,
     discarded,
@@ -112,12 +107,10 @@ export async function evaluateDiscoverViability(issueNumbers, options = {}) {
     },
   };
 }
-
 export function evaluateA4Viability(issue) {
   const normalizedIssue = normalizeIssue(issue);
   const criteria = [];
   const failedCriteria = [];
-
   for (const criterion of CRITERIA) {
     const result = criterion.evaluate(normalizedIssue);
     criteria.push({
@@ -130,14 +123,12 @@ export function evaluateA4Viability(issue) {
       failedCriteria.push(criterion.id);
     }
   }
-
   return {
     passed: failedCriteria.length === 0,
     failedCriteria,
     criteria,
   };
 }
-
 export function evaluateLimitedScope(issue) {
   const corpus = `${issue.title}\n${issue.body}`;
   if (NARROW_SCOPE_PATTERN.test(corpus)) {
@@ -157,7 +148,6 @@ export function evaluateLimitedScope(issue) {
     evidence: 'No broad-scope signal detected.',
   };
 }
-
 export function evaluateClearVerification(issue) {
   const corpus = `${issue.title}\n${issue.body}`;
   if (OBJECTIVE_VERIFICATION_PATTERN.test(corpus)) {
@@ -177,7 +167,6 @@ export function evaluateClearVerification(issue) {
     evidence: 'No objective verification signal detected.',
   };
 }
-
 export function evaluateAutonomousCompletion(issue) {
   const corpus = `${issue.title}\n${issue.body}`;
   if (EXTERNAL_COORDINATION_PATTERN.test(corpus)) {
@@ -191,7 +180,6 @@ export function evaluateAutonomousCompletion(issue) {
     evidence: 'No external coordination signal detected.',
   };
 }
-
 function parseArgs(argv) {
   const parsed = {
     issueNumbers: [],
@@ -199,7 +187,6 @@ function parseArgs(argv) {
     owner: '',
     repo: '',
   };
-
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
@@ -233,11 +220,11 @@ function parseArgs(argv) {
     }
     throw new Error(`unknown argument: ${token}`);
   }
-
-  parsed.issueNumbers = normalizeIssueNumbers(parsed.issueNumbers);
-  return parsed;
+  return {
+    ...parsed,
+    issueNumbers: normalizeIssueNumbers(parsed.issueNumbers),
+  };
 }
-
 function printHelp() {
   process.stdout.write(`Usage:
   node scripts/discover-viability-gate.mjs --issue <number> [--issue <number> ...]
@@ -257,23 +244,21 @@ Output schema (JSON mode):
   }
 `);
 }
-
 function normalizeIssueNumbers(values) {
   const parsed = values
     .map((value) => Number.parseInt(String(value).trim(), 10))
     .filter(Number.isInteger);
   return [...new Set(parsed)];
 }
-
 function normalizeIssue(issue) {
+  const i = issue;
   return {
-    number: Number(issue?.number ?? 0),
-    title: String(issue?.title ?? ''),
-    body: String(issue?.body ?? ''),
-    state: String(issue?.state ?? ''),
+    number: Number(i?.number ?? 0),
+    title: String(i?.title ?? ''),
+    body: String(i?.body ?? ''),
+    state: String(i?.state ?? ''),
   };
 }
-
 function countDiscardedCriteria(discarded) {
   const counts = {};
   for (const item of discarded) {
@@ -283,7 +268,6 @@ function countDiscardedCriteria(discarded) {
   }
   return counts;
 }
-
 function renderCsv(summary) {
   const lines = ['kind,number,title,criteria'];
   for (const item of summary.viable) {
@@ -291,18 +275,14 @@ function renderCsv(summary) {
   }
   for (const item of summary.discarded) {
     lines.push(
-      `discarded,${item.number},${escapeCsv(item.title)},"${escapeCsv(
-        (item.failedCriteria ?? []).join('|'),
-      )}"`,
+      `discarded,${item.number},${escapeCsv(item.title)},"${escapeCsv((item.failedCriteria ?? []).join('|'))}"`,
     );
   }
   return `${lines.join('\n')}\n`;
 }
-
 function escapeCsv(value) {
   return String(value ?? '').replaceAll('"', '""');
 }
-
 function buildIssueLoader(owner, repo) {
   return async function loadIssue(issueNumber) {
     const data = ghJson(
@@ -320,7 +300,6 @@ function buildIssueLoader(owner, repo) {
     };
   };
 }
-
 function ghText(args, options = {}) {
   const { allowStatuses = [] } = options;
   try {
@@ -335,7 +314,6 @@ function ghText(args, options = {}) {
     throw error;
   }
 }
-
 function ghJson(args, options = {}) {
   const text = ghText(args, options);
   if (!text) {
@@ -343,7 +321,6 @@ function ghJson(args, options = {}) {
   }
   return JSON.parse(text);
 }
-
 function isMainModule(metaUrl) {
   if (!process.argv[1]) {
     return false;
