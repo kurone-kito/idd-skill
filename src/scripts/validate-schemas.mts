@@ -3,6 +3,7 @@
 // The scripts/validate-schemas.mjs copy is generated from the .mts source
 // named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
 /**
  * Strict JSON Schema (draft 2020-12 subset) validator.
  *
@@ -17,13 +18,33 @@
  * Any other keyword in a schema triggers an error, preventing false
  * confidence from silently-ignored constraints.
  */
+
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+interface SchemaNode {
+  type?: string;
+  required?: string[];
+  properties?: Record<string, SchemaNode>;
+  patternProperties?: Record<string, SchemaNode>;
+  additionalProperties?: boolean | SchemaNode;
+  minLength?: number;
+  minimum?: number;
+  exclusiveMinimum?: number;
+  pattern?: string;
+  format?: string;
+  minItems?: number;
+  items?: SchemaNode;
+  enum?: unknown[];
+  [key: string]: unknown;
+}
+
 /** Keywords accepted as pure annotations (no validation effect). */
 const ANNOTATION_KEYWORDS = new Set(['$schema', '$id', 'title', 'description']);
+
 /** Keywords this validator actively enforces. */
 const ENFORCED_KEYWORDS = new Set([
   'type',
@@ -40,19 +61,22 @@ const ENFORCED_KEYWORDS = new Set([
   'items',
   'enum',
 ]);
+
 const ALLOWED_KEYWORDS = new Set([
   ...ANNOTATION_KEYWORDS,
   ...ENFORCED_KEYWORDS,
 ]);
+
 /** Format values this validator actively enforces. */
 const SUPPORTED_FORMATS = new Set(['date-time']);
+
 /**
  * Check that a schema object only uses allowed keywords, recursively.
  */
-export function checkSchemaKeywords(schema, path = '$') {
+export function checkSchemaKeywords(schema: unknown, path = '$'): string[] {
   if (typeof schema !== 'object' || schema === null) return [];
-  const s = schema;
-  const errors = [];
+  const s = schema as SchemaNode;
+  const errors: string[] = [];
   for (const key of Object.keys(s)) {
     if (!ALLOWED_KEYWORDS.has(key)) {
       errors.push(`${path}: unsupported keyword "${key}"`);
@@ -92,19 +116,22 @@ export function checkSchemaKeywords(schema, path = '$') {
   }
   return errors;
 }
-function getType(val) {
+
+function getType(val: unknown): string {
   if (val === null) return 'null';
   if (Array.isArray(val)) return 'array';
   return typeof val;
 }
+
 /**
  * Validate data against a schema (subset enforced by this validator).
  * Returns error messages — empty array means valid.
  */
-export function validate(data, schema, path = '$') {
-  const s = schema;
-  const errors = [];
+export function validate(data: unknown, schema: unknown, path = '$'): string[] {
+  const s = schema as SchemaNode;
+  const errors: string[] = [];
   const actualType = getType(data);
+
   if (s.type !== undefined) {
     if (s.type === 'integer') {
       if (actualType !== 'number') {
@@ -113,7 +140,7 @@ export function validate(data, schema, path = '$') {
       }
       if (!Number.isInteger(data)) {
         errors.push(
-          `${path}: expected type "integer", got non-integer number ${data}`,
+          `${path}: expected type "integer", got non-integer number ${data as number}`,
         );
         return errors;
       }
@@ -122,8 +149,9 @@ export function validate(data, schema, path = '$') {
       return errors;
     }
   }
+
   if (actualType === 'string') {
-    const str = data;
+    const str = data as string;
     if (s.minLength !== undefined && str.length < s.minLength) {
       errors.push(`${path}: length ${str.length} < minLength ${s.minLength}`);
     }
@@ -134,23 +162,32 @@ export function validate(data, schema, path = '$') {
       errors.push(`${path}: invalid date-time value "${str}"`);
     }
   }
+
   if (s.enum !== undefined && !s.enum.includes(data)) {
     errors.push(
       `${path}: "${String(data)}" not in enum [${s.enum.join(', ')}]`,
     );
   }
-  if (actualType === 'number' && s.minimum !== undefined && data < s.minimum) {
-    errors.push(`${path}: ${data} < minimum ${s.minimum}`);
+
+  if (
+    actualType === 'number' &&
+    s.minimum !== undefined &&
+    (data as number) < s.minimum
+  ) {
+    errors.push(`${path}: ${data as number} < minimum ${s.minimum}`);
   }
   if (
     actualType === 'number' &&
     s.exclusiveMinimum !== undefined &&
-    data <= s.exclusiveMinimum
+    (data as number) <= s.exclusiveMinimum
   ) {
-    errors.push(`${path}: ${data} <= exclusiveMinimum ${s.exclusiveMinimum}`);
+    errors.push(
+      `${path}: ${data as number} <= exclusiveMinimum ${s.exclusiveMinimum}`,
+    );
   }
+
   if (actualType === 'array') {
-    const arr = data;
+    const arr = data as unknown[];
     if (s.minItems !== undefined && arr.length < s.minItems) {
       errors.push(
         `${path}: array length ${arr.length} < minItems ${s.minItems}`,
@@ -162,8 +199,9 @@ export function validate(data, schema, path = '$') {
       }
     }
   }
+
   if (actualType === 'object') {
-    const obj = data;
+    const obj = data as Record<string, unknown>;
     for (const req of s.required ?? []) {
       if (!(req in obj)) {
         errors.push(`${path}: missing required property "${req}"`);
@@ -175,7 +213,7 @@ export function validate(data, schema, path = '$') {
       }
     }
     const declaredProperties = s.properties ?? {};
-    const compiledPatternSchemas = [];
+    const compiledPatternSchemas: [RegExp, SchemaNode][] = [];
     for (const [pattern, patternSchema] of Object.entries(
       s.patternProperties ?? {},
     )) {
@@ -213,29 +251,37 @@ export function validate(data, schema, path = '$') {
       }
     }
   }
+
   return errors;
 }
+
 /**
  * Load and parse a JSON file by path relative to repository root.
  */
-export function loadJson(relPath) {
+export function loadJson(relPath: string): unknown {
   return JSON.parse(readFileSync(join(ROOT, relPath), 'utf8'));
 }
+
+interface PhaseGraphNode {
+  id?: unknown;
+  next?: unknown;
+}
+
 /**
  * Check referential integrity of a phase-graph data object.
  *
  * Verifies that every node referenced in a `next` array exists as a node
  * id within the same graph, and that no node id is duplicated.
  */
-export function validatePhaseGraph(data) {
-  const errors = [];
-  const nodes = data?.nodes;
+export function validatePhaseGraph(data: unknown): string[] {
+  const errors: string[] = [];
+  const nodes = (data as { nodes?: unknown } | null)?.nodes;
   if (typeof data !== 'object' || data === null || !Array.isArray(nodes)) {
     return errors;
   }
-  const graphNodes = nodes;
-  const nodeIds = new Set();
-  const duplicates = new Set();
+  const graphNodes = nodes as PhaseGraphNode[];
+  const nodeIds = new Set<string>();
+  const duplicates = new Set<string>();
   for (const node of graphNodes) {
     if (typeof node.id !== 'string') continue;
     if (nodeIds.has(node.id)) duplicates.add(node.id);
@@ -245,7 +291,7 @@ export function validatePhaseGraph(data) {
     errors.push(`Duplicate node id: "${id}"`);
   }
   for (const node of graphNodes) {
-    for (const target of node.next ?? []) {
+    for (const target of (node.next ?? []) as unknown[]) {
       if (typeof target !== 'string' || !nodeIds.has(target)) {
         errors.push(
           `Node "${String(node.id)}": next target "${String(target)}" does not exist`,
@@ -255,10 +301,15 @@ export function validatePhaseGraph(data) {
   }
   return errors;
 }
+
 /**
  * Validate a fixture against its schema.
  */
-export function validateFixture(schemaPath, fixturePath, expectValid) {
+export function validateFixture(
+  schemaPath: string,
+  fixturePath: string,
+  expectValid: boolean,
+): { ok: boolean; errors: string[] } {
   const schema = loadJson(schemaPath);
   const fixture = loadJson(fixturePath);
   const keyErrors = checkSchemaKeywords(schema);
@@ -269,7 +320,7 @@ export function validateFixture(schemaPath, fixturePath, expectValid) {
     };
   }
   const errs = validate(fixture, schema);
-  let graphErrors = [];
+  let graphErrors: string[] = [];
   if (schemaPath.endsWith('phase-graph.schema.json') && errs.length === 0) {
     graphErrors = validatePhaseGraph(fixture);
   }
@@ -284,9 +335,10 @@ export function validateFixture(schemaPath, fixturePath, expectValid) {
   }
   return { ok: true, errors: [] };
 }
+
 // CLI: run all schemas and fixtures when invoked directly.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const cases = [
+  const cases: [string, string, boolean][] = [
     [
       'schemas/claim-marker.schema.json',
       'fixtures/schemas/claim-marker.valid.json',
@@ -355,6 +407,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     ],
     ['schemas/phase-graph.schema.json', 'schemas/phase-graph.json', true],
   ];
+
   let failed = 0;
   for (const [schemaPath, fixturePath, expectValid] of cases) {
     const result = validateFixture(schemaPath, fixturePath, expectValid);

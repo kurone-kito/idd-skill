@@ -3,13 +3,31 @@
 // The scripts/consistency-helpers.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
-import { parseProjectCommandRows } from './policy-helpers.mjs';
+
+import { parseProjectCommandRows } from './policy-helpers.mts';
 
 export {
   inspectHelperRuntimeConfig,
   normalizePolicyConfig,
   resolveCollaboratorMarkerTrust,
-} from './policy-helpers.mjs';
+} from './policy-helpers.mts';
+
+interface PolicyDrift {
+  path: string;
+  expected: unknown;
+  actual: unknown;
+  reason?: string;
+}
+
+interface LooseConfig {
+  commands?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+interface RootMarkdownAllowlistConfig {
+  id?: unknown;
+  allowed?: unknown;
+}
 
 const COMMAND_KEYS = [
   'install-deps',
@@ -17,14 +35,21 @@ const COMMAND_KEYS = [
   'pre-push-validate',
   'post-fix-validate',
 ];
+
 const POLICY_FIELD_ROWS = new Map([
   ['issueScope', 'issue-scope'],
   ['orphanFirstPolicy', 'orphan-first-policy'],
 ]);
-export function collectPolicyConfigDrift(config, overviewText) {
-  const c = config && typeof config === 'object' ? config : {};
-  const drifts = [];
+
+export function collectPolicyConfigDrift(
+  config: unknown,
+  overviewText: string,
+): PolicyDrift[] {
+  const c: LooseConfig =
+    config && typeof config === 'object' ? (config as LooseConfig) : {};
+  const drifts: PolicyDrift[] = [];
   const commandRows = parseProjectCommandRows(overviewText);
+
   for (const key of COMMAND_KEYS) {
     const expected = commandRows.get(key);
     if (expected === undefined) {
@@ -45,6 +70,7 @@ export function collectPolicyConfigDrift(config, overviewText) {
       });
     }
   }
+
   for (const [field, row] of POLICY_FIELD_ROWS) {
     const expected = commandRows.get(row);
     if (expected === undefined) {
@@ -65,22 +91,29 @@ export function collectPolicyConfigDrift(config, overviewText) {
       });
     }
   }
+
   return drifts;
 }
-function hasOwn(value, key) {
-  return Object.hasOwn(value ?? {}, key);
+
+function hasOwn(value: unknown, key: string): boolean {
+  return Object.hasOwn((value ?? {}) as object, key);
 }
-export function collectRootMarkdownAllowlistViolations(repoFiles, config) {
+
+export function collectRootMarkdownAllowlistViolations(
+  repoFiles: readonly string[],
+  config: RootMarkdownAllowlistConfig | null | undefined,
+): string[] {
   if (!config) {
     return [];
   }
+
   const id = String(config.id ?? 'root-markdown-allowlist');
   const allowedEntries = config.allowed ?? [];
   if (!Array.isArray(allowedEntries)) {
     return [`${id}: allowed must be an array of root Markdown file names`];
   }
-  const allowed = new Set(allowedEntries);
-  const violations = [];
+  const allowed = new Set(allowedEntries as unknown[]);
+  const violations: string[] = [];
   for (const file of repoFiles) {
     if (file.includes('/') || !/\.md$/i.test(file)) {
       continue;
