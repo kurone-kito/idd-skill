@@ -21,19 +21,23 @@
 // Invoked via `pnpm run build`, so node_modules/.bin (tsc, biome) is on
 // PATH. Uses only node: builtins to stay compatible with the repository's
 // bare-node boundary.
+
 import { execFileSync } from 'node:child_process';
 
 const EMITTED_PREFIX = 'TSFILE: ';
-const tscOutput = execFileSync(
+
+const tscOutput: string = execFileSync(
   'tsc',
   ['-p', 'tsconfig.build.json', '--listEmittedFiles'],
   { encoding: 'utf8' },
 );
-const emittedFiles = tscOutput
+
+const emittedFiles: string[] = tscOutput
   .split(/\r?\n/)
   .filter((line) => line.startsWith(EMITTED_PREFIX))
   .map((line) => line.slice(EMITTED_PREFIX.length).trim())
   .filter((file) => file.endsWith('.mjs'));
+
 if (emittedFiles.length > 0) {
   execFileSync('biome', ['check', '--write', ...emittedFiles], {
     stdio: 'inherit',
