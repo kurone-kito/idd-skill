@@ -4,18 +4,91 @@
 // The scripts/discover-readiness-check.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import type { LabelEvent } from './authoring-label-guard.mts';
 import {
   buildAuthoringLabelWarning,
   resolveAuthoringGuardPolicy,
-} from './authoring-label-guard.mjs';
+} from './authoring-label-guard.mts';
 
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
 });
 const INACCESSIBLE_HTTP_STATUSES = new Set([403, 410, 451]);
+
+type InaccessibleIssueSentinel = typeof INACCESSIBLE_ISSUE_SENTINEL;
+
+/** One issue that passed every readiness filter. */
+export interface ReadinessReadyIssue {
+  number: number;
+  title: string;
+}
+
+/** One issue removed by a readiness filter, with the failed reasons. */
+export interface ReadinessFilteredIssue {
+  number: number;
+  title: string;
+  reasons: string[];
+}
+
+/** One reference that could not be resolved during the readiness check. */
+export interface ReadinessUnresolvableReference {
+  issueNumber: number;
+  kind: string;
+  reference: string;
+  reason: string;
+}
+
+/** Full readiness verdict returned by `evaluateDiscoverReadiness`. */
+export interface ReadinessSummary {
+  ready: ReadinessReadyIssue[];
+  filteredOut: ReadinessFilteredIssue[];
+  unresolvable: ReadinessUnresolvableReference[];
+  warnings: { issueNumber: number; message: string }[];
+  summary: {
+    total: number;
+    readyCount: number;
+    filteredCount: number;
+    unresolvableCount: number;
+    filteredByReason: Record<string, number>;
+  };
+}
+
+interface NormalizedIssue {
+  number: number;
+  title: string;
+  state: string;
+  body: string;
+  labels: Set<string>;
+  labelEvents: LabelEvent[];
+  url: string;
+}
+
+interface EvaluateDiscoverReadinessOptions {
+  includeUnresolvable?: boolean;
+  loadIssue?: (issueNumber: number) => unknown;
+  findRoadmapsByMarker?: (markerId: string) => unknown;
+  loadIssueLabelEvents?: (issueNumber: number) => unknown;
+  authoringLabelName?: string;
+  authoringStaleAgeMs?: number;
+  now?: Date | string;
+}
+
+interface ParsedArgs {
+  issueNumbers: number[];
+  includeUnresolvable: boolean;
+  csv: boolean;
+  owner: string;
+  repo: string;
+  policy: string;
+  now: string;
+}
+
+type CachedIssue = NormalizedIssue | InaccessibleIssueSentinel | null;
+
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
   if (args.issueNumbers.length === 0) {
@@ -23,12 +96,14 @@ if (isMainModule(import.meta.url)) {
       'missing required --issue <number> (repeatable) or --issues <n1,n2,...>',
     );
   }
+
   const owner =
     args.owner ||
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
   const repo =
     args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
   const authoringPolicy = resolveAuthoringGuardPolicy(loadPolicy(args.policy));
+
   const summary = await evaluateDiscoverReadiness(args.issueNumbers, {
     includeUnresolvable: args.includeUnresolvable,
     loadIssue: buildIssueLoader(owner, repo),
@@ -38,13 +113,18 @@ if (isMainModule(import.meta.url)) {
     authoringStaleAgeMs: authoringPolicy.staleAgeMs,
     now: args.now || new Date(),
   });
+
   if (args.csv) {
     process.stdout.write(renderCsv(summary));
   } else {
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   }
 }
-export async function evaluateDiscoverReadiness(issueNumbers, options) {
+
+export async function evaluateDiscoverReadiness(
+  issueNumbers: (number | string)[],
+  options: EvaluateDiscoverReadinessOptions,
+): Promise<ReadinessSummary> {
   const {
     includeUnresolvable = false,
     loadIssue,
@@ -64,12 +144,14 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
       'evaluateDiscoverReadiness requires findRoadmapsByMarker(markerId)',
     );
   }
-  const ready = [];
-  const filteredOut = [];
-  const unresolvable = [];
-  const warnings = [];
-  const issueCache = new Map();
-  const markerCache = new Map();
+
+  const ready: ReadinessReadyIssue[] = [];
+  const filteredOut: ReadinessFilteredIssue[] = [];
+  const unresolvable: ReadinessUnresolvableReference[] = [];
+  const warnings: { issueNumber: number; message: string }[] = [];
+  const issueCache = new Map<number, CachedIssue>();
+  const markerCache = new Map<string, NormalizedIssue[]>();
+
   for (const issueNumber of normalizeIssueNumbers(issueNumbers)) {
     const issue = await getIssue(issueNumber, issueCache, loadIssue);
     if (!issue || isInaccessibleIssue(issue)) {
@@ -97,7 +179,8 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
       });
       continue;
     }
-    const reasons = new Set();
+
+    const reasons = new Set<string>();
     const labels = normalizeLabels(issue.labels);
     if (labels.has('status:blocked-by-human')) {
       reasons.add('label:status:blocked-by-human');
@@ -118,6 +201,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         warnings.push(warning);
       }
     }
+
     for (const dependencyNumber of extractDependencyIssueNumbers(issue.body)) {
       const dependencyIssue = await getIssue(
         dependencyNumber,
@@ -144,6 +228,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         reasons.add(`open_dependency_issue:#${dependencyNumber}`);
       }
     }
+
     for (const blockedNumber of extractBlockedByIssueNumbers(issue.body)) {
       const blockedIssue = await getIssue(blockedNumber, issueCache, loadIssue);
       if (!blockedIssue || isInaccessibleIssue(blockedIssue)) {
@@ -163,6 +248,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         reasons.add(`blocked_by_open_issue:#${blockedNumber}`);
       }
     }
+
     for (const marker of extractBlockedByRoadmapMarkers(issue.body)) {
       const markerMatches = await getRoadmapsByMarker(
         marker,
@@ -183,6 +269,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         reasons.add(`blocked_by_open_roadmap_marker:${marker}`);
       }
     }
+
     if (reasons.size === 0) {
       ready.push({
         number: issue.number,
@@ -190,12 +277,14 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
       });
       continue;
     }
+
     filteredOut.push({
       number: issue.number,
       title: issue.title,
       reasons: [...reasons].sort(),
     });
   }
+
   const filteredByReason = countReasons(filteredOut);
   return {
     ready,
@@ -211,19 +300,22 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     },
   };
 }
-export function extractBlockedByIssueNumbers(body) {
+
+export function extractBlockedByIssueNumbers(body: string): number[] {
   const matches = body.matchAll(/^\s*Blocked by\s+#(\d+)\b/gim);
   return dedupeNumbers(
     [...matches].map((match) => Number.parseInt(match[1], 10)),
   );
 }
-export function extractBlockedByRoadmapMarkers(body) {
+
+export function extractBlockedByRoadmapMarkers(body: string): string[] {
   const matches = body.matchAll(
     /<!--\s*idd-skill-blocked-by:\s*([^\s>]+)\s*-->/gi,
   );
   return [...new Set([...matches].map((match) => match[1]))];
 }
-export function extractDependencyIssueNumbers(body) {
+
+export function extractDependencyIssueNumbers(body: string): number[] {
   const explicitDependencies = [
     ...body.matchAll(/^\s*Depends on\s+#(\d+)\b/gim),
   ];
@@ -235,8 +327,17 @@ export function extractDependencyIssueNumbers(body) {
     ...taskListDependencies.map((match) => Number.parseInt(match[1], 10)),
   ]);
 }
-function parseArgs(argv) {
-  const parsed = {
+
+function parseArgs(argv: string[]): ParsedArgs {
+  const parsed: {
+    issueNumbers: (number | string)[];
+    includeUnresolvable: boolean;
+    csv: boolean;
+    owner: string;
+    repo: string;
+    policy: string;
+    now: string;
+  } = {
     issueNumbers: [],
     includeUnresolvable: false,
     csv: false,
@@ -245,6 +346,7 @@ function parseArgs(argv) {
     policy: '',
     now: '',
   };
+
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
@@ -292,11 +394,13 @@ function parseArgs(argv) {
     }
     throw new Error(`unknown argument: ${token}`);
   }
+
   return {
     ...parsed,
     issueNumbers: normalizeIssueNumbers(parsed.issueNumbers),
   };
 }
+
 function printHelp() {
   process.stdout.write(`Usage:
   node scripts/discover-readiness-check.mjs --issue <number> [--issue <number> ...]
@@ -313,18 +417,30 @@ Output schema (JSON mode):
   }
 `);
 }
-function normalizeIssueNumbers(values) {
+
+function normalizeIssueNumbers(values: (number | string)[]): number[] {
   const parsed = values
     .map((value) => Number.parseInt(String(value).trim(), 10))
     .filter((value) => Number.isInteger(value) && value > 0);
   return [...new Set(parsed)];
 }
-function dedupeNumbers(values) {
+
+function dedupeNumbers(values: number[]): number[] {
   return [
     ...new Set(values.filter((value) => Number.isInteger(value) && value > 0)),
   ];
 }
-function normalizeIssue(issue) {
+
+function normalizeIssue(issue: {
+  number?: unknown;
+  id?: unknown;
+  title?: unknown;
+  state?: unknown;
+  body?: unknown;
+  labels?: unknown;
+  labelEvents?: unknown;
+  url?: unknown;
+}): NormalizedIssue {
   return {
     number: Number.parseInt(String(issue.number ?? issue.id ?? 0), 10),
     title: String(issue.title ?? ''),
@@ -335,7 +451,8 @@ function normalizeIssue(issue) {
     url: String(issue.url ?? ''),
   };
 }
-function normalizeLabels(labelsInput) {
+
+function normalizeLabels(labelsInput: unknown): Set<string> {
   if (!labelsInput) {
     return new Set();
   }
@@ -351,20 +468,26 @@ function normalizeLabels(labelsInput) {
           if (typeof label === 'string') {
             return label;
           }
-          return String(label?.name ?? '');
+          return String((label as { name?: unknown } | null)?.name ?? '');
         })
         .filter(Boolean),
     );
   }
   return new Set();
 }
-function isParentEpicIssue(issue) {
+
+function isParentEpicIssue(issue: NormalizedIssue): boolean {
   if (issue.title.toLowerCase().startsWith('roadmap')) {
     return true;
   }
   return issue.labels.has('roadmap');
 }
-async function getIssue(issueNumber, cache, loadIssue) {
+
+async function getIssue(
+  issueNumber: number,
+  cache: Map<number, CachedIssue>,
+  loadIssue: (issueNumber: number) => unknown,
+): Promise<CachedIssue> {
   if (cache.has(issueNumber)) {
     return cache.get(issueNumber) ?? null;
   }
@@ -372,24 +495,35 @@ async function getIssue(issueNumber, cache, loadIssue) {
   const issue = isInaccessibleIssue(rawIssue)
     ? INACCESSIBLE_ISSUE_SENTINEL
     : rawIssue
-      ? normalizeIssue(rawIssue)
+      ? normalizeIssue(rawIssue as Parameters<typeof normalizeIssue>[0])
       : null;
   cache.set(issueNumber, issue);
   return issue;
 }
-async function getRoadmapsByMarker(marker, cache, findRoadmapsByMarker) {
+
+async function getRoadmapsByMarker(
+  marker: string,
+  cache: Map<string, NormalizedIssue[]>,
+  findRoadmapsByMarker: (markerId: string) => unknown,
+): Promise<NormalizedIssue[]> {
   const cached = cache.get(marker);
   if (cached) {
     return cached;
   }
   const rawMatches = await findRoadmapsByMarker(marker);
-  const matches = (rawMatches ?? [])
-    .map((issue) => normalizeIssue(issue))
+  const matches = ((rawMatches ?? []) as unknown[])
+    .map((issue) =>
+      normalizeIssue(issue as Parameters<typeof normalizeIssue>[0]),
+    )
     .filter((issue) => Number.isInteger(issue.number) && issue.number > 0);
   cache.set(marker, matches);
   return matches;
 }
-async function resolveLabelEvents(issue, loadIssueLabelEvents) {
+
+async function resolveLabelEvents(
+  issue: NormalizedIssue,
+  loadIssueLabelEvents?: (issueNumber: number) => unknown,
+): Promise<LabelEvent[]> {
   if (
     issue.labelEvents.length > 0 ||
     typeof loadIssueLabelEvents !== 'function'
@@ -398,13 +532,16 @@ async function resolveLabelEvents(issue, loadIssueLabelEvents) {
   }
   try {
     const events = await loadIssueLabelEvents(issue.number);
-    return Array.isArray(events) ? events : [];
+    return Array.isArray(events) ? (events as LabelEvent[]) : [];
   } catch {
     return [];
   }
 }
-function countReasons(filteredOut) {
-  const counts = {};
+
+function countReasons(
+  filteredOut: ReadinessFilteredIssue[],
+): Record<string, number> {
+  const counts: Record<string, number> = {};
   for (const item of filteredOut) {
     for (const reason of item.reasons) {
       counts[reason] = (counts[reason] ?? 0) + 1;
@@ -412,7 +549,8 @@ function countReasons(filteredOut) {
   }
   return counts;
 }
-function renderCsv(summary) {
+
+function renderCsv(summary: ReadinessSummary): string {
   const lines = ['number,title,status,reasons'];
   for (const item of summary.ready) {
     lines.push(`${item.number},${escapeCsv(item.title)},ready,`);
@@ -424,15 +562,17 @@ function renderCsv(summary) {
   }
   return `${lines.join('\n')}\n`;
 }
-function escapeCsv(value) {
+
+function escapeCsv(value: unknown): string {
   const text = String(value ?? '');
   if (!/[",\n]/.test(text)) {
     return text;
   }
   return `"${text.replaceAll('"', '""')}"`;
 }
-function buildIssueLoader(owner, repo) {
-  return async (issueNumber) => {
+
+function buildIssueLoader(owner: string, repo: string) {
+  return async (issueNumber: number) => {
     const args = [
       'api',
       `repos/${owner}/${repo}/issues/${issueNumber}`,
@@ -453,14 +593,16 @@ function buildIssueLoader(owner, repo) {
     }
   };
 }
-function buildIssueLabelEventsLoader(owner, repo) {
-  return async (issueNumber) => {
+
+function buildIssueLabelEventsLoader(owner: string, repo: string) {
+  return async (issueNumber: number) => {
     const repoRef = `${owner}/${repo}`;
     return fetchIssueLabelEvents(repoRef, issueNumber);
   };
 }
-function fetchIssueLabelEvents(repoRef, issueNumber) {
-  const events = [];
+
+function fetchIssueLabelEvents(repoRef: string, issueNumber: number) {
+  const events: unknown[] = [];
   const pageSize = 100;
   for (let page = 1; ; page += 1) {
     const rawPage = JSON.parse(
@@ -468,8 +610,10 @@ function fetchIssueLabelEvents(repoRef, issueNumber) {
         'api',
         `repos/${repoRef}/issues/${issueNumber}/timeline?per_page=${pageSize}&page=${page}`,
       ]).trim() || '[]',
+    ) as unknown[];
+    const labeled = rawPage.filter(
+      (event) => (event as { event?: unknown } | null)?.event === 'labeled',
     );
-    const labeled = rawPage.filter((event) => event?.event === 'labeled');
     events.push(...labeled);
     if (rawPage.length < pageSize) {
       break;
@@ -477,8 +621,9 @@ function fetchIssueLabelEvents(repoRef, issueNumber) {
   }
   return events;
 }
-function buildRoadmapMarkerResolver(owner, repo) {
-  return async (marker) => {
+
+function buildRoadmapMarkerResolver(owner: string, repo: string) {
+  return async (marker: string) => {
     const query = `repo:${owner}/${repo} is:issue in:body "<!-- idd-skill-roadmap-id: ${marker} -->"`;
     const encodedQuery = encodeURIComponent(query);
     const result = runGh([
@@ -490,10 +635,12 @@ function buildRoadmapMarkerResolver(owner, repo) {
     return JSON.parse(result || '[]');
   };
 }
-function ghText(args) {
+
+function ghText(args: string[]): string {
   return runGh(args).trim();
 }
-function loadPolicy(policyPath) {
+
+function loadPolicy(policyPath: string): unknown {
   const targetPath = policyPath
     ? resolve(process.cwd(), policyPath)
     : resolve(process.cwd(), '.github/idd/config.json');
@@ -503,48 +650,63 @@ function loadPolicy(policyPath) {
     return {};
   }
 }
-function runGh(args, options = {}) {
+
+function runGh(
+  args: string[],
+  options: { allowStatuses?: number[] } = {},
+): string {
   const { allowStatuses = [] } = options;
+
   try {
     return execFileSync('gh', args, {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    const rawStatus = error?.status;
+    const rawStatus = (error as { status?: unknown } | null)?.status;
     const status = typeof rawStatus === 'number' ? rawStatus : null;
     if (status !== null && allowStatuses.includes(status)) {
       return '';
     }
-    const stderr = String(error?.stderr ?? '').trim();
+    const stderr = String(
+      (error as { stderr?: unknown } | null)?.stderr ?? '',
+    ).trim();
     const prefix = `gh ${args.join(' ')}`;
     const wrapped = new Error(
       stderr ? `${prefix} failed: ${stderr}` : `${prefix} failed`,
-    );
+    ) as Error & { status?: number | null; stderr?: string };
     wrapped.status = status;
     wrapped.stderr = stderr;
     throw wrapped;
   }
 }
-function isInaccessibleIssue(value) {
-  return value?.__iddLookupStatus === 'inaccessible';
+
+function isInaccessibleIssue(
+  value: unknown,
+): value is InaccessibleIssueSentinel {
+  return (
+    (value as { __iddLookupStatus?: unknown } | null)?.__iddLookupStatus ===
+    'inaccessible'
+  );
 }
-function isInaccessibleIssueLookupError(error) {
+
+function isInaccessibleIssueLookupError(error: unknown): boolean {
   if (!error) {
     return false;
   }
-  const rawStatus = error.status;
+  const rawStatus = (error as { status?: unknown }).status;
   const status = typeof rawStatus === 'number' ? rawStatus : null;
   if (status !== null && INACCESSIBLE_HTTP_STATUSES.has(status)) {
     return true;
   }
-  const candidate = error;
+  const candidate = error as { stderr?: unknown; message?: unknown };
   const stderr = String(candidate.stderr ?? candidate.message ?? '');
   return /resource not accessible|forbidden|requires authentication|visibility/i.test(
     stderr,
   );
 }
-function isMainModule(metaUrl) {
+
+function isMainModule(metaUrl: string): boolean {
   if (!metaUrl || !process.argv[1]) {
     return false;
   }

@@ -4,11 +4,13 @@
 // The scripts/discover-roadmap-graph.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseAutopilotSuitability } from './autopilot-suitability.mjs';
+
+import { parseAutopilotSuitability } from './autopilot-suitability.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
@@ -34,17 +36,156 @@ query($owner:String!, $repo:String!, $number:Int!, $after:String) {
   }
 }
 `;
+
+type InaccessibleIssueSentinel = typeof INACCESSIBLE_ISSUE_SENTINEL;
+
+/** One outbound reference extracted from an issue body or sub-issue list. */
+export interface RoadmapGraphReference {
+  target: number;
+  relationship: string;
+  evidence: string;
+}
+
+/** One traversal edge of the enumerated roadmap graph. */
+export interface RoadmapGraphEdge extends RoadmapGraphReference {
+  source: number;
+}
+
+/** Classification verdict for one issue node during traversal. */
+export interface RoadmapIssueClassification {
+  kind: 'roadmap' | 'execution';
+  roadmapMarkerId: string;
+}
+
+/** One node of the enumerated roadmap graph in report form. */
+export interface RoadmapGraphNode {
+  number: number;
+  title: string;
+  state: string;
+  labels: string[];
+  classification: 'roadmap' | 'execution';
+  roadmapMarkerId: string;
+  autopilotSuitability: number | null;
+  depth: number;
+}
+
+/** Provenance path from the root roadmap to one discovered node. */
+export interface RoadmapProvenancePath {
+  target: number;
+  path: number[];
+}
+
+/** One de-duplicated diagnostic entry for a problematic reference. */
+export interface RoadmapReferenceDiagnostic {
+  source: number;
+  target: number;
+  relationship: string;
+  evidence: string;
+  reason: string;
+}
+
+/** One duplicate-reference diagnostic entry. */
+export interface RoadmapDuplicateReferenceDiagnostic {
+  source: number;
+  target: number;
+  relationship: string;
+  evidence: string;
+  firstSeenFrom: number;
+}
+
+/** One traversal-cycle diagnostic entry. */
+export interface RoadmapCycleDiagnostic {
+  source: number;
+  target: number;
+  relationship: string;
+  path: number[];
+}
+
+/** Full enumeration report returned by `enumerateRoadmapGraph`. */
+export interface RoadmapGraphReport {
+  root: {
+    number: number;
+    title: string;
+    state: string;
+    classification: 'roadmap' | 'execution';
+    roadmapMarkerId: string;
+  };
+  nodes: RoadmapGraphNode[];
+  edges: RoadmapGraphEdge[];
+  provenancePaths: RoadmapProvenancePath[];
+  roadmapNodes: number[];
+  executionCandidates: number[];
+  diagnostics: {
+    duplicateReferences: RoadmapDuplicateReferenceDiagnostic[];
+    cycles: RoadmapCycleDiagnostic[];
+    inaccessibleReferences: RoadmapReferenceDiagnostic[];
+    unresolvedReferences: RoadmapReferenceDiagnostic[];
+  };
+  summary: {
+    rootNumber: number;
+    nodeCount: number;
+    edgeCount: number;
+    roadmapNodeCount: number;
+    executionCandidateCount: number;
+    duplicateReferenceCount: number;
+    cycleCount: number;
+    inaccessibleReferenceCount: number;
+    unresolvedReferenceCount: number;
+    maxDepth: number;
+  };
+}
+
+interface NormalizedIssue {
+  number: number;
+  title: string;
+  state: string;
+  body: string;
+  labels: Set<string>;
+  isPullRequest: boolean;
+}
+
+interface RoadmapNodeRecord {
+  number: number;
+  title: string;
+  state: string;
+  labels: Set<string>;
+  classification: 'roadmap' | 'execution';
+  roadmapMarkerId: string;
+  autopilotSuitability: number | null;
+  depth: number;
+}
+
+interface EnumerateRoadmapGraphOptions {
+  markerPrefix?: unknown;
+  owner?: string;
+  repo?: string;
+  loadIssue?: (issueNumber: number) => unknown;
+  loadSubIssues?: (issueNumber: number) => unknown;
+}
+
+interface ParsedArgs {
+  issue: number;
+  owner: string;
+  repo: string;
+  policy: string;
+  help: boolean;
+}
+
+type CachedIssue = NormalizedIssue | InaccessibleIssueSentinel | null;
+
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
   if (!Number.isInteger(args.issue) || args.issue <= 0) {
     throw new Error('missing required --issue <number>');
   }
+
   const owner =
     args.owner ||
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
   const repo =
     args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
-  const policy = loadPolicy(args.policy);
+  const policy = loadPolicy(args.policy) as { markerPrefix?: unknown };
+
   const graph = await enumerateRoadmapGraph(args.issue, {
     markerPrefix: policy.markerPrefix,
     owner,
@@ -52,9 +193,14 @@ if (isMainModule(import.meta.url)) {
     loadIssue: buildIssueLoader(owner, repo),
     loadSubIssues: buildSubIssueLoader(owner, repo),
   });
+
   process.stdout.write(`${JSON.stringify(graph, null, 2)}\n`);
 }
-export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
+
+export async function enumerateRoadmapGraph(
+  rootIssueNumber: number,
+  options: EnumerateRoadmapGraphOptions = {},
+): Promise<RoadmapGraphReport> {
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
   const loadIssueOption = options.loadIssue;
   const loadSubIssues =
@@ -62,30 +208,32 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       ? options.loadSubIssues
       : async () => [];
   const currentRepoRef = normalizeRepoRef(options.owner, options.repo);
+
   if (typeof loadIssueOption !== 'function') {
     throw new Error('enumerateRoadmapGraph requires loadIssue(issueNumber)');
   }
   // Re-bind after the guard so the hoisted helper closures below see the
   // narrowed function type.
   const loadIssue = loadIssueOption;
-  const issueCache = new Map();
-  const nodeRecords = new Map();
-  const edges = [];
-  const provenancePaths = [];
+
+  const issueCache = new Map<number, CachedIssue>();
+  const nodeRecords = new Map<number, RoadmapNodeRecord>();
+  const edges: RoadmapGraphEdge[] = [];
+  const provenancePaths: RoadmapProvenancePath[] = [];
   const diagnostics = {
-    duplicateReferences: [],
-    cycles: [],
-    inaccessibleReferences: [],
-    unresolvedReferences: [],
+    duplicateReferences: [] as RoadmapDuplicateReferenceDiagnostic[],
+    cycles: [] as RoadmapCycleDiagnostic[],
+    inaccessibleReferences: [] as RoadmapReferenceDiagnostic[],
+    unresolvedReferences: [] as RoadmapReferenceDiagnostic[],
   };
-  const pathKeys = new Set();
-  const visitedIssuePaths = new Set();
-  const edgeKeys = new Set();
-  const duplicateKeys = new Set();
-  const cycleKeys = new Set();
-  const inaccessibleKeys = new Set();
-  const unresolvedKeys = new Set();
-  const referenceCache = new Map();
+  const pathKeys = new Set<string>();
+  const visitedIssuePaths = new Set<string>();
+  const edgeKeys = new Set<string>();
+  const duplicateKeys = new Set<string>();
+  const cycleKeys = new Set<string>();
+  const inaccessibleKeys = new Set<string>();
+  const unresolvedKeys = new Set<string>();
+  const referenceCache = new Map<number, RoadmapGraphReference[]>();
   const fetchedRoot = await getIssue(rootIssueNumber, issueCache, loadIssue);
   if (!fetchedRoot) {
     throw new Error(`root issue #${rootIssueNumber} was not found`);
@@ -99,7 +247,9 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   // Re-bind after the guards so the hoisted helper closures below see the
   // narrowed issue type.
   const rootIssue = fetchedRoot;
+
   await visitIssue(rootIssue.number, [rootIssue.number]);
+
   const nodes = [...nodeRecords.values()]
     .map((node) => ({
       number: node.number,
@@ -129,6 +279,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   if (!rootNode) {
     throw new Error(`root issue #${rootIssueNumber} was not recorded`);
   }
+
   return {
     root: {
       number: rootNode.number,
@@ -167,21 +318,25 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       ),
     },
   };
-  async function visitIssue(issueNumber, path) {
+
+  async function visitIssue(issueNumber: number, path: number[]) {
     const issue = await getIssue(issueNumber, issueCache, loadIssue);
     if (!issue || isInaccessibleIssue(issue)) {
       return;
     }
+
     const visitKey = `${issue.number}:${path.join('>')}`;
     if (visitedIssuePaths.has(visitKey)) {
       return;
     }
     visitedIssuePaths.add(visitKey);
+
     recordNode(issue, path);
     const references = await getReferences(issue);
-    const seenSourceTargets = new Set();
-    const seenSourceEdgeKeys = new Set();
-    const firstReferenceBySourceTarget = new Map();
+    const seenSourceTargets = new Set<string>();
+    const seenSourceEdgeKeys = new Set<string>();
+    const firstReferenceBySourceTarget = new Map<string, RoadmapGraphEdge>();
+
     for (const reference of references) {
       const edge = {
         source: issue.number,
@@ -198,6 +353,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       if (!edgeKeys.has(edgeKey)) {
         edgeKeys.add(edgeKey);
         edges.push(edge);
+
         const sourceTargetKey = `${edge.source}:${edge.target}`;
         if (seenSourceTargets.has(sourceTargetKey)) {
           recordDuplicateReference(
@@ -206,6 +362,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
           );
         }
         seenSourceTargets.add(sourceTargetKey);
+
         const firstReference =
           firstReferenceBySourceTarget.get(sourceTargetKey);
         if (firstReference) {
@@ -214,6 +371,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
           firstReferenceBySourceTarget.set(sourceTargetKey, edge);
         }
       }
+
       if (path.includes(edge.target)) {
         const cyclePath = [...path, edge.target];
         const cycleKey = cyclePath.join('>');
@@ -228,6 +386,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
         }
         continue;
       }
+
       const targetIssue = await getIssue(edge.target, issueCache, loadIssue);
       if (!targetIssue) {
         recordReferenceDiagnostic(
@@ -256,12 +415,16 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
         );
         continue;
       }
+
       const nextPath = [...path, edge.target];
       recordProvenancePath(edge.target, nextPath);
       await visitIssue(edge.target, nextPath);
     }
   }
-  async function getReferences(issue) {
+
+  async function getReferences(
+    issue: NormalizedIssue,
+  ): Promise<RoadmapGraphReference[]> {
     const cached = referenceCache.get(issue.number);
     if (cached) {
       return cached;
@@ -274,7 +437,8 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     referenceCache.set(issue.number, references);
     return references;
   }
-  function recordNode(issue, path) {
+
+  function recordNode(issue: NormalizedIssue, path: number[]) {
     const existing = nodeRecords.get(issue.number);
     const classification = classifyIssue(issue, markerPrefix);
     if (issue.number === rootIssue.number) {
@@ -285,6 +449,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       existing.depth = Math.min(existing.depth, depth);
       return;
     }
+
     nodeRecords.set(issue.number, {
       number: issue.number,
       title: issue.title,
@@ -297,7 +462,8 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     });
     recordProvenancePath(issue.number, path);
   }
-  function recordProvenancePath(target, path) {
+
+  function recordProvenancePath(target: number, path: number[]) {
     const pathKey = `${target}:${path.join('>')}`;
     if (pathKeys.has(pathKey)) {
       return;
@@ -305,7 +471,11 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     pathKeys.add(pathKey);
     provenancePaths.push({ target, path });
   }
-  function recordDuplicateReference(edge, firstReference) {
+
+  function recordDuplicateReference(
+    edge: RoadmapGraphEdge,
+    firstReference: RoadmapGraphEdge,
+  ) {
     const key = `${edge.source}:${edge.target}:${edge.relationship}:${edge.evidence}`;
     if (duplicateKeys.has(key)) {
       return;
@@ -320,10 +490,11 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     });
   }
 }
+
 export function extractRoadmapMarkerId(
-  body,
-  markerPrefix = DEFAULT_MARKER_PREFIX,
-) {
+  body: unknown,
+  markerPrefix: string = DEFAULT_MARKER_PREFIX,
+): string {
   const regex = new RegExp(
     `<!--\\s*${escapeRegex(markerPrefix)}-roadmap-id:\\s*([^\\s>]+)\\s*-->`,
     'i',
@@ -331,7 +502,11 @@ export function extractRoadmapMarkerId(
   const match = regex.exec(String(body ?? ''));
   return match ? match[1] : '';
 }
-export function classifyIssue(issue, markerPrefix = DEFAULT_MARKER_PREFIX) {
+
+export function classifyIssue(
+  issue: { body?: unknown; labels?: unknown },
+  markerPrefix: string = DEFAULT_MARKER_PREFIX,
+): RoadmapIssueClassification {
   const roadmapMarkerId = extractRoadmapMarkerId(issue.body, markerPrefix);
   const labels = normalizeLabels(issue.labels);
   if (roadmapMarkerId || labels.has('roadmap')) {
@@ -345,7 +520,10 @@ export function classifyIssue(issue, markerPrefix = DEFAULT_MARKER_PREFIX) {
     roadmapMarkerId: '',
   };
 }
-export function extractTaskListReferences(body) {
+
+export function extractTaskListReferences(
+  body: unknown,
+): RoadmapGraphReference[] {
   return String(body ?? '')
     .split(/\r?\n/u)
     .flatMap((line) => {
@@ -359,8 +537,12 @@ export function extractTaskListReferences(body) {
         : [];
     });
 }
-export function extractKeywordReferences(body, options = {}) {
-  const references = [];
+
+export function extractKeywordReferences(
+  body: unknown,
+  options: { currentRepoRef?: string; owner?: string; repo?: string } = {},
+): RoadmapGraphReference[] {
+  const references: RoadmapGraphReference[] = [];
   const currentRepoRef = normalizeRepoRef(
     options.currentRepoRef
       ? options.currentRepoRef.split('/')[0]
@@ -393,7 +575,8 @@ export function extractKeywordReferences(body, options = {}) {
   }
   return references;
 }
-function classifyKeywordRelationship(keyword) {
+
+function classifyKeywordRelationship(keyword: unknown): string {
   const normalized = String(keyword ?? '').toLowerCase();
   if (normalized.startsWith('depend') || normalized.startsWith('blocked')) {
     return 'dependency';
@@ -406,18 +589,24 @@ function classifyKeywordRelationship(keyword) {
   }
   return 'closing-keyword';
 }
-function extractKeywordReferenceTargets(segment, currentRepoRef) {
-  const targets = [];
+
+function extractKeywordReferenceTargets(
+  segment: unknown,
+  currentRepoRef: string,
+): number[] {
+  const targets: number[] = [];
   let remaining = String(segment ?? '')
     .trimStart()
     .replace(/^:\s*/u, '');
+
   while (remaining) {
     const match = remaining.match(/^(?:([\w.-]+\/[\w.-]+)#(\d+)|#(\d+))/u);
     if (!match) {
       break;
     }
+
     const qualifiedRepoRef = match[1]
-      ? normalizeRepoRef(...match[1].split('/'))
+      ? normalizeRepoRef(...(match[1].split('/') as [string, string]))
       : '';
     const target = Number.parseInt(match[2] ?? match[3] ?? '', 10);
     if (
@@ -427,6 +616,7 @@ function extractKeywordReferenceTargets(segment, currentRepoRef) {
     ) {
       targets.push(target);
     }
+
     remaining = remaining.slice(match[0].length);
     const separatorMatch = remaining.match(
       /^\s*(?:,\s*(?:and\s*)?|\band\b\s*)/iu,
@@ -436,9 +626,11 @@ function extractKeywordReferenceTargets(segment, currentRepoRef) {
     }
     remaining = remaining.slice(separatorMatch[0].length);
   }
+
   return targets;
 }
-function normalizeRepoRef(owner, repo) {
+
+function normalizeRepoRef(owner: unknown, repo: unknown): string {
   const normalizedOwner = String(owner ?? '')
     .trim()
     .toLowerCase();
@@ -449,14 +641,18 @@ function normalizeRepoRef(owner, repo) {
     ? `${normalizedOwner}/${normalizedRepo}`
     : '';
 }
-function normalizeSubIssueReferences(subIssues) {
+
+function normalizeSubIssueReferences(
+  subIssues: unknown,
+): RoadmapGraphReference[] {
   return normalizeSubIssueNumbers(subIssues).map((target) => ({
     target,
     relationship: 'sub-issue',
     evidence: `GitHub sub-issue #${target}`,
   }));
 }
-function normalizeSubIssueNumbers(subIssues) {
+
+function normalizeSubIssueNumbers(subIssues: unknown): number[] {
   if (!Array.isArray(subIssues)) {
     return [];
   }
@@ -467,20 +663,25 @@ function normalizeSubIssueNumbers(subIssues) {
           if (typeof entry === 'number') {
             return entry;
           }
-          return Number.parseInt(String(entry?.number ?? entry), 10);
+          return Number.parseInt(
+            String((entry as { number?: unknown } | null)?.number ?? entry),
+            10,
+          );
         })
         .filter((value) => Number.isInteger(value) && value > 0),
     ),
   ];
 }
-function parseArgs(argv) {
-  const parsed = {
+
+function parseArgs(argv: string[]): ParsedArgs {
+  const parsed: ParsedArgs = {
     issue: 0,
     owner: '',
     repo: '',
     policy: '',
     help: false,
   };
+
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
@@ -510,8 +711,10 @@ function parseArgs(argv) {
     }
     throw new Error(`unknown argument: ${token}`);
   }
+
   return parsed;
 }
+
 function printHelp() {
   process.stdout.write(`Usage:
   node scripts/discover-roadmap-graph.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--policy <path>]
@@ -545,7 +748,16 @@ Output schema (JSON mode):
   }
 `);
 }
-function normalizeIssue(issue) {
+
+function normalizeIssue(issue: {
+  number?: unknown;
+  id?: unknown;
+  title?: unknown;
+  state?: unknown;
+  body?: unknown;
+  labels?: unknown;
+  pull_request?: unknown;
+}): NormalizedIssue {
   return {
     number: Number.parseInt(String(issue.number ?? issue.id ?? 0), 10),
     title: String(issue.title ?? ''),
@@ -555,7 +767,8 @@ function normalizeIssue(issue) {
     isPullRequest: Boolean(issue.pull_request),
   };
 }
-function normalizeLabels(labelsInput) {
+
+function normalizeLabels(labelsInput: unknown): Set<string> {
   if (!labelsInput) {
     return new Set();
   }
@@ -569,23 +782,30 @@ function normalizeLabels(labelsInput) {
           if (typeof label === 'string') {
             return normalizeLabelName(label);
           }
-          return normalizeLabelName(label?.name);
+          return normalizeLabelName((label as { name?: unknown } | null)?.name);
         })
         .filter(Boolean),
     );
   }
   return new Set();
 }
-function normalizeLabelName(label) {
+
+function normalizeLabelName(label: unknown): string {
   return String(label ?? '')
     .trim()
     .toLowerCase();
 }
-function normalizeMarkerPrefix(markerPrefix) {
+
+function normalizeMarkerPrefix(markerPrefix: unknown): string {
   const normalized = String(markerPrefix ?? '').trim();
   return normalized || DEFAULT_MARKER_PREFIX;
 }
-async function getIssue(issueNumber, cache, loadIssue) {
+
+async function getIssue(
+  issueNumber: number,
+  cache: Map<number, CachedIssue>,
+  loadIssue: (issueNumber: number) => unknown,
+): Promise<CachedIssue> {
   if (cache.has(issueNumber)) {
     return cache.get(issueNumber) ?? null;
   }
@@ -593,13 +813,14 @@ async function getIssue(issueNumber, cache, loadIssue) {
   const issue = isInaccessibleIssue(rawIssue)
     ? INACCESSIBLE_ISSUE_SENTINEL
     : rawIssue
-      ? normalizeIssue(rawIssue)
+      ? normalizeIssue(rawIssue as Parameters<typeof normalizeIssue>[0])
       : null;
   cache.set(issueNumber, issue);
   return issue;
 }
-function buildIssueLoader(owner, repo) {
-  return async (issueNumber) => {
+
+function buildIssueLoader(owner: string, repo: string) {
+  return async (issueNumber: number) => {
     const args = [
       'api',
       `repos/${owner}/${repo}/issues/${issueNumber}`,
@@ -623,12 +844,14 @@ function buildIssueLoader(owner, repo) {
     }
   };
 }
-function buildSubIssueLoader(owner, repo) {
-  return async (issueNumber) => {
-    const numbers = [];
+
+function buildSubIssueLoader(owner: string, repo: string) {
+  return async (issueNumber: number) => {
+    const numbers: number[] = [];
     let after = '';
+
     while (true) {
-      const variables = {
+      const variables: Record<string, string | number> = {
         owner,
         repo,
         number: issueNumber,
@@ -636,7 +859,18 @@ function buildSubIssueLoader(owner, repo) {
       if (after) {
         variables.after = after;
       }
-      const result = runGraphqlQuery(SUB_ISSUES_QUERY, variables);
+      const result = runGraphqlQuery(SUB_ISSUES_QUERY, variables) as {
+        data?: {
+          repository?: {
+            issue?: {
+              subIssues?: {
+                nodes?: unknown;
+                pageInfo?: { hasNextPage?: unknown; endCursor?: unknown };
+              };
+            };
+          };
+        };
+      };
       const connection = result?.data?.repository?.issue?.subIssues;
       if (
         !connection ||
@@ -647,6 +881,7 @@ function buildSubIssueLoader(owner, repo) {
           `subIssues connection missing for issue #${issueNumber}`,
         );
       }
+
       numbers.push(...normalizeSubIssueNumbers(connection.nodes));
       if (!connection.pageInfo.hasNextPage) {
         break;
@@ -658,10 +893,15 @@ function buildSubIssueLoader(owner, repo) {
       }
       after = String(connection.pageInfo.endCursor);
     }
+
     return [...new Set(numbers)];
   };
 }
-function runGraphqlQuery(query, variables) {
+
+function runGraphqlQuery(
+  query: string,
+  variables: Record<string, string | number>,
+): unknown {
   const args = ['api', 'graphql', '-f', `query=${query}`];
   for (const [name, value] of Object.entries(variables)) {
     if (value === '' || value === null || value === undefined) {
@@ -670,23 +910,27 @@ function runGraphqlQuery(query, variables) {
     const flag = typeof value === 'number' ? '-F' : '-f';
     args.push(flag, `${name}=${value}`);
   }
+
   try {
     const raw = execFileSync('gh', args, {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
-    const parsed = JSON.parse(raw || '{}');
+    const parsed = JSON.parse(raw || '{}') as { errors?: unknown };
     if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
       throw new Error(formatGraphqlErrors(parsed.errors));
     }
     return parsed;
   } catch (error) {
-    const stderr = String(error?.stderr ?? '').trim();
-    const detail = stderr || error.message;
+    const stderr = String(
+      (error as { stderr?: unknown } | null)?.stderr ?? '',
+    ).trim();
+    const detail = stderr || (error as Error).message;
     throw new Error(`gh api graphql failed: ${detail}`);
   }
 }
-function loadPolicy(policyPath) {
+
+function loadPolicy(policyPath: string): unknown {
   const targetPath = policyPath
     ? resolve(process.cwd(), policyPath)
     : resolve(process.cwd(), '.github/idd/config.json');
@@ -700,64 +944,88 @@ function loadPolicy(policyPath) {
     throw new Error(`failed to load policy from ${targetPath}: ${detail}`);
   }
 }
-function ghText(args) {
+
+function ghText(args: string[]): string {
   return runGh(args).trim();
 }
-function runGh(args, options = {}) {
+
+function runGh(
+  args: string[],
+  options: { allowStatuses?: number[] } = {},
+): string {
   const { allowStatuses = [] } = options;
+
   try {
     return execFileSync('gh', args, {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    const rawStatus = error?.status;
+    const rawStatus = (error as { status?: unknown } | null)?.status;
     const status = typeof rawStatus === 'number' ? rawStatus : null;
     if (status !== null && allowStatuses.includes(status)) {
       return '';
     }
-    const stderr = String(error?.stderr ?? '').trim();
+    const stderr = String(
+      (error as { stderr?: unknown } | null)?.stderr ?? '',
+    ).trim();
     const prefix = `gh ${args.join(' ')}`;
     const wrapped = new Error(
       stderr ? `${prefix} failed: ${stderr}` : `${prefix} failed`,
-    );
+    ) as Error & { status?: number | null; stderr?: string };
     wrapped.status = status;
     wrapped.stderr = stderr;
     throw wrapped;
   }
 }
-function isInaccessibleIssue(value) {
-  return value?.__iddLookupStatus === 'inaccessible';
+
+function isInaccessibleIssue(
+  value: unknown,
+): value is InaccessibleIssueSentinel {
+  return (
+    (value as { __iddLookupStatus?: unknown } | null)?.__iddLookupStatus ===
+    'inaccessible'
+  );
 }
-function isInaccessibleIssueLookupError(error) {
+
+function isInaccessibleIssueLookupError(error: unknown): boolean {
   if (!error) {
     return false;
   }
-  const rawStatus = error.status;
+  const rawStatus = (error as { status?: unknown }).status;
   const status = typeof rawStatus === 'number' ? rawStatus : null;
   if (status !== null && INACCESSIBLE_HTTP_STATUSES.has(status)) {
     return true;
   }
-  const stderr = String(error.stderr ?? '');
+  const stderr = String((error as { stderr?: unknown }).stderr ?? '');
   return /Resource not accessible|access denied|Forbidden|Unavailable for legal reasons/i.test(
     stderr,
   );
 }
-function isNotFoundIssueLookupError(error) {
+
+function isNotFoundIssueLookupError(error: unknown): boolean {
   if (!error) {
     return false;
   }
-  const candidate = error;
+  const candidate = error as { stderr?: unknown; message?: unknown };
   const stderr = String(candidate.stderr ?? candidate.message ?? '');
   return stderr.includes('HTTP 404');
 }
-function isMainModule(importMetaUrl) {
+
+function isMainModule(importMetaUrl: string): boolean {
   return process.argv[1] === fileURLToPath(importMetaUrl);
 }
-function buildEdgeKey(edge) {
+
+function buildEdgeKey(edge: RoadmapGraphEdge): string {
   return `${edge.source}:${edge.target}:${edge.relationship}:${edge.evidence}`;
 }
-function recordReferenceDiagnostic(collection, dedupeKeys, edge, reason) {
+
+function recordReferenceDiagnostic(
+  collection: RoadmapReferenceDiagnostic[],
+  dedupeKeys: Set<string>,
+  edge: RoadmapGraphEdge,
+  reason: string,
+) {
   const key = `${edge.source}:${edge.target}:${edge.relationship}:${reason}`;
   if (dedupeKeys.has(key)) {
     return;
@@ -771,10 +1039,15 @@ function recordReferenceDiagnostic(collection, dedupeKeys, edge, reason) {
     reason,
   });
 }
-function compareByNumber(left, right) {
+
+function compareByNumber(
+  left: { number: number },
+  right: { number: number },
+): number {
   return left.number - right.number;
 }
-function compareEdges(left, right) {
+
+function compareEdges(left: RoadmapGraphEdge, right: RoadmapGraphEdge): number {
   return (
     left.source - right.source ||
     left.target - right.target ||
@@ -782,14 +1055,32 @@ function compareEdges(left, right) {
     left.evidence.localeCompare(right.evidence)
   );
 }
-function comparePaths(left, right) {
+
+function comparePaths(
+  left: RoadmapProvenancePath,
+  right: RoadmapProvenancePath,
+): number {
   return (
     left.target - right.target ||
     left.path.length - right.path.length ||
     left.path.join('>').localeCompare(right.path.join('>'))
   );
 }
-function compareDiagnostics(left, right) {
+
+function compareDiagnostics(
+  left: {
+    source: number;
+    target: number;
+    relationship?: string;
+    reason?: string;
+  },
+  right: {
+    source: number;
+    target: number;
+    relationship?: string;
+    reason?: string;
+  },
+): number {
   return (
     left.source - right.source ||
     left.target - right.target ||
@@ -799,7 +1090,11 @@ function compareDiagnostics(left, right) {
     String(left.reason ?? '').localeCompare(String(right.reason ?? ''))
   );
 }
-function compareCycles(left, right) {
+
+function compareCycles(
+  left: RoadmapCycleDiagnostic,
+  right: RoadmapCycleDiagnostic,
+): number {
   return (
     left.source - right.source ||
     left.target - right.target ||
@@ -807,11 +1102,18 @@ function compareCycles(left, right) {
     left.path.join('>').localeCompare(right.path.join('>'))
   );
 }
-function formatGraphqlErrors(errors) {
+
+function formatGraphqlErrors(errors: unknown[]): string {
   return errors
-    .map((error) => String(error?.message ?? 'unknown GraphQL error'))
+    .map((error) =>
+      String(
+        (error as { message?: unknown } | null)?.message ??
+          'unknown GraphQL error',
+      ),
+    )
     .join('; ');
 }
-function escapeRegex(value) {
+
+function escapeRegex(value: string): string {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
