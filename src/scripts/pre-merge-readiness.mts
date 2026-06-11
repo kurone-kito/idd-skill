@@ -761,6 +761,14 @@ function fetchReviewThreads(
     const reviewThreads = payload?.data?.repository?.pullRequest?.reviewThreads;
     for (const thread of reviewThreads?.nodes ?? []) {
       if (thread.comments?.pageInfo?.hasNextPage) {
+        // hasNextPage with a missing thread id or cursor is a malformed
+        // payload; fail fast with a clear message instead of a confusing
+        // GraphQL error or a silently truncated thread.
+        if (!thread.id || !thread.comments.pageInfo.endCursor) {
+          throw new Error(
+            'review thread pagination payload is missing id or endCursor',
+          );
+        }
         thread.comments.nodes.push(
           ...fetchThreadCommentPages(
             thread.id,
@@ -782,11 +790,11 @@ function fetchReviewThreads(
 }
 
 function fetchThreadCommentPages(
-  threadId: string | null | undefined,
-  afterCursor: string | null | undefined,
+  threadId: string,
+  afterCursor: string,
 ): ThreadCommentPayload[] {
   const nodes: ThreadCommentPayload[] = [];
-  let cursor = afterCursor;
+  let cursor: string | null | undefined = afterCursor;
 
   while (cursor) {
     const payload = ghGraphql(
@@ -821,6 +829,9 @@ function fetchThreadCommentPages(
 
     const comments = payload?.data?.node?.comments;
     nodes.push(...(comments?.nodes ?? []));
+    if (comments?.pageInfo?.hasNextPage && !comments.pageInfo.endCursor) {
+      throw new Error('thread comment pagination payload is missing endCursor');
+    }
     cursor = comments?.pageInfo?.hasNextPage
       ? comments.pageInfo.endCursor
       : null;
