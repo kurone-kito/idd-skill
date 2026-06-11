@@ -1,0 +1,27 @@
+{
+  // Emit configuration: generate the distributed `.mjs` artifacts from
+  // the `src/**/*.mts` sources. `rootDir: "src"` with `outDir: "."` maps
+  //   src/scripts/<name>.mts -> scripts/<name>.mjs
+  //   src/bin/<name>.mts     -> bin/<name>.mjs
+  // and `rewriteRelativeImportExtensions` (inherited) turns a source
+  // import of `./foo.mts` into `./foo.mjs` in the emitted output.
+  //
+  // `pnpm run build` runs this and then normalizes the emitted files with
+  // Biome so the committed artifacts stay style-stable; `pnpm run
+  // build:check` additionally fails when the working tree drifts.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src",
+    "outDir": ".",
+    "removeComments": false,
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["src/**/*.mts"],
+  // An explicit `exclude` is required: with `outDir: "."` TypeScript would
+  // otherwise auto-exclude the whole project root (the outDir) and find no
+  // inputs (TS18003). Listing the emit targets keeps generated artifacts
+  // out of the input set without re-excluding `src`.
+  "exclude": ["node_modules", "scripts", "bin", "tests", "idd-template"]
+}

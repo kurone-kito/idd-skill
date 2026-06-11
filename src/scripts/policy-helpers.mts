@@ -3,6 +3,75 @@
 // The scripts/policy-helpers.mjs copy is generated from the .mts source
 // named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
+type EnumSet = ReadonlySet<string>;
+
+interface CheckSelector {
+  selector: string;
+  matchMode: string;
+}
+
+interface RawForcedHandoff {
+  mode?: unknown;
+  authorityPolicy?: unknown;
+}
+
+// Structural view of the untrusted config object parsed from an
+// adopter-controlled JSON file. Every field is optional and weakly
+// typed; the runtime guards below perform the real validation.
+interface RawConfig {
+  issueScope?: unknown;
+  orphanFirstPolicy?: unknown;
+  skipIssueAuthorApprovalGate?: unknown;
+  maintainerApprovalActorPolicy?: unknown;
+  stallRecovery?: { quietWindow?: unknown };
+  forcedHandoff?: RawForcedHandoff;
+  'forced-handoff'?: RawForcedHandoff;
+  forcedHandoffAuthority?: unknown;
+  'forced-handoff-authority'?: unknown;
+  forcedHandoffMode?: unknown;
+  'forced-handoff-mode'?: unknown;
+  markerTrust?: { allowCollaboratorMarkers?: unknown };
+  markerTrustAllowCollaboratorMarkers?: unknown;
+  allowCollaboratorMarkers?: unknown;
+  advisoryWait?: {
+    requestCap?: unknown;
+    pendingWindow?: unknown;
+    settledWindow?: unknown;
+    pollInterval?: unknown;
+    capExhaustedRoute?: unknown;
+  };
+  ciWait?: {
+    runningTimeout?: unknown;
+    generationTimeout?: unknown;
+    rerunPolicy?: unknown;
+  };
+  ciGate?: {
+    externalChecks?: { advisory?: unknown; waivable?: unknown };
+    externalCheckWaivers?: {
+      mode?: unknown;
+      authorityPolicy?: unknown;
+      maxValidity?: unknown;
+    };
+  };
+  discover?: { activeClaimPreScanBatchSize?: unknown };
+  claim?: { verifySettleDelay?: unknown };
+  critiqueLoop?: {
+    cPhaseLowSeveritySkipAfter?: unknown;
+    e10NoProgressHoldAfter?: unknown;
+  };
+  reviewEscalation?: {
+    changesRequestedFirstEscalation?: unknown;
+    changesRequestedSecondEscalation?: unknown;
+  };
+  approvalSignals?: { readyLabelName?: unknown; labelFreshnessMode?: unknown };
+  issueAuthoring?: {
+    maxClarificationRounds?: unknown;
+    authoringLabelName?: unknown;
+    authoringStaleAge?: unknown;
+  };
+}
+
 const HELPER_RUNTIME_PROFILES = new Set([
   'package-manager',
   'vendored-node',
@@ -43,6 +112,7 @@ const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
+
 export const POLICY_DEFAULTS = Object.freeze({
   issueScope: 'roadmap-first',
   orphanFirstPolicy: 'none',
@@ -105,8 +175,9 @@ export const POLICY_DEFAULTS = Object.freeze({
     authoringStaleAge: 'PT4H',
   }),
 });
-export function parseProjectCommandRows(text) {
-  const commands = new Map();
+
+export function parseProjectCommandRows(text: string): Map<string, string> {
+  const commands = new Map<string, string>();
   for (const line of text.split(/\r?\n/)) {
     const match = /^\|\s*\*\*([^*]+)\*\*\s*\|\s*`([^`]+)`\s*\|/.exec(line);
     if (!match) {
@@ -116,14 +187,17 @@ export function parseProjectCommandRows(text) {
   }
   return commands;
 }
-export function inspectHelperRuntimeConfig(config) {
+
+export function inspectHelperRuntimeConfig(config: unknown) {
   if (typeof config !== 'object' || config === null || Array.isArray(config)) {
     return { status: 'invalid', reason: 'config must be a non-null object' };
   }
+
   if (!hasOwn(config, 'helperRuntime')) {
     return { status: 'absent' };
   }
-  const helperRuntime = config.helperRuntime;
+
+  const helperRuntime = (config as { helperRuntime?: unknown }).helperRuntime;
   if (
     typeof helperRuntime !== 'object' ||
     helperRuntime === null ||
@@ -134,6 +208,7 @@ export function inspectHelperRuntimeConfig(config) {
       reason: 'helperRuntime must be an object when present',
     };
   }
+
   const unexpectedKeys = Object.keys(helperRuntime).filter(
     (key) => !HELPER_RUNTIME_KEYS.has(key),
   );
@@ -143,26 +218,32 @@ export function inspectHelperRuntimeConfig(config) {
       reason: `unsupported helperRuntime keys: ${unexpectedKeys.join(', ')}`,
     };
   }
-  const profile = helperRuntime.profile;
+
+  const profile = (helperRuntime as { profile?: unknown }).profile;
   if (typeof profile !== 'string' || profile.length === 0) {
     return {
       status: 'invalid',
       reason: 'helperRuntime.profile must be a non-empty string',
     };
   }
+
   if (!HELPER_RUNTIME_PROFILES.has(profile)) {
     return {
       status: 'invalid',
       reason: `unsupported helperRuntime.profile "${profile}"`,
     };
   }
+
   return { status: 'ok', profile };
 }
-export function normalizePolicyConfig(config) {
+
+export function normalizePolicyConfig(config: unknown) {
   if (typeof config !== 'object' || config === null || Array.isArray(config)) {
     return clone(POLICY_DEFAULTS);
   }
-  const c = config;
+
+  const c = config as RawConfig;
+
   const forcedHandoffAuthorityAlias = firstAcceptedString(
     APPROVAL_ACTOR_POLICIES,
     c?.forcedHandoff?.authorityPolicy,
@@ -182,6 +263,7 @@ export function normalizePolicyConfig(config) {
     c?.markerTrustAllowCollaboratorMarkers,
     c?.allowCollaboratorMarkers,
   );
+
   return {
     issueScope: parseEnum(
       c?.issueScope,
@@ -346,13 +428,18 @@ export function normalizePolicyConfig(config) {
     },
   };
 }
-export function resolveCollaboratorMarkerTrust(config, envValue = '') {
+
+export function resolveCollaboratorMarkerTrust(
+  config: unknown,
+  envValue: string = '',
+): boolean {
   if (hasConfiguredCollaboratorMarkerTrust(config)) {
     return normalizePolicyConfig(config).markerTrust.allowCollaboratorMarkers;
   }
   return isTruthy(envValue);
 }
-export function parseIsoDurationToMs(value) {
+
+export function parseIsoDurationToMs(value: unknown): number | null {
   if (typeof value !== 'string') {
     return null;
   }
@@ -368,7 +455,10 @@ export function parseIsoDurationToMs(value) {
     days * DAY_MS + hours * HOUR_MS + minutes * MINUTE_MS + seconds * SECOND_MS;
   return totalMs > 0 ? totalMs : null;
 }
-export function getReviewEscalationChangesRequestedPolicy(config = {}) {
+
+export function getReviewEscalationChangesRequestedPolicy(
+  config: unknown = {},
+): { escalateAfterMs: number; releaseAfterEscalationMs: number } {
   const normalized = normalizePolicyConfig(config);
   const firstEscalationMs = parseIsoDurationToMs(
     normalized.reviewEscalation.changesRequestedFirstEscalation,
@@ -396,18 +486,22 @@ export function getReviewEscalationChangesRequestedPolicy(config = {}) {
     resolvedSecondEscalationMs > resolvedFirstEscalationMs
       ? resolvedSecondEscalationMs - resolvedFirstEscalationMs
       : defaultPostEscalationMs;
+
   return {
     escalateAfterMs: resolvedFirstEscalationMs,
     releaseAfterEscalationMs: resolvedPostEscalationMs,
   };
 }
-function isFiniteNumber(value) {
+
+function isFiniteNumber(value: number | null): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
-function clone(value) {
+
+function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
 }
-function _firstString(...values) {
+
+function _firstString(...values: unknown[]): string {
   for (const value of values) {
     if (typeof value === 'string' && value.length > 0) {
       return value;
@@ -415,7 +509,8 @@ function _firstString(...values) {
   }
   return '';
 }
-function firstAcceptedString(accepted, ...values) {
+
+function firstAcceptedString(accepted: EnumSet, ...values: unknown[]): string {
   for (const value of values) {
     if (typeof value === 'string' && accepted.has(value)) {
       return value;
@@ -423,7 +518,8 @@ function firstAcceptedString(accepted, ...values) {
   }
   return '';
 }
-function firstBoolean(...values) {
+
+function firstBoolean(...values: unknown[]): boolean | null {
   for (const value of values) {
     if (typeof value === 'boolean') {
       return value;
@@ -431,19 +527,29 @@ function firstBoolean(...values) {
   }
   return null;
 }
-function parseEnum(value, accepted, fallback) {
+
+function parseEnum(
+  value: unknown,
+  accepted: EnumSet,
+  fallback: string,
+): string {
   if (typeof value === 'string' && accepted.has(value)) {
     return value;
   }
   return fallback;
 }
-function parseDuration(value, fallback) {
+
+function parseDuration(value: unknown, fallback: string): string {
   if (typeof value === 'string' && ISO_DURATION_RE.test(value)) {
     return value;
   }
   return fallback;
 }
-function parseAdvisoryWholeMinuteDuration(value, fallback) {
+
+function parseAdvisoryWholeMinuteDuration(
+  value: unknown,
+  fallback: string,
+): string {
   if (
     typeof value === 'string' &&
     ADVISORY_WHOLE_MINUTE_DURATION_RE.test(value)
@@ -452,7 +558,8 @@ function parseAdvisoryWholeMinuteDuration(value, fallback) {
   }
   return fallback;
 }
-function parseAdvisoryCapRoute(value, fallback) {
+
+function parseAdvisoryCapRoute(value: unknown, fallback: string): string {
   if (typeof value === 'string') {
     if (ADVISORY_CAP_ROUTES.has(value)) {
       return value;
@@ -461,67 +568,83 @@ function parseAdvisoryCapRoute(value, fallback) {
   }
   return fallback;
 }
-function parsePositiveDuration(value, fallback) {
+
+function parsePositiveDuration(value: unknown, fallback: string): string {
   return typeof value === 'string' &&
     ISO_DURATION_RE.test(value) &&
     parseIsoDurationToMs(value) !== null
     ? value
     : fallback;
 }
-function parsePositiveInteger(value, fallback) {
+
+function parsePositiveInteger(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1
     ? value
     : fallback;
 }
-function parseNonEmptyString(value, fallback) {
+
+function parseNonEmptyString(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.length > 0 ? value : fallback;
 }
-function parseCheckSelectors(value, fallback) {
+
+function parseCheckSelectors(
+  value: unknown,
+  fallback: readonly CheckSelector[],
+): CheckSelector[] {
   if (!Array.isArray(value) || value.length === 0) {
-    return clone(fallback);
+    return clone(fallback) as CheckSelector[];
   }
-  const entries = value;
-  const normalized = [];
+
+  const entries = value as unknown[];
+  const normalized: CheckSelector[] = [];
   for (const entry of entries) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
-      return clone(fallback);
+      return clone(fallback) as CheckSelector[];
     }
-    const candidate = entry;
+
+    const candidate = entry as { selector?: unknown; matchMode?: unknown };
     const entryKeys = Object.keys(candidate);
     if (entryKeys.some((key) => key !== 'selector' && key !== 'matchMode')) {
-      return clone(fallback);
+      return clone(fallback) as CheckSelector[];
     }
+
     const selector = parseNonEmptyString(candidate.selector, '');
     if (!selector) {
-      return clone(fallback);
+      return clone(fallback) as CheckSelector[];
     }
+
     if (hasOwn(candidate, 'matchMode')) {
       if (
         typeof candidate.matchMode !== 'string' ||
         !CHECK_SELECTOR_MATCH_MODES.has(candidate.matchMode)
       ) {
-        return clone(fallback);
+        return clone(fallback) as CheckSelector[];
       }
     }
+
     normalized.push({
       selector,
       matchMode:
         typeof candidate.matchMode === 'string' ? candidate.matchMode : 'exact',
     });
   }
+
   return normalized;
 }
-function hasConfiguredCollaboratorMarkerTrust(config) {
-  const c = config;
+
+function hasConfiguredCollaboratorMarkerTrust(config: unknown): boolean {
+  const c = config as RawConfig | null | undefined;
   return (
     typeof c?.markerTrust?.allowCollaboratorMarkers === 'boolean' ||
     typeof c?.markerTrustAllowCollaboratorMarkers === 'boolean' ||
     typeof c?.allowCollaboratorMarkers === 'boolean'
   );
 }
-function isTruthy(value) {
+
+function isTruthy(value: unknown): boolean {
   return /^(1|true|yes)$/i.test(String(value ?? '').trim());
 }
-function hasOwn(value, key) {
-  return Object.hasOwn(value ?? {}, key);
+
+function hasOwn(value: unknown, key: string): boolean {
+  return Object.hasOwn((value ?? {}) as object, key);
 }

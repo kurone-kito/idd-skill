@@ -1,6 +1,15 @@
 # Normalize line endings
 * text=auto eol=lf
 
+# Generated from TypeScript sources in src/**/*.mts by `pnpm run build`.
+# Marked linguist-generated (not linguist-vendored, which denotes
+# third-party code) so the artifacts drop out of language statistics and
+# their diffs collapse in review. Listed per file during the TypeScript
+# migration so hand-written .mjs are never mis-marked; see
+# docs/typescript-sources.md.
+scripts/policy-helpers.mjs linguist-generated=true
+scripts/collaborator-permission.mjs linguist-generated=true
+
 # Binary files
 *.gif binary
 *.ico binary
