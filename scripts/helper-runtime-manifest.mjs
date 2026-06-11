@@ -534,7 +534,11 @@ function buildProfileCatalog({
       notes: [
         'Copy the listed files into matching paths in the target repository.',
         'The managed file list is derived from the helper entrypoint import graph to avoid hand-maintained drift.',
+        "Append the recommendedGitattributes lines to the adopter's .gitattributes so the vendored bundle is marked linguist-vendored (dropped from language statistics and de-prioritized in code search).",
       ],
+      recommendedGitattributes: managedFiles.map(
+        (file) => `${file.targetPath} linguist-vendored`,
+      ),
     },
     'ephemeral-npx': {
       profile: 'ephemeral-npx',

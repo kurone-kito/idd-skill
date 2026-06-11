@@ -61,6 +61,11 @@ interface ProfileEntry {
   managedFiles: ManagedFile[];
   commands: Record<string, string>;
   notes: string[];
+  // Only the vendored-node profile vends files into the adopter
+  // repository, so only it recommends `<path> linguist-vendored`
+  // .gitattributes lines (one per managed file). Other profiles omit
+  // this field entirely.
+  recommendedGitattributes?: string[];
 }
 
 interface ManifestArgs {
@@ -654,7 +659,11 @@ function buildProfileCatalog({
       notes: [
         'Copy the listed files into matching paths in the target repository.',
         'The managed file list is derived from the helper entrypoint import graph to avoid hand-maintained drift.',
+        "Append the recommendedGitattributes lines to the adopter's .gitattributes so the vendored bundle is marked linguist-vendored (dropped from language statistics and de-prioritized in code search).",
       ],
+      recommendedGitattributes: managedFiles.map(
+        (file) => `${file.targetPath} linguist-vendored`,
+      ),
     },
     'ephemeral-npx': {
       profile: 'ephemeral-npx',

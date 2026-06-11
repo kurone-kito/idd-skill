@@ -629,6 +629,32 @@ runs on IDD branches. Use `pull_request` triggers (which fire on the PR
 regardless of branch name), or a push filter that matches the slash namespace
 (`'**'` or `'issue/**'`), for any check that must gate IDD pull requests.
 
+### Optional — mark the vendored helper bundle `linguist-vendored`
+
+This step applies **only to the `vendored-node` profile** (the only
+profile that copies helper files into your repository). The vendored
+bundle is third-party code, so marking it `linguist-vendored` drops it
+from your repository's language statistics and de-prioritizes it in code
+search — useful when your own code is mostly docs or another language and
+you do not want the copied `.mjs`/schema files to dominate the language
+bar. (This is the adopter-side counterpart of the source repository's
+`linguist-generated` artifacts; the semantics differ deliberately:
+generated = first-party build output, vendored = copied third-party code.)
+
+The helper-runtime manifest emits the exact lines from the same
+`managedFiles` import-graph it uses to vend the bundle, so the attribute
+list never drifts from what you copied. Append them to your
+`.gitattributes`:
+
+```sh
+node scripts/helper-runtime-manifest.mjs --profile vendored-node \
+  | node -e 'const m=JSON.parse(require("node:fs").readFileSync(0,"utf8"));process.stdout.write(m.profiles["vendored-node"].recommendedGitattributes.join("\n")+"\n")' \
+  >> .gitattributes
+```
+
+Other profiles vend no files and emit no recommendation, so they need
+nothing here.
+
 ---
 
 ## Step 3 — Record policy decisions

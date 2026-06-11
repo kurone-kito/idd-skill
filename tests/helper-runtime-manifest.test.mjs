@@ -91,6 +91,44 @@ test('vendored-node managed files match the canonical helper import closure', ()
   }
 });
 
+test('vendored-node recommends linguist-vendored per managed file; other profiles emit none', () => {
+  const manifest = buildHelperRuntimeManifest({ targetRoot: REPO_ROOT });
+  const vendored = manifest.profiles['vendored-node'];
+
+  // Exactly one `<path> linguist-vendored` line per managed file, in the
+  // same order, and nothing else. Adding a managed file without a matching
+  // attribute line (or vice versa) fails this deepEqual.
+  const expected = vendored.managedFiles.map(
+    (file) => `${file.targetPath} linguist-vendored`,
+  );
+  assert.deepEqual(vendored.recommendedGitattributes, expected);
+  assert.equal(
+    vendored.recommendedGitattributes.length,
+    vendored.managedFiles.length,
+  );
+  assert.ok(
+    vendored.recommendedGitattributes.includes(
+      'scripts/protocol-helpers.mjs linguist-vendored',
+    ),
+  );
+
+  // Only the vendored-node profile vends files, so only it carries a
+  // recommendation; the others omit the field entirely.
+  for (const profileName of [
+    'package-manager',
+    'ephemeral-npx',
+    'instructions-only',
+  ]) {
+    // Assert the key is genuinely absent, not merely `=== undefined`
+    // (which would also pass for a present-but-undefined property).
+    assert.equal(
+      Object.hasOwn(manifest.profiles[profileName], 'recommendedGitattributes'),
+      false,
+      profileName,
+    );
+  }
+});
+
 test('detectPackageManager respects package metadata and lockfiles', () => {
   const packageJsonRoot = mkdtempSync(
     join(tmpdir(), 'idd-helper-runtime-package-json-'),
