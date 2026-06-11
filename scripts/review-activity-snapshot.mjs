@@ -258,6 +258,11 @@ function fetchReviewThreads(owner, repo, prNumber) {
     if (!reviewThreads?.pageInfo?.hasNextPage) {
       break;
     }
+    // hasNextPage with a missing cursor would re-fetch the first page
+    // forever; fail fast on the malformed payload instead.
+    if (!reviewThreads.pageInfo.endCursor) {
+      throw new Error('review thread pagination payload is missing endCursor');
+    }
     cursor = reviewThreads.pageInfo.endCursor;
   }
   return nodes;
