@@ -21,7 +21,7 @@
  *   contains   — only text-presence is checked; no source to copy
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -63,7 +63,27 @@ type Update =
   | { kind: 'generated'; block: GeneratedBlock }
   | { kind: 'shell'; list: ShellFileList; sourceBlock: GeneratedBlock };
 
-const root = join(fileURLToPath(import.meta.url), '..', '..');
+// Resolve the repository root by walking up to the nearest package.json,
+// so the source resolves the same root whether it runs as the emitted
+// scripts/sync-docs.mjs (one level deep) or the src/scripts/sync-docs.mts
+// source under Node type-stripping (two levels deep). A fixed `../..` from
+// import.meta.url would resolve to src/ for the source.
+function resolveRepoRoot(fromUrl: string): string {
+  let dir = dirname(fileURLToPath(fromUrl));
+  for (let depth = 0; depth < 16; depth += 1) {
+    if (existsSync(join(dir, 'package.json'))) {
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  return dir;
+}
+
+const root = resolveRepoRoot(import.meta.url);
 const manifestPath = 'audit/sync-manifest.json';
 
 const args = process.argv.slice(2);

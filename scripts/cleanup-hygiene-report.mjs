@@ -51,14 +51,10 @@ export function aggregateMetrics(prs, timestamp) {
     const status = classifyPRCleanupStatus(pr);
     if (status.status === 'clean') {
       recentClean++;
-    } else if (status.status === 'needs_apply') {
+    } else {
       recentNeedsApply++;
       skipReasonCounts[status.reason] =
         (skipReasonCounts[status.reason] || 0) + (status.count || 1);
-    } else if (status.status === 'failed') {
-      metrics.candidatesByClassifier.failed++;
-    } else {
-      metrics.candidatesByClassifier.thresholdMissing++;
     }
   }
   // Update summary metrics (recent + historical)

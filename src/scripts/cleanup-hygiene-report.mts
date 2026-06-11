@@ -120,14 +120,10 @@ export function aggregateMetrics(prs: unknown, timestamp: string): Metrics {
 
     if (status.status === 'clean') {
       recentClean++;
-    } else if (status.status === 'needs_apply') {
+    } else {
       recentNeedsApply++;
       skipReasonCounts[status.reason] =
         (skipReasonCounts[status.reason] || 0) + (status.count || 1);
-    } else if ((status as { status: string }).status === 'failed') {
-      metrics.candidatesByClassifier.failed++;
-    } else {
-      metrics.candidatesByClassifier.thresholdMissing++;
     }
   }
 
