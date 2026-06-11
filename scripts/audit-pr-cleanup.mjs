@@ -200,6 +200,16 @@ async function buildReport(owner, repo, prNumber, options = {}) {
     evaluateReviewParent(review, pr, threadIndex, latestGatingReviews, report);
   }
 
+  // Collaborator trust is evaluated lazily per author; record it in the
+  // source mix only when the collaborator path actually trusted someone
+  // during this report's evaluation.
+  if (
+    report.collaboratorTrustEnabled &&
+    [...trustedMarkerAuthorCache.values()].some(Boolean)
+  ) {
+    report.trustedMarkerActorsSources.push('collaborators');
+  }
+
   return report;
 }
 

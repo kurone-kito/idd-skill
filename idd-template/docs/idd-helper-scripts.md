@@ -72,12 +72,14 @@ In the idd-skill source repository, the following optional helpers were adopted:
   config `trustedMarkerActors` list — with the optional
   collaborator-permission trust; their JSON evidence reports the
   resolved viewer-plus-configured list and the plural
-  `trustedMarkerActorsSources` mix (collaborator trust is evaluated
-  lazily per author and surfaces as `collaboratorTrustEnabled` /
-  the `collaborators` source tag rather than in the list), so
-  config-listed actors widen trust explicitly while
-  collaborator-permission trust stays opt-in
-  (`IDD_TRUST_COLLABORATOR_MARKERS` / `trustCollaboratorMarkers`)
+  `trustedMarkerActorsSources` mix. Collaborator trust never appears in
+  the list itself: both helpers add a `collaborators` source tag when
+  collaborator permission actually trusted an author, and
+  `audit-pr-cleanup` additionally reports the capability as
+  `collaboratorTrustEnabled`. Config-listed actors therefore widen
+  trust explicitly while collaborator-permission trust stays opt-in
+  (the `IDD_TRUST_COLLABORATOR_MARKERS` environment variable or the
+  `trustCollaboratorMarkers` config field)
 - `scripts/review-disposition-verify.mjs` for read-only E7 disposition
   marker presence verification across PATH A and PATH B items
 
