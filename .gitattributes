@@ -21,6 +21,7 @@ scripts/discover-orphan-filter.mjs linguist-generated=true
 scripts/discover-readiness-check.mjs linguist-generated=true
 scripts/idd-doctor.mjs linguist-generated=true
 scripts/check-pnpm-boundary.mjs linguist-generated=true
+scripts/audit-docs.mjs linguist-generated=true
 
 # Binary files
 *.gif binary

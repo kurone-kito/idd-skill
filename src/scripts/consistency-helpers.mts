@@ -24,7 +24,7 @@ interface LooseConfig {
   [key: string]: unknown;
 }
 
-interface RootMarkdownAllowlistConfig {
+export interface RootMarkdownAllowlistConfig {
   id?: unknown;
   allowed?: unknown;
 }
