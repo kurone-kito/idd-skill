@@ -4,6 +4,7 @@
 // The scripts/minimize-superseded-markers.mjs copy is generated from the
 // .mts source named above by `pnpm run build`. Edit the .mts source,
 // never the generated .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
@@ -14,34 +15,90 @@ const MINIMIZABLE_TYPENAMES = new Set([
   'PullRequestReview',
   'PullRequestReviewComment',
 ]);
+
+interface ProbeNode {
+  typename: unknown;
+  url: unknown;
+  isMinimized: unknown;
+  viewerCanMinimize: unknown;
+  author: unknown;
+}
+
+type ProbeResult =
+  | { ok: true; node: ProbeNode }
+  | { ok: false; reason: string };
+type MutationResult = { ok: true } | { ok: false; reason: string };
+type GhResult = { ok: true; stdout: string } | { ok: false; stderr: string };
+
+interface ReportItem {
+  subjectId: string;
+  url?: unknown;
+  typename?: unknown;
+  status: string;
+  reason?: string;
+  author?: unknown;
+}
+
+interface MinimizeReport {
+  mode: string;
+  classifier: string;
+  counts: {
+    eligible: number;
+    alreadyMinimized: number;
+    cannotMinimize: number;
+    untrusted: number;
+    unsupportedType: number;
+    applied: number;
+    failed: number;
+  };
+  items: ReportItem[];
+  trustedMarkerActors?: string[];
+  trustedMarkerActorsSource?: string;
+}
+
+interface MinimizeArgs {
+  subjectIds: string[];
+  classifier: string;
+  trustedMarkerLogins: string;
+  apply: boolean;
+  allowUntrusted: boolean;
+  format: string;
+  help: boolean;
+}
+
 if (isMainModule(import.meta.url)) {
-  let args;
+  let args: MinimizeArgs;
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (error) {
-    console.error(`error: ${error.message}`);
+    console.error(`error: ${(error as Error).message}`);
     process.exit(2);
   }
+
   if (args.help) {
     printUsage();
     process.exit(0);
   }
+
   if (!ALLOWED_CLASSIFIERS.has(args.classifier)) {
     console.error(
       `error: --classifier must be one of ${[...ALLOWED_CLASSIFIERS].join(', ')} (got "${args.classifier}")`,
     );
     process.exit(2);
   }
+
   if (!ALLOWED_FORMATS.has(args.format)) {
     console.error(
       `error: --format must be one of ${[...ALLOWED_FORMATS].join(', ')} (got "${args.format}")`,
     );
     process.exit(2);
   }
+
   if (args.subjectIds.length === 0) {
     console.error('error: --subject-ids must contain at least one ID');
     process.exit(2);
   }
+
   const { actors: trustedActors, source: trustedMarkerActorsSource } =
     resolveTrustedActors({
       flagValue: args.trustedMarkerLogins,
@@ -55,6 +112,7 @@ if (isMainModule(import.meta.url)) {
     );
     process.exit(2);
   }
+
   const report = runMinimize({
     subjectIds: args.subjectIds,
     classifier: args.classifier,
@@ -64,22 +122,31 @@ if (isMainModule(import.meta.url)) {
   });
   report.trustedMarkerActors = [...trustedSet].sort();
   report.trustedMarkerActorsSource = trustedMarkerActorsSource;
+
   if (args.format === 'table') {
     printTable(report);
   } else {
     console.log(JSON.stringify(report, null, 2));
   }
+
   const exitCode = computeExitCode(report);
   process.exit(exitCode);
 }
+
 export function runMinimize({
   subjectIds,
   classifier,
   trustedSet,
   apply,
   allowUntrusted,
-}) {
-  const report = {
+}: {
+  subjectIds: string[];
+  classifier: string;
+  trustedSet: Set<string>;
+  apply: boolean;
+  allowUntrusted: boolean;
+}): MinimizeReport {
+  const report: MinimizeReport = {
     mode: apply ? 'apply' : 'dry-run',
     classifier,
     counts: {
@@ -93,6 +160,7 @@ export function runMinimize({
     },
     items: [],
   };
+
   for (const subjectId of subjectIds) {
     const probe = probeSubject(subjectId);
     if (!probe.ok) {
@@ -100,8 +168,10 @@ export function runMinimize({
       report.counts.failed += 1;
       continue;
     }
+
     const { author, isMinimized, viewerCanMinimize, url, typename } =
       probe.node;
+
     if (!MINIMIZABLE_TYPENAMES.has(String(typename))) {
       report.items.push({
         subjectId,
@@ -113,6 +183,7 @@ export function runMinimize({
       report.counts.unsupportedType += 1;
       continue;
     }
+
     if (isMinimized) {
       report.items.push({
         subjectId,
@@ -124,6 +195,7 @@ export function runMinimize({
       report.counts.alreadyMinimized += 1;
       continue;
     }
+
     if (!viewerCanMinimize) {
       report.items.push({
         subjectId,
@@ -135,6 +207,7 @@ export function runMinimize({
       report.counts.cannotMinimize += 1;
       continue;
     }
+
     if (!allowUntrusted && !isTrustedAuthor(author, trustedSet)) {
       report.items.push({
         subjectId,
@@ -147,7 +220,9 @@ export function runMinimize({
       report.counts.untrusted += 1;
       continue;
     }
+
     report.counts.eligible += 1;
+
     if (!apply) {
       report.items.push({
         subjectId,
@@ -158,6 +233,7 @@ export function runMinimize({
       });
       continue;
     }
+
     const mutation = applyMinimize(subjectId, classifier);
     if (mutation.ok) {
       report.items.push({
@@ -179,9 +255,11 @@ export function runMinimize({
       report.counts.failed += 1;
     }
   }
+
   return report;
 }
-export function probeSubject(subjectId) {
+
+export function probeSubject(subjectId: string): ProbeResult {
   const result = runGh([
     'api',
     'graphql',
@@ -203,13 +281,24 @@ export function probeSubject(subjectId) {
       reason: `gh-graphql-error: ${result.stderr.slice(0, 200)}`,
     };
   }
-  let parsed;
+  let parsed: {
+    errors?: { message?: unknown }[];
+    data?: {
+      node?: {
+        __typename?: unknown;
+        url?: unknown;
+        isMinimized?: unknown;
+        viewerCanMinimize?: unknown;
+        author?: { login?: unknown };
+      };
+    };
+  };
   try {
     parsed = JSON.parse(result.stdout);
   } catch (error) {
     return {
       ok: false,
-      reason: `gh-graphql-parse: ${error.message}`,
+      reason: `gh-graphql-parse: ${(error as Error).message}`,
     };
   }
   if (Array.isArray(parsed?.errors) && parsed.errors.length > 0) {
@@ -237,7 +326,11 @@ export function probeSubject(subjectId) {
     },
   };
 }
-export function applyMinimize(subjectId, classifier) {
+
+export function applyMinimize(
+  subjectId: string,
+  classifier: string,
+): MutationResult {
   const result = runGh([
     'api',
     'graphql',
@@ -263,11 +356,16 @@ export function applyMinimize(subjectId, classifier) {
       reason: `mutation-error: ${result.stderr.slice(0, 200)}`,
     };
   }
-  let parsed;
+  let parsed: {
+    errors?: { message?: unknown }[];
+    data?: {
+      minimizeComment?: { minimizedComment?: { isMinimized?: unknown } };
+    };
+  };
   try {
     parsed = JSON.parse(result.stdout);
   } catch (error) {
-    return { ok: false, reason: `mutation-parse: ${error.message}` };
+    return { ok: false, reason: `mutation-parse: ${(error as Error).message}` };
   }
   if (Array.isArray(parsed?.errors) && parsed.errors.length > 0) {
     return {
@@ -288,7 +386,8 @@ export function applyMinimize(subjectId, classifier) {
   }
   return { ok: true };
 }
-export function normalizeTrustedMarkerLogins(logins) {
+
+export function normalizeTrustedMarkerLogins(logins: unknown): string[] {
   return [
     ...new Set(
       (Array.isArray(logins) ? logins : [])
@@ -301,6 +400,7 @@ export function normalizeTrustedMarkerLogins(logins) {
     ),
   ].sort();
 }
+
 // Local flag > env > config ladder mirroring the shared
 // resolveTrustedMarkerActors() contract. This helper stays
 // self-contained because the template mirror ships without
@@ -309,7 +409,11 @@ export function resolveTrustedActors({
   flagValue = '',
   envValue = '',
   config = null,
-} = {}) {
+}: {
+  flagValue?: string;
+  envValue?: string;
+  config?: unknown;
+} = {}): { actors: string[]; source: string } {
   const fromFlag = normalizeTrustedMarkerLogins(splitLoginCsv(flagValue));
   if (fromFlag.length > 0) {
     return { actors: fromFlag, source: 'flag' };
@@ -318,7 +422,8 @@ export function resolveTrustedActors({
   if (fromEnv.length > 0) {
     return { actors: fromEnv, source: 'env' };
   }
-  const configActors = config?.trustedMarkerActors;
+  const configActors = (config as { trustedMarkerActors?: unknown } | null)
+    ?.trustedMarkerActors;
   const fromConfig = normalizeTrustedMarkerLogins(
     Array.isArray(configActors) ? configActors : [],
   );
@@ -327,32 +432,40 @@ export function resolveTrustedActors({
   }
   return { actors: [], source: 'none' };
 }
-function splitLoginCsv(value) {
+
+function splitLoginCsv(value: unknown): string[] {
   return String(value ?? '')
     .split(',')
     .map((login) => login.trim())
     .filter((login) => login.length > 0);
 }
-function loadIddConfig() {
+
+function loadIddConfig(): unknown {
   try {
     return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
   } catch {
     return null;
   }
 }
-export function isTrustedAuthor(author, trustedSet) {
+
+export function isTrustedAuthor(
+  author: unknown,
+  trustedSet: Set<string>,
+): boolean {
   if (!author) {
     return false;
   }
   return trustedSet.has(String(author).toLowerCase());
 }
-export function computeExitCode(report) {
+
+export function computeExitCode(report: MinimizeReport): number {
   if (report.counts.failed > 0) {
     return 1;
   }
   return 0;
 }
-function printTable(report) {
+
+function printTable(report: MinimizeReport): void {
   console.log(`mode: ${report.mode}  classifier: ${report.classifier}`);
   const c = report.counts;
   console.log(
@@ -364,7 +477,8 @@ function printTable(report) {
     console.log(`  [${item.status}] ${item.subjectId}  ${url}  ${reason}`);
   }
 }
-function runGh(argv) {
+
+function runGh(argv: string[]): GhResult {
   try {
     const stdout = execFileSync('gh', argv, {
       encoding: 'utf8',
@@ -372,15 +486,19 @@ function runGh(argv) {
     });
     return { ok: true, stdout };
   } catch (error) {
-    const e = error;
+    const e = error as {
+      stderr?: { toString?: () => string };
+      message?: unknown;
+    };
     return {
       ok: false,
       stderr: String(e.stderr?.toString?.() ?? e.message ?? 'unknown error'),
     };
   }
 }
-function parseArgs(argv) {
-  const args = {
+
+function parseArgs(argv: string[]): MinimizeArgs {
+  const args: MinimizeArgs = {
     subjectIds: [],
     classifier: 'OUTDATED',
     trustedMarkerLogins: '',
@@ -389,6 +507,7 @@ function parseArgs(argv) {
     format: 'json',
     help: false,
   };
+
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') {
@@ -444,10 +563,13 @@ function parseArgs(argv) {
     }
     throw new Error(`unknown argument: ${arg}`);
   }
+
   return args;
 }
-function printUsage() {
-  console.log(`Usage: minimize-superseded-markers --subject-ids <id1,id2,...> [--classifier OUTDATED|RESOLVED] [--trusted-marker-logins login1,login2] [--allow-untrusted] [--apply] [--format json|table]
+
+function printUsage(): void {
+  console.log(
+    `Usage: minimize-superseded-markers --subject-ids <id1,id2,...> [--classifier OUTDATED|RESOLVED] [--trusted-marker-logins login1,login2] [--allow-untrusted] [--apply] [--format json|table]
 
 The trusted-author gate is mandatory by default: supply trusted logins
 via --trusted-marker-logins, IDD_TRUSTED_MARKER_ACTORS, or the
@@ -455,9 +577,11 @@ trustedMarkerActors list in .github/idd/config.json (flag > env >
 config precedence) so the helper rejects markers from untrusted GitHub
 actors. Use --allow-untrusted only when you intentionally want to
 minimize markers regardless of author, and the caller has already
-verified the subject IDs are operationally safe to hide.`);
+verified the subject IDs are operationally safe to hide.`,
+  );
 }
-function isMainModule(metaUrl) {
+
+function isMainModule(metaUrl: string): boolean {
   const entry = process.argv[1];
   if (!entry) return false;
   try {

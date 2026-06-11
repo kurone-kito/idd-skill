@@ -574,8 +574,8 @@
     },
     {
       "id": "minimize-superseded-markers-helper",
-      "source": "idd-template/scripts/minimize-superseded-markers.mjs",
-      "target": "scripts/minimize-superseded-markers.mjs",
+      "source": "scripts/minimize-superseded-markers.mjs",
+      "target": "idd-template/scripts/minimize-superseded-markers.mjs",
       "mode": "exact"
     }
   ],

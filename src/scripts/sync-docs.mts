@@ -4,6 +4,7 @@
 // The scripts/sync-docs.mjs copy is generated from the .mts source named
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
+
 /**
  * sync-docs.mjs — Deterministic mirror generation for idd-skill docs.
  *
@@ -19,25 +20,70 @@
  *   structure  — only heading structure is checked; no source to copy
  *   contains   — only text-presence is checked; no source to copy
  */
+
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+interface SyncPair {
+  id: string;
+  source: string;
+  target: string;
+  mode: string;
+  replacements?: { from: string; to: string }[];
+}
+
+interface GeneratedBlock {
+  id: string;
+  file: string;
+  language?: string;
+  stripPrefix?: string;
+  paths?: string[];
+}
+
+interface ShellFileList {
+  id: string;
+  file: string;
+  generatedBlock: string;
+  stripPrefix?: string;
+}
+
+interface Manifest {
+  syncPairs?: SyncPair[];
+  generatedBlocks?: GeneratedBlock[];
+  shellFileLists?: ShellFileList[];
+}
+
+interface Diff {
+  target: string;
+  content: string;
+}
+
+type Update =
+  | { kind: 'generated'; block: GeneratedBlock }
+  | { kind: 'shell'; list: ShellFileList; sourceBlock: GeneratedBlock };
+
 const root = join(fileURLToPath(import.meta.url), '..', '..');
 const manifestPath = 'audit/sync-manifest.json';
+
 const args = process.argv.slice(2);
 const apply = args.includes('--apply');
-const manifest = JSON.parse(readText(manifestPath));
+
+const manifest = JSON.parse(readText(manifestPath)) as Manifest;
 const generatedBlocks = manifest.generatedBlocks ?? [];
 const shellFileLists = manifest.shellFileLists ?? [];
-const diffs = [];
-const skippedPairs = [];
+
+const diffs: Diff[] = [];
+const skippedPairs: { id: string; mode: string }[] = [];
 let nonZeroExit = false;
+
 processSyncPairs(manifest.syncPairs ?? []);
 processGeneratedBlocksAndShellFileLists(generatedBlocks, shellFileLists);
+
 if (nonZeroExit) {
   process.exit(1);
 }
+
 if (diffs.length === 0) {
   console.log('All mirrored artifacts are up to date.');
   if (skippedPairs.length > 0) {
@@ -48,6 +94,7 @@ if (diffs.length === 0) {
   }
   process.exit(0);
 }
+
 if (!apply) {
   console.log(`${diffs.length} file(s) out of sync:`);
   for (const { target } of diffs) {
@@ -62,6 +109,7 @@ if (!apply) {
   console.log('\nRun with --apply to write changes.');
   process.exit(1);
 }
+
 let written = 0;
 for (const { target, content } of diffs) {
   mkdirSync(dirname(join(root, target)), { recursive: true });
@@ -76,13 +124,17 @@ if (skippedPairs.length > 0) {
     skippedPairs.map((p) => p.id).join(', '),
   );
 }
+
 // ---------------------------------------------------------------------------
 // syncPairs processing
 // ---------------------------------------------------------------------------
-function processSyncPairs(pairs) {
-  const seenTargets = new Set();
+
+function processSyncPairs(pairs: SyncPair[]): void {
+  const seenTargets = new Set<string>();
+
   for (const pair of pairs) {
     const { id, source, target, mode, replacements = [] } = pair;
+
     if (mode === 'exact' || mode === 'concreted') {
       if (seenTargets.has(target)) {
         // Duplicate target — both entries produce the same content by design.
@@ -93,11 +145,13 @@ function processSyncPairs(pairs) {
         continue;
       }
       seenTargets.add(target);
+
       const sourceText = readText(source);
       const generated = normalizeText(
         applyReplacements(sourceText, replacements),
       );
       const current = tryReadText(target);
+
       if (current === null || normalizeText(current) !== generated) {
         diffs.push({ target, content: generated });
       }
@@ -111,19 +165,25 @@ function processSyncPairs(pairs) {
     }
   }
 }
+
 // ---------------------------------------------------------------------------
 // generatedBlocks + shellFileLists processing
 // ---------------------------------------------------------------------------
+
 /**
  * Groups all generatedBlocks and shellFileLists by file, then applies all
  * updates to each file in a single pass (avoiding stale position offsets
  * after the first update shifts the string).
  */
-function processGeneratedBlocksAndShellFileLists(blocks, lists) {
+function processGeneratedBlocksAndShellFileLists(
+  blocks: GeneratedBlock[],
+  lists: ShellFileList[],
+): void {
   const blockById = new Map(blocks.map((b) => [b.id, b]));
+
   // Group all updates by target file
-  const byFile = new Map();
-  const addToFile = (file, update) => {
+  const byFile = new Map<string, Update[]>();
+  const addToFile = (file: string, update: Update): void => {
     const list = byFile.get(file);
     if (list) {
       list.push(update);
@@ -131,6 +191,7 @@ function processGeneratedBlocksAndShellFileLists(blocks, lists) {
       byFile.set(file, [update]);
     }
   };
+
   for (const block of blocks) {
     addToFile(block.file, { kind: 'generated', block });
   }
@@ -145,6 +206,7 @@ function processGeneratedBlocksAndShellFileLists(blocks, lists) {
     }
     addToFile(list.file, { kind: 'shell', list, sourceBlock });
   }
+
   for (const [file, updates] of byFile) {
     // Prefer already-queued content (e.g. from a preceding syncPairs pass) so
     // that we do not silently clobber transformations that a syncPairs entry
@@ -156,8 +218,10 @@ function processGeneratedBlocksAndShellFileLists(blocks, lists) {
       nonZeroExit = true;
       continue;
     }
+
     let text = normalizeText(rawText);
     let changed = false;
+
     for (const update of updates) {
       if (update.kind === 'generated') {
         const result = applyGeneratedBlock(text, update.block);
@@ -181,6 +245,7 @@ function processGeneratedBlocksAndShellFileLists(blocks, lists) {
         }
       }
     }
+
     if (changed) {
       // Remove an existing stale entry for this file if present (possible when
       // both generatedBlocks and shellFileLists share the same file).
@@ -190,15 +255,20 @@ function processGeneratedBlocksAndShellFileLists(blocks, lists) {
     }
   }
 }
+
 /**
  * Replaces the content between the audit:generated markers in `text`
  * with a freshly rendered code block.
  *
  * Returns the updated text, or null on error.
  */
-function applyGeneratedBlock(text, block) {
+function applyGeneratedBlock(
+  text: string,
+  block: GeneratedBlock,
+): string | null {
   const startMarker = `<!-- audit:generated id=${block.id} -->`;
   const endMarker = '<!-- /audit:generated -->';
+
   const start = text.indexOf(startMarker);
   if (start === -1) {
     console.error(
@@ -214,13 +284,16 @@ function applyGeneratedBlock(text, block) {
     );
     return null;
   }
+
   const rendered = renderGeneratedBlock(block);
   const current = text.slice(innerStart, end);
   if (normalizeText(current) === normalizeText(rendered)) {
     return text; // already in sync
   }
+
   return text.slice(0, innerStart) + rendered + text.slice(end);
 }
+
 /**
  * Replaces the `for FILE in` file list in the shell code block that
  * follows `<!-- audit:shell-list id=XXX -->` with the canonical file
@@ -228,7 +301,11 @@ function applyGeneratedBlock(text, block) {
  *
  * Returns the updated text, or null on error.
  */
-function applyShellFileList(text, list, sourceBlock) {
+function applyShellFileList(
+  text: string,
+  list: ShellFileList,
+  sourceBlock: GeneratedBlock,
+): string | null {
   const marker = `<!-- audit:shell-list id=${list.id} -->`;
   const markerPos = text.indexOf(marker);
   if (markerPos === -1) {
@@ -237,7 +314,9 @@ function applyShellFileList(text, list, sourceBlock) {
     );
     return null;
   }
+
   const searchFrom = markerPos + marker.length;
+
   // Find the opening fence
   const fenceStart = text.indexOf('```', searchFrom);
   if (fenceStart === -1) {
@@ -260,9 +339,11 @@ function applyShellFileList(text, list, sourceBlock) {
     );
     return null;
   }
+
   // Code content (between the first ``` line and the closing ```)
   const codeContent = text.slice(codeLineStart + 1, fenceEnd);
   const lines = codeContent.split('\n');
+
   const loopStartIdx = lines.findIndex((l) => l.trim() === 'for FILE in \\');
   if (loopStartIdx === -1) {
     console.error(
@@ -279,6 +360,7 @@ function applyShellFileList(text, list, sourceBlock) {
     );
     return null;
   }
+
   // Build the canonical file list lines
   const strip = list.stripPrefix ?? sourceBlock.stripPrefix;
   const files = resolveBlockFiles(sourceBlock).map((f) =>
@@ -288,43 +370,55 @@ function applyShellFileList(text, list, sourceBlock) {
     const suffix = i < files.length - 1 ? ' \\' : '';
     return `  "${f}"${suffix}`;
   });
+
   const currentFileLines = lines.slice(loopStartIdx + 1, loopEndIdx);
   if (currentFileLines.join('\n') === newFileLines.join('\n')) {
     return text; // already in sync
   }
+
   const newLines = [
     ...lines.slice(0, loopStartIdx + 1), // "for FILE in \"
     ...newFileLines,
     ...lines.slice(loopEndIdx), // "do" and onwards
   ];
   const newCodeContent = newLines.join('\n');
+
   return (
     text.slice(0, codeLineStart + 1) + newCodeContent + text.slice(fenceEnd)
   );
 }
+
 // ---------------------------------------------------------------------------
 // Utility helpers
 // ---------------------------------------------------------------------------
-function renderGeneratedBlock(block) {
+
+function renderGeneratedBlock(block: GeneratedBlock): string {
   const files = resolveBlockFiles(block);
   const renderedFiles = files.map((f) => doStripPrefix(f, block.stripPrefix));
   return `\n\n\`\`\`${block.language ?? 'text'}\n${renderedFiles.join('\n')}\n\`\`\`\n\n`;
 }
-function resolveBlockFiles(block) {
+
+function resolveBlockFiles(block: GeneratedBlock): string[] {
   // Use the static paths list when present; this matches audit-docs.mjs behaviour.
   return block.paths ? [...block.paths] : [];
 }
-function applyReplacements(text, replacements) {
+
+function applyReplacements(
+  text: string,
+  replacements: { from: string; to: string }[],
+): string {
   let result = text;
   for (const { from, to } of replacements) {
     result = result.split(from).join(to);
   }
   return result;
 }
-function normalizeText(text) {
+
+function normalizeText(text: string): string {
   return text.replace(/\r\n?/g, '\n');
 }
-function doStripPrefix(file, prefix) {
+
+function doStripPrefix(file: string, prefix: string | undefined): string {
   if (!prefix) return file;
   if (file.startsWith(prefix)) return file.slice(prefix.length);
   console.error(
@@ -333,7 +427,8 @@ function doStripPrefix(file, prefix) {
   nonZeroExit = true;
   return file;
 }
-function readText(relPath) {
+
+function readText(relPath: string): string {
   try {
     return readFileSync(join(root, relPath), 'utf8');
   } catch {
@@ -341,7 +436,8 @@ function readText(relPath) {
     process.exit(1);
   }
 }
-function tryReadText(relPath) {
+
+function tryReadText(relPath: string): string | null {
   try {
     return readFileSync(join(root, relPath), 'utf8');
   } catch {

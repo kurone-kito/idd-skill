@@ -31,6 +31,10 @@ scripts/review-disposition-verify.mjs linguist-generated=true
 scripts/cleanup-hygiene-report.mjs linguist-generated=true
 # Every bin/ shim is generated from src/bin/*.mts (whole directory).
 bin/**/*.mjs linguist-generated=true
+scripts/sync-docs.mjs linguist-generated=true
+scripts/minimize-superseded-markers.mjs linguist-generated=true
+scripts/stalled-session-quiet-check.mjs linguist-generated=true
+idd-template/scripts/minimize-superseded-markers.mjs linguist-generated=true
 
 # Binary files
 *.gif binary
