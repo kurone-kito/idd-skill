@@ -101,11 +101,15 @@ const TS_IGNORE_TOKEN = `@ts-${'ignore'}`;
 const TS_EXPECT_ERROR_TOKEN = `@ts-${'expect'}-error`;
 // The explicit-`any` matcher is likewise assembled from fragments so its
 // own pattern text never trips the scan when this file is scanned.
+// It counts every standalone `any` word in stripped code — annotations,
+// casts, and type arguments in any nesting (`Set<any[]>`,
+// `Map<string, any>`, unions) — excluding only property access
+// (`.any`) and larger identifiers. Deliberately conservative: an
+// unusual identifier literally named `any` would over-count, which
+// fails loud for a budget gate rather than letting a wrapped type
+// argument bypass it.
 const ANY_TOKEN = 'any';
-const EXPLICIT_ANY_PATTERN = new RegExp(
-  `(?::\\s*${ANY_TOKEN}\\b|\\bas\\s+${ANY_TOKEN}\\b|<${ANY_TOKEN}>)`,
-  'g',
-);
+const EXPLICIT_ANY_PATTERN = new RegExp(`(?<![.$\\w])${ANY_TOKEN}\\b`, 'g');
 /**
  * Collect type-suppression budget violations across the given files.
  * Pure (no I/O) so it can be unit-tested; the audit pipeline feeds it

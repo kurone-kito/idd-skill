@@ -108,6 +108,31 @@ test('fails when the explicit any budget is exceeded', () => {
   );
 });
 
+test('wrapped type arguments cannot bypass the explicit any budget', () => {
+  // Regression: `any` nested inside generics, arrays, or unions must
+  // count, not just the bare annotation/cast/argument shapes.
+  const files = [
+    {
+      path: 'src/scripts/sample.mts',
+      text: [
+        'const a = new Set<any[]>();',
+        'const b = new Map<string, any>();',
+        'const c = parse<any | unknown>();',
+        'const ok = obj.any;',
+      ].join('\n'),
+    },
+  ];
+  const violations = collectTypeSuppressionViolations(files, {
+    ...BUDGET_ZERO,
+    explicitAnyLimit: 2,
+  });
+  assert.equal(violations.length, 1);
+  assert.match(
+    violations[0],
+    /3 explicit any occurrence\(s\) exceed the recorded budget of 2/,
+  );
+});
+
 test('does not count any-like prose in comments or strings', () => {
   const files = [
     {
