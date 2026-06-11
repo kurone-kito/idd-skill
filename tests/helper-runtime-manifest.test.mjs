@@ -119,9 +119,11 @@ test('vendored-node recommends linguist-vendored per managed file; other profile
     'ephemeral-npx',
     'instructions-only',
   ]) {
+    // Assert the key is genuinely absent, not merely `=== undefined`
+    // (which would also pass for a present-but-undefined property).
     assert.equal(
-      manifest.profiles[profileName].recommendedGitattributes,
-      undefined,
+      Object.hasOwn(manifest.profiles[profileName], 'recommendedGitattributes'),
+      false,
       profileName,
     );
   }
