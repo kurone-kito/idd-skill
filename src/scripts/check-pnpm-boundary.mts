@@ -3,10 +3,12 @@
 // The scripts/check-pnpm-boundary.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseProjectCommandRows } from './idd-doctor.mjs';
+
+import { parseProjectCommandRows } from './idd-doctor.mts';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const TEMPLATE_OVERVIEW_PATH =
@@ -18,8 +20,9 @@ const COMMAND_ROWS = [
   'install-deps',
 ];
 const FORBIDDEN_TOKEN = /\bpnpm\b/i;
+
 /** Find pnpm leaks in template Project commands rows. */
-export function findPnpmCommandLeaks(overviewText) {
+export function findPnpmCommandLeaks(overviewText: string): string[] {
   const rows = parseProjectCommandRows(overviewText);
   return COMMAND_ROWS.flatMap((name) => {
     const command = rows.get(name) ?? '';
@@ -27,12 +30,17 @@ export function findPnpmCommandLeaks(overviewText) {
     return [`${name}: contains forbidden token "pnpm" (${command})`];
   });
 }
+
 /** Check distributable template boundary in the current repository. */
-export function checkPnpmBoundary(root = ROOT) {
+export function checkPnpmBoundary(root: string = ROOT): {
+  ok: boolean;
+  errors: string[];
+} {
   const text = readFileSync(join(root, TEMPLATE_OVERVIEW_PATH), 'utf8');
   const errors = findPnpmCommandLeaks(text);
   return { ok: errors.length === 0, errors };
 }
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = checkPnpmBoundary();
   if (!result.ok) {
