@@ -4,6 +4,7 @@
 // The scripts/review-disposition-verify.mjs copy is generated from the
 // .mts source named above by `pnpm run build`. Edit the .mts source,
 // never the generated .mjs. See docs/typescript-sources.md.
+
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -12,16 +13,52 @@ const MARKER_REJECTED_RE = /^\*\*Rejected\*\*\s+—/;
 const MARKER_REJECTION_CONFIRMED_RE =
   /^\*\*Rejection confirmed by maintainer\*\*\s+—/;
 const MARKER_AMD_RE = /^\*\*Awaiting maintainer decision\*\*\s+—/;
+
+interface Checks {
+  decisionRecorded: boolean;
+  markerPresent: boolean | null;
+  markerMatchesDecision: boolean | null;
+  threadResolutionCorrect: boolean | null;
+}
+
+interface ItemResult {
+  id: string;
+  path: unknown;
+  checks: Checks;
+  passed: boolean;
+  issues: string[];
+}
+
+interface NormalizedItem {
+  id: string;
+  path: unknown;
+  type: string | null;
+  decision: string | null;
+  markerReply: string | null;
+  threadResolved: boolean | null;
+}
+
+interface VerifyResult {
+  passed: boolean;
+  summary: string;
+  totalCount: number;
+  passedCount: number;
+  failedCount: number;
+  items: ItemResult[];
+}
+
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
     process.exit(0);
   }
+
   if (args.items === null) {
     throw new Error('--items is required');
   }
-  let rawItems;
+
+  let rawItems: unknown[];
   try {
     const parsed = JSON.parse(args.items);
     if (Array.isArray(parsed)) {
@@ -31,31 +68,33 @@ if (isMainModule(import.meta.url)) {
       typeof parsed === 'object' &&
       'items' in parsed
     ) {
-      const itemsField = parsed.items;
+      const itemsField = (parsed as { items?: unknown }).items;
       if (itemsField === null) {
         throw new Error(
           "--items JSON object has 'items: null'; expected an array",
         );
       }
-      rawItems = itemsField ?? [];
+      rawItems = (itemsField ?? []) as unknown[];
     } else {
       throw new Error("--items JSON object must have an 'items' key");
     }
   } catch (err) {
-    if (err.message.includes('--items')) {
+    if ((err as Error).message.includes('--items')) {
       throw err;
     }
     throw new Error(
       "--items must be a valid JSON array or object with an 'items' key",
     );
   }
+
   const result = verifyDispositions(rawItems);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
+
 /**
  * Verify E7 disposition evidence for a set of ReviewItems_snapshot items.
  */
-export function verifyDispositions(items) {
+export function verifyDispositions(items: unknown): VerifyResult {
   if (!Array.isArray(items)) {
     throw new TypeError('items must be an array');
   }
@@ -69,7 +108,8 @@ export function verifyDispositions(items) {
       items: [],
     };
   }
-  const results = items.map((item) => {
+
+  const results: ItemResult[] = items.map((item) => {
     const normalized = normalizeItem(item);
     if (normalized.path === 'A') {
       return checkPathAItem(normalized);
@@ -92,12 +132,14 @@ export function verifyDispositions(items) {
       ],
     };
   });
+
   const passedCount = results.filter((r) => r.passed).length;
   const failedCount = results.length - passedCount;
   const passed = failedCount === 0;
   const summary = passed
     ? `All ${results.length} item${results.length === 1 ? '' : 's'} verified.`
     : `${failedCount} of ${results.length} item${results.length === 1 ? '' : 's'} failed E7 verification.`;
+
   return {
     passed,
     summary,
@@ -107,11 +149,14 @@ export function verifyDispositions(items) {
     items: results,
   };
 }
+
 /**
  * Classify a disposition marker reply.
  * Returns "accepted" | "rejected" | "awaiting_maintainer" | null.
  */
-export function classifyMarker(text) {
+export function classifyMarker(
+  text: unknown,
+): 'accepted' | 'rejected' | 'awaiting_maintainer' | null {
   if (typeof text !== 'string' || text.trim() === '') {
     return null;
   }
@@ -130,19 +175,21 @@ export function classifyMarker(text) {
   }
   return null;
 }
+
 /**
  * Verify a PATH A item per E7 rules.
  */
-export function checkPathAItem(item) {
+export function checkPathAItem(item: unknown): ItemResult {
   const normalized = normalizeItem(item);
   const { id, type, decision, markerReply, threadResolved } = normalized;
-  const checks = {
+  const checks: Checks = {
     decisionRecorded: false,
     markerPresent: null,
     markerMatchesDecision: null,
     threadResolutionCorrect: null,
   };
-  const issues = [];
+  const issues: string[] = [];
+
   const validDecisions = new Set([
     'accepted',
     'rejected',
@@ -159,10 +206,13 @@ export function checkPathAItem(item) {
     return makeResult(id, 'A', checks, issues);
   }
   checks.decisionRecorded = true;
+
   if (decision === 'accepted') {
     return makeResult(id, 'A', checks, issues);
   }
+
   const markerType = classifyMarker(markerReply ?? '');
+
   if (decision === 'rejected') {
     const markerPresent = markerType === 'rejected';
     checks.markerPresent = markerPresent;
@@ -172,6 +222,7 @@ export function checkPathAItem(item) {
         'PATH A Rejected item is missing the required `**Rejected** — {reason}` marker reply.',
       );
     }
+
     if (type === 'review_thread') {
       const resolutionCorrect = threadResolved === true;
       checks.threadResolutionCorrect = resolutionCorrect;
@@ -192,6 +243,7 @@ export function checkPathAItem(item) {
     }
     return makeResult(id, 'A', checks, issues);
   }
+
   if (decision === 'awaiting_maintainer') {
     const markerPresent = markerType === 'awaiting_maintainer';
     checks.markerPresent = markerPresent;
@@ -201,6 +253,7 @@ export function checkPathAItem(item) {
         'PATH A AMD item is missing the required `**Awaiting maintainer decision** — {reasoning}` marker reply.',
       );
     }
+
     if (type === 'review_thread') {
       const resolutionCorrect = threadResolved === false;
       checks.threadResolutionCorrect = resolutionCorrect;
@@ -221,21 +274,24 @@ export function checkPathAItem(item) {
     }
     return makeResult(id, 'A', checks, issues);
   }
+
   return makeResult(id, 'A', checks, issues);
 }
+
 /**
  * Verify a PATH B item per E7 rules.
  */
-export function checkPathBItem(item) {
+export function checkPathBItem(item: unknown): ItemResult {
   const normalized = normalizeItem(item);
   const { id, type, decision, markerReply, threadResolved } = normalized;
-  const checks = {
+  const checks: Checks = {
     decisionRecorded: false,
     markerPresent: null,
     markerMatchesDecision: null,
     threadResolutionCorrect: null,
   };
-  const issues = [];
+  const issues: string[] = [];
+
   const validDecisions = new Set(['accepted', 'rejected']);
   if (decision === null) {
     checks.decisionRecorded = false;
@@ -250,6 +306,7 @@ export function checkPathBItem(item) {
     return makeResult(id, 'B', checks, issues);
   }
   checks.decisionRecorded = true;
+
   const markerType = classifyMarker(markerReply ?? '');
   const markerPresent = markerType === 'accepted' || markerType === 'rejected';
   const markerMatchesDecision = markerType === decision;
@@ -264,6 +321,7 @@ export function checkPathBItem(item) {
       `PATH B marker type (${markerType}) does not match recorded decision (${decision}).`,
     );
   }
+
   if (type === 'review_thread') {
     const resolutionCorrect = threadResolved === true;
     checks.threadResolutionCorrect = resolutionCorrect;
@@ -282,9 +340,16 @@ export function checkPathBItem(item) {
       checks.threadResolutionCorrect = true;
     }
   }
+
   return makeResult(id, 'B', checks, issues);
 }
-function makeResult(id, path, checks, issues) {
+
+function makeResult(
+  id: string,
+  path: string,
+  checks: Checks,
+  issues: string[],
+): ItemResult {
   return {
     id,
     path,
@@ -293,8 +358,16 @@ function makeResult(id, path, checks, issues) {
     issues,
   };
 }
-function normalizeItem(item) {
-  const it = item ?? {};
+
+function normalizeItem(item: unknown): NormalizedItem {
+  const it = (item ?? {}) as {
+    id?: unknown;
+    path?: unknown;
+    type?: unknown;
+    decision?: unknown;
+    markerReply?: unknown;
+    threadResolved?: unknown;
+  };
   return {
     id: String(it.id ?? ''),
     path: typeof it.path === 'string' ? it.path.toUpperCase() : it.path,
@@ -310,8 +383,9 @@ function normalizeItem(item) {
           : null,
   };
 }
-function parseArgs(argv) {
-  const parsed = {
+
+function parseArgs(argv: string[]): { items: string | null; help: boolean } {
+  const parsed: { items: string | null; help: boolean } = {
     items: null,
     help: false,
   };
@@ -334,7 +408,8 @@ function parseArgs(argv) {
   }
   return parsed;
 }
-function printHelp() {
+
+function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/review-disposition-verify.mjs --items '<json>' [--help]
 
@@ -372,7 +447,8 @@ Output schema:
 }
 `);
 }
-function isMainModule(metaUrl) {
+
+function isMainModule(metaUrl: string): boolean {
   if (!metaUrl || !process.argv[1]) {
     return false;
   }

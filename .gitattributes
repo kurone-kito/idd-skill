@@ -20,6 +20,8 @@ scripts/audit-pr-cleanup-summary.mjs linguist-generated=true
 scripts/phase-id-resolver.mjs linguist-generated=true
 scripts/branch-conflict-state.mjs linguist-generated=true
 scripts/discover-viability-gate.mjs linguist-generated=true
+scripts/review-disposition-verify.mjs linguist-generated=true
+scripts/cleanup-hygiene-report.mjs linguist-generated=true
 # Every bin/ shim is generated from src/bin/*.mts (whole directory).
 bin/**/*.mjs linguist-generated=true
 
