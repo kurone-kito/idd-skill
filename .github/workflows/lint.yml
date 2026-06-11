@@ -28,7 +28,22 @@ jobs:
           persist-credentials: false
       - name: Run documentation audit
         run: node scripts/audit-docs.mjs --check
+      # The test suite is typed `.mts` executed via Node's native type
+      # stripping (unflagged since 22.18). A stale runner image with an
+      # older Node would mis-parse the files, so fail loudly first.
+      - name: Assert Node.js floor for native .mts type stripping
+        run: |
+          node -e '
+            const [major, minor] = process.versions.node.split(".").map(Number);
+            if (major < 22 || (major === 22 && minor < 18)) {
+              console.error(
+                "Node " + process.version + " cannot run .mts tests via " +
+                "native type stripping; this lane needs Node >= 22.18.",
+              );
+              process.exit(1);
+            }
+          '
       - name: Run protocol tests
-        run: node --test tests/*.mjs
+        run: node --test tests/*.test.mts
       - name: Run workshop integrity check
         run: node scripts/verify-workshop-integrity.mjs --format table

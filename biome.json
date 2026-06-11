@@ -8,7 +8,7 @@
       "src/**/*.mts",
       "scripts/**/*.mjs",
       "bin/**/*.mjs",
-      "tests/**/*.mjs",
+      "tests/**/*.mts",
       "idd-template/scripts/**/*.mjs"
     ]
   },

@@ -8,6 +8,28 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Resolve the package root by walking up to the nearest package.json.
+// This is location-independent, so it returns the same root whether this
+// module runs as the emitted scripts/helper-runtime-manifest.mjs (one
+// level deep), the src/scripts/helper-runtime-manifest.mts source under
+// Node type-stripping (two levels deep), or is imported by another
+// module — a fixed `..` from import.meta.url would resolve to src/ for
+// the source.
+function resolveRepoRoot(fromUrl) {
+  let dir = dirname(fileURLToPath(fromUrl));
+  for (let depth = 0; depth < 16; depth += 1) {
+    if (existsSync(resolve(dir, 'package.json'))) {
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  return dir;
+}
+const PACKAGE_ROOT = resolveRepoRoot(import.meta.url);
 const PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn'];
 const PROFILE_NAMES = [
   'package-manager',
@@ -265,7 +287,7 @@ export function buildHelperRuntimeManifest({
   packageSpec = '',
   targetRoot = process.cwd(),
 } = {}) {
-  const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const packageRoot = PACKAGE_ROOT;
   const packageMetadata = resolveSourcePackageMetadata(packageRoot);
   const normalizedProfile = normalizeProfile(profile);
   const normalizedFromProfile = normalizeOptionalProfile(fromProfile);
@@ -309,9 +331,7 @@ export function buildHelperRuntimeManifest({
         : null,
   };
 }
-export function collectVendoredFiles(
-  packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..'),
-) {
+export function collectVendoredFiles(packageRoot = PACKAGE_ROOT) {
   const queue = HELPER_COMMANDS.map((command) => command.entryPath).map(
     (entryPath) => resolve(packageRoot, entryPath),
   );
@@ -436,9 +456,7 @@ function buildCommandCatalog() {
     contractPaths: command.contractPaths ?? [],
   }));
 }
-export function resolveSourcePackageMetadata(
-  packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..'),
-) {
+export function resolveSourcePackageMetadata(packageRoot = PACKAGE_ROOT) {
   const fallback = {
     name: PACKAGE_NAME,
     repository: SOURCE_REPOSITORY,

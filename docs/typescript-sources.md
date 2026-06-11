@@ -50,7 +50,7 @@ adopter repositories that vendor the bundle.
 
 | Command                | Purpose                                                          |
 | ---------------------- | ---------------------------------------------------------------- |
-| `pnpm run typecheck`   | `tsc --noEmit` over `src/**/*.mts` under `strict`                |
+| `pnpm run typecheck`   | `tsc --noEmit` over `src/**/*.mts` + `tests/**/*.mts` (`strict`) |
 | `pnpm run build`       | Emit the generated `.mjs` (tsc) and normalize them with Biome    |
 | `pnpm run build:check` | `build` then `git diff --exit-code` — fails when the tree drifts |
 
@@ -84,3 +84,14 @@ budget is the **blocking** enforcement in both CI lanes.
 The migration converts modules in dependency-ordered waves; only the
 sources listed in `tsconfig.json`'s `include` set are type-checked, so
 unconverted hand-written `.mjs` stay untyped and CI is green throughout.
+
+## Test suite
+
+The test suite is typed TypeScript (`tests/*.test.mts`). Tests are not
+distributed and are never emitted — `tsconfig.build.json` excludes
+`tests`, and both lanes run them directly via Node's native type
+stripping (`node --test tests/*.test.mts`). Unit tests import the typed
+`src/scripts/*.mts` sources so assertions are checked against the real
+signatures; CLI/integration tests keep spawning the emitted
+`scripts/*.mjs` / `bin/*.mjs` artifacts, which is exactly what adopters
+execute.

@@ -148,6 +148,7 @@ interface BranchRuleLike {
         require_code_owner_review?: unknown;
         required_review_thread_resolution?: unknown;
         required_reviewers?: RequiredReviewerLike[] | null;
+        workflows?: unknown;
       })
     | null;
 }
@@ -157,6 +158,7 @@ interface BranchRulesetLike {
   id?: unknown;
   ruleset_id?: unknown;
   current_user_can_bypass?: unknown;
+  bypass_actors?: unknown;
 }
 
 /** Classic branch-protection payload. */

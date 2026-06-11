@@ -6,9 +6,9 @@
   // generated from them by `pnpm run build` (see `tsconfig.build.json`
   // and `docs/typescript-sources.md`).
   //
-  // The `include` set grows one conversion wave at a time, so unconverted
-  // hand-written `.mjs` files stay outside type-checking and CI is green
-  // throughout the migration.
+  // The `include` set covers the typed sources and the test suite; tests
+  // are type-checked only (never emitted — `tsconfig.build.json` excludes
+  // them) and run natively via Node's type stripping.
   "compilerOptions": {
     "module": "nodenext",
     "moduleResolution": "nodenext",
@@ -24,5 +24,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*.mts"]
+  "include": ["src/**/*.mts", "tests/**/*.mts"]
 }

@@ -604,7 +604,7 @@
     "description": "Ratchet rule (mirrors bundleBudgets): raising a limit requires an explicit callout in the PR description; lowering is always allowed. The ts-ignore directive is forbidden outright; ts-expect-error is the only allowed escape and must carry a same-line reason. Limits record the measured current counts, not aspirations.",
     "globs": [
       "src/**/*.mts",
-      "tests/**/*.mjs"
+      "tests/**/*.mts"
     ],
     "tsExpectErrorLimit": 0,
     "explicitAnyLimit": 0
