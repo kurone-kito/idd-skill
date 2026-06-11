@@ -23,6 +23,12 @@ scripts/idd-doctor.mjs linguist-generated=true
 scripts/check-pnpm-boundary.mjs linguist-generated=true
 scripts/audit-docs.mjs linguist-generated=true
 scripts/protocol-helpers.mjs linguist-generated=true
+scripts/advisory-wait-state.mjs linguist-generated=true
+scripts/live-status-digest.mjs linguist-generated=true
+scripts/pre-merge-readiness.mjs linguist-generated=true
+scripts/resume-claim-routing.mjs linguist-generated=true
+scripts/resume-route-selection.mjs linguist-generated=true
+scripts/review-activity-snapshot.mjs linguist-generated=true
 
 # Binary files
 *.gif binary
