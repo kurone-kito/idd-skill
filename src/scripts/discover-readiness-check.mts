@@ -48,7 +48,7 @@ export interface ReadinessSummary {
   ready: ReadinessReadyIssue[];
   filteredOut: ReadinessFilteredIssue[];
   unresolvable: ReadinessUnresolvableReference[];
-  warnings: { issueNumber: number; message: string }[];
+  warnings: NonNullable<ReturnType<typeof buildAuthoringLabelWarning>>[];
   summary: {
     total: number;
     readyCount: number;
@@ -149,7 +149,8 @@ export async function evaluateDiscoverReadiness(
   const ready: ReadinessReadyIssue[] = [];
   const filteredOut: ReadinessFilteredIssue[] = [];
   const unresolvable: ReadinessUnresolvableReference[] = [];
-  const warnings: { issueNumber: number; message: string }[] = [];
+  const warnings: NonNullable<ReturnType<typeof buildAuthoringLabelWarning>>[] =
+    [];
   const issueCache = new Map<number, CachedIssue>();
   const markerCache = new Map<string, NormalizedIssue[]>();
 

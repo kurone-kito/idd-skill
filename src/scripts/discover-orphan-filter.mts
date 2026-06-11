@@ -248,7 +248,8 @@ export function filterOrphanIssues(
     reference: number;
     reason: string;
   }[] = [];
-  const warnings: { issueNumber: number; message: string }[] = [];
+  const warnings: NonNullable<ReturnType<typeof buildAuthoringLabelWarning>>[] =
+    [];
 
   for (const issue of issues) {
     const result = classifyIssue(issue, {
