@@ -4,27 +4,116 @@
 // The scripts/resume-claim-routing.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
-import { normalizePolicyConfig } from './policy-helpers.mjs';
+import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
+import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mts';
+import { normalizePolicyConfig } from './policy-helpers.mts';
+import type {
+  ParsedClaimMarker,
+  ParsedForcedHandoffMarker,
+} from './protocol-helpers.mts';
 import {
   isStaleAt,
   parseClaimComment,
   resolveActiveClaim,
-} from './protocol-helpers.mjs';
+} from './protocol-helpers.mts';
+
+/** Author reference embedded in GitHub REST payloads. */
+interface GhAuthorPayload {
+  login?: string | null;
+}
+
+/** Issue comment payload fields consumed by this helper. */
+interface IssueCommentPayload {
+  body?: string | null;
+  created_at?: string | null;
+  user?: GhAuthorPayload | null;
+}
+
+/** Raw claim event accepted by `evaluateResumeClaimRouting`. */
+interface RawClaimEventPayload {
+  body?: unknown;
+  createdAt?: unknown;
+  created_at?: unknown;
+  author?: { login?: unknown } | null;
+  user?: { login?: unknown } | null;
+}
+
+/** Normalized trusted claim event consumed by the routing evaluator. */
+interface NormalizedClaimEvent {
+  body: string;
+  createdAt: string;
+  author: { login: string };
+}
+
+/** Comment event shape passed to forced-handoff callbacks. */
+interface CommentEventLike {
+  body?: string | null;
+  createdAt?: string | null;
+  author?: GhAuthorPayload | null;
+}
+
+/** Inputs accepted by {@link evaluateResumeClaimRouting}. */
+interface ResumeClaimRoutingInput {
+  events?: unknown;
+  claimId?: unknown;
+  staleAgeMs?: unknown;
+  now?: unknown;
+}
+
+/** Callback options accepted by {@link evaluateResumeClaimRouting}. */
+interface ResumeClaimRoutingOptions {
+  isTrustedAuthor?: (login: string) => boolean;
+  isForcedHandoffEnabled?: (
+    forcedHandoff: ParsedForcedHandoffMarker,
+    event: CommentEventLike,
+  ) => boolean;
+  isAuthorizedForcedHandoff?: (
+    forcedBy: string,
+    forcedHandoff: ParsedForcedHandoffMarker,
+    event: CommentEventLike,
+  ) => boolean;
+}
+
+/** Legacy (claim-id-less) claim marker parsed from an issue comment. */
+interface LegacyClaimMarker {
+  agentId: string;
+  createdAt: string;
+  branch: string;
+}
+
+/** Parsed CLI arguments. */
+interface ResumeClaimRoutingArgs {
+  issue: number | null;
+  owner: string;
+  repo: string;
+  token: string;
+  claimId: string;
+  now: string;
+  policy: string;
+  staleAgeMs: number;
+  trustedMarkerLogins: string;
+  help: boolean;
+}
 
 const DEFAULT_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 const LEGACY_CLAIM_PATTERN =
   /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 const LEGACY_RELEASE_PATTERN =
   /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
+
 if (isCliExecution()) {
   runCli();
 }
-export function evaluateResumeClaimRouting(input, options = {}) {
+
+export function evaluateResumeClaimRouting(
+  input: ResumeClaimRoutingInput,
+  options: ResumeClaimRoutingOptions = {},
+) {
   const nowIso =
     normalizeIso(input.now) ?? normalizeIso(new Date().toISOString()) ?? '';
   const staleAgeMs = normalizeStaleAgeMs(input.staleAgeMs);
@@ -40,6 +129,7 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     typeof options.isAuthorizedForcedHandoff === 'function'
       ? options.isAuthorizedForcedHandoff
       : () => false;
+
   const events = normalizeEvents(input.events).filter((event) =>
     trustedAuthor(event.author?.login ?? ''),
   );
@@ -54,10 +144,12 @@ export function evaluateResumeClaimRouting(input, options = {}) {
   const laterCompetingClaim = state.activeClaim
     ? findLaterCompetingClaim(events, state.activeClaim)
     : null;
+
   const warnings = [...state.warnings];
   let routeState = 'unclaimed';
   let action = 're_claim';
   let reason = 'no-active-claim';
+
   if (state.mode === 'legacy-only') {
     if (!state.legacyClaim) {
       routeState = 'unclaimed';
@@ -101,6 +193,7 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     action = 'stop';
     reason = 'active-claim-non-stale';
   }
+
   return {
     state: routeState,
     action,
@@ -136,7 +229,8 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     },
   };
 }
-function runCli() {
+
+function runCli(): void {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -149,6 +243,7 @@ function runCli() {
     process.env.GH_TOKEN = args.token;
     process.env.GITHUB_TOKEN = args.token;
   }
+
   const owner =
     args.owner ||
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
@@ -164,10 +259,17 @@ function runCli() {
   });
   const trustedSet = new Set(trustedLogins.map((login) => login.toLowerCase()));
   const comments = fetchIssueComments(repository, args.issue);
-  const issue = ghJson(['api', `repos/${repository}/issues/${args.issue}`]);
+  const issue = ghJson(['api', `repos/${repository}/issues/${args.issue}`]) as {
+    number?: unknown;
+    title?: unknown;
+    state?: unknown;
+    html_url?: unknown;
+    url?: unknown;
+  };
   const forcedHandoffEnabled = policy.forcedHandoff.mode === 'human-gated';
   const forcedHandoffAuthorityPolicy = policy.forcedHandoff.authorityPolicy;
-  const permissionCache = new Map();
+  const permissionCache: CollaboratorPermissionCache = new Map();
+
   const result = evaluateResumeClaimRouting(
     {
       events: comments.map((comment) => ({
@@ -197,6 +299,7 @@ function runCli() {
         ),
     },
   );
+
   const output = {
     repository: { owner, repo },
     issue: {
@@ -216,7 +319,23 @@ function runCli() {
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
-function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
+
+function resolveClaimState(
+  events: NormalizedClaimEvent[],
+  nowIso: string,
+  staleAgeMs: number,
+  options: {
+    isForcedHandoffEnabled?: (
+      forcedHandoff: ParsedForcedHandoffMarker,
+      event: CommentEventLike,
+    ) => boolean;
+    isAuthorizedForcedHandoff?: (
+      forcedBy: string,
+      forcedHandoff: ParsedForcedHandoffMarker,
+      event: CommentEventLike,
+    ) => boolean;
+  } = {},
+) {
   const isForcedHandoffEnabled =
     typeof options.isForcedHandoffEnabled === 'function'
       ? options.isForcedHandoffEnabled
@@ -225,6 +344,7 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
     typeof options.isAuthorizedForcedHandoff === 'function'
       ? options.isAuthorizedForcedHandoff
       : () => false;
+
   // hasNewFormatClaim drives the new-format vs legacy-only mode. Detect
   // it by scanning before delegating to the canonical parser so the
   // wrapper can return the right legacy-fallback shape.
@@ -232,13 +352,30 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
     (event) =>
       parseClaimComment(event.body ?? '', event.createdAt ?? '') !== null,
   );
-  const warnings = [];
-  const onAnomalousHeartbeat = ({ claimId, activeBranch, heartbeatBranch }) => {
+
+  const warnings: string[] = [];
+  const onAnomalousHeartbeat = ({
+    claimId,
+    activeBranch,
+    heartbeatBranch,
+  }: {
+    claimId: string;
+    activeBranch: string;
+    heartbeatBranch: string;
+  }) => {
     warnings.push(
       `ignored anomalous heartbeat for ${claimId}: branch ${heartbeatBranch} != ${activeBranch}`,
     );
   };
-  const onIgnoredForcedHandoff = ({ reason, forcedHandoff, event }) => {
+  const onIgnoredForcedHandoff = ({
+    reason,
+    forcedHandoff,
+    event,
+  }: {
+    reason: string;
+    forcedHandoff: ParsedForcedHandoffMarker;
+    event: CommentEventLike;
+  }) => {
     if (reason === 'mode-disabled') {
       warnings.push(
         `ignored forced-handoff for ${forcedHandoff.oldClaimId}: forced-handoff mode is not enabled`,
@@ -257,6 +394,7 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
       );
     }
   };
+
   const activeClaim = hasNewFormatClaim
     ? resolveActiveClaim(events, {
         isTrustedAuthor: () => true, // events were already filtered by caller
@@ -274,6 +412,7 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
         onIgnoredForcedHandoff,
       })
     : null;
+
   if (hasNewFormatClaim) {
     return {
       mode: 'new-format',
@@ -283,6 +422,7 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
       legacyReleased: false,
     };
   }
+
   const orderedEvents = [...events].sort(compareEvents);
   const legacy = resolveLegacyClaimState(orderedEvents, nowIso, staleAgeMs);
   return {
@@ -293,9 +433,15 @@ function resolveClaimState(events, nowIso, staleAgeMs, options = {}) {
     legacyReleased: legacy.released,
   };
 }
-function resolveLegacyClaimState(orderedEvents, _nowIso, _staleAgeMs) {
-  let latestClaim = null;
-  let latestMatchingRelease = null;
+
+function resolveLegacyClaimState(
+  orderedEvents: NormalizedClaimEvent[],
+  _nowIso?: string,
+  _staleAgeMs?: number,
+) {
+  let latestClaim: LegacyClaimMarker | null = null;
+  let latestMatchingRelease: { agentId: string; createdAt: string } | null =
+    null;
   for (const event of orderedEvents) {
     const claim = parseLegacyClaimComment(event.body, event.createdAt);
     if (claim) {
@@ -319,27 +465,35 @@ function resolveLegacyClaimState(orderedEvents, _nowIso, _staleAgeMs) {
   const released = Boolean(latestMatchingRelease);
   return { claim: latestClaim, released };
 }
-function findSameSecondContenders(events, activeClaim) {
+
+function findSameSecondContenders(
+  events: NormalizedClaimEvent[],
+  activeClaim: ParsedClaimMarker,
+): string[] {
   const activeSecond = toSecond(activeClaim.createdAt);
   if (activeSecond === null) {
     return [];
   }
   return events
     .map((event) => parseClaimComment(event.body, event.createdAt))
-    .filter((claim) => Boolean(claim))
+    .filter((claim): claim is ParsedClaimMarker => Boolean(claim))
     .filter((claim) => toSecond(claim.createdAt) === activeSecond)
     .map((claim) => claim.claimId)
     .filter((claimId) => claimId !== activeClaim.claimId)
     .sort();
 }
-function findLaterCompetingClaim(events, activeClaim) {
+
+function findLaterCompetingClaim(
+  events: NormalizedClaimEvent[],
+  activeClaim: ParsedClaimMarker,
+) {
   const activeSecond = toSecond(activeClaim.createdAt);
   if (activeSecond === null) {
     return null;
   }
   const contenders = events
     .map((event) => parseClaimComment(event.body, event.createdAt))
-    .filter((claim) => Boolean(claim))
+    .filter((claim): claim is ParsedClaimMarker => Boolean(claim))
     .filter((claim) => claim.claimId !== activeClaim.claimId)
     .filter((claim) => {
       const claimSecond = toSecond(claim.createdAt);
@@ -354,7 +508,11 @@ function findLaterCompetingClaim(events, activeClaim) {
     created_at: contenders[0].createdAt,
   };
 }
-function parseLegacyClaimComment(body, createdAt) {
+
+function parseLegacyClaimComment(
+  body: string,
+  createdAt: string,
+): LegacyClaimMarker | null {
   const match = String(body ?? '')
     .trimEnd()
     .match(LEGACY_CLAIM_PATTERN);
@@ -367,7 +525,11 @@ function parseLegacyClaimComment(body, createdAt) {
     branch: match[3],
   };
 }
-function parseLegacyReleaseComment(body, createdAt) {
+
+function parseLegacyReleaseComment(
+  body: string,
+  createdAt: string,
+): { agentId: string; createdAt: string } | null {
   const match = String(body ?? '')
     .trimEnd()
     .match(LEGACY_RELEASE_PATTERN);
@@ -379,11 +541,12 @@ function parseLegacyReleaseComment(body, createdAt) {
     createdAt: normalizeIso(match[2]) ?? normalizeIso(createdAt) ?? createdAt,
   };
 }
-function normalizeEvents(events) {
+
+function normalizeEvents(events: unknown): NormalizedClaimEvent[] {
   if (!Array.isArray(events)) {
     return [];
   }
-  return events
+  return (events as RawClaimEventPayload[])
     .map((event) => ({
       body: String(event?.body ?? ''),
       createdAt: normalizeIso(event?.createdAt ?? event?.created_at),
@@ -391,9 +554,13 @@ function normalizeEvents(events) {
         login: String(event?.author?.login ?? event?.user?.login ?? ''),
       },
     }))
-    .filter((event) => event.createdAt !== null);
+    .filter((event): event is NormalizedClaimEvent => event.createdAt !== null);
 }
-function compareEvents(left, right) {
+
+function compareEvents(
+  left: NormalizedClaimEvent,
+  right: NormalizedClaimEvent,
+): number {
   const leftSecond = toSecond(left.createdAt);
   const rightSecond = toSecond(right.createdAt);
   if (
@@ -409,6 +576,7 @@ function compareEvents(left, right) {
   if (leftSecond === null && rightSecond !== null) {
     return 1;
   }
+
   const leftClaim = parseClaimComment(left.body, left.createdAt);
   const rightClaim = parseClaimComment(right.body, right.createdAt);
   if (leftClaim && rightClaim && leftClaim.claimId !== rightClaim.claimId) {
@@ -416,8 +584,9 @@ function compareEvents(left, right) {
   }
   return compareIso(left.createdAt, right.createdAt);
 }
-function parseArgs(argv) {
-  const parsed = {
+
+function parseArgs(argv: string[]): ResumeClaimRoutingArgs {
+  const parsed: ResumeClaimRoutingArgs = {
     issue: null,
     owner: '',
     repo: '',
@@ -491,7 +660,8 @@ function parseArgs(argv) {
   }
   return parsed;
 }
-function printHelp() {
+
+function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--token <token>] [--claim-id <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"]
 
@@ -504,14 +674,18 @@ Output schema:
 }
 `);
 }
-function fetchIssueComments(repository, issueNumber) {
-  const comments = [];
+
+function fetchIssueComments(
+  repository: string,
+  issueNumber: number | null,
+): IssueCommentPayload[] {
+  const comments: IssueCommentPayload[] = [];
   const pageSize = 100;
   for (let page = 1; ; page += 1) {
     const pageItems = ghJson([
       'api',
       `repos/${repository}/issues/${issueNumber}/comments?per_page=${pageSize}&page=${page}`,
-    ]);
+    ]) as IssueCommentPayload[];
     comments.push(...pageItems);
     if (pageItems.length < pageSize) {
       break;
@@ -519,12 +693,19 @@ function fetchIssueComments(repository, issueNumber) {
   }
   return comments;
 }
-function loadPolicy(policyPath, { strict = false } = {}) {
+
+function loadPolicy(
+  policyPath: string,
+  { strict = false }: { strict?: boolean } = {},
+) {
   const source = policyPath
     ? resolve(process.cwd(), policyPath)
     : resolve(process.cwd(), '.github/idd/config.json');
   try {
-    const config = JSON.parse(readFileSync(source, 'utf8'));
+    const config = JSON.parse(readFileSync(source, 'utf8')) as {
+      claimTiming?: { staleAge?: unknown } | null;
+      trustedMarkerActors?: unknown;
+    } | null;
     const normalized = normalizePolicyConfig(config);
     return {
       source,
@@ -532,7 +713,7 @@ function loadPolicy(policyPath, { strict = false } = {}) {
         parseDurationToMs(config?.claimTiming?.staleAge) ??
         DEFAULT_STALE_AGE_MS,
       trustedMarkerActors: Array.isArray(config?.trustedMarkerActors)
-        ? config.trustedMarkerActors
+        ? (config.trustedMarkerActors as unknown[])
             .map((value) => String(value ?? '').trim())
             .filter(Boolean)
         : [],
@@ -544,7 +725,7 @@ function loadPolicy(policyPath, { strict = false } = {}) {
   } catch (error) {
     if (strict) {
       throw new Error(
-        `failed to load policy from ${source}: ${String(error?.message ?? error)}`,
+        `failed to load policy from ${source}: ${String((error as { message?: unknown } | null)?.message ?? error)}`,
       );
     }
     const normalized = normalizePolicyConfig({});
@@ -559,7 +740,8 @@ function loadPolicy(policyPath, { strict = false } = {}) {
     };
   }
 }
-function parseDurationToMs(value) {
+
+function parseDurationToMs(value: unknown): number | null {
   const text = String(value ?? '').trim();
   if (!text) {
     return null;
@@ -576,7 +758,16 @@ function parseDurationToMs(value) {
   const seconds = Number.parseInt(match[4] ?? '0', 10);
   return (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
 }
-function resolveTrustedLogins({ fromArgs, fromPolicy, currentLogin }) {
+
+function resolveTrustedLogins({
+  fromArgs,
+  fromPolicy,
+  currentLogin,
+}: {
+  fromArgs?: unknown;
+  fromPolicy?: string[] | null;
+  currentLogin?: unknown;
+}): string[] {
   const fromCsv = String(fromArgs ?? '')
     .split(',')
     .map((value) => value.trim())
@@ -590,13 +781,19 @@ function resolveTrustedLogins({ fromArgs, fromPolicy, currentLogin }) {
     .filter(Boolean);
   return [...new Set(merged)];
 }
-function normalizeStaleAgeMs(value) {
+
+function normalizeStaleAgeMs(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
     return DEFAULT_STALE_AGE_MS;
   }
   return Math.floor(value);
 }
-function isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs) {
+
+function isStaleByAge(
+  activeCreatedAt: string,
+  nextCreatedAt: string,
+  staleAgeMs: number,
+): boolean {
   if (staleAgeMs === DEFAULT_STALE_AGE_MS) {
     return isStaleAt(activeCreatedAt, nextCreatedAt);
   }
@@ -607,7 +804,8 @@ function isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs) {
   }
   return end - start >= staleAgeMs;
 }
-function normalizeIso(value) {
+
+function normalizeIso(value: unknown): string | null {
   if (!value) {
     return null;
   }
@@ -617,7 +815,8 @@ function normalizeIso(value) {
   }
   return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
-function compareIso(left, right) {
+
+function compareIso(left: string, right: string): number {
   const leftTime = Date.parse(String(left ?? ''));
   const rightTime = Date.parse(String(right ?? ''));
   if (!Number.isFinite(leftTime) || !Number.isFinite(rightTime)) {
@@ -625,24 +824,29 @@ function compareIso(left, right) {
   }
   return leftTime - rightTime;
 }
-function toSecond(iso) {
+
+function toSecond(iso: string | null | undefined): number | null {
   const milliseconds = Date.parse(String(iso ?? ''));
   if (!Number.isFinite(milliseconds)) {
     return null;
   }
   return Math.floor(milliseconds / 1000);
 }
-function normalizeToken(value) {
+
+function normalizeToken(value: unknown): string {
   const token = String(value ?? '').trim();
   return token.length > 0 ? token : '';
 }
-function ghJson(args) {
+
+function ghJson(args: string[]): unknown {
   return JSON.parse(runGh(args).trim() || '[]');
 }
-function ghText(args) {
+
+function ghText(args: string[]): string {
   return runGh(args).trim();
 }
-function runGh(args) {
+
+function runGh(args: string[]): string {
   try {
     return execFileSync('gh', args, {
       encoding: 'utf8',
@@ -650,14 +854,17 @@ function runGh(args) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    const stderr = String(error?.stderr ?? '').trim();
+    const stderr = String(
+      (error as { stderr?: unknown } | null)?.stderr ?? '',
+    ).trim();
     if (stderr) {
       throw new Error(`gh command failed: ${stderr}`);
     }
     throw error;
   }
 }
-function isCliExecution() {
+
+function isCliExecution(): boolean {
   return (
     Boolean(process.argv[1]) &&
     fileURLToPath(import.meta.url) === resolve(process.argv[1])

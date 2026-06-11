@@ -4,15 +4,19 @@
 // The scripts/pre-merge-readiness.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { readAdvisoryWaitPolicy } from './advisory-wait-policy.mjs';
+
+import { readAdvisoryWaitPolicy } from './advisory-wait-policy.mts';
+import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
-} from './collaborator-permission.mjs';
-import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
+} from './collaborator-permission.mts';
+import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
+import type { TrustedMarkerActorResolution } from './protocol-helpers.mts';
 import {
   buildPreMergeReadinessSummary,
   deriveIddAgentLogins,
@@ -24,7 +28,160 @@ import {
   resolveRulesetDetailPath,
   resolveTrustedMarkerActors,
   selectCodeownersText,
-} from './protocol-helpers.mjs';
+} from './protocol-helpers.mts';
+
+/** Author reference embedded in GitHub REST/GraphQL payloads. */
+interface GhAuthorPayload {
+  login?: string | null;
+}
+
+/** Issue comment payload fields consumed by this helper. */
+interface IssueCommentPayload {
+  id?: string | number | null;
+  body?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  user?: GhAuthorPayload | null;
+}
+
+/** PR review payload fields consumed by this helper. */
+interface ReviewPayload {
+  state?: string | null;
+  user?: GhAuthorPayload | null;
+  submitted_at?: string | null;
+  updated_at?: string | null;
+  commit_id?: string | null;
+}
+
+/** CI status-check entry returned by `gh pr checks`. */
+interface CheckPayload {
+  name?: string | null;
+  state?: string | null;
+  completedAt?: string | null;
+}
+
+/** Timeline event payload fields consumed by the Copilot coverage check. */
+interface TimelineEventPayload {
+  event?: string | null;
+  sha?: string | null;
+  commit_id?: string | null;
+  requested_reviewer?: GhAuthorPayload | null;
+}
+
+/** Branch rule entry from the rules API. */
+interface BranchRulePayload {
+  type?: string | null;
+  ruleset_id?: unknown;
+  ruleset_source_type?: unknown;
+  source_type?: unknown;
+  ruleset_source?: unknown;
+  source?: unknown;
+}
+
+/** Required status-check entry in classic protection payloads. */
+type RawRequiredCheckPayload =
+  | string
+  | {
+      app_id?: unknown;
+      integration_id?: unknown;
+      source?: unknown;
+      context?: unknown;
+      name?: unknown;
+      check?: unknown;
+    }
+  | null
+  | undefined;
+
+/** Classic branch-protection bypass team entry. */
+interface ClassicBypassTeamPayload {
+  slug?: unknown;
+  organization?: { login?: unknown } | null;
+  html_url?: unknown;
+}
+
+/** Classic branch-protection payload. */
+interface BranchProtectionPayload {
+  required_pull_request_reviews?: {
+    require_code_owner_reviews?: unknown;
+    require_code_owner_review?: unknown;
+    required_approving_review_count?: unknown;
+    bypass_pull_request_allowances?: {
+      users?: (string | { login?: unknown } | null)[] | null;
+      teams?: (ClassicBypassTeamPayload | null)[] | null;
+      apps?: (string | { slug?: unknown; app_slug?: unknown } | null)[] | null;
+    } | null;
+  } | null;
+  required_conversation_resolution?: { enabled?: unknown } | null;
+  required_status_checks?: {
+    required_status_checks?: RawRequiredCheckPayload[] | null;
+    required_checks?: RawRequiredCheckPayload[] | null;
+    checks?: RawRequiredCheckPayload[] | null;
+    contexts?: RawRequiredCheckPayload[] | null;
+  } | null;
+}
+
+/** GraphQL pagination cursor block. */
+interface PageInfoPayload {
+  hasNextPage?: boolean | null;
+  endCursor?: string | null;
+}
+
+/** Review-thread reply node (GraphQL `reviewThreads` comment). */
+interface ThreadCommentPayload {
+  body?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  author?: GhAuthorPayload | null;
+  pullRequestReview?: { id?: string | null } | null;
+}
+
+/** Review thread (GraphQL `reviewThreads` node). */
+interface ReviewThreadPayload {
+  id?: string | null;
+  isResolved?: boolean | null;
+  reviewerReopenedAt?: string | null;
+  comments?: {
+    pageInfo?: PageInfoPayload | null;
+    nodes: ThreadCommentPayload[];
+  } | null;
+}
+
+/** GraphQL `reviewThreads` connection payload. */
+interface ReviewThreadsConnectionPayload {
+  pageInfo?: PageInfoPayload | null;
+  nodes?: ReviewThreadPayload[] | null;
+}
+
+/** gh subprocess failure-tolerance options. */
+interface RunGhOptions {
+  allowStatuses?: number[];
+  allowHttpStatuses?: number[];
+}
+
+/** Parsed CLI arguments. */
+interface PreMergeReadinessArgs {
+  prNumber: number | null;
+  claimIssueNumber: number | null;
+  owner: string;
+  repo: string;
+  trustedMarkerLogins: string;
+  iddAgentLogins: string;
+  advisoryBotLogins: string;
+  expectedClaimId: string;
+  expectedAgentId: string;
+  now: string;
+}
+
+/**
+ * JSON state document printed by this CLI: the pre-merge readiness
+ * gate summary plus the trusted-marker actor provenance fields.
+ */
+export type PreMergeReadinessReport = ReturnType<
+  typeof buildPreMergeReadinessSummary
+> & {
+  trustedMarkerActors: string[];
+  trustedMarkerActorsSource: TrustedMarkerActorResolution['source'];
+};
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.prNumber) {
@@ -33,6 +190,7 @@ if (!args.prNumber) {
 if (!args.claimIssueNumber) {
   throw new Error('missing required --claim-issue <number> argument');
 }
+
 const owner =
   args.owner ||
   ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
@@ -59,6 +217,7 @@ const { logins: advisoryBotLogins, source: advisoryBotLoginsSource } =
     envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
     config: iddConfig,
   });
+
 const pr = ghJson([
   'pr',
   'view',
@@ -69,13 +228,20 @@ const pr = ghJson([
   'headRefOid,baseRefName,url,author,reviewDecision',
   '--jq',
   '.',
-]);
+]) as {
+  headRefOid?: unknown;
+  baseRefName?: unknown;
+  url?: unknown;
+  author?: { login?: unknown } | null;
+  reviewDecision?: unknown;
+};
 const prHeadSha = String(pr.headRefOid ?? '');
 const baseRefName = String(pr.baseRefName ?? '');
 const prUrl = String(pr.url ?? '');
 const prAuthorLogin = String(pr.author?.login ?? '').toLowerCase();
 const reviewDecision = String(pr.reviewDecision ?? '');
 const encodedBaseRefName = encodeURIComponent(baseRefName);
+
 const checks = ghJson(
   [
     'pr',
@@ -89,45 +255,46 @@ const checks = ghJson(
     '.',
   ],
   { allowStatuses: [1, 8] },
-);
+) as CheckPayload[];
 const branchRules = ghApiJson(
   `repos/${owner}/${repo}/rules/branches/${encodedBaseRefName}`,
   true,
   [],
   { allowHttpStatuses: [404] },
-);
+) as BranchRulePayload[];
 const branchRulesets = fetchBranchRulesets(owner, repo, branchRules);
 const branchProtection = ghApiJson(
   `repos/${owner}/${repo}/branches/${encodedBaseRefName}/protection`,
   false,
   [],
   { allowHttpStatuses: [404] },
-);
+) as BranchProtectionPayload;
 const reviews = ghApiJson(
   `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
   true,
-);
+) as ReviewPayload[];
 const requestedReviewers = ghApiJson(
   `repos/${owner}/${repo}/pulls/${args.prNumber}/requested_reviewers`,
   false,
-);
+) as { users?: GhAuthorPayload[] | null };
 const timelineEvents = ghApiJson(
   `repos/${owner}/${repo}/issues/${args.prNumber}/timeline`,
   true,
   ['-H', 'Accept: application/vnd.github+json'],
-);
+) as TimelineEventPayload[];
 const comments = ghApiJson(
   `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
   true,
-);
+) as IssueCommentPayload[];
 const claimComments = ghApiJson(
   `repos/${owner}/${repo}/issues/${args.claimIssueNumber}/comments`,
   true,
-);
+) as IssueCommentPayload[];
 const threads = fetchReviewThreads(owner, repo, args.prNumber);
-const changedFiles = ghApiJson(
-  `repos/${owner}/${repo}/pulls/${args.prNumber}/files`,
-  true,
+const changedFiles = (
+  ghApiJson(`repos/${owner}/${repo}/pulls/${args.prNumber}/files`, true) as {
+    filename?: unknown;
+  }[]
 )
   .map((file) => String(file.filename ?? ''))
   .filter(Boolean);
@@ -142,6 +309,7 @@ const viewerTeamSlugs = resolveViewerClassicBypassTeamSlugs(
   viewerLogin,
   branchProtection,
 );
+
 const collaboratorTrustEnabled = readCollaboratorTrustEnabled();
 const trustedMarkerLogins = normalizeTrustedMarkerLogins([
   viewerLogin,
@@ -162,7 +330,8 @@ const iddAgentLogins = deriveIddAgentLogins({
 const advisoryWaitPolicy = readAdvisoryWaitPolicy();
 const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
 const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
-const forcedHandoffPermissionCache = new Map();
+const forcedHandoffPermissionCache: CollaboratorPermissionCache = new Map();
+
 const summary = buildPreMergeReadinessSummary(
   {
     prHeadSha,
@@ -213,6 +382,7 @@ const summary = buildPreMergeReadinessSummary(
     collaboratorTrustEnabled,
   },
 );
+
 process.stdout.write(
   `${JSON.stringify(
     {
@@ -224,13 +394,15 @@ process.stdout.write(
     2,
   )}\n`,
 );
-function warnDeprecatedFlag(deprecated, canonical) {
+
+function warnDeprecatedFlag(deprecated: string, canonical: string): void {
   process.stderr.write(
     `warning: ${deprecated} is deprecated; use ${canonical} instead.\n`,
   );
 }
-function parseArgs(argv) {
-  const parsed = {
+
+function parseArgs(argv: string[]): PreMergeReadinessArgs {
+  const parsed: PreMergeReadinessArgs = {
     prNumber: null,
     claimIssueNumber: null,
     owner: '',
@@ -242,6 +414,7 @@ function parseArgs(argv) {
     expectedAgentId: '',
     now: '',
   };
+
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
@@ -313,6 +486,7 @@ function parseArgs(argv) {
     }
     throw new Error(`unknown argument: ${token}`);
   }
+
   if (!Number.isInteger(parsed.prNumber) || (parsed.prNumber ?? 0) < 1) {
     parsed.prNumber = null;
   }
@@ -322,15 +496,18 @@ function parseArgs(argv) {
   ) {
     parsed.claimIssueNumber = null;
   }
+
   return parsed;
 }
-function printHelp() {
+
+function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/pre-merge-readiness.mjs --pr <number> --claim-issue <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--claim-id <claim-id>] [--agent-id <agent-id>] [--now <ISO8601>]
   Deprecated aliases (one release): --expected-claim-id -> --claim-id, --expected-agent-id -> --agent-id
 `);
 }
-function normalizeComment(comment) {
+
+function normalizeComment(comment: IssueCommentPayload) {
   return {
     id: String(comment.id ?? ''),
     author: { login: comment.user?.login ?? '' },
@@ -339,14 +516,16 @@ function normalizeComment(comment) {
     updatedAt: comment.updated_at ?? comment.created_at ?? '',
   };
 }
-function normalizeClaimComment(comment) {
+
+function normalizeClaimComment(comment: IssueCommentPayload) {
   return {
     body: comment.body ?? '',
     createdAt: comment.created_at ?? '',
     author: { login: comment.user?.login ?? '' },
   };
 }
-function normalizeReview(review) {
+
+function normalizeReview(review: ReviewPayload) {
   return {
     author: { login: review.user?.login ?? '' },
     state: review.state ?? '',
@@ -356,7 +535,8 @@ function normalizeReview(review) {
     updatedAt: review.updated_at ?? review.submitted_at ?? '',
   };
 }
-function normalizeThread(thread) {
+
+function normalizeThread(thread: ReviewThreadPayload) {
   return {
     id: thread.id,
     isResolved: Boolean(thread.isResolved),
@@ -376,10 +556,16 @@ function normalizeThread(thread) {
     },
   };
 }
-function inferReviewerReopenedAt(thread) {
+
+function inferReviewerReopenedAt(thread: ReviewThreadPayload): string {
   return thread.reviewerReopenedAt ?? '';
 }
-function resolveTrustedCollaboratorMarkerLogins(owner, repo, comments) {
+
+function resolveTrustedCollaboratorMarkerLogins(
+  owner: string,
+  repo: string,
+  comments: IssueCommentPayload[],
+): string[] {
   const markerAuthors = [
     ...new Set(
       comments
@@ -390,6 +576,7 @@ function resolveTrustedCollaboratorMarkerLogins(owner, repo, comments) {
         .filter(Boolean),
     ),
   ];
+
   return markerAuthors.filter((login) => {
     const permission = safeGhText([
       'api',
@@ -397,6 +584,7 @@ function resolveTrustedCollaboratorMarkerLogins(owner, repo, comments) {
       '--jq',
       '.permission',
     ]).toLowerCase();
+
     return (
       permission === 'admin' ||
       permission === 'maintain' ||
@@ -404,7 +592,12 @@ function resolveTrustedCollaboratorMarkerLogins(owner, repo, comments) {
     );
   });
 }
-function resolveEligibleCodeownerUserLogins(owner, repo, logins) {
+
+function resolveEligibleCodeownerUserLogins(
+  owner: string,
+  repo: string,
+  logins: unknown[],
+): string[] {
   return normalizeTrustedMarkerLogins(logins).filter((login) => {
     const permission = safeGhText([
       'api',
@@ -412,6 +605,7 @@ function resolveEligibleCodeownerUserLogins(owner, repo, logins) {
       '--jq',
       '.permission',
     ]).toLowerCase();
+
     return (
       permission === 'admin' ||
       permission === 'maintain' ||
@@ -419,7 +613,8 @@ function resolveEligibleCodeownerUserLogins(owner, repo, logins) {
     );
   });
 }
-function fetchCodeownersText(owner, repo, ref) {
+
+function fetchCodeownersText(owner: string, repo: string, ref: string): string {
   const payloads = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'].map(
     (path) => {
       return ghApiJson(
@@ -432,9 +627,14 @@ function fetchCodeownersText(owner, repo, ref) {
   );
   return selectCodeownersText(payloads);
 }
-function fetchBranchRulesets(owner, repo, branchRules) {
-  const rulesetPaths = [];
-  const seenPaths = new Set();
+
+function fetchBranchRulesets(
+  owner: string,
+  repo: string,
+  branchRules: BranchRulePayload[],
+) {
+  const rulesetPaths: string[] = [];
+  const seenPaths = new Set<string>();
   for (const rule of branchRules ?? []) {
     const rulesetId = Number.parseInt(String(rule?.ruleset_id ?? ''), 10);
     if (!Number.isInteger(rulesetId)) {
@@ -447,6 +647,7 @@ function fetchBranchRulesets(owner, repo, branchRules) {
     seenPaths.add(path);
     rulesetPaths.push(path);
   }
+
   return rulesetPaths
     .map((path) => {
       try {
@@ -455,25 +656,26 @@ function fetchBranchRulesets(owner, repo, branchRules) {
           false,
           ['-H', 'Accept: application/vnd.github+json'],
           { allowHttpStatuses: [404] },
-        );
+        ) as Record<string, unknown>;
       } catch {
         return {};
       }
     })
     .filter((ruleset) => Object.keys(ruleset).length > 0);
 }
+
 function resolveViewerClassicBypassTeamSlugs(
-  owner,
-  viewerLogin,
-  branchProtection,
-) {
+  owner: string,
+  viewerLogin: string,
+  branchProtection: BranchProtectionPayload,
+): string[] {
   if (!viewerLogin) {
     return [];
   }
   const teams =
     branchProtection.required_pull_request_reviews
       ?.bypass_pull_request_allowances?.teams ?? [];
-  const viewerTeams = new Set();
+  const viewerTeams = new Set<string>();
   for (const team of teams) {
     const slug = String(team?.slug ?? '')
       .trim()
@@ -488,7 +690,9 @@ function resolveViewerClassicBypassTeamSlugs(
     ).trim();
     const state = safeGhText([
       'api',
-      `orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(slug)}/memberships/${encodeURIComponent(viewerLogin)}`,
+      `orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(slug)}/memberships/${encodeURIComponent(
+        viewerLogin,
+      )}`,
       '--jq',
       '.state',
     ]).toLowerCase();
@@ -498,13 +702,20 @@ function resolveViewerClassicBypassTeamSlugs(
   }
   return [...viewerTeams].sort();
 }
-function extractTeamOrgFromHtmlUrl(htmlUrl) {
+
+function extractTeamOrgFromHtmlUrl(htmlUrl: unknown): string {
   const match = String(htmlUrl ?? '').match(/\/orgs\/([^/]+)\/teams\//);
   return match?.[1] ?? '';
 }
-function fetchReviewThreads(owner, repo, prNumber) {
-  const nodes = [];
-  let cursor = null;
+
+function fetchReviewThreads(
+  owner: string,
+  repo: string,
+  prNumber: number,
+): ReviewThreadPayload[] {
+  const nodes: ReviewThreadPayload[] = [];
+  let cursor: string | null | undefined = null;
+
   while (true) {
     const payload = ghGraphql(
       `
@@ -537,7 +748,16 @@ function fetchReviewThreads(owner, repo, prNumber) {
         number: Number.parseInt(String(prNumber), 10),
         cursor,
       },
-    );
+    ) as {
+      data?: {
+        repository?: {
+          pullRequest?: {
+            reviewThreads?: ReviewThreadsConnectionPayload | null;
+          } | null;
+        } | null;
+      } | null;
+    };
+
     const reviewThreads = payload?.data?.repository?.pullRequest?.reviewThreads;
     for (const thread of reviewThreads?.nodes ?? []) {
       if (thread.comments?.pageInfo?.hasNextPage) {
@@ -559,6 +779,7 @@ function fetchReviewThreads(owner, repo, prNumber) {
       }
     }
     nodes.push(...(reviewThreads?.nodes ?? []));
+
     if (!reviewThreads?.pageInfo?.hasNextPage) {
       break;
     }
@@ -569,11 +790,17 @@ function fetchReviewThreads(owner, repo, prNumber) {
     }
     cursor = reviewThreads.pageInfo.endCursor;
   }
+
   return nodes;
 }
-function fetchThreadCommentPages(threadId, afterCursor) {
-  const nodes = [];
-  let cursor = afterCursor;
+
+function fetchThreadCommentPages(
+  threadId: string,
+  afterCursor: string,
+): ThreadCommentPayload[] {
+  const nodes: ThreadCommentPayload[] = [];
+  let cursor: string | null | undefined = afterCursor;
+
   while (cursor) {
     const payload = ghGraphql(
       `
@@ -594,7 +821,17 @@ function fetchThreadCommentPages(threadId, afterCursor) {
           }
         }`,
       { id: threadId, cursor },
-    );
+    ) as {
+      data?: {
+        node?: {
+          comments?: {
+            pageInfo?: PageInfoPayload | null;
+            nodes?: ThreadCommentPayload[] | null;
+          } | null;
+        } | null;
+      } | null;
+    };
+
     const comments = payload?.data?.node?.comments;
     nodes.push(...(comments?.nodes ?? []));
     if (comments?.pageInfo?.hasNextPage && !comments.pageInfo.endCursor) {
@@ -604,9 +841,14 @@ function fetchThreadCommentPages(threadId, afterCursor) {
       ? comments.pageInfo.endCursor
       : null;
   }
+
   return nodes;
 }
-function ghGraphql(query, variables) {
+
+function ghGraphql(
+  query: string,
+  variables: Record<string, string | number | null | undefined>,
+): unknown {
   const args = ['api', 'graphql', '-f', `query=${query}`];
   for (const [key, value] of Object.entries(variables)) {
     if (value === null || value === undefined) {
@@ -620,20 +862,29 @@ function ghGraphql(query, variables) {
   }
   return JSON.parse(runGh(args).trim() || '{}');
 }
-function ghJson(args, options = {}) {
+
+function ghJson(args: string[], options: RunGhOptions = {}): unknown {
   return JSON.parse(runGh(args, options).trim() || '[]');
 }
-function ghText(args) {
+
+function ghText(args: string[]): string {
   return runGh(args).trim();
 }
-function safeGhText(args) {
+
+function safeGhText(args: string[]): string {
   try {
     return ghText(args);
   } catch {
     return '';
   }
 }
-function ghApiJson(path, paginate = false, extraArgs = [], options = {}) {
+
+function ghApiJson(
+  path: string,
+  paginate = false,
+  extraArgs: string[] = [],
+  options: RunGhOptions = {},
+): unknown {
   const args = ['api', path, ...extraArgs];
   if (paginate) {
     // gh api with --paginate and --jq '.[]' emits one JSON object per line.
@@ -650,38 +901,44 @@ function ghApiJson(path, paginate = false, extraArgs = [], options = {}) {
   }
   return JSON.parse(raw);
 }
-function runGh(args, options = {}) {
+
+function runGh(args: string[], options: RunGhOptions = {}): string {
   try {
     return execFileSync('gh', args, {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    const status = Number(error?.status ?? -1);
+    const status = Number((error as { status?: unknown } | null)?.status ?? -1);
     if ((options.allowStatuses ?? []).includes(status)) {
-      const stdout = String(error?.stdout ?? '');
+      const stdout = String(
+        (error as { stdout?: unknown } | null)?.stdout ?? '',
+      );
       if (/^\s*[[{]/.test(stdout)) {
         return stdout;
       }
     }
-    const stderr = String(error?.stderr ?? '');
+    const stderr = String((error as { stderr?: unknown } | null)?.stderr ?? '');
     const httpStatus = Number(stderr.match(/HTTP\s+(\d+)/i)?.[1] ?? -1);
     if ((options.allowHttpStatuses ?? []).includes(httpStatus)) {
-      return String(error?.stdout ?? '');
+      return String((error as { stdout?: unknown } | null)?.stdout ?? '');
     }
     throw error;
   }
 }
-function splitCsv(value) {
+
+function splitCsv(value: unknown): string[] {
   return String(value ?? '')
     .split(',')
     .map((token) => token.trim())
     .filter(Boolean);
 }
-function isTruthy(value) {
+
+function isTruthy(value: unknown): boolean {
   return /^(1|true|yes)$/i.test(String(value ?? '').trim());
 }
-function readCollaboratorTrustEnabled() {
+
+function readCollaboratorTrustEnabled(): boolean {
   try {
     return resolveCollaboratorMarkerTrust(
       JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
@@ -692,9 +949,16 @@ function readCollaboratorTrustEnabled() {
   }
   return isTruthy(process.env.IDD_TRUST_COLLABORATOR_MARKERS);
 }
-function loadIddConfig() {
+
+function loadIddConfig(): {
+  trustedMarkerActors?: unknown;
+  advisoryBotLogins?: unknown;
+} | null {
   try {
-    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
+    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8')) as {
+      trustedMarkerActors?: unknown;
+      advisoryBotLogins?: unknown;
+    };
   } catch {
     return null;
   }

@@ -4,10 +4,100 @@
 // The scripts/resume-route-selection.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
+
+import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
+
+/** Author reference embedded in GitHub REST payloads. */
+interface GhAuthorPayload {
+  login?: string | null;
+}
+
+/** Open-PR candidate row returned by `gh pr list`. */
+interface PrCandidatePayload {
+  number?: number;
+  title?: string | null;
+  body?: string | null;
+  url?: string | null;
+}
+
+/** CI status-check entry returned by `gh pr checks`. */
+interface CheckPayload {
+  name?: string | null;
+  state?: string | null;
+  completedAt?: string | null;
+}
+
+/** PR review payload fields consumed by this helper. */
+interface ReviewPayload {
+  user?: GhAuthorPayload | null;
+  state?: string | null;
+  submitted_at?: string | null;
+}
+
+/** Issue comment payload fields consumed by this helper. */
+interface IssueCommentPayload {
+  created_at?: string | null;
+  user?: GhAuthorPayload | null;
+}
+
+/** Merge-state fields returned by `gh pr view`. */
+interface MergeStatePayload {
+  mergeable?: unknown;
+  mergeStateStatus?: unknown;
+}
+
+/** GraphQL `reviewThreads` connection slice consumed by this helper. */
+interface ReviewThreadsConnectionPayload {
+  nodes?: { isResolved?: boolean | null }[] | null;
+  pageInfo?: {
+    hasNextPage?: boolean | null;
+    endCursor?: string | null;
+  } | null;
+}
+
+/** Routing input accepted by {@link selectResumeRoute}. */
+interface ResumeRouteInput {
+  prAmbiguous?: unknown;
+  prExists?: unknown;
+  requiredChecksGenerated?: unknown;
+  hasUnpushedCommits?: unknown;
+  worktreeDirty?: unknown;
+  ciRunning?: unknown;
+  ciFailed?: unknown;
+  ciSuccess?: unknown;
+  reviewExists?: unknown;
+  reviewPending?: unknown;
+  branchState?: unknown;
+}
+
+/** Fully-defaulted routing state derived from {@link ResumeRouteInput}. */
+interface NormalizedResumeRouteState {
+  prAmbiguous: boolean;
+  prExists: boolean;
+  requiredChecksGenerated: boolean;
+  hasUnpushedCommits: boolean;
+  worktreeDirty: boolean;
+  ciRunning: boolean;
+  ciFailed: boolean;
+  ciSuccess: boolean;
+  reviewExists: boolean;
+  reviewPending: boolean;
+  branchState: string;
+}
+
+/** Parsed CLI arguments. */
+interface ResumeRouteSelectionArgs {
+  issue: number | null;
+  owner: string;
+  repo: string;
+  token: string;
+  tableDump: boolean;
+  help: boolean;
+}
 
 const RUNNING_STATES = new Set([
   'queued',
@@ -23,15 +113,19 @@ const PASS_EQUIVALENT_STATES = new Set([
   'neutral',
   'not_applicable',
 ]);
+
 if (isCliExecution()) {
   runCli();
 }
-export function selectResumeRoute(input) {
+
+export function selectResumeRoute(input: ResumeRouteInput) {
   const state = normalizeState(input);
-  const reasonParts = [];
+  const reasonParts: string[] = [];
+
   if (state.prAmbiguous) {
     return result('stop', 'multiple-open-prs-for-issue', state, reasonParts);
   }
+
   if (!state.prExists) {
     if (state.hasUnpushedCommits && !state.worktreeDirty) {
       return result('D1', 'no-pr-unpushed-clean-worktree', state, reasonParts);
@@ -46,6 +140,7 @@ export function selectResumeRoute(input) {
     }
     return result('stop', 'no-pr-no-unpushed-clean-path', state, reasonParts);
   }
+
   if (!state.requiredChecksGenerated) {
     return result(
       state.reviewExists ? 'E15' : 'D4',
@@ -54,6 +149,7 @@ export function selectResumeRoute(input) {
       reasonParts,
     );
   }
+
   if (state.ciRunning) {
     return result(
       state.reviewExists ? 'E15' : 'D4',
@@ -62,6 +158,7 @@ export function selectResumeRoute(input) {
       reasonParts,
     );
   }
+
   if (state.ciFailed) {
     return result(
       state.reviewExists ? 'E15' : 'D4',
@@ -70,6 +167,7 @@ export function selectResumeRoute(input) {
       reasonParts,
     );
   }
+
   if (state.ciSuccess) {
     if (state.reviewPending) {
       return result('E1', 'pr-ci-success-review-pending', state, reasonParts);
@@ -100,9 +198,11 @@ export function selectResumeRoute(input) {
     }
     return result('F2', 'pr-ci-success-no-review-pending', state, reasonParts);
   }
+
   return result('stop', 'pr-ci-unknown-state', state, reasonParts);
 }
-function runCli() {
+
+function runCli(): void {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -115,18 +215,29 @@ function runCli() {
     process.env.GH_TOKEN = args.token;
     process.env.GITHUB_TOKEN = args.token;
   }
+
   const owner =
     args.owner ||
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
   const repo =
     args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
   const repository = `${owner}/${repo}`;
+
   const routingInput = collectRoutingInput({
     repository,
     issueNumber: args.issue,
   });
   const selected = selectResumeRoute(routingInput);
-  const output = {
+
+  const output: {
+    repository: { owner: string; repo: string };
+    issue: number | null;
+    route: string;
+    reason: string;
+    state: NormalizedResumeRouteState;
+    evidence: { rule_trace: string[] };
+    decision_table?: { condition: string; route: string }[];
+  } = {
     repository: { owner, repo },
     issue: args.issue,
     route: selected.route,
@@ -134,16 +245,26 @@ function runCli() {
     state: selected.state,
     evidence: selected.evidence,
   };
+
   if (args.tableDump) {
     output.decision_table = decisionTable();
   }
+
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
-function collectRoutingInput({ repository, issueNumber }) {
+
+function collectRoutingInput({
+  repository,
+  issueNumber,
+}: {
+  repository: string;
+  issueNumber: number | null;
+}) {
   const prs = findIssueRelatedOpenPrs({ repository, issueNumber });
   const issuePr = prs.length === 1 ? prs[0] : null;
   const viewerLogin = ghText(['api', 'user', '--jq', '.login']).toLowerCase();
   const gitState = collectLocalGitState();
+
   if (!issuePr) {
     return {
       prAmbiguous: prs.length > 1,
@@ -166,6 +287,7 @@ function collectRoutingInput({ repository, issueNumber }) {
       prUrl: null,
     };
   }
+
   const checks = ghJson(
     [
       'pr',
@@ -178,7 +300,7 @@ function collectRoutingInput({ repository, issueNumber }) {
       'name,state,completedAt',
     ],
     { allowNoRequiredChecks: true },
-  );
+  ) as CheckPayload[];
   const normalizedStates = checks.map((check) =>
     String(check.state ?? '').toLowerCase(),
   );
@@ -190,6 +312,7 @@ function collectRoutingInput({ repository, issueNumber }) {
     !ciRunning &&
     !ciFailed &&
     normalizedStates.every((state) => PASS_EQUIVALENT_STATES.has(state));
+
   const reviewThreads = fetchReviewThreads({
     owner: repository.split('/')[0],
     repo: repository.split('/')[1],
@@ -198,16 +321,18 @@ function collectRoutingInput({ repository, issueNumber }) {
   const unresolvedThreadCount = reviewThreads.filter(
     (thread) => thread.isResolved === false,
   ).length;
+
   const reviews = ghApiJson(
     `repos/${repository}/pulls/${issuePr.number}/reviews`,
     true,
-  );
+  ) as ReviewPayload[];
   const changesRequestedCount = countLatestChangesRequestedByReviewer(reviews);
   const reviewExists = unresolvedThreadCount > 0 || reviews.length > 0;
+
   const comments = ghApiJson(
     `repos/${repository}/issues/${issuePr.number}/comments`,
     true,
-  );
+  ) as IssueCommentPayload[];
   const unrepliedCommentCount = countUnrepliedRegularComments(
     comments,
     viewerLogin,
@@ -216,6 +341,7 @@ function collectRoutingInput({ repository, issueNumber }) {
     unresolvedThreadCount > 0 ||
     unrepliedCommentCount > 0 ||
     changesRequestedCount > 0;
+
   const mergeState = ghJson([
     'pr',
     'view',
@@ -224,8 +350,9 @@ function collectRoutingInput({ repository, issueNumber }) {
     repository,
     '--json',
     'mergeable,mergeStateStatus',
-  ]);
+  ]) as MergeStatePayload;
   const branchState = classifyBranchState(mergeState);
+
   return {
     prAmbiguous: false,
     prExists: true,
@@ -247,6 +374,7 @@ function collectRoutingInput({ repository, issueNumber }) {
     prUrl: issuePr.url,
   };
 }
+
 function collectLocalGitState() {
   const worktreeDirty = runGit(['status', '--porcelain']).trim().length > 0;
   const hasUnpushedCommits = detectUnpushedCommits();
@@ -255,7 +383,8 @@ function collectLocalGitState() {
     worktreeDirty,
   };
 }
-function detectUnpushedCommits() {
+
+function detectUnpushedCommits(): boolean {
   const hasUpstream = runGitAllowFailure([
     'rev-parse',
     '--abbrev-ref',
@@ -267,7 +396,14 @@ function detectUnpushedCommits() {
   }
   return runGit(['rev-list', '--count', 'HEAD']).trim() !== '0';
 }
-function findIssueRelatedOpenPrs({ repository, issueNumber }) {
+
+function findIssueRelatedOpenPrs({
+  repository,
+  issueNumber,
+}: {
+  repository: string;
+  issueNumber: number | null;
+}): PrCandidatePayload[] {
   const candidates = ghJson([
     'pr',
     'list',
@@ -279,11 +415,15 @@ function findIssueRelatedOpenPrs({ repository, issueNumber }) {
     '100',
     '--json',
     'number,title,body,url',
-  ]);
+  ]) as PrCandidatePayload[];
   const issueRefPattern = new RegExp(`(^|[^0-9])#${issueNumber}([^0-9]|$)`);
   return candidates.filter((pr) => issueRefPattern.test(String(pr.body ?? '')));
 }
-function countUnrepliedRegularComments(comments, viewerLogin) {
+
+function countUnrepliedRegularComments(
+  comments: IssueCommentPayload[],
+  viewerLogin: string,
+): number {
   const sorted = [...comments]
     .map((comment) => ({
       createdAt: Date.parse(String(comment.created_at ?? '')),
@@ -291,6 +431,7 @@ function countUnrepliedRegularComments(comments, viewerLogin) {
     }))
     .filter((comment) => Number.isFinite(comment.createdAt))
     .sort((left, right) => left.createdAt - right.createdAt);
+
   let count = 0;
   for (let index = 0; index < sorted.length; index += 1) {
     const comment = sorted[index];
@@ -306,7 +447,10 @@ function countUnrepliedRegularComments(comments, viewerLogin) {
   }
   return count;
 }
-export function classifyBranchState(mergeState) {
+
+export function classifyBranchState(
+  mergeState: MergeStatePayload | null | undefined,
+): string {
   const mergeable = String(mergeState?.mergeable ?? '').toUpperCase();
   const mergeStateStatus = String(
     mergeState?.mergeStateStatus ?? '',
@@ -318,8 +462,14 @@ export function classifyBranchState(mergeState) {
   if (mergeable === 'MERGEABLE') return 'clean';
   return 'unknown';
 }
-export function countLatestChangesRequestedByReviewer(reviews) {
-  const latestByReviewer = new Map();
+
+export function countLatestChangesRequestedByReviewer(
+  reviews: ReviewPayload[],
+): number {
+  const latestByReviewer = new Map<
+    string,
+    { state: string; submittedAt: number }
+  >();
   for (const review of reviews) {
     const reviewer = String(review.user?.login ?? '').toLowerCase();
     const state = String(review.state ?? '').toUpperCase();
@@ -343,7 +493,8 @@ export function countLatestChangesRequestedByReviewer(reviews) {
   }
   return count;
 }
-function normalizeState(input) {
+
+function normalizeState(input: ResumeRouteInput): NormalizedResumeRouteState {
   return {
     prAmbiguous: input.prAmbiguous === true,
     prExists: input.prExists === true,
@@ -359,7 +510,13 @@ function normalizeState(input) {
       typeof input.branchState === 'string' ? input.branchState : 'clean',
   };
 }
-function result(route, reason, state, reasonParts) {
+
+function result(
+  route: string,
+  reason: string,
+  state: NormalizedResumeRouteState,
+  reasonParts: string[],
+) {
   return {
     route,
     reason,
@@ -369,7 +526,8 @@ function result(route, reason, state, reasonParts) {
     },
   };
 }
-function decisionTable() {
+
+function decisionTable(): { condition: string; route: string }[] {
   return [
     { condition: 'multiple open PRs match issue', route: 'stop' },
     { condition: 'no PR + required checks not generated', route: 'D4' },
@@ -398,23 +556,43 @@ function decisionTable() {
     },
   ];
 }
-function fetchReviewThreads({ owner, repo, number }) {
-  const threads = [];
-  let cursor = null;
+
+function fetchReviewThreads({
+  owner,
+  repo,
+  number,
+}: {
+  owner: string;
+  repo: string;
+  number: number | undefined;
+}): { isResolved?: boolean | null }[] {
+  const threads: { isResolved?: boolean | null }[] = [];
+  let cursor: string | null | undefined = null;
   while (true) {
-    const response = ghApiGraphqlJson({
-      query:
-        'query($owner:String!, $repo:String!, $number:Int!, $cursor:String) { repository(owner:$owner,name:$repo){ pullRequest(number:$number){ reviewThreads(first:100, after:$cursor){ nodes{ isResolved } pageInfo{ hasNextPage endCursor } } } } }',
-      variables: {
-        owner,
-        repo,
-        number,
-        cursor,
-      },
-    }).data?.repository?.pullRequest?.reviewThreads;
+    const response: ReviewThreadsConnectionPayload | null | undefined = (
+      ghApiGraphqlJson({
+        query:
+          'query($owner:String!, $repo:String!, $number:Int!, $cursor:String) { repository(owner:$owner,name:$repo){ pullRequest(number:$number){ reviewThreads(first:100, after:$cursor){ nodes{ isResolved } pageInfo{ hasNextPage endCursor } } } } }',
+        variables: {
+          owner,
+          repo,
+          number,
+          cursor,
+        },
+      }) as {
+        data?: {
+          repository?: {
+            pullRequest?: {
+              reviewThreads?: ReviewThreadsConnectionPayload | null;
+            } | null;
+          } | null;
+        } | null;
+      }
+    ).data?.repository?.pullRequest?.reviewThreads;
     const nodes = response?.nodes ?? [];
     threads.push(...nodes);
-    const pageInfo = response?.pageInfo;
+    const pageInfo: ReviewThreadsConnectionPayload['pageInfo'] =
+      response?.pageInfo;
     if (!pageInfo?.hasNextPage) {
       break;
     }
@@ -428,8 +606,9 @@ function fetchReviewThreads({ owner, repo, number }) {
   }
   return threads;
 }
-function parseArgs(argv) {
-  const parsed = {
+
+function parseArgs(argv: string[]): ResumeRouteSelectionArgs {
+  const parsed: ResumeRouteSelectionArgs = {
     issue: null,
     owner: '',
     repo: '',
@@ -478,7 +657,8 @@ function parseArgs(argv) {
   }
   return parsed;
 }
-function printHelp() {
+
+function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/resume-route-selection.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--token <token>] [--table-dump]
 
@@ -491,7 +671,14 @@ Output schema:
 }
 `);
 }
-function ghApiGraphqlJson({ query, variables }) {
+
+function ghApiGraphqlJson({
+  query,
+  variables,
+}: {
+  query: string;
+  variables: Record<string, string | number | null | undefined>;
+}): unknown {
   const args = ['api', 'graphql', '-f', `query=${query}`];
   for (const [key, value] of Object.entries(variables)) {
     if (value === null || value === undefined) {
@@ -505,7 +692,8 @@ function ghApiGraphqlJson({ query, variables }) {
   }
   return JSON.parse(runGh(args).trim() || '{}');
 }
-function ghApiJson(path, paginate = false) {
+
+function ghApiJson(path: string, paginate = false): unknown {
   const args = ['api', path];
   if (paginate) {
     // gh api with --paginate and --jq '.[]' emits one JSON object per line.
@@ -522,7 +710,11 @@ function ghApiJson(path, paginate = false) {
   }
   return parsePaginatedGhNdjson(raw);
 }
-function ghJson(args, options = {}) {
+
+function ghJson(
+  args: string[],
+  options: { allowNoRequiredChecks?: boolean } = {},
+): unknown {
   try {
     return JSON.parse(runGh(args).trim() || '{}');
   } catch (error) {
@@ -533,24 +725,34 @@ function ghJson(args, options = {}) {
     throw error;
   }
 }
-export function recoverJsonFromGhFailure(error, options = {}) {
-  const stderr = String(error?.stderr ?? '');
+
+export function recoverJsonFromGhFailure(
+  error: unknown,
+  options: { allowNoRequiredChecks?: boolean } = {},
+): { recovered: boolean; value: unknown } {
+  const stderr = String((error as { stderr?: unknown } | null)?.stderr ?? '');
   if (
     options.allowNoRequiredChecks &&
     /no required checks reported/i.test(stderr)
   ) {
     return { recovered: true, value: [] };
   }
-  const stdout = String(error?.stdout ?? '').trim();
+
+  const stdout = String(
+    (error as { stdout?: unknown } | null)?.stdout ?? '',
+  ).trim();
   if (stdout) {
     return { recovered: true, value: JSON.parse(stdout) };
   }
+
   return { recovered: false, value: null };
 }
-function ghText(args) {
+
+function ghText(args: string[]): string {
   return runGh(args).trim();
 }
-function runGh(args) {
+
+function runGh(args: string[]): string {
   try {
     return execFileSync('gh', args, {
       encoding: 'utf8',
@@ -558,17 +760,27 @@ function runGh(args) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    const stderr = String(error?.stderr ?? '').trim();
+    const stderr = String(
+      (error as { stderr?: unknown } | null)?.stderr ?? '',
+    ).trim();
     if (stderr) {
-      const wrapped = new Error(`gh command failed: ${stderr}`);
-      wrapped.stderr = String(error?.stderr ?? '');
-      wrapped.stdout = String(error?.stdout ?? '');
+      const wrapped = new Error(`gh command failed: ${stderr}`) as Error & {
+        stderr?: string;
+        stdout?: string;
+      };
+      wrapped.stderr = String(
+        (error as { stderr?: unknown } | null)?.stderr ?? '',
+      );
+      wrapped.stdout = String(
+        (error as { stdout?: unknown } | null)?.stdout ?? '',
+      );
       throw wrapped;
     }
     throw error;
   }
 }
-function runGit(args) {
+
+function runGit(args: string[]): string {
   try {
     return execFileSync('git', args, {
       encoding: 'utf8',
@@ -576,14 +788,17 @@ function runGit(args) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    const stderr = String(error?.stderr ?? '').trim();
+    const stderr = String(
+      (error as { stderr?: unknown } | null)?.stderr ?? '',
+    ).trim();
     if (stderr) {
       throw new Error(`git command failed: ${stderr}`);
     }
     throw error;
   }
 }
-function runGitAllowFailure(args) {
+
+function runGitAllowFailure(args: string[]) {
   try {
     const stdout = execFileSync('git', args, {
       encoding: 'utf8',
@@ -594,11 +809,12 @@ function runGitAllowFailure(args) {
   } catch (error) {
     return {
       ok: false,
-      stderr: String(error?.stderr ?? ''),
+      stderr: String((error as { stderr?: unknown } | null)?.stderr ?? ''),
     };
   }
 }
-function isCliExecution() {
+
+function isCliExecution(): boolean {
   return (
     Boolean(process.argv[1]) &&
     fileURLToPath(import.meta.url) === resolve(process.argv[1])
