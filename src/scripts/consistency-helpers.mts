@@ -298,11 +298,16 @@ function stripCommentsAndStrings(text: string): string {
     const next = text[i + 1];
     if (state === 'code') {
       if (ch === '/' && next === '/') {
+        // Emit one space so a comment between tokens cannot splice them
+        // together (a block comment between `as` and `any` must not
+        // produce a single merged token that dodges the matcher).
+        out += ' ';
         state = 'line-comment';
         i += 2;
         continue;
       }
       if (ch === '/' && next === '*') {
+        out += ' ';
         state = 'block-comment';
         i += 2;
         continue;

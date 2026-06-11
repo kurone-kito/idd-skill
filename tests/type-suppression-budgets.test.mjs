@@ -177,6 +177,21 @@ test('regex literals containing quotes do not open phantom strings', () => {
   assert.match(violations[0], /1 explicit any occurrence/);
 });
 
+test('a block comment between tokens cannot hide an explicit any', () => {
+  // Regression: stripping a comment must leave a token boundary so a
+  // block comment between `as` and `any` cannot splice them into one
+  // merged token that dodges the matcher.
+  const files = [
+    {
+      path: 'src/scripts/sample.mts',
+      text: 'const v = value as/* hidden */any;\nconst w: /* gap */ any = 1;\n',
+    },
+  ];
+  const violations = collectTypeSuppressionViolations(files, BUDGET_ZERO);
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /2 explicit any occurrence/);
+});
+
 test('division is not mistaken for a regex literal', () => {
   const files = [
     {
