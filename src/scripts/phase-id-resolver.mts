@@ -4,6 +4,7 @@
 // The scripts/phase-id-resolver.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never
 // the generated .mjs. See docs/typescript-sources.md.
+
 const DEFAULT_CANONICAL_PHASE_IDS = [
   'A0',
   'A0_O',
@@ -51,7 +52,8 @@ const DEFAULT_CANONICAL_PHASE_IDS = [
   'F4',
   'F5',
 ];
-const DEFAULT_LEGACY_ALIASES = {
+
+const DEFAULT_LEGACY_ALIASES: Record<string, string[]> = {
   A0_O: ['A0-O', 'A0O'],
   A0_T: ['A0-T', 'A0T'],
   A1_5: ['A1.5', 'A1-5', 'A15'],
@@ -59,21 +61,45 @@ const DEFAULT_LEGACY_ALIASES = {
   A4_5: ['A4.5', 'A4-5', 'A45'],
   F2_5: ['F2.5', 'F2-5', 'F25'],
 };
+
+interface PhaseIdResolution {
+  canonicalPhaseId: string;
+  matchedBy: string;
+  normalizedInput: string;
+}
+
+interface PhaseIdResolver {
+  canonicalPhaseIds: string[];
+  legacyAliasMap: Record<string, string[]>;
+  resolve(rawInput: unknown): PhaseIdResolution;
+}
+
+interface CreateResolverOptions {
+  canonicalPhaseIds?: string[];
+  legacyAliases?: Record<string, string[] | string>;
+}
+
 if (isCliExecution()) {
   runCli();
 }
-export function resolvePhaseId(input, options = {}) {
+
+export function resolvePhaseId(
+  input: unknown,
+  options: CreateResolverOptions = {},
+): PhaseIdResolution {
   const resolver = createPhaseIdResolver(options);
   return resolver.resolve(input);
 }
+
 export function createPhaseIdResolver({
   canonicalPhaseIds = DEFAULT_CANONICAL_PHASE_IDS,
   legacyAliases = DEFAULT_LEGACY_ALIASES,
-} = {}) {
-  const canonicalByKey = new Map();
-  const aliasHits = new Map();
-  const canonicalOrder = [];
-  const legacyAliasMap = {};
+}: CreateResolverOptions = {}): PhaseIdResolver {
+  const canonicalByKey = new Map<string, string>();
+  const aliasHits = new Map<string, Set<string>>();
+  const canonicalOrder: string[] = [];
+  const legacyAliasMap: Record<string, string[]> = {};
+
   for (const candidate of canonicalPhaseIds) {
     const normalized = normalizePhaseIdToken(candidate, { allowEmpty: false });
     if (!isCanonicalToken(normalized)) {
@@ -88,6 +114,7 @@ export function createPhaseIdResolver({
     canonicalByKey.set(normalized, normalized);
     canonicalOrder.push(normalized);
   }
+
   for (const [canonical, aliases] of Object.entries(legacyAliases ?? {})) {
     const normalizedCanonical = normalizePhaseIdToken(canonical, {
       allowEmpty: false,
@@ -104,7 +131,7 @@ export function createPhaseIdResolver({
       if (normalizedAlias === normalizedCanonical) {
         continue;
       }
-      const owners = aliasHits.get(normalizedAlias) ?? new Set();
+      const owners = aliasHits.get(normalizedAlias) ?? new Set<string>();
       owners.add(normalizedCanonical);
       aliasHits.set(normalizedAlias, owners);
       if (!legacyAliasMap[normalizedCanonical]) {
@@ -115,6 +142,7 @@ export function createPhaseIdResolver({
       }
     }
   }
+
   const ambiguousAliases = [...aliasHits.entries()]
     .filter(([, owners]) => owners.size > 1)
     .map(([alias, owners]) => ({
@@ -130,13 +158,15 @@ export function createPhaseIdResolver({
       { ambiguousAliases },
     );
   }
-  const aliasToCanonical = new Map(
+
+  const aliasToCanonical = new Map<string, string>(
     [...aliasHits.entries()].map(([alias, owners]) => [alias, [...owners][0]]),
   );
+
   return {
     canonicalPhaseIds: canonicalOrder,
     legacyAliasMap,
-    resolve(rawInput) {
+    resolve(rawInput: unknown): PhaseIdResolution {
       const aliasInputKey = normalizeAliasToken(rawInput);
       const normalizedInput = normalizePhaseIdToken(rawInput, {
         allowEmpty: false,
@@ -147,16 +177,18 @@ export function createPhaseIdResolver({
           `Phase ID contains unsupported characters: ${String(rawInput)}`,
         );
       }
+
       if (
         isCanonicalToken(aliasInputKey) &&
         canonicalByKey.has(aliasInputKey)
       ) {
         return {
-          canonicalPhaseId: canonicalByKey.get(aliasInputKey),
+          canonicalPhaseId: canonicalByKey.get(aliasInputKey) as string,
           matchedBy: 'canonical',
           normalizedInput,
         };
       }
+
       const aliasCanonical = aliasToCanonical.get(aliasInputKey);
       if (aliasCanonical) {
         return {
@@ -165,6 +197,7 @@ export function createPhaseIdResolver({
           normalizedInput,
         };
       }
+
       throw buildResolverError(
         'unknown_phase_id',
         `Unknown phase ID: ${String(rawInput)} (normalized: ${normalizedInput})`,
@@ -173,7 +206,11 @@ export function createPhaseIdResolver({
     },
   };
 }
-export function normalizePhaseIdToken(input, { allowEmpty = true } = {}) {
+
+export function normalizePhaseIdToken(
+  input: unknown,
+  { allowEmpty = true }: { allowEmpty?: boolean } = {},
+): string {
   const source = String(input ?? '');
   const normalized = source
     .trim()
@@ -186,7 +223,8 @@ export function normalizePhaseIdToken(input, { allowEmpty = true } = {}) {
   }
   return normalized;
 }
-function runCli() {
+
+function runCli(): void {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -195,6 +233,7 @@ function runCli() {
   if (!args.phaseId) {
     throw new Error('--phase-id is required');
   }
+
   const resolver = createPhaseIdResolver();
   const result = resolver.resolve(args.phaseId);
   const output = {
@@ -207,16 +246,22 @@ function runCli() {
   };
   process.stdout.write(`${JSON.stringify(compactObject(output), null, 2)}\n`);
 }
-function parseArgs(argv) {
+
+function parseArgs(argv: string[]): {
+  phaseId: string;
+  verbose: boolean;
+  help: boolean;
+} {
   const parsed = {
     phaseId: '',
     verbose: false,
     help: false,
   };
+
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
-    const requireValue = () => {
+    const requireValue = (): string => {
       if (value === undefined || String(value).startsWith('--')) {
         throw new Error(`missing value for argument: ${token}`);
       }
@@ -237,9 +282,11 @@ function parseArgs(argv) {
     }
     throw new Error(`unknown argument: ${token}`);
   }
+
   return parsed;
 }
-function printHelp() {
+
+function printHelp(): void {
   process.stdout.write(
     [
       'Usage: node scripts/phase-id-resolver.mjs --phase-id <value> [--verbose]',
@@ -250,26 +297,40 @@ function printHelp() {
   );
   process.stdout.write('\n');
 }
-function isCanonicalToken(token) {
+
+function isCanonicalToken(token: string): boolean {
   return /^[A-Z0-9]+(?:_[A-Z0-9]+)*$/.test(token);
 }
-function isSupportedInputToken(rawInput) {
+
+function isSupportedInputToken(rawInput: string): boolean {
   return /^[A-Za-z0-9.\-/:\\_\s]+$/.test(rawInput.trim());
 }
-function normalizeAliasToken(input) {
+
+function normalizeAliasToken(input: unknown): string {
   return String(input ?? '')
     .trim()
     .toUpperCase()
     .replace(/\s+/g, ' ');
 }
-function buildResolverError(code, message, details = {}) {
-  const error = new Error(message);
+
+function buildResolverError(
+  code: string,
+  message: string,
+  details: unknown = {},
+): Error {
+  const error = new Error(message) as Error & {
+    code: string;
+    details: unknown;
+  };
   error.code = code;
   error.details = details;
   return error;
 }
-function compactObject(value) {
-  const output = {};
+
+function compactObject(
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  const output: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
     if (entry !== undefined) {
       output[key] = entry;
@@ -277,7 +338,8 @@ function compactObject(value) {
   }
   return output;
 }
-function isCliExecution() {
+
+function isCliExecution(): boolean {
   try {
     return import.meta.url === new URL(`file://${process.argv[1]}`).href;
   } catch {

@@ -3,7 +3,24 @@
 // The scripts/audit-pr-cleanup-summary.mjs copy is generated from the
 // .mts source named above by `pnpm run build`. Edit the .mts source,
 // never the generated .mjs. See docs/typescript-sources.md.
-export function computeReportSummary(report) {
+
+interface CleanupReportItem {
+  isMinimized?: boolean;
+  viewerCanMinimize?: boolean;
+  [key: string]: unknown;
+}
+
+interface CleanupReport {
+  candidates: unknown[];
+  skipped: CleanupReportItem[];
+  applied: unknown[];
+  failed: unknown[];
+  mode?: string;
+  summary?: Record<string, number>;
+  status?: string;
+}
+
+export function computeReportSummary(report: CleanupReport): void {
   const alreadyMinimized = report.skipped.filter(
     (skip) => skip.isMinimized,
   ).length;
@@ -13,6 +30,7 @@ export function computeReportSummary(report) {
   const viewerCannotMinimize = report.skipped.filter(
     (skip) => !skip.isMinimized && !skip.viewerCanMinimize,
   ).length;
+
   report.summary = {
     candidate: report.candidates.length,
     skipped: report.skipped.length,
@@ -22,6 +40,7 @@ export function computeReportSummary(report) {
     'viewer-can-minimize': viewerCanMinimize,
     'viewer-cannot-minimize': viewerCannotMinimize,
   };
+
   if (report.mode === 'dry-run') {
     if (report.candidates.length > 0) {
       report.status = 'needs-apply';
@@ -32,6 +51,7 @@ export function computeReportSummary(report) {
     }
     return;
   }
+
   if (report.mode === 'apply') {
     if (report.failed.length > 0) {
       report.status = 'failed';
