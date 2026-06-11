@@ -4,21 +4,96 @@
 // The scripts/claim-approval-gate.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { normalizePolicyConfig } from './policy-helpers.mjs';
+
+import { normalizePolicyConfig } from './policy-helpers.mts';
 
 const APPROVAL_POLICIES = new Set([
   'owners-and-maintainers-only',
   'all-write-permission-actors',
 ]);
 const APPROVAL_POLICY_DEFAULT = 'owners-and-maintainers-only';
+
+interface PermissionResult {
+  known: boolean;
+  permission: string;
+  error: string;
+}
+
+type ResolvePermission = (login: string) => unknown;
+
+interface NormalizedIssue {
+  authorLogin: string;
+  labels: string[];
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+interface NormalizedComment {
+  authorLogin: string;
+  body: string;
+  createdAt: string | null;
+}
+
+interface TimelineEvent {
+  event?: unknown;
+  label?: unknown;
+  created_at?: unknown;
+  changes?: { title?: unknown; body?: unknown };
+}
+
+interface TimelineState {
+  known: boolean;
+  events: TimelineEvent[];
+}
+
+interface PolicyState {
+  skipIssueAuthorApprovalGate: boolean;
+  maintainerApprovalActorPolicy: string;
+  approvalSignals: { readyLabelName: string; labelFreshnessMode: string };
+  source: string;
+}
+
+interface Check {
+  id: string;
+  name: string;
+  result: string;
+  evidence?: string;
+}
+
+interface ReadyLabelState {
+  approved: boolean;
+  present: boolean;
+  freshnessUnknown: boolean;
+  evidence: string;
+}
+
+interface ApprovalCommentState {
+  comment: NormalizedComment | null;
+  permissionUnknown: boolean;
+  totalCandidates: number;
+}
+
+interface EvaluateInput {
+  issue?: unknown;
+  comments?: unknown;
+  timeline?: unknown;
+  policy?: unknown;
+  generatedPlanUpdatedAt?: unknown;
+}
+
 if (isCliExecution()) {
   runCli();
 }
-export function evaluateClaimApprovalGate(input, options = {}) {
+
+export function evaluateClaimApprovalGate(
+  input: EvaluateInput,
+  options: { resolvePermission?: ResolvePermission } = {},
+) {
   const issue = normalizeIssue(input.issue);
   const comments = normalizeComments(input.comments);
   const timelineState = normalizeTimeline(input.timeline);
@@ -27,7 +102,7 @@ export function evaluateClaimApprovalGate(input, options = {}) {
     comments,
     override: input.generatedPlanUpdatedAt,
   });
-  const resolvePermission =
+  const resolvePermission: ResolvePermission =
     typeof options.resolvePermission === 'function'
       ? options.resolvePermission
       : () => ({
@@ -35,7 +110,8 @@ export function evaluateClaimApprovalGate(input, options = {}) {
           permission: '',
           error: 'permission resolver missing',
         });
-  const checks = [];
+
+  const checks: Check[] = [];
   const gateEnabled = !policyState.skipIssueAuthorApprovalGate;
   checks.push({
     id: 'gate_enabled',
@@ -45,6 +121,7 @@ export function evaluateClaimApprovalGate(input, options = {}) {
       ? 'skipIssueAuthorApprovalGate is not true.'
       : 'skipIssueAuthorApprovalGate=true; gate bypassed.',
   });
+
   if (!gateEnabled) {
     return {
       approved: true,
@@ -60,7 +137,8 @@ export function evaluateClaimApprovalGate(input, options = {}) {
       checks,
     };
   }
-  const ambiguity = [];
+
+  const ambiguity: string[] = [];
   let permissionAmbiguity = false;
   const issueAuthor = issue.authorLogin;
   const authorPermission = issueAuthor
@@ -82,6 +160,7 @@ export function evaluateClaimApprovalGate(input, options = {}) {
       ? `Issue author ${issueAuthor} satisfies policy ${policyState.maintainerApprovalActorPolicy}.`
       : `Issue author ${issueAuthor || '(missing)'} does not satisfy policy ${policyState.maintainerApprovalActorPolicy}.`,
   });
+
   const latestSubstantiveEditAt = resolveLatestSubstantiveEditAt(
     issue,
     timelineState,
@@ -108,6 +187,7 @@ export function evaluateClaimApprovalGate(input, options = {}) {
     result: readyLabelState.approved ? 'pass' : 'fail',
     evidence: readyLabelState.evidence,
   });
+
   const approvalCommentState = findLatestReadyApprovalComment({
     comments,
     policy: policyState.maintainerApprovalActorPolicy,
@@ -117,6 +197,7 @@ export function evaluateClaimApprovalGate(input, options = {}) {
     ambiguity.push('approval-comment-permission-unavailable');
     permissionAmbiguity = true;
   }
+
   let readyCommentFresh = false;
   if (
     approvalCommentState.comment &&
@@ -136,6 +217,7 @@ export function evaluateClaimApprovalGate(input, options = {}) {
       freshnessAnchor,
     }),
   });
+
   const timelineKnown = timelineState.known;
   if (!timelineKnown) {
     ambiguity.push('issue-timeline-unavailable');
@@ -143,6 +225,7 @@ export function evaluateClaimApprovalGate(input, options = {}) {
   if (!generatedPlanState.known) {
     ambiguity.push('generated-plan-freshness-unavailable');
   }
+
   const ambiguityBlocking =
     ambiguity.length > 0 &&
     !authorSelfAuthorized &&
@@ -158,6 +241,7 @@ export function evaluateClaimApprovalGate(input, options = {}) {
         ? `Ambiguity present but bypassed by explicit/author approval: ${ambiguity.join(', ')}`
         : 'No ambiguity detected.',
   });
+
   const approved =
     authorSelfAuthorized ||
     readyLabelState.approved ||
@@ -185,7 +269,8 @@ export function evaluateClaimApprovalGate(input, options = {}) {
     checks,
   };
 }
-function runCli() {
+
+function runCli(): void {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -198,27 +283,36 @@ function runCli() {
     process.env.GH_TOKEN = args.token;
     process.env.GITHUB_TOKEN = args.token;
   }
+
   const owner =
     args.owner ||
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
   const repo =
     args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
   const repoRef = `${owner}/${repo}`;
-  const issue = ghJson(['api', `repos/${repoRef}/issues/${args.issue}`]);
+  const issue = ghJson(['api', `repos/${repoRef}/issues/${args.issue}`]) as {
+    number?: unknown;
+    title?: unknown;
+    state?: unknown;
+    html_url?: unknown;
+    url?: unknown;
+    user?: { login?: unknown };
+  };
   const comments = ghApiJson(
     `repos/${repoRef}/issues/${args.issue}/comments`,
     true,
   );
   const timelineState = fetchIssueTimeline(repoRef, args.issue ?? 0);
   const policy = loadPolicy(args.policy);
-  const permissionCache = new Map();
-  const resolvePermission = (login) =>
+  const permissionCache = new Map<string, PermissionResult>();
+  const resolvePermission: ResolvePermission = (login) =>
     resolveCollaboratorPermission({
       owner,
       repo,
       login,
       cache: permissionCache,
     });
+
   const result = evaluateClaimApprovalGate(
     {
       issue,
@@ -251,10 +345,23 @@ function runCli() {
         })),
     timelineAvailable: timelineState.known,
   };
+
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
-function parseArgs(argv) {
-  const parsed = {
+
+interface ParsedArgs {
+  issue: number | null;
+  owner: string;
+  repo: string;
+  policy: string;
+  token: string;
+  generatedPlanUpdatedAt: string;
+  verbose: boolean;
+  help: boolean;
+}
+
+function parseArgs(argv: string[]): ParsedArgs {
+  const parsed: ParsedArgs = {
     issue: null,
     owner: '',
     repo: '',
@@ -264,10 +371,11 @@ function parseArgs(argv) {
     verbose: false,
     help: false,
   };
+
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
-    const requireValue = () => {
+    const requireValue = (): string => {
       if (value === undefined || String(value).startsWith('--')) {
         throw new Error(`missing value for argument: ${token}`);
       }
@@ -313,9 +421,11 @@ function parseArgs(argv) {
     }
     throw new Error(`unknown argument: ${token}`);
   }
+
   return parsed;
 }
-function printHelp() {
+
+function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/claim-approval-gate.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--generated-plan-updated-at <ISO8601>] [--verbose]
 
@@ -332,8 +442,17 @@ Output schema:
 }
 `);
 }
-function normalizeIssue(issue) {
-  const i = issue;
+
+function normalizeIssue(issue: unknown): NormalizedIssue {
+  const i = issue as
+    | {
+        user?: { login?: unknown };
+        labels?: unknown;
+        created_at?: unknown;
+        updated_at?: unknown;
+      }
+    | null
+    | undefined;
   return {
     authorLogin: String(i?.user?.login ?? '')
       .trim()
@@ -343,36 +462,48 @@ function normalizeIssue(issue) {
     updatedAt: normalizeIso(i?.updated_at),
   };
 }
-function normalizeLabels(labels) {
+
+function normalizeLabels(labels: unknown): string[] {
   if (!Array.isArray(labels)) {
     return [];
   }
-  return labels
-    .map((label) => (typeof label === 'string' ? label : (label?.name ?? '')))
+  return (labels as unknown[])
+    .map((label) =>
+      typeof label === 'string'
+        ? label
+        : ((label as { name?: unknown })?.name ?? ''),
+    )
     .map((label) => String(label).trim().toLowerCase())
     .filter(Boolean);
 }
-function normalizeComments(comments) {
+
+function normalizeComments(comments: unknown): NormalizedComment[] {
   if (!Array.isArray(comments)) {
     return [];
   }
-  return comments
+  return (comments as unknown[])
     .map((comment) => ({
-      authorLogin: String(comment?.user?.login ?? '')
+      authorLogin: String(
+        (comment as { user?: { login?: unknown } })?.user?.login ?? '',
+      )
         .trim()
         .toLowerCase(),
-      body: String(comment?.body ?? ''),
-      createdAt: normalizeIso(comment?.created_at),
+      body: String((comment as { body?: unknown })?.body ?? ''),
+      createdAt: normalizeIso(
+        (comment as { created_at?: unknown })?.created_at,
+      ),
     }))
     .filter((comment) => comment.createdAt !== null);
 }
-function normalizeTimeline(timeline) {
+
+function normalizeTimeline(timeline: unknown): TimelineState {
   if (!Array.isArray(timeline)) {
     return { known: false, events: [] };
   }
-  return { known: true, events: timeline };
+  return { known: true, events: timeline as TimelineEvent[] };
 }
-function normalizePolicy(policy) {
+
+function normalizePolicy(policy: unknown): PolicyState {
   const normalized = normalizePolicyConfig(policy);
   return {
     skipIssueAuthorApprovalGate: normalized.skipIssueAuthorApprovalGate,
@@ -389,19 +520,30 @@ function normalizePolicy(policy) {
         normalized.approvalSignals.labelFreshnessMode ?? 'presence-only',
       ),
     },
-    source: String(policy?.source ?? '.github/idd/config.json'),
+    source: String(
+      (policy as { source?: unknown } | null)?.source ??
+        '.github/idd/config.json',
+    ),
   };
 }
+
 function resolveReadyLabelApproval({
   issue,
   timelineState,
   policy,
   freshnessAnchor,
   freshnessDeterminable,
-}) {
+}: {
+  issue: NormalizedIssue;
+  timelineState: TimelineState;
+  policy: PolicyState;
+  freshnessAnchor: string | null;
+  freshnessDeterminable: boolean;
+}): ReadyLabelState {
   const readyLabelName = policy.approvalSignals.readyLabelName;
   const labelDisplayName = readyLabelName || 'idd:ready';
   const hasReadyLabel = issue.labels.includes(readyLabelName);
+
   if (!hasReadyLabel) {
     return {
       approved: false,
@@ -410,6 +552,7 @@ function resolveReadyLabelApproval({
       evidence: `Configured ready label ${labelDisplayName} is absent.`,
     };
   }
+
   if (policy.approvalSignals.labelFreshnessMode !== 'event-freshness') {
     return {
       approved: true,
@@ -418,6 +561,7 @@ function resolveReadyLabelApproval({
       evidence: `Configured ready label ${labelDisplayName} is present; labelFreshnessMode=presence-only.`,
     };
   }
+
   if (!timelineState.known) {
     return {
       approved: false,
@@ -426,6 +570,7 @@ function resolveReadyLabelApproval({
       evidence: `Configured ready label ${labelDisplayName} is present, but the issue timeline is unavailable for label freshness checks.`,
     };
   }
+
   if (!freshnessDeterminable || !freshnessAnchor) {
     return {
       approved: false,
@@ -434,6 +579,7 @@ function resolveReadyLabelApproval({
       evidence: `Configured ready label ${labelDisplayName} is present, but the freshness anchor could not be determined.`,
     };
   }
+
   const latestLabelEvent = findLatestReadyLabelEvent(
     timelineState.events,
     readyLabelName,
@@ -446,6 +592,7 @@ function resolveReadyLabelApproval({
       evidence: `Configured ready label ${labelDisplayName} is present, but no matching label application event was found in the issue timeline.`,
     };
   }
+
   const fresh = compareIso(latestLabelEvent.createdAt, freshnessAnchor) > 0;
   return {
     approved: fresh,
@@ -454,7 +601,14 @@ function resolveReadyLabelApproval({
     evidence: `Configured ready label ${labelDisplayName} was last applied at ${latestLabelEvent.createdAt}; freshness anchor is ${freshnessAnchor}.`,
   };
 }
-function detectGeneratedPlanUpdateAt({ comments, override }) {
+
+function detectGeneratedPlanUpdateAt({
+  comments,
+  override,
+}: {
+  comments: NormalizedComment[];
+  override: unknown;
+}): { known: boolean; updatedAt: string | null } {
   const overrideIso = normalizeIso(override);
   if (override && !overrideIso) {
     return { known: false, updatedAt: null };
@@ -471,7 +625,11 @@ function detectGeneratedPlanUpdateAt({ comments, override }) {
     .filter(Boolean);
   return { known: true, updatedAt: maxTimestamp(...generatedPlanComments) };
 }
-function resolveLatestSubstantiveEditAt(issue, timelineState) {
+
+function resolveLatestSubstantiveEditAt(
+  issue: NormalizedIssue,
+  timelineState: TimelineState,
+): string | null {
   if (!timelineState.known) {
     return null;
   }
@@ -482,11 +640,21 @@ function resolveLatestSubstantiveEditAt(issue, timelineState) {
     .filter(Boolean);
   return maxTimestamp(issue.createdAt, ...editedAt);
 }
-function findLatestReadyLabelEvent(events, readyLabelName) {
+
+interface NormalizedLabelEvent {
+  event: string;
+  labelName: string;
+  createdAt: string | null;
+}
+
+function findLatestReadyLabelEvent(
+  events: unknown,
+  readyLabelName: string,
+): NormalizedLabelEvent | null {
   if (!Array.isArray(events)) {
     return null;
   }
-  const relevant = events
+  const relevant = (events as TimelineEvent[])
     .map((event) => ({
       event: String(event?.event ?? '')
         .trim()
@@ -500,24 +668,31 @@ function findLatestReadyLabelEvent(events, readyLabelName) {
     .sort((left, right) => compareIso(left.createdAt, right.createdAt));
   return relevant.length > 0 ? relevant[relevant.length - 1] : null;
 }
-function normalizeLabelName(value) {
+
+function normalizeLabelName(value: unknown): string {
   if (typeof value === 'string') {
     return value.trim().toLowerCase();
   }
-  return String(value?.name ?? '')
+  return String((value as { name?: unknown } | null)?.name ?? '')
     .trim()
     .toLowerCase();
 }
+
 function findLatestReadyApprovalComment({
   comments,
   policy,
   resolvePermission,
-}) {
+}: {
+  comments: NormalizedComment[];
+  policy: string;
+  resolvePermission: ResolvePermission;
+}): ApprovalCommentState {
   const readyCandidates = comments.filter((comment) =>
     hasReadySignal(comment.body),
   );
   let permissionUnknown = false;
-  const authorized = [];
+  const authorized: NormalizedComment[] = [];
+
   for (const candidate of readyCandidates) {
     const permission = normalizePermissionResult(
       resolvePermission(candidate.authorLogin),
@@ -530,6 +705,7 @@ function findLatestReadyApprovalComment({
       authorized.push(candidate);
     }
   }
+
   authorized.sort((left, right) => compareIso(left.createdAt, right.createdAt));
   return {
     comment: authorized.length > 0 ? authorized[authorized.length - 1] : null,
@@ -537,7 +713,8 @@ function findLatestReadyApprovalComment({
     totalCandidates: readyCandidates.length,
   };
 }
-function hasReadySignal(body) {
+
+function hasReadySignal(body: unknown): boolean {
   const trimmed = String(body ?? '').trim();
   if (trimmed === 'IDD ready') {
     return true;
@@ -546,11 +723,16 @@ function hasReadySignal(body) {
     .split(/\r?\n/)
     .some((line) => line.trim() === 'IDD ready');
 }
+
 function buildReadyCommentEvidence({
   approvalCommentState,
   freshnessDeterminable,
   freshnessAnchor,
-}) {
+}: {
+  approvalCommentState: ApprovalCommentState;
+  freshnessDeterminable: boolean;
+  freshnessAnchor: string | null;
+}): string {
   if (!approvalCommentState.comment) {
     return approvalCommentState.totalCandidates > 0
       ? 'Ready comments exist but none came from an authorized actor.'
@@ -561,7 +743,18 @@ function buildReadyCommentEvidence({
   }
   return `Latest authorized ready comment at ${approvalCommentState.comment.createdAt}; freshness anchor is ${freshnessAnchor}.`;
 }
-function deriveReason(state) {
+
+function deriveReason(state: {
+  approved: boolean;
+  authorSelfAuthorized: boolean;
+  readyLabelApproved: boolean;
+  readyLabelFreshnessUnknown: boolean;
+  readyCommentFresh: boolean;
+  hasAuthorizedReadyComment: boolean;
+  ambiguityBlocking: boolean;
+  permissionAmbiguity: boolean;
+  freshnessDeterminable: boolean;
+}): string {
   if (!state.approved) {
     if (state.permissionAmbiguity) {
       return 'approval-ambiguous';
@@ -591,7 +784,8 @@ function deriveReason(state) {
   }
   return 'gate-disabled';
 }
-function isAuthorizedByPolicy(permission, policy) {
+
+function isAuthorizedByPolicy(permission: string, policy: string): boolean {
   if (policy === 'all-write-permission-actors') {
     return (
       permission === 'admin' ||
@@ -601,11 +795,12 @@ function isAuthorizedByPolicy(permission, policy) {
   }
   return permission === 'admin' || permission === 'maintain';
 }
-function normalizePermissionResult(value) {
+
+function normalizePermissionResult(value: unknown): PermissionResult {
   if (!value || typeof value !== 'object') {
     return { known: false, permission: '', error: 'invalid permission result' };
   }
-  const v = value;
+  const v = value as { permission?: unknown; known?: unknown; error?: unknown };
   const permission = String(v.permission ?? '')
     .trim()
     .toLowerCase();
@@ -615,7 +810,8 @@ function normalizePermissionResult(value) {
     error: String(v.error ?? ''),
   };
 }
-function normalizeIso(value) {
+
+function normalizeIso(value: unknown): string | null {
   if (!value) {
     return null;
   }
@@ -625,26 +821,32 @@ function normalizeIso(value) {
   }
   return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
-function compareIso(left, right) {
-  const leftTime = new Date(left).getTime();
-  const rightTime = new Date(right).getTime();
+
+function compareIso(left: string | null, right: string | null): number {
+  const leftTime = new Date(left as string).getTime();
+  const rightTime = new Date(right as string).getTime();
   if (Number.isNaN(leftTime) || Number.isNaN(rightTime)) {
     return 0;
   }
   return leftTime - rightTime;
 }
-function maxTimestamp(...values) {
+
+function maxTimestamp(...values: (string | null | undefined)[]): string | null {
   const normalized = values
     .filter(Boolean)
     .map((value) => normalizeIso(value))
-    .filter((value) => value !== null);
+    .filter((value): value is string => value !== null);
   if (normalized.length === 0) {
     return null;
   }
   normalized.sort(compareIso);
   return normalized[normalized.length - 1];
 }
-function fetchIssueTimeline(repoRef, issueNumber) {
+
+function fetchIssueTimeline(
+  repoRef: string,
+  issueNumber: number,
+): { known: boolean; events: unknown } {
   try {
     const events = ghApiJson(
       `repos/${repoRef}/issues/${issueNumber}/timeline`,
@@ -656,7 +858,18 @@ function fetchIssueTimeline(repoRef, issueNumber) {
     return { known: false, events: [] };
   }
 }
-function resolveCollaboratorPermission({ owner, repo, login, cache }) {
+
+function resolveCollaboratorPermission({
+  owner,
+  repo,
+  login,
+  cache,
+}: {
+  owner: string;
+  repo: string;
+  login: unknown;
+  cache: Map<string, PermissionResult>;
+}): PermissionResult {
   const normalized = String(login ?? '')
     .trim()
     .toLowerCase();
@@ -671,7 +884,7 @@ function resolveCollaboratorPermission({ owner, repo, login, cache }) {
     `repos/${owner}/${repo}/collaborators/${encodeURIComponent(normalized)}/permission`,
   );
   if (result.status === 404) {
-    const notCollaborator = {
+    const notCollaborator: PermissionResult = {
       known: true,
       permission: 'none',
       error: '',
@@ -680,7 +893,7 @@ function resolveCollaboratorPermission({ owner, repo, login, cache }) {
     return notCollaborator;
   }
   if (result.status !== 200) {
-    const unknownResult = {
+    const unknownResult: PermissionResult = {
       known: false,
       permission: '',
       error: `permission lookup failed: ${result.status}`,
@@ -688,11 +901,13 @@ function resolveCollaboratorPermission({ owner, repo, login, cache }) {
     cache.set(normalized, unknownResult);
     return unknownResult;
   }
-  const permission = String(result.body?.permission ?? '')
+  const permission = String(
+    (result.body as { permission?: unknown } | null)?.permission ?? '',
+  )
     .trim()
     .toLowerCase();
   const known = permission.length > 0;
-  const resolved = {
+  const resolved: PermissionResult = {
     known,
     permission,
     error: known ? '' : 'permission missing in response',
@@ -700,7 +915,8 @@ function resolveCollaboratorPermission({ owner, repo, login, cache }) {
   cache.set(normalized, resolved);
   return resolved;
 }
-function loadPolicy(policyPath) {
+
+function loadPolicy(policyPath: string): { source: string; config: unknown } {
   const source = policyPath || '.github/idd/config.json';
   try {
     const raw = JSON.parse(readFileSync(source, 'utf8'));
@@ -723,19 +939,28 @@ function loadPolicy(policyPath) {
     };
   }
 }
-function ghApiJson(path, paginate = false, extraArgs = []) {
+
+function ghApiJson(
+  path: string,
+  paginate = false,
+  extraArgs: string[] = [],
+): unknown {
   const args = ['api', path, ...extraArgs];
   if (paginate) {
     args.push('--paginate');
   }
   return JSON.parse(runGh(args).trim() || '[]');
 }
-function ghApiJsonWithStatus(path) {
+
+function ghApiJsonWithStatus(path: string): {
+  status: number;
+  body: unknown;
+} {
   try {
     const body = JSON.parse(runGh(['api', path]).trim() || '{}');
     return { status: 200, body };
   } catch (error) {
-    const stderr = String(error?.stderr ?? '');
+    const stderr = String((error as { stderr?: unknown })?.stderr ?? '');
     const httpStatus = Number.parseInt(
       /HTTP\s+(\d+)/.exec(stderr)?.[1] ?? '0',
       10,
@@ -746,13 +971,16 @@ function ghApiJsonWithStatus(path) {
     return { status: 0, body: null };
   }
 }
-function ghJson(args) {
+
+function ghJson(args: string[]): unknown {
   return JSON.parse(runGh(args).trim() || '{}');
 }
-function ghText(args) {
+
+function ghText(args: string[]): string {
   return runGh(args).trim();
 }
-function runGh(args) {
+
+function runGh(args: string[]): string {
   try {
     return execFileSync('gh', args, {
       encoding: 'utf8',
@@ -760,16 +988,19 @@ function runGh(args) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    const stderr = String(error?.stderr ?? '').trim();
+    const stderr = String((error as { stderr?: unknown })?.stderr ?? '').trim();
     if (stderr) {
-      const wrapped = new Error(`gh command failed: ${stderr}`);
+      const wrapped = new Error(`gh command failed: ${stderr}`) as Error & {
+        stderr?: string;
+      };
       wrapped.stderr = stderr;
       throw wrapped;
     }
     throw error;
   }
 }
-function isCliExecution() {
+
+function isCliExecution(): boolean {
   return (
     Boolean(process.argv[1]) &&
     fileURLToPath(import.meta.url) === resolve(process.argv[1])

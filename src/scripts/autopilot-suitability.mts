@@ -15,8 +15,17 @@
 // advisory ranking/routing hint only — it never replaces the A4.5
 // suitability gate or the A5 claim safety checks, which still run on
 // whatever candidate is selected.
+
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 export const DEFAULT_AUTOPILOT_SUITABILITY_FLOOR = 3;
+
+interface RankOptions<T> {
+  floor?: number;
+  enabled?: boolean;
+  routeBelowFloor?: boolean;
+  getScore?: (item: T) => number | null;
+}
+
 /**
  * Parse the authored autopilot-suitability score from an issue body.
  *
@@ -28,9 +37,9 @@ export const DEFAULT_AUTOPILOT_SUITABILITY_FLOOR = 3;
  * caller evaluates it the normal way.
  */
 export function parseAutopilotSuitability(
-  body,
-  markerPrefix = DEFAULT_MARKER_PREFIX,
-) {
+  body: unknown,
+  markerPrefix: string = DEFAULT_MARKER_PREFIX,
+): number | null {
   const prefix =
     typeof markerPrefix === 'string' && markerPrefix.length > 0
       ? markerPrefix
@@ -40,7 +49,7 @@ export function parseAutopilotSuitability(
     'gi',
   );
   const text = String(body ?? '');
-  const values = new Set();
+  const values = new Set<number>();
   let sawInvalid = false;
   let match = regex.exec(text);
   while (match) {
@@ -63,11 +72,12 @@ export function parseAutopilotSuitability(
   }
   return [...values][0];
 }
+
 /**
  * Normalize a configured floor to an integer 1-5, falling back to the
  * default (3) for anything out of range or non-integer.
  */
-export function normalizeAutopilotSuitabilityFloor(floor) {
+export function normalizeAutopilotSuitabilityFloor(floor: unknown): number {
   if (
     typeof floor === 'number' &&
     Number.isInteger(floor) &&
@@ -78,6 +88,7 @@ export function normalizeAutopilotSuitabilityFloor(floor) {
   }
   return DEFAULT_AUTOPILOT_SUITABILITY_FLOOR;
 }
+
 /**
  * Rank a candidate list by autopilot-suitability score and route
  * below-floor candidates out to a human bucket.
@@ -97,15 +108,21 @@ export function normalizeAutopilotSuitabilityFloor(floor) {
  *   their real score — so attended discovery never loses a selectable
  *   issue.
  */
-export function rankAndRouteBySuitability(items, options = {}) {
+export function rankAndRouteBySuitability<T>(
+  items: T[],
+  options: RankOptions<T> = {},
+): { ranked: T[]; routedToHuman: T[] } {
   const list = Array.isArray(items) ? [...items] : [];
   const getScore =
-    typeof options.getScore === 'function' ? options.getScore : () => null;
+    typeof options.getScore === 'function'
+      ? options.getScore
+      : (): number | null => null;
   if (options.enabled === false) {
     return { ranked: list, routedToHuman: [] };
   }
   const floor = normalizeAutopilotSuitabilityFloor(options.floor);
   const routeBelowFloor = options.routeBelowFloor === true;
+
   // Compute each item's score exactly once and reuse it for both routing
   // and ranking, so a non-trivial or non-deterministic getScore cannot
   // produce inconsistent decisions. Defensively normalize here too:
@@ -120,8 +137,9 @@ export function rankAndRouteBySuitability(items, options = {}) {
       score: isAutopilotSuitabilityScore(raw) ? raw : null,
     };
   });
-  const routedToHuman = [];
-  const eligible = [];
+
+  const routedToHuman: typeof scored = [];
+  const eligible: typeof scored = [];
   for (const entry of scored) {
     if (routeBelowFloor && entry.score !== null && entry.score < floor) {
       routedToHuman.push(entry);
@@ -129,6 +147,7 @@ export function rankAndRouteBySuitability(items, options = {}) {
       eligible.push(entry);
     }
   }
+
   const ranked = eligible
     .sort(
       (left, right) =>
@@ -136,13 +155,15 @@ export function rankAndRouteBySuitability(items, options = {}) {
         left.index - right.index,
     )
     .map((entry) => entry.item);
+
   return { ranked, routedToHuman: routedToHuman.map((entry) => entry.item) };
 }
+
 /**
  * True when `value` is a valid authored autopilot-suitability score:
  * an integer in the inclusive range 1-5.
  */
-export function isAutopilotSuitabilityScore(value) {
+export function isAutopilotSuitabilityScore(value: unknown): value is number {
   return (
     typeof value === 'number' &&
     Number.isInteger(value) &&
@@ -150,6 +171,7 @@ export function isAutopilotSuitabilityScore(value) {
     value <= 5
   );
 }
-function escapeRegex(value) {
+
+function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

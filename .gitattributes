@@ -9,6 +9,13 @@
 # docs/typescript-sources.md.
 scripts/policy-helpers.mjs linguist-generated=true
 scripts/collaborator-permission.mjs linguist-generated=true
+scripts/validate-schemas.mjs linguist-generated=true
+scripts/advisory-wait-policy.mjs linguist-generated=true
+scripts/ci-wait-policy.mjs linguist-generated=true
+scripts/consistency-helpers.mjs linguist-generated=true
+scripts/autopilot-suitability.mjs linguist-generated=true
+scripts/authoring-label-guard.mjs linguist-generated=true
+scripts/claim-approval-gate.mjs linguist-generated=true
 
 # Binary files
 *.gif binary

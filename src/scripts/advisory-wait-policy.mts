@@ -3,8 +3,11 @@
 // The scripts/advisory-wait-policy.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
 import { readFileSync } from 'node:fs';
-import { loadJson, validate } from './validate-schemas.mjs';
+
+import { loadJson, validate } from './validate-schemas.mts';
+
 export const DEFAULT_ADVISORY_REQUEST_CAP = 30;
 export const DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES = 30;
 export const DEFAULT_ADVISORY_SETTLED_WINDOW_MINUTES = 10;
@@ -15,7 +18,18 @@ export const ADVISORY_CAP_EXHAUSTED_ROUTES = new Set([
   'hold',
 ]);
 const POLICY_SCHEMA = loadJson('schemas/policy.schema.json');
-export function readAdvisoryWaitPolicy(path = '.github/idd/config.json') {
+
+interface AdvisoryWaitPolicy {
+  requestCap: number;
+  pendingWindowMinutes: number;
+  settledWindowMinutes: number;
+  pollIntervalMinutes: number;
+  capExhaustedRoute: string;
+}
+
+export function readAdvisoryWaitPolicy(
+  path: string = '.github/idd/config.json',
+): AdvisoryWaitPolicy {
   try {
     const config = JSON.parse(readFileSync(path, 'utf8'));
     if (validate(config, POLICY_SCHEMA).length > 0) {
@@ -26,8 +40,13 @@ export function readAdvisoryWaitPolicy(path = '.github/idd/config.json') {
     return resolveAdvisoryWaitPolicy({});
   }
 }
-export function resolveAdvisoryWaitPolicy(config = {}) {
-  const advisoryWait = config?.advisoryWait ?? {};
+
+export function resolveAdvisoryWaitPolicy(
+  config: unknown = {},
+): AdvisoryWaitPolicy {
+  const advisoryWait = ((config as { advisoryWait?: unknown } | null)
+    ?.advisoryWait ?? {}) as Record<string, unknown>;
+
   return {
     requestCap: normalizeConfiguredPositiveInteger(
       advisoryWait.requestCap,
@@ -50,8 +69,11 @@ export function resolveAdvisoryWaitPolicy(config = {}) {
     ),
   };
 }
-export function normalizeAdvisoryWaitRuntimeOptions(options = {}) {
-  const o = options ?? {};
+
+export function normalizeAdvisoryWaitRuntimeOptions(
+  options: unknown = {},
+): AdvisoryWaitPolicy {
+  const o = (options ?? {}) as Record<string, unknown>;
   return {
     requestCap: normalizePositiveInteger(
       o.requestCap,
@@ -72,35 +94,48 @@ export function normalizeAdvisoryWaitRuntimeOptions(options = {}) {
     capExhaustedRoute: normalizeCapExhaustedRoute(o.capExhaustedRoute),
   };
 }
-function normalizePositiveInteger(value, fallback) {
+
+function normalizePositiveInteger(value: unknown, fallback: number): number {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : fallback;
 }
-function normalizeConfiguredPositiveInteger(value, fallback) {
+
+function normalizeConfiguredPositiveInteger(
+  value: unknown,
+  fallback: number,
+): number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0
     ? value
     : fallback;
 }
-function normalizePositiveNumber(value, fallback) {
+
+function normalizePositiveNumber(value: unknown, fallback: number): number {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : fallback;
 }
-function normalizeConfiguredDurationMinutes(value, fallback) {
+
+function normalizeConfiguredDurationMinutes(
+  value: unknown,
+  fallback: number,
+): number {
   const milliseconds = parseConfiguredDurationToMs(value);
   return milliseconds && milliseconds > 0 ? milliseconds / 60000 : fallback;
 }
-function normalizeConfiguredCapExhaustedRoute(value) {
+
+function normalizeConfiguredCapExhaustedRoute(value: unknown): string {
   return typeof value === 'string' && ADVISORY_CAP_EXHAUSTED_ROUTES.has(value)
     ? value
     : ADVISORY_CAP_EXHAUSTED_ROUTE_DEFAULT;
 }
-function normalizeCapExhaustedRoute(value) {
+
+function normalizeCapExhaustedRoute(value: unknown): string {
   const route = String(value ?? '').trim();
   return ADVISORY_CAP_EXHAUSTED_ROUTES.has(route)
     ? route
     : ADVISORY_CAP_EXHAUSTED_ROUTE_DEFAULT;
 }
-function parseConfiguredDurationToMs(value) {
+
+function parseConfiguredDurationToMs(value: unknown): number | null {
   if (typeof value !== 'string' || value.length === 0) return null;
   const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/.exec(value);
   if (!match) return null;
