@@ -4,6 +4,7 @@
 // The scripts/verify-workshop-integrity.mjs copy is generated from the
 // .mts source named above by `pnpm run build`. Edit the .mts source,
 // never the generated .mjs. See docs/typescript-sources.md.
+
 import {
   existsSync,
   readdirSync,
@@ -23,20 +24,78 @@ import {
 
 const WORKSHOP_ROOTS = ['docs/workshop'];
 const WORKSHOP_ASSET_DIRS = ['docs/workshop/assets'];
+
+interface FileMeta {
+  headingSlugs: Set<string>;
+  refDefs: Map<string, string>;
+}
+
+interface Ref {
+  kind: string;
+  target?: string;
+  line: number;
+  label?: string;
+  status?: string;
+}
+
+interface Issue {
+  file: string;
+  kind: string;
+  target?: string;
+  label?: string;
+  line: number;
+  status: string;
+  detail?: string;
+}
+
+interface Report {
+  scanned: number;
+  issues: Issue[];
+  counts: {
+    checkedLinks: number;
+    checkedImages: number;
+    missingFile: number;
+    missingAnchor: number;
+    invalidUrl: number;
+    escapedRepo: number;
+    unresolvedRef: number;
+    assetOutsideAssetsDir: number;
+  };
+}
+
+interface CheckResult {
+  status: string;
+  detail?: string;
+  resolvedPath?: string;
+}
+
+interface VerifyOptions {
+  workshopRoots?: string[];
+  assetDirs?: string[];
+}
+
+interface VerifyArgs {
+  root: string;
+  format: string;
+  help: boolean;
+}
+
 if (isMainModule(import.meta.url)) {
-  let args;
+  let args: VerifyArgs;
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (error) {
-    console.error(`error: ${error.message}`);
+    console.error(`error: ${(error as Error).message}`);
     process.exit(2);
   }
   if (args.help) {
     printUsage();
     process.exit(0);
   }
+
   const repoRoot = resolve(args.root);
   const report = runVerification(repoRoot);
+
   if (args.format === 'table') {
     printTable(report);
   } else {
@@ -44,17 +103,22 @@ if (isMainModule(import.meta.url)) {
   }
   process.exit(computeExitCode(report));
 }
-export function runVerification(repoRoot, options = {}) {
+
+export function runVerification(
+  repoRoot: string,
+  options: VerifyOptions = {},
+): Report {
   const workshopRoots = options.workshopRoots ?? WORKSHOP_ROOTS;
-  const files = [];
+  const files: string[] = [];
   for (const root of workshopRoots) {
     const abs = resolve(repoRoot, root);
     if (existsSync(abs) && statSync(abs).isDirectory()) {
       collectMarkdown(abs, files);
     }
   }
-  const fileContents = new Map();
-  const fileMeta = new Map();
+
+  const fileContents = new Map<string, string>();
+  const fileMeta = new Map<string, FileMeta>();
   for (const file of files) {
     const content = readFileSync(file, 'utf8');
     fileContents.set(file, content);
@@ -63,7 +127,8 @@ export function runVerification(repoRoot, options = {}) {
       refDefs: extractReferenceDefinitions(content),
     });
   }
-  const report = {
+
+  const report: Report = {
     scanned: files.length,
     issues: [],
     counts: {
@@ -80,6 +145,7 @@ export function runVerification(repoRoot, options = {}) {
   const assetDirs = (options.assetDirs ?? WORKSHOP_ASSET_DIRS).map((dir) =>
     normalize(resolve(repoRoot, dir)),
   );
+
   for (const file of files) {
     const content = fileContents.get(file);
     const meta = fileMeta.get(file);
@@ -148,6 +214,7 @@ export function runVerification(repoRoot, options = {}) {
   }
   return report;
 }
+
 // Strips fenced code blocks (``` and ~~~) before pattern scanning so
 // example Markdown inside code samples is never interpreted as a real
 // link or heading. Tracks both fence character and opening length so a
@@ -157,10 +224,10 @@ export function runVerification(repoRoot, options = {}) {
 // is treated as content, not as a close. Replaces masked lines with
 // blank lines (same line count) so downstream offset → line-number
 // calculations remain correct.
-export function stripFencedCodeBlocks(content) {
+export function stripFencedCodeBlocks(content: unknown): string {
   const lines = String(content).split(/\r?\n/);
-  const out = [];
-  let fence = null;
+  const out: string[] = [];
+  let fence: { char: string; length: number } | null = null;
   for (const line of lines) {
     const openMatch = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
     if (openMatch) {
@@ -189,30 +256,35 @@ export function stripFencedCodeBlocks(content) {
   }
   return out.join('\n');
 }
+
 // Replaces HTML-comment regions (`<!-- ... -->`, possibly multi-line)
 // with whitespace, preserving newlines so offset → line numbers
 // remain accurate. Markdown links inside comments are not real.
-export function stripHtmlComments(content) {
+export function stripHtmlComments(content: unknown): string {
   return String(content).replace(/<!--[\s\S]*?-->/g, (match) =>
     match.replace(/[^\r\n]/g, ' '),
   );
 }
+
 // Strips inline code spans (`...`, ``...``, etc.) so
 // `[demo](./missing.md)` inside backticks is not extracted as a
 // real link. The lazy `[\s\S]+?` allows code spans to cross
 // newlines so multi-line spans are also covered. The replacement
 // preserves newlines so downstream offset → line numbers stay
 // accurate.
-export function stripInlineCodeSpans(content) {
+export function stripInlineCodeSpans(content: unknown): string {
   return String(content).replace(
     /(`+)((?:(?!\1)[\s\S])+?)\1/g,
     (match, fence) =>
       `${fence}${match.slice(fence.length, -fence.length).replace(/[^\r\n]/g, ' ')}${fence}`,
   );
 }
-export function extractReferenceDefinitions(markdown) {
+
+export function extractReferenceDefinitions(
+  markdown: unknown,
+): Map<string, string> {
   const stripped = stripHtmlComments(stripFencedCodeBlocks(markdown));
-  const map = new Map();
+  const map = new Map<string, string>();
   const lines = stripped.split(/\r?\n/);
   for (const line of lines) {
     const match = line.match(
@@ -229,8 +301,12 @@ export function extractReferenceDefinitions(markdown) {
   }
   return map;
 }
-export function extractReferences(markdown, refDefs = new Map()) {
-  const refs = [];
+
+export function extractReferences(
+  markdown: unknown,
+  refDefs: Map<string, string> = new Map(),
+): Ref[] {
+  const refs: Ref[] = [];
   const stripped = stripHtmlComments(stripFencedCodeBlocks(markdown));
   // Mask inline code spans and backslash-escaped link delimiters
   // before any pattern matching so `[demo](./x.md)` inside backticks
@@ -244,13 +320,15 @@ export function extractReferences(markdown, refDefs = new Map()) {
   extractAutolinksFromContent(sanitized, refs);
   return refs;
 }
-function maskBackslashEscapes(content) {
+
+function maskBackslashEscapes(content: unknown): string {
   // Replace \[, \], and \! with two-char filler so the link / image
   // / reference patterns do not consume them. Other escapes are left
   // intact.
   return String(content).replace(/\\([[\]!])/g, '  ');
 }
-function lineNumberAtOffset(content, offset) {
+
+function lineNumberAtOffset(content: string, offset: number): number {
   let line = 1;
   const cap = Math.min(offset, content.length);
   for (let i = 0; i < cap; i += 1) {
@@ -258,7 +336,8 @@ function lineNumberAtOffset(content, offset) {
   }
   return line;
 }
-function extractInlineFromContent(content, refs) {
+
+function extractInlineFromContent(content: string, refs: Ref[]): void {
   // CommonMark inline link / image. Link text may span newlines
   // (`[^\]]*` matches `\n`), but destinations and titles stay on
   // one line. Destination can be either a bare token (no whitespace,
@@ -267,7 +346,7 @@ function extractInlineFromContent(content, refs) {
   // parenthesized form.
   const pattern =
     /(!?)\[([^\]]*)\]\(\s*(<[^>\n]*>|[^()\s]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
-  let match;
+  let match: RegExpExecArray | null;
   // biome-ignore lint/suspicious/noAssignInExpressions: canonical regex-exec iteration idiom
   while ((match = pattern.exec(content)) !== null) {
     let target = match[3];
@@ -281,7 +360,8 @@ function extractInlineFromContent(content, refs) {
     });
   }
 }
-function extractAutolinksFromContent(content, refs) {
+
+function extractAutolinksFromContent(content: string, refs: Ref[]): void {
   // CommonMark autolink: <scheme://...>. We only validate the URL
   // syntax (no live HTTP), so we treat them as link references.
   // Skip matches that overlap an inline-link destination such as
@@ -289,7 +369,7 @@ function extractAutolinksFromContent(content, refs) {
   // both of which already account for the URL.
   const consumedRanges = collectAngleBracketDestinationRanges(content);
   const pattern = /<([a-z][a-z0-9+.-]*:[^>\s]+)>/gi;
-  let match;
+  let match: RegExpExecArray | null;
   // biome-ignore lint/suspicious/noAssignInExpressions: canonical regex-exec iteration idiom
   while ((match = pattern.exec(content)) !== null) {
     if (
@@ -304,11 +384,14 @@ function extractAutolinksFromContent(content, refs) {
     });
   }
 }
-function collectAngleBracketDestinationRanges(content) {
-  const ranges = [];
+
+function collectAngleBracketDestinationRanges(
+  content: string,
+): [number, number][] {
+  const ranges: [number, number][] = [];
   // Inline link/image destination wrapped in <...>.
   const inlinePattern = /(!?)\[([^\]]*)\]\(\s*(<[^>\n]*>)/g;
-  let match;
+  let match: RegExpExecArray | null;
   // biome-ignore lint/suspicious/noAssignInExpressions: canonical regex-exec iteration idiom
   while ((match = inlinePattern.exec(content)) !== null) {
     const destStart = match.index + match[0].length - match[3].length;
@@ -323,7 +406,12 @@ function collectAngleBracketDestinationRanges(content) {
   }
   return ranges;
 }
-function rangeOverlaps(ranges, start, end) {
+
+function rangeOverlaps(
+  ranges: [number, number][],
+  start: number,
+  end: number,
+): boolean {
   for (const [rangeStart, rangeEnd] of ranges) {
     if (start < rangeEnd && end > rangeStart) {
       return true;
@@ -331,12 +419,17 @@ function rangeOverlaps(ranges, start, end) {
   }
   return false;
 }
-function extractReferenceStyleFromContent(content, refs, refDefs) {
+
+function extractReferenceStyleFromContent(
+  content: string,
+  refs: Ref[],
+  refDefs: Map<string, string>,
+): void {
   // [text][label] or ![alt][label]. Empty label (`[text][]`)
   // resolves against the text itself.
   const definitionLineCheck = /^\s{0,3}\[[^\]]+\]:\s*\S+/;
   const pattern = /(!?)\[([^\]]+)\]\[([^\]\n]*)\]/g;
-  let match;
+  let match: RegExpExecArray | null;
   // biome-ignore lint/suspicious/noAssignInExpressions: canonical regex-exec iteration idiom
   while ((match = pattern.exec(content)) !== null) {
     const lineNumber = lineNumberAtOffset(content, match.index);
@@ -363,7 +456,12 @@ function extractReferenceStyleFromContent(content, refs, refDefs) {
     });
   }
 }
-function extractShortcutReferencesFromContent(content, refs, refDefs) {
+
+function extractShortcutReferencesFromContent(
+  content: string,
+  refs: Ref[],
+  refDefs: Map<string, string>,
+): void {
   if (refDefs.size === 0) return;
   const definitionLineCheck = /^\s{0,3}\[[^\]]+\]:\s*\S+/;
   // CommonMark shortcut reference: [label] alone, not followed by
@@ -376,7 +474,7 @@ function extractShortcutReferencesFromContent(content, refs, refDefs) {
   // ordinary prose like `the [example] above` does not produce false
   // positives.
   const pattern = /(?<!\])(!?)\[([^\]\n]+)\](?!\(|\[|:)/g;
-  let match;
+  let match: RegExpExecArray | null;
   // biome-ignore lint/suspicious/noAssignInExpressions: canonical regex-exec iteration idiom
   while ((match = pattern.exec(content)) !== null) {
     const lineText = lineContaining(content, match.index);
@@ -393,18 +491,20 @@ function extractShortcutReferencesFromContent(content, refs, refDefs) {
     });
   }
 }
-function lineContaining(content, offset) {
+
+function lineContaining(content: string, offset: number): string {
   const lineStart = content.lastIndexOf('\n', offset - 1) + 1;
   const lineEndIdx = content.indexOf('\n', offset);
   const lineEnd = lineEndIdx === -1 ? content.length : lineEndIdx;
   return content.slice(lineStart, lineEnd);
 }
-export function extractHeadingSlugs(markdown) {
-  const slugs = new Set();
-  const counts = new Map();
+
+export function extractHeadingSlugs(markdown: unknown): Set<string> {
+  const slugs = new Set<string>();
+  const counts = new Map<string, number>();
   const stripped = stripHtmlComments(stripFencedCodeBlocks(markdown));
   const lines = stripped.split(/\r?\n/);
-  const consider = (raw) => {
+  const consider = (raw: string): void => {
     const slug = slugifyHeading(raw);
     if (!slug) return;
     const count = counts.get(slug) ?? 0;
@@ -434,18 +534,19 @@ export function extractHeadingSlugs(markdown) {
   }
   return slugs;
 }
+
 // GitHub heading slug algorithm (simplified): strip HTML tags,
 // drop most punctuation, lowercase, replace spaces with hyphens,
 // keep Unicode letters/digits, underscore, and hyphen. See
 // https://gist.github.com/asabaylus/3071099 for the reference
 // algorithm.
-export function slugifyHeading(text) {
+export function slugifyHeading(text: unknown): string {
   if (!text) return '';
   let s = String(text);
   // Strip HTML tags. Loop until no further change so payloads like
   // `<<script>foo</script>>` collapse instead of leaving fragments
   // such as `<script>foo</script>` after a single pass.
-  let prev;
+  let prev: string;
   do {
     prev = s;
     s = s.replace(/<[^<>]*>/g, '');
@@ -460,7 +561,13 @@ export function slugifyHeading(text) {
   s = s.replace(/^-+|-+$/g, '');
   return s;
 }
-export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
+
+export function classifyAndCheck(
+  target: unknown,
+  fromFile: string,
+  repoRoot: string,
+  fileMeta: Map<string, FileMeta>,
+): CheckResult {
   const trimmed = String(target).trim();
   if (trimmed.length === 0) {
     return { status: 'missing-file', detail: 'empty target' };
@@ -470,7 +577,7 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
       new URL(`https:${trimmed}`);
       return { status: 'ok' };
     } catch (error) {
-      return { status: 'invalid-url', detail: error.message };
+      return { status: 'invalid-url', detail: (error as Error).message };
     }
   }
   // Any absolute URI scheme — hierarchical (with `//`) or
@@ -482,9 +589,10 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
       new URL(trimmed);
       return { status: 'ok' };
     } catch (error) {
-      return { status: 'invalid-url', detail: error.message };
+      return { status: 'invalid-url', detail: (error as Error).message };
     }
   }
+
   let pathPart = trimmed;
   let anchorPart = '';
   const hashIndex = trimmed.indexOf('#');
@@ -492,25 +600,29 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
     pathPart = trimmed.slice(0, hashIndex);
     anchorPart = trimmed.slice(hashIndex + 1);
   }
+
   // Strip query string from the local path; existsSync does not
   // understand `?plain=1` and would falsely report missing.
   const queryIndex = pathPart.indexOf('?');
   if (queryIndex >= 0) {
     pathPart = pathPart.slice(0, queryIndex);
   }
+
   let decodedPath = pathPart;
   try {
     decodedPath = decodeURIComponent(pathPart);
   } catch {
     // Leave as-is when not valid percent-encoding.
   }
+
   let decodedAnchor = anchorPart;
   try {
     decodedAnchor = decodeURIComponent(anchorPart);
   } catch {
     // Leave as-is when not valid percent-encoding.
   }
-  let resolvedPath;
+
+  let resolvedPath: string;
   if (decodedPath.length === 0) {
     resolvedPath = fromFile;
   } else if (decodedPath.startsWith('/')) {
@@ -519,6 +631,7 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
     resolvedPath = resolve(dirname(fromFile), decodedPath);
   }
   resolvedPath = normalize(resolvedPath);
+
   const repoRootNormalized = normalize(repoRoot);
   // Lexical containment first (catches `..` and root-relative
   // escapes before any disk I/O).
@@ -534,8 +647,8 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
   // Failing realpath (non-existent path, EACCES, …) leaves the
   // lexical check as the only guard.
   if (existsSync(resolvedPath)) {
-    let realTarget;
-    let realRoot;
+    let realTarget: string | undefined;
+    let realRoot: string | undefined;
     try {
       realTarget = realpathSync(resolvedPath);
       realRoot = realpathSync(repoRootNormalized);
@@ -549,6 +662,7 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
       };
     }
   }
+
   if (!existsSync(resolvedPath)) {
     return {
       status: 'missing-file',
@@ -564,13 +678,16 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
       detail: 'anchor requested but target is a directory',
     };
   }
+
   if (anchorPart.length === 0) {
     return { status: 'ok', resolvedPath };
   }
+
   const isMarkdown = extname(resolvedPath).toLowerCase() === '.md';
   if (!isMarkdown) {
     return { status: 'ok', resolvedPath };
   }
+
   let meta = fileMeta.get(resolvedPath);
   if (!meta) {
     const content = readFileSync(resolvedPath, 'utf8');
@@ -588,7 +705,11 @@ export function classifyAndCheck(target, fromFile, repoRoot, fileMeta) {
   }
   return { status: 'ok', resolvedPath };
 }
-export function checkAssetUnderAssetsDir(resolvedPath, assetDirs) {
+
+export function checkAssetUnderAssetsDir(
+  resolvedPath: string,
+  assetDirs: string[],
+): { ok: boolean; detail?: string } {
   if (!Array.isArray(assetDirs) || assetDirs.length === 0) {
     return { ok: true };
   }
@@ -602,15 +723,18 @@ export function checkAssetUnderAssetsDir(resolvedPath, assetDirs) {
     detail: `image target resolves outside ${assetDirs[0]}; image references should live under docs/workshop/assets/ or be absolute URLs`,
   };
 }
-function isInside(targetPath, rootPath) {
+
+function isInside(targetPath: string, rootPath: string): boolean {
   if (targetPath === rootPath) return true;
   const rootWithSep = rootPath.endsWith(sep) ? rootPath : `${rootPath}${sep}`;
   return targetPath.startsWith(rootWithSep);
 }
-export function computeExitCode(report) {
+
+export function computeExitCode(report: Report): number {
   return report.issues.length > 0 ? 1 : 0;
 }
-function collectMarkdown(dir, out) {
+
+function collectMarkdown(dir: string, out: string[]): void {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
@@ -620,7 +744,8 @@ function collectMarkdown(dir, out) {
     }
   }
 }
-function printTable(report) {
+
+function printTable(report: Report): void {
   console.log(
     `scanned: ${report.scanned}  links: ${report.counts.checkedLinks}  images: ${report.counts.checkedImages}  issues: ${report.issues.length}`,
   );
@@ -630,8 +755,9 @@ function printTable(report) {
     );
   }
 }
-function parseArgs(argv) {
-  const args = {
+
+function parseArgs(argv: string[]): VerifyArgs {
+  const args: VerifyArgs = {
     root: process.cwd(),
     format: 'table',
     help: false,
@@ -659,7 +785,8 @@ function parseArgs(argv) {
   }
   return args;
 }
-function printUsage() {
+
+function printUsage(): void {
   console.log(`usage: node scripts/verify-workshop-integrity.mjs [options]
 
 options:
@@ -674,7 +801,8 @@ offline-safe). Targets that resolve outside the repository root via
 path traversal are reported as errors.
 `);
 }
-function isMainModule(metaUrl) {
+
+function isMainModule(metaUrl: string): boolean {
   const entry = process.argv[1];
   if (!entry) return false;
   try {

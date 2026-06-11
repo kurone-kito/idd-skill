@@ -4,9 +4,73 @@
 // The scripts/helper-runtime-manifest.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+interface HelperCommand {
+  id: string;
+  scriptName: string;
+  binName: string;
+  entryPath: string;
+  vendoredCommand: string;
+  description: string;
+  contractPaths?: string[];
+}
+
+interface ManagedFile {
+  sourcePath: string;
+  targetPath: string;
+}
+
+interface PackageMetadata {
+  name: string;
+  repository: string;
+  nodeEngines: string;
+}
+
+interface LockfileMatch {
+  filename: string;
+  manager: string;
+}
+
+interface RuntimeEvidence {
+  hasPackageJson: boolean;
+  declaredPackageManager: string;
+  lockfileMatches: LockfileMatch[];
+  detectedPackageManager: string;
+  packageJsonOnly: boolean;
+  ambiguousPackageManager: boolean;
+}
+
+interface Recommendation {
+  profile: string;
+  packageManager: string;
+  reason: string;
+  evidence: RuntimeEvidence;
+}
+
+interface ProfileEntry {
+  profile: string;
+  description: string;
+  packageManager: string;
+  installCommand: string;
+  managedDependencies: { devDependencies: Record<string, string> };
+  managedPackageJsonScripts: Record<string, string>;
+  managedFiles: ManagedFile[];
+  commands: Record<string, string>;
+  notes: string[];
+}
+
+interface ManifestArgs {
+  help: boolean;
+  profile: string;
+  fromProfile: string;
+  packageManager: string;
+  packageSpec: string;
+  targetRoot: string;
+}
 
 const PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn'];
 const PROFILE_NAMES = [
@@ -23,10 +87,11 @@ const PACKAGE_SPEC_PIN_HINT =
   'Pass --package-spec with a pinned tarball URL or reviewed commit archive when you need reproducible helper imports.';
 const NODE_ENGINES = '^22.22.2 || >=24';
 const SCRIPT_FILE_EXTENSIONS = ['.mjs', '.js', '.json'];
-const EXTRA_RUNTIME_FILES = new Map([
+const EXTRA_RUNTIME_FILES = new Map<string, string[]>([
   ['scripts/advisory-wait-policy.mjs', ['schemas/policy.schema.json']],
 ]);
-const HELPER_COMMANDS = [
+
+const HELPER_COMMANDS: HelperCommand[] = [
   {
     id: 'doctor',
     scriptName: 'idd:doctor',
@@ -243,12 +308,15 @@ const HELPER_COMMANDS = [
     contractPaths: ['schemas/branch-conflict-state.schema.json'],
   },
 ];
+
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
+
   if (args.help) {
     printHelp();
     process.exit(0);
   }
+
   const manifest = buildHelperRuntimeManifest({
     profile: args.profile,
     fromProfile: args.fromProfile,
@@ -256,14 +324,22 @@ if (isMainModule(import.meta.url)) {
     packageSpec: args.packageSpec,
     targetRoot: args.targetRoot,
   });
+
   process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
 }
+
 export function buildHelperRuntimeManifest({
   profile = '',
   fromProfile = '',
   packageManager = '',
   packageSpec = '',
   targetRoot = process.cwd(),
+}: {
+  profile?: string;
+  fromProfile?: string;
+  packageManager?: string;
+  packageSpec?: string;
+  targetRoot?: string;
 } = {}) {
   const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const packageMetadata = resolveSourcePackageMetadata(packageRoot);
@@ -284,9 +360,11 @@ export function buildHelperRuntimeManifest({
     packageManager: normalizedPackageManager,
     packageSpec: normalizedPackageSpec,
   });
-  const selectedProfiles = normalizedProfile
+
+  const selectedProfiles: Record<string, ProfileEntry> = normalizedProfile
     ? { [normalizedProfile]: profileCatalog[normalizedProfile] }
     : profileCatalog;
+
   return {
     version: 1,
     sourceRepository: packageMetadata.repository,
@@ -309,14 +387,16 @@ export function buildHelperRuntimeManifest({
         : null,
   };
 }
+
 export function collectVendoredFiles(
   packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..'),
-) {
+): ManagedFile[] {
   const queue = HELPER_COMMANDS.map((command) => command.entryPath).map(
     (entryPath) => resolve(packageRoot, entryPath),
   );
-  const visited = new Set();
-  const managedFiles = new Set();
+  const visited = new Set<string>();
+  const managedFiles = new Set<string>();
+
   while (queue.length > 0) {
     const current = queue.pop();
     if (!current || visited.has(current)) {
@@ -330,6 +410,7 @@ export function collectVendoredFiles(
         relativePath(packageRoot, resolve(packageRoot, extraFile)),
       );
     }
+
     const source = readFileSync(current, 'utf8');
     for (const specifier of findRelativeImports(source)) {
       const dependency = resolveRelativeImport(current, specifier);
@@ -339,6 +420,7 @@ export function collectVendoredFiles(
       queue.push(dependency);
     }
   }
+
   for (const command of HELPER_COMMANDS) {
     for (const contractPath of command.contractPaths ?? []) {
       managedFiles.add(
@@ -346,22 +428,29 @@ export function collectVendoredFiles(
       );
     }
   }
+
   return [...managedFiles].sort().map((targetPath) => ({
     sourcePath: targetPath,
     targetPath,
   }));
 }
-export function detectPackageManager(root = process.cwd()) {
+
+export function detectPackageManager(root = process.cwd()): string {
   return collectHelperRuntimeEvidence(root).detectedPackageManager;
 }
-export function collectHelperRuntimeEvidence(root = process.cwd()) {
+
+export function collectHelperRuntimeEvidence(
+  root = process.cwd(),
+): RuntimeEvidence {
   const packageJsonPath = resolve(root, 'package.json');
   let declaredPackageManager = '';
   let hasPackageJson = false;
   if (existsSync(packageJsonPath)) {
     hasPackageJson = true;
     try {
-      const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+      const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+        packageManager?: unknown;
+      };
       const declared = String(packageJson.packageManager ?? '');
       for (const manager of PACKAGE_MANAGERS) {
         if (declared.startsWith(`${manager}@`)) {
@@ -373,6 +462,7 @@ export function collectHelperRuntimeEvidence(root = process.cwd()) {
       // Ignore parse errors here and fall back to lockfile detection.
     }
   }
+
   const lockfileMatches = [
     { filename: 'pnpm-lock.yaml', manager: 'pnpm' },
     { filename: 'package-lock.json', manager: 'npm' },
@@ -381,6 +471,7 @@ export function collectHelperRuntimeEvidence(root = process.cwd()) {
   const detectedPackageManager =
     declaredPackageManager ||
     (lockfileMatches.length === 1 ? lockfileMatches[0].manager : '');
+
   return {
     hasPackageJson,
     declaredPackageManager,
@@ -392,7 +483,10 @@ export function collectHelperRuntimeEvidence(root = process.cwd()) {
       !declaredPackageManager && lockfileMatches.length > 1,
   };
 }
-export function recommendHelperRuntimeProfile(root = process.cwd()) {
+
+export function recommendHelperRuntimeProfile(
+  root = process.cwd(),
+): Recommendation {
   const evidence = collectHelperRuntimeEvidence(root);
   if (evidence.detectedPackageManager) {
     return {
@@ -404,6 +498,7 @@ export function recommendHelperRuntimeProfile(root = process.cwd()) {
       evidence,
     };
   }
+
   if (evidence.ambiguousPackageManager) {
     return {
       profile: 'vendored-node',
@@ -413,11 +508,13 @@ export function recommendHelperRuntimeProfile(root = process.cwd()) {
       evidence,
     };
   }
+
   let reason = 'No supported package-manager evidence was detected.';
   if (evidence.packageJsonOnly) {
     reason =
       'package.json alone is not enough evidence to assume npm, another package manager, or a real Node.js helper path.';
   }
+
   return {
     profile: 'instructions-only',
     packageManager: '',
@@ -425,7 +522,16 @@ export function recommendHelperRuntimeProfile(root = process.cwd()) {
     evidence,
   };
 }
-function buildCommandCatalog() {
+
+function buildCommandCatalog(): {
+  id: string;
+  scriptName: string;
+  binName: string;
+  entryPath: string;
+  vendoredCommand: string;
+  description: string;
+  contractPaths: string[];
+}[] {
   return HELPER_COMMANDS.map((command) => ({
     id: command.id,
     scriptName: command.scriptName,
@@ -436,10 +542,11 @@ function buildCommandCatalog() {
     contractPaths: command.contractPaths ?? [],
   }));
 }
+
 export function resolveSourcePackageMetadata(
   packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..'),
-) {
-  const fallback = {
+): PackageMetadata {
+  const fallback: PackageMetadata = {
     name: PACKAGE_NAME,
     repository: SOURCE_REPOSITORY,
     nodeEngines: NODE_ENGINES,
@@ -448,8 +555,13 @@ export function resolveSourcePackageMetadata(
   if (!existsSync(packageJsonPath)) {
     return fallback;
   }
+
   try {
-    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+      name?: unknown;
+      repository?: unknown;
+      engines?: { node?: unknown };
+    };
     if (packageJson.name !== PACKAGE_NAME) {
       return fallback;
     }
@@ -462,26 +574,33 @@ export function resolveSourcePackageMetadata(
     return fallback;
   }
 }
-function normalizeRepository(repository) {
+
+function normalizeRepository(repository: unknown): string {
   if (typeof repository === 'string' && repository) {
     return repository;
   }
   if (
     repository &&
     typeof repository === 'object' &&
-    typeof repository.url === 'string' &&
-    repository.url
+    typeof (repository as { url?: unknown }).url === 'string' &&
+    (repository as { url: string }).url
   ) {
-    return repository.url;
+    return (repository as { url: string }).url;
   }
   return SOURCE_REPOSITORY;
 }
+
 function buildProfileCatalog({
   packageMetadata,
   managedFiles,
   packageManager,
   packageSpec,
-}) {
+}: {
+  packageMetadata: PackageMetadata;
+  managedFiles: ManagedFile[];
+  packageManager: string;
+  packageSpec: string;
+}): Record<string, ProfileEntry> {
   const packageManagerScripts = Object.fromEntries(
     HELPER_COMMANDS.map((command) => [command.scriptName, command.binName]),
   );
@@ -497,6 +616,7 @@ function buildProfileCatalog({
       `npx --yes --package ${packageSpec} ${command.binName}`,
     ]),
   );
+
   return {
     'package-manager': {
       profile: 'package-manager',
@@ -571,7 +691,16 @@ function buildProfileCatalog({
     },
   };
 }
-function buildSwitchPlan({ fromProfile, toProfile, profileCatalog }) {
+
+function buildSwitchPlan({
+  fromProfile,
+  toProfile,
+  profileCatalog,
+}: {
+  fromProfile: string;
+  toProfile: string;
+  profileCatalog: Record<string, ProfileEntry>;
+}) {
   const from = profileCatalog[fromProfile];
   const to = profileCatalog[toProfile];
   return {
@@ -602,14 +731,22 @@ function buildSwitchPlan({ fromProfile, toProfile, profileCatalog }) {
     ),
   };
 }
-function subtractPaths(leftFiles, rightFiles) {
+
+function subtractPaths(
+  leftFiles: ManagedFile[],
+  rightFiles: ManagedFile[],
+): string[] {
   const right = new Set(rightFiles.map((file) => file.targetPath));
   return leftFiles
     .filter((file) => !right.has(file.targetPath))
     .map((file) => file.targetPath)
     .sort();
 }
-function buildPackageManagerInstallCommand(packageManager, packageSpec) {
+
+function buildPackageManagerInstallCommand(
+  packageManager: string,
+  packageSpec: string,
+): string {
   if (packageManager === 'npm') {
     return `npm install --save-dev ${packageSpec}`;
   }
@@ -621,8 +758,9 @@ function buildPackageManagerInstallCommand(packageManager, packageSpec) {
   }
   throw new Error(`unsupported package manager: ${packageManager}`);
 }
-function parseArgs(argv) {
-  const parsed = {
+
+function parseArgs(argv: string[]): ManifestArgs {
+  const parsed: ManifestArgs = {
     help: false,
     profile: '',
     fromProfile: '',
@@ -630,15 +768,17 @@ function parseArgs(argv) {
     packageSpec: '',
     targetRoot: '',
   };
+
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
-    const requireValue = () => {
+    const requireValue = (): string => {
       if (value === undefined || value.startsWith('--')) {
         throw new Error(`missing value for argument: ${token}`);
       }
       return value;
     };
+
     if (token === '--help' || token === '-h') {
       parsed.help = true;
       continue;
@@ -668,11 +808,14 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+
     throw new Error(`unknown argument: ${token}`);
   }
+
   return parsed;
 }
-function printHelp() {
+
+function printHelp(): void {
   process.stdout.write(`usage: node scripts/helper-runtime-manifest.mjs [options]
 
 Options:
@@ -684,10 +827,12 @@ Options:
   --help
 `);
 }
-function normalizePackageSpec(packageSpec) {
+
+function normalizePackageSpec(packageSpec: string): string {
   return packageSpec || DEFAULT_PACKAGE_SPEC;
 }
-function normalizeProfile(profile) {
+
+function normalizeProfile(profile: string): string {
   if (!profile) {
     return '';
   }
@@ -696,13 +841,18 @@ function normalizeProfile(profile) {
   }
   return profile;
 }
-function normalizeOptionalProfile(profile) {
+
+function normalizeOptionalProfile(profile: string): string {
   if (!profile) {
     return '';
   }
   return normalizeProfile(profile);
 }
-function normalizePackageManager(packageManager, profile) {
+
+function normalizePackageManager(
+  packageManager: string,
+  profile: string,
+): string {
   if (!packageManager) {
     if (profile === 'package-manager') {
       throw new Error(
@@ -716,8 +866,9 @@ function normalizePackageManager(packageManager, profile) {
   }
   return packageManager;
 }
-function findRelativeImports(source) {
-  const specifiers = new Set();
+
+function findRelativeImports(source: string): string[] {
+  const specifiers = new Set<string>();
   const patterns = [
     /\b(?:import|export)\s+(?:[^"'`]+\s+from\s+)?["'](\.[^"']+)["']/g,
     /\bimport\s*\(\s*["'](\.[^"']+)["']\s*\)/g,
@@ -729,18 +880,22 @@ function findRelativeImports(source) {
   }
   return [...specifiers];
 }
-function resolveRelativeImport(fromFile, specifier) {
+
+function resolveRelativeImport(fromFile: string, specifier: string): string {
   const directory = dirname(fromFile);
   const basePath = resolve(directory, specifier);
   const candidates = existsSync(basePath)
     ? [basePath]
     : SCRIPT_FILE_EXTENSIONS.map((extension) => `${basePath}${extension}`);
+
   return candidates.find((candidate) => existsSync(candidate)) ?? '';
 }
-function relativePath(root, target) {
+
+function relativePath(root: string, target: string): string {
   return relative(root, target).replaceAll('\\', '/');
 }
-function isMainModule(moduleUrl) {
+
+function isMainModule(moduleUrl: string): boolean {
   if (!process.argv[1]) {
     return false;
   }
