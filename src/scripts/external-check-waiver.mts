@@ -4,20 +4,253 @@
 // The scripts/external-check-waiver.mjs copy is generated from the .mts source named
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
-import { resolveHelperActiveClaim } from './forced-handoff-marker.mjs';
+
+import { resolveHelperActiveClaim } from './forced-handoff-marker.mts';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
   resolveCollaboratorMarkerTrust,
-} from './policy-helpers.mjs';
+} from './policy-helpers.mts';
+import type { ClaimValidationSummary } from './protocol-helpers.mts';
 import {
   parsePaginatedGhNdjson,
   renderExternalCheckWaiverComment,
-} from './protocol-helpers.mjs';
+} from './protocol-helpers.mts';
+
+/** Normalized policy object returned by {@link normalizePolicyConfig}. */
+type NormalizedPolicy = ReturnType<typeof normalizePolicyConfig>;
+
+/** Waivable external-check selector entry from the normalized policy. */
+type WaivableSelector =
+  NormalizedPolicy['ciGate']['externalChecks']['waivable'][number];
+
+/** Active claim resolved from the trusted claim-marker stream. */
+type ActiveClaim = ClaimValidationSummary['activeClaim'];
+
+/** Author reference embedded in GitHub REST payloads. */
+interface GhAuthorPayload {
+  login?: string | null;
+}
+
+/** Issue comment payload fields consumed by this helper. */
+interface IssueCommentPayload {
+  body?: string | null;
+  created_at?: string | null;
+  user?: GhAuthorPayload | null;
+  author?: GhAuthorPayload | null;
+}
+
+/** Status-check rollup entry from `gh pr view --json statusCheckRollup`. */
+interface StatusCheckRollupEntry {
+  __typename?: string | null;
+  context?: string | null;
+  state?: string | null;
+  targetUrl?: string | null;
+  status?: string | null;
+  conclusion?: string | null;
+  name?: string | null;
+  detailsUrl?: string | null;
+  workflowName?: string | null;
+}
+
+/** Linked issue reference from `closingIssuesReferences`. */
+interface LinkedIssueRefPayload {
+  number?: number | null;
+  url?: string | null;
+}
+
+/** Pull-request payload fields consumed by this helper. */
+interface PrPayload {
+  number?: number | null;
+  url?: string | null;
+  state?: string | null;
+  headRefName?: string | null;
+  headRefOid?: string | null;
+  statusCheckRollup?: StatusCheckRollupEntry[] | null;
+  closingIssuesReferences?: LinkedIssueRefPayload[] | null;
+}
+
+/** Linked-issue candidate with its resolved active claim (or null). */
+interface IssueCandidatePayload {
+  number?: number | null;
+  url?: string | null;
+  activeClaim?: ActiveClaim | null;
+}
+
+/** Linked-issue candidate narrowed to a present active claim. */
+interface LinkedIssueWithClaim {
+  number?: number | null;
+  url?: string | null;
+  activeClaim: ActiveClaim;
+}
+
+/** Result of {@link selectLinkedIssueCandidate}. */
+type LinkedIssueSelection =
+  | { ok: true; issue: LinkedIssueWithClaim; reason: string }
+  | { ok: false; issue: null; reason: string };
+
+/** Raw authority evidence accepted by {@link normalizeAuthorityEvidence}. */
+interface AuthorityEvidenceInput {
+  known?: boolean;
+  roleName?: unknown;
+  role_name?: unknown;
+  user?: { role_name?: unknown } | null;
+  permission?: unknown;
+  permissions?: unknown;
+  error?: unknown;
+}
+
+/** Normalized authority evidence emitted in the plan report. */
+interface AuthorityEvidence {
+  actor: string;
+  policy: string;
+  known: boolean;
+  authorized: boolean;
+  isOwner: boolean;
+  permission: string;
+  roleName: string;
+  error: string;
+}
+
+/** Collaborator authority lookup result. */
+interface CollaboratorAuthority {
+  known: boolean;
+  authorized: boolean;
+  permission: string;
+  roleName: string;
+  error: string;
+}
+
+/** Normalized PR check entry derived from the status-check rollup. */
+interface NormalizedCheck {
+  type: string;
+  name: string;
+  state: string;
+  successLike: boolean;
+  pending: boolean;
+  url: string;
+  workflowName?: string;
+}
+
+/** Inputs accepted by {@link planExternalCheckWaiver}. */
+interface ExternalCheckWaiverPlanInput {
+  mode?: string;
+  repository?: string;
+  policy?: NormalizedPolicy;
+  policySource?: string;
+  actor?: string;
+  authority?: AuthorityEvidenceInput;
+  pr?: PrPayload;
+  issueCandidates?: IssueCandidatePayload[];
+  issueNumber?: number;
+  expectedClaimId?: string;
+  requestedSelector?: string;
+  reason?: string;
+  expiresAt?: string;
+  repoOwner?: string;
+}
+
+/** Structured waiver plan report. */
+interface ExternalCheckWaiverReport {
+  mode: string;
+  action: string;
+  canApply: boolean;
+  repository: string;
+  policy: {
+    source: string;
+    waiverMode: string;
+    authorityPolicy: string;
+    maxValidity: string;
+  };
+  actor: AuthorityEvidence;
+  pr: {
+    number: number;
+    url: string;
+    state: string;
+    headRefName: string;
+    headRefOid: string;
+  };
+  linkedIssue: {
+    number?: number | null;
+    url?: string | null;
+    activeClaim: ActiveClaim;
+  } | null;
+  requested: {
+    selector: string;
+    matchMode: string;
+    reason: string;
+    expiresAt: string;
+  };
+  checks: {
+    total: number;
+    matched: NormalizedCheck[];
+    matchedSelectors: WaivableSelector[];
+    uncoveredChecks: NormalizedCheck[];
+  };
+  blockingReasons: string[];
+  body: string;
+  applied?: boolean;
+  commentUrl?: string;
+}
+
+/** Parsed CLI arguments. */
+interface ExternalCheckWaiverArgs {
+  prNumber: number;
+  issueNumber: number;
+  claimId: string;
+  checkSelector: string;
+  reason: string;
+  expiresAt: string;
+  expiresIn: string;
+  actor: string;
+  repo: string;
+  apply: boolean;
+  yes: boolean;
+  format: string;
+  help: boolean;
+}
+
+/** Posted-comment payload fields consumed by this helper. */
+interface PostedCommentPayload {
+  html_url?: string | null;
+  url?: string | null;
+}
+
+/** Interactive prompt function with an optional readline close hook. */
+type PromptFn = ((question: string) => Promise<string>) & {
+  close?: () => void;
+};
+
+/** GitHub API call result with a parsed JSON body and HTTP status. */
+interface GhApiStatusResult {
+  status: number;
+  body: {
+    permission?: unknown;
+    role_name?: unknown;
+    user?: { role_name?: unknown } | null;
+  };
+}
+
+/** Options accepted by {@link runExternalCheckWaiver}. */
+interface RunExternalCheckWaiverOptions {
+  args?: ExternalCheckWaiverArgs;
+  actor?: string;
+  authority?: AuthorityEvidenceInput;
+  pr?: PrPayload;
+  issueCandidates?: IssueCandidatePayload[];
+  now?: Date;
+  isTTY?: boolean;
+  prompt?: PromptFn;
+  postComment?: (
+    prNumber: number,
+    body: string,
+  ) => Promise<PostedCommentPayload> | PostedCommentPayload;
+}
 
 const APPROVAL_ACTOR_POLICIES = new Set([
   'owners-and-maintainers-only',
@@ -39,23 +272,35 @@ const PENDING_CHECK_STATES = new Set([
   'pending',
   'expected',
 ]);
+
 export const NON_TTY_APPLY_ERROR =
   'operator interaction is required; rerun in a TTY or pass --yes after reviewing dry-run output';
-export function matchCheckSelector(name, selector, matchMode = 'exact') {
+
+export function matchCheckSelector(
+  name: unknown,
+  selector: unknown,
+  matchMode: string = 'exact',
+): boolean {
   const normalizedName = String(name ?? '').trim();
   const normalizedSelector = String(selector ?? '').trim();
   if (!normalizedName || !normalizedSelector) {
     return false;
   }
+
   if (matchMode === 'glob') {
     const source = normalizedSelector
       .replace(/[|\\{}()[\]^$+?.]/g, '\\$&')
       .replace(/\*/g, '.*');
     return new RegExp(`^${source}$`).test(normalizedName);
   }
+
   return normalizedName === normalizedSelector;
 }
-export function planExternalCheckWaiver(input, options = {}) {
+
+export function planExternalCheckWaiver(
+  input: ExternalCheckWaiverPlanInput,
+  options: { now?: Date; repoOwner?: string } = {},
+): ExternalCheckWaiverReport {
   const pr = input?.pr ?? {};
   const issueCandidates = Array.isArray(input?.issueCandidates)
     ? input.issueCandidates
@@ -73,6 +318,7 @@ export function planExternalCheckWaiver(input, options = {}) {
     String(options.repoOwner ?? input?.repoOwner ?? '').trim(),
     policy?.ciGate?.externalCheckWaivers?.authorityPolicy,
   );
+
   const requestedMatchMode = selectorRequestsGlob(requestedSelector)
     ? 'glob'
     : 'exact';
@@ -103,6 +349,7 @@ export function planExternalCheckWaiver(input, options = {}) {
       );
     });
   });
+
   const maxValidity = parseIsoDurationToMs(
     policy?.ciGate?.externalCheckWaivers?.maxValidity ?? 'PT24H',
   );
@@ -120,7 +367,8 @@ export function planExternalCheckWaiver(input, options = {}) {
     expectedClaimId: input?.expectedClaimId,
     headRefName: String(pr.headRefName ?? '').trim(),
   });
-  const blockingReasons = [];
+
+  const blockingReasons: string[] = [];
   if (String(pr.state ?? 'OPEN').toUpperCase() !== 'OPEN') {
     blockingReasons.push(`PR #${pr.number ?? '?'} is not open`);
   }
@@ -176,6 +424,7 @@ export function planExternalCheckWaiver(input, options = {}) {
       'one or more matched checks are not configured as waivable external checks',
     );
   }
+
   const body =
     requestedSelector &&
     reason &&
@@ -192,6 +441,7 @@ export function planExternalCheckWaiver(input, options = {}) {
           expiresAt,
         })
       : '';
+
   return {
     mode: input?.mode === 'apply' ? 'apply' : 'dry-run',
     action: input?.mode === 'apply' ? 'create' : 'plan',
@@ -238,12 +488,16 @@ export function planExternalCheckWaiver(input, options = {}) {
     body,
   };
 }
-export async function runExternalCheckWaiver(options = {}) {
+
+export async function runExternalCheckWaiver(
+  options: RunExternalCheckWaiverOptions = {},
+): Promise<{ exitCode: number; report?: ExternalCheckWaiverReport }> {
   const args = options.args ?? parseArgs(process.argv.slice(2));
   if (args.help) {
     printUsage();
     return { exitCode: 0 };
   }
+
   const repository =
     args.repo ||
     ghText([
@@ -273,6 +527,7 @@ export async function runExternalCheckWaiver(options = {}) {
       `--actor ${args.actor} does not match the authenticated user ${viewerLogin}; omit --actor to use the authenticated identity`,
     );
   }
+
   const authority =
     options.authority ??
     resolveCollaboratorAuthority({ owner, repo: name, actor });
@@ -292,6 +547,7 @@ export async function runExternalCheckWaiver(options = {}) {
       headRefName: pr.headRefName,
       prNumber: args.prNumber,
     });
+
   const report = planExternalCheckWaiver(
     {
       mode: args.apply ? 'apply' : 'dry-run',
@@ -315,10 +571,12 @@ export async function runExternalCheckWaiver(options = {}) {
     },
     { now: options.now, repoOwner: owner },
   );
+
   if (!args.apply) {
     renderReport(report, args.format);
     return { exitCode: 0, report };
   }
+
   if (!report.canApply) {
     renderReport(report, args.format);
     throw new Error(
@@ -330,11 +588,13 @@ export async function runExternalCheckWaiver(options = {}) {
       'external-check waiver apply blocked: canonical comment body is empty',
     );
   }
+
   const isTTY =
     options.isTTY ?? Boolean(process.stdin.isTTY && process.stdout.isTTY);
   if (!args.yes && !isTTY) {
     throw new Error(NON_TTY_APPLY_ERROR);
   }
+
   if (!args.yes) {
     renderReport(report, args.format);
     const ask = options.prompt ?? makeReadlinePrompt();
@@ -349,16 +609,18 @@ export async function runExternalCheckWaiver(options = {}) {
       return { exitCode: 0, report: { ...report, applied: false } };
     }
   }
+
   const result = options.postComment
     ? await options.postComment(args.prNumber, report.body)
-    : ghJson([
+    : (ghJson([
         'api',
         `repos/${owner}/${name}/issues/${args.prNumber}/comments`,
         '--method',
         'POST',
         '-f',
         `body=${report.body}`,
-      ]);
+      ]) as PostedCommentPayload);
+
   const appliedReport = {
     ...report,
     applied: true,
@@ -367,25 +629,37 @@ export async function runExternalCheckWaiver(options = {}) {
   renderReport(appliedReport, args.format);
   return { exitCode: 0, report: appliedReport };
 }
-function selectorRequestsGlob(selector) {
+
+function selectorRequestsGlob(selector: unknown): boolean {
   return /[*]/.test(String(selector ?? ''));
 }
-function selectLinkedIssueCandidate(issueCandidates, options = {}) {
-  const filtered = issueCandidates.filter((candidate) => {
-    if (options.issueNumber && candidate.number !== options.issueNumber) {
-      return false;
-    }
-    if (candidate.activeClaim?.branch !== options.headRefName) {
-      return false;
-    }
-    if (
-      options.expectedClaimId &&
-      candidate.activeClaim?.claimId !== options.expectedClaimId
-    ) {
-      return false;
-    }
-    return Boolean(candidate.activeClaim);
-  });
+
+function selectLinkedIssueCandidate(
+  issueCandidates: IssueCandidatePayload[],
+  options: {
+    issueNumber?: number;
+    expectedClaimId?: string;
+    headRefName?: string;
+  } = {},
+): LinkedIssueSelection {
+  const filtered = issueCandidates.filter(
+    (candidate): candidate is LinkedIssueWithClaim => {
+      if (options.issueNumber && candidate.number !== options.issueNumber) {
+        return false;
+      }
+      if (candidate.activeClaim?.branch !== options.headRefName) {
+        return false;
+      }
+      if (
+        options.expectedClaimId &&
+        candidate.activeClaim?.claimId !== options.expectedClaimId
+      ) {
+        return false;
+      }
+      return Boolean(candidate.activeClaim);
+    },
+  );
+
   if (filtered.length === 1) {
     return {
       ok: true,
@@ -408,7 +682,10 @@ function selectLinkedIssueCandidate(issueCandidates, options = {}) {
       'multiple linked issues expose active claims on the PR branch; rerun with --issue and --claim-id',
   };
 }
-function normalizeChecks(statusCheckRollup = []) {
+
+function normalizeChecks(
+  statusCheckRollup: StatusCheckRollupEntry[] | null | undefined = [],
+): NormalizedCheck[] {
   return (statusCheckRollup ?? [])
     .map((entry) => {
       if (entry?.__typename === 'StatusContext') {
@@ -424,6 +701,7 @@ function normalizeChecks(statusCheckRollup = []) {
           url: String(entry.targetUrl ?? ''),
         };
       }
+
       const status = String(entry?.status ?? '')
         .trim()
         .toLowerCase();
@@ -444,7 +722,13 @@ function normalizeChecks(statusCheckRollup = []) {
     })
     .filter((entry) => entry.name);
 }
-function normalizeAuthorityEvidence(evidence, actor, repoOwner, policy) {
+
+function normalizeAuthorityEvidence(
+  evidence: AuthorityEvidenceInput | null | undefined,
+  actor: string,
+  repoOwner: string,
+  policy: string,
+): AuthorityEvidence {
   const normalizedPolicy = APPROVAL_ACTOR_POLICIES.has(policy)
     ? policy
     : APPROVAL_ACTOR_POLICY_DEFAULT;
@@ -465,6 +749,7 @@ function normalizeAuthorityEvidence(evidence, actor, repoOwner, policy) {
       permission.length > 0 ||
       actor === repoOwner.toLowerCase());
   const isOwner = actor === repoOwner.toLowerCase();
+
   let authorized = false;
   if (isOwner) {
     authorized = true;
@@ -480,12 +765,14 @@ function normalizeAuthorityEvidence(evidence, actor, repoOwner, policy) {
     authorized =
       roleName === 'admin' || roleName === 'maintain' || permission === 'admin';
   }
+
   const error = known
     ? ''
     : String(
         evidence?.error ??
           'authority lookup did not return role-aware permission evidence',
       );
+
   return {
     actor,
     policy: normalizedPolicy,
@@ -497,7 +784,16 @@ function normalizeAuthorityEvidence(evidence, actor, repoOwner, policy) {
     error,
   };
 }
-function resolveExpiryAt({ expiresAt, expiresIn, now }) {
+
+function resolveExpiryAt({
+  expiresAt,
+  expiresIn,
+  now,
+}: {
+  expiresAt: string;
+  expiresIn: string;
+  now: Date;
+}): string {
   const hasExpiresAt = Boolean(String(expiresAt ?? '').trim());
   const hasExpiresIn = Boolean(String(expiresIn ?? '').trim());
   if (hasExpiresAt === hasExpiresIn) {
@@ -510,12 +806,15 @@ function resolveExpiryAt({ expiresAt, expiresIn, now }) {
     }
     return parsed.toISOString().replace(/\.\d{3}Z$/, 'Z');
   }
+
   const durationMs = parseIsoDurationToMs(String(expiresIn).trim());
   if (!Number.isFinite(durationMs) || (durationMs ?? 0) <= 0) {
     throw new Error(`invalid --expires-in value: ${expiresIn}`);
   }
+
   return new Date(now.getTime() + (durationMs ?? 0)).toISOString();
 }
+
 function resolveLinkedIssueCandidates({
   owner,
   repo,
@@ -526,11 +825,21 @@ function resolveLinkedIssueCandidates({
   expectedClaimId,
   headRefName,
   prNumber,
-}) {
+}: {
+  owner: string;
+  repo: string;
+  rawConfig: unknown;
+  viewerLogin: string;
+  linkedIssues: LinkedIssueRefPayload[] | null | undefined;
+  issueNumber: number;
+  expectedClaimId: string;
+  headRefName: string | null | undefined;
+  prNumber: number;
+}): IssueCandidatePayload[] {
   const issueRefs = (linkedIssues ?? []).filter((issue) => {
     return !issueNumber || Number(issue.number) === issueNumber;
   });
-  const results = [];
+  const results: IssueCandidatePayload[] = [];
   for (const issue of issueRefs) {
     const comments = ghJson(
       [
@@ -539,7 +848,7 @@ function resolveLinkedIssueCandidates({
         `repos/${owner}/${repo}/issues/${issue.number}/comments`,
       ],
       true,
-    );
+    ) as IssueCommentPayload[];
     const trustedMarkerLogins = buildTrustedMarkerLogins({
       owner,
       repo,
@@ -604,7 +913,16 @@ function resolveLinkedIssueCandidates({
   }
   return results;
 }
-function fetchPullRequest({ owner, repo, prNumber }) {
+
+function fetchPullRequest({
+  owner,
+  repo,
+  prNumber,
+}: {
+  owner: string;
+  repo: string;
+  prNumber: number;
+}): PrPayload {
   return ghJson([
     'pr',
     'view',
@@ -613,9 +931,18 @@ function fetchPullRequest({ owner, repo, prNumber }) {
     `${owner}/${repo}`,
     '--json',
     'number,state,url,headRefName,headRefOid,statusCheckRollup,closingIssuesReferences',
-  ]);
+  ]) as PrPayload;
 }
-function resolveCollaboratorAuthority({ owner, repo, actor }) {
+
+function resolveCollaboratorAuthority({
+  owner,
+  repo,
+  actor,
+}: {
+  owner: string;
+  repo: string;
+  actor: string;
+}): CollaboratorAuthority {
   const normalized = String(actor ?? '')
     .trim()
     .toLowerCase();
@@ -628,6 +955,7 @@ function resolveCollaboratorAuthority({ owner, repo, actor }) {
       error: 'empty actor',
     };
   }
+
   const result = ghApiJsonWithStatus(
     `repos/${owner}/${repo}/collaborators/${encodeURIComponent(normalized)}/permission`,
   );
@@ -649,6 +977,7 @@ function resolveCollaboratorAuthority({ owner, repo, actor }) {
       error: `authority lookup failed: ${result.status}`,
     };
   }
+
   return {
     known: true,
     authorized: false,
@@ -663,13 +992,20 @@ function resolveCollaboratorAuthority({ owner, repo, actor }) {
     error: '',
   };
 }
+
 export function buildTrustedMarkerLogins({
   owner,
   repo,
   rawConfig,
   viewerLogin,
   issueComments,
-}) {
+}: {
+  owner: string;
+  repo: string;
+  rawConfig: unknown;
+  viewerLogin: string;
+  issueComments?: IssueCommentPayload[] | null;
+}): Set<string> {
   const trusted = new Set(
     [
       owner,
@@ -680,6 +1016,7 @@ export function buildTrustedMarkerLogins({
       .filter(Boolean)
       .map((login) => login.toLowerCase()),
   );
+
   if (
     !resolveCollaboratorMarkerTrust(
       rawConfig,
@@ -688,6 +1025,7 @@ export function buildTrustedMarkerLogins({
   ) {
     return trusted;
   }
+
   const uniqueLogins = new Set(
     (issueComments ?? [])
       .map((comment) =>
@@ -718,8 +1056,10 @@ export function buildTrustedMarkerLogins({
   }
   return trusted;
 }
-function readTrustedMarkerActors(rawConfig) {
-  const actors = rawConfig?.trustedMarkerActors;
+
+function readTrustedMarkerActors(rawConfig: unknown): string[] {
+  const actors = (rawConfig as { trustedMarkerActors?: unknown } | null)
+    ?.trustedMarkerActors;
   if (!Array.isArray(actors)) {
     return [];
   }
@@ -728,24 +1068,28 @@ function readTrustedMarkerActors(rawConfig) {
     .map((entry) => entry.trim())
     .filter(Boolean);
 }
-function readJsonFile(path) {
+
+function readJsonFile(path: string): unknown {
   try {
     return JSON.parse(readFileSync(path, 'utf8'));
   } catch {
     return {};
   }
 }
-function ghText(args) {
+
+function ghText(args: string[]): string {
   return execFileSync('gh', args, { encoding: 'utf8' }).trim();
 }
-function safeGhText(args) {
+
+function safeGhText(args: string[]): string {
   try {
     return ghText(args);
   } catch {
     return '';
   }
 }
-function ghJson(args, slurp = false) {
+
+function ghJson(args: string[], slurp = false): unknown {
   const finalArgs = [...args];
   if (slurp) {
     finalArgs.splice(1, 0, '--jq', '.[]');
@@ -755,11 +1099,14 @@ function ghJson(args, slurp = false) {
   }
   return JSON.parse(execFileSync('gh', finalArgs, { encoding: 'utf8' }));
 }
-function ghApiJsonWithStatus(path) {
+
+function ghApiJsonWithStatus(path: string): GhApiStatusResult {
   try {
     return {
       status: 200,
-      body: JSON.parse(execFileSync('gh', ['api', path], { encoding: 'utf8' })),
+      body: JSON.parse(
+        execFileSync('gh', ['api', path], { encoding: 'utf8' }),
+      ) as GhApiStatusResult['body'],
     };
   } catch (error) {
     const status = extractGhHttpStatus(error);
@@ -769,24 +1116,32 @@ function ghApiJsonWithStatus(path) {
     };
   }
 }
-export function extractGhHttpStatus(error) {
-  const e = error;
+
+export function extractGhHttpStatus(error: unknown): number {
+  const e = error as {
+    stderr?: unknown;
+    status?: unknown;
+    exitCode?: unknown;
+  } | null;
   const stderr = String(e?.stderr ?? '');
   const httpStatusMatch = stderr.match(/\(HTTP\s+(\d{3})\)/i);
   if (httpStatusMatch) {
     return Number(httpStatusMatch[1]);
   }
+
   const exitStatus = Number(e?.status ?? e?.exitCode ?? 0);
   return Number.isInteger(exitStatus) && exitStatus > 0 ? exitStatus : 0;
 }
-function renderReport(report, format) {
+
+function renderReport(report: ExternalCheckWaiverReport, format: string): void {
   if (format === 'text') {
     process.stdout.write(renderTextReport(report));
     return;
   }
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }
-function renderTextReport(report) {
+
+function renderTextReport(report: ExternalCheckWaiverReport): string {
   const matchedChecks =
     report.checks.matched
       .map((check) => `${check.name}=${check.state}`)
@@ -795,6 +1150,7 @@ function renderTextReport(report) {
     report.blockingReasons.length > 0
       ? report.blockingReasons.map((reason) => `- ${reason}`).join('\n')
       : '- none';
+
   return [
     `mode: ${report.mode}`,
     `canApply: ${report.canApply}`,
@@ -814,17 +1170,19 @@ function renderTextReport(report) {
     '',
   ].join('\n');
 }
-function makeReadlinePrompt() {
+
+function makeReadlinePrompt(): PromptFn {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (question) =>
+  const ask: PromptFn = (question) =>
     new Promise((resolve) =>
       rl.question(question, (answer) => resolve(answer)),
     );
   ask.close = () => rl.close();
   return ask;
 }
-function parseArgs(argv) {
-  const parsed = {
+
+function parseArgs(argv: string[]): ExternalCheckWaiverArgs {
+  const parsed: ExternalCheckWaiverArgs = {
     prNumber: 0,
     issueNumber: 0,
     claimId: '',
@@ -839,6 +1197,7 @@ function parseArgs(argv) {
     format: 'json',
     help: false,
   };
+
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     switch (token) {
@@ -895,6 +1254,7 @@ function parseArgs(argv) {
         throw new Error(`unknown argument: ${token}`);
     }
   }
+
   if (!parsed.help) {
     if (!parsed.prNumber) {
       throw new Error('missing required --pr <number> argument');
@@ -906,9 +1266,11 @@ function parseArgs(argv) {
       throw new Error('missing required --reason <text> argument');
     }
   }
+
   return parsed;
 }
-function parseOwnerRepo(value) {
+
+function parseOwnerRepo(value: unknown): { owner: string; name: string } {
   const repo = String(value ?? '').trim();
   const match = repo.match(/^([^/\s]+)\/([^/\s]+)$/);
   if (!match) {
@@ -916,27 +1278,31 @@ function parseOwnerRepo(value) {
   }
   return { owner: match[1], name: match[2] };
 }
-function readValue(argv, index, flag) {
+
+function readValue(argv: string[], index: number, flag: string): string {
   const value = argv[index];
   if (value === undefined) {
     throw new Error(`missing value for ${flag}`);
   }
   return value;
 }
-function parsePositiveInteger(value, flag) {
+
+function parsePositiveInteger(value: unknown, flag: string): number {
   const raw = String(value ?? '').trim();
   if (!/^[1-9]\d*$/.test(raw)) {
     throw new Error(`invalid ${flag} value: ${value}`);
   }
   return Number(raw);
 }
-function splitCsv(value) {
+
+function splitCsv(value: unknown): string[] {
   return String(value ?? '')
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
 }
-function printUsage() {
+
+function printUsage(): void {
   process.stdout.write(`usage: node scripts/external-check-waiver.mjs --pr <number> --check <selector> --reason <text> (--expires <iso8601> | --expires-in <duration>) [options]
 
 Options:
@@ -950,16 +1316,20 @@ Options:
   --help                            show this message
 `);
 }
-export async function main(argv = process.argv.slice(2)) {
+
+export async function main(
+  argv: string[] = process.argv.slice(2),
+): Promise<void> {
   const result = await runExternalCheckWaiver({ args: parseArgs(argv) });
   process.exit(result.exitCode);
 }
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-  main().catch((error) => {
-    process.stderr.write(`Error: ${error.message}\n`);
+  main().catch((error: unknown) => {
+    process.stderr.write(`Error: ${(error as Error).message}\n`);
     process.exit(1);
   });
 }

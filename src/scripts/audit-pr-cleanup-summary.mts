@@ -10,14 +10,14 @@ interface CleanupReportItem {
   [key: string]: unknown;
 }
 
-interface CleanupReport {
+export interface CleanupReport {
   candidates: unknown[];
   skipped: CleanupReportItem[];
   applied: unknown[];
   failed: unknown[];
   mode?: string;
-  summary?: Record<string, number>;
-  status?: string;
+  summary?: Record<string, number> | null;
+  status?: string | null;
 }
 
 export function computeReportSummary(report: CleanupReport): void {

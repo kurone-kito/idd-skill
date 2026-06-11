@@ -4,20 +4,86 @@
 // The scripts/force-handoff.mjs copy is generated from the .mts source named
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
+import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
-} from './collaborator-permission.mjs';
-import { planHandoff } from './forced-handoff-marker.mjs';
-import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
+} from './collaborator-permission.mts';
+import { planHandoff } from './forced-handoff-marker.mts';
+import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
+
+/** Author reference embedded in GitHub REST payloads. */
+interface GhAuthorPayload {
+  login?: string | null;
+}
+
+/** Issue comment payload fields consumed by this helper. */
+interface IssueCommentPayload {
+  body?: string | null;
+  created_at?: string | null;
+  user?: GhAuthorPayload | null;
+  author?: GhAuthorPayload | null;
+}
+
+/** Linked-PR row returned by `gh pr list --json number,headRefName`. */
+interface LinkedPrPayload {
+  number?: number | string | null;
+  headRefName?: string | null;
+}
+
+/** Posted-comment payload fields consumed by this helper. */
+interface PostedCommentPayload {
+  html_url?: string | null;
+  url?: string | null;
+}
+
+/** Interactive prompt function with an optional readline close hook. */
+type PromptFn = ((question: string) => Promise<string>) & {
+  close?: () => void;
+};
+
+/** Options accepted by {@link runHandoff}. */
+interface RunHandoffOptions {
+  isTTY?: boolean;
+  prompt?: PromptFn;
+  repo?: string;
+  forcedBy?: string;
+  reason?: string;
+  trustedMarkerLogins?: string[] | Set<string>;
+  isAuthorizedForcedHandoff?: (actor: string) => boolean;
+  fetchIssueComments?: (
+    issueNumber: number,
+  ) => Promise<IssueCommentPayload[]> | IssueCommentPayload[];
+  fetchLinkedPrs?: (
+    branch: string,
+  ) => Promise<LinkedPrPayload[]> | LinkedPrPayload[];
+  postComment?: (
+    issueNumber: number,
+    body: string,
+  ) => Promise<PostedCommentPayload> | PostedCommentPayload;
+  mode?: string;
+}
+
+/** Result returned by {@link runHandoff}. */
+interface RunHandoffResult {
+  posted: boolean;
+  commentUrl?: string;
+  successorIds?: { newAgentId: string; newClaimId: string };
+  contextScope?: string;
+}
+
 export const NON_TTY_ERROR =
   'operator interaction is required; run idd-force-handoff in an interactive TTY';
-export async function runHandoff(options = {}) {
+
+export async function runHandoff(
+  options: RunHandoffOptions = {},
+): Promise<RunHandoffResult> {
   const {
     isTTY = Boolean(process.stdin.isTTY && process.stdout.isTTY),
     prompt: promptFn,
@@ -31,17 +97,22 @@ export async function runHandoff(options = {}) {
     postComment,
     mode,
   } = options;
+
   if (!isTTY) {
     throw new Error(NON_TTY_ERROR);
   }
+
   if ((mode ?? readForcedHandoffMode()) !== 'human-gated') {
     throw new Error(
       "forced-handoff mode is not human-gated; idd-force-handoff is only available when forcedHandoff.mode is 'human-gated'",
     );
   }
+
   const ask = promptFn ?? makeReadlinePrompt();
+
   const rawIssue = await ask('Issue number: ');
   const issueNumber = parsePositiveInteger(rawIssue, '--issue');
+
   const repoRef =
     repo ??
     ghText([
@@ -53,6 +124,7 @@ export async function runHandoff(options = {}) {
       '.nameWithOwner',
     ]);
   const { owner, name } = parseOwnerRepo(repoRef);
+
   const forcedBy =
     givenForcedBy ??
     safeGhText(['api', 'user', '--jq', '.login']).toLowerCase();
@@ -61,24 +133,27 @@ export async function runHandoff(options = {}) {
       'could not determine current GitHub user; ensure gh is authenticated',
     );
   }
+
   const issueComments = fetchIssueComments
     ? await fetchIssueComments(issueNumber)
-    : ghJson(
+    : (ghJson(
         [
           'api',
           '--paginate',
           `repos/${owner}/${name}/issues/${issueNumber}/comments`,
         ],
         true,
-      );
+      ) as IssueCommentPayload[]);
+
   const trustedMarkerLogins =
     givenTrustedLogins ??
     buildTrustedMarkerLogins(owner, name, forcedBy, issueComments);
+
   const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
-  const permissionCache = new Map();
+  const permissionCache: CollaboratorPermissionCache = new Map();
   const isAuthorizedForcedHandoff =
     givenAuthPredicate ??
-    ((actor) =>
+    ((actor: string) =>
       isAuthorizedForcedHandoffActor(
         owner,
         name,
@@ -86,16 +161,19 @@ export async function runHandoff(options = {}) {
         forcedHandoffAuthorityPolicy,
         permissionCache,
       ));
+
   const resolveOpts = {
     trustedMarkerLogins,
     isAuthorizedForcedHandoff,
     forcedBy,
     reason,
   };
+
   const firstPass = planHandoff(issueComments, [], resolveOpts);
+
   const linkedPrs = fetchLinkedPrs
     ? await fetchLinkedPrs(firstPass.branch)
-    : ghJson([
+    : (ghJson([
         'pr',
         'list',
         '--repo',
@@ -106,9 +184,11 @@ export async function runHandoff(options = {}) {
         'open',
         '--json',
         'number,headRefName',
-      ]);
+      ]) as LinkedPrPayload[]);
+
   let plan = planHandoff(issueComments, linkedPrs, resolveOpts);
-  let resolvedPrNumber;
+
+  let resolvedPrNumber: number | undefined;
   if (plan.contextScope === 'issue-plus-pr') {
     const prList = plan.prReferences.join(', ');
     const rawPr = await ask(`Open PR on branch (${prList}). Enter PR number: `);
@@ -116,11 +196,13 @@ export async function runHandoff(options = {}) {
     plan = planHandoff(issueComments, linkedPrs, { ...resolveOpts, prNumber });
     resolvedPrNumber = prNumber;
   }
+
   if (!plan.markerBody) {
     throw new Error(
       'cannot generate forced-handoff marker: check that forced-handoff mode is human-gated and the actor is authorized',
     );
   }
+
   const { newAgentId, newClaimId } = plan.successorIds;
   const lines = [
     '',
@@ -136,22 +218,25 @@ export async function runHandoff(options = {}) {
     '',
   ];
   process.stdout.write(`${lines.join('\n')}\n`);
+
   const confirm = await ask('Confirm forced handoff? [y/N] ');
   ask.close?.();
   if (confirm.trim().toLowerCase() !== 'y') {
     process.stdout.write('Aborted. No changes made.\n');
     return { posted: false };
   }
+
   const result = postComment
     ? await postComment(issueNumber, plan.markerBody)
-    : ghJson([
+    : (ghJson([
         'api',
         `repos/${owner}/${name}/issues/${issueNumber}/comments`,
         '--method',
         'POST',
         '-f',
         `body=${plan.markerBody}`,
-      ]);
+      ]) as PostedCommentPayload);
+
   const commentUrl = String(result.html_url ?? result.url ?? '');
   process.stdout.write(
     [
@@ -162,6 +247,7 @@ export async function runHandoff(options = {}) {
       '',
     ].join('\n'),
   );
+
   return {
     posted: true,
     commentUrl,
@@ -169,15 +255,17 @@ export async function runHandoff(options = {}) {
     contextScope: plan.contextScope,
   };
 }
-export function main() {
-  runHandoff().catch((err) => {
-    process.stderr.write(`Error: ${err.message}\n`);
+
+export function main(): void {
+  runHandoff().catch((err: unknown) => {
+    process.stderr.write(`Error: ${(err as Error).message}\n`);
     process.exit(1);
   });
 }
-function makeReadlinePrompt() {
+
+function makeReadlinePrompt(): PromptFn {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (question) =>
+  const ask: PromptFn = (question) =>
     new Promise((resolve) =>
       rl.question(question, (answer) => {
         resolve(answer);
@@ -186,14 +274,16 @@ function makeReadlinePrompt() {
   ask.close = () => rl.close();
   return ask;
 }
-function parsePositiveInteger(value, flag) {
+
+function parsePositiveInteger(value: unknown, flag: string): number {
   const raw = String(value ?? '').trim();
   if (!/^[1-9]\d*$/.test(raw)) {
     throw new Error(`invalid ${flag} value: ${raw}`);
   }
   return Number(raw);
 }
-function parseOwnerRepo(value) {
+
+function parseOwnerRepo(value: unknown): { owner: string; name: string } {
   const repo = String(value ?? '').trim();
   const match = repo.match(/^([^/\s]+)\/([^/\s]+)$/);
   if (!match) {
@@ -201,17 +291,20 @@ function parseOwnerRepo(value) {
   }
   return { owner: match[1], name: match[2] };
 }
-function ghText(args) {
+
+function ghText(args: string[]): string {
   return execFileSync('gh', args, { encoding: 'utf8' }).trim();
 }
-function safeGhText(args) {
+
+function safeGhText(args: string[]): string {
   try {
     return ghText(args);
   } catch {
     return '';
   }
 }
-function ghJson(args, slurp = false) {
+
+function ghJson(args: string[], slurp = false): unknown {
   const finalArgs = [...args];
   if (slurp) {
     // gh api with --paginate and --jq '.[]' emits one JSON object per line.
@@ -224,7 +317,13 @@ function ghJson(args, slurp = false) {
   }
   return JSON.parse(execFileSync('gh', finalArgs, { encoding: 'utf8' }));
 }
-function buildTrustedMarkerLogins(owner, repo, viewerLogin, issueComments) {
+
+function buildTrustedMarkerLogins(
+  owner: string,
+  repo: string,
+  viewerLogin: string,
+  issueComments: IssueCommentPayload[],
+): Set<string> {
   const configuredActors = readTrustedMarkerActorsFromConfig();
   const configured = [
     viewerLogin,
@@ -234,10 +333,12 @@ function buildTrustedMarkerLogins(owner, repo, viewerLogin, issueComments) {
   const trusted = new Set(
     configured.filter(Boolean).map((l) => l.toLowerCase()),
   );
+
   if (!readCollaboratorTrustEnabled()) {
     return trusted;
   }
-  const permissionCache = new Map();
+
+  const permissionCache = new Map<string, string>();
   const uniqueLogins = new Set(
     issueComments
       .map((comment) =>
@@ -270,9 +371,12 @@ function buildTrustedMarkerLogins(owner, repo, viewerLogin, issueComments) {
   }
   return trusted;
 }
-function readTrustedMarkerActorsFromConfig() {
+
+function readTrustedMarkerActorsFromConfig(): string[] {
   try {
-    const config = JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
+    const config = JSON.parse(
+      readFileSync('.github/idd/config.json', 'utf8'),
+    ) as { trustedMarkerActors?: unknown };
     const actors = config?.trustedMarkerActors;
     if (Array.isArray(actors)) {
       return actors.map(String).filter(Boolean);
@@ -282,9 +386,16 @@ function readTrustedMarkerActorsFromConfig() {
   }
   return [];
 }
-function readCollaboratorTrustEnabled() {
+
+function readCollaboratorTrustEnabled(): boolean {
   try {
-    const config = JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
+    const config = JSON.parse(
+      readFileSync('.github/idd/config.json', 'utf8'),
+    ) as {
+      markerTrust?: { allowCollaboratorMarkers?: unknown } | null;
+      markerTrustAllowCollaboratorMarkers?: unknown;
+      allowCollaboratorMarkers?: unknown;
+    };
     const nested = config?.markerTrust?.allowCollaboratorMarkers;
     const topLevel =
       config?.markerTrustAllowCollaboratorMarkers ??
@@ -298,15 +409,18 @@ function readCollaboratorTrustEnabled() {
   }
   return isTruthy(process.env.IDD_TRUST_COLLABORATOR_MARKERS);
 }
-function isTruthy(value) {
+
+function isTruthy(value: unknown): boolean {
   return /^(1|true|yes)$/i.test(String(value ?? '').trim());
 }
-function splitCsv(value) {
+
+function splitCsv(value: unknown): string[] {
   return String(value ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
 }
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
