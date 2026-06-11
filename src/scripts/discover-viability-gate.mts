@@ -4,9 +4,67 @@
 // The scripts/discover-viability-gate.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+
 import { execFileSync } from 'node:child_process';
 
-const CRITERIA = [
+interface NormalizedIssue {
+  number: number;
+  title: string;
+  body: string;
+  state: string;
+}
+
+interface EvalResult {
+  pass: boolean;
+  evidence: string;
+}
+
+interface CriterionResult {
+  id: string;
+  name: string;
+  result: string;
+  evidence: string;
+}
+
+interface ViableItem {
+  number: number;
+  title: string;
+}
+
+interface DiscardedItem {
+  number: number;
+  title: string;
+  failedCriteria: string[];
+  criteria?: CriterionResult[];
+}
+
+interface ViabilitySummary {
+  viable: ViableItem[];
+  discarded: DiscardedItem[];
+  summary: {
+    total: number;
+    viableCount: number;
+    discardedCount: number;
+    discardedByCriterion: Record<string, number>;
+  };
+}
+
+interface IssueLike {
+  number?: unknown;
+  title?: unknown;
+  body?: unknown;
+  state?: unknown;
+}
+
+type IssueLoader = (
+  issueNumber: number,
+) => Promise<IssueLike | null> | IssueLike | null;
+
+const CRITERIA: {
+  id: string;
+  name: string;
+  evaluate: (issue: NormalizedIssue) => EvalResult;
+}[] = [
   {
     id: 'limited_scope',
     name: 'Limited scope',
@@ -23,6 +81,7 @@ const CRITERIA = [
     evaluate: evaluateAutonomousCompletion,
   },
 ];
+
 const BROAD_SCOPE_PATTERN =
   /\b(cross-cutting|cross cutting|across (?:many|multiple)|multiple subsystems?|repository-wide|entire repo|public interface|redesign|architecture|global refactor|large refactor)\b/i;
 const NARROW_SCOPE_PATTERN =
@@ -33,6 +92,7 @@ const SUBJECTIVE_VERIFICATION_PATTERN =
   /\b(feels?|looks? good|opinion|judgement?|ux call|maintainer preference|stakeholder preference|subjective)\b/i;
 const EXTERNAL_COORDINATION_PATTERN =
   /\b(external coordination|human decision|maintainer decision|stakeholder sign-?off|manual approval|waiting for (?:maintainer|stakeholder)|external system|third-?party access|credential|production access|cross-repo dependency)\b/i;
+
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
   if (args.issueNumbers.length === 0) {
@@ -40,6 +100,7 @@ if (isMainModule(import.meta.url)) {
       'missing required --issue <number> (repeatable) or --issues <n1,n2,...>',
     );
   }
+
   const owner =
     args.owner ||
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
@@ -48,21 +109,28 @@ if (isMainModule(import.meta.url)) {
   const summary = await evaluateDiscoverViability(args.issueNumbers, {
     loadIssue: buildIssueLoader(owner, repo),
   });
+
   if (args.csv) {
     process.stdout.write(renderCsv(summary));
   } else {
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   }
 }
-export async function evaluateDiscoverViability(issueNumbers, options = {}) {
+
+export async function evaluateDiscoverViability(
+  issueNumbers: unknown[],
+  options: { loadIssue?: IssueLoader } = {},
+): Promise<ViabilitySummary> {
   const { loadIssue } = options;
   if (typeof loadIssue !== 'function') {
     throw new Error(
       'evaluateDiscoverViability requires loadIssue(issueNumber)',
     );
   }
-  const viable = [];
-  const discarded = [];
+
+  const viable: ViableItem[] = [];
+  const discarded: DiscardedItem[] = [];
+
   for (const issueNumber of normalizeIssueNumbers(issueNumbers)) {
     const issue = await loadIssue(issueNumber);
     if (!issue) {
@@ -81,6 +149,7 @@ export async function evaluateDiscoverViability(issueNumbers, options = {}) {
       });
       continue;
     }
+
     const result = evaluateA4Viability(issue);
     if (result.passed) {
       viable.push({
@@ -96,6 +165,7 @@ export async function evaluateDiscoverViability(issueNumbers, options = {}) {
       criteria: result.criteria,
     });
   }
+
   return {
     viable,
     discarded,
@@ -107,10 +177,16 @@ export async function evaluateDiscoverViability(issueNumbers, options = {}) {
     },
   };
 }
-export function evaluateA4Viability(issue) {
+
+export function evaluateA4Viability(issue: unknown): {
+  passed: boolean;
+  failedCriteria: string[];
+  criteria: CriterionResult[];
+} {
   const normalizedIssue = normalizeIssue(issue);
-  const criteria = [];
-  const failedCriteria = [];
+  const criteria: CriterionResult[] = [];
+  const failedCriteria: string[] = [];
+
   for (const criterion of CRITERIA) {
     const result = criterion.evaluate(normalizedIssue);
     criteria.push({
@@ -123,13 +199,15 @@ export function evaluateA4Viability(issue) {
       failedCriteria.push(criterion.id);
     }
   }
+
   return {
     passed: failedCriteria.length === 0,
     failedCriteria,
     criteria,
   };
 }
-export function evaluateLimitedScope(issue) {
+
+export function evaluateLimitedScope(issue: NormalizedIssue): EvalResult {
   const corpus = `${issue.title}\n${issue.body}`;
   if (NARROW_SCOPE_PATTERN.test(corpus)) {
     return {
@@ -148,7 +226,8 @@ export function evaluateLimitedScope(issue) {
     evidence: 'No broad-scope signal detected.',
   };
 }
-export function evaluateClearVerification(issue) {
+
+export function evaluateClearVerification(issue: NormalizedIssue): EvalResult {
   const corpus = `${issue.title}\n${issue.body}`;
   if (OBJECTIVE_VERIFICATION_PATTERN.test(corpus)) {
     return {
@@ -167,7 +246,10 @@ export function evaluateClearVerification(issue) {
     evidence: 'No objective verification signal detected.',
   };
 }
-export function evaluateAutonomousCompletion(issue) {
+
+export function evaluateAutonomousCompletion(
+  issue: NormalizedIssue,
+): EvalResult {
   const corpus = `${issue.title}\n${issue.body}`;
   if (EXTERNAL_COORDINATION_PATTERN.test(corpus)) {
     return {
@@ -180,13 +262,25 @@ export function evaluateAutonomousCompletion(issue) {
     evidence: 'No external coordination signal detected.',
   };
 }
-function parseArgs(argv) {
-  const parsed = {
+
+function parseArgs(argv: string[]): {
+  issueNumbers: number[];
+  csv: boolean;
+  owner: string;
+  repo: string;
+} {
+  const parsed: {
+    issueNumbers: (string | number)[];
+    csv: boolean;
+    owner: string;
+    repo: string;
+  } = {
     issueNumbers: [],
     csv: false,
     owner: '',
     repo: '',
   };
+
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
@@ -220,12 +314,14 @@ function parseArgs(argv) {
     }
     throw new Error(`unknown argument: ${token}`);
   }
+
   return {
     ...parsed,
     issueNumbers: normalizeIssueNumbers(parsed.issueNumbers),
   };
 }
-function printHelp() {
+
+function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/discover-viability-gate.mjs --issue <number> [--issue <number> ...]
   node scripts/discover-viability-gate.mjs --issues <n1,n2,...>
@@ -244,14 +340,16 @@ Output schema (JSON mode):
   }
 `);
 }
-function normalizeIssueNumbers(values) {
+
+function normalizeIssueNumbers(values: unknown[]): number[] {
   const parsed = values
     .map((value) => Number.parseInt(String(value).trim(), 10))
     .filter(Number.isInteger);
   return [...new Set(parsed)];
 }
-function normalizeIssue(issue) {
-  const i = issue;
+
+function normalizeIssue(issue: unknown): NormalizedIssue {
+  const i = issue as IssueLike | null | undefined;
   return {
     number: Number(i?.number ?? 0),
     title: String(i?.title ?? ''),
@@ -259,8 +357,11 @@ function normalizeIssue(issue) {
     state: String(i?.state ?? ''),
   };
 }
-function countDiscardedCriteria(discarded) {
-  const counts = {};
+
+function countDiscardedCriteria(
+  discarded: DiscardedItem[],
+): Record<string, number> {
+  const counts: Record<string, number> = {};
   for (const item of discarded) {
     for (const criterion of item.failedCriteria ?? []) {
       counts[criterion] = (counts[criterion] ?? 0) + 1;
@@ -268,27 +369,37 @@ function countDiscardedCriteria(discarded) {
   }
   return counts;
 }
-function renderCsv(summary) {
+
+function renderCsv(summary: ViabilitySummary): string {
   const lines = ['kind,number,title,criteria'];
   for (const item of summary.viable) {
     lines.push(`viable,${item.number},${escapeCsv(item.title)},""`);
   }
   for (const item of summary.discarded) {
     lines.push(
-      `discarded,${item.number},${escapeCsv(item.title)},"${escapeCsv((item.failedCriteria ?? []).join('|'))}"`,
+      `discarded,${item.number},${escapeCsv(item.title)},"${escapeCsv(
+        (item.failedCriteria ?? []).join('|'),
+      )}"`,
     );
   }
   return `${lines.join('\n')}\n`;
 }
-function escapeCsv(value) {
+
+function escapeCsv(value: unknown): string {
   return String(value ?? '').replaceAll('"', '""');
 }
-function buildIssueLoader(owner, repo) {
-  return async function loadIssue(issueNumber) {
+
+function buildIssueLoader(
+  owner: string,
+  repo: string,
+): (issueNumber: number) => Promise<IssueLike | null> {
+  return async function loadIssue(
+    issueNumber: number,
+  ): Promise<IssueLike | null> {
     const data = ghJson(
       ['api', `repos/${owner}/${repo}/issues/${issueNumber}`, '--jq', '.'],
       { allowStatuses: [1] },
-    );
+    ) as IssueLike | null;
     if (!data) {
       return null;
     }
@@ -300,7 +411,11 @@ function buildIssueLoader(owner, repo) {
     };
   };
 }
-function ghText(args, options = {}) {
+
+function ghText(
+  args: string[],
+  options: { allowStatuses?: number[] } = {},
+): string {
   const { allowStatuses = [] } = options;
   try {
     return execFileSync('gh', args, {
@@ -308,20 +423,27 @@ function ghText(args, options = {}) {
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
   } catch (error) {
-    if (allowStatuses.includes(error.status)) {
+    if (
+      allowStatuses.includes((error as { status?: number }).status as number)
+    ) {
       return '';
     }
     throw error;
   }
 }
-function ghJson(args, options = {}) {
+
+function ghJson(
+  args: string[],
+  options: { allowStatuses?: number[] } = {},
+): unknown {
   const text = ghText(args, options);
   if (!text) {
     return null;
   }
   return JSON.parse(text);
 }
-function isMainModule(metaUrl) {
+
+function isMainModule(metaUrl: string): boolean {
   if (!process.argv[1]) {
     return false;
   }

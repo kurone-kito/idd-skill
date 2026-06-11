@@ -19,6 +19,7 @@ scripts/claim-approval-gate.mjs linguist-generated=true
 scripts/audit-pr-cleanup-summary.mjs linguist-generated=true
 scripts/phase-id-resolver.mjs linguist-generated=true
 scripts/branch-conflict-state.mjs linguist-generated=true
+scripts/discover-viability-gate.mjs linguist-generated=true
 # Every bin/ shim is generated from src/bin/*.mts (whole directory).
 bin/**/*.mjs linguist-generated=true
 
