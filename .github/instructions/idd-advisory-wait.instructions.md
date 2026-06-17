@@ -10,6 +10,26 @@ Policy constants (cap and windows) are named in
 [`docs/policy-constants.md`](../../docs/policy-constants.md). This file
 owns behavior.
 
+## Scope — Copilot-only settle/wait window
+
+This protocol's settle/wait window covers **Copilot only**. Other
+advisory reviewers configured through `.github/idd/config.json`
+`advisoryBotLogins` (for example CodeRabbit or a Codex connector) are
+**not** given a wait window by this protocol. That Copilot-only scope is
+deliberate: see the `external-bot` profile in
+[`docs/idd-review-policy-profiles.md`](../../docs/idd-review-policy-profiles.md),
+which swaps the single advisory bot by manual customization instead of
+gating on every configured bot.
+
+In a repository that configures non-Copilot `advisoryBotLogins`, the
+load-bearing safety net for their late-arriving findings is the **E1
+activity-universe snapshot + `review-watermark` delta**
+(`idd-review-snapshot.instructions.md`), re-checked by the F2/F3
+merge-readiness gate — not this advisory-wait window. See
+[`idd-pre-merge.instructions.md`](idd-pre-merge.instructions.md) for the
+merge-gate requirement that forbids a bare CI-green merge without a fresh
+covering snapshot.
+
 ## 1. Canonical path (helper-first)
 
 When helper support is installed, use the profile-selected
