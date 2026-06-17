@@ -194,10 +194,13 @@ When in scope, run:
 or `idd-doctor` finds that a commit already landed on the wrong branch —
 typically the primary worktree's `main`, or another issue's branch —
 recover by **cherry-picking** the misplaced commit onto the correct issue
-branch (in its own sibling worktree), then restore the contaminated branch
-to its intended state (e.g. `git reset --hard` the contaminated branch back
-to its upstream). Do **not** force-push the contaminated branch as a
-shortcut: preserve that branch's real history and move only the misplaced
+branch (in its own sibling worktree), then restore the contaminated
+branch. If the contaminated branch is **unpushed** (typically the primary
+worktree's `main`), `git reset --hard` it back to its upstream. If it was
+**already pushed or shared**, do **not** `git reset --hard` then force-push
+to erase the misplaced commit — that is the forbidden force-push; instead
+`git revert` the misplaced change, or let the operator evacuate the branch.
+Either way, preserve that branch's real history and move only the misplaced
 commit.
 
 Out of scope and explicitly **not** blocked:
