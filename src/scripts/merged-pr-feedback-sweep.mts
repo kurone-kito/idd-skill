@@ -325,10 +325,11 @@ function collectUnaddressedComments(
 
   for (const comment of comments) {
     const author = authorLogin(comment);
+    // IDD-agent comments (incl. their dispositions) are excluded by author
+    // here, so a disposition marker is treated specially only when the agent
+    // wrote it. A non-IDD reviewer who opens a comment with "**Rejected**" is
+    // still surfaced as feedback.
     if (!author || isIdd(author)) {
-      continue;
-    }
-    if (isDispositionBody(comment.body)) {
       continue;
     }
     // IDD bookkeeping is not feedback: a trusted operational-state marker,

@@ -166,6 +166,25 @@ test('excludes a comment addressed by a later IDD disposition', () => {
   assert.equal(result.prs.length, 0);
 });
 
+test('surfaces a non-IDD comment that opens with a disposition marker', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 14,
+      comments: [
+        {
+          body: '**Rejected** — I disagree with this approach; it breaks X.',
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'a-human' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(result.prs[0].unaddressedComments[0].author, 'a-human');
+});
+
 test('a non-disposition IDD comment (e.g. a marker) does not address feedback', () => {
   const prs: MergedPrInput[] = [
     {
