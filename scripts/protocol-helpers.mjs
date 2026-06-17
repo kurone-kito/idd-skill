@@ -1401,6 +1401,12 @@ export function evaluateAdvisoryWaitOutcome(input) {
   }
   return input.elapsedMinutes >= settledWindowMinutes ? 'SATISFIED' : 'WAIT';
 }
+// F3 deliberately has a separate outcome from evaluateAdvisoryWaitOutcome:
+// once Copilot is no longer pending (review submitted or cancelled), F3
+// treats the advisory wait as SATISFIED so a settled-but-not-re-reviewed
+// HEAD can merge, even while the shared `outcome` still routes E14/F2 to
+// REQUEST_NEEDED. F3 reads f3Outcome exclusively when helper output is
+// valid; see idd-advisory-wait.instructions.md §1 (F3-specific interpretation).
 export function evaluateAdvisoryWaitF3Outcome(input) {
   if (input.lastCopilotCommit === input.prHeadSha || !input.copilotPending) {
     return 'SATISFIED';
