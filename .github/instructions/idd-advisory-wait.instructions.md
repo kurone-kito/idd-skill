@@ -90,6 +90,15 @@ to the distributed defaults named in `docs/policy-constants.md`:
 
 ### F3-specific interpretation
 
+**Precedence**: when valid helper output is available, **F3 uses
+`f3Outcome` exclusively**, so the **F3** column in the Caller-mapping table
+above is read from `f3Outcome`. The `Outcome` column and its
+`REQUEST_NEEDED → return to E14` routing govern **E14, F2, and the
+shell-fallback path** (where no `f3Outcome` exists). This is why the helper
+can legitimately emit `outcome: REQUEST_NEEDED` together with `f3Outcome:
+SATISFIED` (when `copilotPending` is `false`) and F3 still merges rather
+than returning to E14.
+
 - F3 must use `f3Outcome` when helper output is available.
 - If `copilotPending` is `false`, F3 treats advisory wait as satisfied.
 - If `copilotPending` is `true`, F3 must not merge on `WAIT`,

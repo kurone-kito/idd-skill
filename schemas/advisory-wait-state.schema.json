@@ -46,6 +46,7 @@
     },
     "outcome": {
       "type": "string",
+      "description": "Shared routing outcome consumed by E14, F2, and the shell-fallback path (AW1-AW5). Its REQUEST_NEEDED -> return-to-E14 routing governs E14 and F2; F3 reads f3Outcome instead.",
       "enum": [
         "SATISFIED",
         "REQUEST_NEEDED",
@@ -56,6 +57,7 @@
     },
     "f3Outcome": {
       "type": "string",
+      "description": "F3-authoritative outcome; treats copilotPending=false as SATISFIED so F3 may merge a settled-but-not-re-reviewed advisory state. F3 uses this field exclusively when helper output is valid, which is why it can diverge from outcome.",
       "enum": [
         "SATISFIED",
         "REQUEST_NEEDED",
