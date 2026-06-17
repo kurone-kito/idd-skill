@@ -64,6 +64,15 @@ condition checks must cover the full activity universe (human
 reviewers plus advisory bot surfaces such as Copilot, CodeRabbit,
 Codex connectors, and CI bots).
 
+When the repository configures non-Copilot `advisoryBotLogins` (for
+example CodeRabbit or a Codex connector), the advisory-wait window does
+**not** cover those bots (`idd-advisory-wait.instructions.md` — that
+window is Copilot-only). F2/F3 MUST NOT merge on a bare CI-green signal:
+the **Review currency** check below must confirm a fresh activity
+snapshot whose `review-watermark` covers the latest activity timestamp,
+so a non-Copilot finding that lands shortly after CI completes still
+returns the workflow to E1 instead of merging over it.
+
 - **Review currency** (live re-fetch required, freshness gate): read the
   most recent `<!-- review-watermark: {agent-id} {claim-id} … -->`
   comment whose embedded `{claim-id}` matches the current active claim
@@ -116,8 +125,9 @@ Codex connectors, and CI bots).
   Structural ack-only carve-out: when the only trigger above is newer
   activity or count growth, and the helper evidence proves it consists
   solely of post-disposition acknowledgements from the configured
-  advisory bots (`reviewCurrency.live.ackOnly` items with the
-  `effective` values current; `comparisonReason:
+  advisory bots (the `reviewCurrency.live.ackOnly.items` are all
+  ack-only, with the sibling `reviewCurrency.live.effective` values
+  current and `reviewCurrency.comparisonReason:
   ack-only-post-disposition`), the advisory courtesy-ack convergence
   rule in `idd-review-triage.instructions.md` applies: do not return to
   E1 for that activity alone. The agent still confirms the semantic

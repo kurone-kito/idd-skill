@@ -66,9 +66,10 @@ assumptions that did not hold when published may fail A4.5 checks
 waste agent time during work.
 
 **Prevention during drafting**: This bundle is where coherence, safety,
-and uniqueness should be validated **before** publishing. The three
-A4.5 prevention checks (coherence, safety, uniqueness) correspond to
-bucket escalation triggers during drafting:
+and uniqueness should be validated **before** publishing. A4.5 runs
+seven suitability checks; the three that drafting can most directly
+prevent (coherence, safety, uniqueness) correspond to bucket escalation
+triggers during drafting:
 
 - If an issue might be incoherent → escalate to `needs-decision` during
   drafting
