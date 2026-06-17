@@ -45,8 +45,43 @@ const PACKAGE_SPEC_PIN_HINT =
   'Pass --package-spec with a pinned tarball URL or reviewed commit archive when you need reproducible helper imports.';
 const NODE_ENGINES = '^22.22.2 || >=24';
 const SCRIPT_FILE_EXTENSIONS = ['.mjs', '.js', '.json'];
+// Runtime data files a helper reads at execution time (not via `import`),
+// so the import-graph walk cannot discover them. A consumer that vendors
+// exactly `managedFiles` must still receive these or the helper crashes on a
+// missing path. The drift guard in tests/helper-runtime-manifest.test.mts
+// asserts the vendored-node managedFiles include every data path
+// validate-schemas references, so this list must stay complete.
 const EXTRA_RUNTIME_FILES = new Map([
   ['scripts/advisory-wait-policy.mjs', ['schemas/policy.schema.json']],
+  // validate-schemas validates every schema/fixture pair in its CLI `cases`
+  // table by reading the files directly; none of them are imported.
+  [
+    'scripts/validate-schemas.mjs',
+    [
+      'schemas/advisory-wait-state.schema.json',
+      'schemas/claim-marker.schema.json',
+      'schemas/forced-handoff-marker.schema.json',
+      'schemas/live-status-digest.schema.json',
+      'schemas/phase-graph.json',
+      'schemas/phase-graph.schema.json',
+      'schemas/policy.schema.json',
+      'schemas/pre-merge-readiness.schema.json',
+      'fixtures/schemas/advisory-wait-state.invalid.json',
+      'fixtures/schemas/advisory-wait-state.valid.json',
+      'fixtures/schemas/claim-marker.invalid.json',
+      'fixtures/schemas/claim-marker.valid.json',
+      'fixtures/schemas/forced-handoff-marker.invalid.json',
+      'fixtures/schemas/forced-handoff-marker.valid.json',
+      'fixtures/schemas/live-status-digest.invalid.json',
+      'fixtures/schemas/live-status-digest.valid.json',
+      'fixtures/schemas/phase-graph.invalid.json',
+      'fixtures/schemas/phase-graph.valid.json',
+      'fixtures/schemas/policy.invalid.json',
+      'fixtures/schemas/policy.valid.json',
+      'fixtures/schemas/pre-merge-readiness.invalid.json',
+      'fixtures/schemas/pre-merge-readiness.valid.json',
+    ],
+  ],
 ]);
 const HELPER_COMMANDS = [
   {
