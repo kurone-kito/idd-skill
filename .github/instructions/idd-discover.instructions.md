@@ -95,8 +95,10 @@ Read the **issue-scope** value from the Project commands table in
   normal. When the
   roadmap path yields **zero candidates reaching A3.5** — i.e. A2
   enumerated no open execution leaves, or A3 filtered them all out as
-  blocked — fall back to **A0-O** before entering the A3 decision tree
-  (mirror of `orphan-first`). If candidates do reach A3.5 but it holds
+  blocked — fall back to **A0-O** before entering the A3 decision tree.
+  This reuses the A0-O orphan search **only** as a post-roadmap fallback;
+  the roadmap path stays primary (unlike `orphan-first`, where A0-O is the
+  first path). If candidates do reach A3.5 but it holds
   them all as
   approval-needed, do **not** fall back: A3.5's stop/ask behavior
   governs, so the fallback never re-scopes around the approval gate.
@@ -150,10 +152,15 @@ Apply the configured policy before passing A0-O candidates to A3.5:
 If at least one orphan issue remains after the configured policy is
 applied: pass the remaining set directly to **A3.5**. Skip A1–A3.
 
-If no orphan issues remain after the configured policy is applied: fall
-back to the roadmap path. Proceed to **A1** and continue with the normal
-A1 → A1.5 → A2 → A3 → A3.5 → A4 sequence. (For the `roadmap-first`
-fallback, the guard above redirects this exit to A3.)
+If no orphan issues remain after the configured policy is applied, the
+next step depends on which path invoked A0-O:
+
+- **`orphan-first` primary path**: fall back to the roadmap path. Proceed
+  to **A1** and continue with the normal
+  A1 → A1.5 → A2 → A3 → A3.5 → A4 sequence.
+- **`roadmap-first` fallback**: the roadmap path already ran, so do **not**
+  re-enter A1. Per the guard at the top of A0-O, this exit goes straight to
+  the **A3 decision tree**.
 
 The A3 decision tree (abort / ask operator in unattended mode) is
 reached when the active discovery path(s) produce zero results: for

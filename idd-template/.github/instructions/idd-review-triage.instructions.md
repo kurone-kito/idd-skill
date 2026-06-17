@@ -398,8 +398,10 @@ E1; continue to F-phase on the current HEAD SHA.
 identity is configured (`advisoryBotLogins` in `.github/idd/config.json`,
 the `--advisory-bot-logins` flag, or `IDD_ADVISORY_BOT_LOGINS`), the
 activity-snapshot and `pre-merge-readiness` evidence emits the structural
-part of this classification (`ackOnly` items, `effective` activity values,
-and `comparisonReason: ack-only-post-disposition`). The agent still owns
+part of this classification (the `reviewCurrency.live.ackOnly.items`, the
+sibling `reviewCurrency.live.effective` activity values, and
+`reviewCurrency.comparisonReason: ack-only-post-disposition`). The agent
+still owns
 the semantic residual — confirming the ack raises no new actionable
 finding — and the evidence never weakens the disposition-evidence or
 unreplied-comment gates, which remain the backstop.

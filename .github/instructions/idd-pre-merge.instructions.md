@@ -125,8 +125,9 @@ returns the workflow to E1 instead of merging over it.
   Structural ack-only carve-out: when the only trigger above is newer
   activity or count growth, and the helper evidence proves it consists
   solely of post-disposition acknowledgements from the configured
-  advisory bots (`reviewCurrency.live.ackOnly` items with the
-  `effective` values current; `comparisonReason:
+  advisory bots (the `reviewCurrency.live.ackOnly.items` are all
+  ack-only, with the sibling `reviewCurrency.live.effective` values
+  current and `reviewCurrency.comparisonReason:
   ack-only-post-disposition`), the advisory courtesy-ack convergence
   rule in `idd-review-triage.instructions.md` applies: do not return to
   E1 for that activity alone. The agent still confirms the semantic
