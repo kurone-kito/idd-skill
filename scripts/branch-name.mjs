@@ -99,7 +99,7 @@ function parseArgs(argv) {
     const token = argv[index];
     const value = argv[index + 1];
     const requireValue = () => {
-      if (value === undefined) {
+      if (value === undefined || value.startsWith('--')) {
         throw new Error(`missing value for argument: ${token}`);
       }
       return value;

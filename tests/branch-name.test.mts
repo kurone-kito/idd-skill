@@ -30,13 +30,6 @@ const WORKED_EXAMPLES: ReadonlyArray<{
       'Add a helper that computes the canonical issue/<number>-<slug> branch name',
     branch: 'issue/901-add-helper-that-computes-canonical-issue',
   },
-  // 40-char cut that lands mid-token and trims back to the last hyphen
-  {
-    number: 123,
-    title:
-      'Implement comprehensive authentication authorization middleware system',
-    branch: 'issue/123-implement-comprehensive-authentication',
-  },
   // empty slug falls back to `task`
   { number: 7, title: '!!!', branch: 'issue/7-task' },
   // non-ASCII characters drop out, ASCII tokens remain

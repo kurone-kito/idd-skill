@@ -134,17 +134,22 @@ from the issue title so parallel sessions converge on the same branch
 name.
 
 When helper runtime is enabled, compute the slug with the branch-name
-helper (resolve the profile-selected command from
-`docs/idd-helper-scripts.md`; non-vendored profiles use `idd:branch-name`,
-not the `node scripts/...` form) instead of hand-tracing it:
+helper instead of hand-tracing it:
 
 ```sh
+# source repo / vendored-node
 node scripts/branch-name.mjs --number <issue-number> --title <issue-title>
+
+# package-manager / ephemeral-npx
+<profile-selected-branch-name-command> --number <issue-number> --title <issue-title>
 ```
 
-It prints `issue/<number>-<slug>` and implements the algorithm below
-exactly. The written algorithm remains the canonical spec and fallback;
-use it when the helper is unavailable or its output is malformed:
+Resolve `<profile-selected-branch-name-command>` from
+`docs/idd-helper-scripts.md`; do not hardcode `node scripts/...` for
+non-vendored profiles. It prints `issue/<number>-<slug>` and implements
+the algorithm below exactly. The written algorithm remains the canonical
+spec and fallback; use it when the helper is unavailable or its output is
+malformed:
 
 1. Convert the issue title to lowercase.
 2. Replace every character outside ASCII `a-z` and `0-9` with `-`.
@@ -164,8 +169,6 @@ use it when the helper is unavailable or its output is malformed:
 - `Add the OAuth login flow` → `issue/42-add-oauth-login-flow`
 - `Add a helper that computes the canonical issue/<number>-<slug> branch name`
   → `issue/901-add-helper-that-computes-canonical-issue`
-- `Implement comprehensive authentication authorization middleware system`
-  → `issue/123-implement-comprehensive-authentication`
 - `!!!` → `issue/7-task`
 - `日本語 calendar 機能` → `issue/99-calendar`
 
