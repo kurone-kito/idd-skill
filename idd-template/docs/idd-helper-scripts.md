@@ -108,6 +108,10 @@ In the idd-skill source repository, the following optional helpers were adopted:
 - `scripts/cleanup-hygiene-report.mjs` for post-merge cleanup hygiene
   metrics aggregation and trend reporting (referenced in
   [kurone-kito/idd-skill#438](https://github.com/kurone-kito/idd-skill/issues/438))
+- `scripts/merged-pr-feedback-sweep.mjs` for read-only detection of
+  unresolved / unaddressed advisory feedback on merged PRs, fed manually to
+  the issue-authoring skill (referenced in
+  [kurone-kito/idd-skill#931](https://github.com/kurone-kito/idd-skill/issues/931))
 
 **Utility and Diagnostic Commands:**
 
@@ -861,6 +865,41 @@ Interpretation rules:
   it with the written Resume/S2-S4 checks for the same active claim,
   stale-threshold gating, closed/merged guards, and A5 race-safe claim
   verification. `quiet_window_met = true` alone is never sufficient.
+
+### Merged-PR feedback sweep
+
+- Source repo / vendored-node command:
+  `node scripts/merged-pr-feedback-sweep.mjs`
+- Package-manager / ephemeral-npx command: use the profile-selected
+  `idd-merged-pr-feedback-sweep` command
+- A **manually-invoked**, read-only detector (no schedule, no mutation). It
+  scans MERGED PRs and surfaces feedback that was left unattended at merge:
+  - **Window selector**: `--since <ISO8601>` and/or `--days <N>`, or
+    `--pr <n>` (repeatable) / `--prs <n1,n2,...>`; `--limit <N>` caps the
+    `--since`/`--days` enumeration. Optional `--owner`, `--repo`,
+    `--trusted-marker-logins`, and `--advisory-bot-logins` (same convention
+    as `review-activity-snapshot`).
+  - **Surfaces**: review threads with `isResolved == false` (excluding
+    threads the IDD agent itself opened; each carries a `dispositioned` flag
+    from the in-thread disposition check), and regular comments /
+    `CHANGES_REQUESTED` review bodies from non-IDD-agent authors that have
+    **no later IDD-agent disposition** (`**Accepted**` / `**Rejected**` /
+    `**Awaiting maintainer decision**`). Trusted IDD operational markers and
+    IDD disposition comments are excluded from the feedback set. Each finding
+    carries an `advisoryBot` flag (`isKnownReviewBot` or a configured
+    `advisoryBotLogins` author) so the operator can prioritize human feedback
+    over capricious advisory-bot noise.
+- JSON output keys: `sweepWindow`, `trustedMarkerActors`,
+  `advisoryBotLogins`, `prs` (each entry has `number`, `mergedAt`,
+  `mergeCommit`, `unresolvedThreads`, and `unaddressedComments`), and
+  `summary` (`prCount`, `flaggedPrCount`, `unresolvedThreadCount`,
+  `unaddressedCommentCount`).
+- Read-only boundary: the helper performs no minimization, no posting, and no
+  issue creation. **Handoff**: the JSON is the input an operator hands to the
+  issue-authoring skill, which re-verifies each candidate against current
+  `main` (reuse-first / not-already-fixed) and drafts follow-up issues
+  bucketed by readiness. The helper does deterministic detection; the
+  judgment-heavy re-verification, drafting, and publish stay operator-gated.
 
 ## Friction Inventory
 
