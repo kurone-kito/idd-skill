@@ -257,7 +257,10 @@ Generate a fresh `{claim-id}`. Determine `{prior-claim-id}`:
 - **Fresh claim** or claim after a released / unclaimed state → `none`
 
 Post the claim comment to the issue. Keep the HTML token at the start
-of the body, followed by the visible note:
+of the body, followed by the visible note. When helper runtime is enabled,
+render this body with the profile-selected emit-marker command
+(`--type claimed-by`, emit-only; see `docs/idd-helper-scripts.md`); the
+written format below stays the canonical fallback:
 
 ```markdown
 <!-- claimed-by: {agent-id} {claim-id} supersedes: {prior-claim-id|none} {ISO8601-timestamp} branch: {branch-name} -->

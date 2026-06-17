@@ -865,6 +865,104 @@ export function renderExternalCheckWaiverComment(
   ].join('\n');
 }
 
+// --- Per-cycle marker body renderers (#900) ---
+//
+// Pure, network-free renderers for the three operational markers an agent
+// posts every cycle. Each returns the exact ready-to-post body (HTML marker
+// token + visible "Do not edit" note); the agent still posts it via the
+// documented HTTP path, so the read-only-by-default / instructions-only
+// fallback is unaffected. The written formats in idd-overview-core (claim)
+// and idd-review-snapshot (watermark/baseline) remain canonical.
+
+function normalizeMarkerCount(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+    return String(value);
+  }
+  const trimmed = String(value ?? '').trim();
+  return /^\d+$/.test(trimmed) ? trimmed : null;
+}
+
+// `none` or a valid ISO timestamp (matching the watermark parser's
+// none-or-ISO contract); null signals an invalid value the caller rejects.
+function normalizeMarkerIsoOrNone(value: unknown): string | null {
+  const token = normalizeNonWhitespaceToken(value);
+  if (token === '' || token === 'none') {
+    return 'none';
+  }
+  return normalizeIsoTimestamp(token) || null;
+}
+
+export function renderClaimedByMarker(payload: {
+  agentId?: unknown;
+  claimId?: unknown;
+  supersedes?: unknown;
+  timestamp?: unknown;
+  branch?: unknown;
+}): string {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const claimId = normalizeNonWhitespaceToken(payload?.claimId);
+  const supersedes = normalizeNonWhitespaceToken(payload?.supersedes) || 'none';
+  const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
+  const branch = normalizeBranchToken(payload?.branch);
+  if (!agentId || !claimId || !timestamp || !branch) {
+    throw new Error('invalid claimed-by marker payload');
+  }
+  return [
+    `<!-- claimed-by: ${agentId} ${claimId} supersedes: ${supersedes} ${timestamp} branch: ${branch} -->`,
+    '',
+    `_${agentId}: issue claim — IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
+
+export function renderReviewWatermarkMarker(payload: {
+  agentId?: unknown;
+  claimId?: unknown;
+  headSha?: unknown;
+  maxActivityAt?: unknown;
+  totalItemCount?: unknown;
+  ciCompletedAt?: unknown;
+}): string {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const claimId = normalizeNonWhitespaceToken(payload?.claimId);
+  const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
+  const maxActivityAt = normalizeMarkerIsoOrNone(payload?.maxActivityAt);
+  const totalItemCount = normalizeMarkerCount(payload?.totalItemCount);
+  const ciCompletedAt = normalizeMarkerIsoOrNone(payload?.ciCompletedAt);
+  if (
+    !agentId ||
+    !claimId ||
+    !/^[0-9a-f]{40}$/.test(headSha) ||
+    maxActivityAt === null ||
+    totalItemCount === null ||
+    ciCompletedAt === null
+  ) {
+    throw new Error('invalid review-watermark marker payload');
+  }
+  return [
+    `<!-- review-watermark: ${agentId} ${claimId} ${headSha} ${maxActivityAt} ${totalItemCount} ${ciCompletedAt} -->`,
+    '',
+    `_${agentId}: review triage snapshot — IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
+
+export function renderReviewBaselineMarker(payload: {
+  agentId?: unknown;
+  claimId?: unknown;
+  sha?: unknown;
+}): string {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const claimId = normalizeNonWhitespaceToken(payload?.claimId);
+  const sha = normalizeNonWhitespaceToken(payload?.sha);
+  if (!agentId || !claimId || !sha) {
+    throw new Error('invalid review-baseline marker payload');
+  }
+  return [
+    `<!-- review-baseline: ${agentId} ${claimId} ${sha} -->`,
+    '',
+    `_${agentId}: critique baseline — IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
+
 function matchCheckSelectorLocal(name: unknown, selector: unknown): boolean {
   const n = String(name ?? '').trim();
   const s = String(selector ?? '').trim();
