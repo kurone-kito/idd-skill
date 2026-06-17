@@ -211,6 +211,23 @@ test('excludes a trusted IDD operational marker comment from the feedback set', 
   assert.equal(result.prs.length, 0);
 });
 
+test('excludes an IDD bookkeeping marker even from CI automation', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 13,
+      comments: [
+        {
+          body: '<!-- idd-cleanup-evidence: applied applied:1 failed:0 -->\n\n_evidence_',
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'github-actions[bot]' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 0);
+});
+
 test('surfaces an unaddressed CHANGES_REQUESTED review body', () => {
   const prs: MergedPrInput[] = [
     {

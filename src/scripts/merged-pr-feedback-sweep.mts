@@ -17,6 +17,7 @@ import {
   hasFreshDisposition,
   isDispositionComment,
   isKnownReviewBot,
+  normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   resolveAdvisoryBotLogins,
   resolveTrustedMarkerActors,
@@ -171,6 +172,38 @@ function isDispositionBody(body: string | null | undefined): boolean {
   );
 }
 
+// Normalize a comma-separated login list; returns null when empty so callers
+// can fall through to the next source in their precedence chain.
+function resolveLoginList(value: string): string[] | null {
+  const tokens = value
+    .split(',')
+    .map((token) => token.trim())
+    .filter(Boolean);
+  return tokens.length > 0 ? normalizeTrustedMarkerLogins(tokens) : null;
+}
+
+// IDD bookkeeping comments are not reviewer feedback.
+function isIddBookkeeping(
+  body: string | null | undefined,
+  author: string,
+  isTrusted: (login: string) => boolean,
+): boolean {
+  // IDD HTML-comment bookkeeping markers (cleanup-evidence, plan, digest,
+  // roadmap-audit, …) are posted by the agent or by CI automation such as
+  // github-actions, never by a reviewer; exclude them regardless of author.
+  if (
+    String(body ?? '')
+      .trimStart()
+      .startsWith('<!-- idd-')
+  ) {
+    return true;
+  }
+  // Operational-state markers (claimed-by / review-watermark / advisory-wait
+  // / …) count only from a trusted marker author; an untrusted look-alike is
+  // left in as surfacing context.
+  return operationalMarkerPrefix(body ?? '') !== null && isTrusted(author);
+}
+
 // ---------------------------------------------------------------------------
 // Pure sweep builder (the testable core — no network)
 // ---------------------------------------------------------------------------
@@ -298,8 +331,10 @@ function collectUnaddressedComments(
     if (isDispositionBody(comment.body)) {
       continue;
     }
-    // A trusted IDD operational marker is bookkeeping, not feedback.
-    if (operationalMarkerPrefix(comment.body ?? '') && isTrusted(author)) {
+    // IDD bookkeeping is not feedback: a trusted operational-state marker,
+    // or any `<!-- idd-… -->` comment (e.g. cleanup-evidence / plan / digest,
+    // which CI automation such as github-actions also posts).
+    if (isIddBookkeeping(comment.body, author, isTrusted)) {
       continue;
     }
     if (isLaterThan(latestDispositionAt, commentTimestamp(comment))) {
@@ -350,6 +385,7 @@ interface SweepArgs {
   repo: string;
   trustedMarkerLogins: string;
   advisoryBotLogins: string;
+  iddAgentLogins: string;
 }
 
 function parseArgs(argv: string[]): SweepArgs {
@@ -362,6 +398,7 @@ function parseArgs(argv: string[]): SweepArgs {
     repo: '',
     trustedMarkerLogins: '',
     advisoryBotLogins: '',
+    iddAgentLogins: '',
   };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -373,26 +410,38 @@ function parseArgs(argv: string[]): SweepArgs {
       index += 1;
       return value;
     };
+    const nextInt = (): number => {
+      const raw = next();
+      const value = Number.parseInt(raw, 10);
+      if (!Number.isFinite(value) || String(value) !== raw.trim()) {
+        throw new Error(`${token} expects an integer, got "${raw}"`);
+      }
+      return value;
+    };
     switch (token) {
       case '--since':
         parsed.since = next();
         break;
       case '--days':
-        parsed.days = Number.parseInt(next(), 10);
+        parsed.days = nextInt();
         break;
       case '--pr':
-        parsed.prNumbers.push(Number.parseInt(next(), 10));
+        parsed.prNumbers.push(nextInt());
         break;
       case '--prs':
         for (const part of next().split(',')) {
-          const value = Number.parseInt(part.trim(), 10);
-          if (!Number.isNaN(value)) {
-            parsed.prNumbers.push(value);
+          const trimmed = part.trim();
+          const value = Number.parseInt(trimmed, 10);
+          if (!Number.isFinite(value) || String(value) !== trimmed) {
+            throw new Error(
+              `--prs expects comma-separated integers, got "${part}"`,
+            );
           }
+          parsed.prNumbers.push(value);
         }
         break;
       case '--limit':
-        parsed.limit = Number.parseInt(next(), 10);
+        parsed.limit = nextInt();
         break;
       case '--owner':
         parsed.owner = next();
@@ -405,6 +454,9 @@ function parseArgs(argv: string[]): SweepArgs {
         break;
       case '--advisory-bot-logins':
         parsed.advisoryBotLogins = next();
+        break;
+      case '--idd-agent-logins':
+        parsed.iddAgentLogins = next();
         break;
       default:
         throw new Error(`unknown argument: ${token}`);
@@ -486,32 +538,47 @@ function listMergedPrNumbers(
   return items;
 }
 
-const PR_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
-  repository(owner:$owner,name:$repo){
-    pullRequest(number:$number){
-      number
-      merged
-      mergedAt
-      mergeCommit{ oid }
-      comments(first:100){ nodes{ body url createdAt author{ login } } }
-      reviews(first:100){ nodes{ body url state submittedAt author{ login } } }
-      reviewThreads(first:100){ nodes{
-        isResolved
-        path
-        comments(first:100){ nodes{ body url createdAt author{ login } } }
-      } }
-    }
-  }
-}`;
+interface Connection<T> {
+  pageInfo?: { hasNextPage?: boolean | null; endCursor?: string | null } | null;
+  nodes?: T[] | null;
+}
 
-interface PullRequestNode {
-  number: number;
-  merged?: boolean | null;
-  mergedAt?: string | null;
-  mergeCommit?: { oid?: string | null } | null;
-  comments?: { nodes?: SweepCommentInput[] | null } | null;
-  reviews?: { nodes?: SweepReviewInput[] | null } | null;
-  reviewThreads?: { nodes?: SweepThreadInput[] | null } | null;
+// Page a single `pullRequest` connection to completion so large PRs cannot
+// silently truncate at 100 items (which would hide unresolved threads or a
+// later disposition comment and produce a false negative). Per-thread reply
+// pagination is intentionally left at first:100 — a thread with 100+ replies
+// is pathological and only affects the advisory `dispositioned` flag, not
+// whether the thread surfaces.
+function fetchAllNodes<T>(
+  owner: string,
+  repo: string,
+  number: number,
+  field: string,
+  nodeFields: string,
+): T[] {
+  const out: T[] = [];
+  let after: string | null = null;
+  for (;;) {
+    const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
+      repository(owner:$owner,name:$repo){ pullRequest(number:$number){
+        ${field}(first:100,after:$after){ pageInfo{ hasNextPage endCursor } nodes{ ${nodeFields} } }
+      } }
+    }`;
+    const result = ghGraphql(query, { owner, repo, number, after }) as {
+      data?: {
+        repository?: {
+          pullRequest?: Record<string, Connection<T> | null> | null;
+        } | null;
+      } | null;
+    };
+    const conn = result?.data?.repository?.pullRequest?.[field];
+    out.push(...(conn?.nodes ?? []));
+    if (!conn?.pageInfo?.hasNextPage || !conn.pageInfo.endCursor) {
+      break;
+    }
+    after = conn.pageInfo.endCursor;
+  }
+  return out;
 }
 
 function fetchMergedPr(
@@ -519,22 +586,52 @@ function fetchMergedPr(
   repo: string,
   number: number,
 ): MergedPrInput | null {
-  const result = ghGraphql(PR_QUERY, { owner, repo, number }) as {
+  const metaQuery = `query($owner:String!,$repo:String!,$number:Int!){
+    repository(owner:$owner,name:$repo){ pullRequest(number:$number){
+      number merged mergedAt mergeCommit{ oid }
+    } }
+  }`;
+  const meta = ghGraphql(metaQuery, { owner, repo, number }) as {
     data?: {
-      repository?: { pullRequest?: PullRequestNode | null } | null;
+      repository?: {
+        pullRequest?: {
+          number?: number;
+          merged?: boolean | null;
+          mergedAt?: string | null;
+          mergeCommit?: { oid?: string | null } | null;
+        } | null;
+      } | null;
     } | null;
   };
-  const pr = result?.data?.repository?.pullRequest;
+  const pr = meta?.data?.repository?.pullRequest;
   if (!pr?.merged) {
     return null;
   }
   return {
-    number: pr.number,
+    number: pr.number ?? number,
     mergedAt: pr.mergedAt ?? null,
     mergeCommit: pr.mergeCommit?.oid ?? null,
-    threads: pr.reviewThreads?.nodes ?? [],
-    comments: pr.comments?.nodes ?? [],
-    reviews: pr.reviews?.nodes ?? [],
+    comments: fetchAllNodes<SweepCommentInput>(
+      owner,
+      repo,
+      number,
+      'comments',
+      'body url createdAt author{ login }',
+    ),
+    reviews: fetchAllNodes<SweepReviewInput>(
+      owner,
+      repo,
+      number,
+      'reviews',
+      'body url state submittedAt author{ login }',
+    ),
+    threads: fetchAllNodes<SweepThreadInput>(
+      owner,
+      repo,
+      number,
+      'reviewThreads',
+      'isResolved path comments(first:100){ nodes{ body url createdAt author{ login } } }',
+    ),
   };
 }
 
@@ -559,6 +656,16 @@ function main(): void {
     envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
     config: iddConfig,
   });
+  // The IDD agent accounts whose comments are treated as dispositions and
+  // whose own comments are not feedback. Distinct from trusted-marker actors:
+  // a human maintainer can be a trusted-marker actor whose review feedback we
+  // still want to surface. Defaults to the trusted-marker actors (the agent
+  // posts under that identity in this repo); override with --idd-agent-logins
+  // or IDD_AGENT_LOGINS when the agent runs under a separate account.
+  const iddAgentLogins =
+    resolveLoginList(args.iddAgentLogins) ??
+    resolveLoginList(process.env.IDD_AGENT_LOGINS ?? '') ??
+    trustedMarkerActors;
 
   const sinceDate = resolveSinceDate(args);
   const targets =
@@ -577,9 +684,7 @@ function main(): void {
   const result = buildMergedPrFeedbackSweep(prs, {
     trustedMarkerActors,
     advisoryBotLogins,
-    // In this workflow the IDD agent posts dispositions under the trusted
-    // marker actor identity, so the disposition authors are those actors.
-    iddAgentLogins: trustedMarkerActors,
+    iddAgentLogins,
   });
 
   process.stdout.write(
@@ -593,6 +698,7 @@ function main(): void {
         },
         trustedMarkerActors,
         advisoryBotLogins,
+        iddAgentLogins,
         prs: result.prs,
         summary: result.summary,
       },

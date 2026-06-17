@@ -878,7 +878,13 @@ Interpretation rules:
     `--pr <n>` (repeatable) / `--prs <n1,n2,...>`; `--limit <N>` caps the
     `--since`/`--days` enumeration. Optional `--owner`, `--repo`,
     `--trusted-marker-logins`, and `--advisory-bot-logins` (same convention
-    as `review-activity-snapshot`).
+    as `review-activity-snapshot`). `--idd-agent-logins` (or
+    `IDD_AGENT_LOGINS`) names the agent accounts whose comments are
+    dispositions / are not feedback — distinct from trusted-marker actors so a
+    human maintainer who is a trusted-marker actor still has their review
+    feedback surfaced; it defaults to the trusted-marker actors. Numeric flags
+    reject non-integer values, and the PR connections are paged to completion
+    so large PRs do not silently truncate.
   - **Surfaces**: review threads with `isResolved == false` (excluding
     threads the IDD agent itself opened; each carries a `dispositioned` flag
     from the in-thread disposition check), and regular comments /
