@@ -79,7 +79,9 @@ the items that will appear in ReviewItems_snapshot). Write `none` if
 the snapshot is
 empty. Compute `{total-item-count}` as the total number of items in the
 snapshot (0 if empty). Persist all six values immediately by posting a
-PR comment with this format:
+PR comment with this format (when helper runtime is enabled, render the
+body with the profile-selected emit-marker command — `--type
+review-watermark`, emit-only; see `docs/idd-helper-scripts.md`):
 
 ```markdown
 <!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->
@@ -209,7 +211,9 @@ critique findings unless they were persisted as reviewer-visible
 comments.
 
 After the critique pass completes, post a new `review-baseline` comment
-with the current HEAD SHA using this format:
+with the current HEAD SHA using this format (when helper runtime is
+enabled, render the body with the profile-selected emit-marker command —
+`--type review-baseline`, emit-only; see `docs/idd-helper-scripts.md`):
 
 ```markdown
 <!-- review-baseline: {agent-id} {claim-id} {SHA} -->

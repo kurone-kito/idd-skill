@@ -359,6 +359,99 @@ export function renderExternalCheckWaiverComment(payload) {
     }),
   ].join('\n');
 }
+// --- Per-cycle marker body renderers (#900) ---
+//
+// Pure, network-free renderers for the three operational markers an agent
+// posts every cycle. Each returns the exact ready-to-post body (HTML marker
+// token + visible "Do not edit" note); the agent still posts it via the
+// documented HTTP path, so the read-only-by-default / instructions-only
+// fallback is unaffected. The written formats in idd-overview-core (claim)
+// and idd-review-snapshot (watermark/baseline) remain canonical.
+function normalizeMarkerCount(value) {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value >= 0 ? String(value) : null;
+  }
+  const trimmed = String(value ?? '').trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  // The watermark parser reads the count back with Number.parseInt; reject
+  // magnitudes beyond the safe-integer range, which would not round-trip to
+  // the same value (and as a JS number would stringify to exponential form
+  // that the parser's `\d+` count pattern rejects outright).
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isSafeInteger(parsed) ? trimmed : null;
+}
+// `none` or a valid ISO timestamp (matching the watermark parser's
+// none-or-ISO contract); null signals an invalid value the caller rejects.
+function normalizeMarkerIsoOrNone(value) {
+  const token = normalizeNonWhitespaceToken(value);
+  if (token === '' || token === 'none') {
+    return 'none';
+  }
+  return normalizeIsoTimestamp(token) || null;
+}
+export function renderClaimedByMarker(payload) {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const claimId = normalizeNonWhitespaceToken(payload?.claimId);
+  const supersedesToken = normalizeNonWhitespaceToken(payload?.supersedes);
+  // Normalize any case-variant of the sentinel to lowercase `none`. The claim
+  // parser matches case-insensitively, but the claim lifecycle
+  // (`applyClaimEvent`) accepts a fresh claim only when `supersedes === 'none'`
+  // exactly, so an emitted `None`/`NONE` would round-trip into a claim that is
+  // silently ignored. Real claim IDs (never a case-variant of `none`) pass
+  // through verbatim.
+  const supersedes =
+    supersedesToken === '' || supersedesToken.toLowerCase() === 'none'
+      ? 'none'
+      : supersedesToken;
+  const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
+  const branch = normalizeBranchToken(payload?.branch);
+  if (!agentId || !claimId || !timestamp || !branch) {
+    throw new Error('invalid claimed-by marker payload');
+  }
+  return [
+    `<!-- claimed-by: ${agentId} ${claimId} supersedes: ${supersedes} ${timestamp} branch: ${branch} -->`,
+    '',
+    `_${agentId}: issue claim — IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
+export function renderReviewWatermarkMarker(payload) {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const claimId = normalizeNonWhitespaceToken(payload?.claimId);
+  const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
+  const maxActivityAt = normalizeMarkerIsoOrNone(payload?.maxActivityAt);
+  const totalItemCount = normalizeMarkerCount(payload?.totalItemCount);
+  const ciCompletedAt = normalizeMarkerIsoOrNone(payload?.ciCompletedAt);
+  if (
+    !agentId ||
+    !claimId ||
+    !/^[0-9a-f]{40}$/.test(headSha) ||
+    maxActivityAt === null ||
+    totalItemCount === null ||
+    ciCompletedAt === null
+  ) {
+    throw new Error('invalid review-watermark marker payload');
+  }
+  return [
+    `<!-- review-watermark: ${agentId} ${claimId} ${headSha} ${maxActivityAt} ${totalItemCount} ${ciCompletedAt} -->`,
+    '',
+    `_${agentId}: review triage snapshot — IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
+export function renderReviewBaselineMarker(payload) {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const claimId = normalizeNonWhitespaceToken(payload?.claimId);
+  const sha = normalizeNonWhitespaceToken(payload?.sha).toLowerCase();
+  if (!agentId || !claimId || !/^[0-9a-f]{40}$/.test(sha)) {
+    throw new Error('invalid review-baseline marker payload');
+  }
+  return [
+    `<!-- review-baseline: ${agentId} ${claimId} ${sha} -->`,
+    '',
+    `_${agentId}: critique baseline — IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
 function matchCheckSelectorLocal(name, selector) {
   const n = String(name ?? '').trim();
   const s = String(selector ?? '').trim();

@@ -299,6 +299,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Compute the canonical A5(e) issue/<number>-<slug> branch name from an issue number and title.',
   },
   {
+    id: 'emit-marker',
+    scriptName: 'idd:emit-marker',
+    binName: 'idd-emit-marker',
+    entryPath: 'scripts/emit-marker.mjs',
+    vendoredCommand: 'node scripts/emit-marker.mjs',
+    description:
+      'Emit a per-cycle claimed-by / review-watermark / review-baseline marker body (emit-only, no network write).',
+  },
+  {
     id: 'ci-wait-policy',
     scriptName: 'idd:ci-wait-policy',
     binName: 'idd-ci-wait-policy',

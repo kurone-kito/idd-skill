@@ -33,6 +33,10 @@ In the idd-skill source repository, the following optional helpers were adopted:
   `issue/<number>-<slug>` branch-name slug computation; deterministic and
   network-free (referenced in
   [kurone-kito/idd-skill#901](https://github.com/kurone-kito/idd-skill/issues/901))
+- `scripts/emit-marker.mjs` for emitting the per-cycle `claimed-by` /
+  `review-watermark` / `review-baseline` marker bodies (emit-only, no
+  network write; referenced in
+  [kurone-kito/idd-skill#900](https://github.com/kurone-kito/idd-skill/issues/900))
 - `scripts/resume-claim-routing.mjs` for Resume Step 1 claim-state
   evaluation and takeover routing (referenced in
   [kurone-kito/idd-skill#394](https://github.com/kurone-kito/idd-skill/issues/394))
@@ -623,6 +627,24 @@ Interpretation rules:
   and the written algorithm stays the canonical fallback
 - The `tests/branch-name.test.mts` drift test re-derives the pre-check (e)
   "Worked examples" table, so the prose and the helper cannot diverge
+
+### Per-cycle marker bodies
+
+- Source repo / vendored-node command:
+  `node scripts/emit-marker.mjs --type <type> <fields...>` where `<type>` is
+  `claimed-by`, `review-watermark`, or `review-baseline`
+- Package-manager / ephemeral-npx command: use the profile-selected
+  `idd:emit-marker` command from the helper runtime manifest wiring above
+- Prints the exact ready-to-post marker body (HTML token + visible "Do not
+  edit" note) to stdout; **emit-only, no network write** — the agent posts
+  it via the documented HTTP path
+- Fields per type: `claimed-by` takes `--agent-id --claim-id --supersedes
+  --timestamp --branch`; `review-watermark` takes `--agent-id --claim-id
+  --head-sha --max-activity-at --total-item-count --ci-completed-at`;
+  `review-baseline` takes `--agent-id --claim-id --sha`
+- The written marker formats in `idd-overview-core` (claim) and
+  `idd-review-snapshot` (watermark/baseline) stay canonical; the render
+  functions live in `protocol-helpers` with byte-shape tests
 
 ### Resume claim and route evidence
 
