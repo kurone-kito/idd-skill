@@ -91,6 +91,43 @@ test('vendored-node managed files match the canonical helper import closure', ()
   }
 });
 
+test('vendored-node managed files include every validate-schemas runtime data file', () => {
+  const managedFiles = new Set(
+    buildHelperRuntimeManifest({
+      profile: 'vendored-node',
+      targetRoot: REPO_ROOT,
+    }).profiles['vendored-node'].managedFiles.map((file) => file.targetPath),
+  );
+
+  // validate-schemas reads its schema/fixture pairs directly (its CLI `cases`
+  // table), not via `import`, so the import-graph walk cannot discover them.
+  // Parse the source for every data path it references and assert the vendored
+  // bundle ships all of them — a downstream that vendors exactly `managedFiles`
+  // must be able to run the validator. Guards the kurone-kito/idd-skill#891 drift.
+  const source = readFileSync(
+    join(REPO_ROOT, 'src/scripts/validate-schemas.mts'),
+    'utf8',
+  );
+  const referenced = [
+    ...new Set(
+      [
+        ...source.matchAll(/'((?:schemas|fixtures\/schemas)\/[^']+\.json)'/g),
+      ].map((match) => match[1]),
+    ),
+  ].sort();
+
+  assert.ok(
+    referenced.length > 0,
+    'expected validate-schemas to reference schema/fixture data files',
+  );
+  for (const dataFile of referenced) {
+    assert.ok(
+      managedFiles.has(dataFile),
+      `vendored-node managedFiles omits ${dataFile}, which validate-schemas reads at runtime`,
+    );
+  }
+});
+
 test('vendored-node recommends linguist-vendored per managed file; other profiles emit none', () => {
   const manifest = buildHelperRuntimeManifest({ targetRoot: REPO_ROOT });
   const vendored = manifest.profiles['vendored-node'];
