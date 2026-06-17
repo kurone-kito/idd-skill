@@ -255,6 +255,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Evaluate the A5(a) issue-author approval gate against issue state.',
   },
   {
+    id: 'branch-name',
+    scriptName: 'idd:branch-name',
+    binName: 'idd-branch-name',
+    entryPath: 'scripts/branch-name.mjs',
+    vendoredCommand: 'node scripts/branch-name.mjs',
+    description:
+      'Compute the canonical A5(e) issue/<number>-<slug> branch name from an issue number and title.',
+  },
+  {
     id: 'ci-wait-policy',
     scriptName: 'idd:ci-wait-policy',
     binName: 'idd-ci-wait-policy',

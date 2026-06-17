@@ -612,6 +612,8 @@ Interpretation rules:
 
 - Source repo / vendored-node command:
   `node scripts/branch-name.mjs --number <issue-number> --title <issue-title>`
+- Package-manager / ephemeral-npx command: use the profile-selected
+  `idd:branch-name` command from the helper runtime manifest wiring above
 - Prints a single plain line `issue/<number>-<slug>`, implementing the
   `idd-claim.instructions.md` pre-check (e) slug algorithm exactly
   (lowercase, replace `[^a-z0-9]` with `-`, drop empty tokens and the
