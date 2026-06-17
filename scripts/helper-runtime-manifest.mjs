@@ -49,8 +49,8 @@ const SCRIPT_FILE_EXTENSIONS = ['.mjs', '.js', '.json'];
 // so the import-graph walk cannot discover them. A consumer that vendors
 // exactly `managedFiles` must still receive these or the helper crashes on a
 // missing path. The drift guard in tests/helper-runtime-manifest.test.mts
-// asserts the validate-schemas list below stays a superset of every data
-// path that helper references.
+// asserts the vendored-node managedFiles include every data path
+// validate-schemas references, so this list must stay complete.
 const EXTRA_RUNTIME_FILES = new Map([
   ['scripts/advisory-wait-policy.mjs', ['schemas/policy.schema.json']],
   // validate-schemas validates every schema/fixture pair in its CLI `cases`
