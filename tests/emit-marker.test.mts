@@ -175,4 +175,8 @@ test('renderers reject payloads that would not round-trip', () => {
   assert.throws(() =>
     renderReviewBaselineMarker({ agentId: 'a', claimId: 'c', sha: '' }),
   );
+  // non-40-hex baseline SHA (baseline tracks HEAD; must be a real commit SHA)
+  assert.throws(() =>
+    renderReviewBaselineMarker({ agentId: 'a', claimId: 'c', sha: 'deadbeef' }),
+  );
 });

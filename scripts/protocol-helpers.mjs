@@ -424,8 +424,8 @@ export function renderReviewWatermarkMarker(payload) {
 export function renderReviewBaselineMarker(payload) {
   const agentId = normalizeNonWhitespaceToken(payload?.agentId);
   const claimId = normalizeNonWhitespaceToken(payload?.claimId);
-  const sha = normalizeNonWhitespaceToken(payload?.sha);
-  if (!agentId || !claimId || !sha) {
+  const sha = normalizeNonWhitespaceToken(payload?.sha).toLowerCase();
+  if (!agentId || !claimId || !/^[0-9a-f]{40}$/.test(sha)) {
     throw new Error('invalid review-baseline marker payload');
   }
   return [
