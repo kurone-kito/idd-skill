@@ -111,8 +111,13 @@ test('vendored-node managed files include every validate-schemas runtime data fi
   const referenced = [
     ...new Set(
       [
-        ...source.matchAll(/'((?:schemas|fixtures\/schemas)\/[^']+\.json)'/g),
-      ].map((match) => match[1]),
+        // Match either quote style via a backreference so a future case
+        // written with double quotes is still captured (biome enforces single
+        // quotes today, but the guard must not silently depend on that).
+        ...source.matchAll(
+          /(['"])((?:schemas|fixtures\/schemas)\/[^'"]+\.json)\1/g,
+        ),
+      ].map((match) => match[2]),
     ),
   ].sort();
 
