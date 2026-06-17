@@ -386,7 +386,17 @@ function normalizeMarkerIsoOrNone(value) {
 export function renderClaimedByMarker(payload) {
   const agentId = normalizeNonWhitespaceToken(payload?.agentId);
   const claimId = normalizeNonWhitespaceToken(payload?.claimId);
-  const supersedes = normalizeNonWhitespaceToken(payload?.supersedes) || 'none';
+  const supersedesToken = normalizeNonWhitespaceToken(payload?.supersedes);
+  // Normalize any case-variant of the sentinel to lowercase `none`. The claim
+  // parser matches case-insensitively, but the claim lifecycle
+  // (`applyClaimEvent`) accepts a fresh claim only when `supersedes === 'none'`
+  // exactly, so an emitted `None`/`NONE` would round-trip into a claim that is
+  // silently ignored. Real claim IDs (never a case-variant of `none`) pass
+  // through verbatim.
+  const supersedes =
+    supersedesToken === '' || supersedesToken.toLowerCase() === 'none'
+      ? 'none'
+      : supersedesToken;
   const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
   const branch = normalizeBranchToken(payload?.branch);
   if (!agentId || !claimId || !timestamp || !branch) {

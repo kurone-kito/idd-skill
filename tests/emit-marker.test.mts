@@ -48,6 +48,34 @@ test('renderClaimedByMarker defaults supersedes to none and carries a takeover i
   );
 });
 
+test('renderClaimedByMarker normalizes any case-variant of the none sentinel', () => {
+  // applyClaimEvent only treats `supersedes === 'none'` (exact lowercase) as a
+  // fresh claim, so the renderer must fold case-variants down to lowercase.
+  for (const variant of ['None', 'NONE', 'nOnE']) {
+    assert.match(
+      renderClaimedByMarker({
+        agentId: 'a',
+        claimId: 'c',
+        supersedes: variant,
+        timestamp: '2026-06-17T09:47:08Z',
+        branch: 'b',
+      }),
+      /supersedes: none /,
+    );
+  }
+  // a real prior claim id (never a case-variant of none) passes through verbatim
+  assert.match(
+    renderClaimedByMarker({
+      agentId: 'a',
+      claimId: 'c',
+      supersedes: 'AbCdEf12',
+      timestamp: '2026-06-17T09:47:08Z',
+      branch: 'b',
+    }),
+    /supersedes: AbCdEf12 /,
+  );
+});
+
 test('renderReviewWatermarkMarker emits the exact watermark body', () => {
   assert.equal(
     renderReviewWatermarkMarker({
