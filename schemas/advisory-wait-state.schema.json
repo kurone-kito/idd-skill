@@ -46,7 +46,7 @@
     },
     "outcome": {
       "type": "string",
-      "description": "Shared routing outcome consumed by E14, F2, and the shell-fallback path (AW1-AW5). Its REQUEST_NEEDED -> return-to-E14 routing governs E14 and F2; F3 reads f3Outcome instead.",
+      "description": "Shared routing outcome consumed by E14, F2, and the shell-fallback path (AW1-AW5). On REQUEST_NEEDED, F2 returns to E14 while E14 itself requests Copilot and polls; F3 reads f3Outcome instead.",
       "enum": [
         "SATISFIED",
         "REQUEST_NEEDED",
