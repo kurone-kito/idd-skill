@@ -131,7 +131,18 @@ Check both linked issues and closing keywords in PR bodies.
 **(e) Branch collision** — Compute the branch name using the IDD naming
 convention: `issue/<number>-<slug>`. Generate `<slug>` deterministically
 from the issue title so parallel sessions converge on the same branch
-name:
+name.
+
+When helper runtime is enabled, compute the slug with the branch-name
+helper instead of hand-tracing it:
+
+```sh
+node scripts/branch-name.mjs --number <issue-number> --title <issue-title>
+```
+
+It prints `issue/<number>-<slug>` and implements the algorithm below
+exactly. The written algorithm remains the canonical spec and fallback;
+use it when the helper is unavailable or its output is malformed:
 
 1. Convert the issue title to lowercase.
 2. Replace every character outside ASCII `a-z` and `0-9` with `-`.
@@ -144,6 +155,19 @@ name:
    character 40, trim back to the last such `-`; if there is no `-`,
    keep the hard 40-character cut. Then strip any trailing `-`.
 6. If the result is empty, use `task`.
+
+**Worked examples** (shared verbatim with the helper's drift test in
+`tests/branch-name.test.mts`) — stop-word removal, a 40-char cut on a
+token boundary, a 40-char cut trimming back mid-token, the empty-slug
+`task` fallback, and non-ASCII drop-out:
+
+- `Add the OAuth login flow` → `issue/42-add-oauth-login-flow`
+- `Add a helper that computes the canonical issue/<number>-<slug> branch name`
+  → `issue/901-add-helper-that-computes-canonical-issue`
+- `Implement comprehensive authentication authorization middleware system`
+  → `issue/123-implement-comprehensive-authentication`
+- `!!!` → `issue/7-task`
+- `日本語 calendar 機能` → `issue/99-calendar`
 
 No remote branch with that name may exist, unless it matches the
 `branch` field in an inheritable claim comment or trusted

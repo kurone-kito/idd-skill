@@ -29,6 +29,10 @@ In the idd-skill source repository, the following optional helpers were adopted:
   verification; A5(d) open-PR conflict checks remain manual by design
   (referenced in
   [kurone-kito/idd-skill#393](https://github.com/kurone-kito/idd-skill/issues/393))
+- `scripts/branch-name.mjs` for the A5(e) canonical
+  `issue/<number>-<slug>` branch-name slug computation; deterministic and
+  network-free (referenced in
+  [kurone-kito/idd-skill#901](https://github.com/kurone-kito/idd-skill/issues/901))
 - `scripts/resume-claim-routing.mjs` for Resume Step 1 claim-state
   evaluation and takeover routing (referenced in
   [kurone-kito/idd-skill#394](https://github.com/kurone-kito/idd-skill/issues/394))
@@ -603,6 +607,20 @@ Interpretation rules:
   checks stay on the written live GitHub path because inheritable-branch
   and linked-issue exceptions do not yet have a supported helper
   contract
+
+### Canonical branch name
+
+- Source repo / vendored-node command:
+  `node scripts/branch-name.mjs --number <issue-number> --title <issue-title>`
+- Prints a single plain line `issue/<number>-<slug>`, implementing the
+  `idd-claim.instructions.md` pre-check (e) slug algorithm exactly
+  (lowercase, replace `[^a-z0-9]` with `-`, drop empty tokens and the
+  whole-token stop-words, rejoin with `-`, apply the 40-character
+  mid-token-aware cut, then fall back to `task` when empty)
+- Deterministic and network-free; the agent keeps branch-naming authority
+  and the written algorithm stays the canonical fallback
+- The `tests/branch-name.test.mts` drift test re-derives the pre-check (e)
+  "Worked examples" table, so the prose and the helper cannot diverge
 
 ### Resume claim and route evidence
 
