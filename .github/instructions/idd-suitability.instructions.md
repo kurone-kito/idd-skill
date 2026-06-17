@@ -13,6 +13,17 @@ This gate evaluates whether an issue is **suitable for autonomous
 execution** independent of the current run's context. Where A4 asks "can
 we do this NOW?", A4.5 asks "SHOULD we do this at all?"
 
+## Relationship to the autopilot-suitability score
+
+The numeric `<!-- {{PROJECT_MARKER_PREFIX}}-autopilot-suitability: N -->`
+footer is a **discovery-time** ranking/routing hint consumed in
+`idd-discover.instructions.md` (its floor is `.github/idd/config.json`
+`autopilotSuitability.floor`, default `3`; see also
+`docs/policy-constants.md`). It is **not** one of the seven
+checks below: A4.5 PASS/FAIL is decided solely by the qualitative content
+checks and never reads the number. A low or missing score never fails this
+gate, and a high score never bypasses it.
+
 When helper support is enabled, use helper scripts from
 `docs/idd-helper-scripts.md` first for A4.5 evidence.
 Written checks and decision flow remain authoritative when helper output
