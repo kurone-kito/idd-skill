@@ -102,6 +102,19 @@ test('renderReviewWatermarkMarker accepts a numeric-string count and defaults no
   );
 });
 
+test('renderReviewWatermarkMarker accepts a count up to the safe-integer max', () => {
+  const max = Number.MAX_SAFE_INTEGER;
+  assert.match(
+    renderReviewWatermarkMarker({
+      agentId: 'a',
+      claimId: 'c',
+      headSha: SHA,
+      totalItemCount: max,
+    }),
+    new RegExp(` ${max} none `),
+  );
+});
+
 test('renderReviewBaselineMarker emits the exact baseline body', () => {
   assert.equal(
     renderReviewBaselineMarker({ agentId: 'a', claimId: 'c', sha: SHA }),
@@ -198,6 +211,24 @@ test('renderers reject payloads that would not round-trip', () => {
       claimId: 'c',
       headSha: SHA,
       totalItemCount: -1,
+    }),
+  );
+  // count beyond the safe-integer range (watermark parser reads it back with
+  // Number.parseInt; a huge digit string or exponential number cannot round-trip)
+  assert.throws(() =>
+    renderReviewWatermarkMarker({
+      agentId: 'a',
+      claimId: 'c',
+      headSha: SHA,
+      totalItemCount: '99999999999999999999',
+    }),
+  );
+  assert.throws(() =>
+    renderReviewWatermarkMarker({
+      agentId: 'a',
+      claimId: 'c',
+      headSha: SHA,
+      totalItemCount: 1e21,
     }),
   );
   assert.throws(() =>

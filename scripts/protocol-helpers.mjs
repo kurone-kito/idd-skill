@@ -368,11 +368,19 @@ export function renderExternalCheckWaiverComment(payload) {
 // fallback is unaffected. The written formats in idd-overview-core (claim)
 // and idd-review-snapshot (watermark/baseline) remain canonical.
 function normalizeMarkerCount(value) {
-  if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
-    return String(value);
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value >= 0 ? String(value) : null;
   }
   const trimmed = String(value ?? '').trim();
-  return /^\d+$/.test(trimmed) ? trimmed : null;
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  // The watermark parser reads the count back with Number.parseInt; reject
+  // magnitudes beyond the safe-integer range, which would not round-trip to
+  // the same value (and as a JS number would stringify to exponential form
+  // that the parser's `\d+` count pattern rejects outright).
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isSafeInteger(parsed) ? trimmed : null;
 }
 // `none` or a valid ISO timestamp (matching the watermark parser's
 // none-or-ISO contract); null signals an invalid value the caller rejects.
