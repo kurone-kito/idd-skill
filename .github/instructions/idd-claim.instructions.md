@@ -134,7 +134,9 @@ from the issue title so parallel sessions converge on the same branch
 name.
 
 When helper runtime is enabled, compute the slug with the branch-name
-helper instead of hand-tracing it:
+helper (resolve the profile-selected command from
+`docs/idd-helper-scripts.md`; non-vendored profiles use `idd:branch-name`,
+not the `node scripts/...` form) instead of hand-tracing it:
 
 ```sh
 node scripts/branch-name.mjs --number <issue-number> --title <issue-title>
@@ -157,9 +159,7 @@ use it when the helper is unavailable or its output is malformed:
 6. If the result is empty, use `task`.
 
 **Worked examples** (shared verbatim with the helper's drift test in
-`tests/branch-name.test.mts`) — stop-word removal, a 40-char cut on a
-token boundary, a 40-char cut trimming back mid-token, the empty-slug
-`task` fallback, and non-ASCII drop-out:
+`tests/branch-name.test.mts`):
 
 - `Add the OAuth login flow` → `issue/42-add-oauth-login-flow`
 - `Add a helper that computes the canonical issue/<number>-<slug> branch name`
