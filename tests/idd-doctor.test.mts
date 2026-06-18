@@ -1117,6 +1117,16 @@ test('containsExampleRepoBackLink still detects list-item paragraph back-links a
   assert.equal(containsExampleRepoBackLink(md, 'kurone-kito/idd-skill'), true);
 });
 
+test('containsExampleRepoBackLink measures a tab after a list marker as columns', () => {
+  // `-\t` has content column 1 (`-`) + 4 (tab) = 5, so a 7-column-indented
+  // back-link is list content (< 5 + 4), not a nested code block. With the
+  // old character-length content column (2) the threshold would be 6 and
+  // the 7-column line would be mis-blanked as code.
+  const md =
+    '-\titem\n\n       [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n';
+  assert.equal(containsExampleRepoBackLink(md, 'kurone-kito/idd-skill'), true);
+});
+
 test('containsExampleRepoBackLink does not open a list for a deeply-indented mid-paragraph marker', () => {
   // A `- ` marker indented >=4 columns mid-paragraph (no list open) is
   // paragraph continuation, not a list item. It must not keep a list level

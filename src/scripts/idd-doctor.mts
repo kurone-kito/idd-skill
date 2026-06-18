@@ -1497,12 +1497,14 @@ function stripFencesPreservingLines(content: string): string {
   return out.join('\n');
 }
 
-// CommonMark §4.4 indented code blocks: at least 4 leading spaces
-// (or one tab), preceded by a blank line. Indented lines that are
-// recognizable list items (`-`, `*`, `+`, or `\d+\.` after the
-// leading whitespace) stay as text — loose-list nested items can
-// otherwise be misread as code. We only blank lines that follow a
-// blank or already-blanked line and do not look like list items.
+// CommonMark §4.4 indented code blocks: content indented at least 4
+// columns beyond the enclosing context (the top level, or an open list
+// item's content column), preceded by a blank line. The stripper below
+// tracks open list levels by content column (supporting `-`/`*`/`+` and
+// ordered `\d+[.)]` markers), so list continuation and nested list items
+// are preserved, while a deeper indent — even a list-marker-looking line
+// — is treated as a nested indented code block and blanked. See
+// stripIndentedCodeBlocksPreservingLines.
 /** Leading-indent width of a line in columns (space = 1, tab = 4). */
 function leadingIndentColumns(line: string): number {
   let columns = 0;
