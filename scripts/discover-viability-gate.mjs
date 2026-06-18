@@ -5,6 +5,8 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const CRITERIA = [
   {
@@ -131,16 +133,20 @@ export function evaluateA4Viability(issue) {
 }
 export function evaluateLimitedScope(issue) {
   const corpus = `${issue.title}\n${issue.body}`;
-  if (NARROW_SCOPE_PATTERN.test(corpus)) {
-    return {
-      pass: true,
-      evidence: 'Narrow-scope signal detected.',
-    };
-  }
+  // Test the broad-scope signal first: a broad/A4-fail cue must fail the
+  // gate even when a narrow cue is also present (e.g. "single module change
+  // that redesigns a public interface"). Returning narrow-pass first would
+  // let that wording bypass the gate.
   if (BROAD_SCOPE_PATTERN.test(corpus)) {
     return {
       pass: false,
       evidence: 'Broad or cross-cutting scope signal detected.',
+    };
+  }
+  if (NARROW_SCOPE_PATTERN.test(corpus)) {
+    return {
+      pass: true,
+      evidence: 'Narrow-scope signal detected.',
     };
   }
   return {
@@ -268,20 +274,24 @@ function countDiscardedCriteria(discarded) {
   }
   return counts;
 }
-function renderCsv(summary) {
+export function renderCsv(summary) {
   const lines = ['kind,number,title,criteria'];
   for (const item of summary.viable) {
-    lines.push(`viable,${item.number},${escapeCsv(item.title)},""`);
+    lines.push(`viable,${item.number},${escapeCsv(item.title)},`);
   }
   for (const item of summary.discarded) {
     lines.push(
-      `discarded,${item.number},${escapeCsv(item.title)},"${escapeCsv((item.failedCriteria ?? []).join('|'))}"`,
+      `discarded,${item.number},${escapeCsv(item.title)},${escapeCsv((item.failedCriteria ?? []).join('|'))}`,
     );
   }
   return `${lines.join('\n')}\n`;
 }
 function escapeCsv(value) {
-  return String(value ?? '').replaceAll('"', '""');
+  const text = String(value ?? '');
+  if (!/[",\n]/.test(text)) {
+    return text;
+  }
+  return `"${text.replaceAll('"', '""')}"`;
 }
 function buildIssueLoader(owner, repo) {
   return async function loadIssue(issueNumber) {
@@ -322,12 +332,10 @@ function ghJson(args, options = {}) {
   return JSON.parse(text);
 }
 function isMainModule(metaUrl) {
-  if (!process.argv[1]) {
+  if (!metaUrl || !process.argv[1]) {
     return false;
   }
-  try {
-    return metaUrl === new URL(`file://${process.argv[1]}`).href;
-  } catch {
-    return false;
-  }
+  // Compare filesystem paths instead of building a file:// URL from
+  // argv[1], which mis-parses Windows drive-letter paths.
+  return fileURLToPath(metaUrl) === resolve(process.argv[1]);
 }

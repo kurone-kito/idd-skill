@@ -4,7 +4,40 @@ import { test } from 'node:test';
 import {
   evaluateA4Viability,
   evaluateDiscoverViability,
+  renderCsv,
 } from '../src/scripts/discover-viability-gate.mts';
+
+// Minimal RFC 4180 single-row field splitter: respects quoted fields so a
+// comma inside a quoted title does not start a new column.
+function parseCsvRow(row: string): string[] {
+  const fields: string[] = [];
+  let field = '';
+  let inQuotes = false;
+  for (let index = 0; index < row.length; index += 1) {
+    const char = row[index];
+    if (inQuotes) {
+      if (char === '"') {
+        if (row[index + 1] === '"') {
+          field += '"';
+          index += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += char;
+      }
+    } else if (char === '"') {
+      inQuotes = true;
+    } else if (char === ',') {
+      fields.push(field);
+      field = '';
+    } else {
+      field += char;
+    }
+  }
+  fields.push(field);
+  return fields;
+}
 
 test('passes viability for narrow scope with objective verification and no external coordination', () => {
   const result = evaluateA4Viability({
@@ -31,6 +64,46 @@ test('fails limited scope for broad cross-cutting work', () => {
 
   assert.equal(result.passed, false);
   assert.ok(result.failedCriteria.includes('limited_scope'));
+});
+
+test('fails limited scope when a broad cue accompanies a narrow cue', () => {
+  const result = evaluateA4Viability({
+    number: 5,
+    title: 'single module change that redesigns a public interface',
+    body: 'Targeted edit, but it redesigns a public interface. Tests included.',
+    state: 'OPEN',
+  });
+
+  assert.equal(result.passed, false);
+  assert.ok(result.failedCriteria.includes('limited_scope'));
+});
+
+test('renderCsv quotes titles containing commas and quotes', () => {
+  const csv = renderCsv({
+    viable: [{ number: 10, title: 'fix parser, escape "quotes" too' }],
+    discarded: [
+      {
+        number: 11,
+        title: 'redesign, broadly',
+        failedCriteria: ['limited_scope'],
+      },
+    ],
+    summary: {
+      total: 2,
+      viableCount: 1,
+      discardedCount: 1,
+      discardedByCriterion: { limited_scope: 1 },
+    },
+  });
+
+  const rows = csv.trimEnd().split('\n');
+  assert.equal(rows[0], 'kind,number,title,criteria');
+  assert.equal(rows[1], 'viable,10,"fix parser, escape ""quotes"" too",');
+  assert.equal(rows[2], 'discarded,11,"redesign, broadly",limited_scope');
+  // Each data row keeps exactly four fields when parsed as RFC 4180 CSV.
+  for (const row of rows.slice(1)) {
+    assert.equal(parseCsvRow(row).length, 4);
+  }
 });
 
 test('fails clear verification when only subjective checks are present', () => {
