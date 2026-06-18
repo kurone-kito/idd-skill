@@ -491,9 +491,9 @@ Among the surviving viable and unclaimed issues (after Step 1.5), pick the
 out-of-range score is treated as no score — ranked at the floor and never
 skipped, so the unscored backlog flows as before. Advisory only: the pick
 still passes A4.5/A5 unchanged and the score never bypasses a gate. When
-`autopilotSuitability.enabled` is `false`, skip this score routing entirely
-— neither skip below-floor nor reorder by score — and evaluate every
-surviving candidate the normal way.
+`autopilotSuitability.enabled` is `false`, ignore the score entirely —
+neither skip below-floor candidates nor reorder by score — and select by
+**lowest issue number**.
 
 After picking, continue to **A4.5** (`idd-suitability.instructions.md`).
 
