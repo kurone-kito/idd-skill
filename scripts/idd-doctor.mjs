@@ -1387,8 +1387,15 @@ function stripIndentedCodeBlocksPreservingLines(content) {
       // A list item (top-level or nested, but shallower than a nested code
       // block per the threshold above). Close any deeper sibling levels,
       // then record this item's content column as the new innermost list.
+      // The content column is the full prefix width in columns (tab = 4),
+      // consistent with leadingIndentColumns, so a tab after the marker is
+      // not miscounted as a single column.
       out.push(line);
-      const contentColumn = indent + listMarker[2].length;
+      let prefixWidth = 0;
+      for (const ch of listMarker[0]) {
+        prefixWidth += ch === '\t' ? 4 : 1;
+      }
+      const contentColumn = prefixWidth;
       popDeeperThan(indent);
       listContentIndents.push(contentColumn);
       prevBlank = false;
