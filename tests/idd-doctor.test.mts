@@ -1117,6 +1117,17 @@ test('containsExampleRepoBackLink still detects list-item paragraph back-links a
   assert.equal(containsExampleRepoBackLink(md, 'kurone-kito/idd-skill'), true);
 });
 
+test('containsExampleRepoBackLink keeps a back-link in an outer list item after an inner list ends', () => {
+  // Multi-level lists: after the inner list and its paragraph dedent back
+  // to the outer item, the back-link sits in a nested item of the still
+  // open outer list (content column 2), not a top-level code block, so it
+  // must still count. (Single-level list tracking would lose the outer
+  // context here and blank it.)
+  const md =
+    '- outer\n  - inner\n  text after inner\n\n    - [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n';
+  assert.equal(containsExampleRepoBackLink(md, 'kurone-kito/idd-skill'), true);
+});
+
 test('containsExampleRepoBackLink rejects URL whose host is not a GitHub host', () => {
   const md =
     '[trap](https://example.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)';

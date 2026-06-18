@@ -1526,15 +1526,30 @@ function stripIndentedCodeBlocksPreservingLines(content: string): string {
   // The minimum indent (in columns) of the open indented code block, set
   // at its opener. A line indented below this leaves the block.
   let codeBaseIndent = 4;
-  // Content-indent column of the innermost open list, or `null` when no
-  // list is open. Under an open list, content indented up to
-  // `listContentIndent + 3` is list continuation / nested-list items,
-  // while content indented `>= listContentIndent + 4` is an indented code
-  // block nested inside the item (CommonMark allows code blocks within a
-  // list item). With no list open the threshold is the top-level 4
-  // columns, so a top-level `>=4`-column indent is still a code block even
-  // when it looks like a list marker.
-  let listContentIndent: number | null = null;
+  // Content-indent columns of the currently open list levels, outermost
+  // first (a stack, so ending an inner list returns to the outer level
+  // instead of losing its context). Under the innermost open list, content
+  // indented up to `top + 3` is list continuation / nested-list items,
+  // while content indented `>= top + 4` is an indented code block nested
+  // inside the item (CommonMark allows code blocks within a list item).
+  // With no list open the threshold is the top-level 4 columns, so a
+  // top-level `>=4`-column indent is still a code block even when it looks
+  // like a list marker.
+  const listContentIndents: number[] = [];
+  const innermostListIndent = () =>
+    listContentIndents.length > 0
+      ? listContentIndents[listContentIndents.length - 1]
+      : null;
+  // Drop list levels whose content column is deeper than `indent`, so a
+  // dedent re-exposes the enclosing list (or no list).
+  const popDeeperThan = (indent: number) => {
+    while (
+      listContentIndents.length > 0 &&
+      indent < listContentIndents[listContentIndents.length - 1]
+    ) {
+      listContentIndents.pop();
+    }
+  };
   for (const line of lines) {
     if (/^\s*$/.test(line)) {
       // A blank line ends neither an open indented code block nor an open
@@ -1548,8 +1563,10 @@ function stripIndentedCodeBlocksPreservingLines(content: string): string {
     }
     const indent = leadingIndentColumns(line);
     // CommonMark §5.2: ordered-list markers may use either `.` or `)`
-    // after the digit. The match width is the list item's content column.
-    const listMarker = /^\s*(?:[-*+]|\d+[.)])\s+/.exec(line);
+    // after the digit. Group 2 (marker + trailing spaces) measures the
+    // marker width in columns since it is ASCII; the content column is the
+    // leading-indent columns plus that width.
+    const listMarker = /^(\s*)((?:[-*+]|\d+[.)])\s+)/.exec(line);
 
     if (inBlock) {
       if (indent >= codeBaseIndent) {
@@ -1564,7 +1581,7 @@ function stripIndentedCodeBlocksPreservingLines(content: string): string {
       inBlock = false;
     }
 
-    const codeThreshold = (listContentIndent ?? 0) + 4;
+    const codeThreshold = (innermostListIndent() ?? 0) + 4;
     if (prevBlank && indent >= codeThreshold) {
       // Indented code block opener — at the top level (no list) or nested
       // inside the current list item. A list marker at this depth is code,
@@ -1578,21 +1595,22 @@ function stripIndentedCodeBlocksPreservingLines(content: string): string {
 
     if (listMarker) {
       // A list item (top-level or nested, but shallower than a nested code
-      // block per the threshold above). Its content column becomes the new
-      // innermost list-content indent.
+      // block per the threshold above). Close any deeper sibling levels,
+      // then record this item's content column as the new innermost list.
       out.push(line);
-      listContentIndent = listMarker[0].length;
+      const contentColumn = indent + listMarker[2].length;
+      popDeeperThan(indent);
+      listContentIndents.push(contentColumn);
       prevBlank = false;
       continue;
     }
 
-    // A non-code, non-list line. If it is indented within the open list's
-    // content column it continues the list; otherwise it falls below that
-    // column and closes the list.
+    // A non-code, non-list line: close any list levels whose content
+    // column is deeper than this line's indent. A line that drops below
+    // every level closes the list entirely; a line still within an outer
+    // level keeps that level open.
     out.push(line);
-    if (listContentIndent === null || indent < listContentIndent) {
-      listContentIndent = null;
-    }
+    popDeeperThan(indent);
     prevBlank = false;
   }
   return out.join('\n');
