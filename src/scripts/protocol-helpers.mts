@@ -1391,6 +1391,7 @@ export function classifyRegularBotComment(
   comment: CommentLike,
   comments: CommentLike[],
   threads: ThreadLike[],
+  options: { isDispositionAuthor?: (login: string) => boolean } = {},
 ): CommentClassification | null {
   const author = comment.author?.login ?? '';
   if (!isCodeRabbitLogin(author)) {
@@ -1415,8 +1416,12 @@ export function classifyRegularBotComment(
       };
     }
     if (
-      hasExplicitDispositionAfter(comment, comments) ||
-      hasCompletedBotThreadDispositions(threads, isCodeRabbitLogin)
+      hasExplicitDispositionAfter(comment, comments, {
+        isDispositionAuthor: options.isDispositionAuthor,
+      }) ||
+      hasCompletedBotThreadDispositions(threads, isCodeRabbitLogin, {
+        isDispositionAuthor: options.isDispositionAuthor,
+      })
     ) {
       return {
         classifier: 'RESOLVED',
@@ -1432,7 +1437,9 @@ export function classifyRegularBotComment(
   ) {
     if (
       /\b(Review triggered|Sure! I'll review|I'll review)\b/i.test(body) &&
-      hasExplicitDispositionAfter(comment, comments)
+      hasExplicitDispositionAfter(comment, comments, {
+        isDispositionAuthor: options.isDispositionAuthor,
+      })
     ) {
       return {
         classifier: 'OUTDATED',
@@ -1479,7 +1486,10 @@ export function indexLatestGatingReviewsByAuthor(reviews: ReviewLike[]) {
   return index;
 }
 
-export function indexThreadsByReview(threads: ThreadLike[]) {
+export function indexThreadsByReview(
+  threads: ThreadLike[],
+  options: { isDispositionAuthor?: (login: string) => boolean } = {},
+) {
   const index = new Map<
     string,
     {
@@ -1510,7 +1520,11 @@ export function indexThreadsByReview(threads: ThreadLike[]) {
       if (!thread.isResolved) {
         current.unresolved += 1;
       }
-      if (!hasFreshDisposition(thread)) {
+      if (
+        !hasFreshDisposition(thread, {
+          isDispositionAuthor: options.isDispositionAuthor,
+        })
+      ) {
         current.missingDisposition += 1;
       }
       if (thread.comments?.pageInfo?.hasNextPage) {
@@ -2878,6 +2892,14 @@ export function summarizeRegularCommentsForGate(
           },
           classificationComments,
           threads,
+          {
+            isDispositionAuthor: (login) =>
+              iddAgentLogins.has(
+                String(login ?? '')
+                  .trim()
+                  .toLowerCase(),
+              ),
+          },
         ) === null
       );
     })
@@ -2958,7 +2980,7 @@ export function summarizeDispositionEvidenceForGate(
     createdAt: comment.createdAt,
   }));
 
-  const missingRegularComments = normalizedComments
+  const outstandingComments = normalizedComments
     .filter(
       (comment) =>
         !isOperationalOrDigestCommentForGate(
@@ -2981,24 +3003,60 @@ export function summarizeDispositionEvidenceForGate(
           },
           classificationComments,
           threads,
+          {
+            isDispositionAuthor: (login) =>
+              iddAgentLogins.has(
+                String(login ?? '')
+                  .trim()
+                  .toLowerCase(),
+              ),
+          },
         ) === null
       );
-    })
-    .filter((comment) => {
-      return !normalizedComments.some((reply) => {
-        return (
-          iddAgentLogins.has(reply.authorLogin) &&
-          isDispositionComment({ body: reply.body }) &&
-          compareIsoTimestamps(reply.activityAt, comment.activityAt) > 0
-        );
-      });
-    })
-    .map((comment) => ({
-      id: comment.id || `comment-${comment.sortedIndex + 1}`,
-      authorLogin: comment.authorLogin || 'unknown',
-      createdAt: comment.createdAt,
-      bodyPreview: buildBodyPreview(comment.body),
-    }));
+    });
+
+  // Count-based 1:1 pairing for the trailing-marker rule: a single later IDD
+  // disposition marker addresses at most ONE earlier regular comment, so one
+  // trailing marker cannot clear several distinct comments that each still
+  // lack a disposition.
+  // Walk the outstanding comments oldest-first and greedily consume the
+  // earliest disposition marker strictly newer than each (markers that are not
+  // newer than the current comment cannot address it or any later comment).
+  const dispositionTimes = normalizedComments
+    .filter(
+      (comment) =>
+        iddAgentLogins.has(comment.authorLogin) &&
+        isDispositionComment({ body: comment.body }),
+    )
+    .map((comment) => comment.activityAt)
+    .filter(isValidIsoTimestamp)
+    .sort((left, right) => Date.parse(left) - Date.parse(right));
+
+  let markerCursor = 0;
+  const missing: typeof outstandingComments = [];
+  for (const comment of outstandingComments) {
+    while (
+      markerCursor < dispositionTimes.length &&
+      compareIsoTimestamps(
+        dispositionTimes[markerCursor],
+        comment.activityAt,
+      ) <= 0
+    ) {
+      markerCursor += 1;
+    }
+    if (markerCursor < dispositionTimes.length) {
+      markerCursor += 1;
+    } else {
+      missing.push(comment);
+    }
+  }
+
+  const missingRegularComments = missing.map((comment) => ({
+    id: comment.id || `comment-${comment.sortedIndex + 1}`,
+    authorLogin: comment.authorLogin || 'unknown',
+    createdAt: comment.createdAt,
+    bodyPreview: buildBodyPreview(comment.body),
+  }));
 
   const missingThreads = (threads ?? [])
     .map((thread, index) => {
@@ -4823,11 +4881,21 @@ export function classifyResumeRoutingCase(
 function hasExplicitDispositionAfter(
   targetComment: CommentLike,
   comments: CommentLike[],
+  options: { isDispositionAuthor?: (login: string) => boolean } = {},
 ): boolean {
+  // Default accepts any non-bot human; an IDD-scoped predicate (when supplied)
+  // restricts the disposition author so a reviewer-authored marker does not
+  // count as a completed IDD disposition.
+  const isDispositionAuthor =
+    typeof options.isDispositionAuthor === 'function'
+      ? options.isDispositionAuthor
+      : (login: string) => !isKnownReviewBot(login);
   const targetTime = Date.parse(targetComment.createdAt ?? '');
   return comments.some((comment) => {
-    const author = comment.author?.login ?? '';
-    if (isKnownReviewBot(author) || !isDispositionComment(comment)) {
+    const author = String(comment.author?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (!isDispositionAuthor(author) || !isDispositionComment(comment)) {
       return false;
     }
     if (!/\bCodeRabbit\b/i.test(comment.body ?? '')) {
@@ -5264,6 +5332,7 @@ function effectiveThreadCommentActivityAt(
 function hasCompletedBotThreadDispositions(
   threads: ThreadLike[],
   loginPredicate: (login: string) => boolean,
+  options: { isDispositionAuthor?: (login: string) => boolean } = {},
 ): boolean {
   const botThreads = threads.filter((thread) => {
     return (thread.comments?.nodes ?? []).some((comment) => {
@@ -5280,7 +5349,9 @@ function hasCompletedBotThreadDispositions(
       return (
         thread.isResolved &&
         !thread.comments?.pageInfo?.hasNextPage &&
-        hasFreshDisposition(thread)
+        hasFreshDisposition(thread, {
+          isDispositionAuthor: options.isDispositionAuthor,
+        })
       );
     })
   );
