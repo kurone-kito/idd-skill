@@ -6,6 +6,7 @@ import {
   isAutopilotSuitabilityScore,
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
+  parseAutopilotSuitabilityMarker,
   rankAndRouteBySuitability,
 } from '../src/scripts/autopilot-suitability.mts';
 
@@ -79,6 +80,85 @@ test('parseAutopilotSuitability returns null on conflicting duplicate markers', 
   assert.equal(parseAutopilotSuitability(`${marker(4)}\n${marker(2)}`), null);
   // identical duplicates collapse to the single value
   assert.equal(parseAutopilotSuitability(`${marker(4)}\n${marker(4)}`), 4);
+});
+
+test('parseAutopilotSuitabilityMarker reports present/value/malformed per case', () => {
+  // absent — no marker in the body at all
+  assert.deepEqual(parseAutopilotSuitabilityMarker('no marker here'), {
+    present: false,
+    value: null,
+    malformed: false,
+  });
+  // present and coherent
+  assert.deepEqual(parseAutopilotSuitabilityMarker(`body\n\n${marker(3)}`), {
+    present: true,
+    value: 3,
+    malformed: false,
+  });
+  // present but malformed: out of range, non-integer, non-numeric
+  for (const bad of [marker(0), marker(6), marker('3.5'), marker('high')]) {
+    assert.deepEqual(
+      parseAutopilotSuitabilityMarker(bad),
+      { present: true, value: null, malformed: true },
+      `malformed: ${bad}`,
+    );
+  }
+  // present but conflicting duplicates -> malformed
+  assert.deepEqual(
+    parseAutopilotSuitabilityMarker(`${marker(4)}\n${marker(2)}`),
+    {
+      present: true,
+      value: null,
+      malformed: true,
+    },
+  );
+  // identical duplicates collapse to a single coherent value
+  assert.deepEqual(
+    parseAutopilotSuitabilityMarker(`${marker(4)}\n${marker(4)}`),
+    {
+      present: true,
+      value: 4,
+      malformed: false,
+    },
+  );
+});
+
+test('parseAutopilotSuitabilityMarker is prefix-aware', () => {
+  assert.deepEqual(
+    parseAutopilotSuitabilityMarker(marker(4, 'my-org'), 'my-org'),
+    {
+      present: true,
+      value: 4,
+      malformed: false,
+    },
+  );
+  // wrong prefix -> not present
+  assert.deepEqual(
+    parseAutopilotSuitabilityMarker(marker(4, 'my-org'), 'idd-skill'),
+    { present: false, value: null, malformed: false },
+  );
+});
+
+test('parseAutopilotSuitability is the value-only view of the shared marker parser', () => {
+  const bodies = [
+    'no marker here',
+    '',
+    `body\n\n${marker(1)}`,
+    marker(5),
+    marker(0),
+    marker(6),
+    marker('high'),
+    marker('3.5'),
+    `${marker(4)}\n${marker(2)}`,
+    `${marker(4)}\n${marker(4)}`,
+  ];
+  for (const body of bodies) {
+    assert.equal(
+      parseAutopilotSuitability(body),
+      parseAutopilotSuitabilityMarker(body).value,
+      `value equivalence: ${JSON.stringify(body)}`,
+    );
+  }
 });
 
 test('normalizeAutopilotSuitabilityFloor clamps to default for bad input', () => {
