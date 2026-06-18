@@ -110,7 +110,7 @@ re-review:
 gh pr edit {pr-number} --add-reviewer {reviewer-login}
 ```
 
-For an **advisory bot**, pass the bot's reviewer **slug** to this
+For an **advisory bot**, pass the bot's reviewer **login** to this
 add-reviewer command (the reliable trigger). The REST `requested_reviewers`
 endpoint called with a bot's **display name** silently no-ops and wastes a
 full advisory-wait cycle, so do not use that path to request a re-review.

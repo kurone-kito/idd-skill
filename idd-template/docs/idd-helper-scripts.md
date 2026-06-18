@@ -343,7 +343,7 @@ Node.js helper path.
   wrapper scripts out of the target repository entirely.
 
 **Authoritative invocation surface per profile.** Under `vendored-node`, the
-canonical invocation is `node scripts/<name>.mjs`; the package-manager / `npx`
+canonical invocation is `node scripts/<name>.mjs`; the `package-manager` / `npx`
 `bin/` facade (the `idd-*` bin wrappers) is **redundant** in this profile and
 may be skipped — keeping it only adds a second surface to align with the
 instruction files for no portability gain. Under `package-manager` and
