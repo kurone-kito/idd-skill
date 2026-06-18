@@ -512,15 +512,30 @@ function parseArgs(argv: string[]): SweepArgs {
   return parsed;
 }
 
+// Resolve the merged-since cutoff from --since and/or --days. When both are
+// supplied the later (more recent) cutoff wins, narrowing the window to the
+// intersection of the two; --since is validated as an ISO8601 date.
 function resolveSinceDate(args: SweepArgs): string | null {
+  const candidates: { iso: string; ms: number }[] = [];
   if (args.since) {
-    return args.since;
+    const ms = Date.parse(args.since);
+    if (Number.isNaN(ms)) {
+      throw new Error(`--since expects an ISO8601 date, got "${args.since}"`);
+    }
+    candidates.push({ iso: args.since, ms });
   }
   if (args.days && args.days > 0) {
-    const cutoff = Date.now() - args.days * 24 * 60 * 60 * 1000;
-    return new Date(cutoff).toISOString().slice(0, 10);
+    const cutoffMs = Date.now() - args.days * 24 * 60 * 60 * 1000;
+    candidates.push({
+      iso: new Date(cutoffMs).toISOString().slice(0, 10),
+      ms: cutoffMs,
+    });
   }
-  return null;
+  if (candidates.length === 0) {
+    return null;
+  }
+  return candidates.reduce((later, next) => (next.ms > later.ms ? next : later))
+    .iso;
 }
 
 function loadIddConfig(): {
@@ -750,11 +765,14 @@ function main(): void {
     resolveLoginList(process.env.IDD_AGENT_LOGINS ?? '') ??
     trustedMarkerActors;
 
-  const sinceDate = resolveSinceDate(args);
-  const targets =
-    args.prNumbers.length > 0
-      ? args.prNumbers.map((number) => ({ number }))
-      : listMergedPrNumbers(repoRef, sinceDate, args.limit);
+  // --since/--days only drive the merged-PR enumeration; when explicit PR
+  // numbers are given they are unused, so resolve and report the window as
+  // null rather than implying the run was time-filtered.
+  const usingExplicitPrs = args.prNumbers.length > 0;
+  const sinceDate = usingExplicitPrs ? null : resolveSinceDate(args);
+  const targets = usingExplicitPrs
+    ? args.prNumbers.map((number) => ({ number }))
+    : listMergedPrNumbers(repoRef, sinceDate, args.limit);
 
   const prs: MergedPrInput[] = [];
   for (const target of targets) {
@@ -775,8 +793,8 @@ function main(): void {
       {
         sweepWindow: {
           since: sinceDate,
-          days: args.days,
-          explicitPrs: args.prNumbers.length > 0 ? args.prNumbers : null,
+          days: usingExplicitPrs ? null : args.days,
+          explicitPrs: usingExplicitPrs ? args.prNumbers : null,
           prCount: result.summary.prCount,
         },
         trustedMarkerActors,

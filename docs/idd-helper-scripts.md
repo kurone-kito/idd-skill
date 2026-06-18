@@ -876,7 +876,11 @@ Interpretation rules:
   scans MERGED PRs and surfaces feedback that was left unattended at merge:
   - **Window selector**: `--since <ISO8601>` and/or `--days <N>`, or
     `--pr <n>` (repeatable) / `--prs <n1,n2,...>`; `--limit <N>` caps the
-    `--since`/`--days` enumeration. Optional `--owner`, `--repo`,
+    `--since`/`--days` enumeration. When both `--since` and `--days` are
+    given, the later (more recent) cutoff wins, narrowing the window to the
+    intersection; `--pr`/`--prs` bypass the date window entirely, so the
+    reported `sweepWindow.since` and `days` are then `null`. Optional
+    `--owner`, `--repo`,
     `--trusted-marker-logins`, and `--advisory-bot-logins` (same convention
     as `review-activity-snapshot`). `--idd-agent-logins` (or
     `IDD_AGENT_LOGINS`) names the agent accounts whose comments are
