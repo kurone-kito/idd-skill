@@ -1072,6 +1072,24 @@ test('containsExampleRepoBackLink keeps a shared image/link reference definition
   assert.equal(containsExampleRepoBackLink(md, 'kurone-kito/idd-skill'), true);
 });
 
+test('containsExampleRepoBackLink keeps a definition shared by an image and a shortcut link', () => {
+  // `shared` is used by a reference image and a *shortcut* reference link
+  // (`[shared]`). The shortcut link still counts, so the definition must
+  // not be dropped.
+  const md =
+    '![badge][shared] — see [shared] for details.\n\n[shared]: https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md';
+  assert.equal(containsExampleRepoBackLink(md, 'kurone-kito/idd-skill'), true);
+});
+
+test('containsExampleRepoBackLink treats a top-level indented list-marker line as code', () => {
+  // With no list open, a >=4-space indented `- ...` line after a blank is
+  // an indented code block (CommonMark), not a list item, so a workshop
+  // URL there must not produce a false back-link pass.
+  const md =
+    'paragraph\n\n    - [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n';
+  assert.equal(containsExampleRepoBackLink(md, 'kurone-kito/idd-skill'), false);
+});
+
 test('containsExampleRepoBackLink rejects URL whose host is not a GitHub host', () => {
   const md =
     '[trap](https://example.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)';

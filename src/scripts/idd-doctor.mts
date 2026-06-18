@@ -1536,6 +1536,12 @@ function stripIndentedCodeBlocksPreservingLines(content: string): string {
   const out: string[] = [];
   let prevBlank = true;
   let inBlock = false;
+  // Whether a list is currently open at the top level. Under an open
+  // list, indented content is list continuation / nested-list items; with
+  // no list open, a top-level >=4-space indent is an indented code block,
+  // even when the line looks like a list marker (CommonMark: a list
+  // marker at >=4 spaces of indent is code, not a list).
+  let listOpen = false;
   for (const line of lines) {
     const isBlank = /^\s*$/.test(line);
     const indented = /^(?: {4}|\t)/.test(line);
@@ -1544,35 +1550,52 @@ function stripIndentedCodeBlocksPreservingLines(content: string): string {
     // code) even when indented under a parent item.
     const looksLikeListItem = /^\s*(?:[-*+]\s|\d+[.)]\s)/.test(line);
     if (isBlank) {
-      // A blank line does not end an open indented code block: per
-      // CommonMark §4.4 a code block is one or more indented chunks
-      // separated by blank lines, so `inBlock` must survive the blank.
-      // The block only ends when a later non-indented, non-blank line
-      // appears (handled by the fall-through below). Leaving `inBlock`
-      // set keeps a post-blank indented list-marker line as code.
+      // A blank line ends neither an open indented code block nor an open
+      // list: per CommonMark §4.4 a code block is one or more indented
+      // chunks separated by blank lines, and loose lists are blank-line
+      // separated too. Both `inBlock` and `listOpen` survive the blank;
+      // the block/list only ends at a later non-indented, non-blank line.
       out.push(line);
       prevBlank = true;
       continue;
     }
-    if (indented && inBlock) {
-      // Continuation of an open indented code block. Per CommonMark §4.4
-      // a list cannot start inside an open indented code block without an
-      // intervening blank line and dedent, so a list-marker-looking line
-      // here stays code and must be blanked too (it is not a list opener).
-      out.push('');
+    if (indented) {
+      if (inBlock) {
+        // Continuation of an open indented code block (even across an
+        // internal blank line). A list cannot start inside it, so a
+        // list-marker-looking line here stays code and is blanked.
+        out.push('');
+        prevBlank = false;
+        continue;
+      }
+      if (listOpen) {
+        // Indented content under an open list is list continuation or a
+        // nested list item, not a top-level code block: keep it.
+        out.push(line);
+        prevBlank = false;
+        continue;
+      }
+      if (prevBlank) {
+        // Opener: a top-level indented line after a blank with no open
+        // list starts an indented code block, even a list-marker-looking
+        // one (>=4 spaces of top-level indent is code, not a list).
+        out.push('');
+        inBlock = true;
+        prevBlank = false;
+        continue;
+      }
+      // Indented line lazily continuing a paragraph (code cannot
+      // interrupt a paragraph): keep it.
+      out.push(line);
       prevBlank = false;
       continue;
     }
-    if (indented && prevBlank && !looksLikeListItem) {
-      // Opener: an indented, non-list line after a blank line starts a
-      // new indented code block.
-      out.push('');
-      inBlock = true;
-      prevBlank = false;
-      continue;
-    }
+    // Non-indented (<=3 spaces), non-blank line: it closes any open code
+    // block and resets the list context — a top-level list marker opens
+    // (or continues) a list; any other line closes it.
     out.push(line);
     inBlock = false;
+    listOpen = looksLikeListItem;
     prevBlank = false;
   }
   return out.join('\n');
@@ -1615,11 +1638,23 @@ export function containsExampleRepoBackLink(
     const label = explicit.length > 0 ? explicit : shortcut;
     if (label.length > 0) imageLabels.add(label.toLowerCase());
   }
-  // A reference *link* (`[text][id]` full or `[id][]` collapsed; the
-  // leading `!` excludes images) shares the `[id]: <url>` definition with
-  // navigation, so a label used by a link must keep its definition even
-  // when an image also references it. Collect link labels and drop only
-  // definitions for labels referenced *exclusively* by images.
+  // Labels that have a reference definition. A shortcut reference
+  // (`[id]`) only resolves to a link/image when such a definition exists,
+  // so the defined-label set scopes shortcut detection below and avoids
+  // treating ordinary bracketed prose as a reference.
+  const definedLabels = new Set<string>();
+  const refDefPattern = /^ {0,3}\[([^\]]+)\]:.*$/gm;
+  let defMatch: RegExpExecArray | null;
+  // biome-ignore lint/suspicious/noAssignInExpressions: canonical regex-exec iteration idiom
+  while ((defMatch = refDefPattern.exec(imagedStripped)) !== null) {
+    definedLabels.add(defMatch[1].trim().toLowerCase());
+  }
+  // A reference *link* (full `[text][id]`, collapsed `[id][]`, or shortcut
+  // `[id]`; the leading `!` excludes images) shares the `[id]: <url>`
+  // definition with navigation, so a label used by a link must keep its
+  // definition even when an image also references it. Collect link labels
+  // and drop only definitions for labels referenced *exclusively* by
+  // images.
   const linkLabels = new Set<string>();
   const refLinkPattern = /(?<!!)\[[^\]]*\]\[([^\]]*)\]/g;
   let linkMatch: RegExpExecArray | null;
@@ -1633,6 +1668,17 @@ export function containsExampleRepoBackLink(
         ? explicit
         : (linkMatch[0].match(/^\[([^\]]*)\]\[\]$/)?.[1]?.trim() ?? '');
     if (label.length > 0) linkLabels.add(label.toLowerCase());
+  }
+  // Shortcut reference links: a bare `[id]` not preceded by `]`/`!` (which
+  // would be a full-reference tail or an image) and not followed by
+  // `(`/`[`/`:` (inline link, full/collapsed reference, or definition).
+  // Only count it when `id` is actually defined.
+  const shortcutPattern = /(?<![\]!])\[([^\]]+)\](?![([:])/g;
+  let shortcutMatch: RegExpExecArray | null;
+  // biome-ignore lint/suspicious/noAssignInExpressions: canonical regex-exec iteration idiom
+  while ((shortcutMatch = shortcutPattern.exec(imagedStripped)) !== null) {
+    const label = shortcutMatch[1].trim().toLowerCase();
+    if (label.length > 0 && definedLabels.has(label)) linkLabels.add(label);
   }
   const dropLabels = new Set(
     [...imageLabels].filter((label) => !linkLabels.has(label)),
