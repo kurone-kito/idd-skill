@@ -483,3 +483,36 @@ test('detects a later competing claim that precedes a heartbeat of the active cl
   assert.equal(result.reason, 'later-competing-claim');
   assert.equal(result.evidence.later_competing_claim?.claim_id, 'claim-race');
 });
+
+test('baselines the competing-claim search by timestamp regardless of event order', () => {
+  // The events array is not oldest-first (the heartbeat appears before the
+  // original claim). The original-claim baseline must be chosen by
+  // timestamp, not array position, so the race is still detected.
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-owned',
+      now: '2026-05-12T11:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:10:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-owned supersedes: none 2026-05-12T10:10:00Z branch: issue/12-task -->',
+        },
+        {
+          createdAt: '2026-05-12T10:05:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: other claim-race supersedes: none 2026-05-12T10:05:00Z branch: issue/12-task -->',
+        },
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-owned supersedes: none 2026-05-12T10:00:00Z branch: issue/12-task -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(result.state, 'disputed');
+  assert.equal(result.evidence.later_competing_claim?.claim_id, 'claim-race');
+});
