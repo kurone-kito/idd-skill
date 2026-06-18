@@ -50,6 +50,23 @@ test('findLatestLabeledAt matches the label case-insensitively and trimmed', () 
   assert.equal(latest, '2026-05-15T11:00:00Z');
 });
 
+test('findLatestLabeledAt normalizes the configured labelName too', () => {
+  // labelName side carries mixed case + whitespace; the event label is the
+  // canonical form. Both sides must be normalized for this to match.
+  const latest = findLatestLabeledAt(
+    [
+      {
+        event: 'labeled',
+        label: { name: 'status:authoring' },
+        created_at: '2026-05-15T12:00:00Z',
+      },
+    ],
+    '  Status:AUTHORING  ',
+  );
+
+  assert.equal(latest, '2026-05-15T12:00:00Z');
+});
+
 test('findLatestLabeledAt still ignores a genuinely different label', () => {
   const latest = findLatestLabeledAt(
     [
