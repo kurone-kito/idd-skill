@@ -590,6 +590,9 @@ Required content:
 - `## Background` or `## Goal`
 - `## Proposed change`
 - `## Acceptance criteria`
+- an autopilot-suitability footer at the end of the body (visible line +
+  `<!-- idd-skill-autopilot-suitability: N -->` marker; see
+  [Autopilot-suitability score](#autopilot-suitability-score))
 
 Optional content:
 
@@ -612,6 +615,8 @@ Validation expectations:
 - when the repository uses `orphan-first-policy: maintainer-approved`,
   the draft includes a post-publication maintainer approval step after
   the final title, body, and generated plan are stable
+- exactly one autopilot-suitability footer with an integer 1-5 marker; a
+  score of `1` also carries `status:blocked-by-human`
 
 ### Roadmap issue schema
 
@@ -626,6 +631,8 @@ Required content:
 - `## Tracks`
 - `## Success criteria`
 - one `<!-- idd-skill-roadmap-id: <roadmap-id> -->` marker
+- an autopilot-suitability footer at the end of the body (visible line +
+  `<!-- idd-skill-autopilot-suitability: N -->` marker)
 
 Recommended content inside `## Tracks`:
 
@@ -646,6 +653,8 @@ Validation expectations:
   instead of normal execution leaves
 - the roadmap can survive multi-session handoffs without relying on
   private session memory
+- exactly one autopilot-suitability footer with an integer 1-5 marker; a
+  score of `1` also carries `status:blocked-by-human`
 
 ### Sub-issue schema
 
@@ -658,6 +667,8 @@ Required content:
 - `## Background`
 - `## Proposed change`
 - `## Acceptance criteria`
+- an autopilot-suitability footer at the end of the body (visible line +
+  `<!-- idd-skill-autopilot-suitability: N -->` marker)
 
 Optional content:
 
@@ -674,6 +685,8 @@ Validation expectations:
 - any dependency marker is resolvable, intentionally chosen, and
   justified
 - the issue can be claimed independently without absorbing sibling work
+- exactly one autopilot-suitability footer with an integer 1-5 marker; a
+  score of `1` also carries `status:blocked-by-human`
 
 ## Validation checklist for drafted output
 
