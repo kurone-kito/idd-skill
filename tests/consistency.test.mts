@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  collectInstructionSizeBudgetViolations,
   collectPolicyConfigDrift,
   inspectHelperRuntimeConfig,
   normalizePolicyConfig,
@@ -37,6 +38,63 @@ test('placeholder scenarios detect clean and dirty post-onboarding fixtures', ()
     '.github/idd/config.json: {{PROJECT_MARKER_PREFIX}}, {{TRUSTED_MARKER_ACTOR}}',
     'README.md: {{REPO_NAME}}',
   ]);
+});
+
+test('instruction size budget skips with a notice when no git comparison base resolves', () => {
+  let loaded = false;
+  const result = collectInstructionSizeBudgetViolations(
+    { id: 'instruction-size-budgets', phaseLimitBytes: 1 },
+    null,
+    () => {
+      loaded = true;
+      return [{ path: 'idd-x.instructions.md', text: 'x'.repeat(10_000) }];
+    },
+  );
+  assert.equal(loaded, false, 'must not read files on the null-base skip path');
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.notices, [
+    'instruction-size-budgets: skipped instruction size budget check because no git comparison base was available',
+  ]);
+});
+
+test('instruction size budget audits only changed files and honors both limits', () => {
+  const files = [
+    // phase file over the phase limit AND changed -> error.
+    { path: 'idd-phase.instructions.md', text: 'p'.repeat(120) },
+    // always-loaded file over the always-loaded limit AND changed -> error.
+    {
+      path: 'idd-core.instructions.md',
+      text: `---\napplyTo: "**"\n---\n${'c'.repeat(120)}`,
+    },
+    // over budget but NOT in the changed set -> ignored.
+    { path: 'idd-untouched.instructions.md', text: 'u'.repeat(10_000) },
+  ];
+  const result = collectInstructionSizeBudgetViolations(
+    {
+      id: 'instruction-size-budgets',
+      alwaysLoadedLimitBytes: 50,
+      phaseLimitBytes: 100,
+    },
+    new Set(['idd-phase.instructions.md', 'idd-core.instructions.md']),
+    () => files,
+  );
+  assert.deepEqual(result.notices, []);
+  assert.equal(result.errors.length, 2);
+  assert.match(
+    result.errors[0],
+    /idd-phase\.instructions\.md is 120 bytes .*phase/,
+  );
+  assert.match(
+    result.errors[1],
+    /idd-core\.instructions\.md is \d+ bytes .*always-loaded/,
+  );
+});
+
+test('instruction size budget returns nothing for absent config', () => {
+  const result = collectInstructionSizeBudgetViolations(null, new Set(), () => {
+    throw new Error('must not load files when config is absent');
+  });
+  assert.deepEqual(result, { errors: [], notices: [] });
 });
 
 test('config drift scenarios detect mismatches between config and overview defaults', () => {

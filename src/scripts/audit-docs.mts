@@ -9,10 +9,12 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
+  InstructionSizeBudgetConfig,
   RootMarkdownAllowlistConfig,
   TypeSuppressionBudgetConfig,
 } from './consistency-helpers.mts';
 import {
+  collectInstructionSizeBudgetViolations,
   collectPolicyConfigDrift,
   collectRootMarkdownAllowlistViolations,
   collectTypeSuppressionViolations,
@@ -63,14 +65,6 @@ interface SyncPair {
   requiredPatterns?: string[];
 }
 
-interface InstructionSizeBudgets {
-  id?: string;
-  glob?: string;
-  alwaysLoadedPattern?: string;
-  alwaysLoadedLimitBytes?: number;
-  phaseLimitBytes?: number;
-}
-
 interface BundleBudget {
   id?: string;
   files?: string[];
@@ -90,7 +84,7 @@ interface AuditManifest {
   generatedBlocks?: GeneratedBlock[];
   shellFileLists?: ShellFileList[];
   syncPairs?: SyncPair[];
-  instructionSizeBudgets?: InstructionSizeBudgets | null;
+  instructionSizeBudgets?: InstructionSizeBudgetConfig | null;
   bundleBudgets?: BundleBudget[];
   forbiddenPatterns?: ForbiddenPattern[];
   rootMarkdownAllowlist?: RootMarkdownAllowlistConfig | null;
@@ -663,38 +657,22 @@ function docsSyncCommandByPackageManager(packageManager: unknown): string {
   }
 }
 
-function checkInstructionSizeBudgets(config: InstructionSizeBudgets | null) {
-  if (!config) {
-    return;
-  }
-
-  const id = config.id ?? 'instruction-size-budgets';
-  const files = globFiles(
-    config.glob ?? '.github/instructions/idd-*.instructions.md',
+function checkInstructionSizeBudgets(
+  config: InstructionSizeBudgetConfig | null,
+) {
+  // The scope/skip decision and budget evaluation live in the pure helper
+  // so they can be unit-tested; the audit pipeline only supplies the
+  // changed-file set and a lazy reader for the globbed instruction files.
+  const result = collectInstructionSizeBudgetViolations(
+    config,
+    changedFiles,
+    () =>
+      globFiles(
+        config?.glob ?? '.github/instructions/idd-*.instructions.md',
+      ).map((file) => ({ path: file, text: readText(file) })),
   );
-  const alwaysLoadedPattern =
-    config.alwaysLoadedPattern ?? 'applyTo:\\s*"\\*\\*"';
-  const alwaysLoadedRegex = new RegExp(alwaysLoadedPattern, 'm');
-  const alwaysLoadedLimitBytes = config.alwaysLoadedLimitBytes ?? 20_000;
-  const phaseLimitBytes = config.phaseLimitBytes ?? 30_000;
-  const candidates =
-    changedFiles === null
-      ? files
-      : files.filter((file) => changedFiles.has(file));
-
-  for (const file of candidates) {
-    const text = readText(file);
-    const bytes = Buffer.byteLength(text, 'utf8');
-    const alwaysLoaded = alwaysLoadedRegex.test(text);
-    const limit = alwaysLoaded ? alwaysLoadedLimitBytes : phaseLimitBytes;
-    if (bytes > limit) {
-      errors.push(
-        `${id}: ${file} is ${bytes} bytes (limit ${limit}; ${
-          alwaysLoaded ? 'always-loaded' : 'phase'
-        })`,
-      );
-    }
-  }
+  errors.push(...result.errors);
+  notices.push(...result.notices);
 }
 
 function checkBundleBudgets(budgets: BundleBudget[]) {
