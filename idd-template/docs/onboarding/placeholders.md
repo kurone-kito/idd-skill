@@ -37,7 +37,7 @@ List the GitHub logins allowed to post trusted IDD markers in
 it fills one quoted JSON array entry, so replace it with a single
 JSON-escaped login string first. Examples:
 
-- one trusted marker actor → `trusted-user-a`
+- one trusted marker actor → `"trusted-user-a"`
 
 If the target repository needs more than one trusted marker actor, add
 the extra quoted array entries manually after the first replacement, for

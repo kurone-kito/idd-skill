@@ -6,9 +6,9 @@ phase. The claim ID and branch stay exactly the same as the active claim.
 ---
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- claimed-by: copilot-cli-abc12345 claim-20260510T090000Z-55521 supersedes: none 2026-05-10T21:00:00Z branch: issue/123-add-onboarding-doctor -->
+<!-- claimed-by: copilot-cli-abc12345 claim-20260510T090000Z-55521 supersedes: none 2026-05-10T11:00:00Z branch: issue/123-add-onboarding-doctor -->
 
-_copilot-cli-abc12345: issue claim - IDD automation marker. Do not edit._
+_copilot-cli-abc12345: issue claim — IDD automation marker. Do not edit._
 
 ---
 

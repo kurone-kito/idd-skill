@@ -11,5 +11,5 @@ Returning to Discover for the next issue.
 ```md
 <!-- unclaimed-by: copilot-cli-abc12345 claim-20260510T090000Z-55521 2026-05-10T12:00:00Z -->
 
-_copilot-cli-abc12345: issue claim released - IDD automation marker. Do not edit._
+_copilot-cli-abc12345: issue claim released — IDD automation marker. Do not edit._
 ```
