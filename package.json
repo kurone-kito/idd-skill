@@ -13,7 +13,6 @@
     "idd-branch-name": "./bin/idd-branch-name.mjs",
     "idd-claim-approval-gate": "./bin/idd-claim-approval-gate.mjs",
     "idd-ci-wait-policy": "./bin/idd-ci-wait-policy.mjs",
-    "idd-cleanup-hygiene-report": "./bin/idd-cleanup-hygiene-report.mjs",
     "idd-discover-roadmap-graph": "./bin/idd-discover-roadmap-graph.mjs",
     "idd-discover-readiness-check": "./bin/idd-discover-readiness-check.mjs",
     "idd-discover-orphan-filter": "./bin/idd-discover-orphan-filter.mjs",

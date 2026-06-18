@@ -200,15 +200,6 @@ const HELPER_COMMANDS = [
     description: 'Audit or apply post-merge comment cleanup.',
   },
   {
-    id: 'cleanup-hygiene-report',
-    scriptName: 'idd:cleanup-hygiene-report',
-    binName: 'idd-cleanup-hygiene-report',
-    entryPath: 'scripts/cleanup-hygiene-report.mjs',
-    vendoredCommand: 'node scripts/cleanup-hygiene-report.mjs',
-    description: 'Generate auditable cleanup hygiene snapshots for merged PRs.',
-    contractPaths: ['docs/cleanup-hygiene-report.md'],
-  },
-  {
     id: 'claim-approval-gate',
     scriptName: 'idd:claim-approval-gate',
     binName: 'idd-claim-approval-gate',
