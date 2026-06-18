@@ -631,25 +631,41 @@ export function evaluateMarkerPrefixConsistency(
   return { prefix: allPrefixes[0] };
 }
 
-function checkProjectCommands(
+// The Project commands table normally lives in idd-overview-core, but a
+// router/core split can keep it in idd-overview instead. Resolve whichever
+// candidate carries a non-empty table rather than hardcoding one file.
+const PROJECT_COMMANDS_CANDIDATE_FILES = [
+  '.github/instructions/idd-overview-core.instructions.md',
+  '.github/instructions/idd-overview.instructions.md',
+];
+
+export function checkProjectCommands(
   root: string,
   report: DoctorReport,
 ): Map<string, string> | null {
-  const path = join(
-    root,
-    '.github/instructions/idd-overview-core.instructions.md',
-  );
-  let text = '';
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch {
+  let commands: Map<string, string> | null = null;
+  let usedPath = '';
+  for (const rel of PROJECT_COMMANDS_CANDIDATE_FILES) {
+    let text: string;
+    try {
+      text = readFileSync(join(root, rel), 'utf8');
+    } catch {
+      continue;
+    }
+    const parsed = parseProjectCommandRows(text);
+    if (parsed.size > 0) {
+      commands = parsed;
+      usedPath = rel;
+      break;
+    }
+  }
+  if (!commands) {
     report.errors.push(
-      'cannot read .github/instructions/idd-overview-core.instructions.md',
+      `cannot find a Project commands table in any of: ${PROJECT_COMMANDS_CANDIDATE_FILES.join(', ')}`,
     );
     return null;
   }
 
-  const commands = parseProjectCommandRows(text);
   const requiredRows = [
     'fix-validate',
     'pre-push-validate',
@@ -659,7 +675,7 @@ function checkProjectCommands(
   const missingRows = requiredRows.filter((row) => !commands.has(row));
   if (missingRows.length > 0) {
     report.errors.push(
-      `project commands table is missing rows: ${missingRows.join(', ')}`,
+      `project commands table (${usedPath}) is missing rows: ${missingRows.join(', ')}`,
     );
     return null;
   }
