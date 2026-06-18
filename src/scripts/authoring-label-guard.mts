@@ -144,5 +144,10 @@ function isMatchingLabeledEvent(event: LabelEvent, labelName: string): boolean {
     typeof event.label === 'string'
       ? event.label
       : (event.label as { name?: unknown } | null | undefined)?.name;
-  return eventLabel === labelName;
+  if (typeof eventLabel !== 'string') {
+    return false;
+  }
+  // Match case-insensitively and trimmed so a label differing only in case
+  // or surrounding whitespace (e.g. " Status:Authoring ") still registers.
+  return eventLabel.trim().toLowerCase() === labelName.trim().toLowerCase();
 }
