@@ -28,6 +28,8 @@ language: en,ja
 useGitignore: true
 version: '0.2'
 words:
+  - desync
+  - desynced
   - idd
   - isort
   - kito

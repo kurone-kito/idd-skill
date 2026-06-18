@@ -54,7 +54,10 @@ interface RawConfig {
       maxValidity?: unknown;
     };
   };
-  discover?: { activeClaimPreScanBatchSize?: unknown };
+  discover?: {
+    activeClaimPreScanBatchSize?: unknown;
+    selectionDesync?: unknown;
+  };
   claim?: { verifySettleDelay?: unknown };
   critiqueLoop?: {
     cPhaseLowSeveritySkipAfter?: unknown;
@@ -91,6 +94,7 @@ const APPROVAL_ACTOR_POLICIES = new Set([
 ]);
 const FORCED_HANDOFF_MODES = new Set(['disabled', 'human-gated']);
 const ADVISORY_CAP_ROUTES = new Set(['phase-specific', 'hold']);
+const SELECTION_DESYNC_MODES = new Set(['off', 'session-offset']);
 const EXTERNAL_CHECK_WAIVER_MODES = new Set([
   'disabled',
   'maintainer-authorized',
@@ -153,6 +157,7 @@ export const POLICY_DEFAULTS = Object.freeze({
   }),
   discover: Object.freeze({
     activeClaimPreScanBatchSize: 10,
+    selectionDesync: 'off',
   }),
   claim: Object.freeze({
     verifySettleDelay: 'PT5S',
@@ -374,6 +379,11 @@ export function normalizePolicyConfig(config: unknown) {
         c?.discover?.activeClaimPreScanBatchSize,
         POLICY_DEFAULTS.discover.activeClaimPreScanBatchSize,
       ),
+      selectionDesync: parseEnum(
+        c?.discover?.selectionDesync,
+        SELECTION_DESYNC_MODES,
+        POLICY_DEFAULTS.discover.selectionDesync,
+      ),
     },
     claim: {
       verifySettleDelay: parseDuration(
@@ -495,6 +505,40 @@ export function getReviewEscalationChangesRequestedPolicy(
 
 function isFiniteNumber(value: number | null): value is number {
   return typeof value === 'number' && Number.isFinite(value);
+}
+
+/**
+ * Deterministically pick an index within a same-score tie band for the
+ * Discover A4 Step 2 selection desync (`discover.selectionDesync:
+ * session-offset`). Pure and network-free: the same session token always
+ * maps to the same index, while distinct tokens spread across the band, so
+ * concurrent autopilot sessions stop colliding on the lowest-numbered
+ * candidate. Returns `0` — the lowest-numbered, i.e. the default
+ * deterministic pick — for an empty/singleton band or a non-string/empty
+ * token, so `off`, no-tie, and no-token behavior is unchanged.
+ *
+ * The band is the caller's ascending-issue-number ordering; this only
+ * chooses an offset within it and never reorders across score bands or
+ * affects branch naming.
+ */
+export function selectDesyncedIndex(token: unknown, bandSize: unknown): number {
+  const size =
+    typeof bandSize === 'number' && Number.isInteger(bandSize) && bandSize > 0
+      ? bandSize
+      : 0;
+  if (size <= 1) {
+    return 0;
+  }
+  if (typeof token !== 'string' || token.length === 0) {
+    return 0;
+  }
+  // FNV-1a 32-bit hash — deterministic, dependency-free, well-spread.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < token.length; i += 1) {
+    hash ^= token.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0) % size;
 }
 
 function clone<T>(value: T): T {
