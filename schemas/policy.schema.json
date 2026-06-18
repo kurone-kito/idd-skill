@@ -354,6 +354,11 @@
         "activeClaimPreScanBatchSize": {
           "type": "integer",
           "minimum": 1
+        },
+        "selectionDesync": {
+          "type": "string",
+          "enum": ["off", "session-offset"],
+          "description": "A4 Step 2 concurrent-selection desync within a same-score tie band. `off` (default) keeps the deterministic lowest-issue-number tie-break; `session-offset` spreads concurrent autopilot sessions across the tie band by a per-session offset to cut claim races. Never reorders across score bands or affects branch naming."
         }
       }
     },

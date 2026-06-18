@@ -476,6 +476,25 @@ still passes A4.5/A5 unchanged and the score never bypasses a gate. When
 neither skip below-floor candidates nor reorder by score — and select by
 **lowest issue number**.
 
+**Concurrent-selection desync (opt-in, off by default).** When
+`.github/idd/config.json` `discover.selectionDesync` is `session-offset`
+(default `off`) and the chosen highest-score tie band has more than one
+eligible candidate, pick the band entry at index
+`selectDesyncedIndex(session-token, band-size)` instead of index 0 —
+`scripts/policy-helpers.mjs` exports it as a pure, deterministic
+`hash(session-token) mod band-size` over the band ordered by ascending
+issue number, where `session-token` is this session's `{agent-id}` (use
+the recommended unique per-session agent-id suffix; it is available at
+selection time, unlike `{claim-id}`, which A5 only generates after
+selection). This
+proactively spreads concurrent autopilot sessions across **different**
+eligible issues to cut the claim races that A4 Step 1.5 and A5(e) only
+resolve reactively. It reorders **only within** a single score tie band —
+never across score bands — and never bypasses A4.5/A5. Same-issue branch
+convergence is preserved because the branch name derives from the issue,
+not selection order. With `off`, a single-entry band, or no applicable
+score, keep the deterministic **lowest issue number** pick.
+
 After picking, proceed to **A4.5** (`idd-suitability.instructions.md`).
 
 ## A4.5 — Pre-Claim Issue-Suitability Triage
