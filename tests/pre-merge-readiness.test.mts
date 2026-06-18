@@ -1458,6 +1458,77 @@ test('disposition evidence treats PATH A and PATH B as complete when both have m
   assert.equal(summary.missingThreadCount, 0);
 });
 
+test('disposition evidence pairs trailing markers 1:1 across regular comments', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'first concern',
+          author: { login: 'reviewer-a' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T00:00:01Z',
+          body: 'second concern',
+          author: { login: 'reviewer-b' },
+        },
+        // A single trailing disposition can address only ONE of the two.
+        {
+          id: 3,
+          createdAt: '2026-05-12T00:00:02Z',
+          body: '**Accepted** — addressed',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    { iddAgentLogins: ['idd-bot'] },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingRegularCommentCount, 1);
+});
+
+test('disposition evidence clears two regular comments when each has its own marker', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'first concern',
+          author: { login: 'reviewer-a' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T00:00:01Z',
+          body: 'second concern',
+          author: { login: 'reviewer-b' },
+        },
+        {
+          id: 3,
+          createdAt: '2026-05-12T00:00:02Z',
+          body: '**Accepted** — first addressed',
+          author: { login: 'idd-bot' },
+        },
+        {
+          id: 4,
+          createdAt: '2026-05-12T00:00:03Z',
+          body: '**Rejected** — second declined',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    { iddAgentLogins: ['idd-bot'] },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.missingRegularCommentCount, 0);
+});
+
 test('disposition evidence blocks unresolved threads without fresh disposition markers', () => {
   const summary = summarizeDispositionEvidenceForGate(
     {

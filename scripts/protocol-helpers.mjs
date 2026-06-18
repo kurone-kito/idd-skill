@@ -773,7 +773,12 @@ export function isCodeRabbitLogin(login) {
   const normalized = login.toLowerCase();
   return normalized === 'coderabbitai' || normalized === 'coderabbitai[bot]';
 }
-export function classifyRegularBotComment(comment, comments, threads) {
+export function classifyRegularBotComment(
+  comment,
+  comments,
+  threads,
+  options = {},
+) {
   const author = comment.author?.login ?? '';
   if (!isCodeRabbitLogin(author)) {
     return null;
@@ -795,7 +800,9 @@ export function classifyRegularBotComment(comment, comments, threads) {
     }
     if (
       hasExplicitDispositionAfter(comment, comments) ||
-      hasCompletedBotThreadDispositions(threads, isCodeRabbitLogin)
+      hasCompletedBotThreadDispositions(threads, isCodeRabbitLogin, {
+        isDispositionAuthor: options.isDispositionAuthor,
+      })
     ) {
       return {
         classifier: 'RESOLVED',
@@ -851,7 +858,7 @@ export function indexLatestGatingReviewsByAuthor(reviews) {
   }
   return index;
 }
-export function indexThreadsByReview(threads) {
+export function indexThreadsByReview(threads, options = {}) {
   const index = new Map();
   for (const thread of threads) {
     const reviewIds = new Set(
@@ -871,7 +878,11 @@ export function indexThreadsByReview(threads) {
       if (!thread.isResolved) {
         current.unresolved += 1;
       }
-      if (!hasFreshDisposition(thread)) {
+      if (
+        !hasFreshDisposition(thread, {
+          isDispositionAuthor: options.isDispositionAuthor,
+        })
+      ) {
         current.missingDisposition += 1;
       }
       if (thread.comments?.pageInfo?.hasNextPage) {
@@ -2086,7 +2097,7 @@ export function summarizeDispositionEvidenceForGate(
     body: comment.body,
     createdAt: comment.createdAt,
   }));
-  const missingRegularComments = normalizedComments
+  const outstandingComments = normalizedComments
     .filter(
       (comment) =>
         !isOperationalOrDigestCommentForGate(
@@ -2111,22 +2122,47 @@ export function summarizeDispositionEvidenceForGate(
           threads,
         ) === null
       );
-    })
-    .filter((comment) => {
-      return !normalizedComments.some((reply) => {
-        return (
-          iddAgentLogins.has(reply.authorLogin) &&
-          isDispositionComment({ body: reply.body }) &&
-          compareIsoTimestamps(reply.activityAt, comment.activityAt) > 0
-        );
-      });
-    })
-    .map((comment) => ({
-      id: comment.id || `comment-${comment.sortedIndex + 1}`,
-      authorLogin: comment.authorLogin || 'unknown',
-      createdAt: comment.createdAt,
-      bodyPreview: buildBodyPreview(comment.body),
-    }));
+    });
+  // Count-based 1:1 pairing for the trailing-marker rule: a single later IDD
+  // disposition marker addresses at most ONE earlier regular comment, so one
+  // trailing marker cannot clear several distinct comments that each still
+  // lack a disposition.
+  // Walk the outstanding comments oldest-first and greedily consume the
+  // earliest disposition marker strictly newer than each (markers that are not
+  // newer than the current comment cannot address it or any later comment).
+  const dispositionTimes = normalizedComments
+    .filter(
+      (comment) =>
+        iddAgentLogins.has(comment.authorLogin) &&
+        isDispositionComment({ body: comment.body }),
+    )
+    .map((comment) => comment.activityAt)
+    .filter(isValidIsoTimestamp)
+    .sort((left, right) => Date.parse(left) - Date.parse(right));
+  let markerCursor = 0;
+  const missing = [];
+  for (const comment of outstandingComments) {
+    while (
+      markerCursor < dispositionTimes.length &&
+      compareIsoTimestamps(
+        dispositionTimes[markerCursor],
+        comment.activityAt,
+      ) <= 0
+    ) {
+      markerCursor += 1;
+    }
+    if (markerCursor < dispositionTimes.length) {
+      markerCursor += 1;
+    } else {
+      missing.push(comment);
+    }
+  }
+  const missingRegularComments = missing.map((comment) => ({
+    id: comment.id || `comment-${comment.sortedIndex + 1}`,
+    authorLogin: comment.authorLogin || 'unknown',
+    createdAt: comment.createdAt,
+    bodyPreview: buildBodyPreview(comment.body),
+  }));
   const missingThreads = (threads ?? [])
     .map((thread, index) => {
       const commentsInThread = thread.comments?.nodes ?? [];
@@ -4059,7 +4095,11 @@ function effectiveThreadCommentActivityAt(comment) {
   }
   return '';
 }
-function hasCompletedBotThreadDispositions(threads, loginPredicate) {
+function hasCompletedBotThreadDispositions(
+  threads,
+  loginPredicate,
+  options = {},
+) {
   const botThreads = threads.filter((thread) => {
     return (thread.comments?.nodes ?? []).some((comment) => {
       return (
@@ -4074,7 +4114,9 @@ function hasCompletedBotThreadDispositions(threads, loginPredicate) {
       return (
         thread.isResolved &&
         !thread.comments?.pageInfo?.hasNextPage &&
-        hasFreshDisposition(thread)
+        hasFreshDisposition(thread, {
+          isDispositionAuthor: options.isDispositionAuthor,
+        })
       );
     })
   );
