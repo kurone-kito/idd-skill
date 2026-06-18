@@ -24,7 +24,6 @@ describe('stalled-session-quiet-check', () => {
         blocking_activities: [],
         has_heartbeat_in_window: false,
         has_ci_running: false,
-        has_pr_head_movement: false,
         has_branch_tip_movement: false,
       },
     });
@@ -65,7 +64,6 @@ describe('stalled-session-quiet-check', () => {
     assert.strictEqual(result.evidence.activity_count_in_window, 2);
     assert.strictEqual(result.evidence.has_heartbeat_in_window, true);
     assert.strictEqual(result.evidence.has_branch_tip_movement, true);
-    assert.strictEqual(result.evidence.has_pr_head_movement, false);
   });
 
   it('always treats ci-running as blocking even without a timestamp', () => {

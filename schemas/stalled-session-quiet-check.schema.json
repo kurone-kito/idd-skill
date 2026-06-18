@@ -134,7 +134,6 @@
         "blocking_activities",
         "has_heartbeat_in_window",
         "has_ci_running",
-        "has_pr_head_movement",
         "has_branch_tip_movement"
       ],
       "properties": {
@@ -176,10 +175,6 @@
         "has_ci_running": {
           "type": "boolean",
           "description": "Whether running or queued CI was observed"
-        },
-        "has_pr_head_movement": {
-          "type": "boolean",
-          "description": "Whether PR head movement was observed in the quiet window"
         },
         "has_branch_tip_movement": {
           "type": "boolean",

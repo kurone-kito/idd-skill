@@ -806,7 +806,6 @@ const stalledSessionQuietCheckFixture = {
     ],
     has_heartbeat_in_window: false,
     has_ci_running: false,
-    has_pr_head_movement: false,
     has_branch_tip_movement: false,
   },
 } satisfies StalledSessionQuietCheckReport;
