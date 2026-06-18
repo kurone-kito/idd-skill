@@ -48,8 +48,9 @@ then re-collided on the next lowest number.
 The opt-in `discover.selectionDesync: session-offset` knob adds a
 **proactive** desync: within a single highest-score tie band it picks the
 entry at `selectDesyncedIndex(session-token, band-size)` (a pure
-`hash(claim-id) mod band-size`) instead of always index 0, spreading
-concurrent sessions across _different_ eligible issues up front.
+`hash(session-token) mod band-size`, the token being the selection-time
+`{agent-id}`) instead of always index 0, spreading concurrent sessions
+across _different_ eligible issues up front.
 
 It is off by default and reorders **only within** a same-score tie band so
 the documented score-then-lowest-number ranking is the unchanged single-
