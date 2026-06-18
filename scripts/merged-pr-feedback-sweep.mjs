@@ -230,11 +230,12 @@ function collectUnaddressedComments(
   const out = [];
   for (const comment of comments) {
     const author = authorLogin(comment);
-    // IDD-agent comments (incl. their dispositions) are excluded by author
-    // here, so a disposition marker is treated specially only when the agent
-    // wrote it. A non-IDD reviewer who opens a comment with "**Rejected**" is
-    // still surfaced as feedback.
-    if (!author || isIdd(author)) {
+    // Only IDD-agent comments are excluded by author (their dispositions are
+    // folded into `latestDispositionAt`); a non-IDD reviewer who opens a
+    // comment with "**Rejected**" is still surfaced as feedback. A
+    // missing/unknown author (deleted user / ghost comment) is surfaced with
+    // `author: null` rather than dropped, to avoid a false negative.
+    if (isIdd(author)) {
       continue;
     }
     // IDD bookkeeping is not feedback: a trusted operational-state marker,
@@ -248,7 +249,7 @@ function collectUnaddressedComments(
     }
     out.push({
       url: comment.url ?? comment.html_url ?? null,
-      author,
+      author: author || null,
       advisoryBot: isAdvisoryBot(author),
       kind: 'comment',
       bodyExcerpt: excerpt(comment.body),
@@ -259,7 +260,9 @@ function collectUnaddressedComments(
       continue;
     }
     const author = authorLogin(review);
-    if (!author || isIdd(author)) {
+    // Same author rule as comments: exclude only explicit IDD agents; a
+    // missing/unknown author is surfaced with `author: null`.
+    if (isIdd(author)) {
       continue;
     }
     if (isLaterThan(latestDispositionAt, review.submittedAt ?? null)) {
@@ -267,7 +270,7 @@ function collectUnaddressedComments(
     }
     out.push({
       url: review.url ?? null,
-      author,
+      author: author || null,
       advisoryBot: isAdvisoryBot(author),
       kind: 'review',
       bodyExcerpt: excerpt(review.body),

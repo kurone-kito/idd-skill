@@ -326,6 +326,36 @@ test('surfaces an unaddressed CHANGES_REQUESTED review body', () => {
   assert.equal(result.prs[0].unaddressedComments[0].advisoryBot, false);
 });
 
+test('surfaces a comment from a missing/unknown author with author null', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 16,
+      comments: [
+        {
+          body: 'This still looks wrong.',
+          createdAt: '2026-06-09T00:00:00Z',
+          author: null,
+        },
+      ],
+      reviews: [
+        {
+          body: 'please fix',
+          state: 'CHANGES_REQUESTED',
+          submittedAt: '2026-06-09T00:00:00Z',
+          author: null,
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 2);
+  for (const finding of result.prs[0].unaddressedComments) {
+    assert.equal(finding.author, null);
+    assert.equal(finding.advisoryBot, false);
+  }
+});
+
 test('a COMMENTED (non-CHANGES_REQUESTED) review body is not feedback', () => {
   const prs: MergedPrInput[] = [
     {
