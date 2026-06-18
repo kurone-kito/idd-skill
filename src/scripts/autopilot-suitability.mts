@@ -65,19 +65,32 @@ export function parseAutopilotSuitabilityMarker(
     `<!--\\s*${escapeRegex(prefix)}-autopilot-suitability:\\s*([^\\s>]+)\\s*-->`,
     'gi',
   );
-  const raws = [...String(body ?? '').matchAll(regex)].map((match) => match[1]);
-  if (raws.length === 0) {
+  const text = String(body ?? '');
+  // Stream matches with regex.exec so an untrusted, marker-heavy body
+  // stays O(1) memory (no per-match arrays), and fail fast on the first
+  // invalid token or first value that conflicts with an earlier one.
+  let present = false;
+  let value: number | null = null;
+  let match = regex.exec(text);
+  while (match) {
+    present = true;
+    const raw = match[1];
+    const parsed = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN;
+    // Fail-safe: any invalid token, or a value disagreeing with an
+    // earlier coherent one, yields no score.
+    if (
+      !isAutopilotSuitabilityScore(parsed) ||
+      (value !== null && parsed !== value)
+    ) {
+      return { present: true, value: null, malformed: true };
+    }
+    value = parsed;
+    match = regex.exec(text);
+  }
+  if (!present) {
     return { present: false, value: null, malformed: false };
   }
-  const values = raws.map((raw) =>
-    /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN,
-  );
-  const distinct = new Set(values);
-  // Fail-safe: any invalid token, or conflicting values, yields no score.
-  if (!values.every(isAutopilotSuitabilityScore) || distinct.size !== 1) {
-    return { present: true, value: null, malformed: true };
-  }
-  return { present: true, value: [...distinct][0], malformed: false };
+  return { present: true, value, malformed: false };
 }
 
 /**
