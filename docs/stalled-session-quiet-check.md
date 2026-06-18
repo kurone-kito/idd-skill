@@ -90,7 +90,6 @@ Resume/S2 treats these fields as the stable contract:
 - `evidence.blocking_activities`
 - `evidence.has_heartbeat_in_window`
 - `evidence.has_ci_running`
-- `evidence.has_pr_head_movement`
 - `evidence.has_branch_tip_movement`
 
 The CLI also includes `repository`, `pr`, and `policy` envelopes for
@@ -138,7 +137,6 @@ The CLI returns JSON shaped like:
     ],
     "has_heartbeat_in_window": false,
     "has_ci_running": false,
-    "has_pr_head_movement": false,
     "has_branch_tip_movement": false
   }
 }
@@ -182,7 +180,15 @@ The helper throws an error if:
 
 ## Timestamp handling
 
-- Uses GitHub server timestamps from API responses
+- Activity timestamps come from GitHub API responses (server time)
+- The `now` reference defaults to the executor's local clock
+  (`new Date()`), **not** a server timestamp; pass `--now <ISO8601>` to
+  pin it to a server-derived time when exact server-relative evaluation
+  matters
+- Branch-tip movement uses the head commit's **committer** date, which is
+  refreshed on (re)create / rebase / cherry-pick / amend, rather than the
+  author date, which preserves the original (possibly very old) authorship
+  time. (Both are Git commit-object fields, not server timestamps.)
 - Normalizes timestamps to ISO8601 UTC with a `Z` suffix
 - Treats `ci-running` as blocking even if its timestamp would otherwise
   fall outside the window

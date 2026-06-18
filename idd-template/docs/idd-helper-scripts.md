@@ -853,7 +853,7 @@ Interpretation rules:
   `latest_activity_type`, `reason`, and `evidence`
   (`activity_count_in_window`, `blocking_activities`,
   `has_heartbeat_in_window`, `has_ci_running`,
-  `has_pr_head_movement`, `has_branch_tip_movement`)
+  `has_branch_tip_movement`)
 - `ci-running` activities always break the quiet window regardless
   of their timestamp; all other types are checked against
   `window_start = now - quiet_window_ms`

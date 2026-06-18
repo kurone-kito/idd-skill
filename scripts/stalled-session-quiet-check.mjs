@@ -73,7 +73,6 @@ export function evaluateQuietWindow(input) {
       blocking_activities: blocking,
       has_heartbeat_in_window: blocking.some((a) => a.type === 'heartbeat'),
       has_ci_running: blocking.some((a) => a.type === 'ci-running'),
-      has_pr_head_movement: blocking.some((a) => a.type === 'pr-head-movement'),
       has_branch_tip_movement: blocking.some(
         (a) => a.type === 'branch-tip-movement',
       ),
@@ -174,12 +173,19 @@ function collectActivities({ repository, pr, now, claimCreatedAt }) {
   ]);
   const headSha = prData.head_sha;
   if (headSha) {
-    // Fetch head commit timestamp for branch-tip-movement
+    // Fetch head commit timestamp for branch-tip-movement. Prefer the
+    // committer date over the author date: the committer date is refreshed
+    // whenever the commit is (re)created — including rebase, cherry-pick,
+    // and amend — so it tracks when the commit was last placed on the
+    // branch, whereas the author date preserves the original authorship
+    // time and can be arbitrarily old. A recent push of an older-authored
+    // commit would otherwise look stale and falsely satisfy the quiet
+    // window. (Both are Git commit-object fields, not server timestamps.)
     const headCommit = ghJson([
       'api',
       `repos/${repository}/commits/${headSha}`,
       '--jq',
-      '{commit_timestamp: .commit.author.date}',
+      '{commit_timestamp: .commit.committer.date}',
     ]);
     if (headCommit.commit_timestamp) {
       activities.push({
