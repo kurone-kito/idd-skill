@@ -42,6 +42,8 @@ export interface SweepCommentInput {
   user?: AuthorRef | null;
   createdAt?: string | null;
   created_at?: string | null;
+  updatedAt?: string | null;
+  updated_at?: string | null;
   url?: string | null;
   html_url?: string | null;
 }
@@ -136,8 +138,18 @@ function authorLogin(
     .toLowerCase();
 }
 
+// Prefer the edited (`updatedAt`) timestamp over the created one so an
+// IDD disposition or a reviewer comment edited after posting is ordered by
+// when it last changed — matching protocol-helpers' freshness semantics and
+// avoiding a false-positive "unaddressed" finding for an edited disposition.
 function commentTimestamp(node: SweepCommentInput): string | null {
-  return node.createdAt ?? node.created_at ?? null;
+  return (
+    node.updatedAt ??
+    node.updated_at ??
+    node.createdAt ??
+    node.created_at ??
+    null
+  );
 }
 
 function excerpt(body: string | null | undefined, max = 160): string {
@@ -352,7 +364,7 @@ function collectUnaddressedComments(
           (comment) =>
             isIdd(authorLogin(comment)) && isDispositionBody(comment.body),
         )
-        .map((comment) => comment.createdAt ?? null),
+        .map((comment) => comment.updatedAt ?? comment.createdAt ?? null),
     ),
   ]);
 
@@ -714,7 +726,7 @@ function fetchMergedPr(
       repo,
       number,
       'comments',
-      'body url createdAt author{ login }',
+      'body url createdAt updatedAt author{ login }',
     ),
     reviews: fetchAllNodes<SweepReviewInput>(
       owner,
@@ -728,7 +740,7 @@ function fetchMergedPr(
       repo,
       number,
       'reviewThreads',
-      'isResolved path comments(first:100){ nodes{ body url createdAt author{ login } } }',
+      'isResolved path comments(first:100){ nodes{ body url createdAt updatedAt author{ login } } }',
     ),
   };
 }

@@ -223,6 +223,31 @@ test('a later thread-level IDD disposition addresses a top-level comment', () =>
   assert.equal(result.prs.length, 0);
 });
 
+test('prefers updatedAt when ordering an edited IDD disposition', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 17,
+      comments: [
+        {
+          body: 'concern',
+          createdAt: '2026-06-09T01:00:00Z',
+          author: { login: 'coderabbitai[bot]' },
+        },
+        {
+          // Created BEFORE the concern but edited AFTER it: the disposition
+          // must still count as the later disposition (updatedAt wins).
+          body: '**Rejected** — not applicable.',
+          createdAt: '2026-06-09T00:00:00Z',
+          updatedAt: '2026-06-09T02:00:00Z',
+          author: { login: 'kurone-kito' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 0);
+});
+
 test('surfaces a non-IDD comment that opens with a disposition marker', () => {
   const prs: MergedPrInput[] = [
     {

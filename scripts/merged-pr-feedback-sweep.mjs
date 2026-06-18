@@ -35,8 +35,18 @@ function authorLogin(node) {
     .trim()
     .toLowerCase();
 }
+// Prefer the edited (`updatedAt`) timestamp over the created one so an
+// IDD disposition or a reviewer comment edited after posting is ordered by
+// when it last changed — matching protocol-helpers' freshness semantics and
+// avoiding a false-positive "unaddressed" finding for an edited disposition.
 function commentTimestamp(node) {
-  return node.createdAt ?? node.created_at ?? null;
+  return (
+    node.updatedAt ??
+    node.updated_at ??
+    node.createdAt ??
+    node.created_at ??
+    null
+  );
 }
 function excerpt(body, max = 160) {
   const flat = String(body ?? '')
@@ -224,7 +234,7 @@ function collectUnaddressedComments(
           (comment) =>
             isIdd(authorLogin(comment)) && isDispositionBody(comment.body),
         )
-        .map((comment) => comment.createdAt ?? null),
+        .map((comment) => comment.updatedAt ?? comment.createdAt ?? null),
     ),
   ]);
   const out = [];
@@ -506,7 +516,7 @@ function fetchMergedPr(owner, repo, number) {
       repo,
       number,
       'comments',
-      'body url createdAt author{ login }',
+      'body url createdAt updatedAt author{ login }',
     ),
     reviews: fetchAllNodes(
       owner,
@@ -520,7 +530,7 @@ function fetchMergedPr(owner, repo, number) {
       repo,
       number,
       'reviewThreads',
-      'isResolved path comments(first:100){ nodes{ body url createdAt author{ login } } }',
+      'isResolved path comments(first:100){ nodes{ body url createdAt updatedAt author{ login } } }',
     ),
   };
 }
