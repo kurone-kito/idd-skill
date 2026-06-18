@@ -208,6 +208,7 @@ export function evaluateAutopilotSuitabilityConsistency(
       );
     } else if (
       marker.value !== null &&
+      marker.value > 1 &&
       marker.value >= floor &&
       blockedByHuman
     ) {

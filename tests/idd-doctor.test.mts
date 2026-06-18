@@ -131,6 +131,42 @@ test('autopilot-suitability consistency: honors a custom floor and marker prefix
   assert.match(warnings[0], /issue #14 is scored 4 \(>= floor 4\)/);
 });
 
+test('autopilot-suitability consistency: floor 1 treats score-1 + blocked-by-human as agreement', () => {
+  const issues = [
+    // floor 1: score 1 with blocked-by-human AGREES — the score and label
+    // both mark the issue human-only, so there is no contradiction.
+    {
+      number: 21,
+      body: `human-only\n${ap(1)}`,
+      labels: ['status:blocked-by-human'],
+    },
+    // floor 1: score 1 without the label still warns via the first branch.
+    { number: 22, body: `task\n${ap(1)}`, labels: [] },
+    // floor 1: score 2 with blocked-by-human still warns (>= floor 1).
+    {
+      number: 23,
+      body: `task\n${ap(2)}`,
+      labels: ['status:blocked-by-human'],
+    },
+  ];
+  const { warnings } = evaluateAutopilotSuitabilityConsistency(issues, {
+    floor: 1,
+  });
+  assert.equal(warnings.length, 2);
+  assert.ok(
+    !warnings.some((w) => /issue #21/.test(w)),
+    'score-1 + blocked-by-human must not warn at floor 1',
+  );
+  assert.match(
+    warnings.find((w) => /issue #22/.test(w)) ?? '',
+    /issue #22 is scored 1 .* missing the status:blocked-by-human label/,
+  );
+  assert.match(
+    warnings.find((w) => /issue #23/.test(w)) ?? '',
+    /issue #23 is scored 2 \(>= floor 1\) but carries status:blocked-by-human/,
+  );
+});
+
 test('findPlaceholders returns template tokens', () => {
   const placeholders = findPlaceholders(`
   keep {{REPO_NAME}}
