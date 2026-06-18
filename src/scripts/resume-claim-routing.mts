@@ -307,11 +307,12 @@ function runCli(): void {
   const permissionCache: CollaboratorPermissionCache = new Map();
   // A forced handoff that displaces a PR-backed claim must carry
   // issue-plus-pr evidence naming that PR; detect the open linked PR(s)
-  // so the gate below can enforce it (fail-safe to no enforcement).
-  const expectedLinkedPrReferences = fetchOpenLinkedPrReferences(
-    repository,
-    args.issue,
-  );
+  // so the gate below can enforce it (fail-safe to no enforcement). Skip
+  // the lookup entirely when forced-handoff mode is off — the gate never
+  // honors a handoff then, so the PR context would go unused.
+  const expectedLinkedPrReferences = forcedHandoffEnabled
+    ? fetchOpenLinkedPrReferences(repository, args.issue)
+    : new Set<string>();
 
   const result = evaluateResumeClaimRouting(
     {
@@ -924,7 +925,9 @@ function fetchOpenLinkedPrReferences(
   const query =
     'query($owner:String!,$repo:String!,$number:Int!){' +
     'repository(owner:$owner,name:$repo){issue(number:$number){' +
-    'timelineItems(first:100,itemTypes:[CONNECTED_EVENT,DISCONNECTED_EVENT])' +
+    // `last` so the most recent connect/disconnect events win: an issue
+    // with many such events must not have newer DISCONNECTED_EVENTs missed.
+    'timelineItems(last:100,itemTypes:[CONNECTED_EVENT,DISCONNECTED_EVENT])' +
     '{nodes{__typename ' +
     '... on ConnectedEvent{subject{__typename ... on PullRequest{number state}}} ' +
     '... on DisconnectedEvent{subject{__typename ... on PullRequest{number}}}' +
