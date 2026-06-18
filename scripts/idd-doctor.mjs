@@ -1358,10 +1358,11 @@ function stripIndentedCodeBlocksPreservingLines(content) {
     }
     const indent = leadingIndentColumns(line);
     // CommonMark §5.2: ordered-list markers may use either `.` or `)`
-    // after the digit. Group 2 (marker + trailing spaces) measures the
-    // marker width in columns since it is ASCII; the content column is the
-    // leading-indent columns plus that width.
-    const listMarker = /^(\s*)((?:[-*+]|\d+[.)])\s+)/.exec(line);
+    // after the digit. The match is the full marker prefix (leading
+    // whitespace + marker + trailing whitespace); its column width gives
+    // the list item's content column, computed tab-aware where the item
+    // is kept below.
+    const listMarker = /^\s*(?:[-*+]|\d+[.)])\s+/.exec(line);
     if (inBlock) {
       if (indent >= codeBaseIndent) {
         // Continuation of the open code block (even across blank lines).
