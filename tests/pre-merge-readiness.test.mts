@@ -1526,6 +1526,131 @@ test('disposition evidence rejects reviewer-authored Accepted marker in threads'
   assert.equal(summary.missingThreads[0].reason, 'missing-fresh-disposition');
 });
 
+test('disposition evidence accepts a resolved Rejection-confirmed-by-maintainer marker', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-amd',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'this is wrong',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:05:00Z',
+                body: '**Rejection confirmed by maintainer** — out of scope; tracked separately.',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'] },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.missingThreadCount, 0);
+});
+
+test('disposition evidence rejects a Rejection-confirmed marker on an unresolved thread', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-amd-open',
+          isResolved: false,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'this is wrong',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:05:00Z',
+                body: '**Rejection confirmed by maintainer** — out of scope.',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'] },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(
+    summary.missingThreads[0].reason,
+    'unresolved-without-fresh-disposition',
+  );
+});
+
+test('disposition evidence skips a resolved out-of-snapshot thread before the boundary', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-old',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'old feedback resolved out of band',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'], snapshotBoundaryAt: '2026-05-12T01:00:00Z' },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.missingThreadCount, 0);
+});
+
+test('disposition evidence still blocks a resolved thread reopened after the boundary', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-reopened',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T02:00:00Z',
+                body: 'new feedback after the snapshot',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'], snapshotBoundaryAt: '2026-05-12T01:00:00Z' },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreads[0].reason, 'missing-fresh-disposition');
+});
+
 test('disposition evidence accepts edited IDD disposition comments as fresh replies', () => {
   const summary = summarizeDispositionEvidenceForGate(
     {

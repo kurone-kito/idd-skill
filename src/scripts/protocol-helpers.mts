@@ -1901,6 +1901,14 @@ export function hasFreshDisposition(
       ? options.isDispositionAuthor
       : (login: string) => !isKnownReviewBot(login);
   const comments = thread.comments?.nodes ?? [];
+  // A resolved thread may be terminally dispositioned with the documented
+  // `**Rejection confirmed by maintainer**` marker instead of a fresh
+  // `**Rejected**` re-post; recognize it as a disposition ONLY when the thread
+  // is resolved (an unresolved thread still needs an explicit disposition).
+  const threadResolved = Boolean(thread.isResolved);
+  const isDisposition = (comment: { body?: string | null }): boolean =>
+    isDispositionComment(comment) ||
+    (threadResolved && isRejectionConfirmedDisposition(comment));
   const latestFeedbackAt = maxIsoTimestamp(
     comments
       .filter((comment) => {
@@ -1908,8 +1916,7 @@ export function hasFreshDisposition(
           .trim()
           .toLowerCase();
         return !(
-          isDispositionComment(comment) &&
-          dispositionAuthorPredicate(authorLogin)
+          isDisposition(comment) && dispositionAuthorPredicate(authorLogin)
         );
       })
       .map((comment) => effectiveThreadCommentActivityAt(comment))
@@ -1920,11 +1927,7 @@ export function hasFreshDisposition(
     const authorLogin = String(comment.author?.login ?? '')
       .trim()
       .toLowerCase();
-    if (
-      !(
-        isDispositionComment(comment) && dispositionAuthorPredicate(authorLogin)
-      )
-    ) {
+    if (!(isDisposition(comment) && dispositionAuthorPredicate(authorLogin))) {
       return false;
     }
     const dispositionActivityAt = effectiveThreadCommentActivityAt(comment);
@@ -1943,6 +1946,22 @@ export function isDispositionComment(comment: {
 }): boolean {
   const body = (comment.body ?? '').trimEnd();
   return body.startsWith('**Accepted**') || body.startsWith('**Rejected**');
+}
+
+// Terminal AMD-rejection marker. When a maintainer agrees with a rejection the
+// agent replies `**Rejection confirmed by maintainer** — {summary}` and resolves
+// the thread, with no separate `**Rejected**` re-post (per
+// idd-review-triage.instructions.md). Mirrors the regex in
+// review-disposition-verify so the F2/F3 gate recognizes the same marker.
+const REJECTION_CONFIRMED_BY_MAINTAINER_RE =
+  /^\*\*Rejection confirmed by maintainer\*\*\s+—/;
+
+export function isRejectionConfirmedDisposition(comment: {
+  body?: string | null;
+}): boolean {
+  return REJECTION_CONFIRMED_BY_MAINTAINER_RE.test(
+    (comment.body ?? '').trimStart(),
+  );
 }
 
 export function isIddDispositionComment(comment: CommentLike): boolean {
@@ -2885,11 +2904,18 @@ export function summarizeDispositionEvidenceForGate(
     advisoryBotLogins?: unknown[] | null;
     trustedMarkerLogins?: unknown[] | null;
     prAuthorLogin?: string | null;
+    snapshotBoundaryAt?: string | null;
   } = {},
 ): DispositionEvidenceSummary {
   const iddAgentLogins = new Set(
     normalizeTrustedMarkerLogins(options.iddAgentLogins ?? []),
   );
+  // The review-snapshot boundary (the active watermark's
+  // max-activity-updatedAt). A resolved thread whose newest external feedback
+  // predates it was settled before the snapshot and is out of E7 scope.
+  const snapshotBoundaryAt = isValidIsoTimestamp(options.snapshotBoundaryAt)
+    ? String(options.snapshotBoundaryAt)
+    : null;
   const advisoryBotLogins = new Set(
     normalizeTrustedMarkerLogins(options.advisoryBotLogins ?? []),
   );
@@ -3008,6 +3034,35 @@ export function summarizeDispositionEvidenceForGate(
         })
       ) {
         return null;
+      }
+      // E1 only snapshots UNRESOLVED non-awaiting threads, and E7 only requires
+      // dispositions for snapshot items. A thread that is already resolved and
+      // whose newest external feedback predates the review-snapshot boundary was
+      // settled out-of-band (or resolved by the reviewer) and must not block; a
+      // resolved thread with external feedback newer than the boundary (e.g.
+      // freshly reopened) still requires a disposition.
+      if (thread.isResolved && snapshotBoundaryAt) {
+        const newestFeedbackAt = maxIsoTimestamp(
+          commentsInThread
+            .filter((comment) => {
+              const authorLogin = String(comment.author?.login ?? '')
+                .trim()
+                .toLowerCase();
+              return (
+                authorLogin &&
+                !iddAgentLogins.has(authorLogin) &&
+                authorLogin !== prAuthorLogin
+              );
+            })
+            .map((comment) => effectiveThreadCommentActivityAt(comment))
+            .filter(isValidIsoTimestamp),
+        );
+        if (
+          !newestFeedbackAt ||
+          compareIsoTimestamps(newestFeedbackAt, snapshotBoundaryAt) <= 0
+        ) {
+          return null;
+        }
       }
       return {
         id: String(thread.id ?? '') || `thread-${index + 1}`,
@@ -4121,6 +4176,7 @@ export function buildPreMergeReadinessSummary(
           advisoryBotLogins,
           trustedMarkerLogins,
           prAuthorLogin,
+          snapshotBoundaryAt: watermark?.maxActivityUpdatedAt ?? null,
         },
       )
     : null;
