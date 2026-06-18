@@ -536,7 +536,20 @@ function ghGraphql(
     }
     args.push(typeof value === 'number' ? '-F' : '-f', `${key}=${value}`);
   }
-  return JSON.parse(runGh(args).trim() || '{}');
+  const result = JSON.parse(runGh(args).trim() || '{}') as {
+    errors?: { message?: string | null }[] | null;
+  };
+  // A GraphQL call can return HTTP 200 with a top-level `errors` array and
+  // null `data`. Fail fast instead of treating it as empty data, which would
+  // be a silent false negative (a PR appearing "clean" because no nodes came
+  // back).
+  if (Array.isArray(result.errors) && result.errors.length > 0) {
+    const messages = result.errors
+      .map((entry) => entry?.message ?? 'unknown')
+      .join('; ');
+    throw new Error(`GraphQL query returned errors: ${messages}`);
+  }
+  return result;
 }
 
 interface MergedPrListItem {
