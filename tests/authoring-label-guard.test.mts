@@ -30,6 +30,58 @@ test('findLatestLabeledAt only accepts explicit labeled events', () => {
   assert.equal(latest, '2026-05-15T07:00:00Z');
 });
 
+test('findLatestLabeledAt matches the label case-insensitively and trimmed', () => {
+  const latest = findLatestLabeledAt(
+    [
+      {
+        event: 'labeled',
+        label: { name: ' Status:Authoring ' },
+        created_at: '2026-05-15T10:00:00Z',
+      },
+      {
+        event: 'labeled',
+        label: 'STATUS:AUTHORING',
+        created_at: '2026-05-15T11:00:00Z',
+      },
+    ],
+    'status:authoring',
+  );
+
+  assert.equal(latest, '2026-05-15T11:00:00Z');
+});
+
+test('findLatestLabeledAt normalizes the configured labelName too', () => {
+  // labelName side carries mixed case + whitespace; the event label is the
+  // canonical form. Both sides must be normalized for this to match.
+  const latest = findLatestLabeledAt(
+    [
+      {
+        event: 'labeled',
+        label: { name: 'status:authoring' },
+        created_at: '2026-05-15T12:00:00Z',
+      },
+    ],
+    '  Status:AUTHORING  ',
+  );
+
+  assert.equal(latest, '2026-05-15T12:00:00Z');
+});
+
+test('findLatestLabeledAt still ignores a genuinely different label', () => {
+  const latest = findLatestLabeledAt(
+    [
+      {
+        event: 'labeled',
+        label: { name: 'status:blocked-by-human' },
+        created_at: '2026-05-15T10:00:00Z',
+      },
+    ],
+    'status:authoring',
+  );
+
+  assert.equal(latest, '');
+});
+
 test('buildAuthoringLabelWarning treats implicit events as timestamp unavailable', () => {
   const warning = buildAuthoringLabelWarning({
     issueNumber: 536,
