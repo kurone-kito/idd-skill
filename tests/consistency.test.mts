@@ -41,34 +41,32 @@ test('placeholder scenarios detect clean and dirty post-onboarding fixtures', ()
 });
 
 test('instruction size budget skips with a notice when no git comparison base resolves', () => {
-  let loaded = false;
+  let listed = false;
   const result = collectInstructionSizeBudgetViolations(
     { id: 'instruction-size-budgets', phaseLimitBytes: 1 },
     null,
     () => {
-      loaded = true;
-      return [{ path: 'idd-x.instructions.md', text: 'x'.repeat(10_000) }];
+      listed = true;
+      return ['idd-x.instructions.md'];
+    },
+    () => {
+      throw new Error('must not read files on the null-base skip path');
     },
   );
-  assert.equal(loaded, false, 'must not read files on the null-base skip path');
+  assert.equal(listed, false, 'must not list files on the null-base skip path');
   assert.deepEqual(result.errors, []);
   assert.deepEqual(result.notices, [
     'instruction-size-budgets: skipped instruction size budget check because no git comparison base was available',
   ]);
 });
 
-test('instruction size budget audits only changed files and honors both limits', () => {
-  const files = [
-    // phase file over the phase limit AND changed -> error.
-    { path: 'idd-phase.instructions.md', text: 'p'.repeat(120) },
-    // always-loaded file over the always-loaded limit AND changed -> error.
-    {
-      path: 'idd-core.instructions.md',
-      text: `---\napplyTo: "**"\n---\n${'c'.repeat(120)}`,
-    },
-    // over budget but NOT in the changed set -> ignored.
-    { path: 'idd-untouched.instructions.md', text: 'u'.repeat(10_000) },
-  ];
+test('instruction size budget reads and audits only changed files, honoring both limits', () => {
+  const texts: Record<string, string> = {
+    'idd-phase.instructions.md': 'p'.repeat(120),
+    'idd-core.instructions.md': `---\napplyTo: "**"\n---\n${'c'.repeat(120)}`,
+    'idd-untouched.instructions.md': 'u'.repeat(10_000),
+  };
+  const readPaths: string[] = [];
   const result = collectInstructionSizeBudgetViolations(
     {
       id: 'instruction-size-budgets',
@@ -76,24 +74,42 @@ test('instruction size budget audits only changed files and honors both limits',
       phaseLimitBytes: 100,
     },
     new Set(['idd-phase.instructions.md', 'idd-core.instructions.md']),
-    () => files,
+    () => Object.keys(texts),
+    (path) => {
+      readPaths.push(path);
+      return texts[path];
+    },
   );
+  // The unchanged file is never read (no wasted disk I/O on large repos).
+  assert.deepEqual(readPaths.sort(), [
+    'idd-core.instructions.md',
+    'idd-phase.instructions.md',
+  ]);
   assert.deepEqual(result.notices, []);
   assert.equal(result.errors.length, 2);
-  assert.match(
-    result.errors[0],
-    /idd-phase\.instructions\.md is 120 bytes .*phase/,
+  assert.ok(
+    result.errors.some((e) =>
+      /idd-phase\.instructions\.md is 120 bytes .*phase/.test(e),
+    ),
   );
-  assert.match(
-    result.errors[1],
-    /idd-core\.instructions\.md is \d+ bytes .*always-loaded/,
+  assert.ok(
+    result.errors.some((e) =>
+      /idd-core\.instructions\.md is \d+ bytes .*always-loaded/.test(e),
+    ),
   );
 });
 
 test('instruction size budget returns nothing for absent config', () => {
-  const result = collectInstructionSizeBudgetViolations(null, new Set(), () => {
-    throw new Error('must not load files when config is absent');
-  });
+  const result = collectInstructionSizeBudgetViolations(
+    null,
+    new Set(),
+    () => {
+      throw new Error('must not list files when config is absent');
+    },
+    () => {
+      throw new Error('must not read files when config is absent');
+    },
+  );
   assert.deepEqual(result, { errors: [], notices: [] });
 });
 

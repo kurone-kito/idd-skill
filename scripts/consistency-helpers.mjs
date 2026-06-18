@@ -366,20 +366,26 @@ function regexCanStartAfter(lastCodeChar, lastWord) {
   return !/[\w$)\]'"`/]/.test(lastCodeChar);
 }
 /**
- * Collect instruction size-budget violations. Pure (no I/O) so it can be
- * unit-tested; the audit pipeline feeds it the globbed file text.
+ * Collect instruction size-budget violations. Pure (no direct I/O) so it
+ * can be unit-tested; the audit pipeline supplies a path lister and a file
+ * reader.
  *
  * Scope rule (mirrors checkPairedChange): the budget is scoped to the
  * files changed against the git comparison base. When `changedFiles` is
  * `null` (no resolvable base — e.g. a CI clone without `origin/main`) the
  * check is skipped with a notice rather than auditing every instruction
  * file, which would let an unrelated PR fail on a file it never touched.
- * `loadFiles` is a thunk so no files are read on the skip path.
+ *
+ * `listFiles` is only invoked when a base resolves, and `readFile` is
+ * invoked only for files in `changedFiles`, so unchanged files are never
+ * read (the audit reads from disk, so reading every match would be wasted
+ * I/O on large repos).
  */
 export function collectInstructionSizeBudgetViolations(
   config,
   changedFiles,
-  loadFiles,
+  listFiles,
+  readFile,
 ) {
   if (!config) {
     return { errors: [], notices: [] };
@@ -399,17 +405,17 @@ export function collectInstructionSizeBudgetViolations(
   const alwaysLoadedLimitBytes = config.alwaysLoadedLimitBytes ?? 20_000;
   const phaseLimitBytes = config.phaseLimitBytes ?? 30_000;
   const errors = [];
-  for (const file of loadFiles()) {
-    if (!changedFiles.has(file.path)) {
+  for (const path of listFiles()) {
+    if (!changedFiles.has(path)) {
       continue;
     }
-    const text = String(file.text ?? '');
+    const text = String(readFile(path) ?? '');
     const bytes = Buffer.byteLength(text, 'utf8');
     const alwaysLoaded = alwaysLoadedRegex.test(text);
     const limit = alwaysLoaded ? alwaysLoadedLimitBytes : phaseLimitBytes;
     if (bytes > limit) {
       errors.push(
-        `${id}: ${file.path} is ${bytes} bytes (limit ${limit}; ${alwaysLoaded ? 'always-loaded' : 'phase'})`,
+        `${id}: ${path} is ${bytes} bytes (limit ${limit}; ${alwaysLoaded ? 'always-loaded' : 'phase'})`,
       );
     }
   }

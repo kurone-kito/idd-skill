@@ -518,15 +518,15 @@ function docsSyncCommandByPackageManager(packageManager) {
 }
 function checkInstructionSizeBudgets(config) {
   // The scope/skip decision and budget evaluation live in the pure helper
-  // so they can be unit-tested; the audit pipeline only supplies the
-  // changed-file set and a lazy reader for the globbed instruction files.
+  // so they can be unit-tested; the audit pipeline supplies the changed
+  // file set, a glob lister, and a reader. The helper reads only changed
+  // files, so unchanged instruction files are never loaded from disk.
   const result = collectInstructionSizeBudgetViolations(
     config,
     changedFiles,
     () =>
-      globFiles(
-        config?.glob ?? '.github/instructions/idd-*.instructions.md',
-      ).map((file) => ({ path: file, text: readText(file) })),
+      globFiles(config?.glob ?? '.github/instructions/idd-*.instructions.md'),
+    readText,
   );
   errors.push(...result.errors);
   notices.push(...result.notices);
