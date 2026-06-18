@@ -262,11 +262,14 @@ function collectActivities({
 
   const headSha = prData.head_sha;
   if (headSha) {
-    // Fetch head commit timestamp for branch-tip-movement. Use the
-    // committer date (server-set on push/rebase/cherry-pick), not the
-    // author date — the author date is client-settable and arbitrarily
-    // old, so a recent push of an older-authored commit would otherwise
-    // look stale and falsely satisfy the quiet window.
+    // Fetch head commit timestamp for branch-tip-movement. Prefer the
+    // committer date over the author date: the committer date is refreshed
+    // whenever the commit is (re)created — including rebase, cherry-pick,
+    // and amend — so it tracks when the commit was last placed on the
+    // branch, whereas the author date preserves the original authorship
+    // time and can be arbitrarily old. A recent push of an older-authored
+    // commit would otherwise look stale and falsely satisfy the quiet
+    // window. (Both are Git commit-object fields, not server timestamps.)
     const headCommit = ghJson([
       'api',
       `repos/${repository}/commits/${headSha}`,

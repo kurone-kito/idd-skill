@@ -185,8 +185,10 @@ The helper throws an error if:
   (`new Date()`), **not** a server timestamp; pass `--now <ISO8601>` to
   pin it to a server-derived time when exact server-relative evaluation
   matters
-- Branch-tip movement uses the head commit's **committer** date (server-set
-  on push), not the client-settable author date
+- Branch-tip movement uses the head commit's **committer** date, which is
+  refreshed on (re)create / rebase / cherry-pick / amend, rather than the
+  author date, which preserves the original (possibly very old) authorship
+  time. (Both are Git commit-object fields, not server timestamps.)
 - Normalizes timestamps to ISO8601 UTC with a `Z` suffix
 - Treats `ci-running` as blocking even if its timestamp would otherwise
   fall outside the window
