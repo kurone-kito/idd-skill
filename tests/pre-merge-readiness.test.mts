@@ -2799,6 +2799,67 @@ test('summarizeRequiredChecks: an empty waivable list covers nothing', () => {
   assert.notEqual(result.status, 'success');
 });
 
+test('summarizeExternalCheckWaivers: a glob waiver selector overlaps an exact waivable surface', () => {
+  const head = 'f'.repeat(40);
+  // A glob waiver "Code*" against an exact waivable "CodeRabbit" must stay
+  // valid: planExternalCheckWaiver creates such globs, so misbucketing them as
+  // notConfigured would silently drop a legitimate waiver.
+  const body = makeWaiverComment({
+    claimId: 'claim-123',
+    headSha: head,
+    checkSelector: 'Code*',
+  });
+  const result = summarizeExternalCheckWaivers(
+    [
+      {
+        body,
+        author: { login: 'kurone-kito' },
+        createdAt: '2026-05-17T00:00:00Z',
+      },
+    ],
+    {
+      prHeadSha: head,
+      activeClaimId: 'claim-123',
+      trustedMarkerLogins: ['kurone-kito'],
+      now: '2026-05-17T00:00:00Z',
+      waivableSelectors: [{ selector: 'CodeRabbit', matchMode: 'exact' }],
+    },
+  );
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.valid[0].checkSelector, 'Code*');
+  assert.equal(result.notConfigured.length, 0);
+});
+
+test('summarizeRequiredChecks: a glob waiver folds in an exact-configured-waivable check', () => {
+  const waivers = {
+    valid: [
+      {
+        authorLogin: 'kurone-kito',
+        checkSelector: 'Code*',
+        reason: 'rate-limit',
+        expiresAt: '2099-01-01T00:00:00Z',
+      },
+    ],
+    expired: [],
+    wrongHead: [],
+    wrongClaim: [],
+    unauthorized: [],
+    malformed: [],
+    notConfigured: [],
+  };
+  const result = summarizeRequiredChecks(
+    [{ name: 'CodeRabbit', state: 'FAILURE', completedAt: '' }],
+    [],
+    { required_status_checks: { contexts: ['CodeRabbit'] } },
+    {
+      waivers,
+      waivableSelectors: [{ selector: 'CodeRabbit', matchMode: 'exact' }],
+    },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, true);
+  assert.equal(result.status, 'success');
+});
+
 test('buildPreMergeReadinessSummary: waiverEvidence always present and validates against schema', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
   const summary = buildPreMergeReadinessSummary(fixture.input, fixture.options);

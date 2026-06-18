@@ -1012,21 +1012,46 @@ function matchCheckSelectorLocal(
 }
 
 /**
- * True when `target` matches any configured waivable selector, honoring each
- * selector's own `matchMode`. Mirrors the creation-path gate in
- * `planExternalCheckWaiver` so the consumption and creation paths agree on
- * which checks a waiver may cover.
+ * True when a concrete check `name` matches any configured waivable selector,
+ * honoring each selector's own `matchMode`. Used to gate whether a present
+ * check sits on the policy's waivable surface.
  */
-function matchesConfiguredWaivableSelector(
-  target: unknown,
+function isCheckNameConfiguredWaivable(
+  name: unknown,
   waivableSelectors: { selector?: unknown; matchMode?: unknown }[],
 ): boolean {
   return waivableSelectors.some((sel) =>
     matchCheckSelectorLocal(
-      target,
+      name,
       sel?.selector,
       sel?.matchMode === 'glob' ? 'glob' : 'exact',
     ),
+  );
+}
+
+/**
+ * True when a waiver's `checkSelector` can name a check that the policy
+ * declared waivable. Unlike a concrete check name, a waiver selector may
+ * itself be a glob, so this tests both directions: the waiver selector
+ * against each configured pattern, and each configured selector against the
+ * waiver pattern (glob inferred from `*`). Either direction means the two
+ * selectors can resolve to a common check — e.g. a glob waiver `Code*`
+ * overlaps an exact waivable `CodeRabbit`. This mirrors the creation-path
+ * gate in `planExternalCheckWaiver`, which validates glob waivers against the
+ * actual matched checks, so a legitimately created waiver is not wrongly
+ * bucketed as `notConfigured` at consumption.
+ */
+function waiverSelectorOverlapsConfiguredWaivable(
+  waiverSelector: unknown,
+  waivableSelectors: { selector?: unknown; matchMode?: unknown }[],
+): boolean {
+  return waivableSelectors.some(
+    (sel) =>
+      matchCheckSelectorLocal(
+        waiverSelector,
+        sel?.selector,
+        sel?.matchMode === 'glob' ? 'glob' : 'exact',
+      ) || matchCheckSelectorLocal(sel?.selector, waiverSelector),
   );
 }
 
@@ -1117,12 +1142,14 @@ export function summarizeExternalCheckWaivers(
     }
 
     // When the policy declares its waivable surface, a valid waiver still only
-    // counts when its selector names a configured-waivable check; otherwise it
-    // is reported but never folds a check in. A null/undefined list disables
-    // the gate (legacy callers), an empty list waives nothing.
+    // counts when its selector can name a configured-waivable check; otherwise
+    // it is reported but never folds a check in. The overlap test treats the
+    // waiver selector as a possible glob so a `Code*` waiver still matches an
+    // exact `CodeRabbit` surface. A null/undefined list disables the gate
+    // (legacy callers), an empty list waives nothing.
     if (
       Array.isArray(waivableSelectors) &&
-      !matchesConfiguredWaivableSelector(
+      !waiverSelectorOverlapsConfiguredWaivable(
         parsed.checkSelector,
         waivableSelectors,
       )
@@ -3383,7 +3410,7 @@ export function summarizeRequiredChecks(
       // null/undefined list keeps the legacy behavior with no gate; an empty
       // configured list covers nothing.
       (!Array.isArray(waivableSelectors) ||
-        matchesConfiguredWaivableSelector(name, waivableSelectors));
+        isCheckNameConfiguredWaivable(name, waivableSelectors));
     return {
       name,
       state,
