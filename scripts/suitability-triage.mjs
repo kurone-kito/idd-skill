@@ -162,11 +162,19 @@ export function checkRepositoryFit(context) {
     new RegExp(EXTERNAL_SYSTEM_ACCESS_PATTERN.source, 'gi'),
   )) {
     const matchIndex = match.index ?? 0;
+    const matchText = match[0] ?? '';
     const contextBefore = body.slice(Math.max(0, matchIndex - 60), matchIndex);
-    // Skip a negated non-requirement (e.g. "does not require production
-    // dashboard credentials"); only an un-negated external-access
-    // requirement blocks Repository Fit.
-    if (NEGATION_PATTERN.test(contextBefore)) {
+    // Skip a negated non-requirement; only an un-negated external-access
+    // requirement blocks Repository Fit. The negation may sit *before* the
+    // match ("does **not** require production credentials") or *after* the
+    // requirement verb inside the match ("requires **no** production
+    // credentials").
+    const negatedRequirement =
+      /\b(?:requires?|needs?|must|depends?\s+on)\s+(?:no|not|never|without|n['’]?t)\b/i;
+    if (
+      NEGATION_PATTERN.test(contextBefore) ||
+      negatedRequirement.test(matchText)
+    ) {
       continue;
     }
     return {

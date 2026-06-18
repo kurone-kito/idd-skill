@@ -344,6 +344,30 @@ test('repository fit allows a negated external-access statement', () => {
   assert.equal(result.pass, true);
 });
 
+test('repository fit allows a post-verb negated external-access statement', () => {
+  // negation after the requirement verb ("requires **no** …"), inside the
+  // EXTERNAL_SYSTEM_ACCESS_PATTERN match rather than before it
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis requires no production dashboard credentials; just edit the README.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('repository fit still flags a real external-access requirement', () => {
+  const result = checkRepositoryFit({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis requires production dashboard credentials to verify the result.`,
+    },
+    repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('duplicate check detects a URL-form duplicate declaration', () => {
   const result = checkDuplicateOrSuperseded({
     issue: {
