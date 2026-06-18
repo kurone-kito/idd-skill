@@ -332,6 +332,23 @@ test('parsePrimaryWorktreePath returns null when input has no worktree line', ()
   assert.equal(parsePrimaryWorktreePath('HEAD abc\nbranch main\n'), null);
 });
 
+test('parsePrimaryWorktreePath parses CRLF-delimited porcelain output', () => {
+  const porcelain = [
+    'worktree C:\\repo\\idd-skill',
+    'HEAD ec72ee60dea3b9eeeb6ca0d7717daa46b98dcc13',
+    'branch refs/heads/main',
+    '',
+  ].join('\r\n');
+
+  assert.equal(parsePrimaryWorktreePath(porcelain), 'C:\\repo\\idd-skill');
+});
+
+test('parsePrimaryWorktreePath returns null for null / undefined / non-string input', () => {
+  assert.equal(parsePrimaryWorktreePath(null), null);
+  assert.equal(parsePrimaryWorktreePath(undefined), null);
+  assert.equal(parsePrimaryWorktreePath(42), null);
+});
+
 test('classifyPrimaryHead flags issue/* branches as B1 violations', () => {
   assert.deepEqual(classifyPrimaryHead('issue/123-foo'), {
     isB1Violation: true,
