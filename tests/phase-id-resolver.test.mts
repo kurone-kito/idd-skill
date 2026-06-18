@@ -143,6 +143,33 @@ test('phase-graph edges remain valid under normalized phase IDs', () => {
   }
 });
 
+test('resolves the documented Resume phase, preserving its configured casing', () => {
+  assert.equal(resolvePhaseId('Resume').canonicalPhaseId, 'Resume');
+  assert.equal(resolvePhaseId('resume').canonicalPhaseId, 'Resume');
+  assert.equal(resolvePhaseId('RESUME').canonicalPhaseId, 'Resume');
+});
+
+test('emits a configured mixed-case canonical id with its original casing', () => {
+  const resolution = resolvePhaseId('handoff', {
+    canonicalPhaseIds: ['Handoff'],
+    legacyAliases: {},
+  });
+  assert.equal(resolution.canonicalPhaseId, 'Handoff');
+});
+
+test('resolves separator-normalized canonical forms to the canonical id', () => {
+  for (const input of ['A4---5', 'A4/5', 'A4 5', 'A4:5']) {
+    assert.equal(
+      resolvePhaseId(input).canonicalPhaseId,
+      'A4_5',
+      `${input} should resolve to A4_5`,
+    );
+  }
+  // the dotted/hyphenated legacy aliases keep resolving as before
+  assert.equal(resolvePhaseId('A4.5').canonicalPhaseId, 'A4_5');
+  assert.equal(resolvePhaseId('A4.5').matchedBy, 'legacy-alias');
+});
+
 function readJson(relativePath: string): unknown {
   return JSON.parse(readFileSync(join(REPO_ROOT, relativePath), 'utf8'));
 }
