@@ -198,6 +198,25 @@ if (planned.action === 'duplicate') {
 }
 
 if (args.apply) {
+  // Re-fetch and re-plan against the latest comments first, then
+  // revalidate the active claim immediately before the create/update
+  // mutation. The replan performs network I/O, so checking the claim
+  // before it would leave a window where a claim release or takeover during
+  // the fetch goes undetected before the write lands.
+  try {
+    planned = planLiveStatusDigestUpsert(
+      fetchIssueComments(owner, repo, targetNumber),
+      fields,
+    );
+  } catch (error) {
+    fail((error as Error).message);
+  }
+  updateReportFromPlan(report, planned);
+  if (planned.action === 'duplicate') {
+    writeReport(report, args.format);
+    process.exit(1);
+  }
+
   if (!args.skipClaimCheck) {
     try {
       assertActiveClaim(
@@ -211,20 +230,6 @@ if (args.apply) {
     } catch (error) {
       fail((error as Error).message);
     }
-  }
-
-  try {
-    planned = planLiveStatusDigestUpsert(
-      fetchIssueComments(owner, repo, targetNumber),
-      fields,
-    );
-  } catch (error) {
-    fail((error as Error).message);
-  }
-  updateReportFromPlan(report, planned);
-  if (planned.action === 'duplicate') {
-    writeReport(report, args.format);
-    process.exit(1);
   }
 
   if (planned.action === 'create') {
