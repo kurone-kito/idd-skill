@@ -50,6 +50,7 @@ const DEFAULT_CANONICAL_PHASE_IDS = [
   'F3',
   'F4',
   'F5',
+  'Resume',
 ];
 const DEFAULT_LEGACY_ALIASES = {
   A0_O: ['A0-O', 'A0O'],
@@ -85,8 +86,12 @@ export function createPhaseIdResolver({
     if (canonicalByKey.has(normalized)) {
       continue;
     }
-    canonicalByKey.set(normalized, normalized);
-    canonicalOrder.push(normalized);
+    // Store the configured spelling as the canonical value and order (only
+    // the normalized form is the lookup key), so a mixed-case canonical ID
+    // such as `Resume` is emitted as `Resume`, not `RESUME`.
+    const spelling = String(candidate).trim();
+    canonicalByKey.set(normalized, spelling);
+    canonicalOrder.push(spelling);
   }
   for (const [canonical, aliases] of Object.entries(legacyAliases ?? {})) {
     const normalizedCanonical = normalizePhaseIdToken(canonical, {
@@ -160,8 +165,23 @@ export function createPhaseIdResolver({
       const aliasCanonical = aliasToCanonical.get(aliasInputKey);
       if (aliasCanonical) {
         return {
-          canonicalPhaseId: aliasCanonical,
+          canonicalPhaseId:
+            canonicalByKey.get(aliasCanonical) ?? aliasCanonical,
           matchedBy: 'legacy-alias',
+          normalizedInput,
+        };
+      }
+      // Separator-normalized fallback: `A4---5`, `A4/5`, and `A4 5` all
+      // normalize to `A4_5` via normalizePhaseIdToken, but normalizeAliasToken
+      // keeps the raw separators so the lookups above miss them. Resolve such
+      // inputs against the canonical map by their fully-normalized form.
+      if (
+        isCanonicalToken(normalizedInput) &&
+        canonicalByKey.has(normalizedInput)
+      ) {
+        return {
+          canonicalPhaseId: canonicalByKey.get(normalizedInput),
+          matchedBy: 'canonical',
           normalizedInput,
         };
       }
