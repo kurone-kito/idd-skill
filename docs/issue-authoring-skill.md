@@ -481,7 +481,7 @@ availability, or ordering constraint.
 - do not split one natural, cohesive change into artificial sibling
   issues only to widen parallel execution
 - when authoring a **docs or operator-help child that documents
-  behavior implemented by sibling issues**, encode `Blocked by` those
+  behavior implemented by sibling issues**, encode `Blocked by #NNN` those
   implementation issues (or otherwise sequence the docs child to run
   after they merge) so the documentation is written against **shipped**
   behavior. Describing designed-but-unshipped behavior in the present

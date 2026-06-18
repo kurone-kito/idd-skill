@@ -337,8 +337,8 @@ F2/F3 merge decision. The `review-activity-snapshot` helper builds the
 F-phase merge decision: the two can disagree in the window just before
 merge ("ci-pass-drift"), so reading CI/activity from the E-phase snapshot
 instead of the live pre-merge run risks merging on stale evidence. See
-[IDD helper script evaluation](idd-helper-scripts.md) for each helper's
-phase role.
+[IDD helper script evaluation](idd-helper-scripts.md#merge-gate-evidence)
+for each helper's phase role.
 
 ## Review Policy Profiles
 

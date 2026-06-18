@@ -1150,7 +1150,7 @@ wire it into the default F-phase merge gate.
 ## Optional: CI cost discipline on billed runners
 
 This is an **optional** appendix for adopters running on metered or private
-Actions runners. The core, cross-agent workflow does not require it.
+GitHub Actions runners. The core, cross-agent workflow does not require it.
 
 IDD's frequent **main-into-feature re-sync cadence** is the dominant driver of
 CI minutes — every sync re-runs the PR's checks. Uncached container builds and
@@ -1160,7 +1160,7 @@ per-PR multi-arch builds compound it. Levers to control the cost:
   the paths they cover actually change.
 - **Cache build layers** (image layer cache, dependency cache) so re-syncs
   reuse prior work instead of rebuilding from scratch.
-- **Keep multi-arch / publish jobs on integration-branch pushes only**, not on
+- **Keep multi-arch / publish jobs on integration branch pushes only**, not on
   every PR head, so per-PR cost stays low.
 - Remember that **re-sync cadence is the main cost lever**: the
   merge-from-`main` freshness model trades CI minutes for merge safety, so tune
