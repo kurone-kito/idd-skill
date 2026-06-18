@@ -274,8 +274,15 @@ function checkAutopilotSuitabilityConsistency(
   }
 }
 
-export function parsePrimaryWorktreePath(porcelain: string): string | null {
-  const lines = porcelain.split('\n');
+export function parsePrimaryWorktreePath(porcelain: unknown): string | null {
+  if (typeof porcelain !== 'string') {
+    return null;
+  }
+  // Split on CRLF or LF so a CRLF porcelain line parses (a `\r` is not
+  // matched by `.` and `$` does not anchor before a trailing `\r`); this
+  // matches the `/\r?\n/` splitting used by the sibling helpers in this
+  // file.
+  const lines = porcelain.split(/\r?\n/);
   for (const line of lines) {
     const match = line.match(/^worktree (.+)$/);
     if (match) {
