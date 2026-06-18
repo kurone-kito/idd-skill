@@ -175,13 +175,26 @@ function collectUnresolvedThreads(threads, isIdd, isAdvisoryBot) {
       advisoryBot: isAdvisoryBot(originAuthor),
       path: thread.path ?? null,
       bodyExcerpt: excerpt(origin?.body),
-      dispositioned: hasFreshDisposition(
-        { isResolved: thread.isResolved, comments: thread.comments },
-        { isDispositionAuthor: isIdd },
-      ),
+      // `hasFreshDisposition` recognizes Accepted/Rejected; OR-in an IDD
+      // `**Awaiting maintainer decision**` reply so AMD threads match the
+      // comment-path disposition handling.
+      dispositioned:
+        hasFreshDisposition(
+          { isResolved: thread.isResolved, comments: thread.comments },
+          { isDispositionAuthor: isIdd },
+        ) || threadHasIddAmd(thread, isIdd),
     });
   }
   return out;
+}
+function threadHasIddAmd(thread, isIdd) {
+  return (thread.comments?.nodes ?? []).some(
+    (comment) =>
+      isIdd(authorLogin(comment)) &&
+      String(comment.body ?? '')
+        .trimStart()
+        .startsWith('**Awaiting maintainer decision**'),
+  );
 }
 function collectUnaddressedComments(
   comments,
