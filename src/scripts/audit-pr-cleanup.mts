@@ -312,6 +312,23 @@ if (args.apply) {
 computeReportSummary(report);
 writeReport(report, args.format);
 
+// Build an IDD-scoped disposition-author predicate from the resolved
+// trusted-marker actors (the accounts the IDD agent posts dispositions under).
+// The non-gate `hasFreshDisposition` callers must use this so a human
+// reviewer's `**Accepted**`/`**Rejected**` is not mistaken for a completed IDD
+// disposition.
+function makeIddDispositionAuthorPredicate(
+  iddLogins: string[],
+): (login: string) => boolean {
+  const set = new Set(iddLogins);
+  return (login) =>
+    set.has(
+      String(login ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+}
+
 async function buildReport(
   owner: string,
   repo: string,
@@ -322,20 +339,24 @@ async function buildReport(
   const comments = fetchIssueComments(owner, repo, prNumber, options);
   const reviews = fetchReviews(owner, repo, prNumber, options);
   const threads = fetchReviewThreads(owner, repo, prNumber, options);
-  const threadIndex = indexThreadsByReview(threads);
-  const latestGatingReviews = indexLatestGatingReviewsByAuthor(reviews);
 
   const configuredTrust = configuredTrustedMarkerActorSources();
+  const iddAgentLogins = normalizeTrustedMarkerLogins([
+    currentViewerLogin(),
+    ...configuredTrust.actors,
+  ]);
+  const threadIndex = indexThreadsByReview(threads, {
+    isDispositionAuthor: makeIddDispositionAuthorPredicate(iddAgentLogins),
+  });
+  const latestGatingReviews = indexLatestGatingReviewsByAuthor(reviews);
+
   const report: CleanupAuditReport = {
     repository: `${owner}/${repo}`,
     pr: prNumber,
     prUrl: pr.url,
     merged: pr.merged,
     mode: 'dry-run',
-    trustedMarkerActors: normalizeTrustedMarkerLogins([
-      currentViewerLogin(),
-      ...configuredTrust.actors,
-    ]),
+    trustedMarkerActors: iddAgentLogins,
     trustedMarkerActorsSources: [
       ...(currentViewerLogin() ? ['viewer'] : []),
       ...configuredTrust.sources,
@@ -443,7 +464,11 @@ function evaluateRegularBotComment(
     return;
   }
 
-  const classification = classifyRegularBotComment(comment, comments, threads);
+  const classification = classifyRegularBotComment(comment, comments, threads, {
+    isDispositionAuthor: makeIddDispositionAuthorPredicate(
+      report.trustedMarkerActors,
+    ),
+  });
   const subject = subjectFromNode(
     comment,
     'IssueComment',
@@ -678,7 +703,13 @@ function evaluateReviewComment(
     return;
   }
 
-  if (!hasFreshDisposition(thread)) {
+  if (
+    !hasFreshDisposition(thread, {
+      isDispositionAuthor: makeIddDispositionAuthorPredicate(
+        report.trustedMarkerActors,
+      ),
+    })
+  ) {
     addSkipped(
       report,
       { ...subject, threadId: thread.id },

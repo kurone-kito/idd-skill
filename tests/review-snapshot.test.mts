@@ -59,6 +59,116 @@ test('indexes review threads by review id', () => {
   assert.equal(requestedThreads.get('REVIEW-2')?.missingDisposition, 1);
 });
 
+test('indexThreadsByReview honors an IDD-scoped disposition-author predicate', () => {
+  const threads: ThreadLike[] = [
+    {
+      id: 'T-1',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          {
+            author: { login: 'reviewer-a' },
+            body: 'please fix',
+            createdAt: '2026-05-12T00:00:00Z',
+            pullRequestReview: { id: 'REVIEW-9' },
+          },
+          {
+            author: { login: 'reviewer-a' },
+            body: '**Accepted** — looks fine',
+            createdAt: '2026-05-12T00:00:01Z',
+            pullRequestReview: { id: 'REVIEW-9' },
+          },
+        ],
+      },
+    },
+  ];
+
+  // Loose default accepts any non-bot human's marker as a disposition.
+  assert.equal(
+    indexThreadsByReview(threads).get('REVIEW-9')?.missingDisposition,
+    0,
+  );
+  // IDD-scoped predicate rejects the reviewer-authored marker, so the thread
+  // is missing a disposition.
+  const scoped = indexThreadsByReview(threads, {
+    isDispositionAuthor: (login) => login === 'idd-bot',
+  });
+  assert.equal(scoped.get('REVIEW-9')?.missingDisposition, 1);
+});
+
+test('classifyRegularBotComment honors an IDD-scoped disposition-author predicate', () => {
+  const summary: CommentLike = {
+    author: { login: 'coderabbitai[bot]' },
+    body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n\nWalkthrough of the change.',
+    createdAt: '2026-05-12T00:00:00Z',
+  };
+  const threads: ThreadLike[] = [
+    {
+      id: 'BT-1',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          {
+            author: { login: 'coderabbitai[bot]' },
+            body: 'consider renaming this',
+            createdAt: '2026-05-12T00:00:01Z',
+          },
+          {
+            author: { login: 'reviewer-a' },
+            body: '**Accepted** — done',
+            createdAt: '2026-05-12T00:00:02Z',
+          },
+        ],
+      },
+    },
+  ];
+
+  // Loose default treats the reviewer-authored marker as a completed
+  // disposition, so the bot summary classifies as RESOLVED.
+  assert.equal(
+    classifyRegularBotComment(summary, [summary], threads)?.classifier,
+    'RESOLVED',
+  );
+  // IDD-scoped predicate rejects it, so there is no completed disposition.
+  assert.equal(
+    classifyRegularBotComment(summary, [summary], threads, {
+      isDispositionAuthor: (login) => login === 'idd-bot',
+    }),
+    null,
+  );
+});
+
+test('classifyRegularBotComment IDD-scopes the explicit-disposition path', () => {
+  const summary: CommentLike = {
+    author: { login: 'coderabbitai[bot]' },
+    body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n\nWalkthrough of the change.',
+    createdAt: '2026-05-12T00:00:00Z',
+  };
+  // A later top-level disposition mentioning CodeRabbit, authored by a human
+  // reviewer rather than an IDD agent.
+  const reviewerDisposition: CommentLike = {
+    author: { login: 'reviewer-a' },
+    body: '**Accepted** — CodeRabbit summary acknowledged',
+    createdAt: '2026-05-12T00:01:00Z',
+  };
+  const comments = [summary, reviewerDisposition];
+
+  // Loose default accepts the reviewer-authored disposition.
+  assert.equal(
+    classifyRegularBotComment(summary, comments, [])?.classifier,
+    'RESOLVED',
+  );
+  // IDD-scoped predicate rejects it (no completed IDD disposition).
+  assert.equal(
+    classifyRegularBotComment(summary, comments, [], {
+      isDispositionAuthor: (login) => login === 'idd-bot',
+    }),
+    null,
+  );
+});
+
 test('tracks latest gating reviews and truncated threads', () => {
   const gatingIndex = indexLatestGatingReviewsByAuthor(
     latestGatingReview.reviews,
