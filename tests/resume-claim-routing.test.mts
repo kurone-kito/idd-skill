@@ -447,3 +447,39 @@ test('legacy matching release remains valid after unrelated later unclaim', () =
   assert.equal(result.reason, 'legacy-released');
   assert.equal(result.active_claim, null);
 });
+
+test('detects a later competing claim that precedes a heartbeat of the active claim', () => {
+  // claim-race (10:05) is posted after the original claim (10:00) but before
+  // a heartbeat of the active claim (10:10). The heartbeat refreshes the
+  // active claim's createdAt; baselining the competitor search on that
+  // refreshed time would hide the race, so the search baselines on the
+  // original claim event instead.
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-owned',
+      now: '2026-05-12T11:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-owned supersedes: none 2026-05-12T10:00:00Z branch: issue/11-task -->',
+        },
+        {
+          createdAt: '2026-05-12T10:05:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: other claim-race supersedes: none 2026-05-12T10:05:00Z branch: issue/11-task -->',
+        },
+        {
+          createdAt: '2026-05-12T10:10:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-owned supersedes: none 2026-05-12T10:10:00Z branch: issue/11-task -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(result.state, 'disputed');
+  assert.equal(result.reason, 'later-competing-claim');
+  assert.equal(result.evidence.later_competing_claim?.claim_id, 'claim-race');
+});

@@ -487,7 +487,19 @@ function findLaterCompetingClaim(
   events: NormalizedClaimEvent[],
   activeClaim: ParsedClaimMarker,
 ) {
-  const activeSecond = toSecond(activeClaim.createdAt);
+  // Baseline on the active claim's ORIGINAL event time, not
+  // activeClaim.createdAt: applyClaimEvent refreshes the latter to the most
+  // recent heartbeat, which would hide a competing claim posted between the
+  // original claim and that heartbeat.
+  const originalClaim = events
+    .map((event) => parseClaimComment(event.body, event.createdAt))
+    .find(
+      (claim): claim is ParsedClaimMarker =>
+        Boolean(claim) && claim?.claimId === activeClaim.claimId,
+    );
+  const activeSecond = toSecond(
+    originalClaim?.createdAt ?? activeClaim.createdAt,
+  );
   if (activeSecond === null) {
     return null;
   }
