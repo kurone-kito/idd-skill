@@ -7,6 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { deriveGhHttpStatus } from './gh-http-status.mjs';
 
 const CRITERIA = [
   {
@@ -295,10 +296,25 @@ function escapeCsv(value) {
 }
 function buildIssueLoader(owner, repo) {
   return async function loadIssue(issueNumber) {
-    const data = ghJson(
-      ['api', `repos/${owner}/${repo}/issues/${issueNumber}`, '--jq', '.'],
-      { allowStatuses: [1] },
-    );
+    let data;
+    try {
+      data = ghJson([
+        'api',
+        `repos/${owner}/${repo}/issues/${issueNumber}`,
+        '--jq',
+        '.',
+      ]);
+    } catch (error) {
+      // Fail closed: only a genuine 404 means the issue is absent. Auth,
+      // rate-limit, network, and unknown failures (status null) must
+      // propagate so discovery aborts instead of marking the issue
+      // not-found. `gh` exits 1 for every HTTP error, so derive the real
+      // status from its output rather than the process exit code.
+      if (deriveGhHttpStatus(error) === 404) {
+        return null;
+      }
+      throw error;
+    }
     if (!data) {
       return null;
     }
@@ -310,22 +326,14 @@ function buildIssueLoader(owner, repo) {
     };
   };
 }
-function ghText(args, options = {}) {
-  const { allowStatuses = [] } = options;
-  try {
-    return execFileSync('gh', args, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
-  } catch (error) {
-    if (allowStatuses.includes(error.status)) {
-      return '';
-    }
-    throw error;
-  }
+function ghText(args) {
+  return execFileSync('gh', args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
 }
-function ghJson(args, options = {}) {
-  const text = ghText(args, options);
+function ghJson(args) {
+  const text = ghText(args);
   if (!text) {
     return null;
   }
