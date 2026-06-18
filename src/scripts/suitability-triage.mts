@@ -126,9 +126,13 @@ const SECRET_PATTERNS = [
   /xox[baprs]-[A-Za-z0-9-]{20,}/,
 ];
 
+// Allow an optional `sudo` and/or `env VAR=val ...` prefix before the
+// shell on the right-hand side of the pipe, so `curl … | sudo bash` and
+// `curl … | env FOO=bar sh` are still detected.
+const UNSAFE_SHELL_SUFFIX = String.raw`\|\s*(?:sudo\s+|env\s+(?:\S+=\S*\s+)*)*(?:sh|bash)\b`;
 const UNSAFE_PATTERNS = [
-  /\bcurl\b[^\n|]*\|\s*(?:sh|bash)\b/i,
-  /\bwget\b[^\n|]*\|\s*(?:sh|bash)\b/i,
+  new RegExp(String.raw`\bcurl\b[^\n|]*${UNSAFE_SHELL_SUFFIX}`, 'i'),
+  new RegExp(String.raw`\bwget\b[^\n|]*${UNSAFE_SHELL_SUFFIX}`, 'i'),
   /\beval\s*\(/i,
 ];
 
@@ -138,7 +142,7 @@ const EXTERNAL_COORDINATION_PATTERN =
 const EXTERNAL_SYSTEM_ACCESS_PATTERN =
   /\b(requires?|need(?:s)?|must|depends on)\b[\s\S]{0,120}\b((?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog)[\s\S]{0,40}(?:access|credentials?|login|permission|sign-?in)|(?:access|credentials?|login|permission|sign-?in)[\s\S]{0,40}(?:external|third-?party|production|dashboard|workspace|console|service|system|slack|jira|datadog))\b/i;
 const DUPLICATE_DECLARATION_PATTERN =
-  /\b(duplicate of|superseded by)\s*#\d+\b/gi;
+  /\b(duplicate of|superseded by)\s*(?:#\d+|https?:\/\/\S+?\/(?:issues|pull)\/\d+)\b/gi;
 const DUPLICATE_NEGATION_PATTERN = /\b(not|no|avoid)\b[\s\S]{0,30}$/i;
 const SUBJECTIVE_SUBJECT_PATTERN =
   /\b(maintainer|stakeholder|human|opinion|judgment|judgement|ux|feel)\b/i;
@@ -226,7 +230,25 @@ export function checkRepositoryFit(context: Context): CheckOutcome {
       evidence: `Cross-repository references detected: ${crossRepoLinks.join(', ')}`,
     };
   }
-  if (EXTERNAL_SYSTEM_ACCESS_PATTERN.test(body)) {
+  for (const match of body.matchAll(
+    new RegExp(EXTERNAL_SYSTEM_ACCESS_PATTERN.source, 'gi'),
+  )) {
+    const matchIndex = match.index ?? 0;
+    const matchText = match[0] ?? '';
+    const contextBefore = body.slice(Math.max(0, matchIndex - 60), matchIndex);
+    // Skip a negated non-requirement; only an un-negated external-access
+    // requirement blocks Repository Fit. The negation may sit *before* the
+    // match ("does **not** require production credentials") or *after* the
+    // requirement verb inside the match ("requires **no** production
+    // credentials").
+    const negatedRequirement =
+      /\b(?:requires?|needs?|must|depends?\s+on)\s+(?:no|not|never|without|n['’]?t)\b/i;
+    if (
+      NEGATION_PATTERN.test(contextBefore) ||
+      negatedRequirement.test(matchText)
+    ) {
+      continue;
+    }
     return {
       pass: false,
       evidence:
@@ -303,38 +325,49 @@ export function checkTrustSafety(context: Context): CheckOutcome {
     };
   }
 
-  const matchedUnsafe = UNSAFE_PATTERNS.find((pattern) => pattern.test(corpus));
-  if (matchedUnsafe) {
-    const unsafeMatch = corpus.match(matchedUnsafe);
-    const unsafeIndex = unsafeMatch?.index ?? -1;
-    const contextStart = Math.max(0, unsafeIndex - 140);
-    const contextEnd = Math.min(
-      corpus.length,
-      unsafeIndex + (unsafeMatch?.[0]?.length ?? 0) + 40,
-    );
-    const localContext =
-      unsafeIndex >= 0 ? corpus.slice(contextStart, contextEnd) : corpus;
+  // Inspect every unsafe-command occurrence across all patterns, not just
+  // the first: an issue may discuss a command safely and then later direct
+  // running it. Any single occurrence with an un-negated execution directive
+  // in its local context fails the check.
+  let sawUnsafeContextOnly = false;
+  for (const pattern of UNSAFE_PATTERNS) {
     const directivePattern = new RegExp(
-      `${EXECUTION_VERB_PATTERN.source}[\\s\\S]{0,80}${matchedUnsafe.source}`,
+      `${EXECUTION_VERB_PATTERN.source}[\\s\\S]{0,80}${pattern.source}`,
       'i',
     );
     const negatedDirectivePattern = new RegExp(
-      `\\b(do not|don't|never|avoid)\\s+(?:run|execute|paste|install|invoke)\\b[^\\n.!?]{0,60}${matchedUnsafe.source}`,
+      `\\b(do not|don't|never|avoid)\\s+(?:run|execute|paste|install|invoke)\\b[^\\n.!?]{0,60}${pattern.source}`,
       'i',
     );
-    if (
-      !directivePattern.test(localContext) ||
-      negatedDirectivePattern.test(localContext)
-    ) {
-      return {
-        pass: true,
-        evidence:
-          'Unsafe command string appears as context only; no execution directive detected.',
-      };
+    for (const occurrence of corpus.matchAll(
+      new RegExp(pattern.source, 'gi'),
+    )) {
+      const unsafeIndex = occurrence.index ?? -1;
+      const matchText = occurrence[0] ?? '';
+      const contextStart = Math.max(0, unsafeIndex - 140);
+      const contextEnd = Math.min(
+        corpus.length,
+        unsafeIndex + matchText.length + 40,
+      );
+      const localContext =
+        unsafeIndex >= 0 ? corpus.slice(contextStart, contextEnd) : corpus;
+      if (
+        directivePattern.test(localContext) &&
+        !negatedDirectivePattern.test(localContext)
+      ) {
+        return {
+          pass: false,
+          evidence: `Unsafe command execution pattern detected: ${pattern}`,
+        };
+      }
+      sawUnsafeContextOnly = true;
     }
+  }
+  if (sawUnsafeContextOnly) {
     return {
-      pass: false,
-      evidence: `Unsafe command execution pattern detected: ${matchedUnsafe}`,
+      pass: true,
+      evidence:
+        'Unsafe command string appears as context only; no execution directive detected.',
     };
   }
 
