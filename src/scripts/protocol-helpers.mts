@@ -4692,7 +4692,7 @@ function normalizeForcedHandoffReason(value: unknown): string {
   return trimmed;
 }
 
-function normalizeLinkedPrReference(value: unknown): string {
+export function normalizeLinkedPrReference(value: unknown): string {
   const token = String(value ?? '').trim();
   if (!token) {
     return '';
