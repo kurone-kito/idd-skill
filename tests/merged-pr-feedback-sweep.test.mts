@@ -190,6 +190,39 @@ test('excludes a comment addressed by a later IDD disposition', () => {
   assert.equal(result.prs.length, 0);
 });
 
+test('a later thread-level IDD disposition addresses a top-level comment', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 15,
+      comments: [
+        {
+          body: 'Did you consider X?',
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'coderabbitai[bot]' },
+        },
+      ],
+      // The disposition lives inside a (resolved) review thread, not as a
+      // top-level comment; it must still count as the "later disposition".
+      threads: [
+        thread(true, [
+          {
+            login: 'coderabbitai[bot]',
+            body: 'related concern',
+            createdAt: '2026-06-09T00:30:00Z',
+          },
+          {
+            login: 'kurone-kito',
+            body: '**Accepted** — covered in follow-up.',
+            createdAt: '2026-06-09T02:00:00Z',
+          },
+        ]),
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 0);
+});
+
 test('surfaces a non-IDD comment that opens with a disposition marker', () => {
   const prs: MergedPrInput[] = [
     {

@@ -124,6 +124,7 @@ export function buildMergedPrFeedbackSweep(prs, options) {
     const unaddressedComments = collectUnaddressedComments(
       pr.comments ?? [],
       pr.reviews ?? [],
+      pr.threads ?? [],
       isIdd,
       isTrusted,
       isAdvisoryBot,
@@ -199,21 +200,33 @@ function threadHasIddAmd(thread, isIdd) {
 function collectUnaddressedComments(
   comments,
   reviews,
+  threads,
   isIdd,
   isTrusted,
   isAdvisoryBot,
 ) {
   // A non-IDD item counts as addressed only when a later IDD-agent
   // *disposition* (Accepted / Rejected / Awaiting maintainer decision)
-  // exists — markers and plain replies do not address feedback.
-  const latestDispositionAt = maxTimestamp(
-    comments
+  // exists — markers and plain replies do not address feedback. IDD
+  // dispositions can land either as a top-level PR comment or as a reply
+  // inside a review thread (the protocol treats thread dispositions as
+  // first-class), so fold both timestamp sources into `latestDispositionAt`.
+  const latestDispositionAt = maxTimestamp([
+    ...comments
       .filter(
         (comment) =>
           isIdd(authorLogin(comment)) && isDispositionBody(comment.body),
       )
       .map(commentTimestamp),
-  );
+    ...threads.flatMap((thread) =>
+      (thread.comments?.nodes ?? [])
+        .filter(
+          (comment) =>
+            isIdd(authorLogin(comment)) && isDispositionBody(comment.body),
+        )
+        .map((comment) => comment.createdAt ?? null),
+    ),
+  ]);
   const out = [];
   for (const comment of comments) {
     const author = authorLogin(comment);
@@ -423,9 +436,24 @@ function fetchAllNodes(owner, repo, number, field, nodeFields) {
       } }
     }`;
     const result = ghGraphql(query, { owner, repo, number, after });
-    const conn = result?.data?.repository?.pullRequest?.[field];
-    out.push(...(conn?.nodes ?? []));
-    if (!conn?.pageInfo?.hasNextPage) {
+    // Fail fast on a missing pullRequest node or connection: an absent node
+    // (e.g. a transient/permission anomaly) would otherwise be read as zero
+    // nodes, making a PR look "clean" — the silent false negative this
+    // helper's fail-fast posture exists to prevent.
+    const pr = result?.data?.repository?.pullRequest;
+    if (pr == null) {
+      throw new Error(
+        `pagination for ${field} on PR #${number} returned no pullRequest node`,
+      );
+    }
+    const conn = pr[field];
+    if (conn == null) {
+      throw new Error(
+        `pagination for ${field} on PR #${number} returned a null connection`,
+      );
+    }
+    out.push(...(conn.nodes ?? []));
+    if (!conn.pageInfo?.hasNextPage) {
       break;
     }
     // Fail fast rather than silently truncate: a missing cursor on a
