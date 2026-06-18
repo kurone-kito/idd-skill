@@ -105,9 +105,6 @@ In the idd-skill source repository, the following optional helpers were adopted:
 
 **Post-Merge Audit Helpers:**
 
-- `scripts/cleanup-hygiene-report.mjs` for post-merge cleanup hygiene
-  metrics aggregation and trend reporting (referenced in
-  [kurone-kito/idd-skill#438](https://github.com/kurone-kito/idd-skill/issues/438))
 - `scripts/merged-pr-feedback-sweep.mjs` for read-only detection of
   unresolved / unaddressed advisory feedback on merged PRs, fed manually to
   the issue-authoring skill (referenced in
@@ -128,73 +125,6 @@ future inventory reviews do not need to re-infer their role from code.
 - `scripts/phase-id-resolver.mjs` (`idd-phase-id-resolver`) — phase ID
   normalization utility; resolves canonical phase IDs from aliases and
   validates token format.
-
-### Cleanup Hygiene Report Metrics
-
-The cleanup-hygiene-report.mjs helper generates an auditable snapshot of
-PR cleanup status across merged pull requests. It tracks cleanup success
-metrics and trends over time using a versioned schema.
-
-**Metric Schema (version 1.0):**
-
-- **Summary metrics** — overall cleanup status:
-  - `totalMergedPRs`: Total number of merged pull requests in the
-    measurement window (integer)
-  - `clean`: Count of PRs with zero minimization candidates (integer)
-  - `needsApply`: Count of PRs with one or more unaddressed candidates
-    (integer)
-  - `cleanPercentage`: Ratio of clean PRs relative to total merged
-    (formula: `clean / totalMergedPRs * 100`, range: 0.0–100.0)
-
-- **Candidates breakdown** (`candidatesByClassifier`) — classification of
-  minimization candidates:
-  - `thresholdMissing`: Candidates below the automation threshold (integer)
-  - `skippedWithReason`: Candidates with a documented skip reason
-    (integer; reasons: review-thread-unresolved, operational-marker-present,
-    held-by-maintainer)
-  - `applied`: Successfully minimized comments (integer)
-  - `failed`: Minimization attempts that failed (integer)
-
-- **Top skip reasons** — most common reasons for deferring cleanup:
-  - Array of objects with `reason` (string) and `count` (integer) fields
-  - Tracked reasons: "review-thread-unresolved", "operational-marker-present",
-    "held-by-maintainer"
-  - Interpretation: helps identify process blockers and coordination needs
-
-- **Trends** — time-sliced metrics for pattern detection:
-  - **Recent** (7-day rolling window):
-    - `days`: 7 (fixed window width)
-    - `startDate`: timestamp of 7 days ago (ISO 8601)
-    - `endDate`: current timestamp (ISO 8601)
-    - `metrics`: summary counts (totalMergedPRs, clean, needsApply)
-    - Use case: detect acute changes or spike patterns in cleanup health
-  - **Historical** (before the 7-day window):
-    - `beforeDate`: timestamp matching recent window start (ISO 8601)
-    - `metrics`: aggregated summary counts
-    - Use case: establish baseline trends for longer-term analysis
-
-**Interpretation guidance:**
-
-- A `cleanPercentage` of 100% indicates no PR comments require cleanup
-  attention (either all comments were addressed or no comment minimization
-  candidates were detected).
-- `topSkipReasons` with high counts may indicate system-level issues
-  (e.g., unresolved review threads prevent cleanup even when comments
-  could be minimized).
-- Recent vs historical comparison shows whether cleanup discipline is
-  improving or declining over time.
-- `candidatesByClassifier` breakdown helps distinguish between items that
-  were below automation threshold, intentionally deferred, successfully
-  cleaned, or failed during cleanup.
-
-The canonical workflow remains the portable shell / `gh` / `jq`
-instructions embedded in `.github/instructions/*.instructions.md`. The
-helpers are convenience layers only; written decision tables and phase
-rules remain authoritative when outputs diverge.
-
-For discover and suitability, use the adopted helpers first when helper
-support is enabled, then fall back to the portable instructions if a
-helper is unavailable or its output does not match the written rules.
 
 ### Discover Roadmap Graph Contract
 

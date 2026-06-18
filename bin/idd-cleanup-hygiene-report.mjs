@@ -1,9 +1,0 @@
-#!/usr/bin/env node
-// idd-generated-from: src/bin/idd-cleanup-hygiene-report.mts
-//
-// The bin/idd-cleanup-hygiene-report.mjs copy is generated from the .mts source named above
-// by `pnpm run build`. Edit the .mts source, never the generated .mjs.
-// See docs/typescript-sources.md.
-import { runHelper } from './run-helper.mjs';
-
-runHelper('../scripts/cleanup-hygiene-report.mjs');
