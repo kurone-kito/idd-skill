@@ -95,19 +95,29 @@ that set instead of re-deriving it.
 1. Fetch current checks for the PR:
 
    ```sh
-   gh pr checks {pr-number} --json name,state,bucket,completedAt,link
+   gh pr checks {pr-number} --json name,state,bucket,startedAt,completedAt,link
    ```
 
 2. Normalize check states:
    - treat `skipped`, `neutral`, and `not_applicable` as pass-equivalent
-   - treat `pending`, `requested`, `waiting`, `queued`, and
-     `in_progress` as running
-   - keep `failure`, `cancelled`, and `timed_out` as non-pass
+   - treat `pending`, `requested`, `waiting`, `queued`,
+     `in_progress`, and the Commit-Status `expected` state as running
+   - keep `failure`, `cancelled`, `timed_out`, `action_required`,
+     `startup_failure`, and `stale` as non-pass
 3. Evaluate only checks in the required-check set, and match expected
    check source when the required definition includes an app/integration
    constraint.
 4. Repeat at a reasonable interval until a terminal route in the table
    below is reached.
+
+Measure each running check's `ciWait.runningTimeout` window from its
+server `startedAt`. When `startedAt` is absent (a queued check that has
+not started yet), the running-timeout has not begun: keep polling, but
+cap that wait at `ciWait.generationTimeout`. Some running states never
+report a `startedAt` — a Commit-Status `expected` context in particular
+may stay started-less — so when `ciWait.generationTimeout` elapses with
+still no `startedAt`, post a hold comment and escalate rather than
+polling indefinitely. Never anchor the window to a client clock.
 
 Do not rely on `gh pr checks` command exit code as the gate decision.
 The decision must be based on normalized required-check states.
@@ -130,10 +140,10 @@ for the same run before posting a hold.
 
 ## Interpretation
 
-| State (required checks only, normalized)                            | Action                                                                                                                                                                                                                                                                                                                      |
-| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| All required checks are generated and pass-equivalent               | → **on-success** (caller-defined)                                                                                                                                                                                                                                                                                           |
-| Any required check is non-pass `failure`                            | Inspect the log. If infra/flaky: apply `ciWait.rerunPolicy` (default `rerun-once`). If it resolves to rerun, rerun the exact failed run once and resume polling. If it resolves to hold, post a hold comment and stop. If code-caused: fix, run **fix-validate**, commit atomically, then return to caller's pre-push step. |
-| Any required check is non-pass `cancelled` or `timed_out`           | Investigate cause. If code-caused: fix, run **fix-validate**, commit atomically, then return to caller's pre-push step. If infra-caused: apply `ciWait.rerunPolicy`; rerun or re-push only when the current rerun budget allows it, otherwise post a hold comment and stop.                                                 |
-| Any required check is running (`pending`/`requested`/`waiting`/...) | Continue waiting. After `ciWait.runningTimeout` elapses with no completion (default: 30 min), apply `ciWait.rerunPolicy`. If it resolves to rerun, rerun CI once and resume polling. If the same route recurs after that rerun, or if the policy is `hold`, post a hold comment and stop.                                   |
-| Required checks are not generated after `ciWait.generationTimeout`  | Treat as running. Default: 10 min. If the corresponding workflow run does not exist at all when that window elapses, post a hold comment and escalate to a maintainer, then stop.                                                                                                                                           |
+| State (required checks only, normalized)                                                   | Action                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| All required checks are generated and pass-equivalent                                      | → **on-success** (caller-defined)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Any required check is non-pass `failure`, `action_required`, `startup_failure`, or `stale` | Inspect the log. If infra/flaky: apply `ciWait.rerunPolicy` (default `rerun-once`). If it resolves to rerun, rerun the exact failed run once and resume polling. If it resolves to hold, post a hold comment and stop. If code-caused: fix, run **fix-validate**, commit atomically, then return to caller's pre-push step. `action_required`, `startup_failure`, and `stale` rarely clear on a blind rerun: inspect, and if the check needs a maintainer action or a fresh run, post a hold comment and stop rather than looping reruns. |
+| Any required check is non-pass `cancelled` or `timed_out`                                  | Investigate cause. If code-caused: fix, run **fix-validate**, commit atomically, then return to caller's pre-push step. If infra-caused: apply `ciWait.rerunPolicy`; rerun or re-push only when the current rerun budget allows it, otherwise post a hold comment and stop.                                                                                                                                                                                                                                                               |
+| Any required check is running (`pending`/`requested`/`waiting`/`expected`/...)             | Continue waiting. After `ciWait.runningTimeout` — measured from the check's server `startedAt` (see the Polling algorithm) — elapses with no completion (default: 30 min), apply `ciWait.rerunPolicy`. If it resolves to rerun, rerun CI once and resume polling. If the same route recurs after that rerun, or if the policy is `hold`, post a hold comment and stop.                                                                                                                                                                    |
+| Required checks are not generated after `ciWait.generationTimeout`                         | Treat as running. Default: 10 min. If the corresponding workflow run does not exist at all when that window elapses, post a hold comment and escalate to a maintainer, then stop.                                                                                                                                                                                                                                                                                                                                                         |
