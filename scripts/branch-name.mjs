@@ -45,9 +45,14 @@ if (isCliExecution()) {
  *    and a `-` exists before char 40, trim back to that `-`, else keep
  *    the hard 40-char cut — then strip any trailing `-`;
  * 6. if empty, fall back to `task`.
+ *
+ * The algorithm is defined over an issue *title string*. Non-string
+ * inputs (including `null`/`undefined`) are out of that domain and are
+ * treated as empty, so they fall back to `task` rather than producing a
+ * coerced slug such as `object-object` or `123`.
  */
 export function computeBranchSlug(title) {
-  const normalized = String(title ?? '')
+  const normalized = (typeof title === 'string' ? title : '')
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '-');
   const tokens = normalized

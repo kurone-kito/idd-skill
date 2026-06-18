@@ -106,5 +106,13 @@ test('computeBranchName composes issue/<number>-<slug>', () => {
 test('handles nullish and non-string titles defensively', () => {
   assert.equal(computeBranchSlug(null), 'task');
   assert.equal(computeBranchSlug(undefined), 'task');
+  // non-string inputs are out of the documented (title-string) domain and
+  // fall back to `task` rather than producing coerced slugs like
+  // `123` / `object-object`
+  assert.equal(computeBranchSlug(123), 'task');
+  assert.equal(computeBranchSlug({}), 'task');
+  assert.equal(computeBranchSlug([1, 2]), 'task');
+  assert.equal(computeBranchSlug(true), 'task');
   assert.equal(computeBranchName(8, null), 'issue/8-task');
+  assert.equal(computeBranchName(9, 123), 'issue/9-task');
 });
