@@ -9,8 +9,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  isAutopilotSuitabilityScore,
   normalizeAutopilotSuitabilityFloor,
+  parseAutopilotSuitabilityMarker,
 } from './autopilot-suitability.mjs';
 import {
   inspectHelperRuntimeConfig,
@@ -103,7 +103,7 @@ export function evaluateAutopilotSuitabilityConsistency(issues, options = {}) {
       ),
     );
     const blockedByHuman = labelNames.has('status:blocked-by-human');
-    const marker = detectAutopilotSuitabilityMarker(issue?.body, prefix);
+    const marker = parseAutopilotSuitabilityMarker(issue?.body, prefix);
     if (!marker.present) {
       continue;
     }
@@ -130,24 +130,6 @@ export function evaluateAutopilotSuitabilityConsistency(issues, options = {}) {
     }
   }
   return { warnings };
-}
-function detectAutopilotSuitabilityMarker(body, prefix) {
-  const regex = new RegExp(
-    `<!--\\s*${escapeRegex(prefix)}-autopilot-suitability:\\s*([^\\s>]+)\\s*-->`,
-    'gi',
-  );
-  const raws = [...String(body ?? '').matchAll(regex)].map((match) => match[1]);
-  if (raws.length === 0) {
-    return { present: false, value: null, malformed: false };
-  }
-  const values = raws.map((raw) =>
-    /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN,
-  );
-  const distinct = new Set(values);
-  if (!values.every(isAutopilotSuitabilityScore) || distinct.size !== 1) {
-    return { present: true, value: null, malformed: true };
-  }
-  return { present: true, value: [...distinct][0], malformed: false };
 }
 function checkAutopilotSuitabilityConsistency(root, options, report) {
   const requireGithub = options.requireGithub === true;

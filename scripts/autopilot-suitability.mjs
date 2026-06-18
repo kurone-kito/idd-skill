@@ -18,16 +18,22 @@
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 export const DEFAULT_AUTOPILOT_SUITABILITY_FLOOR = 3;
 /**
- * Parse the authored autopilot-suitability score from an issue body.
+ * Canonical parser for the authored
+ * `<!-- {prefix}-autopilot-suitability: N -->` marker.
  *
- * Returns an integer 1-5 when the body carries a single coherent
- * `<!-- {prefix}-autopilot-suitability: N -->` marker. Returns null
- * (fail-safe = "no score") when the marker is absent, non-integer,
- * out of the 1-5 range, or present more than once with disagreeing
- * values. A null score must never cause an issue to be skipped; the
- * caller evaluates it the normal way.
+ * Returns `{ present, value, malformed }`:
+ * - `present` is false only when no marker appears in the body.
+ * - `value` is the single coherent integer 1-5, or null (fail-safe =
+ *   "no score") when the marker is absent, non-integer, out of the 1-5
+ *   range, or repeated with disagreeing values.
+ * - `malformed` is true when a marker is present but its value is not a
+ *   single coherent 1-5 score.
+ *
+ * `parseAutopilotSuitability` and `idd-doctor` both parse the marker
+ * through this one implementation so the regex and fail-safe rules never
+ * drift between the discovery rankers and the doctor consistency check.
  */
-export function parseAutopilotSuitability(
+export function parseAutopilotSuitabilityMarker(
   body,
   markerPrefix = DEFAULT_MARKER_PREFIX,
 ) {
@@ -39,29 +45,36 @@ export function parseAutopilotSuitability(
     `<!--\\s*${escapeRegex(prefix)}-autopilot-suitability:\\s*([^\\s>]+)\\s*-->`,
     'gi',
   );
-  const text = String(body ?? '');
-  const values = new Set();
-  let sawInvalid = false;
-  let match = regex.exec(text);
-  while (match) {
-    const raw = match[1];
-    if (/^\d+$/.test(raw)) {
-      const value = Number.parseInt(raw, 10);
-      if (value >= 1 && value <= 5) {
-        values.add(value);
-      } else {
-        sawInvalid = true;
-      }
-    } else {
-      sawInvalid = true;
-    }
-    match = regex.exec(text);
+  const raws = [...String(body ?? '').matchAll(regex)].map((match) => match[1]);
+  if (raws.length === 0) {
+    return { present: false, value: null, malformed: false };
   }
+  const values = raws.map((raw) =>
+    /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN,
+  );
+  const distinct = new Set(values);
   // Fail-safe: any invalid token, or conflicting values, yields no score.
-  if (sawInvalid || values.size !== 1) {
-    return null;
+  if (!values.every(isAutopilotSuitabilityScore) || distinct.size !== 1) {
+    return { present: true, value: null, malformed: true };
   }
-  return [...values][0];
+  return { present: true, value: [...distinct][0], malformed: false };
+}
+/**
+ * Parse the authored autopilot-suitability score from an issue body.
+ *
+ * Returns an integer 1-5 when the body carries a single coherent
+ * `<!-- {prefix}-autopilot-suitability: N -->` marker. Returns null
+ * (fail-safe = "no score") when the marker is absent, non-integer,
+ * out of the 1-5 range, or present more than once with disagreeing
+ * values. A null score must never cause an issue to be skipped; the
+ * caller evaluates it the normal way. Thin value-only view over
+ * {@link parseAutopilotSuitabilityMarker}.
+ */
+export function parseAutopilotSuitability(
+  body,
+  markerPrefix = DEFAULT_MARKER_PREFIX,
+) {
+  return parseAutopilotSuitabilityMarker(body, markerPrefix).value;
 }
 /**
  * Normalize a configured floor to an integer 1-5, falling back to the
