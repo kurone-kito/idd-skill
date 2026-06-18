@@ -112,10 +112,12 @@ that set instead of re-deriving it.
 
 Measure each running check's `ciWait.runningTimeout` window from its
 server `startedAt`. When `startedAt` is absent (a queued check that has
-not started yet), the running-timeout has not begun: keep polling until
-`startedAt` appears, falling back to the `ciWait.generationTimeout` bound
-for a check that never reports one. Never anchor the window to a client
-clock.
+not started yet), the running-timeout has not begun: keep polling, but
+cap that wait at `ciWait.generationTimeout`. Some running states never
+report a `startedAt` — a Commit-Status `expected` context in particular
+may stay started-less — so when `ciWait.generationTimeout` elapses with
+still no `startedAt`, post a hold comment and escalate rather than
+polling indefinitely. Never anchor the window to a client clock.
 
 Do not rely on `gh pr checks` command exit code as the gate decision.
 The decision must be based on normalized required-check states.
