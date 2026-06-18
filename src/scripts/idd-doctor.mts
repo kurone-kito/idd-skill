@@ -948,7 +948,12 @@ export function readWorktreeGuardBranchPatterns(root: string): string[] {
       patterns.length > 0 &&
       patterns.every((p) => typeof p === 'string' && p.trim().length > 0)
     ) {
-      return patterns;
+      // Return trimmed patterns: a configured entry with surrounding
+      // whitespace (e.g. `"issue/* "`) otherwise passes validation but
+      // never matches a real branch, silently covering nothing.
+      return (patterns as string[])
+        .map((pattern) => pattern.trim())
+        .filter((pattern) => pattern.length > 0);
     }
   } catch {
     // fall through to defaults

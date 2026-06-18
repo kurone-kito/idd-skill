@@ -461,6 +461,43 @@ test('readWorktreeGuardEnabled returns false when config is missing or invalid',
   }
 });
 
+test('readWorktreeGuardBranchPatterns trims configured patterns and falls back when invalid', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-guard-'));
+  try {
+    const writeConfig = (obj: unknown) => {
+      mkdirSync(join(dir, '.github/idd'), { recursive: true });
+      writeFileSync(join(dir, '.github/idd/config.json'), JSON.stringify(obj));
+    };
+    // Missing config -> defaults.
+    assert.deepEqual(
+      readWorktreeGuardBranchPatterns(dir),
+      DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS,
+    );
+    // Surrounding whitespace is trimmed so the pattern matches real branches.
+    writeConfig({
+      worktreeGuard: { branchPatterns: ['  issue/* ', 'release/*\t'] },
+    });
+    assert.deepEqual(readWorktreeGuardBranchPatterns(dir), [
+      'issue/*',
+      'release/*',
+    ]);
+    // Whitespace-only entries are invalid -> fall back to defaults.
+    writeConfig({ worktreeGuard: { branchPatterns: ['  ', ''] } });
+    assert.deepEqual(
+      readWorktreeGuardBranchPatterns(dir),
+      DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS,
+    );
+    // Non-array -> defaults.
+    writeConfig({ worktreeGuard: { branchPatterns: 'issue/*' } });
+    assert.deepEqual(
+      readWorktreeGuardBranchPatterns(dir),
+      DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 const HARDENED_WORK =
   '## B1\n\n### Anti-patterns\n\ntext\n\n### B1 self-check\n\ntext\n';
 const HARDENED_CORE =
