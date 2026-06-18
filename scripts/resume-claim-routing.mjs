@@ -12,6 +12,7 @@ import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   isStaleAt,
+  normalizeLinkedPrReference,
   parseClaimComment,
   resolveActiveClaim,
 } from './protocol-helpers.mjs';
@@ -23,6 +24,37 @@ const LEGACY_RELEASE_PATTERN =
   /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 if (isCliExecution()) {
   runCli();
+}
+/**
+ * Build the `isForcedHandoffEnabled` gate used by the resume CLI.
+ *
+ * Mirrors `summarizeClaimValidation`'s gate so a forced handoff that
+ * displaces a **PR-backed** claim is honored only with `issue-plus-pr`
+ * evidence naming that PR:
+ *
+ * - forced-handoff mode disabled → never honor;
+ * - no open linked PR backs the claim (`expectedLinkedPrReferences`
+ *   empty, including the fail-safe lookup-error case) → honor an
+ *   `issue-only` handoff as before;
+ * - an open linked PR backs the claim → require `contextScope` of
+ *   `issue-plus-pr` whose `linkedPr` matches one of the expected PRs.
+ */
+export function buildForcedHandoffEnabledGate(options) {
+  const { forcedHandoffEnabled, expectedLinkedPrReferences } = options;
+  return (forcedHandoff) => {
+    if (!forcedHandoffEnabled) {
+      return false;
+    }
+    if (expectedLinkedPrReferences.size === 0) {
+      return true;
+    }
+    if (forcedHandoff.contextScope !== 'issue-plus-pr') {
+      return false;
+    }
+    return expectedLinkedPrReferences.has(
+      normalizeLinkedPrReference(forcedHandoff.linkedPr),
+    );
+  };
 }
 export function evaluateResumeClaimRouting(input, options = {}) {
   const nowIso =
@@ -168,6 +200,13 @@ function runCli() {
   const forcedHandoffEnabled = policy.forcedHandoff.mode === 'human-gated';
   const forcedHandoffAuthorityPolicy = policy.forcedHandoff.authorityPolicy;
   const permissionCache = new Map();
+  // A forced handoff that displaces a PR-backed claim must carry
+  // issue-plus-pr evidence naming that PR; detect the open linked PR(s)
+  // so the gate below can enforce it (fail-safe to no enforcement).
+  const expectedLinkedPrReferences = fetchOpenLinkedPrReferences(
+    repository,
+    args.issue,
+  );
   const result = evaluateResumeClaimRouting(
     {
       events: comments.map((comment) => ({
@@ -186,7 +225,10 @@ function runCli() {
             .trim()
             .toLowerCase(),
         ),
-      isForcedHandoffEnabled: () => forcedHandoffEnabled,
+      isForcedHandoffEnabled: buildForcedHandoffEnabledGate({
+        forcedHandoffEnabled,
+        expectedLinkedPrReferences,
+      }),
       isAuthorizedForcedHandoff: (forcedBy) =>
         isAuthorizedForcedHandoffActor(
           owner,
@@ -651,6 +693,78 @@ function toSecond(iso) {
 function normalizeToken(value) {
   const token = String(value ?? '').trim();
   return token.length > 0 ? token : '';
+}
+/**
+ * Resolve the set of open pull requests that back this issue's claim, as
+ * normalized PR references. Uses a precise signal — a PR connected to the
+ * issue via `CONNECTED_EVENT` (reconciled against later
+ * `DISCONNECTED_EVENT`s) that is currently `OPEN` — rather than a bare
+ * cross-reference/mention, so an unrelated open PR merely mentioning the
+ * issue does not falsely block a legitimate `issue-only` forced handoff.
+ * Fails safe to an empty set (no enforcement) on any lookup error.
+ */
+function fetchOpenLinkedPrReferences(repository, issueNumber) {
+  const references = new Set();
+  const [owner, repo] = repository.split('/');
+  if (!owner || !repo || !Number.isInteger(issueNumber)) {
+    return references;
+  }
+  const query =
+    'query($owner:String!,$repo:String!,$number:Int!){' +
+    'repository(owner:$owner,name:$repo){issue(number:$number){' +
+    'timelineItems(first:100,itemTypes:[CONNECTED_EVENT,DISCONNECTED_EVENT])' +
+    '{nodes{__typename ' +
+    '... on ConnectedEvent{subject{__typename ... on PullRequest{number state}}} ' +
+    '... on DisconnectedEvent{subject{__typename ... on PullRequest{number}}}' +
+    '}}}}}';
+  let data;
+  try {
+    data = ghJson([
+      'api',
+      'graphql',
+      '-f',
+      `query=${query}`,
+      '-f',
+      `owner=${owner}`,
+      '-f',
+      `repo=${repo}`,
+      '-F',
+      `number=${issueNumber}`,
+    ]);
+  } catch {
+    return references;
+  }
+  const nodes = data?.data?.repository?.issue?.timelineItems?.nodes;
+  if (!Array.isArray(nodes)) {
+    return references;
+  }
+  // The last connect/disconnect event per PR wins (timeline is chronological).
+  const connected = new Map();
+  const states = new Map();
+  for (const node of nodes) {
+    const record = node;
+    const subject = record?.subject;
+    if (subject?.__typename !== 'PullRequest') {
+      continue;
+    }
+    const number =
+      typeof subject.number === 'number' ? subject.number : Number.NaN;
+    if (!Number.isInteger(number)) {
+      continue;
+    }
+    if (record?.__typename === 'ConnectedEvent') {
+      connected.set(number, true);
+      states.set(number, String(subject.state ?? ''));
+    } else if (record?.__typename === 'DisconnectedEvent') {
+      connected.set(number, false);
+    }
+  }
+  for (const [number, isConnected] of connected) {
+    if (isConnected && states.get(number) === 'OPEN') {
+      references.add(normalizeLinkedPrReference(number));
+    }
+  }
+  return references;
 }
 function ghJson(args) {
   return JSON.parse(runGh(args).trim() || '[]');

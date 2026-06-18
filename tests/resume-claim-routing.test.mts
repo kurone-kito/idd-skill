@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { evaluateResumeClaimRouting } from '../src/scripts/resume-claim-routing.mts';
+import {
+  buildForcedHandoffEnabledGate,
+  evaluateResumeClaimRouting,
+} from '../src/scripts/resume-claim-routing.mts';
 
 function trusted(logins: string[]) {
   const set = new Set(logins);
@@ -515,4 +518,111 @@ test('baselines the competing-claim search by timestamp regardless of event orde
 
   assert.equal(result.state, 'disputed');
   assert.equal(result.evidence.later_competing_claim?.claim_id, 'claim-race');
+});
+
+// Forced-handoff events whose marker scope/linkedPr can be varied to test
+// the buildForcedHandoffEnabledGate behavior end-to-end.
+function forcedHandoffEvents(scope: {
+  contextScope: string;
+  linkedPr?: string;
+}) {
+  const payload = {
+    oldAgentId: 'copilot',
+    oldClaimId: 'claim-old',
+    newAgentId: 'copilot',
+    newClaimId: 'claim-new',
+    branch: 'issue/11-task',
+    forcedBy: 'maintainer',
+    reason: 'handoff',
+    timestamp: '2026-05-12T10:01:00Z',
+    ...scope,
+  };
+  return [
+    {
+      createdAt: '2026-05-12T10:00:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/11-task -->',
+    },
+    {
+      createdAt: '2026-05-12T10:01:00Z',
+      author: { login: 'maintainer' },
+      body: `<!-- forced-handoff: ${JSON.stringify(payload)} -->\n\n_maintainer: forced handoff — IDD automation marker. Do not edit._`,
+    },
+  ];
+}
+
+const route = (
+  events: ReturnType<typeof forcedHandoffEvents>,
+  gate: ReturnType<typeof buildForcedHandoffEnabledGate>,
+) =>
+  evaluateResumeClaimRouting(
+    { claimId: 'claim-new', now: '2026-05-12T11:00:00Z', events },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: gate,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+    },
+  );
+
+test('gate blocks an issue-only forced handoff that displaces a PR-backed claim', () => {
+  const gate = buildForcedHandoffEnabledGate({
+    forcedHandoffEnabled: true,
+    expectedLinkedPrReferences: new Set(['77']),
+  });
+  const result = route(
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+    gate,
+  );
+  // Handoff not honored: the original claim stays active, successor rejected.
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+});
+
+test('gate honors an issue-plus-pr forced handoff naming the backing PR', () => {
+  const gate = buildForcedHandoffEnabledGate({
+    forcedHandoffEnabled: true,
+    expectedLinkedPrReferences: new Set(['77']),
+  });
+  const result = route(
+    forcedHandoffEvents({ contextScope: 'issue-plus-pr', linkedPr: '77' }),
+    gate,
+  );
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.active_claim?.claim_id, 'claim-new');
+});
+
+test('gate rejects an issue-plus-pr handoff naming a different PR', () => {
+  const gate = buildForcedHandoffEnabledGate({
+    forcedHandoffEnabled: true,
+    expectedLinkedPrReferences: new Set(['77']),
+  });
+  const result = route(
+    forcedHandoffEvents({ contextScope: 'issue-plus-pr', linkedPr: '88' }),
+    gate,
+  );
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
+});
+
+test('gate honors an issue-only handoff when no open linked PR backs the claim', () => {
+  const gate = buildForcedHandoffEnabledGate({
+    forcedHandoffEnabled: true,
+    expectedLinkedPrReferences: new Set(),
+  });
+  const result = route(
+    forcedHandoffEvents({ contextScope: 'issue-only' }),
+    gate,
+  );
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.active_claim?.claim_id, 'claim-new');
+});
+
+test('gate never honors a forced handoff when forced-handoff mode is disabled', () => {
+  const gate = buildForcedHandoffEnabledGate({
+    forcedHandoffEnabled: false,
+    expectedLinkedPrReferences: new Set(),
+  });
+  const result = route(
+    forcedHandoffEvents({ contextScope: 'issue-plus-pr', linkedPr: '77' }),
+    gate,
+  );
+  assert.equal(result.active_claim?.claim_id, 'claim-old');
 });
