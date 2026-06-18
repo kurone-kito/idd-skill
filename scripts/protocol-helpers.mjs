@@ -452,15 +452,35 @@ export function renderReviewBaselineMarker(payload) {
     `_${agentId}: critique baseline — IDD automation marker. Do not edit._`,
   ].join('\n');
 }
-function matchCheckSelectorLocal(name, selector) {
+function matchCheckSelectorLocal(name, selector, matchMode) {
   const n = String(name ?? '').trim();
   const s = String(selector ?? '').trim();
   if (!n || !s) return false;
-  if (s.includes('*')) {
+  // An explicit matchMode wins; otherwise infer glob from a `*` in the
+  // selector (the legacy behavior every existing two-argument caller relies
+  // on, e.g. waiver-selector vs check-name coverage matching).
+  const useGlob =
+    matchMode === undefined ? s.includes('*') : matchMode === 'glob';
+  if (useGlob) {
     const source = s.replace(/[|\\{}()[\]^$+?.]/g, '\\$&').replace(/\*/g, '.*');
     return new RegExp(`^${source}$`).test(n);
   }
   return n === s;
+}
+/**
+ * True when `target` matches any configured waivable selector, honoring each
+ * selector's own `matchMode`. Mirrors the creation-path gate in
+ * `planExternalCheckWaiver` so the consumption and creation paths agree on
+ * which checks a waiver may cover.
+ */
+function matchesConfiguredWaivableSelector(target, waivableSelectors) {
+  return waivableSelectors.some((sel) =>
+    matchCheckSelectorLocal(
+      target,
+      sel?.selector,
+      sel?.matchMode === 'glob' ? 'glob' : 'exact',
+    ),
+  );
 }
 export function summarizeExternalCheckWaivers(
   comments,
@@ -469,6 +489,7 @@ export function summarizeExternalCheckWaivers(
     activeClaimId = '',
     trustedMarkerLogins = [],
     now = '',
+    waivableSelectors = null,
   } = {},
 ) {
   const trustedSet = new Set(normalizeTrustedMarkerLogins(trustedMarkerLogins));
@@ -481,6 +502,7 @@ export function summarizeExternalCheckWaivers(
   const wrongClaim = [];
   const unauthorized = [];
   const malformed = [];
+  const notConfigured = [];
   for (const comment of comments ?? []) {
     const body = String(comment?.body ?? '');
     // Prefilter on a marker-start, case-insensitive match aligned with
@@ -531,6 +553,24 @@ export function summarizeExternalCheckWaivers(
       });
       continue;
     }
+    // When the policy declares its waivable surface, a valid waiver still only
+    // counts when its selector names a configured-waivable check; otherwise it
+    // is reported but never folds a check in. A null/undefined list disables
+    // the gate (legacy callers), an empty list waives nothing.
+    if (
+      Array.isArray(waivableSelectors) &&
+      !matchesConfiguredWaivableSelector(
+        parsed.checkSelector,
+        waivableSelectors,
+      )
+    ) {
+      notConfigured.push({
+        authorLogin,
+        checkSelector: parsed.checkSelector,
+        expiresAt: parsed.expiresAt,
+      });
+      continue;
+    }
     valid.push({
       authorLogin,
       checkSelector: parsed.checkSelector,
@@ -538,7 +578,15 @@ export function summarizeExternalCheckWaivers(
       expiresAt: parsed.expiresAt,
     });
   }
-  return { valid, expired, wrongHead, wrongClaim, unauthorized, malformed };
+  return {
+    valid,
+    expired,
+    wrongHead,
+    wrongClaim,
+    unauthorized,
+    malformed,
+    notConfigured,
+  };
 }
 export function parseExternalCheckWaiverComment(body, createdAt) {
   const match = body
@@ -2395,7 +2443,7 @@ export function summarizeRequiredChecks(
   checks = [],
   branchRules = [],
   branchProtection = {},
-  { waivers = null } = {},
+  { waivers = null, waivableSelectors = null } = {},
 ) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(
     branchRules,
@@ -2415,7 +2463,14 @@ export function summarizeRequiredChecks(
     const state = String(check.state ?? '').toUpperCase();
     const coveredByWaiver =
       !SUCCESS_STATES.has(state) &&
-      validWaivers.some((w) => matchCheckSelectorLocal(name, w.checkSelector));
+      validWaivers.some((w) =>
+        matchCheckSelectorLocal(name, w.checkSelector),
+      ) &&
+      // The check must also sit on the policy's waivable surface. A
+      // null/undefined list keeps the legacy behavior with no gate; an empty
+      // configured list covers nothing.
+      (!Array.isArray(waivableSelectors) ||
+        matchesConfiguredWaivableSelector(name, waivableSelectors));
     return {
       name,
       state,
@@ -3179,14 +3234,17 @@ export function buildPreMergeReadinessSummary(
     expectedClaimId: options.expectedClaimId,
     expectedAgentId: options.expectedAgentId,
   });
+  const waivableCheckSelectors = options.waivableCheckSelectors ?? null;
   const waiverEvidence = summarizeExternalCheckWaivers(comments, {
     prHeadSha,
     activeClaimId: claim.activeClaim?.claimId ?? options.activeClaimId ?? '',
     trustedMarkerLogins,
     now,
+    waivableSelectors: waivableCheckSelectors,
   });
   const ci = summarizeRequiredChecks(checks, branchRules, branchProtection, {
     waivers: waiverEvidence,
+    waivableSelectors: waivableCheckSelectors,
   });
   const dispositionEvidence = options.includeDispositionEvidence
     ? summarizeDispositionEvidenceForGate(

@@ -772,6 +772,7 @@ const preMergeReadinessFixture = {
     wrongClaim: [],
     unauthorized: [],
     malformed: [],
+    notConfigured: [],
   },
   trustedMarkerActors: ['copilot-cli'],
   trustedMarkerActorsSource: 'config',

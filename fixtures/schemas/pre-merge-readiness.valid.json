@@ -170,6 +170,7 @@
     "wrongHead": [],
     "wrongClaim": [],
     "unauthorized": [],
-    "malformed": []
+    "malformed": [],
+    "notConfigured": []
   }
 }
