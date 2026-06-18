@@ -1328,9 +1328,14 @@ function stripIndentedCodeBlocksPreservingLines(content) {
     // code) even when indented under a parent item.
     const looksLikeListItem = /^\s*(?:[-*+]\s|\d+[.)]\s)/.test(line);
     if (isBlank) {
+      // A blank line does not end an open indented code block: per
+      // CommonMark §4.4 a code block is one or more indented chunks
+      // separated by blank lines, so `inBlock` must survive the blank.
+      // The block only ends when a later non-indented, non-blank line
+      // appears (handled by the fall-through below). Leaving `inBlock`
+      // set keeps a post-blank indented list-marker line as code.
       out.push(line);
       prevBlank = true;
-      inBlock = false;
       continue;
     }
     if (indented && inBlock) {
@@ -1390,11 +1395,33 @@ export function containsExampleRepoBackLink(readmeContent, repoSlug) {
     const label = explicit.length > 0 ? explicit : shortcut;
     if (label.length > 0) imageLabels.add(label.toLowerCase());
   }
+  // A reference *link* (`[text][id]` full or `[id][]` collapsed; the
+  // leading `!` excludes images) shares the `[id]: <url>` definition with
+  // navigation, so a label used by a link must keep its definition even
+  // when an image also references it. Collect link labels and drop only
+  // definitions for labels referenced *exclusively* by images.
+  const linkLabels = new Set();
+  const refLinkPattern = /(?<!!)\[[^\]]*\]\[([^\]]*)\]/g;
+  let linkMatch;
+  // biome-ignore lint/suspicious/noAssignInExpressions: canonical regex-exec iteration idiom
+  while ((linkMatch = refLinkPattern.exec(imagedStripped)) !== null) {
+    const explicit = linkMatch[1]?.trim() ?? '';
+    // Collapsed form `[id][]` carries the label in the first bracket;
+    // recover it from the full match when the second bracket is empty.
+    const label =
+      explicit.length > 0
+        ? explicit
+        : (linkMatch[0].match(/^\[([^\]]*)\]\[\]$/)?.[1]?.trim() ?? '');
+    if (label.length > 0) linkLabels.add(label.toLowerCase());
+  }
+  const dropLabels = new Set(
+    [...imageLabels].filter((label) => !linkLabels.has(label)),
+  );
   const stripped =
-    imageLabels.size === 0
+    dropLabels.size === 0
       ? imagedStripped
       : imagedStripped.replace(/^ {0,3}\[([^\]]+)\]:.*$/gm, (full, label) =>
-          imageLabels.has(label.trim().toLowerCase()) ? '' : full,
+          dropLabels.has(label.trim().toLowerCase()) ? '' : full,
         );
   // Absolute http(s) URLs.
   const urlPattern = /https?:\/\/[^\s<>)\]"']+/gi;
