@@ -8,6 +8,7 @@
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { deriveGhHttpStatus } from './gh-http-status.mts';
 
 interface NormalizedIssue {
   number: number;
@@ -406,10 +407,25 @@ function buildIssueLoader(
   return async function loadIssue(
     issueNumber: number,
   ): Promise<IssueLike | null> {
-    const data = ghJson(
-      ['api', `repos/${owner}/${repo}/issues/${issueNumber}`, '--jq', '.'],
-      { allowStatuses: [1] },
-    ) as IssueLike | null;
+    let data: IssueLike | null;
+    try {
+      data = ghJson([
+        'api',
+        `repos/${owner}/${repo}/issues/${issueNumber}`,
+        '--jq',
+        '.',
+      ]) as IssueLike | null;
+    } catch (error) {
+      // Fail closed: only a genuine 404 means the issue is absent. Auth,
+      // rate-limit, network, and unknown failures (status null) must
+      // propagate so discovery aborts instead of marking the issue
+      // not-found. `gh` exits 1 for every HTTP error, so derive the real
+      // status from its output rather than the process exit code.
+      if (deriveGhHttpStatus(error) === 404) {
+        return null;
+      }
+      throw error;
+    }
     if (!data) {
       return null;
     }
@@ -422,31 +438,15 @@ function buildIssueLoader(
   };
 }
 
-function ghText(
-  args: string[],
-  options: { allowStatuses?: number[] } = {},
-): string {
-  const { allowStatuses = [] } = options;
-  try {
-    return execFileSync('gh', args, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
-  } catch (error) {
-    if (
-      allowStatuses.includes((error as { status?: number }).status as number)
-    ) {
-      return '';
-    }
-    throw error;
-  }
+function ghText(args: string[]): string {
+  return execFileSync('gh', args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
 }
 
-function ghJson(
-  args: string[],
-  options: { allowStatuses?: number[] } = {},
-): unknown {
-  const text = ghText(args, options);
+function ghJson(args: string[]): unknown {
+  const text = ghText(args);
   if (!text) {
     return null;
   }

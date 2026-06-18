@@ -6,7 +6,16 @@ import {
   extractBlockedByIssueNumbers,
   extractBlockedByRoadmapMarkers,
   extractDependencyIssueNumbers,
+  isInaccessibleIssueLookupError,
 } from '../src/scripts/discover-readiness-check.mts';
+
+// Shape of a wrapped runGh failure: process exit code 1 with the true
+// HTTP status carried in stderr.
+const ghError = (stderr: string) =>
+  Object.assign(new Error(`gh api ... failed: ${stderr}`), {
+    status: 1,
+    stderr,
+  });
 
 test('extractors parse blocked-by references, roadmap markers, and dependencies', () => {
   const body = `
@@ -259,5 +268,46 @@ test('bubbles non-recoverable loader failures', async () => {
       findRoadmapsByMarker: async () => [],
     }),
     /network timeout/,
+  );
+});
+
+test('isInaccessibleIssueLookupError downgrades only visibility 403/410/451', () => {
+  // Visibility / integration-permission 403, 410, 451 -> inaccessible
+  assert.equal(
+    isInaccessibleIssueLookupError(
+      ghError('Resource not accessible by integration (HTTP 403)'),
+    ),
+    true,
+  );
+  assert.equal(
+    isInaccessibleIssueLookupError(
+      ghError('Repository access blocked due to visibility (HTTP 451)'),
+    ),
+    true,
+  );
+});
+
+test('isInaccessibleIssueLookupError fails closed on auth, rate-limit, and 404', () => {
+  // 403 secondary-rate-limit must abort, not downgrade.
+  assert.equal(
+    isInaccessibleIssueLookupError(
+      ghError('You have exceeded a secondary rate limit (HTTP 403)'),
+    ),
+    false,
+  );
+  // 401 auth failure must abort.
+  assert.equal(
+    isInaccessibleIssueLookupError(ghError('Bad credentials (HTTP 401)')),
+    false,
+  );
+  // A genuine 404 is handled as not-found upstream, never inaccessible.
+  assert.equal(
+    isInaccessibleIssueLookupError(ghError('Not Found (HTTP 404)')),
+    false,
+  );
+  // No derivable status -> fail closed (not inaccessible -> abort upstream).
+  assert.equal(
+    isInaccessibleIssueLookupError(ghError('connect ETIMEDOUT')),
+    false,
   );
 });

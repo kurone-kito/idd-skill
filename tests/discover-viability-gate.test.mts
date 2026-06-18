@@ -130,6 +130,19 @@ test('fails autonomous completion when external coordination is required', () =>
   assert.ok(result.failedCriteria.includes('autonomous_completion'));
 });
 
+test('evaluateDiscoverViability fails closed when a lookup aborts', async () => {
+  // A non-404 gh failure (auth / rate-limit / network) propagates out of
+  // loadIssue instead of being swallowed into a silent issue_not_found.
+  await assert.rejects(
+    evaluateDiscoverViability([900], {
+      loadIssue: async () => {
+        throw new Error('gh api ... failed: Bad credentials (HTTP 401)');
+      },
+    }),
+    /Bad credentials/,
+  );
+});
+
 test('evaluateDiscoverViability groups viable and discarded candidates', async () => {
   const issues = new Map([
     [

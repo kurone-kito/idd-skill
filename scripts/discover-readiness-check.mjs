@@ -12,6 +12,7 @@ import {
   buildAuthoringLabelWarning,
   resolveAuthoringGuardPolicy,
 } from './authoring-label-guard.mjs';
+import { deriveGhHttpStatus } from './gh-http-status.mjs';
 
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
@@ -441,12 +442,19 @@ function buildIssueLoader(owner, repo) {
       '.',
     ];
     try {
-      const result = runGh(args, { allowStatuses: [404] }).trim();
+      const result = runGh(args).trim();
       if (!result || result === 'null') {
         return null;
       }
       return JSON.parse(result);
     } catch (error) {
+      // `gh` exits 1 for every HTTP error, so derive the real status from
+      // its output. Fail closed: a genuine 404 maps to issue_not_found,
+      // a visibility 403/410/451 maps to issue_inaccessible, and auth /
+      // rate-limit / network / unknown failures propagate to abort.
+      if (deriveGhHttpStatus(error) === 404) {
+        return null;
+      }
       if (isInaccessibleIssueLookupError(error)) {
         return INACCESSIBLE_ISSUE_SENTINEL;
       }
@@ -504,8 +512,7 @@ function loadPolicy(policyPath) {
     return {};
   }
 }
-function runGh(args, options = {}) {
-  const { allowStatuses = [] } = options;
+function runGh(args) {
   try {
     return execFileSync('gh', args, {
       encoding: 'utf8',
@@ -514,34 +521,37 @@ function runGh(args, options = {}) {
   } catch (error) {
     const rawStatus = error?.status;
     const status = typeof rawStatus === 'number' ? rawStatus : null;
-    if (status !== null && allowStatuses.includes(status)) {
-      return '';
-    }
     const stderr = String(error?.stderr ?? '').trim();
+    const stdout = String(error?.stdout ?? '').trim();
     const prefix = `gh ${args.join(' ')}`;
+    // Preserve stderr and stdout on the wrapped error so deriveGhHttpStatus
+    // can recover the real HTTP status; the process exit status is always
+    // 1 and is kept only for diagnostics.
     const wrapped = new Error(
       stderr ? `${prefix} failed: ${stderr}` : `${prefix} failed`,
     );
     wrapped.status = status;
     wrapped.stderr = stderr;
+    wrapped.stdout = stdout;
     throw wrapped;
   }
 }
 function isInaccessibleIssue(value) {
   return value?.__iddLookupStatus === 'inaccessible';
 }
-function isInaccessibleIssueLookupError(error) {
-  if (!error) {
+export function isInaccessibleIssueLookupError(error) {
+  const status = deriveGhHttpStatus(error);
+  // Only a true 403/410/451 can be an inaccessible-issue downgrade.
+  if (status === null || !INACCESSIBLE_HTTP_STATUSES.has(status)) {
     return false;
   }
-  const rawStatus = error.status;
-  const status = typeof rawStatus === 'number' ? rawStatus : null;
-  if (status !== null && INACCESSIBLE_HTTP_STATUSES.has(status)) {
-    return true;
-  }
+  // Among those, downgrade only on visibility / integration-permission
+  // wording. A 403 secondary-rate-limit (or an auth failure that somehow
+  // surfaces as 403) must abort instead of being downgraded, so the regex
+  // deliberately excludes generic "forbidden" / "requires authentication".
   const candidate = error;
   const stderr = String(candidate.stderr ?? candidate.message ?? '');
-  return /resource not accessible|forbidden|requires authentication|visibility/i.test(
+  return /resource not accessible|not accessible by integration|visibility/i.test(
     stderr,
   );
 }
