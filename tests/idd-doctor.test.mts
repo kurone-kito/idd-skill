@@ -6,6 +6,7 @@ import { test } from 'node:test';
 
 import {
   backLinkPatternFor,
+  checkProjectCommands,
   classifyBacklog,
   classifyPrimaryHead,
   classifyWorktreeHeadFinding,
@@ -1418,4 +1419,81 @@ test('decodeGithubReadmeBase64 rejects literal jq-null and non-multiple-of-4 len
   // Base64 strings are always a multiple of 4 chars (with padding).
   assert.equal(decodeGithubReadmeBase64('abc'), null);
   assert.equal(decodeGithubReadmeBase64('abcde'), null);
+});
+
+// Minimal Project commands table (parseProjectCommandRows reads
+// `| **name** | `cmd` |` rows). At least one non-`true` value avoids the
+// all-no-op warning path.
+const PROJECT_COMMANDS_TABLE = [
+  '| Name | Commands |',
+  '| --- | --- |',
+  '| **fix-validate** | `npx dprint fmt` |',
+  '| **pre-push-validate** | `npx dprint check` |',
+  '| **post-fix-validate** | `npx dprint fmt` |',
+  '| **install-deps** | `true` |',
+  '',
+].join('\n');
+
+function makeOverviewFixture(files: Record<string, string>): string {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-pc-'));
+  mkdirSync(join(dir, '.github/instructions'), { recursive: true });
+  for (const [name, text] of Object.entries(files)) {
+    writeFileSync(join(dir, '.github/instructions', name), text);
+  }
+  return dir;
+}
+
+const emptyReport = (root: string) => ({
+  root,
+  errors: [] as string[],
+  warnings: [] as string[],
+  passes: [] as string[],
+});
+
+test('checkProjectCommands reads the table from idd-overview-core', () => {
+  const dir = makeOverviewFixture({
+    'idd-overview-core.instructions.md': PROJECT_COMMANDS_TABLE,
+  });
+  try {
+    const report = emptyReport(dir);
+    const commands = checkProjectCommands(dir, report);
+    assert.ok(commands instanceof Map);
+    assert.equal(commands?.get('fix-validate'), 'npx dprint fmt');
+    assert.deepEqual(report.errors, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkProjectCommands falls back to idd-overview on a router/core split', () => {
+  // core is a router with no commands table; the table lives in idd-overview.
+  const dir = makeOverviewFixture({
+    'idd-overview-core.instructions.md':
+      '# Router\n\nNo commands table here.\n',
+    'idd-overview.instructions.md': PROJECT_COMMANDS_TABLE,
+  });
+  try {
+    const report = emptyReport(dir);
+    const commands = checkProjectCommands(dir, report);
+    assert.ok(commands instanceof Map);
+    assert.equal(commands?.get('install-deps'), 'true');
+    assert.deepEqual(report.errors, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkProjectCommands errors when no overview file carries the table', () => {
+  const dir = makeOverviewFixture({
+    'idd-overview-core.instructions.md': '# Router\n\nNo table.\n',
+  });
+  try {
+    const report = emptyReport(dir);
+    const commands = checkProjectCommands(dir, report);
+    assert.equal(commands, null);
+    assert.equal(report.errors.length, 1);
+    assert.match(report.errors[0], /cannot find a Project commands table/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
