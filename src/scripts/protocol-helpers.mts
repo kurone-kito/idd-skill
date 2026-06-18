@@ -1285,6 +1285,86 @@ export function planLiveStatusDigestUpsert(
   };
 }
 
+/** Minimal upsert-plan shape consumed by {@link applyDigestUpsert}. */
+export interface DigestUpsertPlanLike {
+  action: string;
+  body: string | null;
+  commentId?: string | number | null;
+  url?: string | null;
+}
+
+/** Result of a comment create/update GitHub mutation. */
+export interface DigestCommentMutationResult {
+  id?: string | number | null;
+  html_url?: string | null;
+  url?: string | null;
+}
+
+/** Injected side effects for {@link applyDigestUpsert}. */
+export interface DigestUpsertIo<P extends DigestUpsertPlanLike> {
+  skipClaimCheck: boolean;
+  refetchAndPlan: () => P;
+  assertClaim: () => void;
+  createComment: (body: string | null) => DigestCommentMutationResult;
+  updateComment: (
+    commentId: string | number,
+    body: string | null,
+  ) => DigestCommentMutationResult;
+}
+
+/** Outcome of {@link applyDigestUpsert}. */
+export interface DigestUpsertOutcome<P extends DigestUpsertPlanLike> {
+  planned: P;
+  outcome: 'duplicate' | 'created' | 'updated' | 'noop';
+  commentId?: string | number | null;
+  url?: string | null;
+}
+
+/**
+ * Orchestrate the apply-time live-status-digest upsert: re-fetch and
+ * re-plan against the latest comments, then revalidate the active claim
+ * immediately before the create/update mutation, so a claim release or
+ * takeover that lands during the replan's network fetch is caught before
+ * the write. The side-effecting I/O is injected so the ordering invariant
+ * — replan, then claim check, then mutation, and no write when the claim
+ * check throws — is unit-testable apart from the live `gh` calls.
+ */
+export function applyDigestUpsert<P extends DigestUpsertPlanLike>(
+  io: DigestUpsertIo<P>,
+): DigestUpsertOutcome<P> {
+  const planned = io.refetchAndPlan();
+  if (planned.action === 'duplicate') {
+    return { planned, outcome: 'duplicate' };
+  }
+  if (!io.skipClaimCheck) {
+    io.assertClaim();
+  }
+  if (planned.action === 'create') {
+    const created = io.createComment(planned.body);
+    return {
+      planned,
+      outcome: 'created',
+      commentId: created.id ?? null,
+      url: created.html_url ?? created.url ?? null,
+    };
+  }
+  if (planned.action === 'update') {
+    if (planned.commentId === undefined || planned.commentId === null) {
+      throw new Error(
+        'cannot update digest because the current comment id is missing',
+      );
+    }
+    const updated = io.updateComment(planned.commentId, planned.body);
+    return {
+      planned,
+      outcome: 'updated',
+      commentId: updated.id ?? planned.commentId,
+      url: updated.html_url ?? updated.url ?? planned.url ?? null,
+    };
+  }
+  return { planned, outcome: 'noop' };
+}
+
 export function unsafeTextReason(body: string): string | null {
   for (const rule of UNSAFE_TEXT_RULES) {
     if (rule.pattern.test(body)) {

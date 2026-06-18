@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  applyDigestUpsert,
   findLiveStatusDigestComments,
   LIVE_STATUS_DIGEST_MARKER,
   planLiveStatusDigestUpsert,
@@ -131,4 +132,82 @@ test('does not modify operational marker comments during digest operations', () 
   assert.equal(plan.action, 'update');
   assert.equal(plan.commentId, 201);
   assert.notEqual(plan.commentId, 200);
+});
+
+test('applyDigestUpsert revalidates the claim after the replan and before the mutation', () => {
+  const calls: string[] = [];
+  const result = applyDigestUpsert({
+    skipClaimCheck: false,
+    refetchAndPlan: () => {
+      calls.push('replan');
+      return { action: 'create', body: 'digest body', duplicates: [] };
+    },
+    assertClaim: () => {
+      calls.push('assertClaim');
+    },
+    createComment: (body) => {
+      calls.push(`create:${body}`);
+      return { id: 42, html_url: 'https://example.test/c/42' };
+    },
+    updateComment: () => {
+      calls.push('update');
+      return {};
+    },
+  });
+  assert.deepEqual(calls, ['replan', 'assertClaim', 'create:digest body']);
+  assert.equal(result.outcome, 'created');
+  assert.equal(result.commentId, 42);
+  assert.equal(result.url, 'https://example.test/c/42');
+});
+
+test('applyDigestUpsert aborts the write when the claim check throws after the replan', () => {
+  const calls: string[] = [];
+  assert.throws(
+    () =>
+      applyDigestUpsert({
+        skipClaimCheck: false,
+        refetchAndPlan: () => {
+          calls.push('replan');
+          return { action: 'update', body: 'x', commentId: 7, duplicates: [] };
+        },
+        assertClaim: () => {
+          calls.push('assertClaim');
+          throw new Error('claim lost: superseded by another session');
+        },
+        createComment: () => {
+          calls.push('create');
+          return {};
+        },
+        updateComment: () => {
+          calls.push('update');
+          return {};
+        },
+      }),
+    /claim lost/,
+  );
+  // The replan ran, the claim check ran and threw, and crucially NO
+  // create/update mutation happened — a claim change between the replan and
+  // the write aborts the apply.
+  assert.deepEqual(calls, ['replan', 'assertClaim']);
+});
+
+test('applyDigestUpsert skips the claim check and mutation on a duplicate plan', () => {
+  const calls: string[] = [];
+  const result = applyDigestUpsert({
+    skipClaimCheck: false,
+    refetchAndPlan: () => ({ action: 'duplicate', body: null, duplicates: [] }),
+    assertClaim: () => {
+      calls.push('assertClaim');
+    },
+    createComment: () => {
+      calls.push('create');
+      return {};
+    },
+    updateComment: () => {
+      calls.push('update');
+      return {};
+    },
+  });
+  assert.equal(result.outcome, 'duplicate');
+  assert.deepEqual(calls, []);
 });
