@@ -281,6 +281,12 @@ test('isInaccessibleIssueLookupError downgrades only visibility 403/410/451', ()
   );
   assert.equal(
     isInaccessibleIssueLookupError(
+      ghError('Resource not accessible by integration (HTTP 410)'),
+    ),
+    true,
+  );
+  assert.equal(
+    isInaccessibleIssueLookupError(
       ghError('Repository access blocked due to visibility (HTTP 451)'),
     ),
     true,
