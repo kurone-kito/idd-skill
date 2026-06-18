@@ -194,8 +194,15 @@ catches parallel-session concurrency before a new claim comment is posted.
 
    ```sh
    gh api "repos/{owner}/{repo}/git/matching-refs/heads/issue/<number>-" \
-     --jq '.[].ref'
+     --jq '.[].ref | sub("^refs/heads/"; "")'
    ```
+
+   The Refs API returns fully-qualified `refs/heads/issue/<number>-…`
+   refs; `sub("^refs/heads/"; "")` strips that prefix so each result
+   compares directly against the short `issue/<number>-…` form stored in a
+   claim `branch` field. Without normalizing it, an inheritable or
+   active-claim branch reads as a non-corresponding ref and trips a false
+   concurrent-session reroute or a false orphan-branch hold below.
 
 3. **Collision action tree**:
 
@@ -227,10 +234,12 @@ catches parallel-session concurrency before a new claim comment is posted.
 
 ## Claim execution
 
-Skip this section if pre-check (c) classified the issue as already
-claimed by this current session. Keep the previously recorded `{claim-id}` and
-branch, then proceed directly to Claim verification without posting a new
-claim.
+Skip the claim-posting steps in this section if pre-check (c) classified
+the issue as already claimed by this current session: keep the previously
+recorded `{claim-id}` and branch and post no new claim. The
+`## Heartbeat posting` rules below are a separate top-level section and
+still apply whenever you extend the active claim's stale clock; then
+proceed to Claim verification.
 
 Determine `{branch-name}`:
 
@@ -268,7 +277,7 @@ written format below stays the canonical fallback:
 _{agent-id}: issue claim — IDD automation marker. Do not edit._
 ```
 
-### Heartbeat posting
+## Heartbeat posting
 
 When posting a heartbeat (i.e., when the issue is already claimed by this current
 session and you are extending the active claim's stale clock), copy the
@@ -287,13 +296,15 @@ the full issue comment stream and parse the active claim in
 chronological order using the shared claim-state rules. Apply all
 race-safe checks below:
 
-1. Build the same-second contender set from trusted `claimed-by` markers
-   that share your claim event's `created_at` second and have different
-   `{claim-id}` values.
+1. Build the same-second contender set from **all** trusted `claimed-by`
+   markers (including your own) that share your claim event's `created_at`
+   second.
 2. If that set has two or more contenders, the winner is the
-   lexicographically earlier `{claim-id}` (case-sensitive ASCII compare).
-   This race-safe tie-break extends the shared parsing rules for this
-   verification step.
+   lexicographically earliest `{claim-id}` (case-sensitive ASCII compare)
+   among them. This race-safe tie-break extends the shared parsing rules
+   for this verification step, and a two-way same-second collision (your
+   marker plus one competitor) is resolved here rather than slipping past
+   as a single-element set.
 3. Verify that the active claim now uses **your** `{claim-id}` after the
    same-second tie-break is applied.
 4. Verify no trusted competing `claimed-by` with a different
