@@ -95,19 +95,27 @@ that set instead of re-deriving it.
 1. Fetch current checks for the PR:
 
    ```sh
-   gh pr checks {pr-number} --json name,state,bucket,completedAt,link
+   gh pr checks {pr-number} --json name,state,bucket,startedAt,completedAt,link
    ```
 
 2. Normalize check states:
    - treat `skipped`, `neutral`, and `not_applicable` as pass-equivalent
-   - treat `pending`, `requested`, `waiting`, `queued`, and
-     `in_progress` as running
-   - keep `failure`, `cancelled`, and `timed_out` as non-pass
+   - treat `pending`, `requested`, `waiting`, `queued`,
+     `in_progress`, and the Commit-Status `expected` state as running
+   - keep `failure`, `cancelled`, `timed_out`, `action_required`,
+     `startup_failure`, and `stale` as non-pass
 3. Evaluate only checks in the required-check set, and match expected
    check source when the required definition includes an app/integration
    constraint.
 4. Repeat at a reasonable interval until a terminal route in the table
    below is reached.
+
+Measure each running check's `ciWait.runningTimeout` window from its
+server `startedAt`. When `startedAt` is absent (a queued check that has
+not started yet), the running-timeout has not begun: keep polling until
+`startedAt` appears, falling back to the `ciWait.generationTimeout` bound
+for a check that never reports one. Never anchor the window to a client
+clock.
 
 Do not rely on `gh pr checks` command exit code as the gate decision.
 The decision must be based on normalized required-check states.
