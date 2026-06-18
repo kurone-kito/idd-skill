@@ -1333,7 +1333,18 @@ function stripIndentedCodeBlocksPreservingLines(content) {
       inBlock = false;
       continue;
     }
-    if (indented && (prevBlank || inBlock) && !looksLikeListItem) {
+    if (indented && inBlock) {
+      // Continuation of an open indented code block. Per CommonMark §4.4
+      // a list cannot start inside an open indented code block without an
+      // intervening blank line and dedent, so a list-marker-looking line
+      // here stays code and must be blanked too (it is not a list opener).
+      out.push('');
+      prevBlank = false;
+      continue;
+    }
+    if (indented && prevBlank && !looksLikeListItem) {
+      // Opener: an indented, non-list line after a blank line starts a
+      // new indented code block.
       out.push('');
       inBlock = true;
       prevBlank = false;
@@ -1362,7 +1373,29 @@ export function containsExampleRepoBackLink(readmeContent, repoSlug) {
     /!\[[^\]]*\]\(\s*<?[^()\s>]+>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g,
     '',
   );
-  const stripped = imagedStripped;
+  // Reference-style images (`![alt][id]`, collapsed `![id][]`, shortcut
+  // `![id]`) resolve their source through a separate `[id]: <url>`
+  // reference definition, so the definition is an image source, not a
+  // navigation link. Collect every label an image references, then drop
+  // the matching reference-definition lines before the URL scans below.
+  // A real reference *link* (`[text][id]`) keeps its definition and is
+  // still counted.
+  const imageLabels = new Set();
+  const imageRefPattern = /!\[([^\]]*)\](?:\[([^\]]*)\])?/g;
+  let imageMatch;
+  // biome-ignore lint/suspicious/noAssignInExpressions: canonical regex-exec iteration idiom
+  while ((imageMatch = imageRefPattern.exec(imagedStripped)) !== null) {
+    const explicit = imageMatch[2]?.trim() ?? '';
+    const shortcut = imageMatch[1]?.trim() ?? '';
+    const label = explicit.length > 0 ? explicit : shortcut;
+    if (label.length > 0) imageLabels.add(label.toLowerCase());
+  }
+  const stripped =
+    imageLabels.size === 0
+      ? imagedStripped
+      : imagedStripped.replace(/^ {0,3}\[([^\]]+)\]:.*$/gm, (full, label) =>
+          imageLabels.has(label.trim().toLowerCase()) ? '' : full,
+        );
   // Absolute http(s) URLs.
   const urlPattern = /https?:\/\/[^\s<>)\]"']+/gi;
   let match;
