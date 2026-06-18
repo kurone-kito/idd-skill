@@ -2212,6 +2212,7 @@ test('summarizeExternalCheckWaivers: empty comments returns all-empty evidence',
     wrongClaim: [],
     unauthorized: [],
     malformed: [],
+    notConfigured: [],
   });
 });
 
@@ -2553,6 +2554,7 @@ test('summarizeExternalCheckWaivers: non-waiver comments are skipped without err
     wrongClaim: [],
     unauthorized: [],
     malformed: [],
+    notConfigured: [],
   });
 });
 
@@ -2592,6 +2594,272 @@ test('summarizeRequiredChecks: waiver with glob selector covers matching failing
   );
 });
 
+test('summarizeExternalCheckWaivers: validity-passing waiver for a non-waivable check goes to notConfigured', () => {
+  const head = 'e'.repeat(40);
+  // The waiver names "CodeRabbit" but the policy only declares "deploy/prod"
+  // waivable, so it is reported but must not count as valid.
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const result = summarizeExternalCheckWaivers(
+    [
+      {
+        body,
+        author: { login: 'kurone-kito' },
+        createdAt: '2026-05-17T00:00:00Z',
+      },
+    ],
+    {
+      prHeadSha: head,
+      activeClaimId: 'claim-123',
+      trustedMarkerLogins: ['kurone-kito'],
+      now: '2026-05-17T00:00:00Z',
+      waivableSelectors: [{ selector: 'deploy/prod', matchMode: 'exact' }],
+    },
+  );
+  assert.equal(result.valid.length, 0);
+  assert.equal(result.notConfigured.length, 1);
+  assert.equal(result.notConfigured[0].checkSelector, 'CodeRabbit');
+  assert.equal(result.notConfigured[0].authorLogin, 'kurone-kito');
+});
+
+test('summarizeExternalCheckWaivers: waiver naming a configured-waivable check stays valid', () => {
+  const head = 'e'.repeat(40);
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const result = summarizeExternalCheckWaivers(
+    [
+      {
+        body,
+        author: { login: 'kurone-kito' },
+        createdAt: '2026-05-17T00:00:00Z',
+      },
+    ],
+    {
+      prHeadSha: head,
+      activeClaimId: 'claim-123',
+      trustedMarkerLogins: ['kurone-kito'],
+      now: '2026-05-17T00:00:00Z',
+      waivableSelectors: [{ selector: 'CodeRabbit', matchMode: 'exact' }],
+    },
+  );
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.notConfigured.length, 0);
+});
+
+test('summarizeExternalCheckWaivers: a glob waivable selector admits a matching waiver', () => {
+  const head = 'e'.repeat(40);
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const result = summarizeExternalCheckWaivers(
+    [
+      {
+        body,
+        author: { login: 'kurone-kito' },
+        createdAt: '2026-05-17T00:00:00Z',
+      },
+    ],
+    {
+      prHeadSha: head,
+      activeClaimId: 'claim-123',
+      trustedMarkerLogins: ['kurone-kito'],
+      now: '2026-05-17T00:00:00Z',
+      waivableSelectors: [{ selector: 'Code*', matchMode: 'glob' }],
+    },
+  );
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.notConfigured.length, 0);
+});
+
+test('summarizeExternalCheckWaivers: omitting waivableSelectors keeps the legacy no-gate path', () => {
+  const head = 'e'.repeat(40);
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const result = summarizeExternalCheckWaivers(
+    [
+      {
+        body,
+        author: { login: 'kurone-kito' },
+        createdAt: '2026-05-17T00:00:00Z',
+      },
+    ],
+    {
+      prHeadSha: head,
+      activeClaimId: 'claim-123',
+      trustedMarkerLogins: ['kurone-kito'],
+      now: '2026-05-17T00:00:00Z',
+    },
+  );
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.notConfigured.length, 0);
+});
+
+test('summarizeExternalCheckWaivers: an empty waivable list waives nothing', () => {
+  const head = 'e'.repeat(40);
+  const body = makeWaiverComment({ claimId: 'claim-123', headSha: head });
+  const result = summarizeExternalCheckWaivers(
+    [
+      {
+        body,
+        author: { login: 'kurone-kito' },
+        createdAt: '2026-05-17T00:00:00Z',
+      },
+    ],
+    {
+      prHeadSha: head,
+      activeClaimId: 'claim-123',
+      trustedMarkerLogins: ['kurone-kito'],
+      now: '2026-05-17T00:00:00Z',
+      waivableSelectors: [],
+    },
+  );
+  assert.equal(result.valid.length, 0);
+  assert.equal(result.notConfigured.length, 1);
+});
+
+test('summarizeRequiredChecks: a configured-waivable check still folds in', () => {
+  const waivers = {
+    valid: [
+      {
+        authorLogin: 'kurone-kito',
+        checkSelector: 'CodeRabbit',
+        reason: 'rate-limit',
+        expiresAt: '2099-01-01T00:00:00Z',
+      },
+    ],
+    expired: [],
+    wrongHead: [],
+    wrongClaim: [],
+    unauthorized: [],
+    malformed: [],
+    notConfigured: [],
+  };
+  const result = summarizeRequiredChecks(
+    [{ name: 'CodeRabbit', state: 'FAILURE', completedAt: '' }],
+    [],
+    { required_status_checks: { contexts: ['CodeRabbit'] } },
+    {
+      waivers,
+      waivableSelectors: [{ selector: 'CodeRabbit', matchMode: 'exact' }],
+    },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, true);
+  assert.equal(result.status, 'success');
+});
+
+test('summarizeRequiredChecks: a waived but non-waivable check is not covered', () => {
+  const waivers = {
+    valid: [
+      {
+        authorLogin: 'kurone-kito',
+        checkSelector: 'CodeRabbit',
+        reason: 'rate-limit',
+        expiresAt: '2099-01-01T00:00:00Z',
+      },
+    ],
+    expired: [],
+    wrongHead: [],
+    wrongClaim: [],
+    unauthorized: [],
+    malformed: [],
+    notConfigured: [],
+  };
+  const result = summarizeRequiredChecks(
+    [{ name: 'CodeRabbit', state: 'FAILURE', completedAt: '' }],
+    [],
+    { required_status_checks: { contexts: ['CodeRabbit'] } },
+    {
+      waivers,
+      waivableSelectors: [{ selector: 'deploy/prod', matchMode: 'exact' }],
+    },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, undefined);
+  assert.notEqual(result.status, 'success');
+});
+
+test('summarizeRequiredChecks: an empty waivable list covers nothing', () => {
+  const waivers = {
+    valid: [
+      {
+        authorLogin: 'kurone-kito',
+        checkSelector: 'CodeRabbit',
+        reason: 'rate-limit',
+        expiresAt: '2099-01-01T00:00:00Z',
+      },
+    ],
+    expired: [],
+    wrongHead: [],
+    wrongClaim: [],
+    unauthorized: [],
+    malformed: [],
+    notConfigured: [],
+  };
+  const result = summarizeRequiredChecks(
+    [{ name: 'CodeRabbit', state: 'FAILURE', completedAt: '' }],
+    [],
+    { required_status_checks: { contexts: ['CodeRabbit'] } },
+    { waivers, waivableSelectors: [] },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, undefined);
+  assert.notEqual(result.status, 'success');
+});
+
+test('summarizeExternalCheckWaivers: a glob waiver selector overlaps an exact waivable surface', () => {
+  const head = 'f'.repeat(40);
+  // A glob waiver "Code*" against an exact waivable "CodeRabbit" must stay
+  // valid: planExternalCheckWaiver creates such globs, so misbucketing them as
+  // notConfigured would silently drop a legitimate waiver.
+  const body = makeWaiverComment({
+    claimId: 'claim-123',
+    headSha: head,
+    checkSelector: 'Code*',
+  });
+  const result = summarizeExternalCheckWaivers(
+    [
+      {
+        body,
+        author: { login: 'kurone-kito' },
+        createdAt: '2026-05-17T00:00:00Z',
+      },
+    ],
+    {
+      prHeadSha: head,
+      activeClaimId: 'claim-123',
+      trustedMarkerLogins: ['kurone-kito'],
+      now: '2026-05-17T00:00:00Z',
+      waivableSelectors: [{ selector: 'CodeRabbit', matchMode: 'exact' }],
+    },
+  );
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.valid[0].checkSelector, 'Code*');
+  assert.equal(result.notConfigured.length, 0);
+});
+
+test('summarizeRequiredChecks: a glob waiver folds in an exact-configured-waivable check', () => {
+  const waivers = {
+    valid: [
+      {
+        authorLogin: 'kurone-kito',
+        checkSelector: 'Code*',
+        reason: 'rate-limit',
+        expiresAt: '2099-01-01T00:00:00Z',
+      },
+    ],
+    expired: [],
+    wrongHead: [],
+    wrongClaim: [],
+    unauthorized: [],
+    malformed: [],
+    notConfigured: [],
+  };
+  const result = summarizeRequiredChecks(
+    [{ name: 'CodeRabbit', state: 'FAILURE', completedAt: '' }],
+    [],
+    { required_status_checks: { contexts: ['CodeRabbit'] } },
+    {
+      waivers,
+      waivableSelectors: [{ selector: 'CodeRabbit', matchMode: 'exact' }],
+    },
+  );
+  assert.equal(result.checks[0].coveredByWaiver, true);
+  assert.equal(result.status, 'success');
+});
+
 test('buildPreMergeReadinessSummary: waiverEvidence always present and validates against schema', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
   const summary = buildPreMergeReadinessSummary(fixture.input, fixture.options);
@@ -2606,6 +2874,7 @@ test('buildPreMergeReadinessSummary: waiverEvidence always present and validates
   assert.ok(Array.isArray(waiverEvidence.wrongClaim));
   assert.ok(Array.isArray(waiverEvidence.unauthorized));
   assert.ok(Array.isArray(waiverEvidence.malformed));
+  assert.ok(Array.isArray(waiverEvidence.notConfigured));
   assert.deepEqual(validate(summary, readinessSchema), []);
 });
 

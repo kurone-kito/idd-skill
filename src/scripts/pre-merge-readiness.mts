@@ -15,7 +15,10 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
+import {
+  normalizePolicyConfig,
+  resolveCollaboratorMarkerTrust,
+} from './policy-helpers.mts';
 import type { TrustedMarkerActorResolution } from './protocol-helpers.mts';
 import {
   buildPreMergeReadinessSummary,
@@ -331,6 +334,7 @@ const advisoryWaitPolicy = readAdvisoryWaitPolicy();
 const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
 const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
 const forcedHandoffPermissionCache: CollaboratorPermissionCache = new Map();
+const waivableCheckSelectors = readWaivableCheckSelectors();
 
 const summary = buildPreMergeReadinessSummary(
   {
@@ -365,6 +369,7 @@ const summary = buildPreMergeReadinessSummary(
     settledWindowMinutes: advisoryWaitPolicy.settledWindowMinutes,
     pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
     capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
+    waivableCheckSelectors,
     forcedHandoffEnabled,
     expectedLinkedPrs: [String(args.prNumber), prUrl].filter(Boolean),
     isAuthorizedForcedHandoff: (forcedBy) =>
@@ -948,6 +953,25 @@ function readCollaboratorTrustEnabled(): boolean {
     // Fall through to env-var fallback.
   }
   return isTruthy(process.env.IDD_TRUST_COLLABORATOR_MARKERS);
+}
+
+// Configured waivable external-check selectors (`ciGate.externalChecks.
+// waivable`). The F2 gate only lets a valid waiver fold a check into
+// `requiredChecksPassing` when that check sits on this surface; an absent or
+// unreadable config yields an empty list (nothing waivable).
+function readWaivableCheckSelectors(): {
+  selector?: unknown;
+  matchMode?: unknown;
+}[] {
+  try {
+    return [
+      ...normalizePolicyConfig(
+        JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
+      ).ciGate.externalChecks.waivable,
+    ];
+  } catch {
+    return [];
+  }
 }
 
 function loadIddConfig(): {

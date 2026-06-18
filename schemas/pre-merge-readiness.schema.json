@@ -950,7 +950,8 @@
         "wrongHead",
         "wrongClaim",
         "unauthorized",
-        "malformed"
+        "malformed",
+        "notConfigured"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1087,6 +1088,29 @@
                 "type": "string"
               },
               "bodyPreview": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "notConfigured": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "authorLogin",
+              "checkSelector",
+              "expiresAt"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "authorLogin": {
+                "type": "string"
+              },
+              "checkSelector": {
+                "type": "string"
+              },
+              "expiresAt": {
                 "type": "string"
               }
             }

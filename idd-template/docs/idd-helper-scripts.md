@@ -344,9 +344,11 @@ The adopted helper boundaries are intentionally narrow:
   unreplied comments, reviewer states, advisory state, CI, claim
   validation, and `waiverEvidence` (parsed external-check waiver comments
   classified as `valid`, `expired`, `wrongHead`, `wrongClaim`,
-  `unauthorized`, or `malformed`; checks covered by a valid waiver are
-  reported with `coveredByWaiver: true` and treated as passing by the CI
-  gate)
+  `unauthorized`, `malformed`, or `notConfigured` — the last for a valid
+  waiver naming a check the policy never declared waivable in
+  `ciGate.externalChecks.waivable`; only a `valid` waiver for a
+  configured-waivable check is reported with `coveredByWaiver: true` and
+  treated as passing by the CI gate)
 - it does not replace the pre-merge or merge decision tables; it only
   reduces command-copy variance when collecting canonical merge-gate
   evidence
