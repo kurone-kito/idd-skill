@@ -712,6 +712,48 @@ export function planLiveStatusDigestUpsert(comments, fields) {
     duplicates: [],
   };
 }
+/**
+ * Orchestrate the apply-time live-status-digest upsert: re-fetch and
+ * re-plan against the latest comments, then revalidate the active claim
+ * immediately before the create/update mutation, so a claim release or
+ * takeover that lands during the replan's network fetch is caught before
+ * the write. The side-effecting I/O is injected so the ordering invariant
+ * — replan, then claim check, then mutation, and no write when the claim
+ * check throws — is unit-testable apart from the live `gh` calls.
+ */
+export function applyDigestUpsert(io) {
+  const planned = io.refetchAndPlan();
+  if (planned.action === 'duplicate') {
+    return { planned, outcome: 'duplicate' };
+  }
+  if (!io.skipClaimCheck) {
+    io.assertClaim();
+  }
+  if (planned.action === 'create') {
+    const created = io.createComment(planned.body);
+    return {
+      planned,
+      outcome: 'created',
+      commentId: created.id ?? null,
+      url: created.html_url ?? created.url ?? null,
+    };
+  }
+  if (planned.action === 'update') {
+    if (planned.commentId === undefined || planned.commentId === null) {
+      throw new Error(
+        'cannot update digest because the current comment id is missing',
+      );
+    }
+    const updated = io.updateComment(planned.commentId, planned.body);
+    return {
+      planned,
+      outcome: 'updated',
+      commentId: updated.id ?? planned.commentId,
+      url: updated.html_url ?? updated.url ?? planned.url ?? null,
+    };
+  }
+  return { planned, outcome: 'noop' };
+}
 export function unsafeTextReason(body) {
   for (const rule of UNSAFE_TEXT_RULES) {
     if (rule.pattern.test(body)) {

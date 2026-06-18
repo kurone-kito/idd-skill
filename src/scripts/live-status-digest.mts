@@ -16,6 +16,8 @@ import {
 } from './collaborator-permission.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
 import {
+  applyDigestUpsert,
+  type DigestUpsertOutcome,
   normalizeTrustedMarkerLogins,
   parsePaginatedGhNdjson,
   planLiveStatusDigestUpsert,
@@ -198,53 +200,47 @@ if (planned.action === 'duplicate') {
 }
 
 if (args.apply) {
-  if (!args.skipClaimCheck) {
-    try {
-      assertActiveClaim(
-        owner,
-        repo,
-        args.claimIssue,
-        args.agentId,
-        args.claimId,
-        claimContext,
-      );
-    } catch (error) {
-      fail((error as Error).message);
-    }
-  }
-
+  // The ordering invariant — re-fetch and re-plan, then revalidate the
+  // active claim immediately before the create/update mutation, with no
+  // write if the claim check throws — lives in applyDigestUpsert. The live
+  // `gh` I/O is injected here so that invariant stays unit-testable.
+  let outcome: DigestUpsertOutcome<LiveStatusDigestPlan>;
   try {
-    planned = planLiveStatusDigestUpsert(
-      fetchIssueComments(owner, repo, targetNumber),
-      fields,
-    );
+    outcome = applyDigestUpsert<LiveStatusDigestPlan>({
+      skipClaimCheck: Boolean(args.skipClaimCheck),
+      refetchAndPlan: () =>
+        planLiveStatusDigestUpsert(
+          fetchIssueComments(owner, repo, targetNumber),
+          fields,
+        ),
+      assertClaim: () =>
+        assertActiveClaim(
+          owner,
+          repo,
+          args.claimIssue,
+          args.agentId,
+          args.claimId,
+          claimContext,
+        ),
+      createComment: (body) =>
+        createIssueComment(owner, repo, targetNumber, body),
+      updateComment: (commentId, body) =>
+        updateIssueComment(owner, repo, commentId, body),
+    });
   } catch (error) {
     fail((error as Error).message);
   }
+
+  planned = outcome.planned;
   updateReportFromPlan(report, planned);
-  if (planned.action === 'duplicate') {
+  if (outcome.outcome === 'duplicate') {
     writeReport(report, args.format);
     process.exit(1);
   }
-
-  if (planned.action === 'create') {
-    const created = createIssueComment(owner, repo, targetNumber, planned.body);
+  if (outcome.outcome === 'created' || outcome.outcome === 'updated') {
     report.applied = true;
-    report.commentId = created.id ?? null;
-    report.url = created.html_url ?? created.url ?? null;
-  } else if (planned.action === 'update') {
-    if (!planned.commentId) {
-      fail('cannot update digest because the current comment id is missing');
-    }
-    const updated = updateIssueComment(
-      owner,
-      repo,
-      planned.commentId,
-      planned.body,
-    );
-    report.applied = true;
-    report.commentId = updated.id ?? planned.commentId;
-    report.url = updated.html_url ?? updated.url ?? planned.url ?? null;
+    report.commentId = outcome.commentId ?? report.commentId;
+    report.url = outcome.url ?? report.url;
   }
 }
 
