@@ -1090,6 +1090,64 @@ test('containsExampleRepoBackLink treats a top-level indented list-marker line a
   assert.equal(containsExampleRepoBackLink(md, 'kurone-kito/idd-skill'), false);
 });
 
+test('containsExampleRepoBackLink ignores an indented code block nested inside a list item', () => {
+  // The list item content sits at column 2; a blank-separated line indented
+  // >= 6 columns (8 here) is an indented code block within the item
+  // (CommonMark), not list content, so a workshop URL there must not
+  // produce a false back-link pass.
+  const md =
+    '- item\n\n        [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n';
+  assert.equal(containsExampleRepoBackLink(md, 'kurone-kito/idd-skill'), false);
+});
+
+test('containsExampleRepoBackLink keeps a real nested list item under a list (not code)', () => {
+  // Regression guard for the nested-code fix: a 4-column nested list item
+  // under a `- ` parent (content column 2) is within `2 + 4`, so it stays
+  // a list item and its back-link still counts.
+  const md =
+    '- parent\n\n    - [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n';
+  assert.equal(containsExampleRepoBackLink(md, 'kurone-kito/idd-skill'), true);
+});
+
+test('containsExampleRepoBackLink still detects list-item paragraph back-links after the nested-code fix', () => {
+  // A back-link in ordinary list-item paragraph text (indented to the
+  // content column, below the nested-code threshold) must still count.
+  const md =
+    '- See the [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n  for details.\n';
+  assert.equal(containsExampleRepoBackLink(md, 'kurone-kito/idd-skill'), true);
+});
+
+test('containsExampleRepoBackLink measures a tab after a list marker as columns', () => {
+  // `-\t` has content column 1 (`-`) + 4 (tab) = 5, so a 7-column-indented
+  // back-link is list content (< 5 + 4), not a nested code block. With the
+  // old character-length content column (2) the threshold would be 6 and
+  // the 7-column line would be mis-blanked as code.
+  const md =
+    '-\titem\n\n       [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n';
+  assert.equal(containsExampleRepoBackLink(md, 'kurone-kito/idd-skill'), true);
+});
+
+test('containsExampleRepoBackLink does not open a list for a deeply-indented mid-paragraph marker', () => {
+  // A `- ` marker indented >=4 columns mid-paragraph (no list open) is
+  // paragraph continuation, not a list item. It must not keep a list level
+  // open across the later blank and shield the following top-level indented
+  // code block from being blanked (which would reintroduce a false pass).
+  const md =
+    'text\n    - foo\n\n        [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n';
+  assert.equal(containsExampleRepoBackLink(md, 'kurone-kito/idd-skill'), false);
+});
+
+test('containsExampleRepoBackLink keeps a back-link in an outer list item after an inner list ends', () => {
+  // Multi-level lists: after the inner list and its paragraph dedent back
+  // to the outer item, the back-link sits in a nested item of the still
+  // open outer list (content column 2), not a top-level code block, so it
+  // must still count. (Single-level list tracking would lose the outer
+  // context here and blank it.)
+  const md =
+    '- outer\n  - inner\n  text after inner\n\n    - [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n';
+  assert.equal(containsExampleRepoBackLink(md, 'kurone-kito/idd-skill'), true);
+});
+
 test('containsExampleRepoBackLink rejects URL whose host is not a GitHub host', () => {
   const md =
     '[trap](https://example.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)';

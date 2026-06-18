@@ -1291,77 +1291,127 @@ function stripFencesPreservingLines(content) {
   }
   return out.join('\n');
 }
-// CommonMark §4.4 indented code blocks: at least 4 leading spaces
-// (or one tab), preceded by a blank line. Indented lines that are
-// recognizable list items (`-`, `*`, `+`, or `\d+\.` after the
-// leading whitespace) stay as text — loose-list nested items can
-// otherwise be misread as code. We only blank lines that follow a
-// blank or already-blanked line and do not look like list items.
+// CommonMark §4.4 indented code blocks: content indented at least 4
+// columns beyond the enclosing context (the top level, or an open list
+// item's content column), preceded by a blank line. The stripper below
+// tracks open list levels by content column (supporting `-`/`*`/`+` and
+// ordered `\d+[.)]` markers), so list continuation and nested list items
+// are preserved, while a deeper indent — even a list-marker-looking line
+// — is treated as a nested indented code block and blanked. See
+// stripIndentedCodeBlocksPreservingLines.
+/** Leading-indent width of a line in columns (space = 1, tab = 4). */
+function leadingIndentColumns(line) {
+  let columns = 0;
+  for (const ch of line) {
+    if (ch === ' ') {
+      columns += 1;
+    } else if (ch === '\t') {
+      columns += 4;
+    } else {
+      break;
+    }
+  }
+  return columns;
+}
 function stripIndentedCodeBlocksPreservingLines(content) {
   const lines = String(content).split(/\r?\n/);
   const out = [];
   let prevBlank = true;
   let inBlock = false;
-  // Whether a list is currently open at the top level. Under an open
-  // list, indented content is list continuation / nested-list items; with
-  // no list open, a top-level >=4-space indent is an indented code block,
-  // even when the line looks like a list marker (CommonMark: a list
-  // marker at >=4 spaces of indent is code, not a list).
-  let listOpen = false;
+  // The minimum indent (in columns) of the open indented code block, set
+  // at its opener. A line indented below this leaves the block.
+  let codeBaseIndent = 4;
+  // Content-indent columns of the currently open list levels, outermost
+  // first (a stack, so ending an inner list returns to the outer level
+  // instead of losing its context). Under the innermost open list, content
+  // indented up to `top + 3` is list continuation / nested-list items,
+  // while content indented `>= top + 4` is an indented code block nested
+  // inside the item (CommonMark allows code blocks within a list item).
+  // With no list open the threshold is the top-level 4 columns, so a
+  // top-level `>=4`-column indent is still a code block even when it looks
+  // like a list marker.
+  const listContentIndents = [];
+  const innermostListIndent = () =>
+    listContentIndents.length > 0
+      ? listContentIndents[listContentIndents.length - 1]
+      : null;
+  // Drop list levels whose content column is deeper than `indent`, so a
+  // dedent re-exposes the enclosing list (or no list).
+  const popDeeperThan = (indent) => {
+    while (
+      listContentIndents.length > 0 &&
+      indent < listContentIndents[listContentIndents.length - 1]
+    ) {
+      listContentIndents.pop();
+    }
+  };
   for (const line of lines) {
-    const isBlank = /^\s*$/.test(line);
-    const indented = /^(?: {4}|\t)/.test(line);
-    // CommonMark §5.2: ordered-list markers may use either `.` or
-    // `)` after the digit. Both shapes count as list items (not
-    // code) even when indented under a parent item.
-    const looksLikeListItem = /^\s*(?:[-*+]\s|\d+[.)]\s)/.test(line);
-    if (isBlank) {
+    if (/^\s*$/.test(line)) {
       // A blank line ends neither an open indented code block nor an open
       // list: per CommonMark §4.4 a code block is one or more indented
       // chunks separated by blank lines, and loose lists are blank-line
-      // separated too. Both `inBlock` and `listOpen` survive the blank;
-      // the block/list only ends at a later non-indented, non-blank line.
+      // separated too. Both states survive the blank; they only end at a
+      // later non-indented, non-blank line (or a dedent).
       out.push(line);
       prevBlank = true;
       continue;
     }
-    if (indented) {
-      if (inBlock) {
-        // Continuation of an open indented code block (even across an
-        // internal blank line). A list cannot start inside it, so a
-        // list-marker-looking line here stays code and is blanked.
+    const indent = leadingIndentColumns(line);
+    // CommonMark §5.2: ordered-list markers may use either `.` or `)`
+    // after the digit. The match is the full marker prefix (leading
+    // whitespace + marker + trailing whitespace); its column width gives
+    // the list item's content column, computed tab-aware where the item
+    // is kept below.
+    const listMarker = /^\s*(?:[-*+]|\d+[.)])\s+/.exec(line);
+    if (inBlock) {
+      if (indent >= codeBaseIndent) {
+        // Continuation of the open code block (even across blank lines).
+        // A list cannot start inside it, so a list-marker-looking line
+        // here stays code and is blanked.
         out.push('');
         prevBlank = false;
         continue;
       }
-      if (listOpen) {
-        // Indented content under an open list is list continuation or a
-        // nested list item, not a top-level code block: keep it.
-        out.push(line);
-        prevBlank = false;
-        continue;
-      }
-      if (prevBlank) {
-        // Opener: a top-level indented line after a blank with no open
-        // list starts an indented code block, even a list-marker-looking
-        // one (>=4 spaces of top-level indent is code, not a list).
-        out.push('');
-        inBlock = true;
-        prevBlank = false;
-        continue;
-      }
-      // Indented line lazily continuing a paragraph (code cannot
-      // interrupt a paragraph): keep it.
-      out.push(line);
+      // Indented below the code block base; it ends. Reprocess this line.
+      inBlock = false;
+    }
+    const codeThreshold = (innermostListIndent() ?? 0) + 4;
+    if (prevBlank && indent >= codeThreshold) {
+      // Indented code block opener — at the top level (no list) or nested
+      // inside the current list item. A list marker at this depth is code,
+      // not a list, so this branch precedes the list-marker handling.
+      out.push('');
+      inBlock = true;
+      codeBaseIndent = codeThreshold;
       prevBlank = false;
       continue;
     }
-    // Non-indented (<=3 spaces), non-blank line: it closes any open code
-    // block and resets the list context — a top-level list marker opens
-    // (or continues) a list; any other line closes it.
+    if (listMarker && indent < codeThreshold) {
+      // A list item (top-level or nested, but shallower than a code block
+      // per the threshold above — a marker at code depth that was not
+      // opened as a code block is paragraph continuation, handled below,
+      // and must not open a list level). Close any deeper sibling levels,
+      // then record this item's content column as the new innermost list.
+      // The content column is the full prefix width in columns (tab = 4),
+      // consistent with leadingIndentColumns, so a tab after the marker is
+      // not miscounted as a single column.
+      out.push(line);
+      let prefixWidth = 0;
+      for (const ch of listMarker[0]) {
+        prefixWidth += ch === '\t' ? 4 : 1;
+      }
+      const contentColumn = prefixWidth;
+      popDeeperThan(indent);
+      listContentIndents.push(contentColumn);
+      prevBlank = false;
+      continue;
+    }
+    // A non-code, non-list line: close any list levels whose content
+    // column is deeper than this line's indent. A line that drops below
+    // every level closes the list entirely; a line still within an outer
+    // level keeps that level open.
     out.push(line);
-    inBlock = false;
-    listOpen = looksLikeListItem;
+    popDeeperThan(indent);
     prevBlank = false;
   }
   return out.join('\n');
