@@ -1416,7 +1416,9 @@ export function classifyRegularBotComment(
       };
     }
     if (
-      hasExplicitDispositionAfter(comment, comments) ||
+      hasExplicitDispositionAfter(comment, comments, {
+        isDispositionAuthor: options.isDispositionAuthor,
+      }) ||
       hasCompletedBotThreadDispositions(threads, isCodeRabbitLogin, {
         isDispositionAuthor: options.isDispositionAuthor,
       })
@@ -1435,7 +1437,9 @@ export function classifyRegularBotComment(
   ) {
     if (
       /\b(Review triggered|Sure! I'll review|I'll review)\b/i.test(body) &&
-      hasExplicitDispositionAfter(comment, comments)
+      hasExplicitDispositionAfter(comment, comments, {
+        isDispositionAuthor: options.isDispositionAuthor,
+      })
     ) {
       return {
         classifier: 'OUTDATED',
@@ -2888,6 +2892,14 @@ export function summarizeRegularCommentsForGate(
           },
           classificationComments,
           threads,
+          {
+            isDispositionAuthor: (login) =>
+              iddAgentLogins.has(
+                String(login ?? '')
+                  .trim()
+                  .toLowerCase(),
+              ),
+          },
         ) === null
       );
     })
@@ -2991,6 +3003,14 @@ export function summarizeDispositionEvidenceForGate(
           },
           classificationComments,
           threads,
+          {
+            isDispositionAuthor: (login) =>
+              iddAgentLogins.has(
+                String(login ?? '')
+                  .trim()
+                  .toLowerCase(),
+              ),
+          },
         ) === null
       );
     });
@@ -4861,11 +4881,21 @@ export function classifyResumeRoutingCase(
 function hasExplicitDispositionAfter(
   targetComment: CommentLike,
   comments: CommentLike[],
+  options: { isDispositionAuthor?: (login: string) => boolean } = {},
 ): boolean {
+  // Default accepts any non-bot human; an IDD-scoped predicate (when supplied)
+  // restricts the disposition author so a reviewer-authored marker does not
+  // count as a completed IDD disposition.
+  const isDispositionAuthor =
+    typeof options.isDispositionAuthor === 'function'
+      ? options.isDispositionAuthor
+      : (login: string) => !isKnownReviewBot(login);
   const targetTime = Date.parse(targetComment.createdAt ?? '');
   return comments.some((comment) => {
-    const author = comment.author?.login ?? '';
-    if (isKnownReviewBot(author) || !isDispositionComment(comment)) {
+    const author = String(comment.author?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (!isDispositionAuthor(author) || !isDispositionComment(comment)) {
       return false;
     }
     if (!/\bCodeRabbit\b/i.test(comment.body ?? '')) {

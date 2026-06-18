@@ -140,6 +140,35 @@ test('classifyRegularBotComment honors an IDD-scoped disposition-author predicat
   );
 });
 
+test('classifyRegularBotComment IDD-scopes the explicit-disposition path', () => {
+  const summary: CommentLike = {
+    author: { login: 'coderabbitai[bot]' },
+    body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n\nWalkthrough of the change.',
+    createdAt: '2026-05-12T00:00:00Z',
+  };
+  // A later top-level disposition mentioning CodeRabbit, authored by a human
+  // reviewer rather than an IDD agent.
+  const reviewerDisposition: CommentLike = {
+    author: { login: 'reviewer-a' },
+    body: '**Accepted** — CodeRabbit summary acknowledged',
+    createdAt: '2026-05-12T00:01:00Z',
+  };
+  const comments = [summary, reviewerDisposition];
+
+  // Loose default accepts the reviewer-authored disposition.
+  assert.equal(
+    classifyRegularBotComment(summary, comments, [])?.classifier,
+    'RESOLVED',
+  );
+  // IDD-scoped predicate rejects it (no completed IDD disposition).
+  assert.equal(
+    classifyRegularBotComment(summary, comments, [], {
+      isDispositionAuthor: (login) => login === 'idd-bot',
+    }),
+    null,
+  );
+});
+
 test('tracks latest gating reviews and truncated threads', () => {
   const gatingIndex = indexLatestGatingReviewsByAuthor(
     latestGatingReview.reviews,

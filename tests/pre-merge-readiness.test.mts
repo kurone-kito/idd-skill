@@ -1458,6 +1458,52 @@ test('disposition evidence treats PATH A and PATH B as complete when both have m
   assert.equal(summary.missingThreadCount, 0);
 });
 
+test('disposition evidence IDD-scopes advisory-bot resolution at the gate', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n\nWalkthrough.',
+          author: { login: 'coderabbitai[bot]' },
+        },
+      ],
+      threads: [
+        {
+          id: 'BT-1',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'coderabbitai[bot]' },
+                createdAt: '2026-05-12T00:00:01Z',
+                body: 'consider renaming this',
+              },
+              // Resolved only by a reviewer-authored marker — not an IDD agent.
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:02Z',
+                body: '**Accepted** — done',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    },
+  );
+
+  // The CodeRabbit summary is "resolved" only by a reviewer-authored marker,
+  // which the IDD-scoped gate must not accept, so the summary is still flagged.
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingRegularCommentCount, 1);
+});
+
 test('disposition evidence pairs trailing markers 1:1 across regular comments', () => {
   const summary = summarizeDispositionEvidenceForGate(
     {
