@@ -1383,9 +1383,11 @@ function stripIndentedCodeBlocksPreservingLines(content) {
       prevBlank = false;
       continue;
     }
-    if (listMarker) {
-      // A list item (top-level or nested, but shallower than a nested code
-      // block per the threshold above). Close any deeper sibling levels,
+    if (listMarker && indent < codeThreshold) {
+      // A list item (top-level or nested, but shallower than a code block
+      // per the threshold above — a marker at code depth that was not
+      // opened as a code block is paragraph continuation, handled below,
+      // and must not open a list level). Close any deeper sibling levels,
       // then record this item's content column as the new innermost list.
       // The content column is the full prefix width in columns (tab = 4),
       // consistent with leadingIndentColumns, so a tab after the marker is

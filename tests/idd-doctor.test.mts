@@ -1117,6 +1117,16 @@ test('containsExampleRepoBackLink still detects list-item paragraph back-links a
   assert.equal(containsExampleRepoBackLink(md, 'kurone-kito/idd-skill'), true);
 });
 
+test('containsExampleRepoBackLink does not open a list for a deeply-indented mid-paragraph marker', () => {
+  // A `- ` marker indented >=4 columns mid-paragraph (no list open) is
+  // paragraph continuation, not a list item. It must not keep a list level
+  // open across the later blank and shield the following top-level indented
+  // code block from being blanked (which would reintroduce a false pass).
+  const md =
+    'text\n    - foo\n\n        [workshop](https://github.com/kurone-kito/idd-skill/blob/main/docs/workshop/README.md)\n';
+  assert.equal(containsExampleRepoBackLink(md, 'kurone-kito/idd-skill'), false);
+});
+
 test('containsExampleRepoBackLink keeps a back-link in an outer list item after an inner list ends', () => {
   // Multi-level lists: after the inner list and its paragraph dedent back
   // to the outer item, the back-link sits in a nested item of the still
