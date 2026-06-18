@@ -2234,6 +2234,53 @@ test('summarizeExternalCheckWaivers: valid waiver is placed in valid bucket', ()
   assert.equal(result.valid[0].authorLogin, 'kurone-kito');
 });
 
+test('summarizeExternalCheckWaivers: an odd-cased marker is still recognized', () => {
+  const head = 'b'.repeat(40);
+  // Uppercase the marker token only; parseExternalCheckWaiverComment is
+  // case-insensitive, so the prefilter must not skip it.
+  const body = makeWaiverComment({
+    claimId: 'claim-123',
+    headSha: head,
+  }).replace(
+    '<!-- idd-external-check-waiver:',
+    '<!-- IDD-EXTERNAL-CHECK-WAIVER:',
+  );
+  const result = summarizeExternalCheckWaivers(
+    [
+      {
+        body,
+        author: { login: 'kurone-kito' },
+        createdAt: '2026-05-17T00:00:00Z',
+      },
+    ],
+    {
+      prHeadSha: head,
+      activeClaimId: 'claim-123',
+      trustedMarkerLogins: ['kurone-kito'],
+      now: '2026-05-17T00:00:00Z',
+    },
+  );
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.malformed.length, 0);
+});
+
+test('summarizeExternalCheckWaivers: a prose mention of the marker name is ignored', () => {
+  const comment = {
+    body: 'We should document the idd-external-check-waiver flow for maintainers.',
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: 'b'.repeat(40),
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+  });
+  // Not a marker at the start of the body — must not be counted as malformed.
+  assert.equal(result.malformed.length, 0);
+  assert.equal(result.valid.length, 0);
+});
+
 test('summarizeExternalCheckWaivers: expired waiver goes to expired bucket', () => {
   const head = 'c'.repeat(40);
   const body = makeWaiverComment({

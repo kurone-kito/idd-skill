@@ -1020,7 +1020,10 @@ export function summarizeExternalCheckWaivers(
 
   for (const comment of comments ?? []) {
     const body = String(comment?.body ?? '');
-    if (!body.includes('idd-external-check-waiver')) continue;
+    // Prefilter on a marker-start, case-insensitive match aligned with
+    // parseExternalCheckWaiverComment's anchor — a case-sensitive substring
+    // skipped odd-cased markers and misclassified prose mentions as malformed.
+    if (!/^<!--\s*idd-external-check-waiver:/i.test(body)) continue;
 
     const authorLogin = String(
       comment?.author?.login ?? comment?.user?.login ?? '',
