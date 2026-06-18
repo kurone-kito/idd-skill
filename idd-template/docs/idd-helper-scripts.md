@@ -896,9 +896,9 @@ Interpretation rules:
     `advisoryBotLogins` author) so the operator can prioritize human feedback
     over capricious advisory-bot noise.
 - JSON output keys: `sweepWindow`, `trustedMarkerActors`,
-  `advisoryBotLogins`, `prs` (each entry has `number`, `mergedAt`,
-  `mergeCommit`, `unresolvedThreads`, and `unaddressedComments`), and
-  `summary` (`prCount`, `flaggedPrCount`, `unresolvedThreadCount`,
+  `advisoryBotLogins`, `iddAgentLogins`, `prs` (each entry has `number`,
+  `mergedAt`, `mergeCommit`, `unresolvedThreads`, and `unaddressedComments`),
+  and `summary` (`prCount`, `flaggedPrCount`, `unresolvedThreadCount`,
   `unaddressedCommentCount`).
 - Read-only boundary: the helper performs no minimization, no posting, and no
   issue creation. **Handoff**: the JSON is the input an operator hands to the

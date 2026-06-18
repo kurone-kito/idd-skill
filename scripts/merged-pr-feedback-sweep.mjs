@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 // idd-generated-from: src/scripts/merged-pr-feedback-sweep.mts
 //
+// The scripts/merged-pr-feedback-sweep.mjs copy is generated from the .mts
+// source named above by `pnpm run build`. Edit the .mts source, never the
+// generated .mjs. See docs/typescript-sources.md.
+//
 // Read-only helper: scan MERGED PRs for unresolved / unaddressed advisory
 // feedback (review threads still open, and non-IDD-agent comments / review
 // bodies that never received a later IDD-agent disposition). It only DETECTS
@@ -397,8 +401,16 @@ function fetchAllNodes(owner, repo, number, field, nodeFields) {
     const result = ghGraphql(query, { owner, repo, number, after });
     const conn = result?.data?.repository?.pullRequest?.[field];
     out.push(...(conn?.nodes ?? []));
-    if (!conn?.pageInfo?.hasNextPage || !conn.pageInfo.endCursor) {
+    if (!conn?.pageInfo?.hasNextPage) {
       break;
+    }
+    // Fail fast rather than silently truncate: a missing cursor on a
+    // has-next-page response would reintroduce the false negative this
+    // pagination exists to prevent.
+    if (!conn.pageInfo.endCursor) {
+      throw new Error(
+        `pagination for ${field} on PR #${number} reported hasNextPage with no endCursor`,
+      );
     }
     after = conn.pageInfo.endCursor;
   }
