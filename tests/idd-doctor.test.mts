@@ -481,8 +481,24 @@ test('readWorktreeGuardBranchPatterns trims configured patterns and falls back w
       'issue/*',
       'release/*',
     ]);
-    // Whitespace-only entries are invalid -> fall back to defaults.
+    // Fail-closed: a single empty/whitespace-only entry invalidates the
+    // whole list and falls back to defaults (no partial honoring of a
+    // malformed config).
+    writeConfig({
+      worktreeGuard: { branchPatterns: ['issue/* ', ''] },
+    });
+    assert.deepEqual(
+      readWorktreeGuardBranchPatterns(dir),
+      DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS,
+    );
+    // Whitespace-only entries -> fall back to defaults.
     writeConfig({ worktreeGuard: { branchPatterns: ['  ', ''] } });
+    assert.deepEqual(
+      readWorktreeGuardBranchPatterns(dir),
+      DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS,
+    );
+    // A non-string entry is malformed -> fall back to defaults.
+    writeConfig({ worktreeGuard: { branchPatterns: ['issue/*', 42] } });
     assert.deepEqual(
       readWorktreeGuardBranchPatterns(dir),
       DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS,

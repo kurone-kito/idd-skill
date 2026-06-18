@@ -950,10 +950,11 @@ export function readWorktreeGuardBranchPatterns(root: string): string[] {
     ) {
       // Return trimmed patterns: a configured entry with surrounding
       // whitespace (e.g. `"issue/* "`) otherwise passes validation but
-      // never matches a real branch, silently covering nothing.
-      return (patterns as string[])
-        .map((pattern) => pattern.trim())
-        .filter((pattern) => pattern.length > 0);
+      // never matches a real branch, silently covering nothing. The
+      // validation above stays fail-closed — any empty/whitespace-only or
+      // non-string entry invalidates the whole list and falls back to the
+      // defaults — so every surviving entry is non-empty after trim.
+      return (patterns as string[]).map((pattern) => pattern.trim());
     }
   } catch {
     // fall through to defaults
