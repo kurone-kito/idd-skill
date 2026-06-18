@@ -890,11 +890,13 @@ Interpretation rules:
     from the in-thread disposition check), and regular comments /
     `CHANGES_REQUESTED` review bodies from non-IDD-agent authors that have
     **no later IDD-agent disposition** (`**Accepted**` / `**Rejected**` /
-    `**Awaiting maintainer decision**`). Trusted IDD operational markers and
-    IDD disposition comments are excluded from the feedback set. Each finding
-    carries an `advisoryBot` flag (`isKnownReviewBot` or a configured
-    `advisoryBotLogins` author) so the operator can prioritize human feedback
-    over capricious advisory-bot noise.
+    `**Awaiting maintainer decision**`). Trusted IDD operational markers, IDD
+    disposition comments, and any HTML comment beginning with `<!-- idd-` (for
+    example cleanup-evidence, excluded regardless of author — including CI
+    automation such as `github-actions[bot]`) are excluded from the feedback
+    set. Each finding carries an `advisoryBot` flag (`isKnownReviewBot` or a
+    configured `advisoryBotLogins` author) so the operator can prioritize human
+    feedback over capricious advisory-bot noise.
 - JSON output keys: `sweepWindow`, `trustedMarkerActors`,
   `advisoryBotLogins`, `iddAgentLogins`, `prs` (each entry has `number`,
   `mergedAt`, `mergeCommit`, `unresolvedThreads`, and `unaddressedComments`),
