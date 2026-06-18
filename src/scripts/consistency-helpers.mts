@@ -436,3 +436,74 @@ function regexCanStartAfter(lastCodeChar: string, lastWord: string): boolean {
   }
   return !/[\w$)\]'"`/]/.test(lastCodeChar);
 }
+
+/** Manifest config for the instruction size-budget audit. */
+export interface InstructionSizeBudgetConfig {
+  id?: string;
+  glob?: string;
+  alwaysLoadedPattern?: string;
+  alwaysLoadedLimitBytes?: number;
+  phaseLimitBytes?: number;
+}
+
+/**
+ * Collect instruction size-budget violations. Pure (no direct I/O) so it
+ * can be unit-tested; the audit pipeline supplies a path lister and a file
+ * reader.
+ *
+ * Scope rule (mirrors checkPairedChange): the budget is scoped to the
+ * files changed against the git comparison base. When `changedFiles` is
+ * `null` (no resolvable base — e.g. a CI clone without `origin/main`) the
+ * check is skipped with a notice rather than auditing every instruction
+ * file, which would let an unrelated PR fail on a file it never touched.
+ *
+ * `listFiles` is only invoked when a base resolves, and `readFile` is
+ * invoked only for files in `changedFiles`, so unchanged files are never
+ * read (the audit reads from disk, so reading every match would be wasted
+ * I/O on large repos).
+ */
+export function collectInstructionSizeBudgetViolations(
+  config: InstructionSizeBudgetConfig | null | undefined,
+  changedFiles: ReadonlySet<string> | null,
+  listFiles: () => readonly string[],
+  readFile: (path: string) => string,
+): { errors: string[]; notices: string[] } {
+  if (!config) {
+    return { errors: [], notices: [] };
+  }
+
+  const id = config.id ?? 'instruction-size-budgets';
+  if (changedFiles === null) {
+    return {
+      errors: [],
+      notices: [
+        `${id}: skipped instruction size budget check because no git comparison base was available`,
+      ],
+    };
+  }
+
+  const alwaysLoadedPattern =
+    config.alwaysLoadedPattern ?? 'applyTo:\\s*"\\*\\*"';
+  const alwaysLoadedRegex = new RegExp(alwaysLoadedPattern, 'm');
+  const alwaysLoadedLimitBytes = config.alwaysLoadedLimitBytes ?? 20_000;
+  const phaseLimitBytes = config.phaseLimitBytes ?? 30_000;
+
+  const errors: string[] = [];
+  for (const path of listFiles()) {
+    if (!changedFiles.has(path)) {
+      continue;
+    }
+    const text = String(readFile(path) ?? '');
+    const bytes = Buffer.byteLength(text, 'utf8');
+    const alwaysLoaded = alwaysLoadedRegex.test(text);
+    const limit = alwaysLoaded ? alwaysLoadedLimitBytes : phaseLimitBytes;
+    if (bytes > limit) {
+      errors.push(
+        `${id}: ${path} is ${bytes} bytes (limit ${limit}; ${
+          alwaysLoaded ? 'always-loaded' : 'phase'
+        })`,
+      );
+    }
+  }
+  return { errors, notices: [] };
+}

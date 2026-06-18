@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  collectInstructionSizeBudgetViolations,
   collectPolicyConfigDrift,
   collectRootMarkdownAllowlistViolations,
   collectTypeSuppressionViolations,
@@ -516,33 +517,19 @@ function docsSyncCommandByPackageManager(packageManager) {
   }
 }
 function checkInstructionSizeBudgets(config) {
-  if (!config) {
-    return;
-  }
-  const id = config.id ?? 'instruction-size-budgets';
-  const files = globFiles(
-    config.glob ?? '.github/instructions/idd-*.instructions.md',
+  // The scope/skip decision and budget evaluation live in the pure helper
+  // so they can be unit-tested; the audit pipeline supplies the changed
+  // file set, a glob lister, and a reader. The helper reads only changed
+  // files, so unchanged instruction files are never loaded from disk.
+  const result = collectInstructionSizeBudgetViolations(
+    config,
+    changedFiles,
+    () =>
+      globFiles(config?.glob ?? '.github/instructions/idd-*.instructions.md'),
+    readText,
   );
-  const alwaysLoadedPattern =
-    config.alwaysLoadedPattern ?? 'applyTo:\\s*"\\*\\*"';
-  const alwaysLoadedRegex = new RegExp(alwaysLoadedPattern, 'm');
-  const alwaysLoadedLimitBytes = config.alwaysLoadedLimitBytes ?? 20_000;
-  const phaseLimitBytes = config.phaseLimitBytes ?? 30_000;
-  const candidates =
-    changedFiles === null
-      ? files
-      : files.filter((file) => changedFiles.has(file));
-  for (const file of candidates) {
-    const text = readText(file);
-    const bytes = Buffer.byteLength(text, 'utf8');
-    const alwaysLoaded = alwaysLoadedRegex.test(text);
-    const limit = alwaysLoaded ? alwaysLoadedLimitBytes : phaseLimitBytes;
-    if (bytes > limit) {
-      errors.push(
-        `${id}: ${file} is ${bytes} bytes (limit ${limit}; ${alwaysLoaded ? 'always-loaded' : 'phase'})`,
-      );
-    }
-  }
+  errors.push(...result.errors);
+  notices.push(...result.notices);
 }
 function checkBundleBudgets(budgets) {
   for (const budget of budgets) {
