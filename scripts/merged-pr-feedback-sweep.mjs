@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // idd-generated-from: src/scripts/merged-pr-feedback-sweep.mts
 //
 // Read-only helper: scan MERGED PRs for unresolved / unaddressed advisory
@@ -269,8 +270,12 @@ function parseArgs(argv) {
     const nextInt = () => {
       const raw = next();
       const value = Number.parseInt(raw, 10);
-      if (!Number.isFinite(value) || String(value) !== raw.trim()) {
-        throw new Error(`${token} expects an integer, got "${raw}"`);
+      if (
+        !Number.isFinite(value) ||
+        String(value) !== raw.trim() ||
+        value < 1
+      ) {
+        throw new Error(`${token} expects a positive integer, got "${raw}"`);
       }
       return value;
     };
@@ -288,9 +293,13 @@ function parseArgs(argv) {
         for (const part of next().split(',')) {
           const trimmed = part.trim();
           const value = Number.parseInt(trimmed, 10);
-          if (!Number.isFinite(value) || String(value) !== trimmed) {
+          if (
+            !Number.isFinite(value) ||
+            String(value) !== trimmed ||
+            value < 1
+          ) {
             throw new Error(
-              `--prs expects comma-separated integers, got "${part}"`,
+              `--prs expects comma-separated positive integers, got "${part}"`,
             );
           }
           parsed.prNumbers.push(value);
