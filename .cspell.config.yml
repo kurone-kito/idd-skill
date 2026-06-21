@@ -41,6 +41,7 @@ words:
   - pytest
   - pyproject
   - tsfile
+  - undispositioned
   - unpushed
   - unreplied
   - unrouted

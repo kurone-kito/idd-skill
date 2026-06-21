@@ -398,6 +398,10 @@ following optional helper scripts:
   dry-run and claim-checked upsert)
 - `scripts/audit-pr-cleanup.mjs` (post-merge cleanup audit and optional
   apply mode)
+- `scripts/merged-pr-feedback-sweep.mjs` (read-only, manually-invoked
+  post-merge sweep that scans merged PRs for unresolved review threads
+  and undispositioned advisory feedback, handing JSON to the
+  issue-authoring skill)
 
 Shell / `gh` / `jq` snippets in
 `.github/instructions/*.instructions.md` remain the canonical portable
