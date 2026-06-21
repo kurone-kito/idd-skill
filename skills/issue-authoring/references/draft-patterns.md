@@ -380,6 +380,13 @@ what the agent can verify independently.
 
 ## Handling duplicates and non-ready outcomes
 
+One source of follow-up issue candidates is the read-only
+`merged-pr-feedback-sweep` helper's JSON output — the unresolved review
+threads and undispositioned advisory feedback it detects on merged PRs.
+Treat each entry as a candidate only: re-verify it against current `main`
+with the reuse-first tree below before drafting, because the feedback may
+already be addressed.
+
 Before publishing an issue, apply a reuse-first decision tree:
 
 1. Is an existing open issue a better fit? If yes, extend it instead of
