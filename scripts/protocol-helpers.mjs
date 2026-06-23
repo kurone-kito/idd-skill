@@ -2260,6 +2260,69 @@ export function summarizeDispositionEvidenceForGate(
     createdAt: comment.createdAt,
     bodyPreview: buildBodyPreview(comment.body),
   }));
+  // #978 advisory-only diagnostic: a blocking resolved thread is
+  // "ack-only-post-disposition" when a thread-local IDD disposition exists and
+  // EVERY external comment newer than the snapshot boundary (the activity that
+  // makes the thread block) is an advisory-bot, non-disposition reply posted
+  // after that disposition — i.e. a post-disposition courtesy ack. Reuses the
+  // review-currency carve-out's recognition shape (advisory-bot predicate driven
+  // by `advisoryBotLogins`, no hard-coded logins; post-disposition ack). Fails
+  // closed (false) without a snapshot boundary, without a thread-local
+  // disposition, or for unresolved threads, and never changes the gate route.
+  const isThreadAckOnlyPostDisposition = (thread) => {
+    if (!thread.isResolved || !snapshotBoundaryAt) {
+      return false;
+    }
+    const nodes = thread.comments?.nodes ?? [];
+    const threadDispositionAt = maxIsoTimestamp(
+      nodes
+        .filter(
+          (comment) =>
+            iddAgentLogins.has(
+              String(comment.author?.login ?? '')
+                .trim()
+                .toLowerCase(),
+            ) && isDispositionComment({ body: String(comment.body ?? '') }),
+        )
+        .map((comment) => comment.createdAt)
+        .filter(isValidIsoTimestamp),
+    );
+    if (!threadDispositionAt) {
+      return false;
+    }
+    const boundaryBlockingFeedback = nodes.filter((comment) => {
+      const authorLogin = String(comment.author?.login ?? '')
+        .trim()
+        .toLowerCase();
+      if (
+        !authorLogin ||
+        iddAgentLogins.has(authorLogin) ||
+        authorLogin === prAuthorLogin
+      ) {
+        return false;
+      }
+      const activityAt = effectiveThreadCommentActivityAt(comment);
+      return (
+        isValidIsoTimestamp(activityAt) &&
+        compareIsoTimestamps(activityAt, snapshotBoundaryAt) > 0
+      );
+    });
+    if (boundaryBlockingFeedback.length === 0) {
+      return false;
+    }
+    return boundaryBlockingFeedback.every((comment) => {
+      const activityAt = effectiveThreadCommentActivityAt(comment);
+      return (
+        advisoryBotLogins.has(
+          String(comment.author?.login ?? '')
+            .trim()
+            .toLowerCase(),
+        ) &&
+        !isDispositionComment({ body: String(comment.body ?? '') }) &&
+        compareIsoTimestamps(activityAt, threadDispositionAt) > 0
+      );
+    });
+  };
   const missingThreads = (threads ?? [])
     .map((thread, index) => {
       const commentsInThread = thread.comments?.nodes ?? [];
@@ -2281,6 +2344,7 @@ export function summarizeDispositionEvidenceForGate(
           id: String(thread.id ?? '') || `thread-${index + 1}`,
           isResolved: Boolean(thread.isResolved),
           reason: 'incomplete-thread-comments',
+          ackOnlyPostDisposition: false,
         };
       }
       if (
@@ -2330,16 +2394,27 @@ export function summarizeDispositionEvidenceForGate(
         reason: thread.isResolved
           ? 'missing-fresh-disposition'
           : 'unresolved-without-fresh-disposition',
+        ackOnlyPostDisposition: isThreadAckOnlyPostDisposition(thread),
       };
     })
     .filter(Boolean);
   const blockingCount = missingRegularComments.length + missingThreads.length;
+  // #978: the sole blocking cause is post-disposition advisory-bot ack-only
+  // activity. True only when something blocks AND every blocking item is an
+  // ack-only-post-disposition resolved thread (no missing regular comments, no
+  // non-ack thread). The guard implies missingThreads is non-empty, so `.every`
+  // is never vacuously true.
+  const soleCauseAckOnlyPostDisposition =
+    blockingCount > 0 &&
+    missingRegularComments.length === 0 &&
+    missingThreads.every((entry) => entry.ackOnlyPostDisposition === true);
   return {
     route: blockingCount > 0 ? 'return-to-e1' : 'proceed',
     reason: blockingCount > 0 ? 'missing-disposition-evidence' : 'complete',
     blockingCount,
     missingRegularCommentCount: missingRegularComments.length,
     missingThreadCount: missingThreads.length,
+    soleCauseAckOnlyPostDisposition,
     missingRegularComments,
     missingThreads,
   };

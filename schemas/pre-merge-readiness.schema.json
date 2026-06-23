@@ -849,6 +849,7 @@
         "blockingCount",
         "missingRegularCommentCount",
         "missingThreadCount",
+        "soleCauseAckOnlyPostDisposition",
         "missingRegularComments",
         "missingThreads"
       ],
@@ -879,6 +880,9 @@
         "missingThreadCount": {
           "type": "integer",
           "minimum": 0
+        },
+        "soleCauseAckOnlyPostDisposition": {
+          "type": "boolean"
         },
         "missingRegularComments": {
           "type": "array",
@@ -918,7 +922,8 @@
             "required": [
               "id",
               "isResolved",
-              "reason"
+              "reason",
+              "ackOnlyPostDisposition"
             ],
             "additionalProperties": false,
             "properties": {
@@ -936,6 +941,9 @@
                   "missing-fresh-disposition",
                   "unresolved-without-fresh-disposition"
                 ]
+              },
+              "ackOnlyPostDisposition": {
+                "type": "boolean"
               }
             }
           }
