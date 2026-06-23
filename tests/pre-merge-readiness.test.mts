@@ -1962,6 +1962,104 @@ test('disposition evidence flags an ack-only thread dispositioned via a rejectio
   assert.equal(summary.soleCauseAckOnlyPostDisposition, true);
 });
 
+test('disposition evidence flags ack-only when the disposition lands after the snapshot boundary (#978)', () => {
+  // The reviewer comment is post-boundary but pre-disposition (it was
+  // dispositioned), so only the later advisory-bot ack is genuinely
+  // post-disposition. The signal must isolate post-disposition activity and
+  // still flag this as ack-only.
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-late-disposition',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T01:30:00Z',
+                body: 'please reconsider this',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T02:00:00Z',
+                body: '**Rejected** — verified: not applicable here',
+              },
+              {
+                author: { login: 'coderabbitai[bot]' },
+                createdAt: '2026-05-12T03:00:00Z',
+                body: 'Thanks for confirming.',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreads[0].ackOnlyPostDisposition, true);
+  assert.equal(summary.soleCauseAckOnlyPostDisposition, true);
+});
+
+test('disposition evidence does not flag a thread with a post-disposition human reply (#978)', () => {
+  // A bot ack AND a later human comment both post-date the disposition. The
+  // human reply is genuine post-disposition feedback, so the post-disposition
+  // set is not advisory-bot-ack-only and the thread stays unflagged.
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-late-human',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please reconsider this',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:30:00Z',
+                body: '**Rejected** — verified: not applicable here',
+              },
+              {
+                author: { login: 'coderabbitai[bot]' },
+                createdAt: '2026-05-12T02:00:00Z',
+                body: 'Thanks for confirming.',
+              },
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T02:30:00Z',
+                body: 'Actually, please reopen — still a problem.',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreads[0].ackOnlyPostDisposition, false);
+  assert.equal(summary.soleCauseAckOnlyPostDisposition, false);
+});
+
 test('disposition evidence accepts edited IDD disposition comments as fresh replies', () => {
   const summary = summarizeDispositionEvidenceForGate(
     {

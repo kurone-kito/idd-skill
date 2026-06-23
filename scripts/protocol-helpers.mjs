@@ -2262,13 +2262,13 @@ export function summarizeDispositionEvidenceForGate(
   }));
   // #978 advisory-only diagnostic: a blocking resolved thread is
   // "ack-only-post-disposition" when a thread-local IDD disposition exists and
-  // EVERY external comment newer than the snapshot boundary (the activity that
-  // makes the thread block) is an advisory-bot, non-disposition reply posted
-  // after that disposition — i.e. a post-disposition courtesy ack. Reuses the
-  // review-currency carve-out's recognition shape (advisory-bot predicate driven
-  // by `advisoryBotLogins`, no hard-coded logins; post-disposition ack). Fails
-  // closed (false) without a snapshot boundary, without a thread-local
-  // disposition, or for unresolved threads, and never changes the gate route.
+  // EVERY external comment newer than BOTH the snapshot boundary (so it re-blocks
+  // the gate) AND the disposition is an advisory-bot, non-disposition courtesy
+  // ack. Reuses the review-currency carve-out's recognition shape (advisory-bot
+  // predicate driven by `advisoryBotLogins`, no hard-coded logins;
+  // post-disposition ack). Fails closed (false) without a snapshot boundary,
+  // without a thread-local disposition, or for unresolved threads, and never
+  // changes the gate route.
   const isThreadAckOnlyPostDisposition = (thread) => {
     if (!thread.isResolved || !snapshotBoundaryAt) {
       return false;
@@ -2300,7 +2300,12 @@ export function summarizeDispositionEvidenceForGate(
     if (!threadDispositionAt) {
       return false;
     }
-    const boundaryBlockingFeedback = nodes.filter((comment) => {
+    // The blocking activity is external feedback newer than BOTH the snapshot
+    // boundary (so it actually re-blocks the gate) AND the thread disposition
+    // (so already-dispositioned feedback predating the ack does not disqualify
+    // the signal). When the disposition lands after the boundary, the
+    // post-disposition bound is what isolates the genuine ack.
+    const postDispositionBlockingFeedback = nodes.filter((comment) => {
       const authorLogin = String(comment.author?.login ?? '')
         .trim()
         .toLowerCase();
@@ -2314,24 +2319,26 @@ export function summarizeDispositionEvidenceForGate(
       const activityAt = effectiveThreadCommentActivityAt(comment);
       return (
         isValidIsoTimestamp(activityAt) &&
-        compareIsoTimestamps(activityAt, snapshotBoundaryAt) > 0
+        compareIsoTimestamps(activityAt, snapshotBoundaryAt) > 0 &&
+        compareIsoTimestamps(activityAt, threadDispositionAt) > 0
       );
     });
-    if (boundaryBlockingFeedback.length === 0) {
+    if (postDispositionBlockingFeedback.length === 0) {
       return false;
     }
-    return boundaryBlockingFeedback.every((comment) => {
-      const activityAt = effectiveThreadCommentActivityAt(comment);
-      return (
+    // Each remaining item must be a pure advisory-bot courtesy ack: an
+    // advisory-bot author whose body is neither a `**Accepted**`/`**Rejected**`
+    // marker nor the terminal `**Rejection confirmed by maintainer**` marker.
+    return postDispositionBlockingFeedback.every(
+      (comment) =>
         advisoryBotLogins.has(
           String(comment.author?.login ?? '')
             .trim()
             .toLowerCase(),
         ) &&
         !isDispositionComment({ body: String(comment.body ?? '') }) &&
-        compareIsoTimestamps(activityAt, threadDispositionAt) > 0
-      );
-    });
+        !isRejectionConfirmedDisposition({ body: String(comment.body ?? '') }),
+    );
   };
   const missingThreads = (threads ?? [])
     .map((thread, index) => {
