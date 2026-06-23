@@ -406,6 +406,20 @@ the semantic residual — confirming the ack raises no new actionable
 finding — and the evidence never weakens the disposition-evidence or
 unreplied-comment gates, which remain the backstop.
 
+**Disposition-evidence parity (advisory-only)**: the same post-disposition
+advisory-bot ack can also re-block the `dispositionEvidence` backstop on an
+already-resolved thread (`route: return-to-e1`,
+`reason: missing-fresh-disposition`). The backstop default is unchanged, but
+`pre-merge-readiness` now surfaces a deterministic signal: each such thread
+carries `ackOnlyPostDisposition: true`, and the top-level
+`dispositionEvidence.soleCauseAckOnlyPostDisposition` is `true` only when
+**every** blocking item is one of those threads (no missing regular comments,
+no non-ack thread). When that signal is `true`, autopilot may deterministically
+override the `return-to-e1` and proceed on the current HEAD SHA (see
+`idd-pre-merge.instructions.md` F2). The signal never changes `route`, and any
+non-ack blocking cause makes it `false`, so the backstop still holds for every
+other case.
+
 ## Review item classes
 
 During E-phase review triage, classify each ReviewItems_snapshot item

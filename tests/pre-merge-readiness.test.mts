@@ -1768,6 +1768,298 @@ test('disposition evidence still blocks a resolved thread reopened after the bou
   assert.equal(summary.missingThreads[0].reason, 'missing-fresh-disposition');
 });
 
+test('disposition evidence flags an ack-only-post-disposition resolved thread without changing the route (#978)', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-ack',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please reconsider this',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:30:00Z',
+                body: '**Rejected** — verified: not applicable here',
+              },
+              {
+                author: { login: 'coderabbitai[bot]' },
+                createdAt: '2026-05-12T02:00:00Z',
+                body: 'Thanks for confirming.',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+    },
+  );
+
+  // The backstop verdict is unchanged: the thread still blocks.
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.blockingCount, 1);
+  assert.equal(summary.missingThreads[0].reason, 'missing-fresh-disposition');
+  // The advisory-only diagnostic recognizes the post-disposition bot ack.
+  assert.equal(summary.missingThreads[0].ackOnlyPostDisposition, true);
+  assert.equal(summary.soleCauseAckOnlyPostDisposition, true);
+});
+
+test('disposition evidence does not flag a resolved thread with substantive post-disposition feedback (#978)', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-substantive',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please reconsider this',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:30:00Z',
+                body: '**Rejected** — verified: not applicable here',
+              },
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T02:00:00Z',
+                body: 'No, this is still wrong — please fix it.',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreads[0].ackOnlyPostDisposition, false);
+  assert.equal(summary.soleCauseAckOnlyPostDisposition, false);
+});
+
+test('disposition evidence reports sole-cause false when a regular comment also blocks (#978)', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 99,
+          createdAt: '2026-05-12T03:00:00Z',
+          body: 'a separate unanswered reviewer note',
+          author: { login: 'reviewer-b' },
+        },
+      ],
+      threads: [
+        {
+          id: 'thread-ack',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please reconsider this',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:30:00Z',
+                body: '**Rejected** — verified: not applicable here',
+              },
+              {
+                author: { login: 'coderabbitai[bot]' },
+                createdAt: '2026-05-12T02:00:00Z',
+                body: 'Thanks for confirming.',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.ok(summary.blockingCount >= 2);
+  // The ack-only thread is still individually flagged ...
+  const ackThread = summary.missingThreads.find(
+    (entry) => entry.id === 'thread-ack',
+  );
+  assert.equal(ackThread?.ackOnlyPostDisposition, true);
+  // ... but a regular comment is a separate, non-ack blocking cause.
+  assert.equal(summary.missingRegularCommentCount, 1);
+  assert.equal(summary.soleCauseAckOnlyPostDisposition, false);
+});
+
+test('disposition evidence flags an ack-only thread dispositioned via a rejection-confirmed marker (#978)', () => {
+  // The thread-local disposition uses the terminal
+  // `**Rejection confirmed by maintainer**` marker (recognized by
+  // hasFreshDisposition on resolved threads), so the ack-only signal must
+  // recognize it too — otherwise this genuine ack-only case goes unflagged.
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-rejection-confirmed',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please reconsider this',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:30:00Z',
+                body: '**Rejection confirmed by maintainer** — agreed, no change needed',
+              },
+              {
+                author: { login: 'coderabbitai[bot]' },
+                createdAt: '2026-05-12T02:00:00Z',
+                body: 'Thanks for confirming.',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreads[0].ackOnlyPostDisposition, true);
+  assert.equal(summary.soleCauseAckOnlyPostDisposition, true);
+});
+
+test('disposition evidence flags ack-only when the disposition lands after the snapshot boundary (#978)', () => {
+  // The reviewer comment is post-boundary but pre-disposition (it was
+  // dispositioned), so only the later advisory-bot ack is genuinely
+  // post-disposition. The signal must isolate post-disposition activity and
+  // still flag this as ack-only.
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-late-disposition',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T01:30:00Z',
+                body: 'please reconsider this',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T02:00:00Z',
+                body: '**Rejected** — verified: not applicable here',
+              },
+              {
+                author: { login: 'coderabbitai[bot]' },
+                createdAt: '2026-05-12T03:00:00Z',
+                body: 'Thanks for confirming.',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreads[0].ackOnlyPostDisposition, true);
+  assert.equal(summary.soleCauseAckOnlyPostDisposition, true);
+});
+
+test('disposition evidence does not flag a thread with a post-disposition human reply (#978)', () => {
+  // A bot ack AND a later human comment both post-date the disposition. The
+  // human reply is genuine post-disposition feedback, so the post-disposition
+  // set is not advisory-bot-ack-only and the thread stays unflagged.
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-late-human',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please reconsider this',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:30:00Z',
+                body: '**Rejected** — verified: not applicable here',
+              },
+              {
+                author: { login: 'coderabbitai[bot]' },
+                createdAt: '2026-05-12T02:00:00Z',
+                body: 'Thanks for confirming.',
+              },
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T02:30:00Z',
+                body: 'Actually, please reopen — still a problem.',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreads[0].ackOnlyPostDisposition, false);
+  assert.equal(summary.soleCauseAckOnlyPostDisposition, false);
+});
+
 test('disposition evidence accepts edited IDD disposition comments as fresh replies', () => {
   const summary = summarizeDispositionEvidenceForGate(
     {

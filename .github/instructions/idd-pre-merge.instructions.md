@@ -263,6 +263,16 @@ returns the workflow to E1 instead of merging over it.
   `dispositionEvidence` shape only; do not substitute E7 verifier fields
   (`passed`, `items[]`) here.
 
+  Deterministic override (advisory-only): if `dispositionEvidence.route`
+  is `return-to-e1` but `dispositionEvidence.soleCauseAckOnlyPostDisposition`
+  is `true` — every blocking item is an `ackOnlyPostDisposition` resolved
+  thread, with no missing regular comments — autopilot **may** treat this
+  gate as satisfied and proceed on the current HEAD SHA, mirroring the
+  review-currency ack-only carve-out. The override applies to that signal
+  **only**; any other `return-to-e1` cause (a missing regular comment, or
+  any thread whose `ackOnlyPostDisposition` is `false`) keeps the backstop
+  and routes to E1/E4 unchanged.
+
 When any F2 condition routes to a hold/stop or back to E1/E14, update
 the PR live status digest after the blocking evidence is recorded and
 before stopping or returning. Set `Phase` to the failing F2 check,
