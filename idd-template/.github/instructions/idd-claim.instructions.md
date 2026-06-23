@@ -253,7 +253,9 @@ Determine `{branch-name}`:
   `issue/<number>-<slug>` where `<slug>` follows the deterministic title
   normalization algorithm from pre-check (e).
 
-Generate a fresh `{claim-id}`. Determine `{prior-claim-id}`:
+Generate a fresh `{claim-id}` — **except in forced-handoff recovery**, where
+the successor adopts the marker's pre-recorded `new-claim-id` instead of
+minting one (see _Claim verification_ below). Determine `{prior-claim-id}`:
 
 - **Takeover of an active claim** (stale claim recovery) → the current
   active claim's `{claim-id}`
@@ -321,10 +323,15 @@ unless the operator has explicitly switched to normal discovery.
 Once verified, record this `{claim-id}` as your current claim token for
 the rest of the workflow.
 
-When the new claim came from forced-handoff recovery, cite the trusted
-forced-handoff evidence in the issue digest or resume report's
-`Authoritative by` field. Do not invent ad hoc `claimed-by` fields and
-do not reuse the displaced `{claim-id}`.
+When the new claim came from forced-handoff recovery, the verified
+`forced-handoff` marker has already set the active claim to its pre-recorded
+`new-claim-id` (Claim-state parsing rule 7). Adopt that `new-claim-id` as your
+own `{claim-id}` for the rest of the run — including the `--claim-id` passed to
+`pre-merge-readiness` at F2/F3 — instead of minting a fresh one; no separate
+`claimed-by supersedes: none` post is required for the transfer itself. Cite
+the trusted forced-handoff evidence in the issue digest or resume report's
+`Authoritative by` field. Do not invent ad hoc `claimed-by` fields, and do not
+reuse the displaced old `{claim-id}`.
 
 ### Hide displaced claim chain on takeover
 
