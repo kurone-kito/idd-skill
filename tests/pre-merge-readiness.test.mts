@@ -1915,6 +1915,53 @@ test('disposition evidence reports sole-cause false when a regular comment also 
   assert.equal(summary.soleCauseAckOnlyPostDisposition, false);
 });
 
+test('disposition evidence flags an ack-only thread dispositioned via a rejection-confirmed marker (#978)', () => {
+  // The thread-local disposition uses the terminal
+  // `**Rejection confirmed by maintainer**` marker (recognized by
+  // hasFreshDisposition on resolved threads), so the ack-only signal must
+  // recognize it too — otherwise this genuine ack-only case goes unflagged.
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-rejection-confirmed',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: 'please reconsider this',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:30:00Z',
+                body: '**Rejection confirmed by maintainer** — agreed, no change needed',
+              },
+              {
+                author: { login: 'coderabbitai[bot]' },
+                createdAt: '2026-05-12T02:00:00Z',
+                body: 'Thanks for confirming.',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreads[0].ackOnlyPostDisposition, true);
+  assert.equal(summary.soleCauseAckOnlyPostDisposition, true);
+});
+
 test('disposition evidence accepts edited IDD disposition comments as fresh replies', () => {
   const summary = summarizeDispositionEvidenceForGate(
     {

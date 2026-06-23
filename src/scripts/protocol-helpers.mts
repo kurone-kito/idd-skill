@@ -3185,6 +3185,12 @@ export function summarizeDispositionEvidenceForGate(
       return false;
     }
     const nodes = thread.comments?.nodes ?? [];
+    // Recognize the same dispositions `hasFreshDisposition` accepts on a
+    // resolved thread (the gate that already decided this thread blocks): a
+    // `**Accepted**`/`**Rejected**` marker OR the terminal
+    // `**Rejection confirmed by maintainer**` marker, anchored by effective
+    // activity (`updatedAt`-preferring) so an edited disposition is dated
+    // consistently. The thread is already known resolved here.
     const threadDispositionAt = maxIsoTimestamp(
       nodes
         .filter(
@@ -3193,9 +3199,13 @@ export function summarizeDispositionEvidenceForGate(
               String(comment.author?.login ?? '')
                 .trim()
                 .toLowerCase(),
-            ) && isDispositionComment({ body: String(comment.body ?? '') }),
+            ) &&
+            (isDispositionComment({ body: String(comment.body ?? '') }) ||
+              isRejectionConfirmedDisposition({
+                body: String(comment.body ?? ''),
+              })),
         )
-        .map((comment) => comment.createdAt)
+        .map((comment) => effectiveThreadCommentActivityAt(comment))
         .filter(isValidIsoTimestamp),
     );
     if (!threadDispositionAt) {
