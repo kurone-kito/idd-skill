@@ -420,7 +420,13 @@ function parseArgs(argv: string[]): IddMergeExecuteArgs {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/idd-merge-execute.mjs --pr <number> --claim-issue <number> [--claim-id <claim-id>] [--agent-id <agent-id>] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <bot1,bot2>] [--apply]
+  node scripts/idd-merge-execute.mjs --pr <number> --claim-issue <number> [--claim-id <claim-id>] [--agent-id <agent-id>] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <bot1,bot2>] [--idd-agent-logins <login1,login2>] [--now <ISO8601>] [--apply]
+
+  Every flag except --apply is forwarded verbatim to the read-only
+  pre-merge-readiness collector, so the full collector flag surface is
+  accepted here — including --idd-agent-logins, --now, and the deprecated
+  --expected-claim-id / --expected-agent-id aliases. --owner and --repo
+  must be passed together or not at all.
 
   Default (no --apply): dry-run. Evaluates every F3 merge gate via the
   read-only pre-merge-readiness collector and prints { ready, blockers,
