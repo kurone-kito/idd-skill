@@ -91,11 +91,14 @@ export interface RoadmapIssueClassification {
 /**
  * Active-claim eligibility annotation for one discovery execution leaf.
  *
- * Only emitted under the opt-in `--with-claim-state` flag. `null` means no
- * trusted claim is present at all; an object describes the resolved active
- * claim and whether it is stale (older than the configured `claimTiming.staleAge`
- * relative to now). `ownedByCurrentSession` is present only when the caller
- * passed `--current-claim-id`.
+ * Under the opt-in `--with-claim-state` flag every annotated open execution
+ * leaf carries this object (Design O). `present: false` (with `claimId: null`,
+ * `agentId: null`) means no trusted claim is present at all; `present: true`
+ * means a trusted claim exists, with `stale` reporting whether it is older
+ * than the configured `claimTiming.staleAge` relative to now (a stale claim is
+ * takeover-eligible). The whole annotation is absent (key omitted) on the
+ * default flag-absent path. `ownedByCurrentSession` is present only when the
+ * caller passed `--current-claim-id`.
  */
 export interface LeafActiveClaim {
   present: boolean;
@@ -117,11 +120,12 @@ export interface RoadmapGraphNode {
   depth: number;
   /**
    * Active-claim annotation, present only under `--with-claim-state` and only
-   * on open execution-leaf nodes. `null` means no trusted claim is present.
-   * Absent on every node in the default (flag-absent) path so the byte-stable
-   * output shape is unchanged.
+   * on open execution-leaf nodes, where it is always an object (Design O):
+   * `present: false` means no trusted claim is present, `present: true` means
+   * one exists (possibly stale). Absent on every node in the default
+   * (flag-absent) path so the byte-stable output shape is unchanged.
    */
-  activeClaim?: LeafActiveClaim | null;
+  activeClaim?: LeafActiveClaim;
   /**
    * Derived eligibility: `true` when no present, non-stale, trusted-actor
    * claim blocks this leaf. Present only under `--with-claim-state` on open
@@ -214,11 +218,13 @@ export interface RoadmapUnionLeaf {
    */
   sourceRoots: number[];
   /**
-   * Active-claim annotation, present only under `--with-claim-state`. `null`
-   * means no trusted claim is present. Absent on every leaf in the default
-   * (flag-absent) path so the byte-stable output shape is unchanged.
+   * Active-claim annotation, present only under `--with-claim-state`, where it
+   * is always an object (Design O): `present: false` means no trusted claim is
+   * present, `present: true` means one exists (possibly stale). Absent on
+   * every leaf in the default (flag-absent) path so the byte-stable output
+   * shape is unchanged.
    */
-  activeClaim?: LeafActiveClaim | null;
+  activeClaim?: LeafActiveClaim;
   /**
    * Derived eligibility: `true` when no present, non-stale, trusted-actor
    * claim blocks this leaf. Present only under `--with-claim-state`.
@@ -978,7 +984,7 @@ function normalizeOpenRoadmapRootNumbers(roots: unknown): number[] {
 
 /** One leaf's resolved claim annotation (`--with-claim-state` output). */
 interface LeafClaimAnnotation {
-  activeClaim: LeafActiveClaim | null;
+  activeClaim: LeafActiveClaim;
   claimEligible: boolean;
 }
 
@@ -988,10 +994,12 @@ interface LeafClaimAnnotation {
  * Fetches the leaf issue's comments via the injected `loadComments` loader,
  * resolves the ACTIVE claim with the SHARED `resolveActiveClaim` from
  * protocol-helpers (trusted-author gated, stale-age aware), then derives
- * present/stale/eligibility. A leaf is eligible when there is NO present,
- * non-stale, trusted-actor claim. The shared `parseClaimComment` /
- * `resolveActiveClaim` parsing is reused read-only and never re-implemented
- * here.
+ * present/stale/eligibility. `activeClaim` is ALWAYS returned as an object
+ * (Design O): `present: false` (with `claimId: null`, `agentId: null`) when no
+ * trusted claim is present, `present: true` otherwise. A leaf is eligible when
+ * there is NO present, non-stale, trusted-actor claim. The shared
+ * `parseClaimComment` / `resolveActiveClaim` parsing is reused read-only and
+ * never re-implemented here.
  */
 export async function annotateLeafClaimState(
   issueNumber: number,
@@ -1169,8 +1177,15 @@ function buildCommentLoader(owner: string, repo: string) {
   };
 }
 
-/** Parse an ISO8601 duration (`P[nD]T[nH][nM][nS]`) to ms; null on garbage. */
-function parseClaimStaleAgeMs(value: unknown): number | null {
+/**
+ * Parse an ISO8601 duration (`P[nD]T[nH][nM][nS]`) to ms; `null` on garbage OR
+ * a non-positive total. A `PT0S` (or any zero/empty-component) duration is
+ * rejected so the caller falls back to `DEFAULT_CLAIM_STALE_AGE_MS` instead of
+ * configuring a 0ms stale age that would mark every claim immediately stale —
+ * matching `parseIsoDurationToMs` in policy-helpers, which likewise returns
+ * `null` for a non-positive duration.
+ */
+export function parseClaimStaleAgeMs(value: unknown): number | null {
   const text = String(value ?? '').trim();
   if (!text) {
     return null;
@@ -1185,7 +1200,8 @@ function parseClaimStaleAgeMs(value: unknown): number | null {
   const hours = Number.parseInt(match[2] ?? '0', 10);
   const minutes = Number.parseInt(match[3] ?? '0', 10);
   const seconds = Number.parseInt(match[4] ?? '0', 10);
-  return (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
+  const totalMs = (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
+  return totalMs > 0 ? totalMs : null;
 }
 
 export function extractRoadmapMarkerId(
@@ -1441,8 +1457,9 @@ function printHelp() {
   --with-claim-state (opt-in) annotates each OPEN execution leaf with active-
   claim eligibility: it fetches that issue's comments and resolves the active
   claim using the configured trustedMarkerActors and claimTiming.staleAge
-  (default PT24H). Each annotated leaf gains:
-    "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null } | null
+  (default PT24H). Each annotated leaf gains (activeClaim is always an object):
+    "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null }
+                   (present:false with claimId/agentId null = no trusted claim)
     "claimEligible": bool   (eligible = no present, non-stale, trusted claim)
   Absent the flag, NO comment API calls are made and no claim fields are
   emitted (the output shape is byte-stable).

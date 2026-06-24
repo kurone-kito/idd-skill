@@ -626,10 +626,12 @@ function normalizeOpenRoadmapRootNumbers(roots) {
  * Fetches the leaf issue's comments via the injected `loadComments` loader,
  * resolves the ACTIVE claim with the SHARED `resolveActiveClaim` from
  * protocol-helpers (trusted-author gated, stale-age aware), then derives
- * present/stale/eligibility. A leaf is eligible when there is NO present,
- * non-stale, trusted-actor claim. The shared `parseClaimComment` /
- * `resolveActiveClaim` parsing is reused read-only and never re-implemented
- * here.
+ * present/stale/eligibility. `activeClaim` is ALWAYS returned as an object
+ * (Design O): `present: false` (with `claimId: null`, `agentId: null`) when no
+ * trusted claim is present, `present: true` otherwise. A leaf is eligible when
+ * there is NO present, non-stale, trusted-actor claim. The shared
+ * `parseClaimComment` / `resolveActiveClaim` parsing is reused read-only and
+ * never re-implemented here.
  */
 export async function annotateLeafClaimState(issueNumber, claimState) {
   const comments = normalizeClaimComments(
@@ -775,8 +777,15 @@ function buildCommentLoader(owner, repo) {
     return comments;
   };
 }
-/** Parse an ISO8601 duration (`P[nD]T[nH][nM][nS]`) to ms; null on garbage. */
-function parseClaimStaleAgeMs(value) {
+/**
+ * Parse an ISO8601 duration (`P[nD]T[nH][nM][nS]`) to ms; `null` on garbage OR
+ * a non-positive total. A `PT0S` (or any zero/empty-component) duration is
+ * rejected so the caller falls back to `DEFAULT_CLAIM_STALE_AGE_MS` instead of
+ * configuring a 0ms stale age that would mark every claim immediately stale —
+ * matching `parseIsoDurationToMs` in policy-helpers, which likewise returns
+ * `null` for a non-positive duration.
+ */
+export function parseClaimStaleAgeMs(value) {
   const text = String(value ?? '').trim();
   if (!text) {
     return null;
@@ -791,7 +800,8 @@ function parseClaimStaleAgeMs(value) {
   const hours = Number.parseInt(match[2] ?? '0', 10);
   const minutes = Number.parseInt(match[3] ?? '0', 10);
   const seconds = Number.parseInt(match[4] ?? '0', 10);
-  return (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
+  const totalMs = (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
+  return totalMs > 0 ? totalMs : null;
 }
 export function extractRoadmapMarkerId(
   body,
@@ -1014,8 +1024,9 @@ function printHelp() {
   --with-claim-state (opt-in) annotates each OPEN execution leaf with active-
   claim eligibility: it fetches that issue's comments and resolves the active
   claim using the configured trustedMarkerActors and claimTiming.staleAge
-  (default PT24H). Each annotated leaf gains:
-    "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null } | null
+  (default PT24H). Each annotated leaf gains (activeClaim is always an object):
+    "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null }
+                   (present:false with claimId/agentId null = no trusted claim)
     "claimEligible": bool   (eligible = no present, non-stale, trusted claim)
   Absent the flag, NO comment API calls are made and no claim fields are
   emitted (the output shape is byte-stable).

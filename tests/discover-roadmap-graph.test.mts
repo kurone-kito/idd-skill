@@ -13,6 +13,7 @@ import {
   extractKeywordReferences,
   extractRoadmapMarkerId,
   extractTaskListReferences,
+  parseClaimStaleAgeMs,
 } from '../src/scripts/discover-roadmap-graph.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -1299,4 +1300,59 @@ test('--all-roadmaps annotates union leaves and fetches each issue once', async 
   assert.equal(byNumber.get(803)?.claimEligible, true);
   // The shared leaf 702 is fetched exactly once even though two roots reach it.
   assert.equal(seen.filter((issueNumber) => issueNumber === 702).length, 1);
+});
+
+test('parseClaimStaleAgeMs rejects non-positive and garbage durations', () => {
+  // A non-positive stale age would configure a 0ms window that marks every
+  // claim immediately stale; reject it so callers fall back to the default.
+  assert.equal(parseClaimStaleAgeMs('PT0S'), null);
+  assert.equal(parseClaimStaleAgeMs('PT0H0M0S'), null);
+  assert.equal(parseClaimStaleAgeMs('P0D'), null);
+  assert.equal(parseClaimStaleAgeMs('PT'), null);
+  assert.equal(parseClaimStaleAgeMs('P'), null);
+  assert.equal(parseClaimStaleAgeMs(''), null);
+  assert.equal(parseClaimStaleAgeMs('garbage'), null);
+  assert.equal(parseClaimStaleAgeMs(undefined), null);
+  // A coherent positive duration still parses.
+  assert.equal(parseClaimStaleAgeMs('PT24H'), CLAIM_STALE_AGE_MS);
+  assert.equal(parseClaimStaleAgeMs('PT1S'), 1000);
+});
+
+test('a PT0S staleAge falls back to the default 24h window, not 0ms', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT)]],
+  ]);
+  // The CLI resolves the configured staleAge via parseClaimStaleAgeMs and
+  // falls back to the default when it returns null. A PT0S policy must NOT
+  // configure a 0ms window — a literal 0ms would mark even the fresh claim
+  // stale. Mirror that fallback here and confirm the fresh claim stays
+  // non-stale (eligible:false), as the default 24h behavior demands.
+  for (const staleAge of ['PT0S', 'PT0H0M0S', 'garbage', '']) {
+    const staleAgeMs =
+      parseClaimStaleAgeMs(staleAge) ?? CLAIM_STALE_AGE_MS;
+    assert.equal(
+      staleAgeMs,
+      CLAIM_STALE_AGE_MS,
+      `non-positive/garbage staleAge ${JSON.stringify(staleAge)} should fall back to the default`,
+    );
+
+    const { resolution } = buildClaimState(commentsByIssue, { staleAgeMs });
+    const graph = await enumerateRoadmapGraph(700, {
+      loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+      claimState: resolution,
+    });
+
+    const leaf701 = new Map(
+      graph.nodes.map((node) => [node.number, node]),
+    ).get(701);
+    // The fresh claim is present and non-stale → it still blocks the leaf,
+    // rather than being wrongly treated as stale by a 0ms window.
+    assert.deepEqual(
+      leaf701?.activeClaim,
+      { present: true, stale: false, claimId: 'claim-701', agentId: 'agent-a' },
+      `staleAge ${JSON.stringify(staleAge)} should not mark a fresh claim stale`,
+    );
+    assert.equal(leaf701?.claimEligible, false);
+  }
 });

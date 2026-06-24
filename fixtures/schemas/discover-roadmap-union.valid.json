@@ -42,7 +42,12 @@
       "roadmapMarkerId": "",
       "autopilotSuitability": null,
       "sourceRoots": [100, 200],
-      "activeClaim": null,
+      "activeClaim": {
+        "present": false,
+        "stale": false,
+        "claimId": null,
+        "agentId": null
+      },
       "claimEligible": true
     }
   ],
