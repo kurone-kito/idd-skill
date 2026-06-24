@@ -160,6 +160,13 @@ roadmap graph for one selected roadmap issue.
   bodies and GitHub sub-issue relationships, but it must not claim
   issues, edit roadmap bodies, close roadmap nodes, or decide readiness
   by itself.
+- **Runtime / read timing**: the helper is **long-running** on large
+  roadmaps — it issues many sequential API calls and emits the whole graph
+  in a single final stdout write, with no progress line or completion
+  sentinel. Redirect stdout to a file and wait for process exit before
+  parsing; a zero-byte or partial read from a still-running (or
+  just-finished) helper means **"still running," not** an A2 enumeration
+  failure.
 
 ### Discover Viability Gate Contract
 

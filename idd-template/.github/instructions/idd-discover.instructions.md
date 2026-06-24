@@ -291,6 +291,14 @@ authorizes an alternate scope for the current run:
   unresolvable with the reason, skip that branch, and continue with the
   rest of the traversal. This is not an enumeration failure.
 
+**Helper read timing.** The `discover-roadmap-graph` helper (see
+[IDD helper script evaluation](../../docs/idd-helper-scripts.md)) is
+long-running on large graphs — it emits the whole graph in one final stdout
+write after many API calls. Redirect stdout to a file and wait for process
+exit before parsing; a zero-byte or mid-run read is **"still running," not** an
+A2 enumeration failure (only the genuine infrastructure/tool failures above
+abort).
+
 Report every A2 execution candidate with its provenance path (e.g.,
 `#222 → #228 → #257`), open roadmap nodes encountered, and any
 unresolvable references before passing to A3.
