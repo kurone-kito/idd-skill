@@ -121,6 +121,20 @@ Before any mutating action in F3, apply the
    to prevent a race where a new push lands after the F3 freshness check
    but before the merge executes.
 
+   **Preferred path (helper runtime enabled)**: run the F3 merge helper
+   documented in
+   [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#merge-execution-f3).
+   First run it in dry-run (no `--apply`) and confirm `ready: true` with
+   an empty `blockers[]`; the helper wraps the read-only
+   `pre-merge-readiness` gate and adds no new authority. Then re-run with
+   `--apply`: when `ready`, it re-fetches the head SHA and re-validates
+   the claim immediately before merging, fails closed (no merge) on head
+   drift or lost claim, and runs the merge commit bound to the validated
+   head (never squash/rebase). The gate checklist and decision table
+   below stay canonical: if the helper is unavailable, its output is
+   invalid, or its evidence conflicts with live GitHub state, discard it
+   and use the manual gate + merge steps in this section.
+
    **Gate checklist** — confirm every field before merging; all must hold,
    and any unmet or unknown field is a NO-GO (fail closed — stop, do not
    merge):

@@ -1,0 +1,11 @@
+{
+  "protocolVersion": "1",
+  "decisionAuthority": "instructions",
+  "mode": "dry-run",
+  "prNumber": 994,
+  "prHeadSha": "",
+  "ready": true,
+  "blockers": [],
+  "merged": false,
+  "mergeResult": ""
+}

@@ -132,6 +132,7 @@ const EXTRA_RUNTIME_FILES = new Map<string, string[]>([
       'schemas/advisory-wait-state.schema.json',
       'schemas/claim-marker.schema.json',
       'schemas/forced-handoff-marker.schema.json',
+      'schemas/idd-merge-execute.schema.json',
       'schemas/live-status-digest.schema.json',
       'schemas/phase-graph.json',
       'schemas/phase-graph.schema.json',
@@ -143,6 +144,8 @@ const EXTRA_RUNTIME_FILES = new Map<string, string[]>([
       'fixtures/schemas/claim-marker.valid.json',
       'fixtures/schemas/forced-handoff-marker.invalid.json',
       'fixtures/schemas/forced-handoff-marker.valid.json',
+      'fixtures/schemas/idd-merge-execute.invalid.json',
+      'fixtures/schemas/idd-merge-execute.valid.json',
       'fixtures/schemas/live-status-digest.invalid.json',
       'fixtures/schemas/live-status-digest.valid.json',
       'fixtures/schemas/phase-graph.invalid.json',
@@ -254,6 +257,16 @@ const HELPER_COMMANDS: HelperCommand[] = [
     vendoredCommand: 'node scripts/pre-merge-readiness.mjs',
     description: 'Collect read-only F2/F3 merge-gate evidence.',
     contractPaths: ['schemas/pre-merge-readiness.schema.json'],
+  },
+  {
+    id: 'merge-execute',
+    scriptName: 'idd:merge-execute',
+    binName: 'idd-merge-execute',
+    entryPath: 'scripts/idd-merge-execute.mjs',
+    vendoredCommand: 'node scripts/idd-merge-execute.mjs',
+    description:
+      'Evaluate the F3 merge gate (dry-run) and execute the bound merge with --apply.',
+    contractPaths: ['schemas/idd-merge-execute.schema.json'],
   },
   {
     id: 'live-status-digest',

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { AdvisoryWaitStateReport } from '../src/scripts/advisory-wait-state.mts';
 import type { BranchConflictResult } from '../src/scripts/branch-conflict-state.mts';
 import type { RoadmapGraphUnionReport } from '../src/scripts/discover-roadmap-graph.mts';
+import type { IddMergeExecuteVerdict } from '../src/scripts/idd-merge-execute.mts';
 import type { PreMergeReadinessReport } from '../src/scripts/pre-merge-readiness.mts';
 import type {
   LiveStatusDigestFields,
@@ -295,6 +296,19 @@ export const discoverRoadmapUnionKeys = [
   'summary',
 ] as const satisfies readonly (keyof RoadmapGraphUnionReport)[];
 
+export const iddMergeExecuteKeys = [
+  'protocolVersion',
+  'decisionAuthority',
+  'mode',
+  'prNumber',
+  'prHeadSha',
+  'ready',
+  'blockers',
+  'mergeCommand',
+  'merged',
+  'mergeResult',
+] as const satisfies readonly (keyof IddMergeExecuteVerdict)[];
+
 export const forcedHandoffMarkerKeys = [
   'oldAgentId',
   'oldClaimId',
@@ -444,6 +458,10 @@ const exhaustivenessWitnesses: {
     ParsedForcedHandoffMarker,
     (typeof forcedHandoffMarkerKeys)[number]
   >;
+  iddMergeExecute: CoversAllKeysOf<
+    IddMergeExecuteVerdict,
+    (typeof iddMergeExecuteKeys)[number]
+  >;
   liveStatusDigest: CoversAllKeysOf<
     LiveStatusDigestFields,
     (typeof liveStatusDigestKeys)[number]
@@ -466,6 +484,7 @@ const exhaustivenessWitnesses: {
   claimMarker: true,
   discoverRoadmapUnion: true,
   forcedHandoffMarker: true,
+  iddMergeExecute: true,
   liveStatusDigest: true,
   phaseGraph: true,
   policyConfig: true,
@@ -605,6 +624,25 @@ const forcedHandoffMarkerFixture = {
   contextScope: 'issue-plus-pr',
   createdAt: '2026-05-12T11:00:05Z',
 } satisfies ParsedForcedHandoffMarker;
+
+const iddMergeExecuteFixture = {
+  protocolVersion: '1',
+  decisionAuthority: 'instructions',
+  mode: 'dry-run',
+  prNumber: 994,
+  prHeadSha: '0123456789abcdef0123456789abcdef01234567',
+  ready: false,
+  blockers: [
+    {
+      gate: 'advisory-wait',
+      detail: 'f3Outcome is "WAIT" (expected "SATISFIED")',
+    },
+  ],
+  mergeCommand:
+    'gh pr merge 994 --merge --match-head-commit 0123456789abcdef0123456789abcdef01234567',
+  merged: false,
+  mergeResult: '',
+} satisfies IddMergeExecuteVerdict;
 
 const liveStatusDigestFixture = {
   phase: 'E1',
@@ -924,6 +962,13 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
     owningModule: 'src/scripts/protocol-helpers.mts',
     keys: forcedHandoffMarkerKeys,
     fixture: forcedHandoffMarkerFixture,
+  },
+  {
+    schemaFile: 'idd-merge-execute.schema.json',
+    exportedType: 'IddMergeExecuteVerdict',
+    owningModule: 'src/scripts/idd-merge-execute.mts',
+    keys: iddMergeExecuteKeys,
+    fixture: iddMergeExecuteFixture,
   },
   {
     schemaFile: 'live-status-digest.schema.json',

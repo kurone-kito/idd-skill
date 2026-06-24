@@ -61,6 +61,9 @@ In the idd-skill source repository, the following optional helpers were adopted:
   and rerun-budget decisions
 - `scripts/pre-merge-readiness.mjs` for read-only F2/F3 readiness
   evidence collection
+- `scripts/idd-merge-execute.mjs` for the F3 merge gate: a dry-run
+  verdict by default and, with `--apply`, the bound merge execution; it
+  wraps `pre-merge-readiness` and adds no new decision authority
 - `scripts/live-status-digest.mjs` for issue or PR live status digest
   discovery, rendering, dry-run, and claim-checked upsert
 - `scripts/audit-pr-cleanup.mjs` for post-merge comment cleanup auditing
@@ -394,6 +397,18 @@ The adopted helper boundaries are intentionally narrow:
 - it does not replace the pre-merge or merge decision tables; it only
   reduces command-copy variance when collecting canonical merge-gate
   evidence
+
+- `idd-merge-execute.mjs` defaults to dry-run and stays read-only in
+  that mode: it reuses `pre-merge-readiness` to evaluate the F3 gates and
+  prints `{ ready, blockers, mergeCommand }` without merging
+- apply mode (`--apply`) is the only mutating path: when `ready` it
+  re-fetches the head SHA and re-validates the claim immediately before
+  merging, fails closed (no merge) on head drift or lost claim, and runs
+  a merge commit bound to the validated head — never squash or rebase
+- it adds no new decision authority (`decisionAuthority: instructions`):
+  it does not replace the written F3 gate checklist or decision table,
+  and on any helper failure or evidence conflict the agent falls back to
+  the manual F3 steps
 
 - `live-status-digest.mjs` defaults to dry-run, supports issue and PR
   targets, and mutates only with explicit `--apply`
@@ -735,6 +750,44 @@ Interpretation rules:
   live GitHub state, discard helper output and use the portable manual
   fetch path.
 
+### Merge execution (F3)
+
+- Preferred F3 path when helper runtime is enabled: dry-run first to
+  inspect the verdict, then `--apply` to execute the bound merge.
+- Command: `node scripts/idd-merge-execute.mjs --pr <pr-number>
+  --claim-issue <issue-number> --claim-id <claim-id>` plus the same
+  optional flags as `pre-merge-readiness` (`--agent-id`, `--owner`,
+  `--repo`, `--trusted-marker-logins`, `--advisory-bot-logins`); add
+  `--apply` to merge.
+- Stable contract:
+  [`idd-merge-execute.schema.json`][idd-merge-execute-schema]
+- It WRAPS the read-only `pre-merge-readiness` collector and adds no new
+  decision authority (`decisionAuthority: instructions`). `ready` is
+  `true` only when every F3 gate holds: review-currency
+  `comparisonRoute == "proceed"`, `threads.actionableCount == 0`,
+  advisory `f3Outcome == "SATISFIED"`, CI all-passing (the F2/F3
+  no-required-checks fallback included), required/CODEOWNER reviews
+  satisfied, claim ownership matches, and disposition evidence both
+  routes proceed and is unblocked (`dispositionEvidence.route ==
+  "proceed"` **and** `dispositionEvidence.blockingCount == 0`; `route`
+  alone is not sufficient). Each failing gate is listed in `blockers[]`
+  as `{ gate, detail }`.
+- Dry-run (default) is read-only: it prints `ready`, `blockers`, and
+  `mergeCommand` (a `gh pr merge <pr> --merge --match-head-commit
+  <validated-head>` bound to the freshly fetched head) and never merges.
+  It exits non-zero when not ready.
+- `--apply` is the only mutating path. If not `ready` it exits non-zero
+  without merging. If `ready` it re-fetches the head SHA and re-validates
+  the claim immediately before merging and **fails closed** (exit
+  non-zero, no merge, clear message) on any head drift or lost claim.
+  Otherwise it runs the merge commit bound to the validated head and
+  reports the result. It never squash- or rebase-merges.
+- Fail closed: if helper execution fails, output is invalid JSON,
+  required fields are missing, or helper evidence conflicts with live
+  GitHub state, discard helper output and run the manual F3 gate +
+  merge steps in `idd-merge.instructions.md`. The written F3 decision
+  table and gate checklist remain canonical.
+
 ### E7 disposition verification
 
 - Preferred command when helper runtime is enabled:
@@ -999,4 +1052,5 @@ pre-merge readiness or later claim-state inspection. They should not
 replace the written decision tables.
 
 [advisory-wait-state-schema]: https://kurone-kito.github.io/idd-skill/schemas/advisory-wait-state.schema.json
+[idd-merge-execute-schema]: https://kurone-kito.github.io/idd-skill/schemas/idd-merge-execute.schema.json
 [pre-merge-readiness-schema]: https://kurone-kito.github.io/idd-skill/schemas/pre-merge-readiness.schema.json
