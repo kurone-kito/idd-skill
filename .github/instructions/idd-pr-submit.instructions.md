@@ -9,8 +9,22 @@ Before the D1 rebase and D2 push, apply the
 
 ## D1 — Sync main before first push
 
-If the branch has not been pushed yet, rebase it onto `main`. This is
-the routine pre-publication history cleanup step.
+If the branch has not been pushed yet, sync it onto `main` before the
+first push — the routine pre-publication history cleanup step. First run
+`git fetch origin main`, then check whether the branch is **already
+current** with `origin/main`: if `git merge-base HEAD origin/main` equals
+`origin/main` (behind-count 0), the branch already contains every commit
+on `main`, so the rebase would be a pure no-op. **Skip the rebase entirely
+and proceed to D2** — D1's pre-publication synchronization goal is already
+met. In a sibling-worktree setup a no-op `git rebase origin/main` can still
+detach HEAD at the upstream tip without replaying the local commit, and
+re-running that no-op rebase re-detaches every time, so the bounded
+recovery below cannot converge for the no-op case; skipping it is the clean
+exit.
+
+Otherwise the branch **is** behind `main`: rebase it onto `main`
+(`git rebase origin/main`), then apply the post-rebase verification and
+bounded recovery below.
 
 After the first D-phase push, do not reuse D1 as the normal
 synchronization path. Later branch updates should return through the
