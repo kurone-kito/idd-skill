@@ -182,12 +182,11 @@ Before any mutating action in F3, apply the
      parent has been accepted or rejected, replied to as required, and
      resolved.
    - Known review-bot regular PR comments may be minimized only after
-     the PR is merged and the comment has a clear completed-review or
-     stale-notification signal, such as a CodeRabbit no-action summary
-     or a CodeRabbit summary / review-trigger acknowledgement with a
-     matching later IDD disposition. CodeRabbit summaries may also be
-     minimized when all CodeRabbit review threads are resolved and have
-     fresh IDD dispositions.
+     the PR is merged and the comment shows a completed-review or
+     stale-notification signal: a CodeRabbit no-action summary, a
+     review-trigger summary with a matching later IDD disposition, or a
+     CodeRabbit summary whose review threads are all resolved with fresh
+     IDD dispositions.
    - Bot review parent bodies without associated review threads are
      skipped by default, including Copilot error review bodies, unless a
      future policy explicitly narrows a safe cleanup class for them.
@@ -266,7 +265,7 @@ Before any mutating action in F3, apply the
 
 ## F5 — Loop
 
-Return to `idd-discover.instructions.md` and pick the next issue. Prefer
-re-entering Discover in a fresh short-lived session rather than looping
-in-process — see the autopilot operating model in
-[`docs/idd-workflow.md`](../../docs/idd-workflow.md).
+Return to `idd-discover.instructions.md` and pick the next issue. F4-complete /
+F5 is the **safe session-exit boundary**: under context pressure, exit here for
+a fresh Discover session rather than looping in-process — see the autopilot
+operating model in [`docs/idd-workflow.md`](../../docs/idd-workflow.md).
