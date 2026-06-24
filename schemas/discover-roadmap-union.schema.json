@@ -82,7 +82,6 @@
           "classification": {
             "type": "string",
             "enum": [
-              "roadmap",
               "execution"
             ]
           },
@@ -90,8 +89,15 @@
             "type": "string"
           },
           "autopilotSuitability": {
-            "description": "Authored autopilot-suitability score (1-5) or null when unscored. The in-repo validator supports neither union types nor `maximum`, so only the lower bound (1) is enforced here; the upper bound (5) is enforced by parseAutopilotSuitability at runtime.",
-            "minimum": 1
+            "description": "Authored autopilot-suitability score (1-5) or null when unscored. The `enum` enumerates every coherent value, so the full null | 1..5 contract (including the upper bound and rejection of non-numeric values) is enforced here, matching parseAutopilotSuitability at runtime.",
+            "enum": [
+              null,
+              1,
+              2,
+              3,
+              4,
+              5
+            ]
           },
           "sourceRoots": {
             "type": "array",

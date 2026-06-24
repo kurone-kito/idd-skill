@@ -841,6 +841,24 @@ test('all-roadmaps ranks the union by suitability descending, tie-broken by issu
   );
 });
 
+test('all-roadmaps ranks unscored leaves at the configured floor', async () => {
+  // With the configured floor at 1, an unscored leaf ranks at effective 1
+  // — now BELOW 702 (score 2), reversing the default-floor (3) ordering
+  // where 804 sorted above 702. This pins that the comparator honors the
+  // configured floor, not the hard-coded default.
+  const report = await enumerateAllRoadmapsGraph({
+    floor: 1,
+    loadOpenRoadmapRoots: async () => [700, 800],
+    loadIssue: async (issueNumber) => loadSiblingEpicIssue(issueNumber),
+  });
+
+  // 701 (5) > 803 (4) > 702 (2) > 804 (unscored, configured floor 1).
+  assert.deepEqual(
+    report.leaves.map((leaf) => leaf.number),
+    [701, 803, 702, 804],
+  );
+});
+
 test('all-roadmaps keeps scored work above an unscored leaf at the same effective score', async () => {
   const issues = new Map<number, unknown>([
     [900, roadmapIssue(900, '- [ ] #901\n- [ ] #902', 'epic-floor')],

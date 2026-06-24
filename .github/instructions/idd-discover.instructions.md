@@ -182,8 +182,11 @@ enumerate the open execution leaves across **all** open roadmap roots and
 rank them by autopilot-suitability (see A2), then carry the top-ranked
 candidate through the normal A3/A4/A4.5/A5 gates. This is additive: the
 single-root selection above stays the default, and orphan-first filtering
-still applies only to true orphans (cross-roadmap leaves carry
-`idd-skill-roadmap-id` markers, so they are not orphans).
+still applies only to true orphans (cross-roadmap leaves are reached via a
+parent roadmap's task list, and per A2 do **not** carry an
+`idd-skill-roadmap-id` marker themselves — that would make them roadmap
+nodes — so orphan-first, which targets issues with no roadmap linkage,
+does not exclude them).
 
 **Note**: Repo-wide or label-based issue queries are permitted only in
 **A0-T** (the scoped `idd-skill-roadmap-id` lookup needed to resolve the

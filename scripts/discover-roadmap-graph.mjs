@@ -9,8 +9,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
   isAutopilotSuitabilityScore,
+  normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
 } from './autopilot-suitability.mjs';
 
@@ -82,6 +82,7 @@ if (isMainModule(import.meta.url)) {
   const report = args.allRoadmaps
     ? await enumerateAllRoadmapsGraph({
         markerPrefix: policy.markerPrefix,
+        floor: policy.autopilotSuitability?.floor,
         owner,
         repo,
         loadIssue: buildIssueLoader(owner, repo),
@@ -392,6 +393,10 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
  */
 export async function enumerateAllRoadmapsGraph(options = {}) {
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
+  // Resolve the configured suitability floor (normalized to an integer
+  // 1-5, falling back to the default when unset) once, then rank unscored
+  // leaves at that configured floor.
+  const floor = normalizeAutopilotSuitabilityFloor(options.floor);
   const loadOpenRoadmapRoots = options.loadOpenRoadmapRoots;
   if (typeof loadOpenRoadmapRoots !== 'function') {
     throw new Error(
@@ -441,7 +446,9 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
         title: node.title,
         state: node.state,
         labels: node.labels,
-        classification: node.classification,
+        // Only execution candidates reach this branch (filtered by
+        // executionSet above), so the classification is always 'execution'.
+        classification: 'execution',
         roadmapMarkerId: node.roadmapMarkerId,
         autopilotSuitability: node.autopilotSuitability,
         sourceRoots: [graph.root.number],
@@ -476,7 +483,7 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       ...leaf,
       sourceRoots: [...leaf.sourceRoots].sort((left, right) => left - right),
     }))
-    .sort(compareUnionLeaves);
+    .sort((left, right) => compareUnionLeaves(left, right, floor));
   const scoredLeafCount = leaves.filter((leaf) =>
     isAutopilotSuitabilityScore(leaf.autopilotSuitability),
   ).length;
@@ -516,24 +523,24 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
  *
  * Sort key, in order:
  *   1. effective suitability DESCENDING — a coherent 1-5 score uses its
- *      own value; a missing/out-of-range score uses the floor so unscored
- *      pre-existing work is not buried below the floor;
+ *      own value; a missing/out-of-range score uses the configured floor
+ *      so unscored pre-existing work is not buried below the floor;
  *   2. scored-before-unscored at a tie — a leaf with a coherent score
  *      never ranks below an unscored leaf at the same effective value, so
- *      "missing is treated as the floor" never lets unscored work jump
- *      ahead of genuinely scored work;
+ *      "missing is treated as the configured floor" never lets unscored
+ *      work jump ahead of genuinely scored work;
  *   3. issue number ASCENDING — a stable, repository-deterministic
  *      tie-break that keeps the order from thrashing between epics.
+ *
+ * `floor` is the configured `autopilotSuitability.floor` (already
+ * normalized to an integer 1-5). The comparator stays a total order.
  */
-function compareUnionLeaves(left, right) {
+function compareUnionLeaves(left, right, floor) {
   const leftScored = isAutopilotSuitabilityScore(left.autopilotSuitability);
   const rightScored = isAutopilotSuitabilityScore(right.autopilotSuitability);
-  const leftEffective = leftScored
-    ? left.autopilotSuitability
-    : DEFAULT_AUTOPILOT_SUITABILITY_FLOOR;
-  const rightEffective = rightScored
-    ? right.autopilotSuitability
-    : DEFAULT_AUTOPILOT_SUITABILITY_FLOOR;
+  // Unscored or out-of-range leaves rank at the configured floor.
+  const leftEffective = leftScored ? left.autopilotSuitability : floor;
+  const rightEffective = rightScored ? right.autopilotSuitability : floor;
   return (
     rightEffective - leftEffective ||
     Number(rightScored) - Number(leftScored) ||
