@@ -46,6 +46,11 @@ Enter the full protocol below **only** when `LAST_COPILOT_COMMIT != PR_HEAD_SHA`
 — the canonical path (or the shell fallback when the helper cannot be trusted)
 then handles the request, pending, stalled, restart, and cap cases.
 
+Keep the wait itself cheap per the
+[wake-up discipline](idd-ci.instructions.md#wake-up-discipline): background or
+schedule a single wake at the **expected** completion rather than inserting
+interim polling turns, and batch all post-wait actions into one turn.
+
 ## 1. Canonical path (helper-first)
 
 When helper support is installed, use the profile-selected
