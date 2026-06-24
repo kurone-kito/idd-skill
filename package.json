@@ -43,7 +43,7 @@
     "lint:precommit": "biome check && dprint check \"**/*.md\" && markdownlint-cli2 \"**/*.md\"",
     "typecheck": "tsc -p tsconfig.json",
     "build": "node scripts/build-ts.mjs",
-    "build:check": "pnpm run build && git diff --exit-code -- scripts bin",
+    "build:check": "pnpm run build && git diff HEAD --exit-code -- scripts bin",
     "test": "pnpm run test:scripts",
     "test:scripts": "node --test tests/*.test.mts",
     "docs:sync": "node scripts/sync-docs.mjs --apply",

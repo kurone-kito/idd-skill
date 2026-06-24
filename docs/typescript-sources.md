@@ -48,11 +48,11 @@ adopter repositories that vendor the bundle.
 
 ## Build and verification
 
-| Command                | Purpose                                                          |
-| ---------------------- | ---------------------------------------------------------------- |
-| `pnpm run typecheck`   | `tsc --noEmit` over `src/**/*.mts` + `tests/**/*.mts` (`strict`) |
-| `pnpm run build`       | Emit the generated `.mjs` (tsc) and normalize them with Biome    |
-| `pnpm run build:check` | `build` then `git diff --exit-code` — fails when the tree drifts |
+| Command                | Purpose                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------- |
+| `pnpm run typecheck`   | `tsc --noEmit` over `src/**/*.mts` + `tests/**/*.mts` (`strict`)                |
+| `pnpm run build`       | Emit the generated `.mjs` (tsc) and normalize them with Biome                   |
+| `pnpm run build:check` | `build` then `git diff HEAD --exit-code` — fails when the committed tree drifts |
 
 `pnpm run lint:minimum` runs `typecheck` and `build:check`, so a forgotten
 rebuild or a hand-edited generated file fails the installed CI lane. The
