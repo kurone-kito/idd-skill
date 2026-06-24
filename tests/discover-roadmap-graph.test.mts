@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  buildTrustedAuthorPredicate,
   classifyIssue,
   enumerateAllRoadmapsGraph,
   enumerateRoadmapGraph,
@@ -1226,6 +1227,49 @@ test('an untrusted-author claim does not block the leaf', async () => {
   const leaf701 = byNumber.get(701);
   assert.equal(leaf701?.activeClaim?.present, false);
   assert.equal(leaf701?.claimEligible, true);
+});
+
+test('IDD_TRUSTED_MARKER_ACTORS env override honors an actor absent from policy', async () => {
+  // `env-trusted-bot` is NOT in policy `trustedMarkerActors`, so a claim it
+  // authors is only honored when the env override is consulted.
+  const previous = process.env.IDD_TRUSTED_MARKER_ACTORS;
+  process.env.IDD_TRUSTED_MARKER_ACTORS = 'env-trusted-bot';
+  try {
+    const issues = claimGraphIssues();
+    const commentsByIssue = new Map<number, unknown[]>([
+      [
+        701,
+        [
+          claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT, {
+            author: 'env-trusted-bot',
+          }),
+        ],
+      ],
+    ]);
+    // Build the resolution through the real, env-aware trusted-actor
+    // predicate (config trusts only `kurone-kito`).
+    const { resolution } = buildClaimState(commentsByIssue);
+    resolution.isTrustedAuthor = buildTrustedAuthorPredicate({
+      trustedMarkerActors: ['kurone-kito'],
+    });
+
+    const graph = await enumerateRoadmapGraph(700, {
+      loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+      claimState: resolution,
+    });
+
+    const byNumber = new Map(graph.nodes.map((node) => [node.number, node]));
+    const leaf701 = byNumber.get(701);
+    // The env-trusted author's fresh claim is now honored.
+    assert.equal(leaf701?.activeClaim?.present, true);
+    assert.equal(leaf701?.claimEligible, false);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.IDD_TRUSTED_MARKER_ACTORS;
+    } else {
+      process.env.IDD_TRUSTED_MARKER_ACTORS = previous;
+    }
+  }
 });
 
 test('--current-claim-id sets ownedByCurrentSession on the matching claim', async () => {

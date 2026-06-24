@@ -16,7 +16,11 @@ import {
   parseAutopilotSuitability,
 } from './autopilot-suitability.mts';
 import { parseIsoDurationToMs } from './policy-helpers.mts';
-import { isStaleAt, resolveActiveClaim } from './protocol-helpers.mts';
+import {
+  isStaleAt,
+  resolveActiveClaim,
+  resolveTrustedMarkerActors,
+} from './protocol-helpers.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // Policy default claim stale age (`claimTiming.staleAge`, `PT24H`). Mirrors
@@ -304,7 +308,10 @@ interface RoadmapNodeRecord {
  */
 interface ClaimStateResolution {
   loadComments: (issueNumber: number) => unknown;
-  /** Trusted-actor predicate (configured `trustedMarkerActors`). */
+  /**
+   * Trusted-actor predicate, resolved from `IDD_TRUSTED_MARKER_ACTORS` then
+   * the configured `trustedMarkerActors`.
+   */
   isTrustedAuthor: (login: string) => boolean;
   /** Configured `claimTiming.staleAge` in ms (defaults to PT24H). */
   staleAgeMs: number;
@@ -1137,39 +1144,50 @@ function buildClaimStateResolution(
   },
   currentClaimId: string,
 ): ClaimStateResolution {
-  const trustedActors = new Set(
-    (Array.isArray(policy.trustedMarkerActors)
-      ? policy.trustedMarkerActors
-      : []
-    )
-      .map((value) =>
-        String(value ?? '')
-          .trim()
-          .toLowerCase(),
-      )
-      .filter(Boolean),
-  );
   const staleAgeMs =
     parseClaimStaleAgeMs(policy.claimTiming?.staleAge) ??
     DEFAULT_CLAIM_STALE_AGE_MS;
   return {
     loadComments: buildCommentLoader(owner, repo),
-    // When `trustedMarkerActors` is empty no author is trusted, so no claim
-    // resolves and every leaf reads as `claimEligible: true`. This is a soft,
-    // availability-preferring default for the advisory discovery hint (it does
-    // NOT fail closed on eligibility): an unverifiable claim marker is simply
-    // not honored. The authoritative A5 claim gate (idd-claim.instructions.md)
-    // remains the real protection against acting on a contested claim.
-    isTrustedAuthor: (login) =>
-      trustedActors.has(
-        String(login ?? '')
-          .trim()
-          .toLowerCase(),
-      ),
+    isTrustedAuthor: buildTrustedAuthorPredicate(policy),
     staleAgeMs,
     nowIso: new Date().toISOString(),
     currentClaimId: String(currentClaimId ?? '').trim(),
   };
+}
+
+/**
+ * Build the case-insensitive trusted-marker-author predicate for the
+ * `--with-claim-state` annotation.
+ *
+ * Trusted actors are resolved through the shared
+ * {@link resolveTrustedMarkerActors} helper so this CLI honors the
+ * `IDD_TRUSTED_MARKER_ACTORS` env override exactly like every other evidence
+ * helper, not just the `trustedMarkerActors` array declared in policy. The
+ * resolved actors are already trimmed, lowercased, and deduped, so the
+ * predicate only needs to normalize the incoming login the same way.
+ *
+ * When the resolved set is empty no author is trusted, so no claim resolves
+ * and every leaf reads as `claimEligible: true`. This is a soft,
+ * availability-preferring default for the advisory discovery hint (it does
+ * NOT fail closed on eligibility): an unverifiable claim marker is simply not
+ * honored. The authoritative A5 claim gate (idd-claim.instructions.md) remains
+ * the real protection against acting on a contested claim.
+ */
+export function buildTrustedAuthorPredicate(policy: {
+  trustedMarkerActors?: unknown;
+}): (login: string) => boolean {
+  const { actors } = resolveTrustedMarkerActors({
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+    config: policy,
+  });
+  const trustedActors = new Set(actors);
+  return (login) =>
+    trustedActors.has(
+      String(login ?? '')
+        .trim()
+        .toLowerCase(),
+    );
 }
 
 /** Live per-issue comment loader (the sole new GitHub API surface). */
