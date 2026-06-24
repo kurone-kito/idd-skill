@@ -1329,8 +1329,7 @@ test('a PT0S staleAge falls back to the default 24h window, not 0ms', async () =
   // stale. Mirror that fallback here and confirm the fresh claim stays
   // non-stale (eligible:false), as the default 24h behavior demands.
   for (const staleAge of ['PT0S', 'PT0H0M0S', 'garbage', '']) {
-    const staleAgeMs =
-      parseClaimStaleAgeMs(staleAge) ?? CLAIM_STALE_AGE_MS;
+    const staleAgeMs = parseClaimStaleAgeMs(staleAge) ?? CLAIM_STALE_AGE_MS;
     assert.equal(
       staleAgeMs,
       CLAIM_STALE_AGE_MS,
@@ -1343,9 +1342,9 @@ test('a PT0S staleAge falls back to the default 24h window, not 0ms', async () =
       claimState: resolution,
     });
 
-    const leaf701 = new Map(
-      graph.nodes.map((node) => [node.number, node]),
-    ).get(701);
+    const leaf701 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+      701,
+    );
     // The fresh claim is present and non-stale → it still blocks the leaf,
     // rather than being wrongly treated as stale by a 0ms window.
     assert.deepEqual(
