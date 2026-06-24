@@ -1,0 +1,55 @@
+{
+  "mode": "all-roadmaps",
+  "roots": [
+    {
+      "number": 100,
+      "title": "roadmap 100",
+      "state": "OPEN",
+      "roadmapMarkerId": "epic-alpha"
+    },
+    {
+      "number": 200,
+      "title": "roadmap 200",
+      "state": "OPEN",
+      "roadmapMarkerId": "epic-beta"
+    }
+  ],
+  "leaves": [
+    {
+      "number": 101,
+      "title": "scored leaf",
+      "state": "OPEN",
+      "labels": [],
+      "classification": "execution",
+      "roadmapMarkerId": "",
+      "autopilotSuitability": 5,
+      "sourceRoots": [100]
+    },
+    {
+      "number": 201,
+      "title": "shared unscored leaf",
+      "state": "OPEN",
+      "labels": ["enhancement"],
+      "classification": "execution",
+      "roadmapMarkerId": "",
+      "autopilotSuitability": null,
+      "sourceRoots": [100, 200]
+    }
+  ],
+  "diagnostics": {
+    "duplicateReferences": [],
+    "cycles": [],
+    "inaccessibleReferences": [],
+    "unresolvedReferences": []
+  },
+  "summary": {
+    "rootCount": 2,
+    "leafCount": 2,
+    "scoredLeafCount": 1,
+    "sharedLeafCount": 1,
+    "duplicateReferenceCount": 0,
+    "cycleCount": 0,
+    "inaccessibleReferenceCount": 0,
+    "unresolvedReferenceCount": 0
+  }
+}

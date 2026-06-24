@@ -129,10 +129,15 @@ future inventory reviews do not need to re-infer their role from code.
 ### Discover Roadmap Graph Contract
 
 `scripts/discover-roadmap-graph.mjs` evaluates the recursive A1.5/A2
-roadmap graph for one selected roadmap issue.
+roadmap graph for one selected roadmap issue. It also offers an additive
+cross-roadmap autopilot discovery mode (`--all-roadmaps`) that unions the
+open execution leaves across every open roadmap root; the single-root
+default below is unchanged.
 
 - **Inputs**: `--issue <number>`, with optional `--owner <owner>`,
-  `--repo <repo>`, and `--policy <path>`.
+  `--repo <repo>`, and `--policy <path>`. `--issue` and `--all-roadmaps`
+  are mutually exclusive; exactly one mode must be selected. Passing both,
+  or neither, is an error.
 - **JSON output**:
   - `root`: `{ number: number, title: string, state: string,`
     `classification: "roadmap" | "execution", roadmapMarkerId: string }`
@@ -152,7 +157,37 @@ roadmap graph for one selected roadmap issue.
     `duplicateReferenceCount: number, cycleCount: number,`
     `inaccessibleReferenceCount: number, unresolvedReferenceCount: number,`
     `maxDepth: number }`
-- **Error conditions**: missing `--issue`, unknown flags, an unreadable
+- **Cross-roadmap autopilot mode (`--all-roadmaps`)**: discovers every
+  **open** roadmap root (an open issue carrying the `roadmap` label **or**
+  an `<!-- {{PROJECT_MARKER_PREFIX}}-roadmap-id: ... -->` marker), runs the
+  single-root enumeration above from each root, and returns a **union** of
+  open execution leaves. The output shape differs from single-root mode:
+  - `mode`: `"all-roadmaps"`
+  - `roots`: `[{ number: number, title: string, state: string,`
+    `roadmapMarkerId: string }]` — every open roadmap root enumerated
+  - `leaves`: `[{ number: number, title: string, state: string,`
+    `labels: string[], classification: "execution",`
+    `roadmapMarkerId: string, autopilotSuitability: number | null,`
+    `sourceRoots: number[] }]` — the union of open execution leaves. Each
+    leaf records every roadmap root it is reachable from in `sourceRoots`
+    (provenance); a leaf shared by sibling epics appears **once** and is
+    never double-counted.
+  - `diagnostics`: same four buckets as single-root mode, deduped across
+    every per-root enumeration.
+  - `summary`: `{ rootCount: number, leafCount: number,`
+    `scoredLeafCount: number, sharedLeafCount: number,`
+    `duplicateReferenceCount: number, cycleCount: number,`
+    `inaccessibleReferenceCount: number, unresolvedReferenceCount: number }`
+  - **Ranking** (global-by-score): `leaves` is sorted by
+    `autopilotSuitability` **descending**, tie-broken by issue number
+    **ascending** (stable). A missing or out-of-range score is treated as
+    the configured suitability floor for ordering so unscored work is not
+    buried, but a coherently scored leaf never ranks below an unscored leaf
+    at the same effective value — scored work always sorts first at a tie.
+    The score is an advisory ranking hint only; it never replaces the
+    A4.5 suitability gate or the A5 claim safety checks.
+- **Error conditions**: missing `--issue` (and no `--all-roadmaps`),
+  combining `--issue` with `--all-roadmaps`, unknown flags, an unreadable
   root roadmap, or incomplete `subIssues` GraphQL data throw. Missing or
   inaccessible descendants are reported in `diagnostics` instead of
   crashing.

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import type { AdvisoryWaitStateReport } from '../src/scripts/advisory-wait-state.mts';
 import type { BranchConflictResult } from '../src/scripts/branch-conflict-state.mts';
+import type { RoadmapGraphUnionReport } from '../src/scripts/discover-roadmap-graph.mts';
 import type { PreMergeReadinessReport } from '../src/scripts/pre-merge-readiness.mts';
 import type {
   LiveStatusDigestFields,
@@ -286,6 +287,14 @@ export const claimMarkerKeys = [
   'createdAt',
 ] as const satisfies readonly (keyof ParsedClaimMarker)[];
 
+export const discoverRoadmapUnionKeys = [
+  'mode',
+  'roots',
+  'leaves',
+  'diagnostics',
+  'summary',
+] as const satisfies readonly (keyof RoadmapGraphUnionReport)[];
+
 export const forcedHandoffMarkerKeys = [
   'oldAgentId',
   'oldClaimId',
@@ -427,6 +436,10 @@ const exhaustivenessWitnesses: {
     ParsedClaimMarker,
     (typeof claimMarkerKeys)[number]
   >;
+  discoverRoadmapUnion: CoversAllKeysOf<
+    RoadmapGraphUnionReport,
+    (typeof discoverRoadmapUnionKeys)[number]
+  >;
   forcedHandoffMarker: CoversAllKeysOf<
     ParsedForcedHandoffMarker,
     (typeof forcedHandoffMarkerKeys)[number]
@@ -451,6 +464,7 @@ const exhaustivenessWitnesses: {
   advisoryWaitState: true,
   branchConflictState: true,
   claimMarker: true,
+  discoverRoadmapUnion: true,
   forcedHandoffMarker: true,
   liveStatusDigest: true,
   phaseGraph: true,
@@ -521,6 +535,62 @@ const claimMarkerFixture = {
   branch: 'issue/874-reconcile-schemas-json-exported',
   createdAt: '2026-06-11T00:00:00Z',
 } satisfies ParsedClaimMarker;
+
+const discoverRoadmapUnionFixture = {
+  mode: 'all-roadmaps',
+  roots: [
+    {
+      number: 100,
+      title: 'roadmap 100',
+      state: 'OPEN',
+      roadmapMarkerId: 'epic-alpha',
+    },
+    {
+      number: 200,
+      title: 'roadmap 200',
+      state: 'OPEN',
+      roadmapMarkerId: 'epic-beta',
+    },
+  ],
+  leaves: [
+    {
+      number: 101,
+      title: 'scored leaf',
+      state: 'OPEN',
+      labels: [],
+      classification: 'execution',
+      roadmapMarkerId: '',
+      autopilotSuitability: 5,
+      sourceRoots: [100],
+    },
+    {
+      number: 201,
+      title: 'shared unscored leaf',
+      state: 'OPEN',
+      labels: ['enhancement'],
+      classification: 'execution',
+      roadmapMarkerId: '',
+      autopilotSuitability: null,
+      sourceRoots: [100, 200],
+    },
+  ],
+  diagnostics: {
+    duplicateReferences: [],
+    cycles: [],
+    inaccessibleReferences: [],
+    unresolvedReferences: [],
+  },
+  summary: {
+    rootCount: 2,
+    leafCount: 2,
+    scoredLeafCount: 1,
+    sharedLeafCount: 1,
+    duplicateReferenceCount: 0,
+    cycleCount: 0,
+    inaccessibleReferenceCount: 0,
+    unresolvedReferenceCount: 0,
+  },
+} satisfies RoadmapGraphUnionReport;
 
 const forcedHandoffMarkerFixture = {
   oldAgentId: 'github-copilot-cli-old',
@@ -840,6 +910,13 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
     owningModule: 'src/scripts/protocol-helpers.mts',
     keys: claimMarkerKeys,
     fixture: claimMarkerFixture,
+  },
+  {
+    schemaFile: 'discover-roadmap-union.schema.json',
+    exportedType: 'RoadmapGraphUnionReport',
+    owningModule: 'src/scripts/discover-roadmap-graph.mts',
+    keys: discoverRoadmapUnionKeys,
+    fixture: discoverRoadmapUnionFixture,
   },
   {
     schemaFile: 'forced-handoff-marker.schema.json',

@@ -1616,3 +1616,38 @@ test('branch-conflict-state invalid fixture fails validation', () => {
   );
   assert.ok(ok, 'Expected invalid fixture to fail schema validation');
 });
+
+test('discover-roadmap-union schema uses only allowed keywords', () => {
+  const schema = loadJson('schemas/discover-roadmap-union.schema.json');
+  assert.deepEqual(checkSchemaKeywords(schema), []);
+});
+
+test('discover-roadmap-union schema publishes metadata fields', () => {
+  const schema = loadJson(
+    'schemas/discover-roadmap-union.schema.json',
+  ) as JsonRecord;
+  assert.equal(schema.$schema, 'https://json-schema.org/draft/2020-12/schema');
+  assert.equal(
+    schema.$id,
+    'https://kurone-kito.github.io/idd-skill/schemas/discover-roadmap-union.schema.json',
+  );
+  assert.equal(schema.title, 'Discover Roadmap Union');
+});
+
+test('discover-roadmap-union valid fixture passes validation', () => {
+  const { ok, errors } = validateFixture(
+    'schemas/discover-roadmap-union.schema.json',
+    'fixtures/schemas/discover-roadmap-union.valid.json',
+    true,
+  );
+  assert.ok(ok, errors.join('\n'));
+});
+
+test('discover-roadmap-union invalid fixture fails validation', () => {
+  const { ok } = validateFixture(
+    'schemas/discover-roadmap-union.schema.json',
+    'fixtures/schemas/discover-roadmap-union.invalid.json',
+    false,
+  );
+  assert.ok(ok, 'Expected invalid fixture to fail schema validation');
+});

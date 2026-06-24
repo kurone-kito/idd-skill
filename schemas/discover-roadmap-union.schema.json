@@ -1,0 +1,300 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/discover-roadmap-union.schema.json",
+  "title": "Discover Roadmap Union",
+  "description": "Read-only cross-roadmap autopilot discovery union: open execution leaves across every open roadmap root, each tagged with its source roots and ranked by autopilot suitability.",
+  "type": "object",
+  "required": [
+    "mode",
+    "roots",
+    "leaves",
+    "diagnostics",
+    "summary"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": [
+        "all-roadmaps"
+      ]
+    },
+    "roots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "number",
+          "title",
+          "state",
+          "roadmapMarkerId"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "title": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "roadmapMarkerId": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "leaves": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "number",
+          "title",
+          "state",
+          "labels",
+          "classification",
+          "roadmapMarkerId",
+          "autopilotSuitability",
+          "sourceRoots"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "title": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "classification": {
+            "type": "string",
+            "enum": [
+              "roadmap",
+              "execution"
+            ]
+          },
+          "roadmapMarkerId": {
+            "type": "string"
+          },
+          "autopilotSuitability": {
+            "description": "Authored autopilot-suitability score (1-5) or null when unscored. The in-repo validator supports neither union types nor `maximum`, so only the lower bound (1) is enforced here; the upper bound (5) is enforced by parseAutopilotSuitability at runtime.",
+            "minimum": 1
+          },
+          "sourceRoots": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "object",
+      "required": [
+        "duplicateReferences",
+        "cycles",
+        "inaccessibleReferences",
+        "unresolvedReferences"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "duplicateReferences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "source",
+              "target",
+              "relationship",
+              "evidence",
+              "firstSeenFrom"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "target": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "relationship": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "string"
+              },
+              "firstSeenFrom": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        },
+        "cycles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "source",
+              "target",
+              "relationship",
+              "path"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "target": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "relationship": {
+                "type": "string"
+              },
+              "path": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        },
+        "inaccessibleReferences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "source",
+              "target",
+              "relationship",
+              "evidence",
+              "reason"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "target": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "relationship": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "unresolvedReferences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "source",
+              "target",
+              "relationship",
+              "evidence",
+              "reason"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "target": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "relationship": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "rootCount",
+        "leafCount",
+        "scoredLeafCount",
+        "sharedLeafCount",
+        "duplicateReferenceCount",
+        "cycleCount",
+        "inaccessibleReferenceCount",
+        "unresolvedReferenceCount"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "rootCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "leafCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scoredLeafCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sharedLeafCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "duplicateReferenceCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cycleCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inaccessibleReferenceCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unresolvedReferenceCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
