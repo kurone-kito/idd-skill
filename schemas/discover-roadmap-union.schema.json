@@ -105,6 +105,32 @@
               "type": "integer",
               "minimum": 1
             }
+          },
+          "activeClaim": {
+            "description": "Active-claim annotation, present only under --with-claim-state. Either null (no present trusted claim) or an object describing the resolved active claim. The in-repo validator has no union `type` / `oneOf` support, so the object case is constrained by `properties` + `additionalProperties: false` (applied only when the value is an object) while `null` passes the type-free check; the runtime contract is null | { present, stale, claimId, agentId, ownedByCurrentSession? }.",
+            "additionalProperties": false,
+            "properties": {
+              "present": {
+                "type": "boolean"
+              },
+              "stale": {
+                "type": "boolean"
+              },
+              "claimId": {
+                "description": "Active claim id (string), or null when no claim is present. The in-repo validator cannot express the `string | null` union, so no `type` is declared here; the runtime contract is string | null."
+              },
+              "agentId": {
+                "description": "Active claim agent id (string), or null when no claim is present. The in-repo validator cannot express the `string | null` union, so no `type` is declared here; the runtime contract is string | null."
+              },
+              "ownedByCurrentSession": {
+                "description": "Present only when --current-claim-id is supplied: true when the active claim's claimId equals it.",
+                "type": "boolean"
+              }
+            }
+          },
+          "claimEligible": {
+            "description": "Derived eligibility, present only under --with-claim-state: true when no present, non-stale, trusted-actor claim blocks this leaf.",
+            "type": "boolean"
           }
         }
       }

@@ -1025,3 +1025,278 @@ process.exit(1);
     /missing required --issue/,
   );
 });
+
+// ---------------------------------------------------------------------------
+// --with-claim-state annotation (#1008).
+// ---------------------------------------------------------------------------
+
+const CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
+const CLAIM_NOW = '2026-06-25T12:00:00Z';
+
+// A claim posted recently relative to CLAIM_NOW is non-stale; one posted
+// well over the 24h stale age earlier is stale.
+const FRESH_CLAIM_AT = '2026-06-25T06:00:00Z';
+const STALE_CLAIM_AT = '2026-06-20T06:00:00Z';
+
+function claimComment(
+  agentId: string,
+  claimId: string,
+  createdAt: string,
+  { author = 'kurone-kito', branch = 'issue/700-task' } = {},
+) {
+  return {
+    body: `<!-- claimed-by: ${agentId} ${claimId} supersedes: none ${createdAt} branch: ${branch} -->`,
+    createdAt,
+    author: { login: author },
+  };
+}
+
+function buildClaimState(
+  commentsByIssue: Map<number, unknown[]>,
+  {
+    currentClaimId = '',
+    trustedActors = ['kurone-kito'],
+    staleAgeMs = CLAIM_STALE_AGE_MS,
+  }: {
+    currentClaimId?: string;
+    trustedActors?: string[];
+    staleAgeMs?: number;
+  } = {},
+) {
+  const trusted = new Set(trustedActors.map((value) => value.toLowerCase()));
+  const seen: number[] = [];
+  return {
+    seen,
+    resolution: {
+      loadComments: (issueNumber: number) => {
+        seen.push(issueNumber);
+        return commentsByIssue.get(issueNumber) ?? [];
+      },
+      isTrustedAuthor: (login: string) =>
+        trusted.has(String(login ?? '').toLowerCase()),
+      staleAgeMs,
+      nowIso: CLAIM_NOW,
+      currentClaimId,
+    },
+  };
+}
+
+// One epic (700) → two open execution leaves (701, 702).
+function claimGraphIssues() {
+  return new Map<number, unknown>([
+    [700, roadmapIssue(700, '- [ ] #701\n- [ ] #702', 'epic-claim')],
+    [701, executionIssue(701, 'leaf 701')],
+    [702, executionIssue(702, 'leaf 702')],
+  ]);
+}
+
+test('without --with-claim-state, leaves carry no claim fields and fetch no comments', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT)]],
+  ]);
+  const { seen } = buildClaimState(commentsByIssue);
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    // claimState intentionally omitted (default path).
+  });
+
+  // No claim fields are present on any node.
+  for (const node of graph.nodes) {
+    const record = node as unknown as Record<string, unknown>;
+    assert.equal(Object.hasOwn(record, 'activeClaim'), false);
+    assert.equal(Object.hasOwn(record, 'claimEligible'), false);
+  }
+  // No comment fetch happened — the loader was never invoked.
+  assert.deepEqual(seen, []);
+});
+
+test('--all-roadmaps without claim state leaves the union shape byte-stable', async () => {
+  const issues = claimGraphIssues();
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [700],
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  for (const leaf of report.leaves) {
+    const record = leaf as unknown as Record<string, unknown>;
+    assert.equal(Object.hasOwn(record, 'activeClaim'), false);
+    assert.equal(Object.hasOwn(record, 'claimEligible'), false);
+  }
+});
+
+test('a present non-stale claim marks the leaf claimEligible:false', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT)]],
+  ]);
+  const { resolution, seen } = buildClaimState(commentsByIssue);
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const byNumber = new Map(graph.nodes.map((node) => [node.number, node]));
+  const leaf701 = byNumber.get(701);
+  assert.deepEqual(leaf701?.activeClaim, {
+    present: true,
+    stale: false,
+    claimId: 'claim-701',
+    agentId: 'agent-a',
+  });
+  assert.equal(leaf701?.claimEligible, false);
+  // Only the open execution leaves are probed (not the roadmap root 700).
+  assert.deepEqual(
+    [...seen].sort((a, b) => a - b),
+    [701, 702],
+  );
+});
+
+test('a stale claim is takeover-eligible: present:true, stale:true, claimEligible:true', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', STALE_CLAIM_AT)]],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const byNumber = new Map(graph.nodes.map((node) => [node.number, node]));
+  const leaf701 = byNumber.get(701);
+  assert.deepEqual(leaf701?.activeClaim, {
+    present: true,
+    stale: true,
+    claimId: 'claim-701',
+    agentId: 'agent-a',
+  });
+  assert.equal(leaf701?.claimEligible, true);
+});
+
+test('an unclaimed leaf is eligible: present:false, claimEligible:true', async () => {
+  const issues = claimGraphIssues();
+  // 702 has no comments at all.
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT)]],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const byNumber = new Map(graph.nodes.map((node) => [node.number, node]));
+  const leaf702 = byNumber.get(702);
+  assert.deepEqual(leaf702?.activeClaim, {
+    present: false,
+    stale: false,
+    claimId: null,
+    agentId: null,
+  });
+  assert.equal(leaf702?.claimEligible, true);
+});
+
+test('an untrusted-author claim does not block the leaf', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [
+      701,
+      [
+        claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT, {
+          author: 'random-drive-by',
+        }),
+      ],
+    ],
+  ]);
+  // Only kurone-kito is trusted, so the marker is ignored → no present claim.
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const byNumber = new Map(graph.nodes.map((node) => [node.number, node]));
+  const leaf701 = byNumber.get(701);
+  assert.equal(leaf701?.activeClaim?.present, false);
+  assert.equal(leaf701?.claimEligible, true);
+});
+
+test('--current-claim-id sets ownedByCurrentSession on the matching claim', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT)]],
+    [702, [claimComment('agent-b', 'claim-702', FRESH_CLAIM_AT)]],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue, {
+    currentClaimId: 'claim-701',
+  });
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const byNumber = new Map(graph.nodes.map((node) => [node.number, node]));
+  // Matching claim id → owned by the current session.
+  assert.equal(byNumber.get(701)?.activeClaim?.ownedByCurrentSession, true);
+  // Non-matching claim id → not owned, but the flag is still emitted.
+  assert.equal(byNumber.get(702)?.activeClaim?.ownedByCurrentSession, false);
+});
+
+test('--current-claim-id emits ownedByCurrentSession:false on an unclaimed leaf', async () => {
+  const issues = claimGraphIssues();
+  const { resolution } = buildClaimState(new Map(), {
+    currentClaimId: 'claim-701',
+  });
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const byNumber = new Map(graph.nodes.map((node) => [node.number, node]));
+  assert.deepEqual(byNumber.get(701)?.activeClaim, {
+    present: false,
+    stale: false,
+    claimId: null,
+    agentId: null,
+    ownedByCurrentSession: false,
+  });
+});
+
+test('--all-roadmaps annotates union leaves and fetches each issue once', async () => {
+  // Two epics share leaf 702; with claim state it must be fetched once.
+  const issues = new Map<number, unknown>([
+    [700, roadmapIssue(700, '- [ ] #701\n- [ ] #702', 'epic-alpha')],
+    [800, roadmapIssue(800, '- [ ] #702\n- [ ] #803', 'epic-beta')],
+    [701, executionIssue(701, 'leaf 701')],
+    [702, executionIssue(702, 'shared leaf 702')],
+    [803, executionIssue(803, 'leaf 803')],
+  ]);
+  const commentsByIssue = new Map<number, unknown[]>([
+    [702, [claimComment('agent-a', 'claim-702', FRESH_CLAIM_AT)]],
+  ]);
+  const { resolution, seen } = buildClaimState(commentsByIssue);
+
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [700, 800],
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const byNumber = new Map(report.leaves.map((leaf) => [leaf.number, leaf]));
+  // Shared, claimed leaf 702: present non-stale claim → not eligible.
+  assert.equal(byNumber.get(702)?.activeClaim?.present, true);
+  assert.equal(byNumber.get(702)?.claimEligible, false);
+  // Unclaimed leaves are eligible.
+  assert.equal(byNumber.get(701)?.claimEligible, true);
+  assert.equal(byNumber.get(803)?.claimEligible, true);
+  // The shared leaf 702 is fetched exactly once even though two roots reach it.
+  assert.equal(seen.filter((issueNumber) => issueNumber === 702).length, 1);
+});

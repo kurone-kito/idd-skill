@@ -23,7 +23,15 @@
       "classification": "execution",
       "roadmapMarkerId": "",
       "autopilotSuitability": 5,
-      "sourceRoots": [100]
+      "sourceRoots": [100],
+      "activeClaim": {
+        "present": true,
+        "stale": false,
+        "claimId": "claim-20260625T000000Z-101",
+        "agentId": "github-copilot-cli",
+        "ownedByCurrentSession": false
+      },
+      "claimEligible": false
     },
     {
       "number": 201,
@@ -33,7 +41,9 @@
       "classification": "execution",
       "roadmapMarkerId": "",
       "autopilotSuitability": null,
-      "sourceRoots": [100, 200]
+      "sourceRoots": [100, 200],
+      "activeClaim": null,
+      "claimEligible": true
     }
   ],
   "diagnostics": {
