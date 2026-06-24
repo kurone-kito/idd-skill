@@ -187,8 +187,10 @@ pnpm run lint
 pnpm run test
 ```
 
-The pre-commit hook runs `pnpm run lint:minimum`, and the commit message
-hook enforces Conventional Commits through commitlint.
+The pre-commit hook runs a fast, commit-safe subset
+(`pnpm run lint:precommit`: Biome, dprint, and markdownlint); the full
+`pnpm run lint:minimum` suite runs in CI. The commit message hook enforces
+Conventional Commits through commitlint.
 
 When you edit canonical source files in `idd-template/`, run
 `pnpm run docs:sync` to propagate the changes to all mirrored artifacts.
