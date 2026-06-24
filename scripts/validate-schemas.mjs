@@ -357,6 +357,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       'fixtures/schemas/pre-merge-readiness.invalid.json',
       false,
     ],
+    [
+      'schemas/idd-merge-execute.schema.json',
+      'fixtures/schemas/idd-merge-execute.valid.json',
+      true,
+    ],
+    [
+      'schemas/idd-merge-execute.schema.json',
+      'fixtures/schemas/idd-merge-execute.invalid.json',
+      false,
+    ],
     ['schemas/policy.schema.json', 'fixtures/schemas/policy.valid.json', true],
     [
       'schemas/policy.schema.json',

@@ -6,6 +6,7 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { readAdvisoryWaitPolicy } from './advisory-wait-policy.mjs';
 import {
   isAuthorizedForcedHandoffActor,
@@ -28,207 +29,219 @@ import {
   resolveTrustedMarkerActors,
   selectCodeownersText,
 } from './protocol-helpers.mjs';
-
-const args = parseArgs(process.argv.slice(2));
-if (!args.prNumber) {
-  throw new Error('missing required --pr <number> argument');
-}
-if (!args.claimIssueNumber) {
-  throw new Error('missing required --claim-issue <number> argument');
-}
-const owner =
-  args.owner ||
-  ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-const repo =
-  args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
-const repoRef = `${owner}/${repo}`;
-const viewerLogin = safeGhText(['api', 'user', '--jq', '.login']).toLowerCase();
-const viewerAppSlug = safeGhText([
-  'api',
-  'app',
-  '--jq',
-  '.slug // .app_slug // empty',
-]).toLowerCase();
-const iddConfig = loadIddConfig();
-const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
-  resolveTrustedMarkerActors({
-    flagValue: args.trustedMarkerLogins,
-    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-    config: iddConfig,
-  });
-const { logins: advisoryBotLogins, source: advisoryBotLoginsSource } =
-  resolveAdvisoryBotLogins({
-    flagValue: args.advisoryBotLogins,
-    envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
-    config: iddConfig,
-  });
-const pr = ghJson([
-  'pr',
-  'view',
-  String(args.prNumber),
-  '-R',
-  repoRef,
-  '--json',
-  'headRefOid,baseRefName,url,author,reviewDecision',
-  '--jq',
-  '.',
-]);
-const prHeadSha = String(pr.headRefOid ?? '');
-const baseRefName = String(pr.baseRefName ?? '');
-const prUrl = String(pr.url ?? '');
-const prAuthorLogin = String(pr.author?.login ?? '').toLowerCase();
-const reviewDecision = String(pr.reviewDecision ?? '');
-const encodedBaseRefName = encodeURIComponent(baseRefName);
-const checks = ghJson(
-  [
+/**
+ * Fetch live GitHub state for the PR + claim issue and build the
+ * read-only pre-merge readiness report. Shared by this CLI and the
+ * `idd-merge-execute` helper so the F2/F3 gate logic is collected from
+ * exactly one place (no duplicated gh plumbing or gate evaluation).
+ */
+export function collectPreMergeReadiness(argv) {
+  const args = parseArgs(argv);
+  if (!args.prNumber) {
+    throw new Error('missing required --pr <number> argument');
+  }
+  if (!args.claimIssueNumber) {
+    throw new Error('missing required --claim-issue <number> argument');
+  }
+  const owner =
+    args.owner ||
+    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+  const repo =
+    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+  const repoRef = `${owner}/${repo}`;
+  const viewerLogin = safeGhText([
+    'api',
+    'user',
+    '--jq',
+    '.login',
+  ]).toLowerCase();
+  const viewerAppSlug = safeGhText([
+    'api',
+    'app',
+    '--jq',
+    '.slug // .app_slug // empty',
+  ]).toLowerCase();
+  const iddConfig = loadIddConfig();
+  const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
+    resolveTrustedMarkerActors({
+      flagValue: args.trustedMarkerLogins,
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+      config: iddConfig,
+    });
+  const { logins: advisoryBotLogins, source: advisoryBotLoginsSource } =
+    resolveAdvisoryBotLogins({
+      flagValue: args.advisoryBotLogins,
+      envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
+      config: iddConfig,
+    });
+  const pr = ghJson([
     'pr',
-    'checks',
+    'view',
     String(args.prNumber),
     '-R',
     repoRef,
     '--json',
-    'name,state,completedAt',
+    'headRefOid,baseRefName,url,author,reviewDecision',
     '--jq',
     '.',
-  ],
-  { allowStatuses: [1, 8] },
-);
-const branchRules = ghApiJson(
-  `repos/${owner}/${repo}/rules/branches/${encodedBaseRefName}`,
-  true,
-  [],
-  { allowHttpStatuses: [404] },
-);
-const branchRulesets = fetchBranchRulesets(owner, repo, branchRules);
-const branchProtection = ghApiJson(
-  `repos/${owner}/${repo}/branches/${encodedBaseRefName}/protection`,
-  false,
-  [],
-  { allowHttpStatuses: [404] },
-);
-const reviews = ghApiJson(
-  `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
-  true,
-);
-const requestedReviewers = ghApiJson(
-  `repos/${owner}/${repo}/pulls/${args.prNumber}/requested_reviewers`,
-  false,
-);
-const timelineEvents = ghApiJson(
-  `repos/${owner}/${repo}/issues/${args.prNumber}/timeline`,
-  true,
-  ['-H', 'Accept: application/vnd.github+json'],
-);
-const comments = ghApiJson(
-  `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
-  true,
-);
-const claimComments = ghApiJson(
-  `repos/${owner}/${repo}/issues/${args.claimIssueNumber}/comments`,
-  true,
-);
-const threads = fetchReviewThreads(owner, repo, args.prNumber);
-const changedFiles = ghApiJson(
-  `repos/${owner}/${repo}/pulls/${args.prNumber}/files`,
-  true,
-)
-  .map((file) => String(file.filename ?? ''))
-  .filter(Boolean);
-const codeownersText = fetchCodeownersText(owner, repo, baseRefName);
-const eligibleCodeownerUserLogins = resolveEligibleCodeownerUserLogins(
-  owner,
-  repo,
-  resolveCodeownersForFiles(codeownersText, changedFiles).codeownerUserLogins,
-);
-const viewerTeamSlugs = resolveViewerClassicBypassTeamSlugs(
-  owner,
-  viewerLogin,
-  branchProtection,
-);
-const collaboratorTrustEnabled = readCollaboratorTrustEnabled();
-const trustedMarkerLogins = normalizeTrustedMarkerLogins([
-  viewerLogin,
-  ...configuredTrustedActors,
-  ...(collaboratorTrustEnabled
-    ? resolveTrustedCollaboratorMarkerLogins(owner, repo, [
-        ...comments,
-        ...claimComments,
-      ])
-    : []),
-]);
-const iddAgentLogins = deriveIddAgentLogins({
-  viewerLogin,
-  iddAgentLogins: splitCsv(args.iddAgentLogins),
-  trustedMarkerLogins,
-  operationalComments: [...comments, ...claimComments],
-});
-const advisoryWaitPolicy = readAdvisoryWaitPolicy();
-const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
-const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
-const forcedHandoffPermissionCache = new Map();
-const waivableCheckSelectors = readWaivableCheckSelectors();
-const summary = buildPreMergeReadinessSummary(
-  {
-    prHeadSha,
-    comments: comments.map(normalizeComment),
-    reviews: reviews.map(normalizeReview),
-    threads: threads.map(normalizeThread),
-    checks,
-    branchRules,
-    branchRulesets,
-    branchProtection,
-    requestedReviewers: requestedReviewers.users ?? [],
-    timelineEvents,
-    claimEvents: claimComments.map(normalizeClaimComment),
-    changedFiles,
-    codeownersText,
-    eligibleCodeownerUserLogins,
-    reviewDecision,
-  },
-  {
-    now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
-    trustedMarkerLogins,
-    iddAgentLogins,
-    advisoryBotLogins,
-    advisoryBotLoginsSource,
-    prAuthorLogin,
-    expectedClaimId: args.expectedClaimId,
-    expectedAgentId: args.expectedAgentId,
-    includeDispositionEvidence: true,
-    requestCap: advisoryWaitPolicy.requestCap,
-    pendingWindowMinutes: advisoryWaitPolicy.pendingWindowMinutes,
-    settledWindowMinutes: advisoryWaitPolicy.settledWindowMinutes,
-    pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
-    capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
-    waivableCheckSelectors,
-    forcedHandoffEnabled,
-    expectedLinkedPrs: [String(args.prNumber), prUrl].filter(Boolean),
-    isAuthorizedForcedHandoff: (forcedBy) =>
-      isAuthorizedForcedHandoffActor(
-        owner,
-        repo,
-        forcedBy,
-        forcedHandoffAuthorityPolicy,
-        forcedHandoffPermissionCache,
-      ),
+  ]);
+  const prHeadSha = String(pr.headRefOid ?? '');
+  const baseRefName = String(pr.baseRefName ?? '');
+  const prUrl = String(pr.url ?? '');
+  const prAuthorLogin = String(pr.author?.login ?? '').toLowerCase();
+  const reviewDecision = String(pr.reviewDecision ?? '');
+  const encodedBaseRefName = encodeURIComponent(baseRefName);
+  const checks = ghJson(
+    [
+      'pr',
+      'checks',
+      String(args.prNumber),
+      '-R',
+      repoRef,
+      '--json',
+      'name,state,completedAt',
+      '--jq',
+      '.',
+    ],
+    { allowStatuses: [1, 8] },
+  );
+  const branchRules = ghApiJson(
+    `repos/${owner}/${repo}/rules/branches/${encodedBaseRefName}`,
+    true,
+    [],
+    { allowHttpStatuses: [404] },
+  );
+  const branchRulesets = fetchBranchRulesets(owner, repo, branchRules);
+  const branchProtection = ghApiJson(
+    `repos/${owner}/${repo}/branches/${encodedBaseRefName}/protection`,
+    false,
+    [],
+    { allowHttpStatuses: [404] },
+  );
+  const reviews = ghApiJson(
+    `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
+    true,
+  );
+  const requestedReviewers = ghApiJson(
+    `repos/${owner}/${repo}/pulls/${args.prNumber}/requested_reviewers`,
+    false,
+  );
+  const timelineEvents = ghApiJson(
+    `repos/${owner}/${repo}/issues/${args.prNumber}/timeline`,
+    true,
+    ['-H', 'Accept: application/vnd.github+json'],
+  );
+  const comments = ghApiJson(
+    `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
+    true,
+  );
+  const claimComments = ghApiJson(
+    `repos/${owner}/${repo}/issues/${args.claimIssueNumber}/comments`,
+    true,
+  );
+  const threads = fetchReviewThreads(owner, repo, args.prNumber);
+  const changedFiles = ghApiJson(
+    `repos/${owner}/${repo}/pulls/${args.prNumber}/files`,
+    true,
+  )
+    .map((file) => String(file.filename ?? ''))
+    .filter(Boolean);
+  const codeownersText = fetchCodeownersText(owner, repo, baseRefName);
+  const eligibleCodeownerUserLogins = resolveEligibleCodeownerUserLogins(
+    owner,
+    repo,
+    resolveCodeownersForFiles(codeownersText, changedFiles).codeownerUserLogins,
+  );
+  const viewerTeamSlugs = resolveViewerClassicBypassTeamSlugs(
+    owner,
     viewerLogin,
-    viewerTeamSlugs,
-    viewerAppSlug,
-    configuredTrustedActors,
-    collaboratorTrustEnabled,
-  },
-);
-process.stdout.write(
-  `${JSON.stringify(
+    branchProtection,
+  );
+  const collaboratorTrustEnabled = readCollaboratorTrustEnabled();
+  const trustedMarkerLogins = normalizeTrustedMarkerLogins([
+    viewerLogin,
+    ...configuredTrustedActors,
+    ...(collaboratorTrustEnabled
+      ? resolveTrustedCollaboratorMarkerLogins(owner, repo, [
+          ...comments,
+          ...claimComments,
+        ])
+      : []),
+  ]);
+  const iddAgentLogins = deriveIddAgentLogins({
+    viewerLogin,
+    iddAgentLogins: splitCsv(args.iddAgentLogins),
+    trustedMarkerLogins,
+    operationalComments: [...comments, ...claimComments],
+  });
+  const advisoryWaitPolicy = readAdvisoryWaitPolicy();
+  const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
+  const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
+  const forcedHandoffPermissionCache = new Map();
+  const waivableCheckSelectors = readWaivableCheckSelectors();
+  const summary = buildPreMergeReadinessSummary(
     {
-      ...summary,
-      trustedMarkerActors: configuredTrustedActors,
-      trustedMarkerActorsSource,
+      prHeadSha,
+      comments: comments.map(normalizeComment),
+      reviews: reviews.map(normalizeReview),
+      threads: threads.map(normalizeThread),
+      checks,
+      branchRules,
+      branchRulesets,
+      branchProtection,
+      requestedReviewers: requestedReviewers.users ?? [],
+      timelineEvents,
+      claimEvents: claimComments.map(normalizeClaimComment),
+      changedFiles,
+      codeownersText,
+      eligibleCodeownerUserLogins,
+      reviewDecision,
     },
-    null,
-    2,
-  )}\n`,
-);
+    {
+      now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
+      trustedMarkerLogins,
+      iddAgentLogins,
+      advisoryBotLogins,
+      advisoryBotLoginsSource,
+      prAuthorLogin,
+      expectedClaimId: args.expectedClaimId,
+      expectedAgentId: args.expectedAgentId,
+      includeDispositionEvidence: true,
+      requestCap: advisoryWaitPolicy.requestCap,
+      pendingWindowMinutes: advisoryWaitPolicy.pendingWindowMinutes,
+      settledWindowMinutes: advisoryWaitPolicy.settledWindowMinutes,
+      pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
+      capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
+      waivableCheckSelectors,
+      forcedHandoffEnabled,
+      expectedLinkedPrs: [String(args.prNumber), prUrl].filter(Boolean),
+      isAuthorizedForcedHandoff: (forcedBy) =>
+        isAuthorizedForcedHandoffActor(
+          owner,
+          repo,
+          forcedBy,
+          forcedHandoffAuthorityPolicy,
+          forcedHandoffPermissionCache,
+        ),
+      viewerLogin,
+      viewerTeamSlugs,
+      viewerAppSlug,
+      configuredTrustedActors,
+      collaboratorTrustEnabled,
+    },
+  );
+  return {
+    ...summary,
+    trustedMarkerActors: configuredTrustedActors,
+    trustedMarkerActorsSource,
+  };
+}
+// CLI: emit the readiness report as JSON when invoked directly.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  process.stdout.write(
+    `${JSON.stringify(collectPreMergeReadiness(process.argv.slice(2)), null, 2)}\n`,
+  );
+}
 function warnDeprecatedFlag(deprecated, canonical) {
   process.stderr.write(
     `warning: ${deprecated} is deprecated; use ${canonical} instead.\n`,

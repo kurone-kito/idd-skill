@@ -24,6 +24,7 @@
     "idd-forced-handoff-marker": "./bin/idd-forced-handoff-marker.mjs",
     "idd-helper-bundle-manifest": "./bin/idd-helper-bundle-manifest.mjs",
     "idd-live-status-digest": "./bin/idd-live-status-digest.mjs",
+    "idd-merge-execute": "./bin/idd-merge-execute.mjs",
     "idd-merged-pr-feedback-sweep": "./bin/idd-merged-pr-feedback-sweep.mjs",
     "idd-phase-id-resolver": "./bin/idd-phase-id-resolver.mjs",
     "idd-pre-merge-readiness": "./bin/idd-pre-merge-readiness.mjs",

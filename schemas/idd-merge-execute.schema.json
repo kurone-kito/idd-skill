@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/idd-merge-execute.schema.json",
+  "title": "IDD Merge Execute",
+  "description": "F3 merge-gate verdict and (under --apply) execution result for a PR head.",
+  "type": "object",
+  "required": [
+    "protocolVersion",
+    "decisionAuthority",
+    "mode",
+    "prNumber",
+    "prHeadSha",
+    "ready",
+    "blockers",
+    "mergeCommand",
+    "merged",
+    "mergeResult"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "pattern": "^1$"
+    },
+    "decisionAuthority": {
+      "type": "string",
+      "enum": ["instructions"]
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["dry-run", "apply"]
+    },
+    "prNumber": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "prHeadSha": {
+      "type": "string",
+      "pattern": "^$|^[0-9a-f]{40}$"
+    },
+    "ready": {
+      "type": "boolean"
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["gate", "detail"],
+        "properties": {
+          "gate": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "mergeCommand": {
+      "type": "string"
+    },
+    "merged": {
+      "type": "boolean"
+    },
+    "mergeResult": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

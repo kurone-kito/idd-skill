@@ -64,6 +64,27 @@ test('pre-merge-readiness schema publishes metadata fields', () => {
   );
 });
 
+test('idd-merge-execute schema uses only allowed keywords', () => {
+  const schema = loadJson('schemas/idd-merge-execute.schema.json');
+  assert.deepEqual(checkSchemaKeywords(schema), []);
+});
+
+test('idd-merge-execute schema publishes metadata fields', () => {
+  const schema = loadJson(
+    'schemas/idd-merge-execute.schema.json',
+  ) as JsonRecord;
+  assert.equal(schema.$schema, 'https://json-schema.org/draft/2020-12/schema');
+  assert.equal(
+    schema.$id,
+    'https://kurone-kito.github.io/idd-skill/schemas/idd-merge-execute.schema.json',
+  );
+  assert.equal(schema.title, 'IDD Merge Execute');
+  assert.equal(
+    schema.description,
+    'F3 merge-gate verdict and (under --apply) execution result for a PR head.',
+  );
+});
+
 test('policy schema uses only allowed keywords', () => {
   const schema = loadJson('schemas/policy.schema.json');
   assert.deepEqual(checkSchemaKeywords(schema), []);
@@ -183,6 +204,24 @@ test('advisory-wait-state invalid fixture fails validation', () => {
   const { ok } = validateFixture(
     'schemas/advisory-wait-state.schema.json',
     'fixtures/schemas/advisory-wait-state.invalid.json',
+    false,
+  );
+  assert.ok(ok, 'Expected invalid fixture to fail schema validation');
+});
+
+test('idd-merge-execute valid fixture passes validation', () => {
+  const { ok, errors } = validateFixture(
+    'schemas/idd-merge-execute.schema.json',
+    'fixtures/schemas/idd-merge-execute.valid.json',
+    true,
+  );
+  assert.ok(ok, errors.join('\n'));
+});
+
+test('idd-merge-execute invalid fixture fails validation', () => {
+  const { ok } = validateFixture(
+    'schemas/idd-merge-execute.schema.json',
+    'fixtures/schemas/idd-merge-execute.invalid.json',
     false,
   );
   assert.ok(ok, 'Expected invalid fixture to fail schema validation');

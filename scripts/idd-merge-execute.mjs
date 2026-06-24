@@ -1,0 +1,269 @@
+#!/usr/bin/env node
+// idd-generated-from: src/scripts/idd-merge-execute.mts
+//
+// The scripts/idd-merge-execute.mjs copy is generated from the .mts
+// source named above by `pnpm run build`. Edit the .mts source, never the
+// generated .mjs. See docs/typescript-sources.md.
+//
+// Thin F3 merge-gate evaluator + executor. It WRAPS the read-only
+// pre-merge-readiness collector (reuses its gate logic verbatim) and
+// introduces NO new decision authority: `decisionAuthority` stays
+// `instructions`. In the default dry-run it only collects evidence and
+// reports the bound merge command; the ONLY mutation anywhere is the
+// `gh pr merge` issued under `--apply` once every F3 gate holds and the
+// head + claim re-validate immediately before the merge.
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { collectPreMergeReadiness } from './pre-merge-readiness.mjs';
+/**
+ * Evaluate every F3 gate against `report` (the pre-merge-readiness
+ * summary). A gate failure is collected as a blocker; `ready` is true
+ * only when no blocker is collected. The conditions mirror the written
+ * F3 gate checklist exactly — this helper adds no stricter sub-condition.
+ */
+export function evaluateMergeGates(report) {
+  const blockers = [];
+  const reviewCurrency = asRecord(report.reviewCurrency);
+  const comparisonRoute = String(reviewCurrency.comparisonRoute ?? '');
+  if (comparisonRoute !== 'proceed') {
+    blockers.push({
+      gate: 'review-currency',
+      detail: `comparisonRoute is "${comparisonRoute}" (expected "proceed"): ${String(reviewCurrency.comparisonReason ?? 'unknown')}`,
+    });
+  }
+  const threads = asRecord(report.threads);
+  const actionableCount = Number(threads.actionableCount ?? -1);
+  if (actionableCount !== 0) {
+    blockers.push({
+      gate: 'unresolved-threads',
+      detail: `actionableCount is ${actionableCount} (expected 0)`,
+    });
+  }
+  const advisoryWait = asRecord(report.advisoryWait);
+  const f3Outcome = String(advisoryWait.f3Outcome ?? '');
+  if (f3Outcome !== 'SATISFIED') {
+    blockers.push({
+      gate: 'advisory-wait',
+      detail: `f3Outcome is "${f3Outcome}" (expected "SATISFIED")`,
+    });
+  }
+  const ci = asRecord(report.ci);
+  if (!isCiAllPassing(ci)) {
+    blockers.push({
+      gate: 'ci',
+      detail: `CI is not all-passing (status="${String(ci.status ?? '')}", noRequiredChecksConfigured=${Boolean(ci.noRequiredChecksConfigured)}, presentRunConclusion="${String(ci.presentRunConclusion ?? '')}")`,
+    });
+  }
+  const reviewerStates = asRecord(report.reviewerStates);
+  if (!isReviewSatisfied(reviewerStates)) {
+    const selfApproval = asRecord(reviewerStates.codeownerSelfApproval);
+    blockers.push({
+      gate: 'required-reviews',
+      detail: `required/CODEOWNER reviews not satisfied (requiredApprovalsSatisfied=${Boolean(reviewerStates.requiredApprovalsSatisfied)}, codeownerApprovalSatisfied=${Boolean(reviewerStates.codeownerApprovalSatisfied)}, codeownerSelfApproval.status="${String(selfApproval.status ?? '')}")`,
+    });
+  }
+  const claim = asRecord(report.claim);
+  if (!claim.matchesExpectedClaim) {
+    blockers.push({
+      gate: 'claim-ownership',
+      detail: `claim ownership does not match (reason="${String(claim.reason ?? 'unknown')}")`,
+    });
+  }
+  const dispositionEvidence = asRecord(report.dispositionEvidence);
+  if (String(dispositionEvidence.route ?? '') !== 'proceed') {
+    blockers.push({
+      gate: 'disposition-evidence',
+      detail: `dispositionEvidence.route is "${String(dispositionEvidence.route ?? 'missing')}" (expected "proceed"): blockingCount=${Number(dispositionEvidence.blockingCount ?? -1)}`,
+    });
+  }
+  return blockers;
+}
+// CI all-passing mirrors the F2/F3 rule: required checks pass, OR (no
+// required checks are configured AND every present run concludes passing).
+// `status === 'success'` already implies required checks passed; the
+// no-required-checks branch must not satisfy CI vacuously, so it requires
+// `presentRunConclusion === 'all-passing'`.
+function isCiAllPassing(ci) {
+  if (ci.requiredChecksPassing === true || ci.status === 'success') {
+    return true;
+  }
+  return (
+    ci.noRequiredChecksConfigured === true &&
+    String(ci.presentRunConclusion ?? '') === 'all-passing'
+  );
+}
+// Required + CODEOWNER reviews are satisfied when the approval-count gate
+// passes and the CODEOWNER gate either passes outright or the self-approval
+// diagnostic is `clear` (a satisfiable bypass topology).
+function isReviewSatisfied(reviewerStates) {
+  if (reviewerStates.requiredApprovalsSatisfied !== true) {
+    return false;
+  }
+  if (reviewerStates.codeownerApprovalSatisfied === true) {
+    return true;
+  }
+  const selfApproval = asRecord(reviewerStates.codeownerSelfApproval);
+  return String(selfApproval.status ?? '') === 'clear';
+}
+function asRecord(value) {
+  return value && typeof value === 'object' ? value : {};
+}
+const defaultDeps = {
+  collect: (passthrough) => collectPreMergeReadiness(passthrough),
+  fetchHeadSha: (prNumber) =>
+    ghText([
+      'pr',
+      'view',
+      String(prNumber),
+      '--json',
+      'headRefOid',
+      '--jq',
+      '.headRefOid',
+    ]),
+  mergePr: (prNumber, headSha) =>
+    ghText([
+      'pr',
+      'merge',
+      String(prNumber),
+      // Always a merge commit — never squash/rebase. Bind to the head.
+      '--merge',
+      '--match-head-commit',
+      headSha,
+    ]),
+};
+/**
+ * Build the F3 verdict and, under `--apply`, execute the merge. The
+ * dry-run path performs NO mutation. The apply path fails closed: if the
+ * gate is not ready it exits without merging; if it is ready it RE-FETCHES
+ * the head SHA and RE-VALIDATES the claim immediately before merging, and
+ * refuses to merge (clear message) on any head drift or lost claim.
+ */
+export function runMergeExecute(argv, deps = defaultDeps) {
+  const args = parseArgs(argv);
+  if (!args.prNumber) {
+    throw new Error('missing required --pr <number> argument');
+  }
+  const report = deps.collect(args.passthrough);
+  const prHeadSha = String(report.prHeadSha ?? '');
+  const blockers = evaluateMergeGates(report);
+  const ready = blockers.length === 0;
+  const mergeCommand = `gh pr merge ${args.prNumber} --merge --match-head-commit ${prHeadSha}`;
+  const verdict = {
+    protocolVersion: '1',
+    decisionAuthority: 'instructions',
+    mode: args.apply ? 'apply' : 'dry-run',
+    prNumber: args.prNumber,
+    prHeadSha,
+    ready,
+    blockers,
+    mergeCommand,
+    merged: false,
+    mergeResult: '',
+  };
+  if (!args.apply) {
+    // Dry-run: read-only. Never merge.
+    return { verdict, exitCode: ready ? 0 : 1 };
+  }
+  if (!ready) {
+    // Apply but not ready: fail closed, do not merge.
+    verdict.mergeResult =
+      'not-ready: gate blockers present; no merge attempted';
+    return { verdict, exitCode: 1 };
+  }
+  // Ready under --apply: re-fetch the head and re-validate the claim
+  // immediately before merging, then fail closed on any drift.
+  const liveHeadSha = deps.fetchHeadSha(args.prNumber);
+  if (liveHeadSha !== prHeadSha) {
+    verdict.mergeResult = `head drift: validated ${prHeadSha} but live head is ${liveHeadSha}; no merge`;
+    return { verdict, exitCode: 1 };
+  }
+  const revalidated = deps.collect(args.passthrough);
+  if (String(revalidated.prHeadSha ?? '') !== prHeadSha) {
+    verdict.mergeResult = `head drift on re-validation: ${String(revalidated.prHeadSha ?? '')} != ${prHeadSha}; no merge`;
+    return { verdict, exitCode: 1 };
+  }
+  const revalidatedClaim = asRecord(revalidated.claim);
+  if (!revalidatedClaim.matchesExpectedClaim) {
+    verdict.mergeResult = `claim lost on re-validation (reason="${String(revalidatedClaim.reason ?? 'unknown')}"); no merge`;
+    return { verdict, exitCode: 1 };
+  }
+  const revalidatedBlockers = evaluateMergeGates(revalidated);
+  if (revalidatedBlockers.length > 0) {
+    verdict.blockers = revalidatedBlockers;
+    verdict.ready = false;
+    verdict.mergeResult =
+      're-validation found new blockers immediately before merge; no merge';
+    return { verdict, exitCode: 1 };
+  }
+  // Always a merge commit — never squash/rebase. Bind to the validated head.
+  const mergeOutput = deps.mergePr(args.prNumber, prHeadSha);
+  verdict.merged = true;
+  verdict.mergeResult = mergeOutput || 'merge command completed';
+  return { verdict, exitCode: 0 };
+}
+function parseArgs(argv) {
+  const parsed = {
+    prNumber: null,
+    passthrough: [],
+    apply: false,
+  };
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === '--apply') {
+      parsed.apply = true;
+      continue;
+    }
+    if (token === '--help' || token === '-h') {
+      printHelp();
+      process.exit(0);
+    }
+    if (token === '--pr') {
+      const value = argv[index + 1];
+      parsed.prNumber = Number.parseInt(value ?? '', 10);
+      parsed.passthrough.push(token, value ?? '');
+      index += 1;
+      continue;
+    }
+    // Every other flag (and its value, if it takes one) is forwarded
+    // verbatim to the pre-merge-readiness collector so the two CLIs accept
+    // an identical flag surface without re-declaring it here.
+    if (token.startsWith('--')) {
+      const value = argv[index + 1];
+      if (value !== undefined && !value.startsWith('--')) {
+        parsed.passthrough.push(token, value);
+        index += 1;
+      } else {
+        parsed.passthrough.push(token);
+      }
+      continue;
+    }
+    throw new Error(`unknown argument: ${token}`);
+  }
+  if (!Number.isInteger(parsed.prNumber) || (parsed.prNumber ?? 0) < 1) {
+    parsed.prNumber = null;
+  }
+  return parsed;
+}
+function printHelp() {
+  process.stdout.write(`Usage:
+  node scripts/idd-merge-execute.mjs --pr <number> --claim-issue <number> [--claim-id <claim-id>] [--agent-id <agent-id>] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <bot1,bot2>] [--apply]
+
+  Default (no --apply): dry-run. Evaluates every F3 merge gate via the
+  read-only pre-merge-readiness collector and prints { ready, blockers,
+  mergeCommand } without merging. Exit 0 when ready, 1 otherwise.
+
+  --apply: when ready, re-fetch the head SHA and re-validate the claim
+  immediately before merging, then run a merge commit bound to the
+  validated head. Fails closed (exit 1, no merge) on head drift or lost
+  claim. Never squash/rebase merges. The merge is the only mutation.
+`);
+}
+function ghText(args) {
+  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
+}
+// CLI: print the verdict as JSON and exit with the gate/merge status.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const { verdict, exitCode } = runMergeExecute(process.argv.slice(2));
+  process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+  process.exit(exitCode);
+}
