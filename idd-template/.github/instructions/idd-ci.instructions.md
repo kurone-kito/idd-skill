@@ -147,3 +147,23 @@ for the same run before posting a hold.
 | Any required check is non-pass `cancelled` or `timed_out`                                  | Investigate cause. If code-caused: fix, run **fix-validate**, commit atomically, then return to caller's pre-push step. If infra-caused: apply `ciWait.rerunPolicy`; rerun or re-push only when the current rerun budget allows it, otherwise post a hold comment and stop.                                                                                                                                                                                                                                                               |
 | Any required check is running (`pending`/`requested`/`waiting`/`expected`/...)             | Continue waiting. After `ciWait.runningTimeout` — measured from the check's server `startedAt` (see the Polling algorithm) — elapses with no completion (default: 30 min), apply `ciWait.rerunPolicy`. If it resolves to rerun, rerun CI once and resume polling. If the same route recurs after that rerun, or if the policy is `hold`, post a hold comment and stop.                                                                                                                                                                    |
 | Required checks are not generated after `ciWait.generationTimeout`                         | Treat as running. Default: 10 min. If the corresponding workflow run does not exist at all when that window elapses, post a hold comment and escalate to a maintainer, then stop.                                                                                                                                                                                                                                                                                                                                                         |
+
+## Wake-up discipline
+
+The polling mechanics above are unchanged. This advisory, tool-agnostic note
+keeps the **wait itself cheap**: the dominant cost of a wait is each
+re-invocation's context re-read (worse once it crosses the prompt-cache TTL,
+as CI/e2e waits routinely do), not the idle time.
+
+- **No interim polling turns** — background the watch, or schedule one wake at
+  the **expected** completion interval; do not insert "is it done yet?" turns
+  or peek at an empty watch buffer between wakes.
+- **Batch post-wait actions** into a single turn once the wait resolves
+  (disposition, replies, marker, next gate together — not one round-trip each).
+- **Scope post-fix re-validation to the changed surface** when the change is
+  provably outside the full build/test suite, instead of re-running everything
+  (also avoids the context cost of large log outputs).
+
+This trims only the wasteful dimensions (context re-read, CI minutes); it does
+**not** reduce review rounds, which remain valuable and run in full. This same
+discipline applies to the advisory-wait and review-fix wait points.
