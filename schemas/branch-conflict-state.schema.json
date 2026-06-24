@@ -51,6 +51,7 @@
         "content-conflict",
         "dirty",
         "force-push-exception",
+        "computing",
         "unknown"
       ]
     },
@@ -61,6 +62,7 @@
         "merge-main",
         "policy-required-update",
         "force-push-exception",
+        "recheck",
         "hold-unknown"
       ]
     },

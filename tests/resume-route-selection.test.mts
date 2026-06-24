@@ -146,6 +146,19 @@ test('routes stop when PR exists, CI succeeded, no pending reviews, and branch s
   assert.equal(result.reason, 'pr-ci-success-branch-dirty-or-unknown');
 });
 
+test('routes F1 when PR exists, CI succeeded, no pending reviews, and branch state is computing', () => {
+  const result = selectResumeRoute({
+    prExists: true,
+    requiredChecksGenerated: true,
+    ciSuccess: true,
+    reviewExists: false,
+    reviewPending: false,
+    branchState: 'computing',
+  });
+  assert.equal(result.route, 'F1');
+  assert.equal(result.reason, 'pr-ci-success-branch-computing');
+});
+
 test('routes F2 when PR exists, CI succeeded, no pending reviews, and branchState is not provided (defaults to clean)', () => {
   const result = selectResumeRoute({
     prExists: true,
@@ -221,9 +234,16 @@ test('classifyBranchState returns clean for BLOCKED MERGEABLE (non-git-conflict 
 test('classifyBranchState returns unknown for null/missing state', () => {
   assert.equal(classifyBranchState(null), 'unknown');
   assert.equal(classifyBranchState({}), 'unknown');
+});
+
+test('classifyBranchState returns computing for transient UNKNOWN mergeable', () => {
   assert.equal(
     classifyBranchState({ mergeable: 'UNKNOWN', mergeStateStatus: '' }),
-    'unknown',
+    'computing',
+  );
+  assert.equal(
+    classifyBranchState({ mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' }),
+    'computing',
   );
 });
 

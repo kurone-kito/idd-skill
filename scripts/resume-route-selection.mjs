@@ -90,6 +90,12 @@ export function selectResumeRoute(input) {
         reasonParts,
       );
     }
+    if (state.branchState === 'computing') {
+      // Mergeability is still computing (transient `UNKNOWN`); resume into F1,
+      // whose bounded re-poll resolves it instead of stopping on a
+      // self-resolving state.
+      return result('F1', 'pr-ci-success-branch-computing', state, reasonParts);
+    }
     if (state.branchState === 'behind-no-conflict') {
       return result(
         'F1',
@@ -316,6 +322,10 @@ export function classifyBranchState(mergeState) {
   if (mergeStateStatus === 'CLEAN') return 'clean';
   if (mergeStateStatus === 'BEHIND') return 'behind-no-conflict';
   if (mergeable === 'MERGEABLE') return 'clean';
+  // GitHub computes `mergeable` asynchronously: an explicit `UNKNOWN` means the
+  // result is still computing (transient), not a terminal classification
+  // failure. Keep `unknown` for genuinely missing/unrecognized state.
+  if (mergeable === 'UNKNOWN') return 'computing';
   return 'unknown';
 }
 export function countLatestChangesRequestedByReviewer(reviews) {

@@ -1,12 +1,12 @@
 {
   "prData": {
-    "number": 104,
-    "headRefOid": "1111111111111111111111111111111111111111",
-    "baseRefOid": "2222222222222222222222222222222222222222",
-    "headRefName": "feature/unknown",
+    "number": 105,
+    "headRefOid": "3333333333333333333333333333333333333333",
+    "baseRefOid": "4444444444444444444444444444444444444444",
+    "headRefName": "feature/unrecognized",
     "baseRefName": "main",
-    "mergeable": "UNKNOWN",
-    "mergeStateStatus": "UNKNOWN",
+    "mergeable": "UNRECOGNIZED",
+    "mergeStateStatus": "UNRECOGNIZED",
     "headRepository": {
       "id": "R_test",
       "name": "test-repo"

@@ -771,9 +771,12 @@ Interpretation rules:
   ```
 
 - `branchState` values: `clean`, `behind-no-conflict`, `content-conflict`,
-  `dirty`, `force-push-exception`, `unknown`
+  `dirty`, `force-push-exception`, `computing`, `unknown` (`computing` is the
+  transient still-computing mergeability that callers re-poll; `unknown` stays
+  terminal)
 - `syncRecommendation` values: `none`, `merge-main`, `policy-required-update`,
-  `force-push-exception`, `hold-unknown`
+  `force-push-exception`, `recheck`, `hold-unknown` (`recheck` pairs with
+  `computing`)
 - Stable fields consumed by D/E/F routing: `branchState`,
   `syncRecommendation`, `published`, `readOnly`, `worktreeUnchanged`
 - Read-only boundary: the helper never runs `git merge`, `git rebase`, or

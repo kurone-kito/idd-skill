@@ -362,6 +362,13 @@ Route based on `branchState` from the helper (or `mergeable` /
   policy requires an up-to-date head: → **sync path** below.
 - **`content-conflict`** (`mergeable` is `CONFLICTING`): → **sync path**
   below.
+- **`computing`** (`syncRecommendation` is `recheck`): `mergeable` is
+  `UNKNOWN` / null because GitHub computes mergeability asynchronously and
+  has not settled — a **transient** state. Do **not** hold. Re-poll after a
+  short wait, up to a small fixed attempt budget (distributed default: 3
+  attempts, a few seconds apart), then route by the first settled result.
+  Only a state that is **still** `computing` / `unknown` after the budget
+  falls through to the hold below.
 - **`dirty`** (`mergeStateStatus` is `DIRTY`) or **`unknown`**: hold; post
   a PR comment documenting the state and stop. Do not proceed to F-phase
   without confirmed branch-state evidence.
