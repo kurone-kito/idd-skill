@@ -253,7 +253,7 @@ enabled and default approval actors to
 | **fix-validate**        | `npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md"`                                       |
 | **pre-push-validate**   | `npx dprint check "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress`                                        |
 | **post-fix-validate**   | `npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress` |
-| **install-deps**        | `true`                                                                                                                                       |
+| **install-deps**        | `pnpm install --frozen-lockfile`                                                                                                             |
 | **issue-scope**         | `roadmap-first`                                                                                                                              |
 | **orphan-first-policy** | `none`                                                                                                                                       |
 
