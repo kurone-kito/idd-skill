@@ -108,6 +108,15 @@ ambiguous). Example Japanese note:
 
 Use server-reported timestamps, not the local wall clock.
 
+**CI-completion precondition.** Post the `review-watermark` only **after**
+every CI run that will count toward the merge gate has completed — including
+any opt-in / label-triggered job enabled at the quiescent pre-merge point.
+Operationally: enable the late job, await its completion, **then** take the
+Step 1 snapshot and post the watermark. A merge-gate-counting run
+completing _after_ the watermark advances HEAD's latest CI time and forces a
+wasted E1↔F2 round-trip (F2's `ci-pass-drift` return-to-E1) even though no new
+review activity occurred.
+
 Note: the comment body begins with an HTML comment token. Some GitHub
 client tools (e.g., `gh issue comment`, `gh api -f body=`) silently
 reject bodies that consist entirely of HTML comments; this format
