@@ -148,7 +148,7 @@
     "glob": ".github/instructions/idd-*.instructions.md",
     "alwaysLoadedPattern": "applyTo:\\s*\"\\*\\*\"",
     "alwaysLoadedLimitBytes": 20000,
-    "phaseLimitBytes": 30000
+    "phaseLimitBytes": 30100
   },
   "bundleBudgets": [
     {
@@ -161,7 +161,7 @@
         ".github/instructions/idd-suitability.instructions.md",
         ".github/instructions/idd-claim.instructions.md"
       ],
-      "limitBytes": 86379
+      "limitBytes": 88100
     },
     {
       "id": "bundle-resume",

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   classifyIssue,
+  enumerateAllRoadmapsGraph,
   enumerateRoadmapGraph,
   extractKeywordReferences,
   extractRoadmapMarkerId,
@@ -759,4 +760,268 @@ test('nodes carry the authored autopilot-suitability score (null when unscored)'
   const byNumber = new Map(graph.nodes.map((node) => [node.number, node]));
   assert.equal(byNumber.get(501)?.autopilotSuitability, 5);
   assert.equal(byNumber.get(502)?.autopilotSuitability, null);
+});
+
+function scoredExecutionIssue(number: number, score: number, state = 'open') {
+  return executionIssue(
+    number,
+    `task ${number}\n<!-- idd-skill-autopilot-suitability: ${score} -->`,
+    state,
+  );
+}
+
+// Two sibling epics, one shared leaf, mixed suitability scores.
+//
+//   700 (epic-alpha) → 701 (score 5), 702 (score 2)
+//   800 (epic-beta)  → 702 (shared),  803 (score 4), 804 (no score)
+const SIBLING_EPIC_ISSUES = new Map<number, unknown>([
+  [700, roadmapIssue(700, '- [ ] #701\n- [ ] #702', 'epic-alpha')],
+  [800, roadmapIssue(800, '- [ ] #702\n- [ ] #803\n- [ ] #804', 'epic-beta')],
+  [701, scoredExecutionIssue(701, 5)],
+  [702, scoredExecutionIssue(702, 2)],
+  [803, scoredExecutionIssue(803, 4)],
+  [804, executionIssue(804, 'task 804 with no score')],
+]);
+
+function loadSiblingEpicIssue(issueNumber: number) {
+  return SIBLING_EPIC_ISSUES.get(issueNumber) ?? null;
+}
+
+test('all-roadmaps unions open execution leaves across every open roadmap root', async () => {
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [700, 800],
+    loadIssue: async (issueNumber) => loadSiblingEpicIssue(issueNumber),
+  });
+
+  assert.equal(report.mode, 'all-roadmaps');
+  assert.deepEqual(
+    report.roots.map((root) => root.number),
+    [700, 800],
+  );
+  // Union of leaves under both epics, deduped (702 counted once).
+  assert.deepEqual(
+    [...report.leaves].map((leaf) => leaf.number).sort((a, b) => a - b),
+    [701, 702, 803, 804],
+  );
+  assert.equal(report.summary.rootCount, 2);
+  assert.equal(report.summary.leafCount, 4);
+});
+
+test('all-roadmaps records source-root provenance and never double-counts shared leaves', async () => {
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [700, 800],
+    loadIssue: async (issueNumber) => loadSiblingEpicIssue(issueNumber),
+  });
+
+  const byNumber = new Map(report.leaves.map((leaf) => [leaf.number, leaf]));
+  // 702 is reachable from both epics: one leaf entry, two source roots.
+  assert.deepEqual(byNumber.get(702)?.sourceRoots, [700, 800]);
+  assert.deepEqual(byNumber.get(701)?.sourceRoots, [700]);
+  assert.deepEqual(byNumber.get(803)?.sourceRoots, [800]);
+  assert.deepEqual(byNumber.get(804)?.sourceRoots, [800]);
+  // The shared leaf appears exactly once in the union.
+  assert.equal(report.leaves.filter((leaf) => leaf.number === 702).length, 1);
+  assert.equal(report.summary.sharedLeafCount, 1);
+  assert.equal(report.summary.scoredLeafCount, 3);
+});
+
+test('all-roadmaps ranks the union by suitability descending, tie-broken by issue number', async () => {
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [700, 800],
+    loadIssue: async (issueNumber) => loadSiblingEpicIssue(issueNumber),
+  });
+
+  // 701 (5) > 803 (4) > [702 (2) and 804 (unscored-floor 3)].
+  // 804 is unscored: it uses the floor (3) as its effective score, so it
+  // sorts above 702 (score 2), but a coherently scored leaf at the floor
+  // would still outrank it.
+  assert.deepEqual(
+    report.leaves.map((leaf) => leaf.number),
+    [701, 803, 804, 702],
+  );
+});
+
+test('all-roadmaps ranks unscored leaves at the configured floor', async () => {
+  // With the configured floor at 1, an unscored leaf ranks at effective 1
+  // — now BELOW 702 (score 2), reversing the default-floor (3) ordering
+  // where 804 sorted above 702. This pins that the comparator honors the
+  // configured floor, not the hard-coded default.
+  const report = await enumerateAllRoadmapsGraph({
+    floor: 1,
+    loadOpenRoadmapRoots: async () => [700, 800],
+    loadIssue: async (issueNumber) => loadSiblingEpicIssue(issueNumber),
+  });
+
+  // 701 (5) > 803 (4) > 702 (2) > 804 (unscored, configured floor 1).
+  assert.deepEqual(
+    report.leaves.map((leaf) => leaf.number),
+    [701, 803, 702, 804],
+  );
+});
+
+test('all-roadmaps keeps scored work above an unscored leaf at the same effective score', async () => {
+  const issues = new Map<number, unknown>([
+    [900, roadmapIssue(900, '- [ ] #901\n- [ ] #902', 'epic-floor')],
+    // 901 carries a coherent floor-value score; 902 is unscored and thus
+    // treated as the floor for ordering — scored work must sort first.
+    [901, scoredExecutionIssue(901, 3)],
+    [902, executionIssue(902, 'unscored leaf')],
+  ]);
+
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [900],
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(
+    report.leaves.map((leaf) => leaf.number),
+    [901, 902],
+  );
+});
+
+test('all-roadmaps tie-breaks equal scores by ascending issue number', async () => {
+  const issues = new Map<number, unknown>([
+    [1000, roadmapIssue(1000, '- [ ] #1003\n- [ ] #1001', 'epic-ties')],
+    [1003, scoredExecutionIssue(1003, 4)],
+    [1001, scoredExecutionIssue(1001, 4)],
+  ]);
+
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [1000],
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(
+    report.leaves.map((leaf) => leaf.number),
+    [1001, 1003],
+  );
+});
+
+test('all-roadmaps returns an empty union when no open roadmap roots exist', async () => {
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [],
+    loadIssue: async () => null,
+  });
+
+  assert.deepEqual(report.roots, []);
+  assert.deepEqual(report.leaves, []);
+  assert.equal(report.summary.rootCount, 0);
+  assert.equal(report.summary.leafCount, 0);
+});
+
+test('single-root --issue output is unchanged by the all-roadmaps addition', async () => {
+  const issues = new Map([
+    [100, roadmapIssue(100, '- [ ] #101\n- [ ] #102', 'root-roadmap')],
+    [101, executionIssue(101, 'alpha')],
+    [102, executionIssue(102, 'beta')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(100, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  // The single-root report carries no union-only fields (mode / leaves /
+  // sourceRoots): its top-level shape is byte-stable with the contract.
+  const graphRecord = graph as unknown as Record<string, unknown>;
+  assert.equal(graphRecord.mode, undefined);
+  assert.equal(graphRecord.leaves, undefined);
+  assert.equal(graphRecord.roots, undefined);
+  for (const node of graph.nodes) {
+    assert.equal(
+      Object.hasOwn(node as unknown as Record<string, unknown>, 'sourceRoots'),
+      false,
+    );
+  }
+  assert.deepEqual(graph.executionCandidates, [101, 102]);
+});
+
+test('all-roadmaps requires the open-roadmap-roots loader', async () => {
+  await assert.rejects(
+    () =>
+      enumerateAllRoadmapsGraph({
+        loadIssue: async () => null,
+      }),
+    /requires loadOpenRoadmapRoots/,
+  );
+});
+
+test('CLI rejects combining --issue with --all-roadmaps', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-discover-roadmap-graph-mutex-'),
+  );
+  const ghPath = join(tempRoot, 'gh');
+  writeFileSync(
+    ghPath,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "repo" && args[1] === "view") {
+  const jq = args[args.indexOf("--jq") + 1];
+  process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
+  process.exit(0);
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`,
+  );
+  chmodSync(ghPath, 0o755);
+
+  assert.throws(
+    () =>
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'),
+          '--issue',
+          '700',
+          '--all-roadmaps',
+        ],
+        {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
+          },
+        },
+      ),
+    /--all-roadmaps cannot be combined with --issue/,
+  );
+});
+
+test('CLI requires --issue when --all-roadmaps is absent', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-discover-roadmap-graph-no-args-'),
+  );
+  const ghPath = join(tempRoot, 'gh');
+  writeFileSync(
+    ghPath,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "repo" && args[1] === "view") {
+  const jq = args[args.indexOf("--jq") + 1];
+  process.stdout.write(jq === ".owner.login" ? "kurone-kito\\n" : "idd-skill\\n");
+  process.exit(0);
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`,
+  );
+  chmodSync(ghPath, 0o755);
+
+  assert.throws(
+    () =>
+      execFileSync(
+        process.execPath,
+        [join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs')],
+        {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
+          },
+        },
+      ),
+    /missing required --issue/,
+  );
 });

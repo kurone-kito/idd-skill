@@ -1,0 +1,38 @@
+{
+  "mode": "single-root",
+  "roots": [
+    {
+      "number": 0,
+      "title": "bad root number",
+      "state": "OPEN",
+      "roadmapMarkerId": ""
+    }
+  ],
+  "leaves": [
+    {
+      "number": 101,
+      "title": "leaf missing sourceRoots",
+      "state": "OPEN",
+      "labels": [],
+      "classification": "execution",
+      "roadmapMarkerId": "",
+      "autopilotSuitability": 6
+    }
+  ],
+  "diagnostics": {
+    "duplicateReferences": [],
+    "cycles": [],
+    "inaccessibleReferences": [],
+    "unresolvedReferences": []
+  },
+  "summary": {
+    "rootCount": 1,
+    "leafCount": 1,
+    "scoredLeafCount": 0,
+    "sharedLeafCount": 0,
+    "duplicateReferenceCount": 0,
+    "cycleCount": 0,
+    "inaccessibleReferenceCount": 0,
+    "unresolvedReferenceCount": 0
+  }
+}

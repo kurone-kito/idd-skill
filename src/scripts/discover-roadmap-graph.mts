@@ -10,7 +10,11 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { parseAutopilotSuitability } from './autopilot-suitability.mts';
+import {
+  isAutopilotSuitabilityScore,
+  normalizeAutopilotSuitabilityFloor,
+  parseAutopilotSuitability,
+} from './autopilot-suitability.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
@@ -31,6 +35,27 @@ query($owner:String!, $repo:String!, $number:Int!, $after:String) {
           hasNextPage
           endCursor
         }
+      }
+    }
+  }
+}
+`;
+const OPEN_ISSUES_QUERY = `
+query($owner:String!, $repo:String!, $after:String) {
+  repository(owner:$owner, name:$repo) {
+    issues(states:OPEN, first:100, after:$after) {
+      nodes {
+        number
+        body
+        labels(first:100) {
+          nodes {
+            name
+          }
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
       }
     }
   }
@@ -135,6 +160,62 @@ export interface RoadmapGraphReport {
   };
 }
 
+/** One ranked open execution leaf in the cross-roadmap union report. */
+export interface RoadmapUnionLeaf {
+  number: number;
+  title: string;
+  state: string;
+  labels: string[];
+  // Union leaves come only from execution candidates, so the
+  // classification is always the literal 'execution'.
+  classification: 'execution';
+  roadmapMarkerId: string;
+  autopilotSuitability: number | null;
+  /**
+   * The set of open roadmap roots this leaf is reachable from, sorted
+   * ascending. A leaf reachable from several sibling epics carries every
+   * source root here and is never double-counted in the union.
+   */
+  sourceRoots: number[];
+}
+
+/** One discovered open roadmap root the union enumeration started from. */
+export interface RoadmapUnionRoot {
+  number: number;
+  title: string;
+  state: string;
+  roadmapMarkerId: string;
+}
+
+/**
+ * Cross-roadmap union report returned by `enumerateAllRoadmapsGraph`.
+ *
+ * Additive `--all-roadmaps` mode: the single-root `RoadmapGraphReport`
+ * shape (returned by `enumerateRoadmapGraph`) is unchanged. This report
+ * is only produced when `--all-roadmaps` is passed.
+ */
+export interface RoadmapGraphUnionReport {
+  mode: 'all-roadmaps';
+  roots: RoadmapUnionRoot[];
+  leaves: RoadmapUnionLeaf[];
+  diagnostics: {
+    duplicateReferences: RoadmapDuplicateReferenceDiagnostic[];
+    cycles: RoadmapCycleDiagnostic[];
+    inaccessibleReferences: RoadmapReferenceDiagnostic[];
+    unresolvedReferences: RoadmapReferenceDiagnostic[];
+  };
+  summary: {
+    rootCount: number;
+    leafCount: number;
+    scoredLeafCount: number;
+    sharedLeafCount: number;
+    duplicateReferenceCount: number;
+    cycleCount: number;
+    inaccessibleReferenceCount: number;
+    unresolvedReferenceCount: number;
+  };
+}
+
 interface NormalizedIssue {
   number: number;
   title: string;
@@ -163,8 +244,27 @@ interface EnumerateRoadmapGraphOptions {
   loadSubIssues?: (issueNumber: number) => unknown;
 }
 
+interface EnumerateAllRoadmapsGraphOptions
+  extends EnumerateRoadmapGraphOptions {
+  /**
+   * Discover every open roadmap root. Each entry is an open issue
+   * carrying the `roadmap` label or an
+   * `<!-- {markerPrefix}-roadmap-id: ... -->` marker. The union mode
+   * runs the existing single-root enumeration from each returned root.
+   */
+  loadOpenRoadmapRoots?: () => unknown;
+  /**
+   * Configured autopilot-suitability floor (`autopilotSuitability.floor`
+   * from policy). Unscored or out-of-range leaves rank at this floor in
+   * the union ordering. Normalized to an integer 1-5, falling back to the
+   * default autopilot-suitability floor when unset or invalid.
+   */
+  floor?: unknown;
+}
+
 interface ParsedArgs {
   issue: number;
+  allRoadmaps: boolean;
   owner: string;
   repo: string;
   policy: string;
@@ -175,8 +275,17 @@ type CachedIssue = NormalizedIssue | InaccessibleIssueSentinel | null;
 
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
-  if (!Number.isInteger(args.issue) || args.issue <= 0) {
-    throw new Error('missing required --issue <number>');
+  const hasIssue = Number.isInteger(args.issue) && args.issue > 0;
+  // --issue and --all-roadmaps are mutually exclusive: exactly one route
+  // must be selected. The single-root --issue contract (required when
+  // --all-roadmaps is absent) is preserved.
+  if (args.allRoadmaps && hasIssue) {
+    throw new Error('--all-roadmaps cannot be combined with --issue');
+  }
+  if (!args.allRoadmaps && !hasIssue) {
+    throw new Error(
+      'missing required --issue <number> (or pass --all-roadmaps)',
+    );
   }
 
   const owner =
@@ -184,17 +293,34 @@ if (isMainModule(import.meta.url)) {
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
   const repo =
     args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
-  const policy = loadPolicy(args.policy) as { markerPrefix?: unknown };
+  const policy = loadPolicy(args.policy) as {
+    markerPrefix?: unknown;
+    autopilotSuitability?: { floor?: unknown };
+  };
 
-  const graph = await enumerateRoadmapGraph(args.issue, {
-    markerPrefix: policy.markerPrefix,
-    owner,
-    repo,
-    loadIssue: buildIssueLoader(owner, repo),
-    loadSubIssues: buildSubIssueLoader(owner, repo),
-  });
+  const report = args.allRoadmaps
+    ? await enumerateAllRoadmapsGraph({
+        markerPrefix: policy.markerPrefix,
+        floor: policy.autopilotSuitability?.floor,
+        owner,
+        repo,
+        loadIssue: buildIssueLoader(owner, repo),
+        loadSubIssues: buildSubIssueLoader(owner, repo),
+        loadOpenRoadmapRoots: buildOpenRoadmapRootsLoader(
+          owner,
+          repo,
+          policy.markerPrefix,
+        ),
+      })
+    : await enumerateRoadmapGraph(args.issue, {
+        markerPrefix: policy.markerPrefix,
+        owner,
+        repo,
+        loadIssue: buildIssueLoader(owner, repo),
+        loadSubIssues: buildSubIssueLoader(owner, repo),
+      });
 
-  process.stdout.write(`${JSON.stringify(graph, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }
 
 export async function enumerateRoadmapGraph(
@@ -491,6 +617,243 @@ export async function enumerateRoadmapGraph(
   }
 }
 
+/**
+ * Cross-roadmap autopilot discovery (additive `--all-roadmaps` mode).
+ *
+ * Discovers every OPEN roadmap root (an open issue carrying the
+ * `roadmap` label OR an `<!-- {markerPrefix}-roadmap-id: ... -->`
+ * marker), runs the existing single-root {@link enumerateRoadmapGraph}
+ * from each root, and returns the UNION of open execution leaves. A leaf
+ * reachable from several sibling roots is recorded once, carrying every
+ * `sourceRoots` it is reachable from (provenance), so it is never
+ * double-counted.
+ *
+ * Ranking (global-by-score): the union is sorted by `autopilotSuitability`
+ * DESCENDING, tie-broken by issue number ASCENDING (stable). Missing or
+ * out-of-range suitability is treated as the configured floor for
+ * ordering, but a leaf with no coherent score never ranks above a scored
+ * leaf at the same effective value — scored work always sorts first at a
+ * tie. See {@link compareUnionLeaves}.
+ *
+ * The helper stays READ-ONLY / evidence-only: it reads issue bodies and
+ * GitHub sub-issue relationships and never claims, mutates, or writes to
+ * GitHub. The single-root report shape is unchanged; this union shape is
+ * only produced in `--all-roadmaps` mode.
+ */
+export async function enumerateAllRoadmapsGraph(
+  options: EnumerateAllRoadmapsGraphOptions = {},
+): Promise<RoadmapGraphUnionReport> {
+  const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
+  // Resolve the configured suitability floor (normalized to an integer
+  // 1-5, falling back to the default when unset) once, then rank unscored
+  // leaves at that configured floor.
+  const floor = normalizeAutopilotSuitabilityFloor(options.floor);
+  const loadOpenRoadmapRoots = options.loadOpenRoadmapRoots;
+  if (typeof loadOpenRoadmapRoots !== 'function') {
+    throw new Error(
+      'enumerateAllRoadmapsGraph requires loadOpenRoadmapRoots()',
+    );
+  }
+
+  const rootNumbers = normalizeOpenRoadmapRootNumbers(
+    await loadOpenRoadmapRoots(),
+  );
+
+  const roots: RoadmapUnionRoot[] = [];
+  const leafRecords = new Map<number, RoadmapUnionLeaf>();
+  // Diagnostics accumulate across every per-root enumeration, deduped on
+  // the same identity keys the single-root report uses so a reference
+  // shared by sibling roots is reported once.
+  const duplicateReferences = new Map<
+    string,
+    RoadmapDuplicateReferenceDiagnostic
+  >();
+  const cycles = new Map<string, RoadmapCycleDiagnostic>();
+  const inaccessibleReferences = new Map<string, RoadmapReferenceDiagnostic>();
+  const unresolvedReferences = new Map<string, RoadmapReferenceDiagnostic>();
+
+  for (const rootNumber of rootNumbers) {
+    const graph = await enumerateRoadmapGraph(rootNumber, {
+      markerPrefix,
+      owner: options.owner,
+      repo: options.repo,
+      loadIssue: options.loadIssue,
+      loadSubIssues: options.loadSubIssues,
+    });
+
+    roots.push({
+      number: graph.root.number,
+      title: graph.root.title,
+      state: graph.root.state,
+      roadmapMarkerId: graph.root.roadmapMarkerId,
+    });
+
+    const executionSet = new Set(graph.executionCandidates);
+    for (const node of graph.nodes) {
+      if (!executionSet.has(node.number)) {
+        continue;
+      }
+      const existing = leafRecords.get(node.number);
+      if (existing) {
+        if (!existing.sourceRoots.includes(graph.root.number)) {
+          existing.sourceRoots.push(graph.root.number);
+        }
+        continue;
+      }
+      leafRecords.set(node.number, {
+        number: node.number,
+        title: node.title,
+        state: node.state,
+        labels: node.labels,
+        // Only execution candidates reach this branch (filtered by
+        // executionSet above), so the classification is always 'execution'.
+        classification: 'execution',
+        roadmapMarkerId: node.roadmapMarkerId,
+        autopilotSuitability: node.autopilotSuitability,
+        sourceRoots: [graph.root.number],
+      });
+    }
+
+    mergeDiagnostic(
+      duplicateReferences,
+      graph.diagnostics.duplicateReferences,
+      (entry) =>
+        `${entry.source}:${entry.target}:${entry.relationship}:${entry.evidence}`,
+    );
+    mergeDiagnostic(
+      cycles,
+      graph.diagnostics.cycles,
+      (entry) => `${entry.source}:${entry.target}:${entry.path.join('>')}`,
+    );
+    mergeDiagnostic(
+      inaccessibleReferences,
+      graph.diagnostics.inaccessibleReferences,
+      (entry) =>
+        `${entry.source}:${entry.target}:${entry.relationship}:${entry.reason}`,
+    );
+    mergeDiagnostic(
+      unresolvedReferences,
+      graph.diagnostics.unresolvedReferences,
+      (entry) =>
+        `${entry.source}:${entry.target}:${entry.relationship}:${entry.reason}`,
+    );
+  }
+
+  const leaves = [...leafRecords.values()]
+    .map((leaf) => ({
+      ...leaf,
+      sourceRoots: [...leaf.sourceRoots].sort((left, right) => left - right),
+    }))
+    .sort((left, right) => compareUnionLeaves(left, right, floor));
+
+  const scoredLeafCount = leaves.filter((leaf) =>
+    isAutopilotSuitabilityScore(leaf.autopilotSuitability),
+  ).length;
+  const sharedLeafCount = leaves.filter(
+    (leaf) => leaf.sourceRoots.length > 1,
+  ).length;
+
+  return {
+    mode: 'all-roadmaps',
+    roots: roots.sort(compareByNumber),
+    leaves,
+    diagnostics: {
+      duplicateReferences: [...duplicateReferences.values()].sort(
+        compareDiagnostics,
+      ),
+      cycles: [...cycles.values()].sort(compareCycles),
+      inaccessibleReferences: [...inaccessibleReferences.values()].sort(
+        compareDiagnostics,
+      ),
+      unresolvedReferences: [...unresolvedReferences.values()].sort(
+        compareDiagnostics,
+      ),
+    },
+    summary: {
+      rootCount: roots.length,
+      leafCount: leaves.length,
+      scoredLeafCount,
+      sharedLeafCount,
+      duplicateReferenceCount: duplicateReferences.size,
+      cycleCount: cycles.size,
+      inaccessibleReferenceCount: inaccessibleReferences.size,
+      unresolvedReferenceCount: unresolvedReferences.size,
+    },
+  };
+}
+
+/**
+ * Global-by-score comparator for the cross-roadmap union.
+ *
+ * Sort key, in order:
+ *   1. effective suitability DESCENDING — a coherent 1-5 score uses its
+ *      own value; a missing/out-of-range score uses the configured floor
+ *      so unscored pre-existing work is not buried below the floor;
+ *   2. scored-before-unscored at a tie — a leaf with a coherent score
+ *      never ranks below an unscored leaf at the same effective value, so
+ *      "missing is treated as the configured floor" never lets unscored
+ *      work jump ahead of genuinely scored work;
+ *   3. issue number ASCENDING — a stable, repository-deterministic
+ *      tie-break that keeps the order from thrashing between epics.
+ *
+ * `floor` is the configured `autopilotSuitability.floor` (already
+ * normalized to an integer 1-5). The comparator stays a total order.
+ */
+function compareUnionLeaves(
+  left: RoadmapUnionLeaf,
+  right: RoadmapUnionLeaf,
+  floor: number,
+): number {
+  const leftScored = isAutopilotSuitabilityScore(left.autopilotSuitability);
+  const rightScored = isAutopilotSuitabilityScore(right.autopilotSuitability);
+  // Unscored or out-of-range leaves rank at the configured floor.
+  const leftEffective = leftScored
+    ? (left.autopilotSuitability as number)
+    : floor;
+  const rightEffective = rightScored
+    ? (right.autopilotSuitability as number)
+    : floor;
+  return (
+    rightEffective - leftEffective ||
+    Number(rightScored) - Number(leftScored) ||
+    left.number - right.number
+  );
+}
+
+function mergeDiagnostic<T>(
+  store: Map<string, T>,
+  entries: T[],
+  keyOf: (entry: T) => string,
+) {
+  for (const entry of entries) {
+    const key = keyOf(entry);
+    if (!store.has(key)) {
+      store.set(key, entry);
+    }
+  }
+}
+
+function normalizeOpenRoadmapRootNumbers(roots: unknown): number[] {
+  if (!Array.isArray(roots)) {
+    return [];
+  }
+  return [
+    ...new Set(
+      roots
+        .map((entry) => {
+          if (typeof entry === 'number') {
+            return entry;
+          }
+          return Number.parseInt(
+            String((entry as { number?: unknown } | null)?.number ?? entry),
+            10,
+          );
+        })
+        .filter((value) => Number.isInteger(value) && value > 0),
+    ),
+  ].sort((left, right) => left - right);
+}
+
 export function extractRoadmapMarkerId(
   body: unknown,
   markerPrefix: string = DEFAULT_MARKER_PREFIX,
@@ -676,6 +1039,7 @@ function normalizeSubIssueNumbers(subIssues: unknown): number[] {
 function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {
     issue: 0,
+    allRoadmaps: false,
     owner: '',
     repo: '',
     policy: '',
@@ -688,6 +1052,10 @@ function parseArgs(argv: string[]): ParsedArgs {
     if (token === '--issue') {
       parsed.issue = Number.parseInt(String(value ?? ''), 10);
       index += 1;
+      continue;
+    }
+    if (token === '--all-roadmaps') {
+      parsed.allRoadmaps = true;
       continue;
     }
     if (token === '--owner') {
@@ -718,8 +1086,14 @@ function parseArgs(argv: string[]): ParsedArgs {
 function printHelp() {
   process.stdout.write(`Usage:
   node scripts/discover-roadmap-graph.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--policy <path>]
+  node scripts/discover-roadmap-graph.mjs --all-roadmaps [--owner <owner>] [--repo <repo>] [--policy <path>]
 
-Output schema (JSON mode):
+  --issue and --all-roadmaps are mutually exclusive; exactly one is required.
+  --all-roadmaps enumerates open execution leaves across every open roadmap
+  root (the union), each tagged with its sourceRoots and ranked by
+  autopilotSuitability (descending, tie-broken by ascending issue number).
+
+Output schema (JSON mode) — --issue single-root report:
   {
     "root": { "number": 638, "title": "...", "state": "OPEN", "classification": "roadmap", "roadmapMarkerId": "..." },
     "nodes": [{ "number": 638, "title": "...", "state": "OPEN", "labels": ["roadmap"], "classification": "roadmap", "roadmapMarkerId": "...", "autopilotSuitability": null, "depth": 0 }],
@@ -744,6 +1118,30 @@ Output schema (JSON mode):
       "inaccessibleReferenceCount": 0,
       "unresolvedReferenceCount": 0,
       "maxDepth": 1
+    }
+  }
+
+Output schema (JSON mode) — --all-roadmaps union report (a different
+top-level shape from the single-root report above):
+  {
+    "mode": "all-roadmaps",
+    "roots": [{ "number": 638, "title": "...", "state": "OPEN", "roadmapMarkerId": "..." }],
+    "leaves": [{ "number": 640, "title": "...", "state": "OPEN", "labels": ["..."], "classification": "execution", "roadmapMarkerId": "", "autopilotSuitability": null, "sourceRoots": [638] }],
+    "diagnostics": {
+      "duplicateReferences": [],
+      "cycles": [],
+      "inaccessibleReferences": [],
+      "unresolvedReferences": []
+    },
+    "summary": {
+      "rootCount": 1,
+      "leafCount": 1,
+      "scoredLeafCount": 0,
+      "sharedLeafCount": 0,
+      "duplicateReferenceCount": 0,
+      "cycleCount": 0,
+      "inaccessibleReferenceCount": 0,
+      "unresolvedReferenceCount": 0
     }
   }
 `);
@@ -890,6 +1288,74 @@ function buildSubIssueLoader(owner: string, repo: string) {
         throw new Error(
           `subIssues pagination cursor missing for issue #${issueNumber}`,
         );
+      }
+      after = String(connection.pageInfo.endCursor);
+    }
+
+    return [...new Set(numbers)];
+  };
+}
+
+function buildOpenRoadmapRootsLoader(
+  owner: string,
+  repo: string,
+  markerPrefix: unknown,
+) {
+  const prefix = normalizeMarkerPrefix(markerPrefix);
+  return async () => {
+    const numbers: number[] = [];
+    let after = '';
+
+    while (true) {
+      const variables: Record<string, string | number> = { owner, repo };
+      if (after) {
+        variables.after = after;
+      }
+      const result = runGraphqlQuery(OPEN_ISSUES_QUERY, variables) as {
+        data?: {
+          repository?: {
+            issues?: {
+              nodes?: unknown;
+              pageInfo?: { hasNextPage?: unknown; endCursor?: unknown };
+            };
+          };
+        };
+      };
+      const connection = result?.data?.repository?.issues;
+      if (
+        !connection ||
+        !Array.isArray(connection.nodes) ||
+        !connection.pageInfo
+      ) {
+        throw new Error('open issues connection missing');
+      }
+
+      for (const node of connection.nodes) {
+        const issue = node as {
+          number?: unknown;
+          body?: unknown;
+          labels?: { nodes?: unknown };
+        } | null;
+        const issueNumber = Number.parseInt(String(issue?.number ?? ''), 10);
+        if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+          continue;
+        }
+        const labels = normalizeLabels(
+          (issue?.labels as { nodes?: unknown } | undefined)?.nodes,
+        );
+        const hasRoadmapMarker = Boolean(
+          extractRoadmapMarkerId(issue?.body, prefix),
+        );
+        if (labels.has('roadmap') || hasRoadmapMarker) {
+          numbers.push(issueNumber);
+        }
+      }
+
+      if (!connection.pageInfo.hasNextPage) {
+        break;
+      }
+      if (!connection.pageInfo.endCursor) {
+        throw new Error('open issues pagination cursor missing');
       }
       after = String(connection.pageInfo.endCursor);
     }
