@@ -107,7 +107,8 @@
             }
           },
           "activeClaim": {
-            "description": "Active-claim annotation, present only under --with-claim-state, where it is always an object (Design O): present:false (with claimId:null, agentId:null) means no trusted claim is present, present:true means one exists (possibly stale). The object is constrained by `required` + `properties` + `additionalProperties: false`; the runtime contract is { present, stale, claimId, agentId, ownedByCurrentSession? }. ownedByCurrentSession is intentionally absent from `required`: it is emitted only with --current-claim-id.",
+            "description": "Active-claim annotation, present only under --with-claim-state, where it is always an object (Design O): present:false (with claimId:null, agentId:null) means no trusted claim is present, present:true means one exists (possibly stale). The object is constrained by `type: object` + `required` + `properties` + `additionalProperties: false`; the runtime contract is { present, stale, claimId, agentId, ownedByCurrentSession? }. ownedByCurrentSession is intentionally absent from `required`: it is emitted only with --current-claim-id.",
+            "type": "object",
             "required": [
               "present",
               "stale",

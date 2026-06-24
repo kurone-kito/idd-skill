@@ -15,6 +15,7 @@ import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
 } from './autopilot-suitability.mts';
+import { parseIsoDurationToMs } from './policy-helpers.mts';
 import { isStaleAt, resolveActiveClaim } from './protocol-helpers.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
@@ -97,8 +98,10 @@ export interface RoadmapIssueClassification {
  * means a trusted claim exists, with `stale` reporting whether it is older
  * than the configured `claimTiming.staleAge` relative to now (a stale claim is
  * takeover-eligible). The whole annotation is absent (key omitted) on the
- * default flag-absent path. `ownedByCurrentSession` is present only when the
- * caller passed `--current-claim-id`.
+ * default flag-absent path. `ownedByCurrentSession` is present whenever the
+ * caller passed `--current-claim-id` (`true` when the active claim's `claimId`
+ * equals it, `false` otherwise — including the no-claim `present: false` case),
+ * and absent only when `--current-claim-id` was not supplied.
  */
 export interface LeafActiveClaim {
   present: boolean;
@@ -1030,8 +1033,10 @@ export async function annotateLeafClaimState(
   });
 
   if (!active) {
-    // No present trusted claim → eligible. `ownedByCurrentSession` is omitted
-    // because there is no claim id to compare against.
+    // No present trusted claim → eligible. When `--current-claim-id` is
+    // supplied, `ownedByCurrentSession` is still emitted (as `false`) because
+    // there is no claim id to match it; it is omitted only when no
+    // `--current-claim-id` was passed.
     return {
       activeClaim: {
         present: false,
@@ -1149,9 +1154,12 @@ function buildClaimStateResolution(
     DEFAULT_CLAIM_STALE_AGE_MS;
   return {
     loadComments: buildCommentLoader(owner, repo),
-    // When no trusted actors are configured, every author is distrusted so no
-    // claim resolves — fail closed (a leaf reads as eligible) rather than
-    // honoring an unverifiable claim marker.
+    // When `trustedMarkerActors` is empty no author is trusted, so no claim
+    // resolves and every leaf reads as `claimEligible: true`. This is a soft,
+    // availability-preferring default for the advisory discovery hint (it does
+    // NOT fail closed on eligibility): an unverifiable claim marker is simply
+    // not honored. The authoritative A5 claim gate (idd-claim.instructions.md)
+    // remains the real protection against acting on a contested claim.
     isTrustedAuthor: (login) =>
       trustedActors.has(
         String(login ?? '')
@@ -1193,27 +1201,17 @@ function buildCommentLoader(owner: string, repo: string) {
  * Parse an ISO8601 duration (`P[nD]T[nH][nM][nS]`) to ms; `null` on garbage OR
  * a non-positive total. A `PT0S` (or any zero/empty-component) duration is
  * rejected so the caller falls back to `DEFAULT_CLAIM_STALE_AGE_MS` instead of
- * configuring a 0ms stale age that would mark every claim immediately stale —
- * matching `parseIsoDurationToMs` in policy-helpers, which likewise returns
- * `null` for a non-positive duration.
+ * configuring a 0ms stale age that would mark every claim immediately stale.
+ *
+ * Thin wrapper over the shared `parseIsoDurationToMs` from policy-helpers
+ * (the single source of truth for ISO-8601 duration parsing, with its own
+ * tests). It already returns `null` for both garbage and a non-positive total,
+ * which is exactly the behavior required here. The unknown input is coerced to
+ * a trimmed string first so non-string/nullish values resolve to `null`
+ * (the shared parser accepts only strings).
  */
 export function parseClaimStaleAgeMs(value: unknown): number | null {
-  const text = String(value ?? '').trim();
-  if (!text) {
-    return null;
-  }
-  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i.exec(
-    text,
-  );
-  if (!match) {
-    return null;
-  }
-  const days = Number.parseInt(match[1] ?? '0', 10);
-  const hours = Number.parseInt(match[2] ?? '0', 10);
-  const minutes = Number.parseInt(match[3] ?? '0', 10);
-  const seconds = Number.parseInt(match[4] ?? '0', 10);
-  const totalMs = (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
-  return totalMs > 0 ? totalMs : null;
+  return parseIsoDurationToMs(String(value ?? '').trim());
 }
 
 export function extractRoadmapMarkerId(
@@ -1442,8 +1440,14 @@ function parseArgs(argv: string[]): ParsedArgs {
       continue;
     }
     if (token === '--current-claim-id') {
-      parsed.currentClaimId = value ?? '';
-      index += 1;
+      // Only consume the next token as the id when it exists and is not itself
+      // a flag, so `--current-claim-id --with-claim-state` does not swallow the
+      // following flag as the id. A missing/flag value leaves currentClaimId
+      // empty and the next flag is left for its own iteration.
+      if (value !== undefined && !value.startsWith('--')) {
+        parsed.currentClaimId = value;
+        index += 1;
+      }
       continue;
     }
     if (token === '--help' || token === '-h') {

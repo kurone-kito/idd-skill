@@ -1690,3 +1690,24 @@ test('discover-roadmap-union invalid fixture fails validation', () => {
   );
   assert.ok(ok, 'Expected invalid fixture to fail schema validation');
 });
+
+test('discover-roadmap-union schema rejects a non-object activeClaim', () => {
+  const schema = loadJson('schemas/discover-roadmap-union.schema.json');
+  // Under Design O activeClaim is always an object; the schema now declares
+  // `type: object`, so a scalar, string, array, or null must be rejected.
+  for (const activeClaim of [42, 'claimed', [], null]) {
+    const instance = JSON.parse(
+      JSON.stringify(
+        loadJson('fixtures/schemas/discover-roadmap-union.valid.json'),
+      ),
+    );
+    instance.leaves[0].activeClaim = activeClaim;
+    const errors = validate(instance, schema);
+    assert.ok(
+      errors.some((error) =>
+        error.includes('$.leaves[0].activeClaim: expected type "object"'),
+      ),
+      `activeClaim ${JSON.stringify(activeClaim)} should be rejected: ${errors.join('\n')}`,
+    );
+  }
+});

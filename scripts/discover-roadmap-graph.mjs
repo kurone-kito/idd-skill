@@ -13,6 +13,7 @@ import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
 } from './autopilot-suitability.mjs';
+import { parseIsoDurationToMs } from './policy-helpers.mjs';
 import { isStaleAt, resolveActiveClaim } from './protocol-helpers.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
@@ -658,8 +659,10 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
       isClaimStaleByAge(activeCreatedAt, nextCreatedAt, claimState.staleAgeMs),
   });
   if (!active) {
-    // No present trusted claim → eligible. `ownedByCurrentSession` is omitted
-    // because there is no claim id to compare against.
+    // No present trusted claim → eligible. When `--current-claim-id` is
+    // supplied, `ownedByCurrentSession` is still emitted (as `false`) because
+    // there is no claim id to match it; it is omitted only when no
+    // `--current-claim-id` was passed.
     return {
       activeClaim: {
         present: false,
@@ -751,9 +754,12 @@ function buildClaimStateResolution(owner, repo, policy, currentClaimId) {
     DEFAULT_CLAIM_STALE_AGE_MS;
   return {
     loadComments: buildCommentLoader(owner, repo),
-    // When no trusted actors are configured, every author is distrusted so no
-    // claim resolves — fail closed (a leaf reads as eligible) rather than
-    // honoring an unverifiable claim marker.
+    // When `trustedMarkerActors` is empty no author is trusted, so no claim
+    // resolves and every leaf reads as `claimEligible: true`. This is a soft,
+    // availability-preferring default for the advisory discovery hint (it does
+    // NOT fail closed on eligibility): an unverifiable claim marker is simply
+    // not honored. The authoritative A5 claim gate (idd-claim.instructions.md)
+    // remains the real protection against acting on a contested claim.
     isTrustedAuthor: (login) =>
       trustedActors.has(
         String(login ?? '')
@@ -793,27 +799,17 @@ function buildCommentLoader(owner, repo) {
  * Parse an ISO8601 duration (`P[nD]T[nH][nM][nS]`) to ms; `null` on garbage OR
  * a non-positive total. A `PT0S` (or any zero/empty-component) duration is
  * rejected so the caller falls back to `DEFAULT_CLAIM_STALE_AGE_MS` instead of
- * configuring a 0ms stale age that would mark every claim immediately stale —
- * matching `parseIsoDurationToMs` in policy-helpers, which likewise returns
- * `null` for a non-positive duration.
+ * configuring a 0ms stale age that would mark every claim immediately stale.
+ *
+ * Thin wrapper over the shared `parseIsoDurationToMs` from policy-helpers
+ * (the single source of truth for ISO-8601 duration parsing, with its own
+ * tests). It already returns `null` for both garbage and a non-positive total,
+ * which is exactly the behavior required here. The unknown input is coerced to
+ * a trimmed string first so non-string/nullish values resolve to `null`
+ * (the shared parser accepts only strings).
  */
 export function parseClaimStaleAgeMs(value) {
-  const text = String(value ?? '').trim();
-  if (!text) {
-    return null;
-  }
-  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i.exec(
-    text,
-  );
-  if (!match) {
-    return null;
-  }
-  const days = Number.parseInt(match[1] ?? '0', 10);
-  const hours = Number.parseInt(match[2] ?? '0', 10);
-  const minutes = Number.parseInt(match[3] ?? '0', 10);
-  const seconds = Number.parseInt(match[4] ?? '0', 10);
-  const totalMs = (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
-  return totalMs > 0 ? totalMs : null;
+  return parseIsoDurationToMs(String(value ?? '').trim());
 }
 export function extractRoadmapMarkerId(
   body,
@@ -1011,8 +1007,14 @@ function parseArgs(argv) {
       continue;
     }
     if (token === '--current-claim-id') {
-      parsed.currentClaimId = value ?? '';
-      index += 1;
+      // Only consume the next token as the id when it exists and is not itself
+      // a flag, so `--current-claim-id --with-claim-state` does not swallow the
+      // following flag as the id. A missing/flag value leaves currentClaimId
+      // empty and the next flag is left for its own iteration.
+      if (value !== undefined && !value.startsWith('--')) {
+        parsed.currentClaimId = value;
+        index += 1;
+      }
       continue;
     }
     if (token === '--help' || token === '-h') {
