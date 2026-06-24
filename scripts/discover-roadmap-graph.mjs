@@ -779,7 +779,7 @@ function printHelp() {
   root (the union), each tagged with its sourceRoots and ranked by
   autopilotSuitability (descending, tie-broken by ascending issue number).
 
-Output schema (JSON mode):
+Output schema (JSON mode) — --issue single-root report:
   {
     "root": { "number": 638, "title": "...", "state": "OPEN", "classification": "roadmap", "roadmapMarkerId": "..." },
     "nodes": [{ "number": 638, "title": "...", "state": "OPEN", "labels": ["roadmap"], "classification": "roadmap", "roadmapMarkerId": "...", "autopilotSuitability": null, "depth": 0 }],
@@ -804,6 +804,30 @@ Output schema (JSON mode):
       "inaccessibleReferenceCount": 0,
       "unresolvedReferenceCount": 0,
       "maxDepth": 1
+    }
+  }
+
+Output schema (JSON mode) — --all-roadmaps union report (a different
+top-level shape from the single-root report above):
+  {
+    "mode": "all-roadmaps",
+    "roots": [{ "number": 638, "title": "...", "state": "OPEN", "roadmapMarkerId": "..." }],
+    "leaves": [{ "number": 640, "title": "...", "state": "OPEN", "labels": ["..."], "classification": "execution", "roadmapMarkerId": "", "autopilotSuitability": null, "sourceRoots": [638] }],
+    "diagnostics": {
+      "duplicateReferences": [],
+      "cycles": [],
+      "inaccessibleReferences": [],
+      "unresolvedReferences": []
+    },
+    "summary": {
+      "rootCount": 1,
+      "leafCount": 1,
+      "scoredLeafCount": 0,
+      "sharedLeafCount": 0,
+      "duplicateReferenceCount": 0,
+      "cycleCount": 0,
+      "inaccessibleReferenceCount": 0,
+      "unresolvedReferenceCount": 0
     }
   }
 `);
