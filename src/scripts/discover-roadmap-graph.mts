@@ -15,8 +15,19 @@ import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
 } from './autopilot-suitability.mts';
+import { parseIsoDurationToMs } from './policy-helpers.mts';
+import {
+  isStaleAt,
+  resolveActiveClaim,
+  resolveTrustedMarkerActors,
+} from './protocol-helpers.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
+// Policy default claim stale age (`claimTiming.staleAge`, `PT24H`). Mirrors
+// the default baked into protocol-helpers' `isStaleAt`, so when the configured
+// stale age equals this default the shared `isStaleAt` path is
+// reused verbatim instead of re-deriving the 24h math here.
+const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
 });
@@ -82,6 +93,28 @@ export interface RoadmapIssueClassification {
   roadmapMarkerId: string;
 }
 
+/**
+ * Active-claim eligibility annotation for one discovery execution leaf.
+ *
+ * Under the opt-in `--with-claim-state` flag every annotated open execution
+ * leaf carries this object (Design O). `present: false` (with `claimId: null`,
+ * `agentId: null`) means no trusted claim is present at all; `present: true`
+ * means a trusted claim exists, with `stale` reporting whether it is older
+ * than the configured `claimTiming.staleAge` relative to now (a stale claim is
+ * takeover-eligible). The whole annotation is absent (key omitted) on the
+ * default flag-absent path. `ownedByCurrentSession` is present whenever the
+ * caller passed `--current-claim-id` (`true` when the active claim's `claimId`
+ * equals it, `false` otherwise — including the no-claim `present: false` case),
+ * and absent only when `--current-claim-id` was not supplied.
+ */
+export interface LeafActiveClaim {
+  present: boolean;
+  stale: boolean;
+  claimId: string | null;
+  agentId: string | null;
+  ownedByCurrentSession?: boolean;
+}
+
 /** One node of the enumerated roadmap graph in report form. */
 export interface RoadmapGraphNode {
   number: number;
@@ -92,6 +125,20 @@ export interface RoadmapGraphNode {
   roadmapMarkerId: string;
   autopilotSuitability: number | null;
   depth: number;
+  /**
+   * Active-claim annotation, present only under `--with-claim-state` and only
+   * on open execution-leaf nodes, where it is always an object (Design O):
+   * `present: false` means no trusted claim is present, `present: true` means
+   * one exists (possibly stale). Absent on every node in the default
+   * (flag-absent) path so the byte-stable output shape is unchanged.
+   */
+  activeClaim?: LeafActiveClaim;
+  /**
+   * Derived eligibility: `true` when no present, non-stale, trusted-actor
+   * claim blocks this leaf. Present only under `--with-claim-state` on open
+   * execution-leaf nodes.
+   */
+  claimEligible?: boolean;
 }
 
 /** Provenance path from the root roadmap to one discovered node. */
@@ -177,6 +224,19 @@ export interface RoadmapUnionLeaf {
    * source root here and is never double-counted in the union.
    */
   sourceRoots: number[];
+  /**
+   * Active-claim annotation, present only under `--with-claim-state`, where it
+   * is always an object (Design O): `present: false` means no trusted claim is
+   * present, `present: true` means one exists (possibly stale). Absent on
+   * every leaf in the default (flag-absent) path so the byte-stable output
+   * shape is unchanged.
+   */
+  activeClaim?: LeafActiveClaim;
+  /**
+   * Derived eligibility: `true` when no present, non-stale, trusted-actor
+   * claim blocks this leaf. Present only under `--with-claim-state`.
+   */
+  claimEligible?: boolean;
 }
 
 /** One discovered open roadmap root the union enumeration started from. */
@@ -236,7 +296,36 @@ interface RoadmapNodeRecord {
   depth: number;
 }
 
-interface EnumerateRoadmapGraphOptions {
+/**
+ * Opt-in active-claim annotation inputs (the `--with-claim-state` surface).
+ *
+ * The whole feature is gated on {@link ClaimStateOptions.claimState} being
+ * present: when it is absent the helper makes NO extra GitHub API calls and
+ * emits no claim fields, so the default output shape stays byte-stable. When
+ * present, each open execution leaf is annotated with active-claim eligibility
+ * using `loadComments` (an injected per-issue comment loader, mirroring the
+ * existing `loadIssue`/`loadSubIssues` injection so tests stay network-free).
+ */
+interface ClaimStateResolution {
+  loadComments: (issueNumber: number) => unknown;
+  /**
+   * Trusted-actor predicate, resolved from `IDD_TRUSTED_MARKER_ACTORS` then
+   * the configured `trustedMarkerActors`.
+   */
+  isTrustedAuthor: (login: string) => boolean;
+  /** Configured `claimTiming.staleAge` in ms (defaults to PT24H). */
+  staleAgeMs: number;
+  /** Resolution "now" (ISO8601); defaults to the wall clock. */
+  nowIso: string;
+  /** `--current-claim-id`, or '' when not supplied. */
+  currentClaimId: string;
+}
+
+interface ClaimStateOptions {
+  claimState?: ClaimStateResolution;
+}
+
+interface EnumerateRoadmapGraphOptions extends ClaimStateOptions {
   markerPrefix?: unknown;
   owner?: string;
   repo?: string;
@@ -268,6 +357,8 @@ interface ParsedArgs {
   owner: string;
   repo: string;
   policy: string;
+  withClaimState: boolean;
+  currentClaimId: string;
   help: boolean;
 }
 
@@ -296,7 +387,18 @@ if (isMainModule(import.meta.url)) {
   const policy = loadPolicy(args.policy) as {
     markerPrefix?: unknown;
     autopilotSuitability?: { floor?: unknown };
+    claimTiming?: { staleAge?: unknown };
+    trustedMarkerActors?: unknown;
   };
+
+  // The claim-state annotation is strictly opt-in: only when --with-claim-state
+  // is passed do we build the comment loader (the sole new GitHub API surface)
+  // and resolve the trusted-actor / stale-age policy. The default path leaves
+  // `claimState` undefined, so no extra fetch is made and the output is
+  // byte-stable.
+  const claimState = args.withClaimState
+    ? buildClaimStateResolution(owner, repo, policy, args.currentClaimId)
+    : undefined;
 
   const report = args.allRoadmaps
     ? await enumerateAllRoadmapsGraph({
@@ -311,6 +413,7 @@ if (isMainModule(import.meta.url)) {
           repo,
           policy.markerPrefix,
         ),
+        claimState,
       })
     : await enumerateRoadmapGraph(args.issue, {
         markerPrefix: policy.markerPrefix,
@@ -318,6 +421,7 @@ if (isMainModule(import.meta.url)) {
         repo,
         loadIssue: buildIssueLoader(owner, repo),
         loadSubIssues: buildSubIssueLoader(owner, repo),
+        claimState,
       });
 
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
@@ -404,6 +508,24 @@ export async function enumerateRoadmapGraph(
   const rootNode = nodeRecords.get(rootIssue.number);
   if (!rootNode) {
     throw new Error(`root issue #${rootIssueNumber} was not recorded`);
+  }
+
+  // Opt-in (#1008): annotate each open execution-leaf node with active-claim
+  // eligibility. Gated on `options.claimState` so the default path makes no
+  // extra GitHub API call and the output shape stays byte-stable.
+  if (options.claimState) {
+    const executionCandidateSet = new Set(executionCandidates);
+    for (const node of nodes) {
+      if (!executionCandidateSet.has(node.number)) {
+        continue;
+      }
+      const annotated = await annotateLeafClaimState(
+        node.number,
+        options.claimState,
+      );
+      (node as RoadmapGraphNode).activeClaim = annotated.activeClaim;
+      (node as RoadmapGraphNode).claimEligible = annotated.claimEligible;
+    }
   }
 
   return {
@@ -746,6 +868,22 @@ export async function enumerateAllRoadmapsGraph(
     }))
     .sort((left, right) => compareUnionLeaves(left, right, floor));
 
+  // Opt-in (#1008): annotate the deduped union leaves once each. The per-root
+  // enumerations above intentionally run without `claimState`, so each issue's
+  // comments are fetched at most once here regardless of how many roots reach
+  // it. Gated on `options.claimState`, so the default path adds no extra
+  // GitHub API call and the union output shape stays byte-stable.
+  if (options.claimState) {
+    for (const leaf of leaves) {
+      const annotated = await annotateLeafClaimState(
+        leaf.number,
+        options.claimState,
+      );
+      leaf.activeClaim = annotated.activeClaim;
+      leaf.claimEligible = annotated.claimEligible;
+    }
+  }
+
   const scoredLeafCount = leaves.filter((leaf) =>
     isAutopilotSuitabilityScore(leaf.autopilotSuitability),
   ).length;
@@ -852,6 +990,246 @@ function normalizeOpenRoadmapRootNumbers(roots: unknown): number[] {
         .filter((value) => Number.isInteger(value) && value > 0),
     ),
   ].sort((left, right) => left - right);
+}
+
+/** One leaf's resolved claim annotation (`--with-claim-state` output). */
+interface LeafClaimAnnotation {
+  activeClaim: LeafActiveClaim;
+  claimEligible: boolean;
+}
+
+/**
+ * Resolve one execution leaf's active-claim eligibility (#1008).
+ *
+ * Fetches the leaf issue's comments via the injected `loadComments` loader,
+ * resolves the ACTIVE claim with the SHARED `resolveActiveClaim` from
+ * protocol-helpers (trusted-author gated, stale-age aware), then derives
+ * present/stale/eligibility. `activeClaim` is ALWAYS returned as an object
+ * (Design O): `present: false` (with `claimId: null`, `agentId: null`) when no
+ * trusted claim is present, `present: true` otherwise. A leaf is eligible when
+ * there is NO present, non-stale, trusted-actor claim. The shared
+ * `parseClaimComment` / `resolveActiveClaim` parsing is reused read-only and
+ * never re-implemented here.
+ *
+ * Intentional limitation: this annotation resolves only NEW-format
+ * `claimed-by` markers via the shared `resolveActiveClaim`. It deliberately
+ * does NOT factor in legacy claim-id-less markers nor forced-handoff
+ * transfers, both of which the authoritative resume/claim path handles
+ * (resume-claim-routing's `resolveLegacyClaimState` and forced-handoff
+ * authorization). Replicating that here would require duplicating that
+ * machinery plus per-candidate permission API calls, which is out of scope
+ * for this read-only discovery hint. `claimEligible` is therefore a
+ * best-effort SOFT signal only; the authoritative A5 claim gate
+ * (`idd-claim.instructions.md`), which DOES account for legacy markers and
+ * forced handoffs, remains the real protection.
+ */
+export async function annotateLeafClaimState(
+  issueNumber: number,
+  claimState: ClaimStateResolution,
+): Promise<LeafClaimAnnotation> {
+  const comments = normalizeClaimComments(
+    await claimState.loadComments(issueNumber),
+  );
+  const active = resolveActiveClaim(comments, {
+    isTrustedAuthor: claimState.isTrustedAuthor,
+    // The 24h math is not re-derived: when the configured stale age equals the
+    // PT24H default, the shared `isStaleAt` is reused as-is;
+    // otherwise the same comparison is applied with the configured age.
+    isStale: (activeCreatedAt, nextCreatedAt) =>
+      isClaimStaleByAge(activeCreatedAt, nextCreatedAt, claimState.staleAgeMs),
+  });
+
+  if (!active) {
+    // No present trusted claim → eligible. When `--current-claim-id` is
+    // supplied, `ownedByCurrentSession` is still emitted (as `false`) because
+    // there is no claim id to match it; it is omitted only when no
+    // `--current-claim-id` was passed.
+    return {
+      activeClaim: {
+        present: false,
+        stale: false,
+        claimId: null,
+        agentId: null,
+        ...(claimState.currentClaimId ? { ownedByCurrentSession: false } : {}),
+      },
+      claimEligible: true,
+    };
+  }
+
+  // Staleness of the present claim is measured against "now": a claim whose
+  // createdAt is older than the configured stale age is a stale (takeover-
+  // eligible) claim, mirroring resume-claim-routing's active-claim staleness.
+  const stale = isClaimStaleByAge(
+    active.createdAt,
+    claimState.nowIso,
+    claimState.staleAgeMs,
+  );
+
+  const annotation: LeafActiveClaim = {
+    present: true,
+    stale,
+    claimId: active.claimId,
+    agentId: active.agentId,
+  };
+  if (claimState.currentClaimId) {
+    annotation.ownedByCurrentSession =
+      active.claimId === claimState.currentClaimId;
+  }
+
+  // Eligible only when there is no present, NON-stale, trusted claim. A stale
+  // claim is takeover-eligible, so it does not block.
+  return { activeClaim: annotation, claimEligible: stale };
+}
+
+/** Coerce a loaded comment payload into the `resolveActiveClaim` event shape. */
+function normalizeClaimComments(
+  raw: unknown,
+): { body: string; createdAt: string; author: { login: string } }[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.map((entry) => {
+    const comment = (entry ?? {}) as {
+      body?: unknown;
+      createdAt?: unknown;
+      created_at?: unknown;
+      author?: { login?: unknown } | null;
+      user?: { login?: unknown } | null;
+    };
+    return {
+      body: String(comment.body ?? ''),
+      createdAt: String(comment.createdAt ?? comment.created_at ?? ''),
+      author: {
+        login: String(comment.author?.login ?? comment.user?.login ?? ''),
+      },
+    };
+  });
+}
+
+/**
+ * Claim staleness by configured age. When the configured age equals the PT24H
+ * policy default, the shared `isStaleAt` is reused verbatim
+ * (the 24h math lives there, not here); otherwise the same millisecond
+ * comparison is applied with the configured age. Mirrors
+ * resume-claim-routing's `isStaleByAge`.
+ */
+function isClaimStaleByAge(
+  activeCreatedAt: string,
+  nextCreatedAt: string,
+  staleAgeMs: number,
+): boolean {
+  if (staleAgeMs === DEFAULT_CLAIM_STALE_AGE_MS) {
+    return isStaleAt(activeCreatedAt, nextCreatedAt);
+  }
+  const start = Date.parse(activeCreatedAt ?? '');
+  const end = Date.parse(nextCreatedAt ?? '');
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return false;
+  }
+  return end - start >= staleAgeMs;
+}
+
+/**
+ * Build the CLI-side claim-state resolution: the live comment loader plus the
+ * resolved trusted-actor predicate, configured stale age, and "now". Only
+ * invoked when `--with-claim-state` is passed, so the live comment fetch is
+ * never wired in the default path.
+ */
+function buildClaimStateResolution(
+  owner: string,
+  repo: string,
+  policy: {
+    claimTiming?: { staleAge?: unknown };
+    trustedMarkerActors?: unknown;
+  },
+  currentClaimId: string,
+): ClaimStateResolution {
+  const staleAgeMs =
+    parseClaimStaleAgeMs(policy.claimTiming?.staleAge) ??
+    DEFAULT_CLAIM_STALE_AGE_MS;
+  return {
+    loadComments: buildCommentLoader(owner, repo),
+    isTrustedAuthor: buildTrustedAuthorPredicate(policy),
+    staleAgeMs,
+    nowIso: new Date().toISOString(),
+    currentClaimId: String(currentClaimId ?? '').trim(),
+  };
+}
+
+/**
+ * Build the case-insensitive trusted-marker-author predicate for the
+ * `--with-claim-state` annotation.
+ *
+ * Trusted actors are resolved through the shared
+ * {@link resolveTrustedMarkerActors} helper so this CLI honors the
+ * `IDD_TRUSTED_MARKER_ACTORS` env override exactly like every other evidence
+ * helper, not just the `trustedMarkerActors` array declared in policy. The
+ * resolved actors are already trimmed, lowercased, and deduped, so the
+ * predicate only needs to normalize the incoming login the same way.
+ *
+ * When the resolved set is empty no author is trusted, so no claim resolves
+ * and every leaf reads as `claimEligible: true`. This is a soft,
+ * availability-preferring default for the advisory discovery hint (it does
+ * NOT fail closed on eligibility): an unverifiable claim marker is simply not
+ * honored. The authoritative A5 claim gate (idd-claim.instructions.md) remains
+ * the real protection against acting on a contested claim.
+ */
+export function buildTrustedAuthorPredicate(policy: {
+  trustedMarkerActors?: unknown;
+}): (login: string) => boolean {
+  const { actors } = resolveTrustedMarkerActors({
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+    config: policy,
+  });
+  const trustedActors = new Set(actors);
+  return (login) =>
+    trustedActors.has(
+      String(login ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+}
+
+/** Live per-issue comment loader (the sole new GitHub API surface). */
+function buildCommentLoader(owner: string, repo: string) {
+  return (issueNumber: number) => {
+    const comments: unknown[] = [];
+    const pageSize = 100;
+    for (let page = 1; ; page += 1) {
+      const raw = runGh([
+        'api',
+        `repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=${pageSize}&page=${page}`,
+        '--jq',
+        '.',
+      ]).trim();
+      const pageItems = raw && raw !== 'null' ? JSON.parse(raw) : [];
+      if (!Array.isArray(pageItems) || pageItems.length === 0) {
+        break;
+      }
+      comments.push(...pageItems);
+      if (pageItems.length < pageSize) {
+        break;
+      }
+    }
+    return comments;
+  };
+}
+
+/**
+ * Parse an ISO8601 duration (`P[nD]T[nH][nM][nS]`) to ms; `null` on garbage OR
+ * a non-positive total. A `PT0S` (or any zero/empty-component) duration is
+ * rejected so the caller falls back to `DEFAULT_CLAIM_STALE_AGE_MS` instead of
+ * configuring a 0ms stale age that would mark every claim immediately stale.
+ *
+ * Thin wrapper over the shared `parseIsoDurationToMs` from policy-helpers
+ * (the single source of truth for ISO-8601 duration parsing, with its own
+ * tests). It already returns `null` for both garbage and a non-positive total,
+ * which is exactly the behavior required here. The unknown input is coerced to
+ * a trimmed string first so non-string/nullish values resolve to `null`
+ * (the shared parser accepts only strings).
+ */
+export function parseClaimStaleAgeMs(value: unknown): number | null {
+  return parseIsoDurationToMs(String(value ?? '').trim());
 }
 
 export function extractRoadmapMarkerId(
@@ -1043,6 +1421,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     owner: '',
     repo: '',
     policy: '',
+    withClaimState: false,
+    currentClaimId: '',
     help: false,
   };
 
@@ -1073,6 +1453,21 @@ function parseArgs(argv: string[]): ParsedArgs {
       index += 1;
       continue;
     }
+    if (token === '--with-claim-state') {
+      parsed.withClaimState = true;
+      continue;
+    }
+    if (token === '--current-claim-id') {
+      // Only consume the next token as the id when it exists and is not itself
+      // a flag, so `--current-claim-id --with-claim-state` does not swallow the
+      // following flag as the id. A missing/flag value leaves currentClaimId
+      // empty and the next flag is left for its own iteration.
+      if (value !== undefined && !value.startsWith('--')) {
+        parsed.currentClaimId = value;
+        index += 1;
+      }
+      continue;
+    }
     if (token === '--help' || token === '-h') {
       printHelp();
       process.exit(0);
@@ -1085,13 +1480,29 @@ function parseArgs(argv: string[]): ParsedArgs {
 
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/discover-roadmap-graph.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--policy <path>]
-  node scripts/discover-roadmap-graph.mjs --all-roadmaps [--owner <owner>] [--repo <repo>] [--policy <path>]
+  node scripts/discover-roadmap-graph.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--current-claim-id <id>]
+  node scripts/discover-roadmap-graph.mjs --all-roadmaps [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--current-claim-id <id>]
 
   --issue and --all-roadmaps are mutually exclusive; exactly one is required.
   --all-roadmaps enumerates open execution leaves across every open roadmap
   root (the union), each tagged with its sourceRoots and ranked by
   autopilotSuitability (descending, tie-broken by ascending issue number).
+
+  --with-claim-state (opt-in) annotates each OPEN execution leaf with active-
+  claim eligibility: it fetches that issue's comments and resolves the active
+  claim using the configured trustedMarkerActors and claimTiming.staleAge
+  (default PT24H). Each annotated leaf gains (activeClaim is always an object):
+    "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null }
+                   (present:false with claimId/agentId null = no trusted claim)
+    "claimEligible": bool   (eligible = no present, non-stale, trusted claim)
+  Absent the flag, NO comment API calls are made and no claim fields are
+  emitted (the output shape is byte-stable).
+  --current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
+  each activeClaim (true when the active claim's claimId equals <id>).
+  NOTE: claimEligible is a best-effort SOFT discovery hint. It resolves only
+  new-format claimed-by markers and intentionally does NOT account for legacy
+  claim-id-less markers or forced-handoff transfers; the authoritative A5
+  claim gate (idd-claim.instructions.md) remains the real protection.
 
 Output schema (JSON mode) — --issue single-root report:
   {
