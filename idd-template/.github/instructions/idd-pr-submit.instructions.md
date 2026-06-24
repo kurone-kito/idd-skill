@@ -27,6 +27,31 @@ them and continue the rebase. After completing the rebase, if any files
 were manually edited during conflict resolution, run **fix-validate**
 before proceeding.
 
+### Post-rebase verification
+
+In a sibling-worktree setup, a rebase can leave HEAD **detached at the
+upstream tip without replaying the local commit**: the branch ref is
+preserved, but HEAD is moved off it. After the rebase completes and before
+D2, verify both:
+
+1. `git branch --show-current` is **non-empty** — HEAD is on the claimed
+   branch, not detached.
+2. The expected local commit is present in `main..HEAD` (for example,
+   `git log --oneline main..HEAD` lists it).
+
+If HEAD is detached (current branch empty), **auto-recover once**: re-attach
+to the claimed branch with `git checkout {branch-name}` (the local commit is
+preserved on the branch ref), re-run the D1 rebase, then re-verify both
+checks. The re-rebase re-signs through the configured commit-signing path —
+do not pin a key. If recovery still fails (HEAD still detached or the
+expected commit absent), post a hold note documenting the branch state and
+stop; do not push.
+
+This is the same divergence the shared
+[claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
+catches at the next mutation (current branch ≠ claimed branch); detecting it
+here turns a confusing later failure into an immediate, recoverable signal.
+
 ## D2 — Verify claim, lint, test, push
 
 1. Re-read the issue to confirm the claim is still yours: the **active
