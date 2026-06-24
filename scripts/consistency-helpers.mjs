@@ -421,3 +421,33 @@ export function collectInstructionSizeBudgetViolations(
   }
   return { errors, notices: [] };
 }
+/**
+ * Collect duplicate `syncPairs` target violations. Pure (no I/O) so it can be
+ * unit-tested and shared between the docs audit and sync-docs.
+ *
+ * `sync-docs` only applies the first occurrence of each target, so a second
+ * entry for the same target is silently skipped and becomes dead data: editing
+ * one copy of a divergent pair leaves the ignored copy stale and misleading.
+ * Flagging duplicates turns that latent authoring hazard into a hard failure.
+ */
+export function collectDuplicateSyncPairTargets(syncPairs) {
+  if (!Array.isArray(syncPairs)) {
+    return [];
+  }
+  const seen = new Set();
+  const violations = [];
+  for (const pair of syncPairs) {
+    const target = String(pair?.target ?? '');
+    if (!target) {
+      continue;
+    }
+    if (seen.has(target)) {
+      violations.push(
+        `syncPairs: duplicate target "${target}" (pair "${String(pair?.id ?? '')}"); each syncPairs target must appear exactly once — a duplicate is silently skipped and becomes dead data`,
+      );
+      continue;
+    }
+    seen.add(target);
+  }
+  return violations;
+}

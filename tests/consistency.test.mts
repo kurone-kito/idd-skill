@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  collectDuplicateSyncPairTargets,
   collectInstructionSizeBudgetViolations,
   collectPolicyConfigDrift,
   inspectHelperRuntimeConfig,
@@ -709,4 +710,36 @@ test('package.json version stays aligned with iddVersion in the shipped and temp
         `(${config.iddVersion}) in ${configPath}`,
     );
   }
+});
+
+test('collectDuplicateSyncPairTargets flags repeated targets and ignores unique ones', () => {
+  assert.deepEqual(
+    collectDuplicateSyncPairTargets([
+      { id: 'a', target: 'x.md' },
+      { id: 'b', target: 'y.md' },
+    ]),
+    [],
+  );
+  // Non-array / empty / missing targets are not violations.
+  assert.deepEqual(collectDuplicateSyncPairTargets(undefined), []);
+  assert.deepEqual(collectDuplicateSyncPairTargets([{ id: 'a' }]), []);
+
+  const dupes = collectDuplicateSyncPairTargets([
+    { id: 'first', target: 'shared.md' },
+    { id: 'other', target: 'unique.md' },
+    { id: 'second', target: 'shared.md' },
+  ]);
+  assert.equal(dupes.length, 1);
+  assert.match(dupes[0], /duplicate target "shared\.md"/);
+  assert.match(dupes[0], /pair "second"/);
+});
+
+test('audit/sync-manifest.json has no duplicate syncPairs targets', () => {
+  const manifest = JSON.parse(
+    readFileSync(
+      new URL('../audit/sync-manifest.json', import.meta.url),
+      'utf8',
+    ),
+  ) as { syncPairs?: { id?: string; target?: string }[] };
+  assert.deepEqual(collectDuplicateSyncPairTargets(manifest.syncPairs), []);
 });

@@ -104,12 +104,14 @@ function processSyncPairs(pairs) {
     const { id, source, target, mode, replacements = [] } = pair;
     if (mode === 'exact' || mode === 'concreted') {
       if (seenTargets.has(target)) {
-        // Duplicate target — both entries produce the same content by design.
-        // Log so maintenance errors become visible rather than silent.
-        console.warn(
-          `sync-docs: duplicate target "${target}" in pair "${id}" — skipping second occurrence`,
+        // A duplicate target is dead data: only the first occurrence is
+        // applied, so a divergent second copy is silently ignored and
+        // misleads future maintainers. Fail loudly instead of skipping so an
+        // accidental re-duplication cannot slip in (the docs audit enforces
+        // the same invariant via collectDuplicateSyncPairTargets).
+        throw new Error(
+          `sync-docs: duplicate target "${target}" in pair "${id}" — each syncPairs target must appear exactly once`,
         );
-        continue;
       }
       seenTargets.add(target);
       const sourceText = readText(source);

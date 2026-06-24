@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  collectDuplicateSyncPairTargets,
   collectInstructionSizeBudgetViolations,
   collectPolicyConfigDrift,
   collectRootMarkdownAllowlistViolations,
@@ -303,6 +304,7 @@ function resolveBlockFiles(block) {
   return files;
 }
 function checkSyncPairs(pairs) {
+  errors.push(...collectDuplicateSyncPairTargets(pairs));
   for (const pair of pairs) {
     if (pair.mode === 'contains') {
       checkContainsPair(pair);
