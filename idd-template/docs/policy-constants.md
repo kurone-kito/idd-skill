@@ -261,14 +261,41 @@ CI enforces two layers of instruction file size limits via `audit/sync-manifest.
 
 ### Bundle limits
 
-| Bundle ID          | Files included                                                                                   | Limit        |
-| ------------------ | ------------------------------------------------------------------------------------------------ | ------------ |
-| `bundle-discovery` | `idd-overview-core` + `idd-overview-appendix` + `idd-discover` + `idd-suitability` + `idd-claim` | 80,000 bytes |
-| `bundle-resume`    | `idd-overview-core` + `idd-overview-appendix` + `idd-resume`                                     | 46,000 bytes |
+`audit/sync-manifest.json` `bundleBudgets` is the single authoritative source
+for each bundle's byte limit (`limitBytes`). The table below lists the current
+bundles and their phase-path composition but deliberately does not duplicate
+the volatile byte values, so this page cannot silently re-drift from the
+manifest. Read the live limits with
+`jq '.bundleBudgets' audit/sync-manifest.json`.
+
+| Bundle ID          | Files included (phase path)                                                                                                                     |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bundle-discovery` | `idd-overview-core` + `idd-overview-appendix` + `idd-discover` + `idd-suitability` + `idd-claim`                                                |
+| `bundle-resume`    | `idd-overview-core` + `idd-overview-appendix` + `idd-resume`                                                                                    |
+| `bundle-work`      | `idd-overview-core` + `idd-overview-appendix` + `idd-work`                                                                                      |
+| `bundle-review`    | `idd-overview-core` + `idd-overview-appendix` + `idd-review-snapshot` + `idd-review-triage` + `idd-review-fix` + `idd-advisory-wait` + `idd-ci` |
+| `bundle-merge`     | `idd-overview-core` + `idd-overview-appendix` + `idd-pre-merge` + `idd-merge-handoff` + `idd-merge` + `idd-advisory-wait` + `idd-ci`            |
 
 Bundle checks run unconditionally (not filtered by changed files) and
-measure the combined byte length of all listed files. Adjust limits in
-`audit/sync-manifest.json` when deliberate growth is accepted.
+measure the combined byte length of all listed files.
+
+### Bundle-budget growth
+
+`bundleBudgets` follows a **ratchet** (documented in full under "Bundle
+Budgets" in `audit/README.md`, and mirrored by the `typeSuppressionBudgets`
+rule): **raising** any `limitBytes` value requires an explicit callout in the
+pull request description justifying the growth; **lowering** a limit after an
+instruction diet needs no callout.
+
+When a legitimate addition pushes a bundle over its current limit, **prefer
+raising the limit (with the PR-description callout) over trimming shared,
+terminology-sensitive instruction content**: trimming such content churns text
+that multiple phases depend on and tends to draw repeated advisory
+terminology-drift review comments. When you do raise a limit, **leave a small
+margin (roughly 10% headroom, the convention recorded in `audit/README.md`)
+rather than bumping to an exact fit** — an exact-fit bump leaves the next
+concurrent session with zero free bytes, forcing an immediate rebase and
+re-bump.
 
 ## Changing A Default
 
