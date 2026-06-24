@@ -4,7 +4,7 @@ Read this file after the self-review loop passes. It covers
 pre-publication main sync, claim verification, tests, pushing, PR
 creation, and waiting for CI.
 
-Before the D1 rebase and D2 push, apply the
+Before the D1 sync and D2 push, apply the
 [shared claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
 
 ## D1 — Sync main before first push
@@ -22,7 +22,7 @@ re-running that no-op rebase re-detaches every time, so the bounded
 recovery below cannot converge for the no-op case; skipping it is the clean
 exit.
 
-Otherwise the branch **is** behind `main`: rebase it onto `main`
+Otherwise the branch **is** behind `origin/main`: rebase it onto `main`
 (`git rebase origin/main`), then apply the post-rebase verification and
 bounded recovery below.
 
