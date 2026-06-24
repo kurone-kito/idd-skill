@@ -135,11 +135,12 @@ returns the workflow to E1 instead of merging over it.
   residual, and every other trigger and gate is unaffected.
 
   A current-claim agent's own post-watermark disposition replies are
-  expected convergence activity, not reviewer input; the E-phase
-  branch-sync watermark refresh (`idd-review-triage.instructions.md`,
-  on the direct-to-F-phase route) re-covers them so this check passes on
-  the refreshed watermark. If they still trip a return-to-E1, refresh the
-  watermark rather than treating them as new reviewer activity.
+  expected convergence activity, not reviewer input; the watermark refresh
+  on the E-phase branch-sync `clean` / `behind-no-conflict`
+  (direct-to-F-phase) route (`idd-review-triage.instructions.md`)
+  re-covers them so this check passes on the refreshed watermark. If a
+  return-to-E1 is triggered solely by those disposition replies, refresh
+  the watermark rather than treating them as new reviewer activity.
 - **Advisory bot wait** (restart-safe enforcement): `PR_HEAD_SHA` is
   already available from the review-currency check above. Apply the
   advisory-wait protocol (`idd-advisory-wait.instructions.md`):

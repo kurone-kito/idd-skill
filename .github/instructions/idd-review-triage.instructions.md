@@ -356,8 +356,8 @@ Route based on `branchState` from the helper (or `mergeable` /
   current-claim agent absorbing its own deterministic dispositions, not
   new reviewer activity; without the refresh F2's review-currency treats
   them as newer activity and returns to E1 for an avoidable cycle. Do
-  **not** refresh on the sync path or a hold below — both re-snapshot at
-  E1 anyway.
+  **not** refresh on the sync path (it re-snapshots at E1 after merging
+  `main`) or on a hold (it stops without proceeding to F-phase).
 - **`behind-no-conflict`** when branch protection or recorded repository
   policy requires an up-to-date head: → **sync path** below.
 - **`content-conflict`** (`mergeable` is `CONFLICTING`): → **sync path**
