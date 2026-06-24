@@ -92,6 +92,16 @@ Before you publish a `ready` issue, confirm:
 - dependency markers represent true start blockers rather than grouping
   related work
 
+## Codebase-fidelity quick check
+
+Before you publish a `ready` issue, confirm:
+
+- when the issue reuses an existing identifier or field name, the
+  specified value matches that name's established semantics in the
+  codebase — it does not overload a name with a new shape or source
+- values that are mutable at runtime are flagged to specify a live read
+  at the point of use rather than a one-time capture at construction
+
 ## Example orphan issue
 
 - `## Background` or `## Goal`

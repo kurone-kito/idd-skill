@@ -262,6 +262,23 @@ choice does not by itself make an otherwise autonomous issue non-ready.
 The ready issue should still carry its own objective verification even
 when a human will look at the result afterward.
 
+## Codebase-fidelity validation
+
+Before publishing a `ready` issue, run a short pre-publication check that
+the spec stays faithful to the existing codebase. Treat this as a routing
+aid, not a rigid wording linter: A4.5 suitability triage is structural and
+does not read the codebase, so a spec that contradicts established
+semantics can still pass that gate and only surface the mismatch in
+advisory review, costing extra review-fix round-trips.
+
+Ask these checks:
+
+1. When an issue reuses an existing identifier or field name, confirm the
+   specified value matches that name's established semantics in the
+   codebase — do not overload a name with a new shape or source.
+2. Flag values that are mutable at runtime — specify a live read at the
+   point of use rather than a one-time capture at construction.
+
 ## Dependency minimization
 
 Encode a dependency edge only when it reflects a true correctness,
