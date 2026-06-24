@@ -30,6 +30,22 @@ merge-readiness gate — not this advisory-wait window. See
 merge-gate requirement that forbids a bare CI-green merge without a fresh
 covering snapshot.
 
+## Fast path — common case
+
+In the overwhelmingly common case the advisory bot reviews the current HEAD
+within a couple of minutes, so the gate reduces to one check: poll
+`LAST_COPILOT_COMMIT` (the `commit_id` of the latest Copilot review); as soon
+as it equals the current `PR_HEAD_SHA` the gate is **SATISFIED** — skip the
+AW2-AW5 marker / recovery / cap machinery and take the caller's `SATISFIED`
+action (E14 → E15, F2 → CI check, F3 → merge). This is the common-case outcome
+of **both** the helper-first canonical path (`outcome` / `f3Outcome` =
+`SATISFIED`) and the shell fallback (AW3 decision table, row one), and changes
+neither.
+
+Enter the full protocol below **only** when `LAST_COPILOT_COMMIT != PR_HEAD_SHA`
+— the canonical path (or the shell fallback when the helper cannot be trusted)
+then handles the request, pending, stalled, restart, and cap cases.
+
 ## 1. Canonical path (helper-first)
 
 When helper support is installed, use the profile-selected
