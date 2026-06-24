@@ -138,11 +138,12 @@ Before any mutating action in F3, apply the
    For the head-SHA field, use this **copy-paste-safe, fail-closed** check
    — both operands fully quoted, no glob, abort on mismatch — rather than
    re-deriving the comparison ad hoc (a stray glob or an unquoted operand
-   can silently mis-gate the most safety-sensitive step). `F2_HEAD_SHA` is
-   the carried `{f2-head-SHA}`; `PR_HEAD_SHA_F3` is the head re-fetched in
-   step 3:
+   can silently mis-gate the most safety-sensitive step). Set `F2_HEAD_SHA`
+   from the carried `{f2-head-SHA}` so the snippet is self-contained;
+   `PR_HEAD_SHA_F3` is the head re-fetched in step 3:
 
    ```sh
+   F2_HEAD_SHA="{f2-head-SHA}"   # the head recorded in the F2 snapshot
    if [ "$PR_HEAD_SHA_F3" != "$F2_HEAD_SHA" ]; then
      echo "F3 abort: head moved ${F2_HEAD_SHA} -> ${PR_HEAD_SHA_F3}" >&2
      exit 1  # do not merge — return to E1 per the freshness rules above
