@@ -279,9 +279,19 @@ function parseArgs(argv) {
   if (!Number.isInteger(parsed.prNumber) || (parsed.prNumber ?? 0) < 1) {
     parsed.prNumber = null;
   }
-  // Scope to `<owner>/<repo>` only when BOTH are provided; a single flag is
-  // treated as not-set so the merge stays on the current-directory repo
-  // rather than constructing a half-formed repo reference.
+  // Fail closed on exactly one of `--owner` / `--repo`: the collector
+  // (`pre-merge-readiness`) fills the missing half from the
+  // current-directory repo, so a single flag would validate one repoRef
+  // while the head re-fetch and merge run against the current-directory
+  // repo — an unsafe split under `--apply`. Require both or neither.
+  if ((owner === '') !== (repo === '')) {
+    throw new Error(
+      'idd-merge-execute: --owner and --repo must be provided together or not at all',
+    );
+  }
+  // Both provided → scope to `<owner>/<repo>`. Neither → null, so the
+  // collector, the head re-fetch, and the merge all default to the
+  // current-directory repo (consistent).
   parsed.repoRef = owner && repo ? `${owner}/${repo}` : null;
   return parsed;
 }

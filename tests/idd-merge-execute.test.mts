@@ -261,6 +261,20 @@ test('without --owner/--repo no -R scope is added (current-directory repo)', () 
   assert.deepEqual(calls.mergeRepoRefs, [null]);
 });
 
+test('exactly one of --owner/--repo fails closed (require both or neither)', () => {
+  const { deps } = depsFor(readyReport());
+  // The collector fills the missing half from the current-directory repo,
+  // so a single flag would validate one repo but merge another.
+  assert.throws(
+    () => runMergeExecute([...BASE_ARGS, '--owner', 'acme', '--apply'], deps),
+    /must be provided together or not at all/,
+  );
+  assert.throws(
+    () => runMergeExecute([...BASE_ARGS, '--repo', 'widget', '--apply'], deps),
+    /must be provided together or not at all/,
+  );
+});
+
 test('--apply on a blocked gate fails closed without merging', () => {
   const report = readyReport();
   report.advisoryWait = { f3Outcome: 'WAIT' };
