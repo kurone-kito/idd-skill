@@ -284,7 +284,13 @@ export function runMergeExecute(
   // Scope the printed command to the same repo the merge would run against so
   // it matches what `--apply` executes (current-directory repo when unset).
   const repoScope = args.repoRef ? `-R ${args.repoRef} ` : '';
-  const mergeCommand = `gh ${repoScope}pr merge ${args.prNumber} --merge --match-head-commit ${prHeadSha}`;
+  // Suppress the copy-pasteable command when the head is invalid (the
+  // head-sha gate fired): binding --match-head-commit to a non-SHA would
+  // emit a malformed, unsafe command despite the helper failing closed.
+  const hasHeadShaBlocker = blockers.some((b) => b.gate === 'head-sha');
+  const mergeCommand = hasHeadShaBlocker
+    ? ''
+    : `gh ${repoScope}pr merge ${args.prNumber} --merge --match-head-commit ${prHeadSha}`;
 
   const verdict: IddMergeExecuteVerdict = {
     protocolVersion: '1',

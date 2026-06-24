@@ -86,6 +86,17 @@ test('a missing or invalid prHeadSha fails closed as a head-sha blocker', () => 
   }
 });
 
+test('mergeCommand is suppressed when the head-sha gate fires', () => {
+  const report = readyReport();
+  report.prHeadSha = 'not-a-sha';
+  const { deps } = depsFor(report);
+  const { verdict, exitCode } = runMergeExecute(BASE_ARGS, deps);
+  assert.equal(verdict.ready, false);
+  // No copy-pasteable command when the head cannot bind --match-head-commit.
+  assert.equal(verdict.mergeCommand, '');
+  assert.equal(exitCode, 1);
+});
+
 test('dry-run on a ready report reports ready with the bound merge command', () => {
   const { deps, calls } = depsFor(readyReport());
   const { verdict, exitCode } = runMergeExecute(BASE_ARGS, deps);
