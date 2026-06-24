@@ -264,11 +264,11 @@ function deriveBranchState({
 
   if (mergeableNorm === 'UNKNOWN' || !mergeableNorm) {
     notes.push(
-      `Mergeable status is ${mergeable ?? 'null'}; unable to classify definitively.`,
+      `Mergeable status is ${mergeable ?? 'null'}; GitHub computes mergeability asynchronously, so this is most likely still computing. Re-poll before treating it as terminal.`,
     );
     return {
-      branchState: 'unknown',
-      syncRecommendation: 'hold-unknown',
+      branchState: 'computing',
+      syncRecommendation: 'recheck',
       conflictFiles: [],
       mergeableSource: 'none',
     };

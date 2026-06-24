@@ -93,7 +93,18 @@ test('classifyBranchConflictState: DIRTY returns dirty state', async () => {
   );
 });
 
-test('classifyBranchConflictState: UNKNOWN returns unknown state', async () => {
+test('classifyBranchConflictState: UNKNOWN returns transient computing state', async () => {
+  const fixture = loadFixture('computing');
+  const result = await classifyBranchConflictState(fixture.prData.number, {
+    owner: 'test-owner',
+    repo: 'test-repo',
+    _testPrData: fixture.prData,
+  });
+  assert.equal(result.branchState, 'computing');
+  assert.equal(result.syncRecommendation, 'recheck');
+});
+
+test('classifyBranchConflictState: unrecognized mergeable returns terminal unknown', async () => {
   const fixture = loadFixture('unknown');
   const result = await classifyBranchConflictState(fixture.prData.number, {
     owner: 'test-owner',

@@ -90,6 +90,12 @@ export function selectResumeRoute(input) {
         reasonParts,
       );
     }
+    if (state.branchState === 'computing') {
+      // Mergeability is still computing (transient `UNKNOWN`); resume into F1,
+      // whose bounded re-poll resolves it instead of stopping on a
+      // self-resolving state.
+      return result('F1', 'pr-ci-success-branch-computing', state, reasonParts);
+    }
     if (state.branchState === 'behind-no-conflict') {
       return result(
         'F1',
@@ -307,7 +313,8 @@ function countUnrepliedRegularComments(comments, viewerLogin) {
   return count;
 }
 export function classifyBranchState(mergeState) {
-  const mergeable = String(mergeState?.mergeable ?? '').toUpperCase();
+  const rawMergeable = mergeState?.mergeable;
+  const mergeable = String(rawMergeable ?? '').toUpperCase();
   const mergeStateStatus = String(
     mergeState?.mergeStateStatus ?? '',
   ).toUpperCase();
@@ -316,6 +323,12 @@ export function classifyBranchState(mergeState) {
   if (mergeStateStatus === 'CLEAN') return 'clean';
   if (mergeStateStatus === 'BEHIND') return 'behind-no-conflict';
   if (mergeable === 'MERGEABLE') return 'clean';
+  // GitHub computes `mergeable` asynchronously: an explicit `UNKNOWN` — or an
+  // explicit `null` mergeable on a present payload — means the result is still
+  // computing (transient), not a terminal classification failure. A genuinely
+  // missing/unparseable payload (no `mergeable` field at all, i.e. `undefined`)
+  // stays terminal `unknown`.
+  if (mergeable === 'UNKNOWN' || rawMergeable === null) return 'computing';
   return 'unknown';
 }
 export function countLatestChangesRequestedByReviewer(reviews) {

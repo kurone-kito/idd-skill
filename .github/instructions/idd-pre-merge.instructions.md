@@ -47,6 +47,15 @@ This check is read-only — F1 does not rebase, merge, or push.
   in `idd-review-triage.instructions.md`. Before returning, update the PR
   live status digest with `Phase: F1 sync-required`, the branch state in
   `Open blockers`, and `Next action: E-phase branch-sync`.
+- **`computing`** (`syncRecommendation` is `recheck`): `mergeable` is
+  `UNKNOWN` / null because GitHub computes mergeability asynchronously and
+  has not settled yet (common right after E1 posts its watermark/baseline) —
+  a **transient** state, not a terminal one. Do **not** hold. Re-poll the
+  branch state after a short wait (the helper is a single read; the wait
+  belongs to this caller), up to a small fixed attempt budget (distributed
+  default: 3 attempts, a few seconds apart), then route by the first settled
+  result. Only if it is **still** `computing` (or `unknown`) after the budget
+  is exhausted, fall through to the terminal hold below.
 - **`dirty`** (`mergeStateStatus` is `DIRTY`) or **`unknown`**: hold; post
   a PR comment documenting the branch state and stop. Do not proceed to F2
   without confirmed clean branch-state evidence. A maintainer must clear
