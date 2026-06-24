@@ -74,6 +74,18 @@ test('evaluateMergeGates returns no blockers for a fully ready report', () => {
   assert.deepEqual(evaluateMergeGates(readyReport()), []);
 });
 
+test('a missing or invalid prHeadSha fails closed as a head-sha blocker', () => {
+  for (const bad of ['', 'not-a-sha', 'ABCDEF', `${HEAD}extra`]) {
+    const report = readyReport();
+    report.prHeadSha = bad;
+    const blockers = evaluateMergeGates(report);
+    assert.ok(
+      blockers.some((b) => b.gate === 'head-sha'),
+      `expected a head-sha blocker for prHeadSha=${JSON.stringify(bad)}`,
+    );
+  }
+});
+
 test('dry-run on a ready report reports ready with the bound merge command', () => {
   const { deps, calls } = depsFor(readyReport());
   const { verdict, exitCode } = runMergeExecute(BASE_ARGS, deps);

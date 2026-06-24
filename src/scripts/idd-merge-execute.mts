@@ -69,6 +69,17 @@ export function evaluateMergeGates(
 ): MergeBlocker[] {
   const blockers: MergeBlocker[] = [];
 
+  // Fail closed on a missing/invalid head: `prHeadSha` binds
+  // `--match-head-commit`, so a non-40-hex value must never yield a
+  // "ready" verdict with an unsafe merge binding.
+  const prHeadSha = String(report.prHeadSha ?? '');
+  if (!/^[0-9a-f]{40}$/.test(prHeadSha)) {
+    blockers.push({
+      gate: 'head-sha',
+      detail: `prHeadSha "${prHeadSha}" is not a 40-hex commit SHA; cannot bind a safe merge`,
+    });
+  }
+
   const reviewCurrency = asRecord(report.reviewCurrency);
   const comparisonRoute = String(reviewCurrency.comparisonRoute ?? '');
   if (comparisonRoute !== 'proceed') {
