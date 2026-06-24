@@ -119,7 +119,37 @@ Before any mutating action in F3, apply the
 
 4. Merge the PR using a **merge commit**, binding to the validated SHA
    to prevent a race where a new push lands after the F3 freshness check
-   but before the merge executes:
+   but before the merge executes.
+
+   **Gate checklist** — confirm every field before merging; all must hold,
+   and any unmet or unknown field is a NO-GO (fail closed — stop, do not
+   merge):
+
+   - current HEAD SHA **equals** the carried F2-snapshot head
+     (`{f2-head-SHA}`);
+   - review-currency route is `proceed`;
+   - `F3_UNRESOLVED_ACTIONABLE_COUNT` is `0`;
+   - advisory `f3Outcome` is `SATISFIED` (with `LAST_COPILOT_COMMIT` equal
+     to the current head, or `copilotPending` is `false`);
+   - all required CI checks pass for the current head;
+   - claim ownership still uses your `{claim-id}`.
+
+   For the head-SHA field, use this **copy-paste-safe, fail-closed** check
+   — both operands fully quoted, no glob, abort on mismatch — rather than
+   re-deriving the comparison ad hoc (a stray glob or an unquoted operand
+   can silently mis-gate the most safety-sensitive step). `F2_HEAD_SHA` is
+   the carried `{f2-head-SHA}`; `PR_HEAD_SHA_F3` is the head re-fetched in
+   step 3:
+
+   ```sh
+   if [ "$PR_HEAD_SHA_F3" != "$F2_HEAD_SHA" ]; then
+     echo "F3 abort: head moved ${F2_HEAD_SHA} -> ${PR_HEAD_SHA_F3}" >&2
+     exit 1  # do not merge — return to F1/E1 per the freshness rules above
+   fi
+   ```
+
+   Then merge, binding `--match-head-commit` to the **freshly validated**
+   `${PR_HEAD_SHA_F3}` (never a stale, hardcoded, or unbound SHA):
 
    ```sh
    gh pr merge {pr-number} --merge --match-head-commit "${PR_HEAD_SHA_F3}"
