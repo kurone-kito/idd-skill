@@ -31,7 +31,8 @@ Before creating, check for local conflicts in this order:
    `main` — these include read-only inspection (`git worktree list`)
    and the HEAD-preserving branch/worktree commands used by Steps 2-3
    below and by Worktree creation
-   (`git branch -d <stale-branch>`, `git worktree add`, `wt new`).
+   (`git branch -d <stale-branch>`, `git worktree add`,
+   `wt switch --create`).
    What must not happen is the primary worktree's HEAD switching to
    the issue branch. See Anti-patterns below.
 
@@ -68,7 +69,7 @@ branch in the primary worktree:
 
 The primary worktree's HEAD MUST remain on `main` throughout B1. The
 implementation branch exists only inside the sibling worktree created
-by `git worktree add` (or WorkTrunk's `wt new`). If the primary
+by `git worktree add` (or WorkTrunk's `wt switch --create`). If the primary
 worktree ever leaves `main` during B1, stop immediately and follow the
 B1 self-check repair path below.
 
@@ -86,11 +87,20 @@ Example: repo `idd-skill`, branch `issue/123-add-foo` → worktree path
 but is not listed in `git worktree list`, stop and report for manual
 cleanup before continuing.
 
-**Step 2 — Create**: use **WorkTrunk** if available:
+**Step 2 — Create**: use **WorkTrunk** if available. The create verb is
+`wt switch --create` (the older `wt new` subcommand was removed):
 
-- macOS/Linux: `wt new <branch-name>`
-- Windows: `git-wt new <branch-name>` (fall back to
-  `wt new <branch-name>` if `git-wt` is unavailable)
+- macOS/Linux: `wt switch --create -b <base-branch> <branch-name>`
+- Windows: `git-wt switch --create -b <base-branch> <branch-name>`, or the
+  same `wt switch --create -b <base-branch> <branch-name>` if `git-wt` is
+  unavailable
+
+`<base-branch>` is normally `main`. In a **non-interactive / automation**
+context, append `-x <noop>` (for example `-x true`): otherwise WorkTrunk
+tries to change the caller's directory, warns "Cannot change directory —
+shell requires restart", and can hang; `-x` makes it create → run the
+pre-start hook → exit cleanly. Describe the current verb rather than pinning
+a WorkTrunk version.
 
 If WorkTrunk is not available, choose the correct case:
 
