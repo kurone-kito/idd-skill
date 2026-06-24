@@ -221,8 +221,8 @@ and issue/PR status — lives in the forge (GitHub), not in the agent's
 context, so the loop does not need to be carried in one long-lived process:
 a thin external runner or scheduler (or a dynamic-paced loop primitive)
 re-enters Discover for the next unclaimed issue in a fresh session. This
-composes with the external-scheduler model already described in
-[positioning](positioning.md) — IDD ships no daemon.
+composes with IDD's existing model — it ships no daemon and relies on an
+external scheduler to drive the loop.
 
 Treat the **context window as a first-class, exhaustible resource**,
 alongside wall-clock time and token budget. A single session that runs
