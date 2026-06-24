@@ -129,8 +129,9 @@ Before any mutating action in F3, apply the
      (`{f2-head-SHA}`);
    - review-currency route is `proceed`;
    - `F3_UNRESOLVED_ACTIONABLE_COUNT` is `0`;
-   - advisory `f3Outcome` is `SATISFIED` (with `LAST_COPILOT_COMMIT` equal
-     to the current head, or `copilotPending` is `false`);
+   - advisory `f3Outcome` is `SATISFIED` (the authoritative advisory gate —
+     do not add stricter sub-conditions; e.g. a pending-window `SATISFIED`
+     can keep `copilotPending` true and `LAST_COPILOT_COMMIT` off the head);
    - all required CI checks pass for the current head;
    - claim ownership still uses your `{claim-id}`.
 
@@ -144,7 +145,7 @@ Before any mutating action in F3, apply the
    ```sh
    if [ "$PR_HEAD_SHA_F3" != "$F2_HEAD_SHA" ]; then
      echo "F3 abort: head moved ${F2_HEAD_SHA} -> ${PR_HEAD_SHA_F3}" >&2
-     exit 1  # do not merge — return to F1/E1 per the freshness rules above
+     exit 1  # do not merge — return to E1 per the freshness rules above
    fi
    ```
 
