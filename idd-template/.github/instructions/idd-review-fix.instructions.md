@@ -239,6 +239,10 @@ keys preserve the distributed defaults. The outcome paths below are
 authoritative and override the shared helper's generic outcomes for this
 phase:
 
+Keep the wait cheap per the
+[wake-up discipline](idd-ci.instructions.md#wake-up-discipline) (no interim
+polling turns; batch post-wait actions into one turn).
+
 **While polling**: if new review threads or comments arrive during the
 CI wait, note them. After CI resolves (any outcome), return to E1 before
 proceeding to F — do not skip triage.
