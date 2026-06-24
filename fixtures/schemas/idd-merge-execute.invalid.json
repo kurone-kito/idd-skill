@@ -3,7 +3,7 @@
   "decisionAuthority": "instructions",
   "mode": "dry-run",
   "prNumber": 994,
-  "prHeadSha": "0123456789abcdef0123456789abcdef01234567",
+  "prHeadSha": "",
   "ready": true,
   "blockers": [],
   "merged": false,

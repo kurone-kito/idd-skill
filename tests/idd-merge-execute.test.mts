@@ -167,6 +167,22 @@ test('every F3 gate maps to its own blocker', () => {
   }
 });
 
+test('disposition-evidence blocks when route is proceed but blockingCount is non-zero', () => {
+  const report = readyReport();
+  report.dispositionEvidence = { route: 'proceed', blockingCount: 1 };
+  const blockers = evaluateMergeGates(report);
+  assert.deepEqual(
+    blockers.map((b) => b.gate),
+    ['disposition-evidence'],
+  );
+  assert.match(blockers[0]?.detail ?? '', /blockingCount=1/);
+
+  const { deps } = depsFor(report);
+  const { verdict, exitCode } = runMergeExecute(BASE_ARGS, deps);
+  assert.equal(verdict.ready, false);
+  assert.equal(exitCode, 1);
+});
+
 test('CI all-passing accepts the no-required-checks fallback', () => {
   const report = readyReport();
   report.ci = {

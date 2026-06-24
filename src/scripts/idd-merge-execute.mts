@@ -134,14 +134,19 @@ export function evaluateMergeGates(
   }
 
   const dispositionEvidence = asRecord(report.dispositionEvidence);
-  if (String(dispositionEvidence.route ?? '') !== 'proceed') {
+  // The written F2/F3 gate requires BOTH `route === 'proceed'` AND
+  // `blockingCount === 0`. Fail closed on a non-zero or non-numeric
+  // blockingCount so a missing/garbled count is treated as a blocker.
+  const dispositionRoute = String(dispositionEvidence.route ?? '');
+  const dispositionBlockingCount = Number(
+    dispositionEvidence.blockingCount ?? -1,
+  );
+  if (dispositionRoute !== 'proceed' || dispositionBlockingCount !== 0) {
     blockers.push({
       gate: 'disposition-evidence',
-      detail: `dispositionEvidence.route is "${String(
-        dispositionEvidence.route ?? 'missing',
-      )}" (expected "proceed"): blockingCount=${Number(
-        dispositionEvidence.blockingCount ?? -1,
-      )}`,
+      detail: `dispositionEvidence.route is "${
+        dispositionRoute || 'missing'
+      }" (expected "proceed"), blockingCount=${dispositionBlockingCount} (expected 0)`,
     });
   }
 

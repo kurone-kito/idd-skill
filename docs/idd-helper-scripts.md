@@ -767,9 +767,11 @@ Interpretation rules:
   `comparisonRoute == "proceed"`, `threads.actionableCount == 0`,
   advisory `f3Outcome == "SATISFIED"`, CI all-passing (the F2/F3
   no-required-checks fallback included), required/CODEOWNER reviews
-  satisfied, claim ownership matches, and
-  `dispositionEvidence.route == "proceed"`. Each failing gate is listed
-  in `blockers[]` as `{ gate, detail }`.
+  satisfied, claim ownership matches, and disposition evidence both
+  routes proceed and is unblocked (`dispositionEvidence.route ==
+  "proceed"` **and** `dispositionEvidence.blockingCount == 0`; `route`
+  alone is not sufficient). Each failing gate is listed in `blockers[]`
+  as `{ gate, detail }`.
 - Dry-run (default) is read-only: it prints `ready`, `blockers`, and
   `mergeCommand` (a `gh pr merge <pr> --merge --match-head-commit
   <validated-head>` bound to the freshly fetched head) and never merges.
