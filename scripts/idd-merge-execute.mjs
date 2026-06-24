@@ -63,7 +63,7 @@ export function evaluateMergeGates(report) {
     });
   }
   const claim = asRecord(report.claim);
-  if (!claim.matchesExpectedClaim) {
+  if (claim.matchesExpectedClaim !== true) {
     blockers.push({
       gate: 'claim-ownership',
       detail: `claim ownership does not match (reason="${String(claim.reason ?? 'unknown')}")`,
@@ -108,28 +108,37 @@ function isReviewSatisfied(reviewerStates) {
 function asRecord(value) {
   return value && typeof value === 'object' ? value : {};
 }
+// Prepend `-R <repoRef>` to a `gh` argument array only when a repo scope is
+// set; otherwise pass the args verbatim (current-directory repo).
+function scopedGhArgs(repoRef, args) {
+  return repoRef ? ['-R', repoRef, ...args] : args;
+}
 const defaultDeps = {
   collect: (passthrough) => collectPreMergeReadiness(passthrough),
-  fetchHeadSha: (prNumber) =>
-    ghText([
-      'pr',
-      'view',
-      String(prNumber),
-      '--json',
-      'headRefOid',
-      '--jq',
-      '.headRefOid',
-    ]),
-  mergePr: (prNumber, headSha) =>
-    ghText([
-      'pr',
-      'merge',
-      String(prNumber),
-      // Always a merge commit — never squash/rebase. Bind to the head.
-      '--merge',
-      '--match-head-commit',
-      headSha,
-    ]),
+  fetchHeadSha: (prNumber, repoRef) =>
+    ghText(
+      scopedGhArgs(repoRef, [
+        'pr',
+        'view',
+        String(prNumber),
+        '--json',
+        'headRefOid',
+        '--jq',
+        '.headRefOid',
+      ]),
+    ),
+  mergePr: (prNumber, headSha, repoRef) =>
+    ghText(
+      scopedGhArgs(repoRef, [
+        'pr',
+        'merge',
+        String(prNumber),
+        // Always a merge commit — never squash/rebase. Bind to the head.
+        '--merge',
+        '--match-head-commit',
+        headSha,
+      ]),
+    ),
 };
 /**
  * Build the F3 verdict and, under `--apply`, execute the merge. The
@@ -147,7 +156,10 @@ export function runMergeExecute(argv, deps = defaultDeps) {
   const prHeadSha = String(report.prHeadSha ?? '');
   const blockers = evaluateMergeGates(report);
   const ready = blockers.length === 0;
-  const mergeCommand = `gh pr merge ${args.prNumber} --merge --match-head-commit ${prHeadSha}`;
+  // Scope the printed command to the same repo the merge would run against so
+  // it matches what `--apply` executes (current-directory repo when unset).
+  const repoScope = args.repoRef ? `-R ${args.repoRef} ` : '';
+  const mergeCommand = `gh ${repoScope}pr merge ${args.prNumber} --merge --match-head-commit ${prHeadSha}`;
   const verdict = {
     protocolVersion: '1',
     decisionAuthority: 'instructions',
@@ -172,7 +184,7 @@ export function runMergeExecute(argv, deps = defaultDeps) {
   }
   // Ready under --apply: re-fetch the head and re-validate the claim
   // immediately before merging, then fail closed on any drift.
-  const liveHeadSha = deps.fetchHeadSha(args.prNumber);
+  const liveHeadSha = deps.fetchHeadSha(args.prNumber, args.repoRef);
   if (liveHeadSha !== prHeadSha) {
     verdict.mergeResult = `head drift: validated ${prHeadSha} but live head is ${liveHeadSha}; no merge`;
     return { verdict, exitCode: 1 };
@@ -183,7 +195,7 @@ export function runMergeExecute(argv, deps = defaultDeps) {
     return { verdict, exitCode: 1 };
   }
   const revalidatedClaim = asRecord(revalidated.claim);
-  if (!revalidatedClaim.matchesExpectedClaim) {
+  if (revalidatedClaim.matchesExpectedClaim !== true) {
     verdict.mergeResult = `claim lost on re-validation (reason="${String(revalidatedClaim.reason ?? 'unknown')}"); no merge`;
     return { verdict, exitCode: 1 };
   }
@@ -196,7 +208,7 @@ export function runMergeExecute(argv, deps = defaultDeps) {
     return { verdict, exitCode: 1 };
   }
   // Always a merge commit — never squash/rebase. Bind to the validated head.
-  const mergeOutput = deps.mergePr(args.prNumber, prHeadSha);
+  const mergeOutput = deps.mergePr(args.prNumber, prHeadSha, args.repoRef);
   verdict.merged = true;
   verdict.mergeResult = mergeOutput || 'merge command completed';
   return { verdict, exitCode: 0 };
@@ -206,7 +218,13 @@ function parseArgs(argv) {
     prNumber: null,
     passthrough: [],
     apply: false,
+    repoRef: null,
   };
+  // Captured locally so `repoRef` is set only when BOTH are present; these
+  // are ALSO forwarded to the collector via passthrough (we do not stop
+  // forwarding them — the collector still scopes its own gh/API calls).
+  let owner = '';
+  let repo = '';
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === '--apply') {
@@ -220,6 +238,18 @@ function parseArgs(argv) {
     if (token === '--pr') {
       const value = argv[index + 1];
       parsed.prNumber = Number.parseInt(value ?? '', 10);
+      parsed.passthrough.push(token, value ?? '');
+      index += 1;
+      continue;
+    }
+    if (token === '--owner' || token === '--repo') {
+      const value = argv[index + 1];
+      if (token === '--owner') {
+        owner = value ?? '';
+      } else {
+        repo = value ?? '';
+      }
+      // Keep forwarding to the collector so it still validates this repo.
       parsed.passthrough.push(token, value ?? '');
       index += 1;
       continue;
@@ -242,6 +272,10 @@ function parseArgs(argv) {
   if (!Number.isInteger(parsed.prNumber) || (parsed.prNumber ?? 0) < 1) {
     parsed.prNumber = null;
   }
+  // Scope to `<owner>/<repo>` only when BOTH are provided; a single flag is
+  // treated as not-set so the merge stays on the current-directory repo
+  // rather than constructing a half-formed repo reference.
+  parsed.repoRef = owner && repo ? `${owner}/${repo}` : null;
   return parsed;
 }
 function printHelp() {

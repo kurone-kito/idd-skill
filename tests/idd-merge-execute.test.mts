@@ -39,13 +39,28 @@ function readyReport(): Record<string, unknown> {
 function depsFor(
   report: Record<string, unknown>,
   overrides: Partial<MergeExecuteDeps> = {},
-): { deps: MergeExecuteDeps; calls: { merged: string[] } } {
-  const calls = { merged: [] as string[] };
+): {
+  deps: MergeExecuteDeps;
+  calls: {
+    merged: string[];
+    fetchRepoRefs: (string | null)[];
+    mergeRepoRefs: (string | null)[];
+  };
+} {
+  const calls = {
+    merged: [] as string[],
+    fetchRepoRefs: [] as (string | null)[],
+    mergeRepoRefs: [] as (string | null)[],
+  };
   const deps: MergeExecuteDeps = {
     collect: () => report,
-    fetchHeadSha: () => String(report.prHeadSha ?? ''),
-    mergePr: (prNumber, headSha) => {
+    fetchHeadSha: (_prNumber, repoRef) => {
+      calls.fetchRepoRefs.push(repoRef);
+      return String(report.prHeadSha ?? '');
+    },
+    mergePr: (prNumber, headSha, repoRef) => {
       calls.merged.push(`${prNumber}:${headSha}`);
+      calls.mergeRepoRefs.push(repoRef);
       return 'Merged PR.';
     },
     ...overrides,
@@ -197,6 +212,37 @@ test('--apply merges a ready PR bound to the validated head', () => {
   assert.equal(verdict.merged, true);
   assert.deepEqual(calls.merged, [`994:${HEAD}`]);
   assert.equal(exitCode, 0);
+});
+
+test('--owner/--repo scope the head re-fetch, merge, and mergeCommand to that repoRef', () => {
+  const { deps, calls } = depsFor(readyReport());
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--owner', 'acme', '--repo', 'widget', '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, true);
+  assert.equal(exitCode, 0);
+  // The emitted command is scoped to the same repo.
+  assert.equal(
+    verdict.mergeCommand,
+    `gh -R acme/widget pr merge 994 --merge --match-head-commit ${HEAD}`,
+  );
+  // Both the head re-fetch and the merge gh calls are scoped to repoRef.
+  assert.deepEqual(calls.fetchRepoRefs, ['acme/widget']);
+  assert.deepEqual(calls.mergeRepoRefs, ['acme/widget']);
+});
+
+test('without --owner/--repo no -R scope is added (current-directory repo)', () => {
+  const { deps, calls } = depsFor(readyReport());
+  const { verdict } = runMergeExecute([...BASE_ARGS, '--apply'], deps);
+
+  assert.equal(
+    verdict.mergeCommand,
+    `gh pr merge 994 --merge --match-head-commit ${HEAD}`,
+  );
+  assert.deepEqual(calls.fetchRepoRefs, [null]);
+  assert.deepEqual(calls.mergeRepoRefs, [null]);
 });
 
 test('--apply on a blocked gate fails closed without merging', () => {
