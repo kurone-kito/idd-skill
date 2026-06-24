@@ -181,7 +181,9 @@ pnpm run lint
 pnpm run test
 ```
 
-pre-commit hook は `pnpm run lint:minimum` を実行し、commit-msg hook は
+pre-commit hook は高速・コミット安全なサブセット
+(`pnpm run lint:precommit`: Biome・dprint・markdownlint)を実行し、完全な
+`pnpm run lint:minimum` スイートは CI で実行されます。commit-msg hook は
 commitlint により Conventional Commits を検証します。
 
 `idd-template/` 配下の正規ソースファイルを編集したときは、`pnpm run docs:sync`

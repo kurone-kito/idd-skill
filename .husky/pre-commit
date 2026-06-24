@@ -3,7 +3,7 @@
 # vim: set ft=sh :
 
 # Fast, commit-safe checks only. The full suite (typecheck, build:check,
-# tests, workshop integrity, cspell) runs at push time via
-# pre-push-validate and in CI. Running build:check's `git diff` here
+# tests, workshop integrity, cspell) runs in CI; pre-push-validate adds
+# docs lint + cspell at push time. Running build:check's `git diff` here
 # deadlocked against the in-progress commit's index.lock (see #1007).
 pnpm run lint:precommit
