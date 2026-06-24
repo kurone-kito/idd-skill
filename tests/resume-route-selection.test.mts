@@ -231,18 +231,27 @@ test('classifyBranchState returns clean for BLOCKED MERGEABLE (non-git-conflict 
   );
 });
 
-test('classifyBranchState returns unknown for null/missing state', () => {
+test('classifyBranchState returns unknown for genuinely missing state', () => {
+  // No payload, or a payload with no `mergeable` field at all (undefined):
+  // genuinely missing/unparseable, so it stays terminal `unknown`.
   assert.equal(classifyBranchState(null), 'unknown');
   assert.equal(classifyBranchState({}), 'unknown');
+  assert.equal(classifyBranchState({ mergeStateStatus: 'UNKNOWN' }), 'unknown');
 });
 
-test('classifyBranchState returns computing for transient UNKNOWN mergeable', () => {
+test('classifyBranchState returns computing for transient UNKNOWN/null mergeable', () => {
   assert.equal(
     classifyBranchState({ mergeable: 'UNKNOWN', mergeStateStatus: '' }),
     'computing',
   );
   assert.equal(
     classifyBranchState({ mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' }),
+    'computing',
+  );
+  // An explicit `null` mergeable on a present payload is GitHub still
+  // computing, not a missing payload, so it is transient `computing`.
+  assert.equal(
+    classifyBranchState({ mergeable: null, mergeStateStatus: 'UNKNOWN' }),
     'computing',
   );
 });
