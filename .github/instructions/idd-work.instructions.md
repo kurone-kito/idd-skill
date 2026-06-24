@@ -91,13 +91,14 @@ cleanup before continuing.
 `wt switch --create` (the older `wt new` subcommand was removed):
 
 - macOS/Linux: `wt switch --create -b <base-branch> <branch-name>`
-- Windows: `git-wt switch --create -b <base-branch> <branch-name>` (fall
-  back to `wt switch --create …` if `git-wt` is unavailable)
+- Windows: `git-wt switch --create -b <base-branch> <branch-name>`, or the
+  same `wt switch --create -b <base-branch> <branch-name>` if `git-wt` is
+  unavailable
 
 `<base-branch>` is normally `main`. In a **non-interactive / automation**
 context, append `-x <noop>` (for example `-x true`): otherwise WorkTrunk
-tries to change the caller's directory, warns `Cannot change directory —
-shell requires restart`, and can hang; `-x` makes it create → run the
+tries to change the caller's directory, warns "Cannot change directory —
+shell requires restart", and can hang; `-x` makes it create → run the
 pre-start hook → exit cleanly. Describe the current verb rather than pinning
 a WorkTrunk version.
 
