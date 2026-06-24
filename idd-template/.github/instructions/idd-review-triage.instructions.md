@@ -317,6 +317,20 @@ ReviewItems_snapshot is empty and the next step is F2, defer the digest
 update unless you intentionally
 return to E1 afterward.
 
+**Refresh the watermark to cover your own dispositions.** If E6 posted any
+disposition replies (any `**Accepted**` / `**Rejected**` reply, on
+reviewer feedback, advisory items, or bot non-review notices), those are
+regular agent-authored comments that
+advance the activity universe past the E1 `review-watermark`. They are the
+current-claim agent absorbing its own deterministic dispositions, not new
+reviewer activity. Before routing to F-phase, re-post the `review-watermark`
+(same `{head-SHA}`, recomputing `{max-activity-updatedAt}` /
+`{total-item-count}` / `{latest-ci-completed-at}` over the current snapshot)
+so it covers them. Skip the refresh only when E6 posted no disposition
+replies (the E1 watermark already covers the snapshot). Without it, F2's
+review-currency sees the agent's own dispositions as newer activity and
+returns to E1 for an avoidable extra cycle.
+
 ## E8 — Accepted PATH A count check
 
 If the Accepted PATH A count is zero → proceed to the
