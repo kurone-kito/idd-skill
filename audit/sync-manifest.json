@@ -209,7 +209,7 @@
         ".github/instructions/idd-advisory-wait.instructions.md",
         ".github/instructions/idd-ci.instructions.md"
       ],
-      "limitBytes": 83681
+      "limitBytes": 83741
     }
   ],
   "syncPairs": [

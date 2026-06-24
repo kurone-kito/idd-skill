@@ -211,6 +211,15 @@ The monolithic single-session loop is therefore the **anti-pattern**;
 prefer short sessions that exit at the F4/F5 boundary and let the runner
 start the next one.
 
+F4-complete / F5 is therefore the recommended **safe session-exit boundary**.
+When context pressure hits mid-issue, a session can die mid-flight and leave a
+partially-progressed issue (claimed, branch pushed, PR open, or mid-review) for
+a later session to untangle. Finishing the current issue to the F4/F5 boundary
+and exiting there converts that uncontrolled failure into a controlled handoff —
+durable claim and PR state plus the existing resume phase let a fresh session
+pick up cleanly at Discover, rather than starting another issue and risking a
+mid-loop death.
+
 Short sessions need cheap ramp-up, which the "facts live in docs and
 helpers, not in session memory" design already supports: a fresh session
 reconstructs what it needs from the instruction files, `.github/idd/`
