@@ -632,6 +632,18 @@ function normalizeOpenRoadmapRootNumbers(roots) {
  * there is NO present, non-stale, trusted-actor claim. The shared
  * `parseClaimComment` / `resolveActiveClaim` parsing is reused read-only and
  * never re-implemented here.
+ *
+ * Intentional limitation: this annotation resolves only NEW-format
+ * `claimed-by` markers via the shared `resolveActiveClaim`. It deliberately
+ * does NOT factor in legacy claim-id-less markers nor forced-handoff
+ * transfers, both of which the authoritative resume/claim path handles
+ * (resume-claim-routing's `resolveLegacyClaimState` and forced-handoff
+ * authorization). Replicating that here would require duplicating that
+ * machinery plus per-candidate permission API calls, which is out of scope
+ * for this read-only discovery hint. `claimEligible` is therefore a
+ * best-effort SOFT signal only; the authoritative A5 claim gate
+ * (`idd-claim.instructions.md`), which DOES account for legacy markers and
+ * forced handoffs, remains the real protection.
  */
 export async function annotateLeafClaimState(issueNumber, claimState) {
   const comments = normalizeClaimComments(
@@ -1032,6 +1044,10 @@ function printHelp() {
   emitted (the output shape is byte-stable).
   --current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
   each activeClaim (true when the active claim's claimId equals <id>).
+  NOTE: claimEligible is a best-effort SOFT discovery hint. It resolves only
+  new-format claimed-by markers and intentionally does NOT account for legacy
+  claim-id-less markers or forced-handoff transfers; the authoritative A5
+  claim gate (idd-claim.instructions.md) remains the real protection.
 
 Output schema (JSON mode) — --issue single-root report:
   {
