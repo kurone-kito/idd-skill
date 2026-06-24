@@ -120,7 +120,8 @@ returns the workflow to E1 instead of merging over it.
   - The current latest CI pass `completedAt` for HEAD differs from
     `{latest-ci-completed-at}` in the watermark (a new CI run completed
     after E1's snapshot; if watermark value is `none`, any current CI
-    pass triggers re-evaluation).
+    pass triggers re-evaluation). A late label-triggered job enabled after
+    the watermark commonly causes this; sequence it before E1, not a fault.
 
   Structural ack-only carve-out: when the only trigger above is newer
   activity or count growth, and the helper evidence proves it consists
