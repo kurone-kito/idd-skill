@@ -301,7 +301,7 @@
         },
         {
           "from": "| **install-deps**        | `{{INSTALL_DEPS_COMMAND}}`       |",
-          "to": "| **install-deps**        | `true`                                                                                                                                       |"
+          "to": "| **install-deps**        | `pnpm install --frozen-lockfile`                                                                                                             |"
         },
         {
           "from": "| **issue-scope**         | `roadmap-first`                  |",
@@ -526,7 +526,7 @@
         },
         {
           "from": "| **install-deps**        | `{{INSTALL_DEPS_COMMAND}}`       |",
-          "to": "| **install-deps**        | `true`                                                                                                                                       |"
+          "to": "| **install-deps**        | `pnpm install --frozen-lockfile`                                                                                                             |"
         },
         {
           "from": "| **issue-scope**         | `roadmap-first`                  |",
