@@ -297,6 +297,38 @@ rather than bumping to an exact fit** — an exact-fit bump leaves the next
 concurrent session with zero free bytes, forcing an immediate rebase and
 re-bump.
 
+### High-contention shared files
+
+A small set of files concentrates concurrent autopilot edits and therefore
+conflicts most often: the **F-phase bundle instruction files** (the
+`bundle-review` and `bundle-merge` members — `idd-overview-core`,
+`idd-overview-appendix`, `idd-review-snapshot`, `idd-review-triage`,
+`idd-review-fix`, `idd-advisory-wait`, `idd-ci`, `idd-pre-merge`,
+`idd-merge-handoff`, `idd-merge`) and the single-line entries in
+`audit/sync-manifest.json`. When a change touches one of these:
+
+- **Expect a merge-from-main conflict** and keep the addition small and
+  localized so the conflict stays a trivial keep-both. Bump any affected
+  bundle budget with the margin convention above.
+- **Discover de-prioritizes overlap** softly: A4 Step 2 prefers a candidate
+  whose `## Candidate files` do not collide with actively-claimed / open-PR
+  work on these files (the `discover-shared-file-overlap` helper reports the
+  signal). It is advisory, never a claim gate.
+
+**Deterministic-ordering lever.** An **append-mostly shared file** — one that
+several independent issues mutate at the same anchor (a generated-file
+classification registry, a size-budget JSON, a barrel / export or registry
+list, and, in adopter repos, i18n message catalogs) — conflicts precisely
+because both sides append at the same insertion point, even though each PR
+passes its own CI in isolation. Where feasible, keep such files
+**deterministically ordered** (sorted keys / one entry per line) and guard
+that order where it can be guarded, so independent additions land in different
+positions and merge cleanly far more often. The conflict on such a file is
+almost always two independent additions, so resolve the sync by **keeping
+both**. Apply this to clearly append-mostly surfaces such as
+`audit/sync-manifest.json` helper / budget entries and any export / registry
+list; file a follow-up where a reorder is non-trivial.
+
 ## Changing A Default
 
 For now, this page records the defaults; it does not centralize them.
