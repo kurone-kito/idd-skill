@@ -731,7 +731,8 @@ Interpretation rules:
 
 - Source repo / vendored-node command:
   `node scripts/post-idd-marker.mjs --type <type> --target <issue|pr> <number> <fields...>`
-  (dry-run prints the body); add `--apply` to POST it.
+  (dry-run prints a JSON envelope whose `body` field is the marker); add
+  `--apply` to POST it.
 - Package-manager / ephemeral-npx command: use the profile-selected
   `idd:post-idd-marker` command from the helper runtime manifest wiring above
 - Write-side companion to `emit-marker`: it renders the canonical body for
