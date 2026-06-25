@@ -132,9 +132,9 @@ Codex CLI / Gemini CLI), see
 
 When the diff under critique implements a helper that **mutates GitHub
 state, mutates git state, or performs a merge** (read-only helpers are out
-of scope), also apply this lens — each check below repeatedly passed a
-clean general critique yet was caught one finding per round by later
-review:
+of scope), also apply this lens — each check below targets a gap class that
+a clean general critique repeatedly missed and that later review then
+surfaced one finding per round:
 
 - **Fail-closed inputs**: guards use strict checks (`=== true`, explicit
   pattern/enum validation) so a non-boolean, empty, missing, or malformed
