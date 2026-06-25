@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  buildOpenRoadmapRootsLoader,
   buildTrustedAuthorPredicate,
   classifyIssue,
   enumerateAllRoadmapsGraph,
@@ -15,6 +16,7 @@ import {
   extractRoadmapMarkerId,
   extractTaskListReferences,
   parseClaimStaleAgeMs,
+  type SearchIssuesQuery,
 } from '../src/scripts/discover-roadmap-graph.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -1025,6 +1027,92 @@ process.exit(1);
         },
       ),
     /missing required --issue/,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Search-narrowed open-roadmap-root discovery (#1017).
+//
+// The live loader narrows root discovery to two cheap server-side searches
+// (a `--label roadmap` search and a body-marker `--match body` search) and
+// re-confirms marker candidates against the body the search already returned,
+// instead of fetching every open issue's body. These tests inject a stubbed
+// `searchIssues` runner at that seam to pin: both root kinds are discovered,
+// a non-marker body hit is dropped, and no full open-issue scan happens.
+// ---------------------------------------------------------------------------
+
+test('open-roadmap-roots loader unions label roots and re-confirmed marker roots', async () => {
+  const queries: SearchIssuesQuery[] = [];
+  const searchIssues = (query: SearchIssuesQuery) => {
+    queries.push(query);
+    if (query.label === 'roadmap') {
+      // Labeled roots: roots by label, no body needed for detection.
+      return [{ number: 701 }, { number: 702 }];
+    }
+    if (query.matchBody) {
+      // Body-marker candidates: 703 carries a real marker (kept on
+      // re-confirm); 704 is a non-marker token hit (dropped); 701 also
+      // surfaces here and must dedupe against the label root.
+      return [
+        { number: 703, body: '<!-- idd-skill-roadmap-id: marker-only -->' },
+        { number: 704, body: 'mentions roadmap-id in prose but no marker' },
+        { number: 701, body: '<!-- idd-skill-roadmap-id: also-labeled -->' },
+      ];
+    }
+    return [];
+  };
+
+  const loadRoots = buildOpenRoadmapRootsLoader(
+    'kurone-kito',
+    'idd-skill',
+    'idd-skill',
+    searchIssues,
+  );
+  const roots = await loadRoots();
+
+  // 701 + 702 (label roots) ∪ 703 (re-confirmed marker root); 704 dropped
+  // because its body carries no marker, 701 deduped across both searches.
+  assert.deepEqual(
+    [...roots].sort((a, b) => a - b),
+    [701, 702, 703],
+  );
+
+  // Exactly two server-side searches: one exact `--label roadmap` (no body
+  // requested) and one body-marker `--match body` carrying the prefixed
+  // marker token. No full open-issue body scan is performed.
+  assert.equal(queries.length, 2);
+  const labelQuery = queries.find((query) => query.label === 'roadmap');
+  assert.deepEqual(labelQuery?.fields, ['number']);
+  assert.equal(labelQuery?.matchBody, undefined);
+  const markerQuery = queries.find((query) => query.matchBody);
+  assert.equal(markerQuery?.matchBody, 'idd-skill-roadmap-id');
+  assert.deepEqual(markerQuery?.fields, ['number', 'body']);
+  assert.equal(markerQuery?.label, undefined);
+});
+
+test('open-roadmap-roots loader honors a custom marker prefix in the body search', async () => {
+  const queries: SearchIssuesQuery[] = [];
+  const searchIssues = (query: SearchIssuesQuery) => {
+    queries.push(query);
+    if (query.matchBody) {
+      return [{ number: 810, body: '<!-- acme-roadmap-id: scoped -->' }];
+    }
+    return [];
+  };
+
+  const roots = await buildOpenRoadmapRootsLoader(
+    'kurone-kito',
+    'idd-skill',
+    'acme',
+    searchIssues,
+  )();
+
+  // The custom prefix flows into both the search token and the re-confirm
+  // regex, so the `acme-` marker is discovered.
+  assert.deepEqual(roots, [810]);
+  assert.equal(
+    queries.find((query) => query.matchBody)?.matchBody,
+    'acme-roadmap-id',
   );
 });
 
