@@ -23,6 +23,10 @@ import {
 } from './protocol-helpers.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
+// GitHub's search API returns at most 1000 results for a single query. The
+// open-roadmap-roots loader pins each search at this cap and warns when a
+// single search returns the full cap (a possible silent truncation).
+const GH_SEARCH_RESULT_CAP = 1000;
 // Policy default claim stale age (`claimTiming.staleAge`, `PT24H`). Mirrors
 // the default baked into protocol-helpers' `isStaleAt`, so when the configured
 // stale age equals this default the shared `isStaleAt` path is
@@ -1707,9 +1711,20 @@ function buildSubIssueLoader(owner: string, repo: string) {
  *      per-issue fetch is made). Only confirmed markers are kept, so a
  *      non-marker text hit on the token never inflates the root set.
  *
- * The two candidate sets are unioned and deduped by number. The output is
- * the identical `number[]` (deduped, ascending) the previous scan returned,
- * so the downstream union/provenance/ranking is byte-stable.
+ * The two candidate sets are unioned and deduped by number, then sorted
+ * ascending. The output is the identical `number[]` (deduped, ascending) the
+ * previous scan returned, so the downstream union/provenance/ranking is
+ * byte-stable.
+ *
+ * Result-cap boundary: `gh search` is hard-capped at
+ * {@link GH_SEARCH_RESULT_CAP} results per query. When a single label or
+ * body-marker search returns the full cap it may have been truncated, so a
+ * repo with >= {@link GH_SEARCH_RESULT_CAP} hits could silently yield an
+ * incomplete root set. The loader emits a NON-FATAL one-line WARNING to stderr
+ * in that case (see {@link warnOnSearchResultCap}) rather than aborting — the
+ * body-marker search can legitimately match many re-confirmed-and-dropped
+ * prose mentions, so a hard error would over-abort. The JSON report itself
+ * goes to stdout, so the stderr warning never corrupts it.
  *
  * Boundary (documented parity note): the marker search uses GitHub's
  * full-text body index. The label search is exact and complete on its own,
@@ -1733,12 +1748,14 @@ export function buildOpenRoadmapRootsLoader(
     const numbers = new Set<number>();
 
     // 1. Label roots: roadmap-labeled open issues are roots by label.
-    for (const issue of searchIssues({
+    const labelResults = searchIssues({
       owner,
       repo,
       label: 'roadmap',
       fields: ['number'],
-    })) {
+    });
+    warnOnSearchResultCap(labelResults, 'label');
+    for (const issue of labelResults) {
       const issueNumber = normalizeSearchIssueNumber(issue);
       if (issueNumber !== null) {
         numbers.add(issueNumber);
@@ -1748,12 +1765,14 @@ export function buildOpenRoadmapRootsLoader(
     // 2. Marker-only roots: narrow to open issues whose body carries the
     //    marker token, then re-confirm with the exact regex on the body the
     //    search already returned (no extra per-issue body fetch).
-    for (const issue of searchIssues({
+    const markerResults = searchIssues({
       owner,
       repo,
       matchBody: `${prefix}-roadmap-id`,
       fields: ['number', 'body'],
-    })) {
+    });
+    warnOnSearchResultCap(markerResults, 'body-marker');
+    for (const issue of markerResults) {
       const issueNumber = normalizeSearchIssueNumber(issue);
       if (issueNumber === null) {
         continue;
@@ -1764,8 +1783,32 @@ export function buildOpenRoadmapRootsLoader(
       }
     }
 
-    return [...numbers];
+    // Ascending, deduped — matches the documented `number[]` contract.
+    return [...numbers].sort((left, right) => left - right);
   };
+}
+
+/**
+ * GitHub's search API caps a single query at 1000 results
+ * ({@link GH_SEARCH_RESULT_CAP}). When a root search returns the full cap it
+ * may have been truncated, so a repo with >= 1000 label or marker-token hits
+ * could silently yield an incomplete root set.
+ *
+ * This is NON-FATAL: the body-marker search can legitimately match many prose
+ * mentions that are re-confirmed and dropped, so a hard error would over-abort.
+ * Instead emit one clear WARNING line to STDERR (the JSON report goes to
+ * stdout, so stderr keeps the report stream clean) and continue. Exported for
+ * the focused loader test that asserts the warning fires.
+ */
+export function warnOnSearchResultCap(
+  results: unknown[],
+  searchKind: 'label' | 'body-marker',
+): void {
+  if (Array.isArray(results) && results.length >= GH_SEARCH_RESULT_CAP) {
+    process.stderr.write(
+      `discover-roadmap-graph: --all-roadmaps root search hit the ${GH_SEARCH_RESULT_CAP}-result cap (${searchKind}); root discovery may be incomplete on this scale.\n`,
+    );
+  }
 }
 
 /** One `gh search issues` query, narrowed to a candidate root set. */
@@ -1794,14 +1837,13 @@ function normalizeSearchIssueNumber(issue: unknown): number | null {
 /**
  * Build the live `gh search issues` runner used by the open-roadmap-roots
  * loader. Each call issues one read-only server-side search; the search API
- * caps a single query at 1000 results, so the limit is pinned at that cap.
+ * caps a single query at {@link GH_SEARCH_RESULT_CAP} results, so the limit is
+ * pinned at that cap (the loader warns when a search returns the full cap).
  * Pull requests are excluded by default (`--include-prs` is never passed),
  * matching the old scan which only ever saw issues from the issues
  * connection.
  */
 function buildSearchIssuesRunner(): SearchIssuesFn {
-  // GitHub's search API returns at most 1000 results for a single query.
-  const SEARCH_RESULT_CAP = 1000;
   return ({ owner, repo, label, matchBody, fields }) => {
     const args = [
       'search',
@@ -1811,7 +1853,7 @@ function buildSearchIssuesRunner(): SearchIssuesFn {
       '--state',
       'open',
       '--limit',
-      String(SEARCH_RESULT_CAP),
+      String(GH_SEARCH_RESULT_CAP),
       '--json',
       fields.join(','),
     ];

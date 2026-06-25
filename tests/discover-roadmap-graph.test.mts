@@ -17,7 +17,24 @@ import {
   extractTaskListReferences,
   parseClaimStaleAgeMs,
   type SearchIssuesQuery,
+  warnOnSearchResultCap,
 } from '../src/scripts/discover-roadmap-graph.mts';
+
+/** Run `body` with `process.stderr.write` captured; return the joined output. */
+function captureStderr(body: () => void): string {
+  const original = process.stderr.write.bind(process.stderr);
+  const chunks: string[] = [];
+  process.stderr.write = ((chunk: unknown) => {
+    chunks.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    body();
+  } finally {
+    process.stderr.write = original;
+  }
+  return chunks.join('');
+}
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -1046,8 +1063,10 @@ test('open-roadmap-roots loader unions label roots and re-confirmed marker roots
   const searchIssues = (query: SearchIssuesQuery) => {
     queries.push(query);
     if (query.label === 'roadmap') {
-      // Labeled roots: roots by label, no body needed for detection.
-      return [{ number: 701 }, { number: 702 }];
+      // Labeled roots returned out of insertion order on purpose: 702 before
+      // 701 so the loader cannot rely on search/Set order for its ascending
+      // contract.
+      return [{ number: 702 }, { number: 701 }];
     }
     if (query.matchBody) {
       // Body-marker candidates: 703 carries a real marker (kept on
@@ -1072,10 +1091,10 @@ test('open-roadmap-roots loader unions label roots and re-confirmed marker roots
 
   // 701 + 702 (label roots) ∪ 703 (re-confirmed marker root); 704 dropped
   // because its body carries no marker, 701 deduped across both searches.
-  assert.deepEqual(
-    [...roots].sort((a, b) => a - b),
-    [701, 702, 703],
-  );
+  // The loader's documented contract is deduped + ASCENDING, so the raw
+  // return must already be sorted even though the stub yielded 702 before 701
+  // and surfaced 703 only via the marker search (no caller-side sort here).
+  assert.deepEqual(roots, [701, 702, 703]);
 
   // Exactly two server-side searches: one exact `--label roadmap` (no body
   // requested) and one body-marker `--match body` carrying the prefixed
@@ -1114,6 +1133,25 @@ test('open-roadmap-roots loader honors a custom marker prefix in the body search
     queries.find((query) => query.matchBody)?.matchBody,
     'acme-roadmap-id',
   );
+});
+
+test('open-roadmap-roots loader warns on the 1000-result search cap', () => {
+  // Below the cap: no warning is emitted (the common case stays silent).
+  const belowCap = captureStderr(() => {
+    warnOnSearchResultCap(new Array(999).fill({ number: 1 }), 'label');
+  });
+  assert.equal(belowCap, '');
+
+  // At the cap: a single NON-FATAL warning line goes to stderr (the JSON
+  // report goes to stdout, so this never corrupts the report stream), naming
+  // which search saturated so root discovery is no longer silently truncated.
+  const atCap = captureStderr(() => {
+    warnOnSearchResultCap(new Array(1000).fill({ number: 1 }), 'body-marker');
+  });
+  assert.match(atCap, /hit the 1000-result cap \(body-marker\)/u);
+  assert.match(atCap, /root discovery may be incomplete/u);
+  // Exactly one warning line.
+  assert.equal(atCap.trimEnd().split('\n').length, 1);
 });
 
 // ---------------------------------------------------------------------------
