@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 // Guard for the append-mostly helper-inventory surfaces (#1032). Each of these
@@ -49,20 +49,47 @@ test('.gitattributes scripts/*.mjs linguist-generated lines are in canonical ord
   assertSorted('.gitattributes scripts/*.mjs lines', lines);
 });
 
+test('.gitattributes lists exactly the generated scripts/*.mjs (no missing or stale)', () => {
+  // A generated artifact carries the `idd-generated-from` provenance header; a
+  // hand-authored helper does not. The marked set must equal the set listed in
+  // .gitattributes so a newly generated script is never left unmarked (linguist
+  // stats / diff-collapsing would silently skip it) and a removed script never
+  // leaves a dangling entry — completeness, alongside the order guard above.
+  const scriptsDir = new URL('scripts/', new URL('../', import.meta.url));
+  const generated = readdirSync(scriptsDir)
+    .filter((name) => name.endsWith('.mjs'))
+    .filter((name) =>
+      /idd-generated-from/.test(
+        readFileSync(new URL(name, scriptsDir), 'utf8').slice(0, 200),
+      ),
+    )
+    .sort();
+  const listed = [
+    ...read('.gitattributes').matchAll(
+      /^scripts\/([^/\n]+\.mjs) linguist-generated=true$/gm,
+    ),
+  ].map((match) => match[1]);
+  assert.deepEqual(
+    listed,
+    generated,
+    'the .gitattributes scripts/*.mjs linguist-generated block must list exactly the generated scripts (add any newly generated script in sorted position; drop entries whose script no longer exists)',
+  );
+});
+
 test('helper-runtime-manifest HELPER_COMMANDS are ordered by id', () => {
   const source = read('src/scripts/helper-runtime-manifest.mts');
   const marker = 'const HELPER_COMMANDS: HelperCommand[] = [';
   const start = source.indexOf(marker);
   assert.ok(start >= 0, 'HELPER_COMMANDS array not found');
-  // Scan to the matching close bracket so ids outside the array are ignored.
-  let depth = 1;
-  let index = start + marker.length;
-  for (; index < source.length && depth > 0; index += 1) {
-    const char = source[index];
-    if (char === '[') depth += 1;
-    else if (char === ']') depth -= 1;
-  }
-  const arrayBody = source.slice(start + marker.length, index - 1);
+  // Slice from the array opener to the first line that starts with the array
+  // terminator `];`. This avoids counting `[`/`]` that appear inside entry
+  // strings/comments (e.g. a description that mentions brackets), which a
+  // bracket-depth scan would miscount into a false CI failure.
+  const afterMarker = source.slice(start + marker.length);
+  const terminator = afterMarker.search(/^\];/m);
+  assert.ok(terminator >= 0, 'HELPER_COMMANDS array terminator `];` not found');
+  const arrayBody = afterMarker.slice(0, terminator);
+  // Entry ids sit at the 4-space top-level indent; nested fields are deeper.
   const ids = [...arrayBody.matchAll(/^ {4}id: '([^']+)'/gm)].map(
     (match) => match[1],
   );
