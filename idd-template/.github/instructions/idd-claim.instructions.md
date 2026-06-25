@@ -272,7 +272,7 @@ of the body, followed by the visible note. When helper runtime is enabled,
 post it with the profile-selected post-idd-marker command (`--type claim
 --target issue <issue-number> --apply` plus the claim fields; see
 `docs/idd-helper-scripts.md`), which renders the canonical body and POSTs it via
-the reliable JSON path — it is dry-run (prints the body, posts nothing) without
+the reliable JSON path — it is dry-run (posts nothing) without
 `--apply`; emit-marker (`--type claimed-by`, emit-only) renders the body without
 posting. The written format below stays the canonical fallback — post it via the
 documented direct
