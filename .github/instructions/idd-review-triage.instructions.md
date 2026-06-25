@@ -437,9 +437,10 @@ Route based on `branchState` from the helper (or `mergeable` /
    command** — even a clean merge commits immediately, so the wrapper must
    own the whole operation.
 3. If conflicts arise, resolve them and complete the merge — on the
-   signed-commit repos above, with the wrapper's own `git merge --continue`
-   so `--continue` does not revert the merge commit to the stalling primary
-   signing (otherwise the plain `git merge --continue`). This is the
+   signed-commit repos above, run the `--continue` through the wrapper too
+   (`git -c … merge --continue`) so it does not revert the merge commit to
+   the stalling primary signing; otherwise the plain `git merge --continue`
+   is fine. This is the
    normal-path complement to the recovery-path re-signing documented in
    `idd-pr-submit.instructions.md` (Post-rebase verification) and
    `idd-overview-core.instructions.md` (cwd-vs-claim cherry-pick
