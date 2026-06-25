@@ -541,8 +541,9 @@ The adopted helper boundaries are intentionally narrow:
   --claim-id <id>` to post the reply and resolve the thread. Optional
   `--owner` / `--repo` / `--agent-id` / `--trusted-marker-logins`.
 - Maps `--comment-id` (the review comment's REST id) to its owning review
-  thread via the GraphQL `reviewThreads` `databaseId` (both the threads and
-  the nested comments connections are paginated to completion), then in
+  thread by matching it against the `databaseId` of the comments inside each
+  GraphQL `reviewThreads` node (both the threads and the nested comments
+  connections are paginated to completion), then in
   `--apply` posts the reply against the thread's **top-level** comment (REST
   `pulls/.../comments/{root-id}/replies` — GitHub does not support replies to
   replies, so a `--comment-id` naming a later reply still resolves the right
