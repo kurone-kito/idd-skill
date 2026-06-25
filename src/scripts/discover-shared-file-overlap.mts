@@ -32,6 +32,8 @@ const DEFAULT_BUNDLE_IDS = ['bundle-review', 'bundle-merge'];
 const DEFAULT_EXTRA_FILES = [DEFAULT_MANIFEST_PATH];
 const DEFAULT_AUTOPILOT_SUITABILITY_FLOOR = 3;
 const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
+/** Upper bound on the best-effort open-PR scan (a `gh pr list --limit`). */
+const OPEN_PR_SCAN_LIMIT = 500;
 
 if (isCliExecution()) {
   runCli();
@@ -442,12 +444,15 @@ function runCli(): void {
 /**
  * Discover the concurrently-active set: every issue closed by an open PR
  * (repo-wide), plus candidate issues that already carry a non-stale claim.
- * Claim scanning is intentionally bounded to the candidate set (no repo-wide
- * comment scan) — that fetch cost is what `--check-overlap` gates — so a
- * non-stale claim on a non-candidate issue with no open PR is not detected.
- * This bounded coverage is acceptable because the overlap signal is an advisory
- * A4 Step 2 tie-breaker, and a claimed candidate becomes active for the next
- * discovery run. Open-PR coverage stays repo-wide.
+ * Active-by-claim covers every issue with a remote `issue/<n>-*` branch (every
+ * IDD claim creates one once pushed), resolved via the shared claim-state rules
+ * — not just the candidate set — so a claim held by another session is detected
+ * even though it is outside the unclaimed candidates being ranked. A claim whose
+ * branch is not yet pushed is picked up once it appears remotely. Active-by-PR
+ * is a best-effort scan of open PRs (bounded by the PR-list page cap). Both
+ * stay bounded — no repo-wide comment scan — which is the fetch cost
+ * `--check-overlap` gates; the overlap signal is an advisory A4 Step 2
+ * tie-breaker, so best-effort coverage is acceptable.
  */
 function discoverActiveIssues(options: {
   repoRef: string;
@@ -458,7 +463,8 @@ function discoverActiveIssues(options: {
   const { repoRef, trustedActors, staleAgeMs, now } = options;
   const active = new Map<number, ActiveIssueInput>();
 
-  // Active-by-PR: every issue closed by an open PR (repo-wide).
+  // Active-by-PR: issues closed by an open PR (best-effort across open PRs,
+  // bounded by the PR-list page cap).
   for (const number of fetchOpenPrLinkedIssues(repoRef)) {
     if (!active.has(number)) {
       const body = fetchIssue(repoRef, number).body;
@@ -507,14 +513,18 @@ function discoverActiveIssues(options: {
 
 /** Issue numbers that currently have an `issue/<n>-*` branch on the remote. */
 function fetchActiveClaimBranchNumbers(repoRef: string): number[] {
-  const refs = ghJson([
-    'api',
-    `repos/${repoRef}/git/matching-refs/heads/issue/`,
-  ]);
   const numbers = new Set<number>();
-  for (const ref of refs) {
-    const name = String((ref as { ref?: unknown }).ref ?? '');
-    const match = name.match(/^refs\/heads\/issue\/(\d+)-/);
+  // `--paginate` follows the Link headers to the end, so a repo with many
+  // issue branches does not silently drop branches past the first page.
+  const output = ghText([
+    'api',
+    '--paginate',
+    `repos/${repoRef}/git/matching-refs/heads/issue/`,
+    '--jq',
+    '.[].ref',
+  ]);
+  for (const line of output.split('\n')) {
+    const match = line.match(/^refs\/heads\/issue\/(\d+)-/);
     if (match) {
       numbers.add(Number.parseInt(match[1], 10));
     }
@@ -592,6 +602,8 @@ function fetchIssueComments(
 
 function fetchOpenPrLinkedIssues(repoRef: string): number[] {
   const numbers = new Set<number>();
+  // Best-effort: `gh pr list` caps at --limit, so a repo with more open PRs
+  // than the cap drops the overflow. Acceptable for an advisory signal.
   const prs = ghJson([
     'pr',
     'list',
@@ -600,7 +612,7 @@ function fetchOpenPrLinkedIssues(repoRef: string): number[] {
     '--state',
     'open',
     '--limit',
-    '200',
+    String(OPEN_PR_SCAN_LIMIT),
     '--json',
     'closingIssuesReferences',
   ]);
@@ -801,14 +813,13 @@ first within a score band, then issue number). Evidence-only: never a hard gate.
 Without --check-overlap no active-set discovery runs (no extra GitHub API
 cost); each candidate's high-contention files are still reported.
 
---check-overlap coverage: open-PR overlap is repo-wide (every issue closed by
-an open PR). Active-claim overlap scans the issues that have a remote
-issue/<n>-* branch (every IDD claim creates one once pushed), resolving each
-with the configured claim stale age, so a non-stale claim held by another
-session is detected even when it is outside the unclaimed candidate set being
-ranked. It is bounded by the number of active issue branches, not a repo-wide
-comment scan; a claim whose branch is not yet pushed is picked up once it
-appears remotely.
+--check-overlap coverage (best-effort, no repo-wide comment scan): open-PR
+overlap scans open PRs (bounded by the gh pr list page cap). Active-claim
+overlap scans the issues that have a remote issue/<n>-* branch (every IDD claim
+creates one once pushed), paginated to the end and resolved with the configured
+claim stale age, so a non-stale claim held by another session is detected even
+when it is outside the unclaimed candidate set being ranked. A claim whose
+branch is not yet pushed is picked up once it appears remotely.
 `);
 }
 

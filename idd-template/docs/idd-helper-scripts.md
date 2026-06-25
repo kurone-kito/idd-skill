@@ -256,13 +256,13 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   claim comments of issues that have a remote `issue/<n>-*` branch, resolved
   with the shared claim-state rules and the configured claim stale age) is
   **gated behind `--check-overlap`** because it adds GitHub API cost; without it
-  each candidate's high-contention files are still reported. **Coverage**:
-  open-PR overlap is repo-wide; active-claim overlap covers every issue that has
-  a remote `issue/<n>-*` branch (every IDD claim creates one once pushed), so a
-  non-stale claim held by another session is detected even when it is outside
-  the unclaimed candidate set being ranked. It is bounded by the number of
-  active issue branches, not a repo-wide comment scan; a claim whose branch is
-  not yet pushed is picked up once it appears remotely.
+  each candidate's high-contention files are still reported. **Coverage**
+  (best-effort, no repo-wide comment scan): open-PR overlap scans open PRs
+  (bounded by the `gh pr list` page cap); active-claim overlap covers every
+  issue that has a remote `issue/<n>-*` branch (every IDD claim creates one once
+  pushed, paginated to the end), so a non-stale claim held by another session is
+  detected even when it is outside the unclaimed candidate set being ranked. A
+  claim whose branch is not yet pushed is picked up once it appears remotely.
 - **High-contention set**: the union of the named bundles' member files plus
   `audit/sync-manifest.json`. Instruction files are keyed by their repo-wide
   unique basename so a source path, mirror path, or bare citation all match.
