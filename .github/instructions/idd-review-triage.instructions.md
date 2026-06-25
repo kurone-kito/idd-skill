@@ -214,9 +214,12 @@ Use these prefixes so that disposition is always unambiguous:
 - CODEOWNER / required reviewer exception:
   `**Awaiting maintainer decision** — {reasoning}`
 
-Two requirements make the F2/F3 gate recognize each marker — it reads
-`isDispositionComment` as "the body **starts with** the marker" and pairs
-dispositions to advisory comments **1:1 by count**:
+Two requirements make the F2/F3 disposition-evidence gate recognize an
+`**Accepted**` / `**Rejected**` disposition — it reads `isDispositionComment`
+as "the body **starts with** that marker" and pairs such dispositions to
+advisory comments **1:1 by count** (the `**Awaiting maintainer decision**`
+marker is a separate PATH A thread signal, not part of this predicate or
+count pairing):
 
 - The marker must be the **first bytes of the comment body** — no heading,
   block quote, or preamble before it, or the gate counts zero dispositions for
