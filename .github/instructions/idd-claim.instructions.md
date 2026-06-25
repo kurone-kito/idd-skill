@@ -270,7 +270,7 @@ minting one (see _Claim verification_ below). Determine `{prior-claim-id}`:
 Post the claim comment to the issue. Keep the HTML token at the start
 of the body, followed by the visible note. When helper runtime is enabled,
 post it with the profile-selected post-idd-marker command (`--type claim
---target issue <issue-number> --apply` plus the claim fields; see
+--target issue <number> --apply` plus the claim fields; see
 `docs/idd-helper-scripts.md`), which renders the canonical body and POSTs it via
 the reliable JSON path — it is dry-run (posts nothing) without
 `--apply`; emit-marker (`--type claimed-by`, emit-only) renders the body without

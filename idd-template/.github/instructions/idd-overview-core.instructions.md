@@ -30,7 +30,7 @@ _{agent-id}: issue claim — IDD automation marker. Do not edit._
 (e.g., `gh issue comment`, `gh api -f body=`) silently reject
 HTML-only bodies — always include the visible note and post via direct
 HTTP `POST` with a JSON body for reliability. When helper runtime is enabled,
-the `post-idd-marker` helper (`--type claim --target issue <n> --apply` plus the
+the `post-idd-marker` helper (`--type claim --target issue <number> --apply` plus the
 claim fields; see `docs/idd-helper-scripts.md`) posts this marker through that
 JSON path (dry-run, posting nothing, without `--apply`); the direct `POST` stays
 the canonical fallback.
@@ -73,7 +73,7 @@ _{agent-id}: issue claim released — IDD automation marker. Do not edit._
 ```
 
 When helper runtime is enabled, post this release marker with
-`post-idd-marker --type unclaim --target issue <n> --apply` (plus the
+`post-idd-marker --type unclaim --target issue <number> --apply` (plus the
 agent-id / claim-id / timestamp fields; see `docs/idd-helper-scripts.md`),
 which renders the canonical body and POSTs it via the reliable JSON path — it is
 dry-run (posting nothing) without `--apply`; the direct HTTP `POST` fallback
