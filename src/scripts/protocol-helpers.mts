@@ -2096,6 +2096,57 @@ export function isIddDispositionComment(comment: CommentLike): boolean {
   return isDispositionComment(comment) && !isKnownReviewBot(author);
 }
 
+// #1018 non-review-notice carry-forward classifiers.
+//
+// An advisory **non-review notice** — an advisory bot reporting it did not
+// review the current HEAD (rate-limit / usage-quota exhaustion / review-limit) —
+// carries no review result and is always dispositioned `**Rejected** — {bot} did
+// not review HEAD …` per the E6 non-review-notice rule. The gate uses the two
+// tight, fail-closed predicates below to let such a disposition carry forward
+// across HEAD changes (see `summarizeDispositionEvidenceForGate`), so a Codex
+// `updatedAt` bump or a re-posted CodeRabbit rate-limit summary does not re-flag
+// `missing-disposition-evidence` for a notice the agent already rejected.
+//
+// Both intentionally **under-match**: an unrecognized notice merely keeps the
+// existing per-push re-disposition churn (safe), while a false positive could
+// carry a stale disposition onto a real review (a false merge). Only
+// machine-generated, bot-specific signals match, and the notice predicate is
+// evaluated solely on advisory-bot-authored comments at the gate, so a human
+// reviewer comment is never reclassified as a notice.
+const ADVISORY_NON_REVIEW_NOTICE_PATTERNS: RegExp[] = [
+  // CodeRabbit rate-limit notice: the machine-generated marker (distinct from
+  // the `summarize by coderabbit.ai` review marker) and its warning heading.
+  /<!--\s*This is an auto-generated comment:\s*rate limited by coderabbit\.ai\s*-->/i,
+  /^[>\s]*#{1,6}\s*Review limit reached\b/im,
+  // Codex usage / quota exhaustion for code reviews.
+  /\bCodex usage limits for code reviews\b/i,
+  /\breached your Codex usage limits\b/i,
+];
+
+export function isAdvisoryNonReviewNotice(body: unknown): boolean {
+  const text = String(body ?? '');
+  if (!text) {
+    return false;
+  }
+  return ADVISORY_NON_REVIEW_NOTICE_PATTERNS.some((pattern) =>
+    pattern.test(text),
+  );
+}
+
+// A trusted IDD disposition of a non-review notice: the canonical
+// `**Rejected** — {bot} did not review HEAD {sha} ({reason}); this is not a
+// completed review` reply. Requires the `**Rejected**` prefix (a notice is
+// always rejected, never accepted) and the `did not review HEAD` phrase that
+// names the notice, so an ordinary rejection of reviewer feedback is excluded.
+export function isNonReviewNoticeDisposition(comment: {
+  body?: string | null;
+}): boolean {
+  const body = (comment.body ?? '').trimStart();
+  return (
+    body.startsWith('**Rejected**') && /\bdid not review HEAD\b/i.test(body)
+  );
+}
+
 export function classifyCiChecks(checks: CheckLike[]) {
   const normalized = checks.map((check) => ({
     name: check.name,
@@ -3128,6 +3179,49 @@ export function summarizeDispositionEvidenceForGate(
       );
     });
 
+  const dispositionComments = normalizedComments.filter(
+    (comment) =>
+      iddAgentLogins.has(comment.authorLogin) &&
+      isDispositionComment({ body: comment.body }),
+  );
+
+  // #1018 non-review-notice carry-forward (fail-closed). A persistent advisory
+  // non-review notice already dispositioned `**Rejected** — {bot} did not review
+  // HEAD …` keeps that disposition across HEAD changes while the bot still has
+  // not reviewed any HEAD: a Codex `updatedAt` bump or a re-posted CodeRabbit
+  // rate-limit summary must not re-flag `missing-disposition-evidence` for a
+  // notice the agent already rejected. Carry forward `min(K, N)` of the `K`
+  // trusted IDD notice-dispositions and `N` outstanding advisory-bot non-review
+  // notices: the matched notices leave the outstanding set and the matched
+  // notice-dispositions leave the general disposition pool, so a notice
+  // disposition never also clears an unrelated regular comment and the notice's
+  // bumped activity can never strand its disposition. The carry-forward guard
+  // re-checks the current notice body, so a notice the bot later replaces with a
+  // real review no longer matches and still needs a fresh disposition. Any
+  // unmatched notice or disposition falls through to the unchanged 1:1 pairing.
+  const noticeDispositions = dispositionComments.filter((comment) =>
+    isNonReviewNoticeDisposition({ body: comment.body }),
+  );
+  const outstandingNotices = outstandingComments.filter(
+    (comment) =>
+      isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+      isAdvisoryNonReviewNotice(comment.body),
+  );
+  const carryForwardCount = Math.min(
+    noticeDispositions.length,
+    outstandingNotices.length,
+  );
+  const carriedNoticeIndexes = new Set(
+    outstandingNotices
+      .slice(0, carryForwardCount)
+      .map((comment) => comment.sortedIndex),
+  );
+  const consumedNoticeDispositionIndexes = new Set(
+    noticeDispositions
+      .slice(0, carryForwardCount)
+      .map((comment) => comment.sortedIndex),
+  );
+
   // Count-based 1:1 pairing for the trailing-marker rule: a single later IDD
   // disposition marker addresses at most ONE earlier regular comment, so one
   // trailing marker cannot clear several distinct comments that each still
@@ -3135,11 +3229,9 @@ export function summarizeDispositionEvidenceForGate(
   // Walk the outstanding comments oldest-first and greedily consume the
   // earliest disposition marker strictly newer than each (markers that are not
   // newer than the current comment cannot address it or any later comment).
-  const dispositionTimes = normalizedComments
+  const dispositionTimes = dispositionComments
     .filter(
-      (comment) =>
-        iddAgentLogins.has(comment.authorLogin) &&
-        isDispositionComment({ body: comment.body }),
+      (comment) => !consumedNoticeDispositionIndexes.has(comment.sortedIndex),
     )
     .map((comment) => comment.activityAt)
     .filter(isValidIsoTimestamp)
@@ -3148,6 +3240,9 @@ export function summarizeDispositionEvidenceForGate(
   let markerCursor = 0;
   const missing: typeof outstandingComments = [];
   for (const comment of outstandingComments) {
+    if (carriedNoticeIndexes.has(comment.sortedIndex)) {
+      continue;
+    }
     while (
       markerCursor < dispositionTimes.length &&
       compareIsoTimestamps(

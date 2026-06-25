@@ -252,6 +252,17 @@ ack / error, as defined in E4):
   review out of the next pass. This
   keeps the disposition vocabulary unchanged for the E7 verifier and the
   F2/F3 gates, and never leaves the item pending across snapshots.
+- **Carry the rejection forward across pushes — do not re-disposition an
+  unchanged notice.** Once a non-review notice carries its `**Rejected** —
+  {bot} did not review HEAD …` reply, that disposition **persists across later
+  HEAD changes** while the same notice persists and the bot still has not
+  reviewed any HEAD. A review-fix push that bumps the notice's `updatedAt` (or a
+  re-posted identical rate-limit / usage-limit summary) does **not** require a
+  fresh identical rejection: the F2/F3 disposition-evidence gate carries the
+  existing rejection forward. Re-disposition **only** when the bot replaces the
+  notice with an actual completed review of the current HEAD — disposition that
+  review under the completed-review rules above (the carry-forward no longer
+  applies to a notice that became a real review).
 - **Do not auto-request a fresh review from triage** to "upgrade" a
   non-review notice. Triggering a new review is a separate concern:
   Copilot advisory state is owned solely by the advisory-wait protocol

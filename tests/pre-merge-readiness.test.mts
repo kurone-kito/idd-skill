@@ -9,6 +9,8 @@ import {
   deriveIddAgentLogins,
   findLastCopilotReviewCommit,
   indexLatestGatingReviewsByAuthor,
+  isAdvisoryNonReviewNotice,
+  isNonReviewNoticeDisposition,
   resolveCodeownersForFiles,
   resolveRulesetDetailPath,
   selectCodeownersText,
@@ -2085,6 +2087,186 @@ test('disposition evidence accepts edited IDD disposition comments as fresh repl
 
   assert.equal(summary.route, 'proceed');
   assert.equal(summary.blockingCount, 0);
+});
+
+// #1018 — a persistent advisory non-review notice already dispositioned
+// `**Rejected** — {bot} did not review HEAD …` carries that disposition forward
+// across HEAD changes, so a Codex `updatedAt` bump does not re-flag it.
+test('disposition evidence carries a persistent non-review notice forward across a bumped updatedAt', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          // The push re-triggered Codex, which re-stamped the same notice; its
+          // updatedAt now post-dates the disposition below.
+          updatedAt: '2026-05-12T03:00:00Z',
+          body: 'You have reached your Codex usage limits for code reviews.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T00:00:30Z',
+          body: '**Rejected** — chatgpt-codex-connector did not review HEAD abc1234 (usage limits); this is not a completed review',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.blockingCount, 0);
+  assert.equal(summary.missingRegularCommentCount, 0);
+});
+
+// A re-posted CodeRabbit rate-limit summary (new createdAt, after the push) is
+// carried forward by the existing non-review-notice disposition that predates it.
+test('disposition evidence carries a re-posted CodeRabbit rate-limit notice forward', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:30Z',
+          body: '**Rejected** — CodeRabbit did not review HEAD abc1234 (review limit reached); this is not a completed review',
+          author: { login: 'idd-bot' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T03:00:00Z',
+          body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> [!WARNING]\n> ## Review limit reached\n>\n> `@kurone-kito`, we could not start this review because the limit was reached.',
+          author: { login: 'coderabbitai[bot]' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.blockingCount, 0);
+});
+
+// No regression: when the bot later replaces the notice with a real review of
+// the current HEAD, the carry-forward does not fire and a fresh disposition is
+// still required.
+test('disposition evidence still requires a fresh disposition when a notice becomes a real review', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:30Z',
+          body: '**Rejected** — chatgpt-codex-connector did not review HEAD abc1234 (usage limits); this is not a completed review',
+          author: { login: 'idd-bot' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T03:00:00Z',
+          body: 'I found a potential off-by-one in `foo.mts` at line 42 — the loop bound should be `<=` to include the final element.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingRegularCommentCount, 1);
+});
+
+// No regression: an undispositioned non-review notice still blocks even when its
+// updatedAt is bumped (the carry-forward requires a matching disposition).
+test('disposition evidence still blocks an undispositioned non-review notice', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T03:00:00Z',
+          body: 'You have reached your Codex usage limits for code reviews.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingRegularCommentCount, 1);
+});
+
+test('isAdvisoryNonReviewNotice matches only machine-generated non-review notices', () => {
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'You have reached your Codex usage limits for code reviews.',
+    ),
+    true,
+  );
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> ## Review limit reached',
+    ),
+    true,
+  );
+  // A real CodeRabbit review summary must NOT be classified as a notice.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n\n## Walkthrough\n\nThe change adds a carry-forward carve-out.',
+    ),
+    false,
+  );
+  // An ordinary reviewer comment that merely mentions usage limits must not match.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'This rate limit handling looks off — please cap the retries.',
+    ),
+    false,
+  );
+  assert.equal(isAdvisoryNonReviewNotice(''), false);
+  assert.equal(isAdvisoryNonReviewNotice(null), false);
+});
+
+test('isNonReviewNoticeDisposition matches only a rejected non-review-notice reply', () => {
+  assert.equal(
+    isNonReviewNoticeDisposition({
+      body: '**Rejected** — CodeRabbit did not review HEAD abc1234 (review limit reached); this is not a completed review',
+    }),
+    true,
+  );
+  // An ordinary rejection of reviewer feedback is not a non-review-notice reply.
+  assert.equal(
+    isNonReviewNoticeDisposition({
+      body: '**Rejected** — verified: the flagged path is already covered by a test',
+    }),
+    false,
+  );
+  // An acceptance is never a non-review-notice disposition.
+  assert.equal(
+    isNonReviewNoticeDisposition({
+      body: '**Accepted** — the bot did not review HEAD, noting for context',
+    }),
+    false,
+  );
+  assert.equal(isNonReviewNoticeDisposition({ body: null }), false);
 });
 
 test('deriveIddAgentLogins keeps prior trusted operational actors but not generic maintainer comments', () => {

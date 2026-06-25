@@ -90,6 +90,15 @@ unambiguous:
   can reopen the thread and add a new reply, which will re-surface it in
   the next E1 pass.
 - **Regular comments**: reply only; do not resolve.
+- **Persistent non-review notices**: a non-review notice (rate-limit /
+  usage-limit / review-limit) already dispositioned `**Rejected** — {bot}
+  did not review HEAD …` in a prior pass **carries that rejection forward**
+  across this push — do **not** re-post an identical rejection just because
+  the notice's `updatedAt` bumped or the bot re-posted the same summary. The
+  F2/F3 disposition-evidence gate honors the existing rejection while the bot
+  still has not reviewed any HEAD (see the E6 non-review-notice rule). Only a
+  notice the bot replaces with an actual completed review of the current HEAD
+  needs a fresh disposition.
 
 After E13 replies and resolutions are complete, upsert the PR live
 status digest before E14 if the next route is still review-fix or CI
