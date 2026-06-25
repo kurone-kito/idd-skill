@@ -22,6 +22,7 @@ import {
   isAdvisoryNonReviewNotice,
   isNonReviewNoticeDisposition,
   normalizeTrustedMarkerLogins,
+  resolveActiveClaim,
 } from './protocol-helpers.mjs';
 
 const DEFAULT_ADVISORY_BOT_LOGINS = [
@@ -50,7 +51,7 @@ export function noticeReason(body) {
  * the current head SHA.
  */
 export function buildDispositionBody(botLogin, headSha, reason) {
-  return `**Rejected** — ${botLogin} did not review HEAD ${headSha} (${reason}); this is not a completed review.`;
+  return `**Rejected** — ${botLogin} did not review HEAD ${headSha} (${reason}); this is not a completed review`;
 }
 /**
  * Plan the dispositions for a PR's regular comments. Pure: takes the fetched
@@ -69,6 +70,13 @@ export function buildDispositionPlan(input, options = {}) {
   );
   const trustedMarkerLogins = new Set(
     normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
+  );
+  // Advisory bots that already have a completed review of the current HEAD (a
+  // distinct, non-notice review). Per the E6 "re-validate just before posting"
+  // rule, their notice must not be rejected: the gate accepts that review, and
+  // a later-timestamped `did not review HEAD` rejection could filter it out.
+  const botsWithCompletedHeadReview = new Set(
+    normalizeTrustedMarkerLogins(options.botsWithCompletedHeadReview ?? []),
   );
   const headSha = String(input.headSha ?? '');
   const comments = (Array.isArray(input.comments) ? input.comments : [])
@@ -94,12 +102,17 @@ export function buildDispositionPlan(input, options = {}) {
     ) {
       continue;
     }
+    // Count a disposition toward at most ONE bot it names. The F2/F3 gate
+    // consumes a notice disposition at most once, so a combined marker naming
+    // several bots must not be credited as covering one notice per bot (that
+    // would let the helper skip notices the gate still blocks on).
     for (const botLogin of advisoryBotLogins) {
       if (dispositionNamesAdvisoryBot(comment.body, botLogin)) {
         dispositionCountByBot.set(
           botLogin,
           (dispositionCountByBot.get(botLogin) ?? 0) + 1,
         );
+        break;
       }
     }
   }
@@ -111,6 +124,16 @@ export function buildDispositionPlan(input, options = {}) {
       !advisoryBotLogins.has(comment.login) ||
       !isAdvisoryNonReviewNotice(comment.body)
     ) {
+      continue;
+    }
+    if (botsWithCompletedHeadReview.has(comment.login)) {
+      // The bot has a completed review of the current HEAD; accept that review
+      // separately and leave the notice un-rejected (E6 race re-validation).
+      skipped.push({
+        noticeId: comment.id,
+        botLogin: comment.login,
+        reason: 'completed-review-present',
+      });
       continue;
     }
     const alreadyCovered = coveredByBot.get(comment.login) ?? 0;
@@ -203,6 +226,23 @@ function ghText(args) {
 function ghJson(args) {
   return JSON.parse(execFileSync('gh', args, { encoding: 'utf8' }));
 }
+/**
+ * Fetch a paginated list endpoint as an array. `gh api --paginate` concatenates
+ * one JSON array per page, so a >1-page response is not a single JSON document;
+ * `--jq '.[]'` flattens each page to one JSON value per line (NDJSON), which we
+ * parse line-by-line. (`--slurp` would be simpler but needs gh >= 2.48.0; Ubuntu
+ * 24.04 LTS ships gh 2.45.0, so the repo standardizes on `--jq '.[]'`.)
+ */
+function ghJsonPaginated(args) {
+  const out = execFileSync('gh', [...args, '--paginate', '--jq', '.[]'], {
+    encoding: 'utf8',
+  });
+  return out
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+    .map((line) => JSON.parse(line));
+}
 function isMainModule(moduleUrl) {
   const entry = process.argv[1];
   if (!entry) {
@@ -219,36 +259,33 @@ disposition, one marker-first comment per notice. Idempotent and fail-closed.
   --pr <number>                  PR number (required)
   --owner <owner>                repo owner (default: gh repo view)
   --repo <repo>                  repo name (default: gh repo view)
-  --claim-issue <number>         issue carrying the active claim (for --apply)
-  --claim-id <claim-id>          active claim id to re-validate before --apply
+  --claim-issue <number>         issue carrying the active claim (required with --apply)
+  --claim-id <claim-id>          active claim id to re-validate (required with --apply)
   --agent-id <agent-id>          current session agent id
   --trusted-marker-logins a,b    logins whose existing dispositions count
+                                 (default: your gh login, so re-runs are idempotent)
   --advisory-bot-logins a,b      advisory bot logins (default: coderabbit + codex)
   --apply                        post the dispositions (default: dry-run)
   -h, --help                     show this help
 `;
-function resolveActiveClaimId(owner, repo, issue) {
-  const comments = ghJson([
+/**
+ * Resolve the active claim id on an issue using the shared
+ * `resolveActiveClaim` state machine, scoped to trusted marker authors. This
+ * reuses the canonical claim parsing/validation (superseding, release,
+ * forced-handoff) and — crucially — ignores claim markers posted by untrusted
+ * authors, so a copied/forged `claimed-by` marker cannot satisfy revalidation.
+ */
+function resolveActiveClaimId(owner, repo, issue, isTrustedAuthor) {
+  const comments = ghJsonPaginated([
     'api',
     `repos/${owner}/${repo}/issues/${issue}/comments`,
-    '--paginate',
   ]);
-  let activeClaimId = null;
-  for (const comment of comments) {
-    const body = String(comment.body ?? '');
-    const claimed = body.match(
-      /<!--\s*claimed-by:\s*\S+\s+(\S+)\s+supersedes:/,
-    );
-    if (claimed) {
-      activeClaimId = claimed[1];
-      continue;
-    }
-    const unclaimed = body.match(/<!--\s*unclaimed-by:\s*\S+\s+(\S+)\s/);
-    if (unclaimed && unclaimed[1] === activeClaimId) {
-      activeClaimId = null;
-    }
-  }
-  return activeClaimId;
+  const events = comments.map((comment) => ({
+    body: comment.body ?? '',
+    createdAt: comment.created_at ?? '',
+    author: { login: comment.user?.login ?? '' },
+  }));
+  return resolveActiveClaim(events, isTrustedAuthor)?.claimId ?? null;
 }
 function postDisposition(owner, repo, pr, body) {
   // A disposition body is plain text starting with `**Rejected**` (not an
@@ -263,11 +300,30 @@ function postDisposition(owner, repo, pr, body) {
     `body=${body}`,
   ]);
 }
+const COMPLETED_REVIEW_STATES = new Set([
+  'APPROVED',
+  'CHANGES_REQUESTED',
+  'COMMENTED',
+]);
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || !Number.isInteger(args.pr) || (args.pr ?? 0) <= 0) {
     process.stdout.write(USAGE);
     process.exit(args.help ? 0 : 1);
+  }
+  // Fail closed: --apply mutates PR state, so the active-claim revalidation is
+  // mandatory. Missing/invalid claim inputs must abort before any read or write
+  // rather than silently bypassing the gate.
+  if (
+    args.apply &&
+    (!Number.isInteger(args.claimIssue) ||
+      (args.claimIssue ?? 0) <= 0 ||
+      !args.claimId)
+  ) {
+    process.stderr.write(
+      '--apply requires --claim-issue and --claim-id for the mandatory claim revalidation\n',
+    );
+    process.exit(1);
   }
   const pr = args.pr;
   const owner =
@@ -275,47 +331,93 @@ if (isMainModule(import.meta.url)) {
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
   const repo =
     args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+  // Default the trusted disposition authors to this gh login. Existing
+  // dispositions only count toward idempotency when their author is trusted, so
+  // without this default a re-run would not recognize its own prior posts and
+  // would double-post. The same trusted set scopes claim revalidation below.
+  const viewerLogin = ghText(['api', 'user', '--jq', '.login']).toLowerCase();
+  const trustedMarkerLogins =
+    args.trustedMarkerLogins.length > 0
+      ? args.trustedMarkerLogins
+      : [viewerLogin];
+  const advisoryBotLogins =
+    args.advisoryBotLogins.length > 0 ? args.advisoryBotLogins : undefined;
   const headSha = ghText([
     'api',
     `repos/${owner}/${repo}/pulls/${pr}`,
     '--jq',
     '.head.sha',
   ]);
-  const rawComments = ghJson([
-    'api',
-    `repos/${owner}/${repo}/issues/${pr}/comments`,
-    '--paginate',
-  ]);
-  const comments = rawComments.map((comment) => ({
-    id: comment.id,
-    login: comment.user?.login ?? '',
-    body: comment.body ?? '',
-    createdAt: comment.created_at ?? '',
-  }));
-  const plan = buildDispositionPlan(
-    { headSha, comments },
-    {
-      advisoryBotLogins:
-        args.advisoryBotLogins.length > 0 ? args.advisoryBotLogins : undefined,
-      trustedMarkerLogins: args.trustedMarkerLogins,
-    },
-  );
+  // Build a plan from a fresh read of the PR's comments and reviews. Called once
+  // for dry-run and again immediately before --apply posts, so a disposition (or
+  // a completed review) another session raced in is reflected just-in-time.
+  const planNow = () => {
+    const rawComments = ghJsonPaginated([
+      'api',
+      `repos/${owner}/${repo}/issues/${pr}/comments`,
+    ]);
+    const comments = rawComments.map((comment) => ({
+      id: comment.id,
+      login: comment.user?.login ?? '',
+      body: comment.body ?? '',
+      createdAt: comment.created_at ?? '',
+    }));
+    const reviews = ghJsonPaginated([
+      'api',
+      `repos/${owner}/${repo}/pulls/${pr}/reviews`,
+    ]);
+    // A bot that posted a real (non-notice) review of the current HEAD has
+    // "reviewed HEAD" — its notice must not be rejected (see buildDispositionPlan).
+    const botsWithCompletedHeadReview = Array.from(
+      new Set(
+        reviews
+          .filter(
+            (review) =>
+              review.commit_id === headSha &&
+              COMPLETED_REVIEW_STATES.has(String(review.state ?? '')) &&
+              !isAdvisoryNonReviewNotice(review.body ?? ''),
+          )
+          .map((review) => review.user?.login ?? '')
+          .filter(Boolean),
+      ),
+    );
+    return buildDispositionPlan(
+      { headSha, comments },
+      { advisoryBotLogins, trustedMarkerLogins, botsWithCompletedHeadReview },
+    );
+  };
   if (!args.apply) {
     process.stdout.write(
-      `${JSON.stringify({ mode: 'dry-run', prNumber: pr, ...plan }, null, 2)}\n`,
+      `${JSON.stringify({ mode: 'dry-run', prNumber: pr, ...planNow() }, null, 2)}\n`,
     );
     process.exit(0);
   }
-  // --apply: re-validate the active claim immediately before posting.
-  if (Number.isInteger(args.claimIssue) && args.claimId) {
-    const activeClaimId = resolveActiveClaimId(owner, repo, args.claimIssue);
-    if (activeClaimId !== args.claimId) {
-      process.stderr.write(
-        `claim revalidation failed: active claim is "${activeClaimId ?? 'none'}", expected "${args.claimId}"\n`,
-      );
-      process.exit(1);
-    }
+  // --apply: re-validate the active claim immediately before posting, scoped to
+  // trusted marker authors so a forged claim marker cannot satisfy the gate.
+  const trustedAuthors = new Set(
+    trustedMarkerLogins.map((login) => login.toLowerCase()),
+  );
+  const activeClaimId = resolveActiveClaimId(
+    owner,
+    repo,
+    args.claimIssue,
+    (login) =>
+      trustedAuthors.has(
+        String(login ?? '')
+          .trim()
+          .toLowerCase(),
+      ),
+  );
+  if (activeClaimId !== args.claimId) {
+    process.stderr.write(
+      `claim revalidation failed: active claim is "${activeClaimId ?? 'none'}", expected "${args.claimId}"\n`,
+    );
+    process.exit(1);
   }
+  // Re-plan from a fresh read AFTER claim revalidation, so the post loop never
+  // re-posts a disposition (or rejects a notice whose bot just reviewed HEAD)
+  // that raced in since the dry-run.
+  const plan = planNow();
   const applied = [];
   const failed = [];
   for (const item of plan.planned) {

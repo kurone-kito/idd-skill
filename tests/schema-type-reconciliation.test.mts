@@ -943,7 +943,7 @@ const dispositionNonReviewNoticesKeys = [
 const dispositionNonReviewNoticesFixture = {
   mode: 'apply',
   prNumber: 7,
-  headSha: 'abc1234',
+  headSha: '0123456789abcdef0123456789abcdef01234567',
   planned: [],
   status: 'applied',
   applied: [{ noticeId: 1, commentId: 1000 }],

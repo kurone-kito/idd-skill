@@ -19,6 +19,9 @@ const CODEX_NOTICE =
   'You have reached your Codex usage limits for code reviews.';
 const CODERABBIT_NOTICE =
   '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> ## Review limit reached';
+// A full 40-char head SHA for the cases that validate against the schema, which
+// now constrains `headSha` to `^[0-9a-f]{40}$`.
+const HEAD_SHA = '0123456789abcdef0123456789abcdef01234567';
 
 function notice(
   id: number,
@@ -37,9 +40,10 @@ test('buildDispositionBody is marker-first and names the bot login + head sha', 
   );
   assert.ok(body.startsWith('**Rejected**'), 'marker must be first bytes');
   assert.match(body, /coderabbitai\[bot\] did not review HEAD abc1234/);
+  // Canonical E6 text ends at "completed review" with no trailing punctuation.
   assert.match(
     body,
-    /\(review limit reached\); this is not a completed review\.$/,
+    /\(review limit reached\); this is not a completed review$/,
   );
 });
 
@@ -184,10 +188,61 @@ test('buildDispositionPlan only considers configured advisory bots', () => {
   assert.equal(plan.planned.length, 0);
 });
 
-test('the dry-run and apply output envelopes validate against the schema', () => {
+test('buildDispositionPlan skips a notice when its bot has a completed HEAD review', () => {
   const plan = buildDispositionPlan(
     {
       headSha: 'abc1234',
+      comments: [
+        notice(1, CODEX, CODEX_NOTICE),
+        notice(2, CODERABBIT, CODERABBIT_NOTICE),
+      ],
+    },
+    {
+      trustedMarkerLogins: ['kurone-kito'],
+      botsWithCompletedHeadReview: [CODEX],
+    },
+  );
+  // Codex has a completed review of HEAD, so its notice is left un-rejected
+  // (the gate accepts that review); CodeRabbit's notice is still planned.
+  assert.deepEqual(
+    plan.planned.map((entry) => entry.botLogin),
+    [CODERABBIT],
+  );
+  assert.deepEqual(
+    plan.skipped.map((entry) => ({
+      botLogin: entry.botLogin,
+      reason: entry.reason,
+    })),
+    [{ botLogin: CODEX, reason: 'completed-review-present' }],
+  );
+});
+
+test('a combined disposition naming several bots covers only one notice', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, CODEX, CODEX_NOTICE),
+        notice(2, CODERABBIT, CODERABBIT_NOTICE),
+        // One trusted disposition that (improperly) names BOTH bots: the F2/F3
+        // gate consumes it once, so it must cover one notice, not one per bot.
+        notice(
+          3,
+          'kurone-kito',
+          '**Rejected** — chatgpt-codex-connector[bot] and coderabbitai[bot] did not review HEAD abc1234 (usage); this is not a completed review',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.skipped.length, 1);
+  assert.equal(plan.planned.length, 1);
+});
+
+test('the dry-run and apply output envelopes validate against the schema', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: HEAD_SHA,
       comments: [
         notice(1, CODEX, CODEX_NOTICE),
         notice(2, CODERABBIT, CODERABBIT_NOTICE),

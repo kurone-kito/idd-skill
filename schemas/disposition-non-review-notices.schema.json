@@ -15,7 +15,8 @@
       "minimum": 1
     },
     "headSha": {
-      "type": "string"
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
     },
     "planned": {
       "type": "array",

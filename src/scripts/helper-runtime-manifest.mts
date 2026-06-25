@@ -267,6 +267,7 @@ const HELPER_COMMANDS: HelperCommand[] = [
     vendoredCommand: 'node scripts/disposition-non-review-notices.mjs',
     description:
       'Detect advisory non-review notices on a PR and emit or post their canonical E6 dispositions.',
+    contractPaths: ['schemas/disposition-non-review-notices.schema.json'],
   },
   {
     id: 'doctor',
