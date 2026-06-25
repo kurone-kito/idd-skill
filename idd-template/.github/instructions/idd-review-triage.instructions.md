@@ -116,8 +116,9 @@ For each Rejected PATH A item whose source is reviewer feedback:
   is enabled, the profile-selected resolve-review-thread command
   (`--pr <number> --comment-id <id> --apply`, with `--body` /
   `--claim-issue` / `--claim-id`; see `docs/idd-helper-scripts.md`) posts the
-  reply and resolves the thread in one call (dry-run without `--apply`); the
-  manual REST reply + GraphQL
+  reply and resolves the thread in one call — dry-run without `--apply`,
+  replying before resolving so a failed reply never leaves a
+  silently-resolved thread; the manual REST reply + GraphQL
   `resolveReviewThread` sequence stays the fallback. Resolving means
   "agent has acted (fixed or definitively rejected)", not "reviewer has
   agreed". If the reviewer disagrees with a regular rejection, they can
