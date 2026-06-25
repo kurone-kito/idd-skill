@@ -161,7 +161,7 @@
         ".github/instructions/idd-suitability.instructions.md",
         ".github/instructions/idd-claim.instructions.md"
       ],
-      "limitBytes": 92000
+      "limitBytes": 100400
     },
     {
       "id": "bundle-resume",
@@ -171,7 +171,7 @@
         ".github/instructions/idd-overview-appendix.instructions.md",
         ".github/instructions/idd-resume.instructions.md"
       ],
-      "limitBytes": 46000
+      "limitBytes": 43300
     },
     {
       "id": "bundle-work",
@@ -181,7 +181,7 @@
         ".github/instructions/idd-overview-appendix.instructions.md",
         ".github/instructions/idd-work.instructions.md"
       ],
-      "limitBytes": 34900
+      "limitBytes": 37400
     },
     {
       "id": "bundle-review",
@@ -195,7 +195,7 @@
         ".github/instructions/idd-advisory-wait.instructions.md",
         ".github/instructions/idd-ci.instructions.md"
       ],
-      "limitBytes": 98300
+      "limitBytes": 108200
     },
     {
       "id": "bundle-merge",
@@ -209,7 +209,7 @@
         ".github/instructions/idd-advisory-wait.instructions.md",
         ".github/instructions/idd-ci.instructions.md"
       ],
-      "limitBytes": 87138
+      "limitBytes": 95900
     }
   ],
   "syncPairs": [
@@ -545,7 +545,7 @@
   },
   "typeSuppressionBudgets": {
     "id": "type-suppression-budgets",
-    "description": "Ratchet rule (mirrors bundleBudgets): raising a limit requires an explicit callout in the PR description; lowering is always allowed. The ts-ignore directive is forbidden outright; ts-expect-error is the only allowed escape and must carry a same-line reason. Limits record the measured current counts, not aspirations.",
+    "description": "Ratchet rule: raising a limit requires an explicit callout in the PR description; lowering is always allowed. The ts-ignore directive is forbidden outright; ts-expect-error is the only allowed escape and must carry a same-line reason. These ts-suppression limits (ts-expect-error / explicit-any) record the measured current counts, not aspirations. The separate bundleBudgets instead carry a small headroom (at most roughly 10% over the measured total, never an exact fit) so a concurrent budget bump does not collide; see audit/README.md and docs/policy-constants.md.",
     "globs": [
       "src/**/*.mts",
       "tests/**/*.mts"
