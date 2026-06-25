@@ -64,13 +64,29 @@ test('parseArgs reads the apply-mode claim inputs', () => {
   assert.deepEqual(args.trustedMarkerLogins, ['kurone-kito', 'second-user']);
 });
 
-test('findThreadForComment maps a REST comment id to its owning thread', () => {
+test('findThreadForComment maps a REST comment id to its owning thread and root comment', () => {
   const threads = [
     thread('thread-a', false, [900, 901]),
     thread('thread-b', true, [1001, 1002]),
   ];
   const match = findThreadForComment(threads, 1002);
-  assert.deepEqual(match, { threadId: 'thread-b', isResolved: true });
+  assert.deepEqual(match, {
+    threadId: 'thread-b',
+    isResolved: true,
+    rootCommentId: 1001,
+  });
+});
+
+test('findThreadForComment returns the top-level comment id when a later reply matches', () => {
+  // The reply must target the thread's first (top-level) comment, since GitHub
+  // does not support replies to replies; matching a later reply still resolves
+  // to the root comment id.
+  const threads = [thread('thread-x', false, [500, 777])];
+  assert.deepEqual(findThreadForComment(threads, 777), {
+    threadId: 'thread-x',
+    isResolved: false,
+    rootCommentId: 500,
+  });
 });
 
 test('findThreadForComment returns null when no thread owns the comment', () => {
@@ -91,6 +107,7 @@ test('findThreadForComment ignores missing databaseId nodes safely', () => {
   assert.deepEqual(findThreadForComment(threads, 1001), {
     threadId: 'thread-c',
     isResolved: false,
+    rootCommentId: 1001,
   });
 });
 
@@ -179,6 +196,33 @@ test('applyResolveReviewThread aborts before any mutation when the claim check t
     /claim lost/,
   );
   assert.deepEqual(calls, []);
+});
+
+test('applyResolveReviewThread posts the reply before a resolve failure surfaces (id observable for the partial-failure report)', () => {
+  const calls: string[] = [];
+  let observedReplyId: number | undefined;
+  assert.throws(
+    () =>
+      applyResolveReviewThread({
+        assertClaim: () => {
+          calls.push('claim');
+        },
+        postReply: () => {
+          calls.push('reply');
+          observedReplyId = 999;
+          return { id: 999 };
+        },
+        resolveThread: () => {
+          calls.push('resolve');
+          throw new Error('resolve failed');
+        },
+      }),
+    /resolve failed/,
+  );
+  assert.deepEqual(calls, ['claim', 'reply', 'claim', 'resolve']);
+  // The reply id is observable before the resolve throws, so the CLI can retain
+  // it in the failed report instead of looking like nothing was posted.
+  assert.equal(observedReplyId, 999);
 });
 
 test('applyResolveReviewThread does not resolve the thread when the reply fails', () => {

@@ -541,17 +541,25 @@ The adopted helper boundaries are intentionally narrow:
   --claim-id <id>` to post the reply and resolve the thread. Optional
   `--owner` / `--repo` / `--agent-id` / `--trusted-marker-logins`.
 - Maps `--comment-id` (the review comment's REST id) to its owning review
-  thread via the GraphQL `reviewThreads` `databaseId`, then in `--apply`
-  posts the reply (REST `pulls/.../comments/{id}/replies`) and resolves the
-  thread (GraphQL `resolveReviewThread`). Reply first, resolve second, so a
-  failed reply never resolves the thread without a disposition.
+  thread via the GraphQL `reviewThreads` `databaseId` (both the threads and
+  the nested comments connections are paginated to completion), then in
+  `--apply` posts the reply against the thread's **top-level** comment (REST
+  `pulls/.../comments/{root-id}/replies` — GitHub does not support replies to
+  replies, so a `--comment-id` naming a later reply still resolves the right
+  thread) and resolves the thread (GraphQL `resolveReviewThread`). Reply
+  first, resolve second, so a failed reply never resolves the thread without a
+  disposition.
 - **Dry-run** reports the resolved `threadId` and current `alreadyResolved`
   state without posting; a comment with no owning thread omits `threadId`
   and includes an `error` note.
 - **Fail-closed**: `--apply` requires `--body` and the
-  `--claim-issue` / `--claim-id` pair, and re-validates the active claim
-  (scoped to trusted marker authors, aborting on a targeting
-  `forced-handoff`) immediately before the reply.
+  `--claim-issue` / `--claim-id` pair, re-validates the active claim before
+  **each** of the reply and the resolve (scoped to trusted marker authors,
+  aborting on a targeting `forced-handoff`), and binds the mutation to the
+  claimed PR by requiring the active claim's branch to equal the PR's head
+  branch. GraphQL `errors` fail fast rather than masquerading as a missing
+  thread, and a partial apply (reply posted, resolve not confirmed) still
+  reports the posted `replyId`.
 - Stable contract: [`resolve-review-thread.schema.json`][resolve-review-thread-schema].
 - The written E13 reply-and-resolve rule in
   `idd-review-fix.instructions.md` stays authoritative; this helper is the

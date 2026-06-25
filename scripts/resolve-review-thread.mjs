@@ -28,13 +28,25 @@ import {
  */
 export function findThreadForComment(threads, commentId) {
   for (const thread of Array.isArray(threads) ? threads : []) {
-    for (const comment of thread.comments?.nodes ?? []) {
+    const nodes = thread.comments?.nodes ?? [];
+    for (const comment of nodes) {
       if (
         comment.databaseId !== null &&
         comment.databaseId !== undefined &&
         Number(comment.databaseId) === Number(commentId)
       ) {
-        return { threadId: thread.id, isResolved: Boolean(thread.isResolved) };
+        // The top-level review comment is the first node in the thread's
+        // comments connection; the reply must target it, even when the request
+        // named a later reply in the thread.
+        const rootDatabaseId = nodes[0]?.databaseId;
+        return {
+          threadId: thread.id,
+          isResolved: Boolean(thread.isResolved),
+          rootCommentId:
+            rootDatabaseId !== null && rootDatabaseId !== undefined
+              ? Number(rootDatabaseId)
+              : null,
+        };
       }
     }
   }
@@ -320,13 +332,15 @@ function resolveThread(threadId) {
   }
 }
 /**
- * Re-fetch the claim issue and decide whether `claimId` is still the active
- * claim. Scoped to trusted marker authors via the shared `resolveActiveClaim`
- * state machine, and fails closed on any `forced-handoff` marker that targets
- * this claim. Aborting on a contested claim is always safe (the manual E13 path
- * remains).
+ * Re-fetch the claim issue and return the active claim **owned by this session**
+ * (its `claimId`, and `agentId` when supplied, match), or `null` when the claim
+ * was lost. Scoped to trusted marker authors via the shared `resolveActiveClaim`
+ * state machine, and fails closed (returns `null`) on any `forced-handoff`
+ * marker that targets this claim. Aborting on a contested claim is always safe
+ * (the manual E13 path remains). The returned `branch` lets the caller bind the
+ * mutation to the PR whose head is that branch.
  */
-function claimStillActive(
+function activeOwnedClaim(
   owner,
   repo,
   issue,
@@ -344,7 +358,7 @@ function claimStillActive(
       comment.created_at ?? '',
     );
     if (forcedHandoff && forcedHandoff.oldClaimId === claimId) {
-      return false;
+      return null;
     }
   }
   const events = comments.map((comment) => ({
@@ -354,9 +368,12 @@ function claimStillActive(
   }));
   const active = resolveActiveClaim(events, isTrustedAuthor);
   if (active?.claimId !== claimId) {
-    return false;
+    return null;
   }
-  return agentId ? active.agentId === agentId : true;
+  if (agentId && active.agentId !== agentId) {
+    return null;
+  }
+  return active;
 }
 function isMainModule(moduleUrl) {
   const entry = process.argv[1];
@@ -423,6 +440,24 @@ if (isMainModule(import.meta.url)) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     process.exit(0);
   }
+  // The reply targets the thread's top-level review comment, so a thread with
+  // no exposed comment id cannot be replied to — fail closed before mutating.
+  const rootCommentId = match.rootCommentId;
+  if (rootCommentId === null) {
+    report.status = 'failed';
+    report.error = `review thread ${match.threadId} exposes no top-level comment id to reply to`;
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    process.exit(1);
+  }
+  // Bind the mutation to the claimed PR: the active claim's branch must be the
+  // PR's head branch, so a valid claim on the issue cannot be used to reply to
+  // and resolve a thread on some other PR passed as --pr.
+  const prHeadRef = ghText([
+    'api',
+    `repos/${owner}/${repo}/pulls/${pr}`,
+    '--jq',
+    '.head.ref',
+  ]);
   // --apply: default the trusted claim authors to this gh login so the
   // revalidation recognizes the session's own claim markers.
   const viewerLogin = ghText(['api', 'user', '--jq', '.login']).toLowerCase();
@@ -438,25 +473,37 @@ if (isMainModule(import.meta.url)) {
         .trim()
         .toLowerCase(),
     );
+  // Retain the posted reply id across a later failure so a partial apply (reply
+  // posted, resolve not confirmed) reports the reply id instead of looking like
+  // nothing was posted — that distinguishes "retry the resolve" from "re-post".
+  let postedReplyId;
   try {
     const result = applyResolveReviewThread({
       assertClaim: () => {
-        if (
-          !claimStillActive(
-            owner,
-            repo,
-            args.claimIssue,
-            args.agentId,
-            args.claimId,
-            isTrustedAuthor,
-          )
-        ) {
+        const active = activeOwnedClaim(
+          owner,
+          repo,
+          args.claimIssue,
+          args.agentId,
+          args.claimId,
+          isTrustedAuthor,
+        );
+        if (!active) {
           throw new Error(
             `claim revalidation failed: "${args.claimId}" is no longer the active claim on issue #${args.claimIssue}`,
           );
         }
+        if (active.branch !== prHeadRef) {
+          throw new Error(
+            `claim/PR mismatch: active claim branch "${active.branch}" does not match PR #${pr} head branch "${prHeadRef}"`,
+          );
+        }
       },
-      postReply: () => postReply(owner, repo, pr, commentId, args.body),
+      postReply: () => {
+        const posted = postReply(owner, repo, pr, rootCommentId, args.body);
+        postedReplyId = posted.id;
+        return posted;
+      },
       resolveThread: () => resolveThread(match.threadId),
     });
     report.status = 'applied';
@@ -465,6 +512,9 @@ if (isMainModule(import.meta.url)) {
     process.exit(0);
   } catch (error) {
     report.status = 'failed';
+    if (postedReplyId !== undefined) {
+      report.replyId = postedReplyId;
+    }
     report.error = error.message;
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     process.exit(1);
