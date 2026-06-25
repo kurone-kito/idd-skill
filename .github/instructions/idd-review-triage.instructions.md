@@ -112,7 +112,12 @@ For each Rejected PATH A item whose source is reviewer feedback:
   `**Awaiting maintainer decision** — {your reasoning}` and wait for the
   maintainer's response.
 - After posting your reply, **immediately resolve the thread** — except
-  when the reply is `**Awaiting maintainer decision**`. Resolving means
+  when the reply is `**Awaiting maintainer decision**`. When helper runtime
+  is enabled, `resolve-review-thread --pr <number> --comment-id <id> --apply`
+  (with `--body`, `--claim-issue`, `--claim-id`; see
+  `docs/idd-helper-scripts.md`) posts the reply and resolves the thread in one
+  call (dry-run without `--apply`); the manual REST reply + GraphQL
+  `resolveReviewThread` sequence stays the fallback. Resolving means
   "agent has acted (fixed or definitively rejected)", not "reviewer has
   agreed". If the reviewer disagrees with a regular rejection, they can
   reopen the thread and add a reply, which will re-surface it in a
