@@ -23,8 +23,9 @@ test('effortOrdinal orders S < M < L and resolves non-hints to the neutral middl
   assert.equal(effortOrdinal('S'), 1);
   assert.equal(effortOrdinal('M'), 2);
   assert.equal(effortOrdinal('L'), 3);
-  // A missing or invalid hint sorts as-if M, so an unscored issue is neither
-  // preferred over nor de-preferred against an equally-ranked M issue.
+  // A missing or invalid hint sorts as-if M, so an issue with no coherent
+  // effort hint is neither preferred over nor de-preferred against an
+  // equally-ranked M issue.
   assert.equal(effortOrdinal(null), NEUTRAL_EFFORT_ORDINAL);
   assert.equal(effortOrdinal('bogus'), NEUTRAL_EFFORT_ORDINAL);
   assert.equal(effortOrdinal(undefined), NEUTRAL_EFFORT_ORDINAL);

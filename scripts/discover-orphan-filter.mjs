@@ -205,18 +205,22 @@ export function filterOrphanIssues(issues, options = {}) {
   // discovery the low-score issues stay selectable, just ranked last.
   // Advisory throughout — the A4.5/A5 gates still run on any selected
   // candidate, and unscored issues are never routed out (fail-safe).
-  const orphansByNumber = [...orphans].sort(
+  const orphansByEffortThenNumber = [...orphans].sort(
     (left, right) =>
       effortOrdinal(left.effort) - effortOrdinal(right.effort) ||
       left.number - right.number,
   );
-  const { ranked, routedToHuman } = rankAndRouteBySuitability(orphansByNumber, {
-    floor:
-      options.autopilotSuitabilityFloor ?? DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
-    enabled: options.autopilotSuitabilityEnabled !== false,
-    routeBelowFloor: options.autopilot === true,
-    getScore: (orphan) => orphan.autopilotSuitability,
-  });
+  const { ranked, routedToHuman } = rankAndRouteBySuitability(
+    orphansByEffortThenNumber,
+    {
+      floor:
+        options.autopilotSuitabilityFloor ??
+        DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
+      enabled: options.autopilotSuitabilityEnabled !== false,
+      routeBelowFloor: options.autopilot === true,
+      getScore: (orphan) => orphan.autopilotSuitability,
+    },
+  );
   const counts = {
     scanned: issues.length,
     orphans: ranked.length,

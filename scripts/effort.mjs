@@ -24,9 +24,9 @@ const DEFAULT_MARKER_PREFIX = 'idd-skill';
 export const EFFORT_HINTS = ['S', 'M', 'L'];
 // Ordinal used by the soft tie-breaker (lower = smaller = preferred). A
 // missing or invalid hint resolves to the **neutral** middle ordinal so an
-// unscored issue is neither preferred over nor de-preferred against an
-// equally-ranked `M` issue; this keeps a band with no effort hints ordered
-// exactly as today (by lowest issue number).
+// issue with no coherent effort hint is neither preferred over nor
+// de-preferred against an equally-ranked `M` issue; this keeps a band with no
+// effort hints ordered exactly as today (by lowest issue number).
 const EFFORT_ORDINALS = { S: 1, M: 2, L: 3 };
 export const NEUTRAL_EFFORT_ORDINAL = 2;
 /**
@@ -97,7 +97,7 @@ export function parseEffort(body, markerPrefix = DEFAULT_MARKER_PREFIX) {
  * The soft-tie-break ordinal for an effort hint: `S` → 1, `M` → 2,
  * `L` → 3, and any non-hint (null / invalid) → the neutral middle ordinal
  * (2). Lower sorts first, so the A4 Step 2 tie-breaker prefers smaller
- * issues while leaving unscored ones in the middle and never excluding any
+ * issues while leaving un-hinted ones in the middle and never excluding any
  * candidate.
  */
 export function effortOrdinal(value) {
