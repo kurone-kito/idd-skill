@@ -404,6 +404,9 @@ function runCli(): void {
   const highContentionFiles = resolveHighContentionFiles({
     manifest,
     bundleIds: args.bundles ?? DEFAULT_BUNDLE_IDS,
+    // Track the manifest actually in use so a custom --manifest is the file
+    // reported (and matched) as high-contention, not the hard-coded default.
+    extraFiles: [args.manifest],
   });
 
   const candidates: OverlapCandidateInput[] = args.candidates.map((number) => {

@@ -298,6 +298,9 @@ function runCli() {
   const highContentionFiles = resolveHighContentionFiles({
     manifest,
     bundleIds: args.bundles ?? DEFAULT_BUNDLE_IDS,
+    // Track the manifest actually in use so a custom --manifest is the file
+    // reported (and matched) as high-contention, not the hard-coded default.
+    extraFiles: [args.manifest],
   });
   const candidates = args.candidates.map((number) => {
     const issue = fetchIssue(repoRef, number);
