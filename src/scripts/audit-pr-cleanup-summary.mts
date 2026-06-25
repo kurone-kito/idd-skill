@@ -57,17 +57,20 @@ export function computeReportSummary(report: CleanupReport): void {
       report.status = 'failed';
       return;
     }
-    if (
-      report.applied.length > 0 &&
-      report.candidates.length === report.applied.length
-    ) {
-      report.status = 'applied';
-      return;
-    }
-    if (report.applied.length > 0) {
+    // A candidate that ended up minimized is done — whether this run minimized
+    // it (`applied`) or it was already / cascade-minimized (an
+    // already-minimized skip; minimizing a parent collapses its child threads,
+    // so a single apply converges more comments than it counts into `applied`).
+    // The only genuine unfinished work is a permission-blocked remainder
+    // (`viewer-cannot-minimize`); a real per-call failure is already handled
+    // above. So `incomplete` is reserved for that remainder, and a converged
+    // run reports `applied` (work done) or `clean` (nothing left). This stops a
+    // converged multi-candidate apply from spuriously reporting `incomplete`
+    // and drawing a false cleanup-failure comment on a merged PR (#1039).
+    if (viewerCannotMinimize > 0) {
       report.status = 'incomplete';
       return;
     }
-    report.status = report.candidates.length === 0 ? 'clean' : 'incomplete';
+    report.status = report.applied.length > 0 ? 'applied' : 'clean';
   }
 }
