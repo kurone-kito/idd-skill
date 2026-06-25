@@ -8,6 +8,7 @@
 // Consumed by:
 //
 // - scripts/discover-roadmap-graph.mjs (A2 node enumeration / union rank)
+// - scripts/discover-orphan-filter.mjs (A0-O orphan candidate ranking)
 //
 // The effort hint is the authored `S | M | L` size estimate defined in
 // skills/issue-authoring/references/contract.md. It is a **soft**
@@ -33,12 +34,16 @@ export const NEUTRAL_EFFORT_ORDINAL = 2;
  * marker.
  *
  * Returns `{ present, value, malformed }`:
- * - `present` is false only when no marker appears in the body.
+ * - `present` is true when a marker carrying a non-whitespace token after
+ *   `-effort:` appears. Like the suitability marker, the detection regex
+ *   requires that token (`[^\s>]+`), so a value-less `<!-- {prefix}-effort:
+ *   -->` does not match and reads as `present: false` rather than a present
+ *   malformed marker.
  * - `value` is the single coherent band (`S`, `M`, or `L`, upper-cased),
  *   or null (fail-safe = "no effort hint") when the marker is absent, not
  *   one of the bands, or repeated with disagreeing values.
- * - `malformed` is true when a marker is present but its value is not a
- *   single coherent band.
+ * - `malformed` is true when a detected marker's value is not a single
+ *   coherent band (e.g. `XL`, `2`, or conflicting duplicates).
  *
  * Mirrors `parseAutopilotSuitabilityMarker` so the regex and fail-safe
  * rules stay aligned between the two authored footers.
