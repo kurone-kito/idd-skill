@@ -429,15 +429,17 @@ Route based on `branchState` from the helper (or `mergeable` /
    `git fetch origin main && git merge origin/main`. On a signed-commit
    repo with non-interactive-hostile primary signing (GPG pinentry /
    hardware touch) and a fallback signing wrapper for arbitrary git
-   subcommands (prefix
+   subcommands (pass
    `-c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`
-   to the subcommand; a commit-only alias like `git commit-ssh` will not
-   run `merge`), **run this `git merge origin/main` through that wrapper —
-   not the plain command** — even a clean merge commits immediately, so the
-   wrapper must own the whole operation.
-3. If conflicts arise, resolve them and complete the merge with the
-   wrapper's own `git merge --continue` form, so `--continue` does not
-   revert the merge commit to the stalling primary signing. This is the
+   to `git` before the subcommand — `git -c … merge`, not `git merge -c …`;
+   a commit-only alias like `git commit-ssh` will not run `merge`), **run
+   this `git merge origin/main` through that wrapper — not the plain
+   command** — even a clean merge commits immediately, so the wrapper must
+   own the whole operation.
+3. If conflicts arise, resolve them and complete the merge — on the
+   signed-commit repos above, with the wrapper's own `git merge --continue`
+   so `--continue` does not revert the merge commit to the stalling primary
+   signing (otherwise the plain `git merge --continue`). This is the
    normal-path complement to the recovery-path re-signing documented in
    `idd-pr-submit.instructions.md` (Post-rebase verification) and
    `idd-overview-core.instructions.md` (cwd-vs-claim cherry-pick

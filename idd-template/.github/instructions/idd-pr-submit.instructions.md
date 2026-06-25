@@ -43,10 +43,11 @@ before proceeding.
 
 On a signed-commit repo whose primary signing is non-interactive-hostile
 (GPG pinentry or a hardware-touch path) but that provides a fallback
-signing wrapper for arbitrary git subcommands (prefix
+signing wrapper for arbitrary git subcommands (pass
 `-c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`
-to the subcommand, or use a repo alias that wraps any subcommand — a
-commit-only alias like `git commit-ssh` will not run `rebase`),
+to `git` before the subcommand — `git -c … rebase`, not `git rebase -c …`
+— or use a repo alias that wraps any subcommand; a commit-only alias like
+`git commit-ssh` will not run `rebase`),
 **run the initial `git rebase origin/main` above through that wrapper —
 not the plain command — and continue it with the wrapper's own
 `--continue` form**; the wrapper must own the whole operation. Plain
