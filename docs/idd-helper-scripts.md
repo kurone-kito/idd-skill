@@ -546,8 +546,8 @@ The adopted helper boundaries are intentionally narrow:
   thread (GraphQL `resolveReviewThread`). Reply first, resolve second, so a
   failed reply never resolves the thread without a disposition.
 - **Dry-run** reports the resolved `threadId` and current `alreadyResolved`
-  state without posting; a comment with no owning thread reports
-  `threadId: null` with an `error` note.
+  state without posting; a comment with no owning thread omits `threadId`
+  and includes an `error` note.
 - **Fail-closed**: `--apply` requires `--body` and the
   `--claim-issue` / `--claim-id` pair, and re-validates the active claim
   (scoped to trusted marker authors, aborting on a targeting

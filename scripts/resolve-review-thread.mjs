@@ -43,13 +43,17 @@ export function findThreadForComment(threads, commentId) {
 /**
  * Orchestrate the apply-mode mutation with injected side effects so the
  * reply→resolve sequencing is testable without the network. Revalidate the
- * active claim first; a thrown claim check aborts before the reply is posted.
+ * active claim before **each** GitHub-side mutation (E13 requires a claim
+ * revalidation before every reply/resolve side effect): the first check aborts
+ * before the reply is posted, and the second aborts before the resolve if the
+ * claim was released or handed off in the window between the two mutations.
  * Resolve only after the reply lands, so a failed reply never leaves a
  * silently-resolved thread with no disposition.
  */
 export function applyResolveReviewThread(deps) {
   deps.assertClaim();
   const reply = deps.postReply();
+  deps.assertClaim();
   deps.resolveThread();
   return { replyId: reply.id };
 }
@@ -175,11 +179,29 @@ function ghGraphql(query, variables) {
   );
 }
 /**
+ * Throw when a GraphQL response carries top-level `errors`, so a bad
+ * PR/repo/auth or any server-side GraphQL failure fails fast with a clear
+ * message instead of being silently read as an empty result (which would
+ * masquerade as "no review thread found").
+ */
+export function assertNoGraphqlErrors(payload, context) {
+  const errors = payload?.errors;
+  if (Array.isArray(errors) && errors.length > 0) {
+    throw new Error(
+      `${context} failed: ${errors
+        .map((entry) => String(entry.message ?? ''))
+        .filter(Boolean)
+        .join('; ')
+        .slice(0, 200)}`,
+    );
+  }
+}
+/**
  * Fetch every review thread of a PR (paginated), each with its node id,
  * resolution state, and member comment database ids — enough to map a REST
- * comment id to its owning thread. Each thread's comments are read up to the
- * first 100, which covers the disposition target (the thread's root or an early
- * reply) in practice; a comment buried past 100 in one thread would not match.
+ * comment id to its owning thread. Both the threads connection **and** each
+ * thread's nested comments connection are paginated to completion, so a target
+ * comment buried past the first 100 replies in a deep thread still resolves.
  */
 function fetchReviewThreads(owner, repo, prNumber) {
   const nodes = [];
@@ -194,7 +216,10 @@ function fetchReviewThreads(owner, repo, prNumber) {
               nodes {
                 id
                 isResolved
-                comments(first: 100) { nodes { databaseId } }
+                comments(first: 100) {
+                  pageInfo { hasNextPage endCursor }
+                  nodes { databaseId }
+                }
               }
             }
           }
@@ -202,7 +227,25 @@ function fetchReviewThreads(owner, repo, prNumber) {
       }`,
       { owner, repo, number: prNumber, cursor },
     );
+    assertNoGraphqlErrors(payload, 'review thread lookup');
     const reviewThreads = payload?.data?.repository?.pullRequest?.reviewThreads;
+    for (const thread of reviewThreads?.nodes ?? []) {
+      if (thread.comments?.pageInfo?.hasNextPage) {
+        if (!thread.id || !thread.comments.pageInfo.endCursor) {
+          throw new Error(
+            'review thread comment pagination payload is missing id or endCursor',
+          );
+        }
+        thread.comments.nodes = [
+          ...(thread.comments.nodes ?? []),
+          ...fetchThreadCommentIds(
+            thread.id,
+            thread.comments.pageInfo.endCursor,
+          ),
+        ];
+        thread.comments.pageInfo.hasNextPage = false;
+      }
+    }
     nodes.push(...(reviewThreads?.nodes ?? []));
     if (!reviewThreads?.pageInfo?.hasNextPage) {
       break;
@@ -211,6 +254,40 @@ function fetchReviewThreads(owner, repo, prNumber) {
       throw new Error('review thread pagination payload is missing endCursor');
     }
     cursor = reviewThreads.pageInfo.endCursor;
+  }
+  return nodes;
+}
+/**
+ * Page the remaining comment-id nodes of one review thread, starting after
+ * `afterCursor`, until the connection is exhausted. Mirrors the sibling
+ * snapshot helper's nested-comment pagination.
+ */
+function fetchThreadCommentIds(threadId, afterCursor) {
+  const nodes = [];
+  let cursor = afterCursor;
+  while (cursor) {
+    const payload = ghGraphql(
+      `query($id: ID!, $cursor: String) {
+        node(id: $id) {
+          ... on PullRequestReviewThread {
+            comments(first: 100, after: $cursor) {
+              pageInfo { hasNextPage endCursor }
+              nodes { databaseId }
+            }
+          }
+        }
+      }`,
+      { id: threadId, cursor },
+    );
+    assertNoGraphqlErrors(payload, 'review thread comment pagination');
+    const comments = payload?.data?.node?.comments;
+    nodes.push(...(comments?.nodes ?? []));
+    if (comments?.pageInfo?.hasNextPage && !comments.pageInfo.endCursor) {
+      throw new Error('thread comment pagination payload is missing endCursor');
+    }
+    cursor = comments?.pageInfo?.hasNextPage
+      ? comments.pageInfo.endCursor
+      : null;
   }
   return nodes;
 }
@@ -235,15 +312,7 @@ function resolveThread(threadId) {
     }`,
     { threadId },
   );
-  if (Array.isArray(payload?.errors) && payload.errors.length > 0) {
-    throw new Error(
-      `resolveReviewThread failed: ${payload.errors
-        .map((entry) => String(entry.message ?? ''))
-        .filter(Boolean)
-        .join('; ')
-        .slice(0, 200)}`,
-    );
-  }
+  assertNoGraphqlErrors(payload, 'resolveReviewThread');
   if (payload?.data?.resolveReviewThread?.thread?.isResolved !== true) {
     throw new Error(
       'resolveReviewThread returned without confirming thread.isResolved',

@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   applyResolveReviewThread,
+  assertNoGraphqlErrors,
   findThreadForComment,
   parseArgs,
   type ResolveReviewThreadReport,
@@ -93,7 +94,29 @@ test('findThreadForComment ignores missing databaseId nodes safely', () => {
   });
 });
 
-test('applyResolveReviewThread revalidates the claim before posting, then resolves after the reply', () => {
+test('assertNoGraphqlErrors throws on a response carrying errors', () => {
+  assert.throws(
+    () =>
+      assertNoGraphqlErrors(
+        { errors: [{ message: 'Could not resolve to a Repository' }] },
+        'review thread lookup',
+      ),
+    /review thread lookup failed: Could not resolve to a Repository/,
+  );
+});
+
+test('assertNoGraphqlErrors passes a clean response so a real not-found is not masked', () => {
+  assert.doesNotThrow(() =>
+    assertNoGraphqlErrors(
+      {
+        data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } },
+      },
+      'review thread lookup',
+    ),
+  );
+});
+
+test('applyResolveReviewThread revalidates the claim before each mutation (reply then resolve)', () => {
   const calls: string[] = [];
   const result = applyResolveReviewThread({
     assertClaim: () => {
@@ -107,8 +130,34 @@ test('applyResolveReviewThread revalidates the claim before posting, then resolv
       calls.push('resolve');
     },
   });
-  assert.deepEqual(calls, ['claim', 'reply', 'resolve']);
+  assert.deepEqual(calls, ['claim', 'reply', 'claim', 'resolve']);
   assert.equal(result.replyId, 555);
+});
+
+test('applyResolveReviewThread does not resolve when the second claim check fails after the reply', () => {
+  const calls: string[] = [];
+  let claimChecks = 0;
+  assert.throws(
+    () =>
+      applyResolveReviewThread({
+        assertClaim: () => {
+          claimChecks += 1;
+          calls.push('claim');
+          if (claimChecks === 2) {
+            throw new Error('claim handed off mid-flight');
+          }
+        },
+        postReply: () => {
+          calls.push('reply');
+          return { id: 1 };
+        },
+        resolveThread: () => {
+          calls.push('resolve');
+        },
+      }),
+    /claim handed off mid-flight/,
+  );
+  assert.deepEqual(calls, ['claim', 'reply', 'claim']);
 });
 
 test('applyResolveReviewThread aborts before any mutation when the claim check throws', () => {
