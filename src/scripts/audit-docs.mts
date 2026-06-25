@@ -14,6 +14,7 @@ import type {
   TypeSuppressionBudgetConfig,
 } from './consistency-helpers.mts';
 import {
+  collectDuplicateSyncPairTargets,
   collectInstructionSizeBudgetViolations,
   collectPolicyConfigDrift,
   collectRootMarkdownAllowlistViolations,
@@ -417,6 +418,7 @@ function resolveBlockFiles(block: GeneratedBlock): string[] {
 }
 
 function checkSyncPairs(pairs: SyncPair[]) {
+  errors.push(...collectDuplicateSyncPairTargets(pairs));
   for (const pair of pairs) {
     if (pair.mode === 'contains') {
       checkContainsPair(pair);
