@@ -255,7 +255,11 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   `--check-overlap`. The cross-issue active-set discovery (open PRs plus
   claimed-candidate comment scans, resolved with the shared claim-state rules)
   is **gated behind `--check-overlap`** because it adds GitHub API cost; without
-  it each candidate's high-contention files are still reported.
+  it each candidate's high-contention files are still reported. **Coverage**:
+  open-PR overlap is repo-wide, but active-claim overlap is scanned only within
+  the candidate set (no repo-wide comment scan), so a non-stale claim on a
+  non-candidate issue with no open PR is not detected — acceptable for an
+  advisory tie-breaker, since a claimed candidate becomes active next run.
 - **High-contention set**: the union of the named bundles' member files plus
   `audit/sync-manifest.json`. Instruction files are keyed by their repo-wide
   unique basename so a source path, mirror path, or bare citation all match.

@@ -323,10 +323,14 @@ function runCli() {
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
 /**
- * Discover the concurrently-active set: every issue closed by an open PR, plus
- * candidate issues that already carry a non-stale claim. Claim scanning is
- * bounded to the candidate set (no repo-wide comment scan); this fetch cost is
- * what the `--check-overlap` flag gates.
+ * Discover the concurrently-active set: every issue closed by an open PR
+ * (repo-wide), plus candidate issues that already carry a non-stale claim.
+ * Claim scanning is intentionally bounded to the candidate set (no repo-wide
+ * comment scan) — that fetch cost is what `--check-overlap` gates — so a
+ * non-stale claim on a non-candidate issue with no open PR is not detected.
+ * This bounded coverage is acceptable because the overlap signal is an advisory
+ * A4 Step 2 tie-breaker, and a claimed candidate becomes active for the next
+ * discovery run. Open-PR coverage stays repo-wide.
  */
 function discoverActiveIssues(options) {
   const { repoRef, candidateNumbers, trustedActors, now } = options;
@@ -363,22 +367,21 @@ function discoverActiveIssues(options) {
   return [...active.values()].sort((left, right) => left.number - right.number);
 }
 function fetchIssue(repoRef, number) {
-  try {
-    const body = ghText([
-      'issue',
-      'view',
-      String(number),
-      '--repo',
-      repoRef,
-      '--json',
-      'body',
-      '--jq',
-      '.body',
-    ]);
-    return { body };
-  } catch {
-    return { body: '' };
-  }
+  // Fail closed: let a fetch failure surface rather than returning an empty
+  // body, which would silently suppress this issue's candidate files and emit
+  // a false "no overlap" result.
+  const body = ghText([
+    'issue',
+    'view',
+    String(number),
+    '--repo',
+    repoRef,
+    '--json',
+    'body',
+    '--jq',
+    '.body',
+  ]);
+  return { body };
 }
 /**
  * Map a REST issue-comment payload to the `CommentLike` shape
@@ -460,8 +463,13 @@ function loadManifest(manifestPath) {
   );
   try {
     return JSON.parse(readFileSync(targetPath, 'utf8'));
-  } catch {
-    return { bundleBudgets: [] };
+  } catch (error) {
+    // Fail closed: an empty manifest would yield an empty high-contention set,
+    // making every candidate look non-overlapping. Surface the load failure.
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `failed to load sync manifest at ${targetPath}: ${message}`,
+    );
   }
 }
 function loadPolicy(policyPath) {
@@ -587,6 +595,13 @@ first within a score band, then issue number). Evidence-only: never a hard gate.
 
 Without --check-overlap no active-set discovery runs (no extra GitHub API
 cost); each candidate's high-contention files are still reported.
+
+--check-overlap coverage: open-PR overlap is repo-wide (every issue closed by
+an open PR), but active-claim overlap is scanned only within the candidate set
+to avoid a repo-wide comment scan — a non-stale claim on a non-candidate issue
+with no open PR is not detected. The signal is an advisory A4 Step 2 hint, so
+this bounded coverage is acceptable; a claimed candidate becomes active for the
+next discovery run.
 `);
 }
 function ghJson(args) {
