@@ -23,6 +23,10 @@ import {
 } from './protocol-helpers.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
+// GitHub's search API returns at most 1000 results for a single query. The
+// open-roadmap-roots loader pins each search at this cap and warns when a
+// single search returns the full cap (a possible silent truncation).
+const GH_SEARCH_RESULT_CAP = 1000;
 // Policy default claim stale age (`claimTiming.staleAge`, `PT24H`). Mirrors
 // the default baked into protocol-helpers' `isStaleAt`, so when the configured
 // stale age equals this default the shared `isStaleAt` path is
@@ -46,27 +50,6 @@ query($owner:String!, $repo:String!, $number:Int!, $after:String) {
           hasNextPage
           endCursor
         }
-      }
-    }
-  }
-}
-`;
-const OPEN_ISSUES_QUERY = `
-query($owner:String!, $repo:String!, $after:String) {
-  repository(owner:$owner, name:$repo) {
-    issues(states:OPEN, first:100, after:$after) {
-      nodes {
-        number
-        body
-        labels(first:100) {
-          nodes {
-            name
-          }
-        }
-      }
-      pageInfo {
-        hasNextPage
-        endCursor
       }
     }
   }
@@ -1707,71 +1690,184 @@ function buildSubIssueLoader(owner: string, repo: string) {
   };
 }
 
-function buildOpenRoadmapRootsLoader(
+/**
+ * Live open-roadmap-roots loader (#1017): search-narrowed root discovery.
+ *
+ * Replaces the previous full open-issue scan (which fetched every open
+ * issue's `body` plus up to 100 labels just to detect a root) with two
+ * cheap server-side searches whose union is the SAME open-root set:
+ *
+ *   1. Label roots — `gh search issues --label roadmap --state open` returns
+ *      every open issue carrying the `roadmap` label. These are roots by
+ *      label with NO body inspection needed; the old scan's
+ *      `labels.has('roadmap')` branch is reproduced exactly (the GitHub
+ *      search `--label` qualifier is a case-insensitive exact-name match, as
+ *      is the `normalizeLabels`-backed `Set.has('roadmap')` it replaces).
+ *   2. Marker-only roots — `gh search issues --match body "<...>roadmap-id"
+ *      --state open` narrows to open issues whose body text contains the
+ *      `idd-skill-roadmap-id`-style marker token, then RE-CONFIRMS each
+ *      candidate with the same `extractRoadmapMarkerId(body, prefix)` regex
+ *      the old scan used (the search already returns the body, so no extra
+ *      per-issue fetch is made). Only confirmed markers are kept, so a
+ *      non-marker text hit on the token never inflates the root set.
+ *
+ * The two candidate sets are unioned and deduped by number, then sorted
+ * ascending. The output is the identical `number[]` (deduped, ascending) the
+ * previous scan returned, so the downstream union/provenance/ranking is
+ * byte-stable.
+ *
+ * Result-cap boundary: `gh search` is hard-capped at
+ * {@link GH_SEARCH_RESULT_CAP} results per query. When a single label or
+ * body-marker search returns the full cap it may have been truncated, so a
+ * repo with >= {@link GH_SEARCH_RESULT_CAP} hits could silently yield an
+ * incomplete root set. The loader emits a NON-FATAL one-line WARNING to stderr
+ * in that case (see {@link warnOnSearchResultCap}) rather than aborting — the
+ * body-marker search can legitimately match many re-confirmed-and-dropped
+ * prose mentions, so a hard error would over-abort. The JSON report itself
+ * goes to stdout, so the stderr warning never corrupts it.
+ *
+ * Boundary (documented parity note): the marker search uses GitHub's
+ * full-text body index. The label search is exact and complete on its own,
+ * so every LABELED root is always found regardless of the marker index. A
+ * marker-ONLY root (no `roadmap` label, marker only in the body) is found
+ * when the body-text index surfaces the broad `roadmap-id` token, which the
+ * `re`-confirm step then verifies — this is the only path that depends on
+ * the search index rather than an exact qualifier. The IDD authoring path
+ * applies the `roadmap` label to roadmap roots, so in practice marker-only
+ * roots are covered by the label search; the marker search is the additive
+ * safety net for unlabeled markers.
+ */
+export function buildOpenRoadmapRootsLoader(
   owner: string,
   repo: string,
   markerPrefix: unknown,
+  searchIssues: SearchIssuesFn = buildSearchIssuesRunner(),
 ) {
   const prefix = normalizeMarkerPrefix(markerPrefix);
   return async () => {
-    const numbers: number[] = [];
-    let after = '';
+    const numbers = new Set<number>();
 
-    while (true) {
-      const variables: Record<string, string | number> = { owner, repo };
-      if (after) {
-        variables.after = after;
+    // 1. Label roots: roadmap-labeled open issues are roots by label.
+    const labelResults = searchIssues({
+      owner,
+      repo,
+      label: 'roadmap',
+      fields: ['number'],
+    });
+    warnOnSearchResultCap(labelResults, 'label');
+    for (const issue of labelResults) {
+      const issueNumber = normalizeSearchIssueNumber(issue);
+      if (issueNumber !== null) {
+        numbers.add(issueNumber);
       }
-      const result = runGraphqlQuery(OPEN_ISSUES_QUERY, variables) as {
-        data?: {
-          repository?: {
-            issues?: {
-              nodes?: unknown;
-              pageInfo?: { hasNextPage?: unknown; endCursor?: unknown };
-            };
-          };
-        };
-      };
-      const connection = result?.data?.repository?.issues;
-      if (
-        !connection ||
-        !Array.isArray(connection.nodes) ||
-        !connection.pageInfo
-      ) {
-        throw new Error('open issues connection missing');
-      }
-
-      for (const node of connection.nodes) {
-        const issue = node as {
-          number?: unknown;
-          body?: unknown;
-          labels?: { nodes?: unknown };
-        } | null;
-        const issueNumber = Number.parseInt(String(issue?.number ?? ''), 10);
-        if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
-          continue;
-        }
-        const labels = normalizeLabels(
-          (issue?.labels as { nodes?: unknown } | undefined)?.nodes,
-        );
-        const hasRoadmapMarker = Boolean(
-          extractRoadmapMarkerId(issue?.body, prefix),
-        );
-        if (labels.has('roadmap') || hasRoadmapMarker) {
-          numbers.push(issueNumber);
-        }
-      }
-
-      if (!connection.pageInfo.hasNextPage) {
-        break;
-      }
-      if (!connection.pageInfo.endCursor) {
-        throw new Error('open issues pagination cursor missing');
-      }
-      after = String(connection.pageInfo.endCursor);
     }
 
-    return [...new Set(numbers)];
+    // 2. Marker-only roots: narrow to open issues whose body carries the
+    //    marker token, then re-confirm with the exact regex on the body the
+    //    search already returned (no extra per-issue body fetch).
+    const markerResults = searchIssues({
+      owner,
+      repo,
+      matchBody: `${prefix}-roadmap-id`,
+      fields: ['number', 'body'],
+    });
+    warnOnSearchResultCap(markerResults, 'body-marker');
+    for (const issue of markerResults) {
+      const issueNumber = normalizeSearchIssueNumber(issue);
+      if (issueNumber === null) {
+        continue;
+      }
+      const body = (issue as { body?: unknown } | null)?.body;
+      if (extractRoadmapMarkerId(body, prefix)) {
+        numbers.add(issueNumber);
+      }
+    }
+
+    // Ascending, deduped — matches the documented `number[]` contract.
+    return [...numbers].sort((left, right) => left - right);
+  };
+}
+
+/**
+ * GitHub's search API caps a single query at 1000 results
+ * ({@link GH_SEARCH_RESULT_CAP}). When a root search returns the full cap it
+ * may have been truncated, so a repo with >= 1000 label or marker-token hits
+ * could silently yield an incomplete root set.
+ *
+ * This is NON-FATAL: the body-marker search can legitimately match many prose
+ * mentions that are re-confirmed and dropped, so a hard error would over-abort.
+ * Instead emit one clear WARNING line to STDERR (the JSON report goes to
+ * stdout, so stderr keeps the report stream clean) and continue. Exported for
+ * the focused loader test that asserts the warning fires.
+ */
+export function warnOnSearchResultCap(
+  results: unknown[],
+  searchKind: 'label' | 'body-marker',
+): void {
+  if (Array.isArray(results) && results.length >= GH_SEARCH_RESULT_CAP) {
+    process.stderr.write(
+      `discover-roadmap-graph: --all-roadmaps root search hit the ${GH_SEARCH_RESULT_CAP}-result cap (${searchKind}); root discovery may be incomplete on this scale.\n`,
+    );
+  }
+}
+
+/** One `gh search issues` query, narrowed to a candidate root set. */
+export interface SearchIssuesQuery {
+  owner: string;
+  repo: string;
+  /** Exact `--label` qualifier (open issues carrying this label). */
+  label?: string;
+  /** Free-text token restricted to the issue body (`--match body`). */
+  matchBody?: string;
+  /** Requested `--json` fields. */
+  fields: string[];
+}
+
+export type SearchIssuesFn = (query: SearchIssuesQuery) => unknown[];
+
+/** Coerce a `gh search issues` JSON entry's number to a positive integer. */
+function normalizeSearchIssueNumber(issue: unknown): number | null {
+  const issueNumber = Number.parseInt(
+    String((issue as { number?: unknown } | null)?.number ?? ''),
+    10,
+  );
+  return Number.isInteger(issueNumber) && issueNumber > 0 ? issueNumber : null;
+}
+
+/**
+ * Build the live `gh search issues` runner used by the open-roadmap-roots
+ * loader. Each call issues one read-only server-side search; the search API
+ * caps a single query at {@link GH_SEARCH_RESULT_CAP} results, so the limit is
+ * pinned at that cap (the loader warns when a search returns the full cap).
+ * Pull requests are excluded by default (`--include-prs` is never passed),
+ * matching the old scan which only ever saw issues from the issues
+ * connection.
+ */
+function buildSearchIssuesRunner(): SearchIssuesFn {
+  return ({ owner, repo, label, matchBody, fields }) => {
+    const args = [
+      'search',
+      'issues',
+      '--repo',
+      `${owner}/${repo}`,
+      '--state',
+      'open',
+      '--limit',
+      String(GH_SEARCH_RESULT_CAP),
+      '--json',
+      fields.join(','),
+    ];
+    if (label) {
+      args.push('--label', label);
+    }
+    if (matchBody) {
+      // Restrict the free-text query to the body field, then pass the token
+      // as the positional search query.
+      args.push('--match', 'body', matchBody);
+    }
+    const raw = runGh(args).trim();
+    const parsed = raw && raw !== 'null' ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
   };
 }
 
