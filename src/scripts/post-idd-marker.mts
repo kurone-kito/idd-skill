@@ -198,14 +198,15 @@ const USAGE = `usage: node scripts/post-idd-marker.mjs --type <type> --target <i
 
 Render the canonical HTML-comment-first body for an IDD operational marker
 (advisory markers are plain-text per the AW3 protocol) and POST it via the
-reliable JSON path. Default mode is dry-run (prints the body); --apply posts it.
-This helper performs no claim/state gating — the calling phase must run its
-claim-revalidation gate before --apply, as the manual POST path it replaces does.
+reliable JSON path. Default mode is dry-run, which prints a JSON envelope whose
+\`body\` field is the marker; --apply POSTs it and prints the created comment
+id/URL. This helper performs no claim/state gating — the calling phase must run
+its claim-revalidation gate before --apply, as the manual POST path it replaces.
 
   --type <type>        one of: ${MARKER_TYPES.join(', ')}
   --target <issue|pr>  the comment target kind (both use the issues comments API)
   <number>             issue or PR number (positional, required)
-  --apply              POST the marker (default: dry-run, print the body)
+  --apply              POST the marker (default: dry-run prints it in a JSON envelope)
   --owner <owner>      repo owner (default: gh repo view)
   --repo <repo>        repo name (default: gh repo view)
   -h, --help           show this help
