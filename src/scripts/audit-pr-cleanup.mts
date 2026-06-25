@@ -1047,9 +1047,18 @@ async function revalidateCandidate(
       current.classifier === candidate.classifier
     );
   });
+  // Carry the FRESH state of the candidate (not the stale scan row) so the
+  // summary classifies it correctly: a candidate that was minimized between the
+  // scan and this apply — typically a cascade when its parent was minimized
+  // earlier in the same run — now has `isMinimized: true` and is counted as an
+  // already-minimized (converged) skip, while a candidate that became
+  // permission-blocked keeps `viewerCanMinimize: false` and is counted as a
+  // genuine remainder. Without this, a cascade-minimized child kept the stale
+  // `isMinimized: false`, so the run looked `incomplete` even though it
+  // converged (#1039).
   addSkipped(
     report,
-    candidate,
+    skipped ?? candidate,
     `pre-minimize revalidation failed: ${skipped?.skipReason ?? 'candidate is no longer eligible'}`,
   );
   return null;
