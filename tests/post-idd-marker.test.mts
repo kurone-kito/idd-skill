@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   buildMarkerBody,
@@ -23,6 +28,7 @@ const SHA = '0123456789abcdef0123456789abcdef01234567';
 const TS = '2026-06-17T09:47:08Z';
 
 const schema = loadJson('schemas/post-idd-marker.schema.json');
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 test('schema uses only supported keywords', () => {
   assert.deepEqual(checkSchemaKeywords(schema), []);
@@ -305,4 +311,93 @@ test('the schema rejects an unknown field and a missing required field', () => {
     validate({ mode: 'dry-run', type: 'claim', target: 'issue' }, schema),
     [],
   );
+});
+
+test('--apply CLI POSTs via gh api --input - and prints the apply envelope', () => {
+  // Stub `gh` on PATH (the discover-roadmap-graph.test.mts pattern) so the
+  // --apply POST path is exercised without network access. The stub records its
+  // argv and the JSON request body piped to stdin, then returns a comment object.
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-post-idd-marker-cli-'));
+  const ghPath = join(tempRoot, 'gh');
+  const argsFile = join(tempRoot, 'gh-args.json');
+  const stdinFile = join(tempRoot, 'gh-stdin.txt');
+  writeFileSync(
+    ghPath,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(args));
+if (args[0] === 'api' && args.includes('--input') && args[args.indexOf('--input') + 1] === '-') {
+  fs.writeFileSync(${JSON.stringify(stdinFile)}, fs.readFileSync(0, 'utf8'));
+  process.stdout.write(JSON.stringify({ id: 4242, html_url: 'https://github.com/o/r/issues/1047#issuecomment-4242' }));
+  process.exit(0);
+}
+process.stderr.write('unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
+`,
+  );
+  chmodSync(ghPath, 0o755);
+
+  const output = execFileSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+      '--type',
+      'claim',
+      '--target',
+      'issue',
+      '1047',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--agent-id',
+      'claude-417b737f',
+      '--claim-id',
+      'c3009f22b5f6',
+      '--supersedes',
+      'none',
+      '--timestamp',
+      TS,
+      '--branch',
+      'issue/1047-foo',
+      '--apply',
+    ],
+    {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
+    },
+  );
+
+  // (3) apply mode prints the envelope with the created comment id / url.
+  assert.deepEqual(JSON.parse(output), {
+    mode: 'apply',
+    type: 'claim',
+    target: 'issue',
+    number: 1047,
+    commentId: 4242,
+    url: 'https://github.com/o/r/issues/1047#issuecomment-4242',
+  });
+
+  // (1) the exact gh api arguments (JSON `--input -` path, not `-f body=`).
+  assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')), [
+    'api',
+    '--method',
+    'POST',
+    'repos/o/r/issues/1047/comments',
+    '--input',
+    '-',
+  ]);
+
+  // (2) the JSON request body piped to stdin carries the exact marker body.
+  assert.deepEqual(JSON.parse(readFileSync(stdinFile, 'utf8')), {
+    body: buildMarkerBody('claim', {
+      'agent-id': 'claude-417b737f',
+      'claim-id': 'c3009f22b5f6',
+      supersedes: 'none',
+      timestamp: TS,
+      branch: 'issue/1047-foo',
+    }),
+  });
 });
