@@ -241,7 +241,10 @@ ack / error, as defined in E4):
   re-request, no wait.** The notice item itself is **always rejected**,
   because it carries no advisory result — never record `**Accepted**` on
   the notice: `**Rejected** — {bot} did not review HEAD {sha}
-  ({reason}); this is not a completed review`. A separate _completed_
+  ({reason}); this is not a completed review`. Write `{bot}` as the bot's
+  **GitHub login** (e.g. `coderabbitai[bot]`, `chatgpt-codex-connector[bot]`)
+  so the carry-forward below can attribute the rejection to exactly that bot
+  when several advisory bots are configured. A separate _completed_
   review of the current HEAD, if one is present, is a **distinct**
   ReviewItems_snapshot item dispositioned `**Accepted**` under the
   completed-review rules above — accept that review, not the notice.
@@ -259,10 +262,13 @@ ack / error, as defined in E4):
   reviewed any HEAD. A review-fix push that bumps the notice's `updatedAt` (or a
   re-posted identical rate-limit / usage-limit summary) does **not** require a
   fresh identical rejection: the F2/F3 disposition-evidence gate carries the
-  existing rejection forward. Re-disposition **only** when the bot replaces the
-  notice with an actual completed review of the current HEAD — disposition that
-  review under the completed-review rules above (the carry-forward no longer
-  applies to a notice that became a real review).
+  existing rejection forward. The carry-forward is **scoped to the bot the
+  rejection names** (by GitHub login), so a rejection of one advisory bot's
+  notice never clears another bot's still-undispositioned notice. Re-disposition
+  **only** when the bot replaces the notice with an actual completed review of
+  the current HEAD — disposition that review under the completed-review rules
+  above (the carry-forward no longer applies to a notice that became a real
+  review).
 - **Do not auto-request a fresh review from triage** to "upgrade" a
   non-review notice. Triggering a new review is a separate concern:
   Copilot advisory state is owned solely by the advisory-wait protocol

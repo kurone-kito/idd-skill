@@ -2134,7 +2134,7 @@ test('disposition evidence carries a re-posted CodeRabbit rate-limit notice forw
         {
           id: 1,
           createdAt: '2026-05-12T00:00:30Z',
-          body: '**Rejected** — CodeRabbit did not review HEAD abc1234 (review limit reached); this is not a completed review',
+          body: '**Rejected** — coderabbitai[bot] (CodeRabbit) did not review HEAD abc1234 (review limit reached); this is not a completed review',
           author: { login: 'idd-bot' },
         },
         {
@@ -2210,6 +2210,49 @@ test('disposition evidence still blocks an undispositioned non-review notice', (
     },
   );
 
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingRegularCommentCount, 1);
+});
+
+// No regression (multi-bot): a disposition naming one advisory bot must NOT
+// carry forward another bot's still-undispositioned notice. The repo can
+// configure several advisory bots at once, so an order/count-only pairing would
+// let a Codex rejection suppress a real CodeRabbit missing-disposition blocker.
+test('disposition evidence does not carry one bot disposition onto another bot notice', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [
+        {
+          id: 1,
+          createdAt: '2026-05-12T00:00:00Z',
+          // CodeRabbit rate-limit notice — never dispositioned.
+          body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> ## Review limit reached',
+          author: { login: 'coderabbitai[bot]' },
+        },
+        {
+          id: 2,
+          createdAt: '2026-05-12T00:00:01Z',
+          body: 'You have reached your Codex usage limits for code reviews.',
+          author: { login: 'chatgpt-codex-connector[bot]' },
+        },
+        {
+          id: 3,
+          createdAt: '2026-05-12T00:00:30Z',
+          // Names only the Codex connector — must not carry the CodeRabbit notice.
+          body: '**Rejected** — chatgpt-codex-connector did not review HEAD abc1234 (usage limits); this is not a completed review',
+          author: { login: 'idd-bot' },
+        },
+      ],
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]', 'chatgpt-codex-connector[bot]'],
+    },
+  );
+
+  // The Codex notice carries forward on its own disposition; the undispositioned
+  // CodeRabbit notice still blocks (one missing regular comment).
   assert.equal(summary.route, 'return-to-e1');
   assert.equal(summary.missingRegularCommentCount, 1);
 });
