@@ -720,9 +720,17 @@ test('collectDuplicateSyncPairTargets flags repeated targets and ignores unique 
     ]),
     [],
   );
-  // Non-array / empty / missing targets are not violations.
+  // Non-array / empty / missing / non-string targets are not violations:
+  // invalid entries are ignored rather than coerced into a fake duplicate.
   assert.deepEqual(collectDuplicateSyncPairTargets(undefined), []);
   assert.deepEqual(collectDuplicateSyncPairTargets([{ id: 'a' }]), []);
+  assert.deepEqual(
+    collectDuplicateSyncPairTargets([
+      { id: 'a', target: {} },
+      { id: 'b', target: {} },
+    ]),
+    [],
+  );
 
   const dupes = collectDuplicateSyncPairTargets([
     { id: 'first', target: 'shared.md' },

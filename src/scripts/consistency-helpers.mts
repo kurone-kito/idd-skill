@@ -526,15 +526,17 @@ export function collectDuplicateSyncPairTargets(
   const seen = new Set<string>();
   const violations: string[] = [];
   for (const pair of syncPairs) {
-    const target = String(pair?.target ?? '');
-    if (!target) {
+    const target = pair?.target;
+    // Only string targets participate: a missing or non-string target is an
+    // invalid entry, not a duplicate, and coercing it (e.g. an object to
+    // "[object Object]") would manufacture confusing false positives.
+    if (typeof target !== 'string' || target === '') {
       continue;
     }
     if (seen.has(target)) {
+      const id = typeof pair?.id === 'string' ? pair.id : '';
       violations.push(
-        `syncPairs: duplicate target "${target}" (pair "${String(
-          pair?.id ?? '',
-        )}"); each syncPairs target must appear exactly once — a duplicate is silently skipped and becomes dead data`,
+        `syncPairs: duplicate target "${target}" (pair "${id}"); each syncPairs target must appear exactly once — a duplicate is silently skipped and becomes dead data`,
       );
       continue;
     }

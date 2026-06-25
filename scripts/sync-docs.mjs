@@ -102,18 +102,19 @@ function processSyncPairs(pairs) {
   const seenTargets = new Set();
   for (const pair of pairs) {
     const { id, source, target, mode, replacements = [] } = pair;
+    // A duplicate target is dead data: only the first occurrence is applied,
+    // so a divergent second copy is silently ignored and misleads future
+    // maintainers. Enforce uniqueness across every pair (matching the docs
+    // audit's collectDuplicateSyncPairTargets, which checks all modes) so the
+    // error message's "each syncPairs target must appear exactly once" holds
+    // regardless of mode.
+    if (seenTargets.has(target)) {
+      throw new Error(
+        `sync-docs: duplicate target "${target}" in pair "${id}" — each syncPairs target must appear exactly once`,
+      );
+    }
+    seenTargets.add(target);
     if (mode === 'exact' || mode === 'concreted') {
-      if (seenTargets.has(target)) {
-        // A duplicate target is dead data: only the first occurrence is
-        // applied, so a divergent second copy is silently ignored and
-        // misleads future maintainers. Fail loudly instead of skipping so an
-        // accidental re-duplication cannot slip in (the docs audit enforces
-        // the same invariant via collectDuplicateSyncPairTargets).
-        throw new Error(
-          `sync-docs: duplicate target "${target}" in pair "${id}" — each syncPairs target must appear exactly once`,
-        );
-      }
-      seenTargets.add(target);
       const sourceText = readText(source);
       const generated = normalizeText(
         applyReplacements(sourceText, replacements),
