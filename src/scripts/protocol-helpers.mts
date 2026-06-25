@@ -2096,6 +2096,85 @@ export function isIddDispositionComment(comment: CommentLike): boolean {
   return isDispositionComment(comment) && !isKnownReviewBot(author);
 }
 
+// #1018 non-review-notice carry-forward classifiers.
+//
+// An advisory **non-review notice** — an advisory bot reporting it did not
+// review the current HEAD (rate-limit / usage-quota exhaustion / review-limit) —
+// carries no review result and is always dispositioned `**Rejected** — {bot} did
+// not review HEAD …` per the E6 non-review-notice rule. The gate uses the two
+// tight, fail-closed predicates below to let such a disposition carry forward
+// across HEAD changes (see `summarizeDispositionEvidenceForGate`), so a Codex
+// `updatedAt` bump or a re-posted CodeRabbit rate-limit summary does not re-flag
+// `missing-disposition-evidence` for a notice the agent already rejected.
+//
+// Both intentionally **under-match**: an unrecognized notice merely keeps the
+// existing per-push re-disposition churn (safe), while a false positive could
+// carry a stale disposition onto a real review (a false merge). Only
+// machine-generated, bot-specific signals match, and the notice predicate is
+// evaluated solely on advisory-bot-authored comments at the gate, so a human
+// reviewer comment is never reclassified as a notice.
+const ADVISORY_NON_REVIEW_NOTICE_PATTERNS: RegExp[] = [
+  // CodeRabbit rate-limit notice: the machine-generated marker (distinct from
+  // the `summarize by coderabbit.ai` review marker) and its warning heading.
+  /<!--\s*This is an auto-generated comment:\s*rate limited by coderabbit\.ai\s*-->/i,
+  /^[>\s]*#{1,6}\s*Review limit reached\b/im,
+  // Codex usage / quota exhaustion for code reviews.
+  /\bCodex usage limits for code reviews\b/i,
+  /\breached your Codex usage limits\b/i,
+];
+
+export function isAdvisoryNonReviewNotice(body: unknown): boolean {
+  const text = String(body ?? '');
+  if (!text) {
+    return false;
+  }
+  return ADVISORY_NON_REVIEW_NOTICE_PATTERNS.some((pattern) =>
+    pattern.test(text),
+  );
+}
+
+// A trusted IDD disposition of a non-review notice: the canonical
+// `**Rejected** — {bot} did not review HEAD {sha} ({reason}); this is not a
+// completed review` reply. Requires the `**Rejected**` prefix (a notice is
+// always rejected, never accepted) and the `did not review HEAD` phrase that
+// names the notice, so an ordinary rejection of reviewer feedback is excluded.
+export function isNonReviewNoticeDisposition(comment: {
+  body?: string | null;
+}): boolean {
+  const body = (comment.body ?? '').trimStart();
+  return (
+    body.startsWith('**Rejected**') && /\bdid not review HEAD\b/i.test(body)
+  );
+}
+
+// The stable identity token of an advisory bot, used to attribute a non-review
+// notice disposition to the bot it rejected. The `[bot]` suffix GitHub appends
+// is dropped so the token matches whether a login is stored as `coderabbitai`
+// or `coderabbitai[bot]`.
+function advisoryBotIdentityToken(login: unknown): string {
+  return String(login ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\[bot\]$/, '');
+}
+
+// True when a non-review-notice disposition body names the given advisory bot's
+// GitHub login, so the gate can attribute a carry-forward to exactly one bot
+// even when several advisory bots are configured. Fail-closed: an empty token or
+// a disposition that does not contain the login carries nothing forward.
+function dispositionNamesAdvisoryBot(
+  dispositionBody: unknown,
+  noticeAuthorLogin: string,
+): boolean {
+  const token = advisoryBotIdentityToken(noticeAuthorLogin);
+  if (!token) {
+    return false;
+  }
+  return String(dispositionBody ?? '')
+    .toLowerCase()
+    .includes(token);
+}
+
 export function classifyCiChecks(checks: CheckLike[]) {
   const normalized = checks.map((check) => ({
     name: check.name,
@@ -3128,6 +3207,68 @@ export function summarizeDispositionEvidenceForGate(
       );
     });
 
+  const dispositionComments = normalizedComments.filter(
+    (comment) =>
+      iddAgentLogins.has(comment.authorLogin) &&
+      isDispositionComment({ body: comment.body }),
+  );
+
+  // #1018 non-review-notice carry-forward (fail-closed, author-scoped). A
+  // persistent advisory non-review notice already dispositioned `**Rejected** —
+  // {bot-login} did not review HEAD …` keeps that disposition across HEAD changes
+  // while the bot still has not reviewed any HEAD: a Codex `updatedAt` bump or a
+  // re-posted CodeRabbit rate-limit summary must not re-flag
+  // `missing-disposition-evidence` for a notice the agent already rejected.
+  //
+  // Each carry-forward is matched strictly WITHIN one advisory-bot identity: a
+  // notice carries forward only against a notice-disposition whose body names
+  // that same bot's GitHub login. This repository can configure several advisory
+  // bots at once (CodeRabbit + a Codex connector), so a count/order-only pairing
+  // could credit bot A's disposition to bot B's still-undispositioned notice and
+  // suppress a real blocker. An unattributable disposition (one that names no
+  // configured bot login) carries nothing forward — the original re-disposition
+  // churn, which is safe. Matched notices leave the outstanding set and the
+  // matched notice-dispositions leave the general disposition pool, so a notice
+  // disposition never also clears an unrelated regular comment and the notice's
+  // bumped activity can never strand its disposition. The guard re-checks the
+  // current notice body, so a notice the bot later replaces with a real review no
+  // longer matches and still needs a fresh disposition. Any unmatched notice or
+  // disposition falls through to the unchanged 1:1 pairing.
+  const noticeDispositions = dispositionComments.filter((comment) =>
+    isNonReviewNoticeDisposition({ body: comment.body }),
+  );
+  const outstandingNotices = outstandingComments.filter(
+    (comment) =>
+      isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+      isAdvisoryNonReviewNotice(comment.body),
+  );
+  const carriedNoticeIndexes = new Set<number>();
+  const consumedNoticeDispositionIndexes = new Set<number>();
+  const noticesByAuthor = new Map<string, typeof outstandingNotices>();
+  for (const notice of outstandingNotices) {
+    const list = noticesByAuthor.get(notice.authorLogin) ?? [];
+    list.push(notice);
+    noticesByAuthor.set(notice.authorLogin, list);
+  }
+  // Sort the bot logins so disposition consumption is deterministic when a single
+  // disposition body could name more than one configured bot (it is consumed by
+  // the lexicographically-first matching author only).
+  for (const authorLogin of [...noticesByAuthor.keys()].sort()) {
+    const notices = noticesByAuthor.get(authorLogin) ?? [];
+    const matchingDispositions = noticeDispositions.filter(
+      (disposition) =>
+        !consumedNoticeDispositionIndexes.has(disposition.sortedIndex) &&
+        dispositionNamesAdvisoryBot(disposition.body, authorLogin),
+    );
+    const carry = Math.min(notices.length, matchingDispositions.length);
+    for (let index = 0; index < carry; index += 1) {
+      carriedNoticeIndexes.add(notices[index].sortedIndex);
+      consumedNoticeDispositionIndexes.add(
+        matchingDispositions[index].sortedIndex,
+      );
+    }
+  }
+
   // Count-based 1:1 pairing for the trailing-marker rule: a single later IDD
   // disposition marker addresses at most ONE earlier regular comment, so one
   // trailing marker cannot clear several distinct comments that each still
@@ -3135,11 +3276,9 @@ export function summarizeDispositionEvidenceForGate(
   // Walk the outstanding comments oldest-first and greedily consume the
   // earliest disposition marker strictly newer than each (markers that are not
   // newer than the current comment cannot address it or any later comment).
-  const dispositionTimes = normalizedComments
+  const dispositionTimes = dispositionComments
     .filter(
-      (comment) =>
-        iddAgentLogins.has(comment.authorLogin) &&
-        isDispositionComment({ body: comment.body }),
+      (comment) => !consumedNoticeDispositionIndexes.has(comment.sortedIndex),
     )
     .map((comment) => comment.activityAt)
     .filter(isValidIsoTimestamp)
@@ -3148,6 +3287,9 @@ export function summarizeDispositionEvidenceForGate(
   let markerCursor = 0;
   const missing: typeof outstandingComments = [];
   for (const comment of outstandingComments) {
+    if (carriedNoticeIndexes.has(comment.sortedIndex)) {
+      continue;
+    }
     while (
       markerCursor < dispositionTimes.length &&
       compareIsoTimestamps(
