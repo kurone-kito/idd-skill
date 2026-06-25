@@ -79,9 +79,16 @@ the items that will appear in ReviewItems_snapshot). Write `none` if
 the snapshot is
 empty. Compute `{total-item-count}` as the total number of items in the
 snapshot (0 if empty). Persist all six values immediately by posting a
-PR comment with this format (when helper runtime is enabled, render the
-body with the profile-selected emit-marker command — `--type
-review-watermark`, emit-only; see `docs/idd-helper-scripts.md`):
+PR comment with this format (when helper runtime is enabled, prefer the
+profile-selected post-idd-marker command — `--type watermark --target pr
+<pr-number> <watermark-fields> --apply`, passing the same six values shown
+below as `--agent-id` / `--claim-id` / `--head-sha` / `--max-activity-at` /
+`--total-item-count` / `--ci-completed-at`, to render and POST this marker in
+one step, so a hand-typed head SHA cannot mis-route the F2 review-currency
+check;
+`emit-marker --type review-watermark` stays the emit-only render path and
+the manual HTTP `POST` below remains the fallback; see
+`docs/idd-helper-scripts.md`):
 
 ```markdown
 <!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->
@@ -123,7 +130,8 @@ reject bodies that consist entirely of HTML comments; this format
 includes visible text so that is not an issue, but the HTTP `POST` path
 is still recommended for reliability (`curl` with
 `-H "Content-Type: application/json"` and
-`-d '{"body":"<!-- ... -->\n\n_note_"}'`).
+`-d '{"body":"<!-- ... -->\n\n_note_"}'`). The post-idd-marker helper
+referenced above performs exactly this JSON `POST` under `--apply`.
 
 On resume or restart, read the latest
 `<!-- review-watermark: {agent-id} {claim-id} … -->` comment whose
@@ -221,8 +229,11 @@ comments.
 
 After the critique pass completes, post a new `review-baseline` comment
 with the current HEAD SHA using this format (when helper runtime is
-enabled, render the body with the profile-selected emit-marker command —
-`--type review-baseline`, emit-only; see `docs/idd-helper-scripts.md`):
+enabled, prefer the profile-selected post-idd-marker command — `--type
+baseline --target pr <pr-number> --agent-id <id> --claim-id <id> --sha
+<head-sha> --apply` — to render and POST it in one step; `emit-marker
+--type review-baseline` stays the emit-only render path; see
+`docs/idd-helper-scripts.md`):
 
 ```markdown
 <!-- review-baseline: {agent-id} {claim-id} {SHA} -->
@@ -235,7 +246,8 @@ watermark). Example Japanese note:
 `_{agent-id}: クリティークのベースライン — IDD 自動化マーカー。編集しないでください。_`
 
 Post using the GitHub REST API directly (the body begins with an HTML
-comment token; use the HTTP `POST` path for reliability).
+comment token; use the HTTP `POST` path for reliability) — or the
+post-idd-marker `--apply` helper above, which performs that JSON `POST`.
 
 ## E3 — Empty list check
 
