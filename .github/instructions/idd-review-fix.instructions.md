@@ -59,7 +59,7 @@ Check for conflicts between the feature branch and `main`. If conflicts
 exist, merge `main` into the feature branch
 (`git fetch origin main && git merge origin/main`), resolve any
 conflicts, and complete the merge. On a signed-commit repo with
-non-interactive-hostile primary signing (GPG pinentry / hardware touch)
+non-interactive-hostile primary signing (GPG pinentry / hardware-touch)
 and a fallback signing wrapper for arbitrary git subcommands (pass
 `-c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`
 to `git` before the subcommand — `git -c … merge`, not `git merge -c …`; a

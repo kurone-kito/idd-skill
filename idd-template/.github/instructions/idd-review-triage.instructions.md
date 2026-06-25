@@ -428,7 +428,7 @@ Route based on `branchState` from the helper (or `mergeable` /
 2. Merge `main` into the feature branch:
    `git fetch origin main && git merge origin/main`. On a signed-commit
    repo with non-interactive-hostile primary signing (GPG pinentry /
-   hardware touch) and a fallback signing wrapper for arbitrary git
+   hardware-touch) and a fallback signing wrapper for arbitrary git
    subcommands (pass
    `-c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`
    to `git` before the subcommand — `git -c … merge`, not `git merge -c …`;
