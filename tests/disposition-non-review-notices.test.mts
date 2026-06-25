@@ -191,22 +191,23 @@ test('buildDispositionPlan only considers configured advisory bots', () => {
   assert.equal(plan.planned.length, 0);
 });
 
-test('buildDispositionPlan skips a notice when its bot has a completed HEAD review', () => {
+test('buildDispositionPlan skips a notice when its bot reviewed at/after it', () => {
   const plan = buildDispositionPlan(
     {
       headSha: 'abc1234',
       comments: [
-        notice(1, CODEX, CODEX_NOTICE),
-        notice(2, CODERABBIT, CODERABBIT_NOTICE),
+        notice(1, CODEX, CODEX_NOTICE, '2026-05-12T00:00:01Z'),
+        notice(2, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:02Z'),
       ],
     },
     {
       trustedMarkerLogins: ['kurone-kito'],
-      botsWithCompletedReview: [CODEX],
+      // Codex completed a review AFTER its notice; CodeRabbit has none.
+      completedReviewAtByBot: { [CODEX]: '2026-05-12T00:00:05Z' },
     },
   );
-  // Codex has a completed review of HEAD, so its notice is left un-rejected
-  // (the gate accepts that review); CodeRabbit's notice is still planned.
+  // Codex's notice is stale (review is newer), so it is left un-rejected;
+  // CodeRabbit's notice is still planned.
   assert.deepEqual(
     plan.planned.map((entry) => entry.botLogin),
     [CODERABBIT],
@@ -220,6 +221,41 @@ test('buildDispositionPlan skips a notice when its bot has a completed HEAD revi
   );
 });
 
+test('buildDispositionPlan still plans a notice newer than a stale review (Codex #4)', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T09:00:00Z'),
+      ],
+    },
+    {
+      trustedMarkerLogins: ['kurone-kito'],
+      // An OLD summary (earlier HEAD) must not cover a fresh rate-limit notice.
+      completedReviewAtByBot: { [CODERABBIT]: '2026-05-12T08:00:00Z' },
+    },
+  );
+  assert.equal(plan.planned.length, 1);
+  assert.equal(plan.skipped.length, 0);
+});
+
+test('buildDispositionPlan keys advisory bots by suffix-insensitive identity', () => {
+  // The notice is authored as `coderabbitai` (no [bot]); the configured advisory
+  // login is `coderabbitai[bot]`. They must resolve to the same identity.
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [notice(1, 'coderabbitai', CODERABBIT_NOTICE)],
+    },
+    {
+      advisoryBotLogins: [CODERABBIT],
+      trustedMarkerLogins: ['kurone-kito'],
+    },
+  );
+  assert.equal(plan.planned.length, 1);
+  assert.equal(plan.planned[0].botLogin, 'coderabbitai');
+});
+
 test('isCodeRabbitCompletedSummary recognizes a CodeRabbit summary, not a notice', () => {
   assert.equal(
     isCodeRabbitCompletedSummary(`${CODERABBIT_SUMMARY}\n## Walkthrough`),
@@ -229,17 +265,19 @@ test('isCodeRabbitCompletedSummary recognizes a CodeRabbit summary, not a notice
   assert.equal(isCodeRabbitCompletedSummary('a human comment'), false);
 });
 
-test('buildDispositionPlan skips a CodeRabbit notice when a summary review is present', () => {
-  // The CLI feeds CodeRabbit's summary comment into botsWithCompletedReview; the
-  // plan then leaves CodeRabbit's rate-limit notice un-rejected.
+test('buildDispositionPlan skips a CodeRabbit notice superseded by a later summary', () => {
+  // The CLI records CodeRabbit's summary timestamp; a summary at/after the notice
+  // leaves CodeRabbit's rate-limit notice un-rejected.
   const plan = buildDispositionPlan(
     {
       headSha: 'abc1234',
-      comments: [notice(1, CODERABBIT, CODERABBIT_NOTICE)],
+      comments: [
+        notice(1, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:01Z'),
+      ],
     },
     {
       trustedMarkerLogins: ['kurone-kito'],
-      botsWithCompletedReview: [CODERABBIT],
+      completedReviewAtByBot: { [CODERABBIT]: '2026-05-12T00:00:09Z' },
     },
   );
   assert.equal(plan.planned.length, 0);

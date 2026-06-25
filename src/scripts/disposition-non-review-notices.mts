@@ -21,6 +21,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 import {
+  advisoryBotIdentityToken,
   dispositionNamesAdvisoryBot,
   isAdvisoryNonReviewNotice,
   isNonReviewNoticeDisposition,
@@ -49,21 +50,21 @@ export function isCodeRabbitCompletedSummary(body: unknown): boolean {
 }
 
 export interface NoticeComment {
-  id: string | number;
+  id: number;
   login: string;
   body: string;
   createdAt: string;
 }
 
 export interface PlannedDisposition {
-  noticeId: string | number;
+  noticeId: number;
   botLogin: string;
   reason: string;
   body: string;
 }
 
 export interface SkippedNotice {
-  noticeId: string | number;
+  noticeId: number;
   botLogin: string;
   reason: string;
 }
@@ -75,12 +76,12 @@ export interface DispositionPlan {
 }
 
 export interface AppliedDisposition {
-  noticeId: string | number;
+  noticeId: number;
   commentId: number;
 }
 
 export interface FailedDisposition {
-  noticeId: string | number;
+  noticeId: number;
   error: string;
 }
 
@@ -140,25 +141,44 @@ export function buildDispositionPlan(
   options: {
     advisoryBotLogins?: unknown[] | null;
     trustedMarkerLogins?: unknown[] | null;
-    botsWithCompletedReview?: unknown[] | null;
+    completedReviewAtByBot?: Record<string, unknown> | null;
   } = {},
 ): DispositionPlan {
-  const advisoryBotLogins = new Set(
+  // Key all advisory-bot comparisons by the suffix-insensitive identity token
+  // (`coderabbitai[bot]` and `coderabbitai` collapse to one identity, matching
+  // `dispositionNamesAdvisoryBot`), so a notice/review/disposition authored
+  // under either variant counts against the same bot.
+  const advisoryBotIdentities = new Set(
     normalizeTrustedMarkerLogins(
       options.advisoryBotLogins ?? DEFAULT_ADVISORY_BOT_LOGINS,
-    ),
+    ).map(advisoryBotIdentityToken),
   );
   const trustedMarkerLogins = new Set(
     normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
   );
-  // Advisory bots that already have a completed review (a distinct, non-notice
-  // PR review of the current HEAD, or a CodeRabbit completed-summary comment).
-  // Per the E6 "re-validate just before posting" rule, their notice must not be
-  // rejected: the gate accepts that review, and a later-timestamped `did not
-  // review HEAD` rejection could filter it out.
-  const botsWithCompletedReview = new Set(
-    normalizeTrustedMarkerLogins(options.botsWithCompletedReview ?? []),
-  );
+  // Per advisory bot identity, the most recent time it produced a completed
+  // review (a non-notice PR review, or a CodeRabbit summary comment). A notice
+  // is left un-rejected only when a completed review landed AT OR AFTER it (the
+  // notice is then stale); an OLDER review does not cover a newer notice. This
+  // honours the E6 "re-validate just before posting" rule without skipping a
+  // current notice merely because the bot reviewed an earlier HEAD.
+  const completedReviewAtByBot = new Map<string, number>();
+  for (const [login, value] of Object.entries(
+    options.completedReviewAtByBot ?? {},
+  )) {
+    const at = Date.parse(String(value ?? ''));
+    if (Number.isNaN(at)) {
+      continue;
+    }
+    const token = advisoryBotIdentityToken(login);
+    completedReviewAtByBot.set(
+      token,
+      Math.max(
+        completedReviewAtByBot.get(token) ?? Number.NEGATIVE_INFINITY,
+        at,
+      ),
+    );
+  }
   const headSha = String(input.headSha ?? '');
 
   const comments = (Array.isArray(input.comments) ? input.comments : [])
@@ -175,8 +195,9 @@ export function buildDispositionPlan(
       return Number.isNaN(delta) ? 0 : delta;
     });
 
-  // Trusted IDD non-review-notice dispositions, grouped per advisory bot login
-  // they name (so each bot's existing dispositions only cover its own notices).
+  // Trusted IDD non-review-notice dispositions, grouped per advisory bot
+  // identity they name (so each bot's existing dispositions only cover its own
+  // notices).
   const dispositionCountByBot = new Map<string, number>();
   for (const comment of comments) {
     if (
@@ -189,11 +210,11 @@ export function buildDispositionPlan(
     // consumes a notice disposition at most once, so a combined marker naming
     // several bots must not be credited as covering one notice per bot (that
     // would let the helper skip notices the gate still blocks on).
-    for (const botLogin of advisoryBotLogins) {
-      if (dispositionNamesAdvisoryBot(comment.body, botLogin)) {
+    for (const identity of advisoryBotIdentities) {
+      if (dispositionNamesAdvisoryBot(comment.body, identity)) {
         dispositionCountByBot.set(
-          botLogin,
-          (dispositionCountByBot.get(botLogin) ?? 0) + 1,
+          identity,
+          (dispositionCountByBot.get(identity) ?? 0) + 1,
         );
         break;
       }
@@ -204,15 +225,22 @@ export function buildDispositionPlan(
   const skipped: SkippedNotice[] = [];
   const coveredByBot = new Map<string, number>();
   for (const comment of comments) {
+    const identity = advisoryBotIdentityToken(comment.login);
     if (
-      !advisoryBotLogins.has(comment.login) ||
+      !advisoryBotIdentities.has(identity) ||
       !isAdvisoryNonReviewNotice(comment.body)
     ) {
       continue;
     }
-    if (botsWithCompletedReview.has(comment.login)) {
-      // The bot has a completed review; accept that review separately and leave
-      // the notice un-rejected (E6 race re-validation).
+    const reviewAt = completedReviewAtByBot.get(identity);
+    const noticeAt = Date.parse(comment.createdAt);
+    if (
+      reviewAt !== undefined &&
+      !Number.isNaN(noticeAt) &&
+      reviewAt >= noticeAt
+    ) {
+      // A completed review landed at or after this notice, so the notice is
+      // stale; accept that review separately and leave the notice un-rejected.
       skipped.push({
         noticeId: comment.id,
         botLogin: comment.login,
@@ -220,11 +248,11 @@ export function buildDispositionPlan(
       });
       continue;
     }
-    const alreadyCovered = coveredByBot.get(comment.login) ?? 0;
-    if (alreadyCovered < (dispositionCountByBot.get(comment.login) ?? 0)) {
+    const alreadyCovered = coveredByBot.get(identity) ?? 0;
+    if (alreadyCovered < (dispositionCountByBot.get(identity) ?? 0)) {
       // An existing trusted disposition naming this bot already covers a notice;
       // attribute it (oldest-first) and skip this one as idempotent.
-      coveredByBot.set(comment.login, alreadyCovered + 1);
+      coveredByBot.set(identity, alreadyCovered + 1);
       skipped.push({
         noticeId: comment.id,
         botLogin: comment.login,
@@ -443,6 +471,36 @@ function postDisposition(
   ]) as { id: number };
 }
 
+/**
+ * Find an already-posted disposition with this exact body authored by `viewer`.
+ * Used after a failed create to detect a comment that landed server-side even
+ * though `gh` exited nonzero (lost response), so a retry never double-posts a
+ * marker the F2/F3 1:1 pairing would consume twice. The body is unique per
+ * notice (bot + head SHA + reason), so an exact match is reliable.
+ */
+function findPostedDisposition(
+  owner: string,
+  repo: string,
+  pr: number,
+  body: string,
+  viewerLogin: string,
+): { id: number } | null {
+  const comments = ghJsonPaginated([
+    'api',
+    `repos/${owner}/${repo}/issues/${pr}/comments`,
+  ]) as { id: number; user?: { login?: string }; body?: string }[];
+  for (let index = comments.length - 1; index >= 0; index -= 1) {
+    const comment = comments[index];
+    if (
+      (comment.user?.login ?? '').trim().toLowerCase() === viewerLogin &&
+      (comment.body ?? '') === body
+    ) {
+      return { id: comment.id };
+    }
+  }
+  return null;
+}
+
 const COMPLETED_REVIEW_STATES = new Set([
   'APPROVED',
   'CHANGES_REQUESTED',
@@ -530,33 +588,44 @@ if (isMainModule(import.meta.url)) {
     ]) as {
       user?: { login?: string };
       body?: string;
-      commit_id?: string;
       state?: string;
+      submitted_at?: string;
     }[];
-    // Bots with a completed review the gate will accept: a real (non-notice) PR
-    // review of the current HEAD, OR a CodeRabbit completed-summary comment
-    // (CodeRabbit reviews land as regular issue comments, not PR reviews). Their
-    // notice must not be rejected (see buildDispositionPlan).
-    const botsWithCompletedReview = Array.from(
-      new Set(
-        [
-          ...reviews
-            .filter(
-              (review) =>
-                review.commit_id === headSha &&
-                COMPLETED_REVIEW_STATES.has(String(review.state ?? '')) &&
-                !isAdvisoryNonReviewNotice(review.body ?? ''),
-            )
-            .map((review) => review.user?.login ?? ''),
-          ...comments
-            .filter((comment) => isCodeRabbitCompletedSummary(comment.body))
-            .map((comment) => comment.login),
-        ].filter(Boolean),
-      ),
-    );
+    // The latest time each bot produced a completed review the gate accepts: a
+    // real (non-notice) PR review, or a CodeRabbit completed-summary comment
+    // (CodeRabbit reviews land as regular issue comments, not PR reviews).
+    // buildDispositionPlan compares these timestamps against each notice, so a
+    // review only suppresses a notice it is at-or-newer than (a stale review of
+    // an older HEAD does not cover a fresh notice).
+    const completedReviewAtByBot: Record<string, string> = {};
+    const recordCompletedReview = (login: string, at: string): void => {
+      const key = login.trim().toLowerCase();
+      if (!key || !at) {
+        return;
+      }
+      if (!completedReviewAtByBot[key] || completedReviewAtByBot[key] < at) {
+        completedReviewAtByBot[key] = at;
+      }
+    };
+    for (const review of reviews) {
+      if (
+        COMPLETED_REVIEW_STATES.has(String(review.state ?? '')) &&
+        !isAdvisoryNonReviewNotice(review.body ?? '')
+      ) {
+        recordCompletedReview(
+          review.user?.login ?? '',
+          review.submitted_at ?? '',
+        );
+      }
+    }
+    for (const comment of comments) {
+      if (isCodeRabbitCompletedSummary(comment.body)) {
+        recordCompletedReview(comment.login, comment.createdAt);
+      }
+    }
     return buildDispositionPlan(
       { headSha, comments },
-      { advisoryBotLogins, trustedMarkerLogins, botsWithCompletedReview },
+      { advisoryBotLogins, trustedMarkerLogins, completedReviewAtByBot },
     );
   };
 
@@ -595,8 +664,8 @@ if (isMainModule(import.meta.url)) {
   // re-posts a disposition (or rejects a notice whose bot just reviewed HEAD)
   // that raced in since the dry-run.
   const plan = planNow();
-  const applied: { noticeId: string | number; commentId: number }[] = [];
-  const failed: { noticeId: string | number; error: string }[] = [];
+  const applied: AppliedDisposition[] = [];
+  const failed: FailedDisposition[] = [];
   let claimLost = false;
   for (const item of plan.planned) {
     if (!revalidateClaim()) {
@@ -610,20 +679,24 @@ if (isMainModule(import.meta.url)) {
       break;
     }
     let posted: { id: number } | null = null;
+    let lastError: Error | null = null;
     for (let attempt = 0; attempt < 2 && !posted; attempt += 1) {
       try {
         posted = postDisposition(owner, repo, pr, item.body);
       } catch (error) {
-        if (attempt === 1) {
-          failed.push({
-            noticeId: item.noticeId,
-            error: (error as Error).message,
-          });
-        }
+        lastError = error as Error;
+        // The create may have landed server-side despite the nonzero exit;
+        // re-read before any retry so we never double-post the same marker.
+        posted = findPostedDisposition(owner, repo, pr, item.body, viewerLogin);
       }
     }
     if (posted) {
       applied.push({ noticeId: item.noticeId, commentId: posted.id });
+    } else {
+      failed.push({
+        noticeId: item.noticeId,
+        error: lastError?.message ?? 'unknown error',
+      });
     }
   }
 
