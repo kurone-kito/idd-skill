@@ -529,6 +529,20 @@ convergence is preserved because the branch name derives from the issue,
 not selection order. With `off`, a single-entry band, or no applicable
 score, keep the deterministic **lowest issue number** pick.
 
+**High-contention shared-file overlap (advisory).** Concurrent autopilot
+sessions tend to edit the same F-phase bundle instruction files
+(`bundle-review` / `bundle-merge`) and `audit/sync-manifest.json`, so a
+colliding pick costs a later merge-from-main conflict. As a **soft**
+tie-breaker layered after the score / lowest-number / desync rules, prefer a
+candidate whose `## Candidate files` do **not** overlap an actively-claimed or
+open-PR issue on one of those files; the optional
+`discover-shared-file-overlap` helper (see
+[IDD helper scripts](../../docs/idd-helper-scripts.md)) reports each candidate's
+`overlapFlag` and a `recommendedOrder`. This is **never a hard gate** — overlap
+never overrides the score or crosses a score band, and a colliding candidate
+stays claimable when it is the only ready work. See the
+[high-contention shared-file convention](../../docs/policy-constants.md#high-contention-shared-files).
+
 After picking, proceed to **A4.5** (`idd-suitability.instructions.md`).
 
 ## A4.5 — Pre-Claim Issue-Suitability Triage

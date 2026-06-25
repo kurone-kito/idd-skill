@@ -240,6 +240,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Collect read-only A4 viability filtering evidence for candidate issues.',
   },
   {
+    id: 'discover-shared-file-overlap',
+    scriptName: 'idd:discover-shared-file-overlap',
+    binName: 'idd-discover-shared-file-overlap',
+    entryPath: 'scripts/discover-shared-file-overlap.mjs',
+    vendoredCommand: 'node scripts/discover-shared-file-overlap.mjs',
+    description:
+      'Flag high-contention shared-file overlap between candidate issues and actively-claimed / open-PR work.',
+  },
+  {
     id: 'advisory-wait-state',
     scriptName: 'idd:advisory-wait-state',
     binName: 'idd-advisory-wait-state',
