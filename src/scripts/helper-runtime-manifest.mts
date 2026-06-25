@@ -160,6 +160,106 @@ const EXTRA_RUNTIME_FILES = new Map<string, string[]>([
 
 const HELPER_COMMANDS: HelperCommand[] = [
   {
+    id: 'advisory-wait-state',
+    scriptName: 'idd:advisory-wait-state',
+    binName: 'idd-advisory-wait-state',
+    entryPath: 'scripts/advisory-wait-state.mjs',
+    vendoredCommand: 'node scripts/advisory-wait-state.mjs',
+    description:
+      'Collect advisory-wait state without mutating PR review state.',
+    contractPaths: ['schemas/advisory-wait-state.schema.json'],
+  },
+  {
+    id: 'audit-pr-cleanup',
+    scriptName: 'idd:audit-pr-cleanup',
+    binName: 'idd-audit-pr-cleanup',
+    entryPath: 'scripts/audit-pr-cleanup.mjs',
+    vendoredCommand: 'node scripts/audit-pr-cleanup.mjs',
+    description: 'Audit or apply post-merge comment cleanup.',
+  },
+  {
+    id: 'branch-conflict-state',
+    scriptName: 'idd:branch-conflict-state',
+    binName: 'idd-branch-conflict-state',
+    entryPath: 'scripts/branch-conflict-state.mjs',
+    vendoredCommand: 'node scripts/branch-conflict-state.mjs',
+    description:
+      'Collect read-only branch conflict and synchronization state evidence for a PR.',
+    contractPaths: ['schemas/branch-conflict-state.schema.json'],
+  },
+  {
+    id: 'branch-name',
+    scriptName: 'idd:branch-name',
+    binName: 'idd-branch-name',
+    entryPath: 'scripts/branch-name.mjs',
+    vendoredCommand: 'node scripts/branch-name.mjs',
+    description:
+      'Compute the canonical A5(e) issue/<number>-<slug> branch name from an issue number and title.',
+  },
+  {
+    id: 'ci-wait-policy',
+    scriptName: 'idd:ci-wait-policy',
+    binName: 'idd-ci-wait-policy',
+    entryPath: 'scripts/ci-wait-policy.mjs',
+    vendoredCommand: 'node scripts/ci-wait-policy.mjs',
+    description:
+      'Resolve shared ciWait defaults and deterministic rerun-budget decisions.',
+    contractPaths: ['schemas/policy.schema.json'],
+  },
+  {
+    id: 'claim-approval-gate',
+    scriptName: 'idd:claim-approval-gate',
+    binName: 'idd-claim-approval-gate',
+    entryPath: 'scripts/claim-approval-gate.mjs',
+    vendoredCommand: 'node scripts/claim-approval-gate.mjs',
+    description:
+      'Evaluate the A5(a) issue-author approval gate against issue state.',
+  },
+  {
+    id: 'discover-orphan-filter',
+    scriptName: 'idd:discover-orphan-filter',
+    binName: 'idd-discover-orphan-filter',
+    entryPath: 'scripts/discover-orphan-filter.mjs',
+    vendoredCommand: 'node scripts/discover-orphan-filter.mjs',
+    description:
+      'Classify open issues into orphan candidates and filtered buckets.',
+  },
+  {
+    id: 'discover-readiness-check',
+    scriptName: 'idd:discover-readiness-check',
+    binName: 'idd-discover-readiness-check',
+    entryPath: 'scripts/discover-readiness-check.mjs',
+    vendoredCommand: 'node scripts/discover-readiness-check.mjs',
+    description:
+      'Collect read-only A3 readiness filtering evidence for candidate issues.',
+  },
+  {
+    id: 'discover-roadmap-graph',
+    scriptName: 'idd:discover-roadmap-graph',
+    binName: 'idd-discover-roadmap-graph',
+    entryPath: 'scripts/discover-roadmap-graph.mjs',
+    vendoredCommand: 'node scripts/discover-roadmap-graph.mjs',
+    description: 'Collect read-only A1.5/A2 recursive roadmap graph evidence.',
+  },
+  {
+    id: 'discover-shared-file-overlap',
+    scriptName: 'idd:discover-shared-file-overlap',
+    binName: 'idd-discover-shared-file-overlap',
+    entryPath: 'scripts/discover-shared-file-overlap.mjs',
+    vendoredCommand: 'node scripts/discover-shared-file-overlap.mjs',
+    description:
+      'Flag high-contention shared-file overlap between candidate issues and actively-claimed / open-PR work.',
+  },
+  {
+    id: 'discover-viability-gate',
+    scriptName: 'idd:discover-viability-gate',
+    binName: 'idd-discover-viability-gate',
+    entryPath: 'scripts/discover-viability-gate.mjs',
+    vendoredCommand: 'node scripts/discover-viability-gate.mjs',
+    description:
+      'Collect read-only A4 viability filtering evidence for candidate issues.',
+  },
+  {
     id: 'doctor',
     scriptName: 'idd:doctor',
     binName: 'idd-doctor',
@@ -167,6 +267,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
     vendoredCommand: 'node scripts/idd-doctor.mjs',
     description:
       'Run IDD onboarding drift checks against the local repository.',
+  },
+  {
+    id: 'emit-marker',
+    scriptName: 'idd:emit-marker',
+    binName: 'idd-emit-marker',
+    entryPath: 'scripts/emit-marker.mjs',
+    vendoredCommand: 'node scripts/emit-marker.mjs',
+    description:
+      'Emit a per-cycle claimed-by / review-watermark / review-baseline marker body (emit-only, no network write).',
   },
   {
     id: 'external-check-waiver',
@@ -206,66 +315,12 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Print the canonical helper bundle import plan for each runtime profile.',
   },
   {
-    id: 'review-activity-snapshot',
-    scriptName: 'idd:review-activity-snapshot',
-    binName: 'idd-review-activity-snapshot',
-    entryPath: 'scripts/review-activity-snapshot.mjs',
-    vendoredCommand: 'node scripts/review-activity-snapshot.mjs',
-    description: 'Collect read-only review activity and CI snapshot evidence.',
-  },
-  {
-    id: 'discover-readiness-check',
-    scriptName: 'idd:discover-readiness-check',
-    binName: 'idd-discover-readiness-check',
-    entryPath: 'scripts/discover-readiness-check.mjs',
-    vendoredCommand: 'node scripts/discover-readiness-check.mjs',
-    description:
-      'Collect read-only A3 readiness filtering evidence for candidate issues.',
-  },
-  {
-    id: 'discover-roadmap-graph',
-    scriptName: 'idd:discover-roadmap-graph',
-    binName: 'idd-discover-roadmap-graph',
-    entryPath: 'scripts/discover-roadmap-graph.mjs',
-    vendoredCommand: 'node scripts/discover-roadmap-graph.mjs',
-    description: 'Collect read-only A1.5/A2 recursive roadmap graph evidence.',
-  },
-  {
-    id: 'discover-viability-gate',
-    scriptName: 'idd:discover-viability-gate',
-    binName: 'idd-discover-viability-gate',
-    entryPath: 'scripts/discover-viability-gate.mjs',
-    vendoredCommand: 'node scripts/discover-viability-gate.mjs',
-    description:
-      'Collect read-only A4 viability filtering evidence for candidate issues.',
-  },
-  {
-    id: 'discover-shared-file-overlap',
-    scriptName: 'idd:discover-shared-file-overlap',
-    binName: 'idd-discover-shared-file-overlap',
-    entryPath: 'scripts/discover-shared-file-overlap.mjs',
-    vendoredCommand: 'node scripts/discover-shared-file-overlap.mjs',
-    description:
-      'Flag high-contention shared-file overlap between candidate issues and actively-claimed / open-PR work.',
-  },
-  {
-    id: 'advisory-wait-state',
-    scriptName: 'idd:advisory-wait-state',
-    binName: 'idd-advisory-wait-state',
-    entryPath: 'scripts/advisory-wait-state.mjs',
-    vendoredCommand: 'node scripts/advisory-wait-state.mjs',
-    description:
-      'Collect advisory-wait state without mutating PR review state.',
-    contractPaths: ['schemas/advisory-wait-state.schema.json'],
-  },
-  {
-    id: 'pre-merge-readiness',
-    scriptName: 'idd:pre-merge-readiness',
-    binName: 'idd-pre-merge-readiness',
-    entryPath: 'scripts/pre-merge-readiness.mjs',
-    vendoredCommand: 'node scripts/pre-merge-readiness.mjs',
-    description: 'Collect read-only F2/F3 merge-gate evidence.',
-    contractPaths: ['schemas/pre-merge-readiness.schema.json'],
+    id: 'live-status-digest',
+    scriptName: 'idd:live-status-digest',
+    binName: 'idd-live-status-digest',
+    entryPath: 'scripts/live-status-digest.mjs',
+    vendoredCommand: 'node scripts/live-status-digest.mjs',
+    description: 'Render or apply the optional live status digest.',
   },
   {
     id: 'merge-execute',
@@ -278,66 +333,21 @@ const HELPER_COMMANDS: HelperCommand[] = [
     contractPaths: ['schemas/idd-merge-execute.schema.json'],
   },
   {
-    id: 'live-status-digest',
-    scriptName: 'idd:live-status-digest',
-    binName: 'idd-live-status-digest',
-    entryPath: 'scripts/live-status-digest.mjs',
-    vendoredCommand: 'node scripts/live-status-digest.mjs',
-    description: 'Render or apply the optional live status digest.',
+    id: 'phase-id-resolver',
+    scriptName: 'idd:phase-id-resolver',
+    binName: 'idd-phase-id-resolver',
+    entryPath: 'scripts/phase-id-resolver.mjs',
+    vendoredCommand: 'node scripts/phase-id-resolver.mjs',
+    description: 'Resolve canonical phase IDs with legacy alias compatibility.',
   },
   {
-    id: 'audit-pr-cleanup',
-    scriptName: 'idd:audit-pr-cleanup',
-    binName: 'idd-audit-pr-cleanup',
-    entryPath: 'scripts/audit-pr-cleanup.mjs',
-    vendoredCommand: 'node scripts/audit-pr-cleanup.mjs',
-    description: 'Audit or apply post-merge comment cleanup.',
-  },
-  {
-    id: 'claim-approval-gate',
-    scriptName: 'idd:claim-approval-gate',
-    binName: 'idd-claim-approval-gate',
-    entryPath: 'scripts/claim-approval-gate.mjs',
-    vendoredCommand: 'node scripts/claim-approval-gate.mjs',
-    description:
-      'Evaluate the A5(a) issue-author approval gate against issue state.',
-  },
-  {
-    id: 'branch-name',
-    scriptName: 'idd:branch-name',
-    binName: 'idd-branch-name',
-    entryPath: 'scripts/branch-name.mjs',
-    vendoredCommand: 'node scripts/branch-name.mjs',
-    description:
-      'Compute the canonical A5(e) issue/<number>-<slug> branch name from an issue number and title.',
-  },
-  {
-    id: 'emit-marker',
-    scriptName: 'idd:emit-marker',
-    binName: 'idd-emit-marker',
-    entryPath: 'scripts/emit-marker.mjs',
-    vendoredCommand: 'node scripts/emit-marker.mjs',
-    description:
-      'Emit a per-cycle claimed-by / review-watermark / review-baseline marker body (emit-only, no network write).',
-  },
-  {
-    id: 'ci-wait-policy',
-    scriptName: 'idd:ci-wait-policy',
-    binName: 'idd-ci-wait-policy',
-    entryPath: 'scripts/ci-wait-policy.mjs',
-    vendoredCommand: 'node scripts/ci-wait-policy.mjs',
-    description:
-      'Resolve shared ciWait defaults and deterministic rerun-budget decisions.',
-    contractPaths: ['schemas/policy.schema.json'],
-  },
-  {
-    id: 'discover-orphan-filter',
-    scriptName: 'idd:discover-orphan-filter',
-    binName: 'idd-discover-orphan-filter',
-    entryPath: 'scripts/discover-orphan-filter.mjs',
-    vendoredCommand: 'node scripts/discover-orphan-filter.mjs',
-    description:
-      'Classify open issues into orphan candidates and filtered buckets.',
+    id: 'pre-merge-readiness',
+    scriptName: 'idd:pre-merge-readiness',
+    binName: 'idd-pre-merge-readiness',
+    entryPath: 'scripts/pre-merge-readiness.mjs',
+    vendoredCommand: 'node scripts/pre-merge-readiness.mjs',
+    description: 'Collect read-only F2/F3 merge-gate evidence.',
+    contractPaths: ['schemas/pre-merge-readiness.schema.json'],
   },
   {
     id: 'resume-claim-routing',
@@ -358,30 +368,12 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Evaluate Resume Step 3 route selection from PR, CI, and review state.',
   },
   {
-    id: 'suitability-triage',
-    scriptName: 'idd:suitability-triage',
-    binName: 'idd-suitability-triage',
-    entryPath: 'scripts/suitability-triage.mjs',
-    vendoredCommand: 'node scripts/suitability-triage.mjs',
-    description:
-      'Evaluate A4.5 suitability checks and map deterministic outcomes.',
-  },
-  {
-    id: 'phase-id-resolver',
-    scriptName: 'idd:phase-id-resolver',
-    binName: 'idd-phase-id-resolver',
-    entryPath: 'scripts/phase-id-resolver.mjs',
-    vendoredCommand: 'node scripts/phase-id-resolver.mjs',
-    description: 'Resolve canonical phase IDs with legacy alias compatibility.',
-  },
-  {
-    id: 'stalled-session-quiet-check',
-    scriptName: 'idd:stalled-session-quiet-check',
-    binName: 'idd-stalled-session-quiet-check',
-    entryPath: 'scripts/stalled-session-quiet-check.mjs',
-    vendoredCommand: 'node scripts/stalled-session-quiet-check.mjs',
-    description: 'Detect quiet windows for Resume/S2 stalled-session recovery.',
-    contractPaths: ['schemas/stalled-session-quiet-check.schema.json'],
+    id: 'review-activity-snapshot',
+    scriptName: 'idd:review-activity-snapshot',
+    binName: 'idd-review-activity-snapshot',
+    entryPath: 'scripts/review-activity-snapshot.mjs',
+    vendoredCommand: 'node scripts/review-activity-snapshot.mjs',
+    description: 'Collect read-only review activity and CI snapshot evidence.',
   },
   {
     id: 'review-disposition-verify',
@@ -393,14 +385,22 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Verify disposition marker presence on review items for E7 meta-check.',
   },
   {
-    id: 'branch-conflict-state',
-    scriptName: 'idd:branch-conflict-state',
-    binName: 'idd-branch-conflict-state',
-    entryPath: 'scripts/branch-conflict-state.mjs',
-    vendoredCommand: 'node scripts/branch-conflict-state.mjs',
+    id: 'stalled-session-quiet-check',
+    scriptName: 'idd:stalled-session-quiet-check',
+    binName: 'idd-stalled-session-quiet-check',
+    entryPath: 'scripts/stalled-session-quiet-check.mjs',
+    vendoredCommand: 'node scripts/stalled-session-quiet-check.mjs',
+    description: 'Detect quiet windows for Resume/S2 stalled-session recovery.',
+    contractPaths: ['schemas/stalled-session-quiet-check.schema.json'],
+  },
+  {
+    id: 'suitability-triage',
+    scriptName: 'idd:suitability-triage',
+    binName: 'idd-suitability-triage',
+    entryPath: 'scripts/suitability-triage.mjs',
+    vendoredCommand: 'node scripts/suitability-triage.mjs',
     description:
-      'Collect read-only branch conflict and synchronization state evidence for a PR.',
-    contractPaths: ['schemas/branch-conflict-state.schema.json'],
+      'Evaluate A4.5 suitability checks and map deterministic outcomes.',
   },
 ];
 
