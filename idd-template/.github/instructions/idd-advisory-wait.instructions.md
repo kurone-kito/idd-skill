@@ -233,6 +233,14 @@ Use only when AW3 outcome is `RECOVERY_NEEDED`:
 advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time}
 ```
 
+When helper runtime is enabled, render and POST this marker with the
+profile-selected post-idd-marker command — `--type advisory-recovery
+--target pr <pr-number> --apply` — which emits the plain-text
+`advisory-wait-recovery:` form with no visible note so the AW2 recognizer
+still matches; the manual JSON `POST` stays the fallback. The same helper
+posts the `advisory-wait:` request form (the marker E14 sends on
+`REQUEST_NEEDED`) via `--type advisory`. See `docs/idd-helper-scripts.md`.
+
 Rules:
 
 - do not request another Copilot review in this path
