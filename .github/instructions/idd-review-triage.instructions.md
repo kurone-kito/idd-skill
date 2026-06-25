@@ -438,8 +438,10 @@ Route based on `branchState` from the helper (or `mergeable` /
 3. If conflicts arise, resolve them and complete the merge with the
    wrapper's own `git merge --continue` form, so `--continue` does not
    revert the merge commit to the stalling primary signing. This is the
-   normal-path complement to the recovery re-signing and mirrors the D1
-   rebase note in `idd-pr-submit.instructions.md`.
+   normal-path complement to the recovery-path re-signing documented in
+   `idd-pr-submit.instructions.md` (Post-rebase verification) and
+   `idd-overview-core.instructions.md` (cwd-vs-claim cherry-pick
+   recovery), mirroring the D1 rebase note.
 4. Run **post-fix-validate**.
 5. Push the feature branch normally (no force push required for merge
    commits).

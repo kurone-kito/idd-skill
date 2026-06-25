@@ -71,9 +71,10 @@ If HEAD is detached (current branch empty), **auto-recover once**: re-attach
 to the claimed branch with `git checkout {branch-name}` (the local commit is
 preserved on the branch ref), re-run the D1 rebase, then re-verify both
 checks. The re-rebase re-signs through the configured commit-signing path —
-do not pin a key — but on the signed-commit repos in the rebase note
-above, run the re-rebase through that same fallback wrapper, since its
-configured primary signing would otherwise stall non-interactively. If
+do not hardcode an ad-hoc key. On the signed-commit repos in the rebase
+note above, run the re-rebase through that same fallback wrapper (the
+repo's blessed fallback, not an ad-hoc pin), since the plain re-rebase
+would stall on the non-interactive primary signing. If
 recovery still fails (HEAD still detached or the
 expected commit absent), post a hold note documenting the branch state and
 stop; do not push.

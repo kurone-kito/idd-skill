@@ -67,7 +67,9 @@ to the subcommand; a commit-only alias like `git commit-ssh` will not run
 plain command — and continue with the wrapper's own `--continue` form**; the
 wrapper must own the whole operation, so `git merge --continue` does not
 revert the merge commit to the stalling primary signing — the normal-path
-complement to the existing detach/cherry-pick recovery re-signing.
+complement to the recovery-path re-signing (the D1 Post-rebase
+detached-HEAD recovery in `idd-pr-submit.instructions.md` and the
+cwd-vs-claim cherry-pick recovery in `idd-overview-core.instructions.md`).
 
 **Active review gate**: if the PR has unresolved review threads,
 unreplied comments, or any reviewer's latest state is
