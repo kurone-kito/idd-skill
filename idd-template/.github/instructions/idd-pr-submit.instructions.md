@@ -41,6 +41,17 @@ them and continue the rebase. After completing the rebase, if any files
 were manually edited during conflict resolution, run **fix-validate**
 before proceeding.
 
+On a signed-commit repo whose primary signing is non-interactive-hostile
+(GPG pinentry or a hardware-touch path) but that provides a fallback
+signing wrapper (e.g. a `git commit-ssh` alias, or
+`-c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`),
+**start the rebase with that wrapper and continue it with the wrapper's
+own `--continue` form**. Plain `git rebase --continue` re-signs the
+replayed commit through the configured primary signing, which stalls
+non-interactively right after the conflict is already resolved. This is
+the normal-path complement to the recovery-path re-signing in Post-rebase
+verification below.
+
 ### Post-rebase verification
 
 In a sibling-worktree setup, a rebase can leave HEAD **detached at the

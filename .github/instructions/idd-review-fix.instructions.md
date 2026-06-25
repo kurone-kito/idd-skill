@@ -58,7 +58,14 @@ Convergence guardrails:
 Check for conflicts between the feature branch and `main`. If conflicts
 exist, merge `main` into the feature branch
 (`git fetch origin main && git merge origin/main`), resolve any
-conflicts, and complete the merge.
+conflicts, and complete the merge. On a signed-commit repo with
+non-interactive-hostile primary signing (GPG pinentry / hardware touch)
+and a fallback signing wrapper (a `git commit-ssh`-style alias or
+`-c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`),
+**start the merge with that wrapper and continue with the wrapper's own
+`--continue` form**, so `git merge --continue` does not revert the merge
+commit to the stalling primary signing — the normal-path complement to
+the existing detach/cherry-pick recovery re-signing.
 
 **Active review gate**: if the PR has unresolved review threads,
 unreplied comments, or any reviewer's latest state is
