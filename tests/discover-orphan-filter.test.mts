@@ -436,7 +436,12 @@ test('filterOrphanIssues applies the effort hint as a soft tie-breaker within a 
   // All four share score 4; effort orders the band: S (7, 20) before the
   // no-hint neutral (13) before L (4), with 7 < 20 broken by number.
   const issues = [
-    { number: 20, title: 'twenty', state: 'OPEN', body: `t\n${s(4)}\n${e('S')}` },
+    {
+      number: 20,
+      title: 'twenty',
+      state: 'OPEN',
+      body: `t\n${s(4)}\n${e('S')}`,
+    },
     { number: 7, title: 'seven', state: 'OPEN', body: `t\n${s(4)}\n${e('S')}` },
     { number: 13, title: 'thirteen', state: 'OPEN', body: `t\n${s(4)}` },
     { number: 4, title: 'four', state: 'OPEN', body: `t\n${s(4)}\n${e('L')}` },

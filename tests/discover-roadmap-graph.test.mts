@@ -896,7 +896,14 @@ function scoredEffortExecutionIssue(
 // One epic, four same-score leaves with mixed effort hints.
 //   900 (epic-effort) → 901 (3, L), 902 (3, S), 903 (3, no hint), 904 (3, S)
 const EFFORT_TIE_ISSUES = new Map<number, unknown>([
-  [900, roadmapIssue(900, '- [ ] #901\n- [ ] #902\n- [ ] #903\n- [ ] #904', 'epic-effort')],
+  [
+    900,
+    roadmapIssue(
+      900,
+      '- [ ] #901\n- [ ] #902\n- [ ] #903\n- [ ] #904',
+      'epic-effort',
+    ),
+  ],
   [901, scoredEffortExecutionIssue(901, 3, 'L')],
   [902, scoredEffortExecutionIssue(902, 3, 'S')],
   [903, scoredExecutionIssue(903, 3)],
@@ -906,7 +913,8 @@ const EFFORT_TIE_ISSUES = new Map<number, unknown>([
 test('all-roadmaps applies the effort hint as a soft tie-breaker within a score band', async () => {
   const report = await enumerateAllRoadmapsGraph({
     loadOpenRoadmapRoots: async () => [900],
-    loadIssue: async (issueNumber) => EFFORT_TIE_ISSUES.get(issueNumber) ?? null,
+    loadIssue: async (issueNumber) =>
+      EFFORT_TIE_ISSUES.get(issueNumber) ?? null,
   });
 
   // All four share suitability 3, so the effort hint orders the band: the two

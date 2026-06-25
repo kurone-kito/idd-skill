@@ -121,15 +121,14 @@ export function parseEffort(
  * candidate.
  */
 export function effortOrdinal(value: unknown): number {
-  return isEffortHint(value)
-    ? EFFORT_ORDINALS[value]
-    : NEUTRAL_EFFORT_ORDINAL;
+  return isEffortHint(value) ? EFFORT_ORDINALS[value] : NEUTRAL_EFFORT_ORDINAL;
 }
 
 /** True when `value` is one of the authored effort bands `S | M | L`. */
 export function isEffortHint(value: unknown): value is EffortHint {
   return (
-    typeof value === 'string' && (EFFORT_HINTS as readonly string[]).includes(value)
+    typeof value === 'string' &&
+    (EFFORT_HINTS as readonly string[]).includes(value)
   );
 }
 
