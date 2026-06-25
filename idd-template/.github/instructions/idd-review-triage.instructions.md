@@ -214,6 +214,21 @@ Use these prefixes so that disposition is always unambiguous:
 - CODEOWNER / required reviewer exception:
   `**Awaiting maintainer decision** — {reasoning}`
 
+Two requirements make the F2/F3 disposition-evidence gate recognize an
+`**Accepted**` / `**Rejected**` disposition — it reads `isDispositionComment`
+as "the body **starts with** that marker" and pairs such dispositions to
+advisory comments **1:1 by count** (the `**Awaiting maintainer decision**`
+marker is a separate PATH A thread signal, not part of this predicate or
+count pairing):
+
+- The marker must be the **first bytes of the comment body** — no heading,
+  block quote, or preamble before it, or the gate counts zero dispositions for
+  that comment.
+- Post **one disposition reply per advisory item**. Do **not** combine several
+  markers into one comment: the 1:1 count pairing clears only one item per
+  comment, so a combined reply leaves the rest flagged
+  `missing-disposition-evidence`.
+
 PATH B — Advisory items (completed review of the current HEAD):
 
 - Reply immediately with a decision marker, even when no code change is
