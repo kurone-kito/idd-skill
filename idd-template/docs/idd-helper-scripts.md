@@ -98,6 +98,11 @@ In the idd-skill source repository, the following optional helpers were adopted:
   `trustCollaboratorMarkers` config field)
 - `scripts/review-disposition-verify.mjs` for read-only E7 disposition
   marker presence verification across PATH A and PATH B items
+- `scripts/disposition-non-review-notices.mjs` for dry-run/apply
+  dispositioning of advisory non-review notices (rate-limit / usage-limit)
+  on a PR — emitting or posting the canonical E6 `**Rejected** — {bot} did
+  not review HEAD …` marker-first, one comment per notice, idempotently and
+  fail-closed (only classifier-recognized notices)
 
 **Operator Recovery Helpers:**
 
@@ -496,6 +501,32 @@ The adopted helper boundaries are intentionally narrow:
 - written E7 rules in `idd-review-triage.instructions.md` remain
   authoritative; this helper only reduces command-copy variance when
   confirming marker presence before triage exits
+
+### Non-review-notice disposition (E6 helper-first)
+
+- Command:
+  `node scripts/disposition-non-review-notices.mjs --pr <number>`
+  (dry-run); add `--apply --claim-issue <n> --claim-id <id>` to post.
+  Pass `--advisory-bot-logins` / `--trusted-marker-logins` to override the
+  defaults.
+- Detects advisory-bot regular comments that the single-sourced
+  `isAdvisoryNonReviewNotice` classifier (`protocol-helpers`) recognizes
+  (rate-limit / usage-limit), and emits / posts the canonical
+  `**Rejected** — {bot-login} did not review HEAD {sha} ({reason}); this
+  is not a completed review` — marker-first, one comment per notice,
+  naming the bot login so the carry-forward attributes it author-scoped.
+- **Idempotent**: per advisory bot, existing trusted
+  `isNonReviewNoticeDisposition` comments naming that bot already cover
+  that many of its notices, so a re-run posts nothing new.
+- **Fail-closed**: only classifier-recognized notices are dispositioned;
+  real reviews and review threads are never touched. `--apply`
+  re-validates the active claim and retries once on a transient post
+  failure.
+- Stable contract: [`disposition-non-review-notices.schema.json`][disposition-non-review-notices-schema].
+- The written E6 non-review-notice rule in
+  `idd-review-triage.instructions.md` stays authoritative; this helper is
+  the helper-first convenience path with the manual `gh api` fallback
+  retained.
 
 ## Stable Helper Evidence Outputs
 
@@ -1104,5 +1135,6 @@ pre-merge readiness or later claim-state inspection. They should not
 replace the written decision tables.
 
 [advisory-wait-state-schema]: https://kurone-kito.github.io/idd-skill/schemas/advisory-wait-state.schema.json
+[disposition-non-review-notices-schema]: https://kurone-kito.github.io/idd-skill/schemas/disposition-non-review-notices.schema.json
 [idd-merge-execute-schema]: https://kurone-kito.github.io/idd-skill/schemas/idd-merge-execute.schema.json
 [pre-merge-readiness-schema]: https://kurone-kito.github.io/idd-skill/schemas/pre-merge-readiness.schema.json

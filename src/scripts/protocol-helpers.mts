@@ -2151,7 +2151,7 @@ export function isNonReviewNoticeDisposition(comment: {
 // notice disposition to the bot it rejected. The `[bot]` suffix GitHub appends
 // is dropped so the token matches whether a login is stored as `coderabbitai`
 // or `coderabbitai[bot]`.
-function advisoryBotIdentityToken(login: unknown): string {
+export function advisoryBotIdentityToken(login: unknown): string {
   return String(login ?? '')
     .trim()
     .toLowerCase()
@@ -2162,7 +2162,7 @@ function advisoryBotIdentityToken(login: unknown): string {
 // GitHub login, so the gate can attribute a carry-forward to exactly one bot
 // even when several advisory bots are configured. Fail-closed: an empty token or
 // a disposition that does not contain the login carries nothing forward.
-function dispositionNamesAdvisoryBot(
+export function dispositionNamesAdvisoryBot(
   dispositionBody: unknown,
   noticeAuthorLogin: string,
 ): boolean {

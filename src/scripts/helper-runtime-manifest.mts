@@ -260,6 +260,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Collect read-only A4 viability filtering evidence for candidate issues.',
   },
   {
+    id: 'disposition-non-review-notices',
+    scriptName: 'idd:disposition-non-review-notices',
+    binName: 'idd-disposition-non-review-notices',
+    entryPath: 'scripts/disposition-non-review-notices.mjs',
+    vendoredCommand: 'node scripts/disposition-non-review-notices.mjs',
+    description:
+      'Detect advisory non-review notices on a PR and emit or post their canonical E6 dispositions.',
+  },
+  {
     id: 'doctor',
     scriptName: 'idd:doctor',
     binName: 'idd-doctor',

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/disposition-non-review-notices.schema.json",
+  "title": "Non-Review-Notice Disposition Plan",
+  "description": "Dry-run plan or apply result for auto-dispositioning advisory non-review notices on a PR (E6 PATH B).",
+  "type": "object",
+  "required": ["mode", "prNumber", "headSha", "skipped"],
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["dry-run", "apply"]
+    },
+    "prNumber": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "headSha": {
+      "type": "string"
+    },
+    "planned": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["noticeId", "botLogin", "reason", "body"],
+        "additionalProperties": false,
+        "properties": {
+          "noticeId": { "type": "integer" },
+          "botLogin": { "type": "string" },
+          "reason": { "type": "string" },
+          "body": { "type": "string", "pattern": "^\\*\\*Rejected\\*\\*" }
+        }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["applied", "failed"]
+    },
+    "applied": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["noticeId", "commentId"],
+        "additionalProperties": false,
+        "properties": {
+          "noticeId": { "type": "integer" },
+          "commentId": { "type": "integer" }
+        }
+      }
+    },
+    "failed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["noticeId", "error"],
+        "additionalProperties": false,
+        "properties": {
+          "noticeId": { "type": "integer" },
+          "error": { "type": "string" }
+        }
+      }
+    },
+    "skipped": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["noticeId", "botLogin", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "noticeId": { "type": "integer" },
+          "botLogin": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}
