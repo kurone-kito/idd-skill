@@ -4,7 +4,6 @@ import { test } from 'node:test';
 import {
   buildDispositionBody,
   buildDispositionPlan,
-  isCodeRabbitCompletedSummary,
   type NoticeComment,
   noticeReason,
 } from '../src/scripts/disposition-non-review-notices.mts';
@@ -20,8 +19,6 @@ const CODEX_NOTICE =
   'You have reached your Codex usage limits for code reviews.';
 const CODERABBIT_NOTICE =
   '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> ## Review limit reached';
-const CODERABBIT_SUMMARY =
-  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->';
 // A full 40-char head SHA for the cases that validate against the schema, which
 // now constrains `headSha` to `^[0-9a-f]{40}$`.
 const HEAD_SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -191,51 +188,27 @@ test('buildDispositionPlan only considers configured advisory bots', () => {
   assert.equal(plan.planned.length, 0);
 });
 
-test('buildDispositionPlan skips a notice when its bot reviewed at/after it', () => {
+test('buildDispositionPlan plans a notice even when the bot also reviewed', () => {
+  // A persistent rate-limit notice stays in the gate's outstanding set until a
+  // disposition naming the bot carries it, even when the bot has a separate
+  // completed review. The helper always plans the undispositioned notice.
   const plan = buildDispositionPlan(
     {
       headSha: 'abc1234',
       comments: [
-        notice(1, CODEX, CODEX_NOTICE, '2026-05-12T00:00:01Z'),
-        notice(2, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:02Z'),
+        notice(1, CODERABBIT, CODERABBIT_NOTICE),
+        // A separate CodeRabbit summary review (handled by the agent, not here).
+        notice(
+          2,
+          CODERABBIT,
+          '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n## Walkthrough',
+        ),
       ],
     },
-    {
-      trustedMarkerLogins: ['kurone-kito'],
-      // Codex completed a review AFTER its notice; CodeRabbit has none.
-      completedReviewAtByBot: { [CODEX]: '2026-05-12T00:00:05Z' },
-    },
-  );
-  // Codex's notice is stale (review is newer), so it is left un-rejected;
-  // CodeRabbit's notice is still planned.
-  assert.deepEqual(
-    plan.planned.map((entry) => entry.botLogin),
-    [CODERABBIT],
-  );
-  assert.deepEqual(
-    plan.skipped.map((entry) => ({
-      botLogin: entry.botLogin,
-      reason: entry.reason,
-    })),
-    [{ botLogin: CODEX, reason: 'completed-review-present' }],
-  );
-});
-
-test('buildDispositionPlan still plans a notice newer than a stale review (Codex #4)', () => {
-  const plan = buildDispositionPlan(
-    {
-      headSha: 'abc1234',
-      comments: [
-        notice(1, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T09:00:00Z'),
-      ],
-    },
-    {
-      trustedMarkerLogins: ['kurone-kito'],
-      // An OLD summary (earlier HEAD) must not cover a fresh rate-limit notice.
-      completedReviewAtByBot: { [CODERABBIT]: '2026-05-12T08:00:00Z' },
-    },
+    { trustedMarkerLogins: ['kurone-kito'] },
   );
   assert.equal(plan.planned.length, 1);
+  assert.equal(plan.planned[0].botLogin, CODERABBIT);
   assert.equal(plan.skipped.length, 0);
 });
 
@@ -254,37 +227,6 @@ test('buildDispositionPlan keys advisory bots by suffix-insensitive identity', (
   );
   assert.equal(plan.planned.length, 1);
   assert.equal(plan.planned[0].botLogin, 'coderabbitai');
-});
-
-test('isCodeRabbitCompletedSummary recognizes a CodeRabbit summary, not a notice', () => {
-  assert.equal(
-    isCodeRabbitCompletedSummary(`${CODERABBIT_SUMMARY}\n## Walkthrough`),
-    true,
-  );
-  assert.equal(isCodeRabbitCompletedSummary(CODERABBIT_NOTICE), false);
-  assert.equal(isCodeRabbitCompletedSummary('a human comment'), false);
-});
-
-test('buildDispositionPlan skips a CodeRabbit notice superseded by a later summary', () => {
-  // The CLI records CodeRabbit's summary timestamp; a summary at/after the notice
-  // leaves CodeRabbit's rate-limit notice un-rejected.
-  const plan = buildDispositionPlan(
-    {
-      headSha: 'abc1234',
-      comments: [
-        notice(1, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:01Z'),
-      ],
-    },
-    {
-      trustedMarkerLogins: ['kurone-kito'],
-      completedReviewAtByBot: { [CODERABBIT]: '2026-05-12T00:00:09Z' },
-    },
-  );
-  assert.equal(plan.planned.length, 0);
-  assert.deepEqual(
-    plan.skipped.map((entry) => entry.reason),
-    ['completed-review-present'],
-  );
 });
 
 test('a combined disposition naming several bots covers only one notice', () => {
@@ -321,7 +263,7 @@ test('the dry-run and apply output envelopes validate against the schema', () =>
     { trustedMarkerLogins: ['kurone-kito'] },
   );
   const dryRun = { mode: 'dry-run', prNumber: 7, ...plan };
-  assert.equal(validate(planSchema, dryRun).length, 0, 'dry-run output');
+  assert.equal(validate(dryRun, planSchema).length, 0, 'dry-run output');
 
   const apply = {
     mode: 'apply',
@@ -335,5 +277,5 @@ test('the dry-run and apply output envelopes validate against the schema', () =>
     failed: [],
     skipped: plan.skipped,
   };
-  assert.equal(validate(planSchema, apply).length, 0, 'apply output');
+  assert.equal(validate(apply, planSchema).length, 0, 'apply output');
 });
