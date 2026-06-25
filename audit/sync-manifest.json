@@ -161,7 +161,7 @@
         ".github/instructions/idd-suitability.instructions.md",
         ".github/instructions/idd-claim.instructions.md"
       ],
-      "limitBytes": 89400
+      "limitBytes": 90321
     },
     {
       "id": "bundle-resume",
@@ -195,7 +195,7 @@
         ".github/instructions/idd-advisory-wait.instructions.md",
         ".github/instructions/idd-ci.instructions.md"
       ],
-      "limitBytes": 95600
+      "limitBytes": 96402
     },
     {
       "id": "bundle-merge",
@@ -209,7 +209,7 @@
         ".github/instructions/idd-advisory-wait.instructions.md",
         ".github/instructions/idd-ci.instructions.md"
       ],
-      "limitBytes": 86200
+      "limitBytes": 87138
     }
   ],
   "syncPairs": [
