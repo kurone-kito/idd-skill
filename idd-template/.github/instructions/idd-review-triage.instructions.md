@@ -252,6 +252,12 @@ ack / error, as defined in E4):
   prove that no review exists — if a separate _completed_ review of the
   current HEAD is also present, disposition that review under the
   completed-review rules above.)
+- **Helper-first (optional).** When helper runtime is enabled, the
+  `disposition-non-review-notices` helper (see
+  `docs/idd-helper-scripts.md`) detects these notices and emits (dry-run)
+  or posts (`--apply`) the canonical disposition below — marker-first, one
+  per notice, idempotently and fail-closed. The written rule here stays
+  authoritative; the manual `gh api` path is the fallback.
 - **Disposition it deterministically in the current pass — no
   re-request, no wait.** The notice item itself is **always rejected**,
   because it carries no advisory result — never record `**Accepted**` on

@@ -18,6 +18,7 @@
     "idd-discover-roadmap-graph": "./bin/idd-discover-roadmap-graph.mjs",
     "idd-discover-shared-file-overlap": "./bin/idd-discover-shared-file-overlap.mjs",
     "idd-discover-viability-gate": "./bin/idd-discover-viability-gate.mjs",
+    "idd-disposition-non-review-notices": "./bin/idd-disposition-non-review-notices.mjs",
     "idd-doctor": "./bin/idd-doctor.mjs",
     "idd-emit-marker": "./bin/idd-emit-marker.mjs",
     "idd-external-check-waiver": "./bin/idd-external-check-waiver.mjs",

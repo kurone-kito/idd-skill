@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { AdvisoryWaitStateReport } from '../src/scripts/advisory-wait-state.mts';
 import type { BranchConflictResult } from '../src/scripts/branch-conflict-state.mts';
 import type { RoadmapGraphUnionReport } from '../src/scripts/discover-roadmap-graph.mts';
+import type { DispositionReport } from '../src/scripts/disposition-non-review-notices.mts';
 import type { IddMergeExecuteVerdict } from '../src/scripts/idd-merge-execute.mts';
 import type { PreMergeReadinessReport } from '../src/scripts/pre-merge-readiness.mts';
 import type {
@@ -928,7 +929,42 @@ const stalledSessionQuietCheckFixture = {
 // The reconciliation table (single source of truth).
 // ---------------------------------------------------------------------------
 
+const dispositionNonReviewNoticesKeys = [
+  'mode',
+  'prNumber',
+  'headSha',
+  'planned',
+  'status',
+  'applied',
+  'failed',
+  'skipped',
+] as const satisfies readonly (keyof DispositionReport)[];
+
+const dispositionNonReviewNoticesFixture = {
+  mode: 'apply',
+  prNumber: 7,
+  headSha: '0123456789abcdef0123456789abcdef01234567',
+  planned: [],
+  status: 'applied',
+  applied: [{ noticeId: 1, commentId: 1000 }],
+  failed: [],
+  skipped: [
+    {
+      noticeId: 2,
+      botLogin: 'coderabbitai[bot]',
+      reason: 'already-dispositioned',
+    },
+  ],
+} satisfies DispositionReport;
+
 const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
+  {
+    schemaFile: 'disposition-non-review-notices.schema.json',
+    exportedType: 'DispositionReport',
+    owningModule: 'src/scripts/disposition-non-review-notices.mts',
+    keys: dispositionNonReviewNoticesKeys,
+    fixture: dispositionNonReviewNoticesFixture,
+  },
   {
     schemaFile: 'advisory-wait-state.schema.json',
     exportedType: 'AdvisoryWaitStateReport',
