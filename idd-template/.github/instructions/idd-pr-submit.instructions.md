@@ -43,8 +43,10 @@ before proceeding.
 
 On a signed-commit repo whose primary signing is non-interactive-hostile
 (GPG pinentry or a hardware-touch path) but that provides a fallback
-signing wrapper (e.g. a `git commit-ssh` alias, or
-`-c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`),
+signing wrapper for arbitrary git subcommands (prefix
+`-c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`
+to the subcommand, or use a repo alias that wraps any subcommand — a
+commit-only alias like `git commit-ssh` will not run `rebase`),
 **run the initial `git rebase origin/main` above through that wrapper —
 not the plain command — and continue it with the wrapper's own
 `--continue` form**; the wrapper must own the whole operation. Plain
@@ -69,7 +71,10 @@ If HEAD is detached (current branch empty), **auto-recover once**: re-attach
 to the claimed branch with `git checkout {branch-name}` (the local commit is
 preserved on the branch ref), re-run the D1 rebase, then re-verify both
 checks. The re-rebase re-signs through the configured commit-signing path —
-do not pin a key. If recovery still fails (HEAD still detached or the
+do not pin a key — but on the signed-commit repos in the rebase note
+above, run the re-rebase through that same fallback wrapper, since its
+configured primary signing would otherwise stall non-interactively. If
+recovery still fails (HEAD still detached or the
 expected commit absent), post a hold note documenting the branch state and
 stop; do not push.
 

@@ -60,10 +60,11 @@ exist, merge `main` into the feature branch
 (`git fetch origin main && git merge origin/main`), resolve any
 conflicts, and complete the merge. On a signed-commit repo with
 non-interactive-hostile primary signing (GPG pinentry / hardware touch)
-and a fallback signing wrapper (a `git commit-ssh`-style alias or
-`-c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`),
-**run that `git merge origin/main` through the wrapper — not the plain
-command — and continue with the wrapper's own `--continue` form**; the
+and a fallback signing wrapper for arbitrary git subcommands (prefix
+`-c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`
+to the subcommand; a commit-only alias like `git commit-ssh` will not run
+`merge`), **run that `git merge origin/main` through the wrapper — not the
+plain command — and continue with the wrapper's own `--continue` form**; the
 wrapper must own the whole operation, so `git merge --continue` does not
 revert the merge commit to the stalling primary signing — the normal-path
 complement to the existing detach/cherry-pick recovery re-signing.

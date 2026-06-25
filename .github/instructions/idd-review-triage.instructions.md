@@ -426,16 +426,18 @@ Route based on `branchState` from the helper (or `mergeable` /
    `main` into the feature branch, as the merge commit will appear in the
    PR history.
 2. Merge `main` into the feature branch:
-   `git fetch origin main && git merge origin/main`
-3. If conflicts arise, resolve them and complete the merge. On a
-   signed-commit repo with non-interactive-hostile primary signing (GPG
-   pinentry / hardware touch) and a fallback signing wrapper (a
-   `git commit-ssh`-style alias or
-   `-c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`),
-   **run the step 2 `git merge origin/main` through that wrapper — not the
-   plain command — and continue with the wrapper's own `--continue` form**;
-   the wrapper must own the whole operation, so `git merge --continue` does
-   not revert the merge commit to the stalling primary signing. This is the
+   `git fetch origin main && git merge origin/main`. On a signed-commit
+   repo with non-interactive-hostile primary signing (GPG pinentry /
+   hardware touch) and a fallback signing wrapper for arbitrary git
+   subcommands (prefix
+   `-c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`
+   to the subcommand; a commit-only alias like `git commit-ssh` will not
+   run `merge`), **run this `git merge origin/main` through that wrapper —
+   not the plain command** — even a clean merge commits immediately, so the
+   wrapper must own the whole operation.
+3. If conflicts arise, resolve them and complete the merge with the
+   wrapper's own `git merge --continue` form, so `--continue` does not
+   revert the merge commit to the stalling primary signing. This is the
    normal-path complement to the recovery re-signing and mirrors the D1
    rebase note in `idd-pr-submit.instructions.md`.
 4. Run **post-fix-validate**.
