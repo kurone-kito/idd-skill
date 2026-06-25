@@ -12,7 +12,7 @@
       "languageLinks": [
         {
           "file": "README.md",
-          "text": "[\u65e5\u672c\u8a9e](./README.ja.md)"
+          "text": "[日本語](./README.ja.md)"
         },
         {
           "file": "README.ja.md",
@@ -155,11 +155,11 @@
       "id": "bundle-discovery",
       "description": "Discovery path: idd-overview-core + idd-overview-appendix + idd-discover + idd-suitability + idd-claim",
       "files": [
-        ".github/instructions/idd-overview-core.instructions.md",
-        ".github/instructions/idd-overview-appendix.instructions.md",
+        ".github/instructions/idd-claim.instructions.md",
         ".github/instructions/idd-discover.instructions.md",
-        ".github/instructions/idd-suitability.instructions.md",
-        ".github/instructions/idd-claim.instructions.md"
+        ".github/instructions/idd-overview-appendix.instructions.md",
+        ".github/instructions/idd-overview-core.instructions.md",
+        ".github/instructions/idd-suitability.instructions.md"
       ],
       "limitBytes": 100400
     },
@@ -167,8 +167,8 @@
       "id": "bundle-resume",
       "description": "Resume path: idd-overview-core + idd-overview-appendix + idd-resume",
       "files": [
-        ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-overview-appendix.instructions.md",
+        ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-resume.instructions.md"
       ],
       "limitBytes": 43300
@@ -177,8 +177,8 @@
       "id": "bundle-work",
       "description": "Work path: idd-overview-core + idd-overview-appendix + idd-work",
       "files": [
-        ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-overview-appendix.instructions.md",
+        ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-work.instructions.md"
       ],
       "limitBytes": 37400
@@ -187,13 +187,13 @@
       "id": "bundle-review",
       "description": "Review path: idd-overview-core + idd-overview-appendix + idd-review-snapshot + idd-review-triage + idd-review-fix + idd-advisory-wait + idd-ci",
       "files": [
-        ".github/instructions/idd-overview-core.instructions.md",
-        ".github/instructions/idd-overview-appendix.instructions.md",
-        ".github/instructions/idd-review-snapshot.instructions.md",
-        ".github/instructions/idd-review-triage.instructions.md",
-        ".github/instructions/idd-review-fix.instructions.md",
         ".github/instructions/idd-advisory-wait.instructions.md",
-        ".github/instructions/idd-ci.instructions.md"
+        ".github/instructions/idd-ci.instructions.md",
+        ".github/instructions/idd-overview-appendix.instructions.md",
+        ".github/instructions/idd-overview-core.instructions.md",
+        ".github/instructions/idd-review-fix.instructions.md",
+        ".github/instructions/idd-review-snapshot.instructions.md",
+        ".github/instructions/idd-review-triage.instructions.md"
       ],
       "limitBytes": 108200
     },
@@ -201,22 +201,70 @@
       "id": "bundle-merge",
       "description": "Merge path: idd-overview-core + idd-overview-appendix + idd-pre-merge + idd-merge-handoff + idd-merge + idd-advisory-wait + idd-ci",
       "files": [
-        ".github/instructions/idd-overview-core.instructions.md",
-        ".github/instructions/idd-overview-appendix.instructions.md",
-        ".github/instructions/idd-pre-merge.instructions.md",
+        ".github/instructions/idd-advisory-wait.instructions.md",
+        ".github/instructions/idd-ci.instructions.md",
         ".github/instructions/idd-merge-handoff.instructions.md",
         ".github/instructions/idd-merge.instructions.md",
-        ".github/instructions/idd-advisory-wait.instructions.md",
-        ".github/instructions/idd-ci.instructions.md"
+        ".github/instructions/idd-overview-appendix.instructions.md",
+        ".github/instructions/idd-overview-core.instructions.md",
+        ".github/instructions/idd-pre-merge.instructions.md"
       ],
       "limitBytes": 95900
     }
   ],
   "syncPairs": [
     {
+      "id": "claude-skills-issue-authoring-contract",
+      "source": "skills/issue-authoring/references/contract.md",
+      "target": ".claude/skills/issue-authoring/references/contract.md",
+      "mode": "exact"
+    },
+    {
+      "id": "claude-skills-issue-authoring-draft-patterns",
+      "source": "skills/issue-authoring/references/draft-patterns.md",
+      "target": ".claude/skills/issue-authoring/references/draft-patterns.md",
+      "mode": "exact"
+    },
+    {
+      "id": "claude-skills-issue-authoring-skill",
+      "source": "skills/issue-authoring/SKILL.md",
+      "target": ".claude/skills/issue-authoring/SKILL.md",
+      "mode": "exact"
+    },
+    {
+      "id": "claude-skills-issue-authoring-workflow-boundary",
+      "source": "skills/issue-authoring/references/workflow-boundary.md",
+      "target": ".claude/skills/issue-authoring/references/workflow-boundary.md",
+      "mode": "exact"
+    },
+    {
+      "id": "concepts-doc",
+      "source": "idd-template/docs/concepts.md",
+      "target": "docs/concepts.md",
+      "mode": "exact"
+    },
+    {
+      "id": "customization-doc",
+      "source": "idd-template/docs/customization.md",
+      "target": "docs/customization.md",
+      "mode": "exact"
+    },
+    {
+      "id": "getting-started-doc",
+      "source": "idd-template/docs/getting-started.md",
+      "target": "docs/getting-started.md",
+      "mode": "exact"
+    },
+    {
       "id": "idd-advisory-wait-instructions",
       "source": "idd-template/.github/instructions/idd-advisory-wait.instructions.md",
       "target": ".github/instructions/idd-advisory-wait.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-advisory-wait-shell-fallback-doc",
+      "source": "idd-template/docs/idd-advisory-wait-shell-fallback.md",
+      "target": "docs/idd-advisory-wait-shell-fallback.md",
       "mode": "exact"
     },
     {
@@ -232,27 +280,27 @@
       "mode": "exact"
     },
     {
+      "id": "idd-comment-minimization-doc",
+      "source": "idd-template/docs/idd-comment-minimization.md",
+      "target": "docs/idd-comment-minimization.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-design-rationale-doc",
+      "source": "idd-template/docs/idd-design-rationale.md",
+      "target": "docs/idd-design-rationale.md",
+      "mode": "structure"
+    },
+    {
       "id": "idd-discover-instructions",
       "source": "idd-template/.github/instructions/idd-discover.instructions.md",
       "target": ".github/instructions/idd-discover.instructions.md",
       "mode": "structure"
     },
     {
-      "id": "idd-roadmap-audit-instructions",
-      "source": "idd-template/.github/instructions/idd-roadmap-audit.instructions.md",
-      "target": ".github/instructions/idd-roadmap-audit.instructions.md",
-      "mode": "concreted",
-      "replacements": [
-        {
-          "from": "{{PROJECT_MARKER_PREFIX}}",
-          "to": "idd-skill"
-        }
-      ]
-    },
-    {
-      "id": "idd-suitability-instructions",
-      "source": "idd-template/.github/instructions/idd-suitability.instructions.md",
-      "target": ".github/instructions/idd-suitability.instructions.md",
+      "id": "idd-helper-scripts-doc",
+      "source": "idd-template/docs/idd-helper-scripts.md",
+      "target": "docs/idd-helper-scripts.md",
       "mode": "exact"
     },
     {
@@ -265,6 +313,12 @@
       "id": "idd-merge-instructions",
       "source": "idd-template/.github/instructions/idd-merge.instructions.md",
       "target": ".github/instructions/idd-merge.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-overview-appendix-instructions",
+      "source": "idd-template/.github/instructions/idd-overview-appendix.instructions.md",
+      "target": ".github/instructions/idd-overview-appendix.instructions.md",
       "mode": "exact"
     },
     {
@@ -312,12 +366,6 @@
       ]
     },
     {
-      "id": "idd-overview-appendix-instructions",
-      "source": "idd-template/.github/instructions/idd-overview-appendix.instructions.md",
-      "target": ".github/instructions/idd-overview-appendix.instructions.md",
-      "mode": "exact"
-    },
-    {
       "id": "idd-pr-submit-instructions",
       "source": "idd-template/.github/instructions/idd-pr-submit.instructions.md",
       "target": ".github/instructions/idd-pr-submit.instructions.md",
@@ -327,6 +375,12 @@
       "id": "idd-pre-merge-instructions",
       "source": "idd-template/.github/instructions/idd-pre-merge.instructions.md",
       "target": ".github/instructions/idd-pre-merge.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-resume-detail-doc",
+      "source": "idd-template/docs/idd-resume-detail.md",
+      "target": "docs/idd-resume-detail.md",
       "mode": "exact"
     },
     {
@@ -348,6 +402,12 @@
       "mode": "exact"
     },
     {
+      "id": "idd-review-policy-profiles-doc",
+      "source": "idd-template/docs/idd-review-policy-profiles.md",
+      "target": "docs/idd-review-policy-profiles.md",
+      "mode": "exact"
+    },
+    {
       "id": "idd-review-snapshot-instructions",
       "source": "idd-template/.github/instructions/idd-review-snapshot.instructions.md",
       "target": ".github/instructions/idd-review-snapshot.instructions.md",
@@ -357,6 +417,24 @@
       "id": "idd-review-triage-instructions",
       "source": "idd-template/.github/instructions/idd-review-triage.instructions.md",
       "target": ".github/instructions/idd-review-triage.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-roadmap-audit-instructions",
+      "source": "idd-template/.github/instructions/idd-roadmap-audit.instructions.md",
+      "target": ".github/instructions/idd-roadmap-audit.instructions.md",
+      "mode": "concreted",
+      "replacements": [
+        {
+          "from": "{{PROJECT_MARKER_PREFIX}}",
+          "to": "idd-skill"
+        }
+      ]
+    },
+    {
+      "id": "idd-suitability-instructions",
+      "source": "idd-template/.github/instructions/idd-suitability.instructions.md",
+      "target": ".github/instructions/idd-suitability.instructions.md",
       "mode": "exact"
     },
     {
@@ -372,46 +450,37 @@
       ]
     },
     {
-      "id": "idd-comment-minimization-doc",
-      "source": "idd-template/docs/idd-comment-minimization.md",
-      "target": "docs/idd-comment-minimization.md",
-      "mode": "exact"
-    },
-    {
-      "id": "idd-resume-detail-doc",
-      "source": "idd-template/docs/idd-resume-detail.md",
-      "target": "docs/idd-resume-detail.md",
-      "mode": "exact"
-    },
-    {
-      "id": "idd-advisory-wait-shell-fallback-doc",
-      "source": "idd-template/docs/idd-advisory-wait-shell-fallback.md",
-      "target": "docs/idd-advisory-wait-shell-fallback.md",
-      "mode": "exact"
-    },
-    {
-      "id": "idd-design-rationale-doc",
-      "source": "idd-template/docs/idd-design-rationale.md",
-      "target": "docs/idd-design-rationale.md",
-      "mode": "structure"
-    },
-    {
-      "id": "idd-helper-scripts-doc",
-      "source": "idd-template/docs/idd-helper-scripts.md",
-      "target": "docs/idd-helper-scripts.md",
-      "mode": "exact"
-    },
-    {
-      "id": "idd-review-policy-profiles-doc",
-      "source": "idd-template/docs/idd-review-policy-profiles.md",
-      "target": "docs/idd-review-policy-profiles.md",
-      "mode": "exact"
-    },
-    {
       "id": "idd-workflow-doc",
       "source": "idd-template/docs/idd-workflow.md",
       "target": "docs/idd-workflow.md",
       "mode": "structure"
+    },
+    {
+      "id": "issue-authoring-boundary-reference",
+      "reference": "docs/issue-authoring-skill.md",
+      "target": "skills/issue-authoring/references/workflow-boundary.md",
+      "mode": "contains",
+      "requiredText": [
+        "This bundle handles pre-approval issue drafting only.",
+        "start the Discover -> Claim -> Work loop implicitly"
+      ]
+    },
+    {
+      "id": "issue-authoring-contract-reference",
+      "reference": "docs/issue-authoring-skill.md",
+      "target": "skills/issue-authoring/references/contract.md",
+      "mode": "contains",
+      "requiredText": [
+        "It mirrors the canonical\ncontract in `docs/issue-authoring-skill.md`.",
+        "## Target marker prefix",
+        "## Publication boundary"
+      ]
+    },
+    {
+      "id": "minimize-superseded-markers-helper",
+      "source": "scripts/minimize-superseded-markers.mjs",
+      "target": "idd-template/scripts/minimize-superseded-markers.mjs",
+      "mode": "exact"
     },
     {
       "id": "permissions-doc",
@@ -420,27 +489,15 @@
       "mode": "exact"
     },
     {
-      "id": "getting-started-doc",
-      "source": "idd-template/docs/getting-started.md",
-      "target": "docs/getting-started.md",
-      "mode": "exact"
-    },
-    {
-      "id": "concepts-doc",
-      "source": "idd-template/docs/concepts.md",
-      "target": "docs/concepts.md",
-      "mode": "exact"
-    },
-    {
-      "id": "customization-doc",
-      "source": "idd-template/docs/customization.md",
-      "target": "docs/customization.md",
-      "mode": "exact"
-    },
-    {
       "id": "policy-constants-doc",
       "source": "idd-template/docs/policy-constants.md",
       "target": "docs/policy-constants.md",
+      "mode": "exact"
+    },
+    {
+      "id": "reference-doc",
+      "source": "idd-template/docs/reference.md",
+      "target": "docs/reference.md",
       "mode": "exact"
     },
     {
@@ -464,63 +521,6 @@
         "Roadmap-audit claims are coordination-only.",
         "heartbeat, release, or take over rather than holding the claim open."
       ]
-    },
-    {
-      "id": "reference-doc",
-      "source": "idd-template/docs/reference.md",
-      "target": "docs/reference.md",
-      "mode": "exact"
-    },
-    {
-      "id": "issue-authoring-contract-reference",
-      "reference": "docs/issue-authoring-skill.md",
-      "target": "skills/issue-authoring/references/contract.md",
-      "mode": "contains",
-      "requiredText": [
-        "It mirrors the canonical\ncontract in `docs/issue-authoring-skill.md`.",
-        "## Target marker prefix",
-        "## Publication boundary"
-      ]
-    },
-    {
-      "id": "issue-authoring-boundary-reference",
-      "reference": "docs/issue-authoring-skill.md",
-      "target": "skills/issue-authoring/references/workflow-boundary.md",
-      "mode": "contains",
-      "requiredText": [
-        "This bundle handles pre-approval issue drafting only.",
-        "start the Discover -> Claim -> Work loop implicitly"
-      ]
-    },
-    {
-      "id": "claude-skills-issue-authoring-skill",
-      "source": "skills/issue-authoring/SKILL.md",
-      "target": ".claude/skills/issue-authoring/SKILL.md",
-      "mode": "exact"
-    },
-    {
-      "id": "claude-skills-issue-authoring-contract",
-      "source": "skills/issue-authoring/references/contract.md",
-      "target": ".claude/skills/issue-authoring/references/contract.md",
-      "mode": "exact"
-    },
-    {
-      "id": "claude-skills-issue-authoring-draft-patterns",
-      "source": "skills/issue-authoring/references/draft-patterns.md",
-      "target": ".claude/skills/issue-authoring/references/draft-patterns.md",
-      "mode": "exact"
-    },
-    {
-      "id": "claude-skills-issue-authoring-workflow-boundary",
-      "source": "skills/issue-authoring/references/workflow-boundary.md",
-      "target": ".claude/skills/issue-authoring/references/workflow-boundary.md",
-      "mode": "exact"
-    },
-    {
-      "id": "minimize-superseded-markers-helper",
-      "source": "scripts/minimize-superseded-markers.mjs",
-      "target": "idd-template/scripts/minimize-superseded-markers.mjs",
-      "mode": "exact"
     }
   ],
   "forbiddenPatterns": [
