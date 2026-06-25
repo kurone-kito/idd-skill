@@ -8,6 +8,7 @@ import type { BranchConflictResult } from '../src/scripts/branch-conflict-state.
 import type { RoadmapGraphUnionReport } from '../src/scripts/discover-roadmap-graph.mts';
 import type { DispositionReport } from '../src/scripts/disposition-non-review-notices.mts';
 import type { IddMergeExecuteVerdict } from '../src/scripts/idd-merge-execute.mts';
+import type { PostIddMarkerResult } from '../src/scripts/post-idd-marker.mts';
 import type { PreMergeReadinessReport } from '../src/scripts/pre-merge-readiness.mts';
 import type {
   LiveStatusDigestFields,
@@ -979,6 +980,25 @@ const resolveReviewThreadFixture = {
   replyId: 4242,
 } satisfies ResolveReviewThreadReport;
 
+const postIddMarkerKeys = [
+  'mode',
+  'type',
+  'target',
+  'number',
+  'body',
+  'commentId',
+  'url',
+] as const satisfies readonly (keyof PostIddMarkerResult)[];
+
+const postIddMarkerFixture = {
+  mode: 'apply',
+  type: 'claim',
+  target: 'issue',
+  number: 1047,
+  commentId: 4800026123,
+  url: 'https://github.com/kurone-kito/idd-skill/issues/1047#issuecomment-4800026123',
+} satisfies PostIddMarkerResult;
+
 const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
   {
     schemaFile: 'disposition-non-review-notices.schema.json',
@@ -993,6 +1013,13 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
     owningModule: 'src/scripts/resolve-review-thread.mts',
     keys: resolveReviewThreadKeys,
     fixture: resolveReviewThreadFixture,
+  },
+  {
+    schemaFile: 'post-idd-marker.schema.json',
+    exportedType: 'PostIddMarkerResult',
+    owningModule: 'src/scripts/post-idd-marker.mts',
+    keys: postIddMarkerKeys,
+    fixture: postIddMarkerFixture,
   },
   {
     schemaFile: 'advisory-wait-state.schema.json',

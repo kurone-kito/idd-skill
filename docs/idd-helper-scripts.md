@@ -42,6 +42,11 @@ In the idd-skill source repository, the following optional helpers were adopted:
   `review-watermark` / `review-baseline` marker bodies (emit-only, no
   network write; referenced in
   [kurone-kito/idd-skill#900](https://github.com/kurone-kito/idd-skill/issues/900))
+- `scripts/post-idd-marker.mjs` for rendering and POSTing any operational
+  marker (`claim` / `unclaim` / `watermark` / `baseline` / `advisory` /
+  `advisory-recovery`) via the reliable JSON path that HTML-comment-first
+  bodies require (referenced in
+  [kurone-kito/idd-skill#1047](https://github.com/kurone-kito/idd-skill/issues/1047))
 - `scripts/resume-claim-routing.mjs` for Resume Step 1 claim-state
   evaluation and takeover routing (referenced in
   [kurone-kito/idd-skill#394](https://github.com/kurone-kito/idd-skill/issues/394))
@@ -761,6 +766,38 @@ Interpretation rules:
   `idd-review-snapshot` (watermark/baseline) stay canonical; the render
   functions live in `protocol-helpers` with byte-shape tests
 
+### Post operational markers (write-side)
+
+- Source repo / vendored-node command:
+  `node scripts/post-idd-marker.mjs --type <type> --target <issue|pr> <number> <fields...>`
+  (dry-run prints a JSON envelope whose `body` field is the marker); add
+  `--apply` to POST it.
+- Package-manager / ephemeral-npx command: use the profile-selected
+  `idd:post-idd-marker` command from the helper runtime manifest wiring above
+- Write-side companion to `emit-marker`: it renders the canonical body for
+  each operational marker `<type>` (`claim`, `unclaim`, `watermark`,
+  `baseline`, `advisory`, `advisory-recovery`) by reusing the single-sourced
+  `protocol-helpers` renderers, then POSTs it as a JSON document
+  (`{"body": …}`) via `gh api --method POST .../comments --input -`. The JSON
+  path is mandatory because `gh issue comment` / `gh api -f body=` silently
+  reject the HTML-comment-first claim-family bodies.
+- The `claim` / `unclaim` / `watermark` / `baseline` bodies are
+  HTML-comment-first with a visible "Do not edit" note; `advisory` /
+  `advisory-recovery` are the **plain-text** `advisory-wait:` /
+  `advisory-wait-recovery:` forms (no visible note) so the AW2 / shell-fallback
+  recognizers still match.
+- Fields per type: `claim` takes `--agent-id --claim-id --supersedes
+  --timestamp --branch`; `unclaim` takes `--agent-id --claim-id --timestamp`;
+  `watermark` takes `--agent-id --claim-id --head-sha --max-activity-at
+  --total-item-count --ci-completed-at`; `baseline` takes `--agent-id
+  --claim-id --sha`; `advisory` / `advisory-recovery` take `--agent-id
+  --head-sha --timestamp`.
+- **No claim/state gating** (the `emit-marker` philosophy): this is a
+  single-marker render+POST primitive, so the calling phase must run its
+  claim-revalidation gate before `--apply`, exactly as the manual POST path it
+  replaces already requires.
+- Stable contract: [`post-idd-marker.schema.json`][post-idd-marker-schema].
+
 ### Resume claim and route evidence
 
 - Claim routing command:
@@ -1176,5 +1213,6 @@ replace the written decision tables.
 [advisory-wait-state-schema]: https://kurone-kito.github.io/idd-skill/schemas/advisory-wait-state.schema.json
 [disposition-non-review-notices-schema]: https://kurone-kito.github.io/idd-skill/schemas/disposition-non-review-notices.schema.json
 [idd-merge-execute-schema]: https://kurone-kito.github.io/idd-skill/schemas/idd-merge-execute.schema.json
+[post-idd-marker-schema]: https://kurone-kito.github.io/idd-skill/schemas/post-idd-marker.schema.json
 [pre-merge-readiness-schema]: https://kurone-kito.github.io/idd-skill/schemas/pre-merge-readiness.schema.json
 [resolve-review-thread-schema]: https://kurone-kito.github.io/idd-skill/schemas/resolve-review-thread.schema.json

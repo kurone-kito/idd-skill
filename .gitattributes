@@ -41,6 +41,7 @@ scripts/merged-pr-feedback-sweep.mjs linguist-generated=true
 scripts/minimize-superseded-markers.mjs linguist-generated=true
 scripts/phase-id-resolver.mjs linguist-generated=true
 scripts/policy-helpers.mjs linguist-generated=true
+scripts/post-idd-marker.mjs linguist-generated=true
 scripts/pre-merge-readiness.mjs linguist-generated=true
 scripts/protocol-helpers.mjs linguist-generated=true
 scripts/resolve-review-thread.mjs linguist-generated=true
