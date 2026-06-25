@@ -529,13 +529,27 @@ convergence is preserved because the branch name derives from the issue,
 not selection order. With `off`, a single-entry band, or no applicable
 score, keep the deterministic **lowest issue number** pick.
 
+**Author-recorded effort hint (soft tie-breaker).** When candidates remain
+tied after the score and optional desync rules, prefer the **lower-effort**
+candidate **before** the lowest-issue-number tie-break, so autopilot tends to
+clear small issues first and leave large ones for a fresh session. Read the
+authored `<!-- idd-skill-effort: S|M|L -->` footer (or the
+`discover-roadmap-graph` node's `effort`): order `S` < `M` < `L`, and a
+missing or invalid hint is treated as the **neutral middle** (as-if `M`), so a
+band with no effort hints keeps the lowest-issue-number order exactly as
+before. This is a **soft** rule: it reorders **only within** a single score
+tie band, never skips, gates, or crosses a score band, and a large (`L`) issue
+stays fully claimable when it is the only ready work. The
+`discover-roadmap-graph` union already emits this order, so it is a cheap read;
+the pick still passes A4.5/A5 unchanged.
+
 **High-contention shared-file overlap (advisory).** Concurrent autopilot
 sessions tend to edit the same F-phase bundle instruction files
 (`bundle-review` / `bundle-merge`) and `audit/sync-manifest.json`, so a
 colliding pick costs a later merge-from-main conflict. As a **soft**
-tie-breaker layered after the score / lowest-number / desync rules, prefer a
-candidate whose `## Candidate files` do **not** overlap an actively-claimed or
-open-PR issue on one of those files; the optional
+tie-breaker layered after the score / desync / effort / lowest-number
+rules, prefer a candidate whose `## Candidate files` do **not** overlap an
+actively-claimed or open-PR issue on one of those files; the optional
 `discover-shared-file-overlap` helper (see
 [IDD helper scripts](../../docs/idd-helper-scripts.md)) reports each candidate's
 `overlapFlag` and a `recommendedOrder`. This is **never a hard gate** — overlap

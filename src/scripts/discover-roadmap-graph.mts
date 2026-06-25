@@ -15,6 +15,7 @@ import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
 } from './autopilot-suitability.mts';
+import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
 import { parseIsoDurationToMs } from './policy-helpers.mts';
 import {
   isStaleAt,
@@ -107,6 +108,7 @@ export interface RoadmapGraphNode {
   classification: 'roadmap' | 'execution';
   roadmapMarkerId: string;
   autopilotSuitability: number | null;
+  effort: EffortHint | null;
   depth: number;
   /**
    * Active-claim annotation, present only under `--with-claim-state` and only
@@ -201,6 +203,7 @@ export interface RoadmapUnionLeaf {
   classification: 'execution';
   roadmapMarkerId: string;
   autopilotSuitability: number | null;
+  effort: EffortHint | null;
   /**
    * The set of open roadmap roots this leaf is reachable from, sorted
    * ascending. A leaf reachable from several sibling epics carries every
@@ -276,6 +279,7 @@ interface RoadmapNodeRecord {
   classification: 'roadmap' | 'execution';
   roadmapMarkerId: string;
   autopilotSuitability: number | null;
+  effort: EffortHint | null;
   depth: number;
 }
 
@@ -472,6 +476,7 @@ export async function enumerateRoadmapGraph(
       classification: node.classification,
       roadmapMarkerId: node.roadmapMarkerId,
       autopilotSuitability: node.autopilotSuitability ?? null,
+      effort: node.effort ?? null,
       depth: node.depth,
     }))
     .sort(compareByNumber);
@@ -689,6 +694,7 @@ export async function enumerateRoadmapGraph(
       classification: classification.kind,
       roadmapMarkerId: classification.roadmapMarkerId,
       autopilotSuitability: parseAutopilotSuitability(issue.body, markerPrefix),
+      effort: parseEffort(issue.body, markerPrefix),
       depth,
     });
     recordProvenancePath(issue.number, path);
@@ -815,6 +821,7 @@ export async function enumerateAllRoadmapsGraph(
         classification: 'execution',
         roadmapMarkerId: node.roadmapMarkerId,
         autopilotSuitability: node.autopilotSuitability,
+        effort: node.effort,
         sourceRoots: [graph.root.number],
       });
     }
@@ -934,9 +941,17 @@ function compareUnionLeaves(
   const rightEffective = rightScored
     ? (right.autopilotSuitability as number)
     : floor;
+  // Soft effort tie-breaker (after the suitability score, before the
+  // lowest-issue-number fallback): within one effective-score band prefer
+  // the lower-effort leaf (S < M < L). A missing/invalid hint resolves to
+  // the neutral middle ordinal via effortOrdinal, so a band with no effort
+  // hints stays ordered by issue number exactly as before. This never
+  // crosses a score band and never drops a leaf — a large issue is still
+  // selectable when it is the only ready work.
   return (
     rightEffective - leftEffective ||
     Number(rightScored) - Number(leftScored) ||
+    effortOrdinal(left.effort) - effortOrdinal(right.effort) ||
     left.number - right.number
   );
 }

@@ -580,6 +580,7 @@ const discoverRoadmapUnionFixture = {
       classification: 'execution',
       roadmapMarkerId: '',
       autopilotSuitability: 5,
+      effort: 'S',
       sourceRoots: [100],
     },
     {
@@ -590,6 +591,7 @@ const discoverRoadmapUnionFixture = {
       classification: 'execution',
       roadmapMarkerId: '',
       autopilotSuitability: null,
+      effort: null,
       sourceRoots: [100, 200],
     },
   ],

@@ -430,6 +430,36 @@ test('filterOrphanIssues tie-breaks equal scores by lowest issue number', () => 
   );
 });
 
+test('filterOrphanIssues applies the effort hint as a soft tie-breaker within a score band', () => {
+  const s = (n: number) => `<!-- idd-skill-autopilot-suitability: ${n} -->`;
+  const e = (hint: string) => `<!-- idd-skill-effort: ${hint} -->`;
+  // All four share score 4; effort orders the band: S (7, 20) before the
+  // no-hint neutral (13) before L (4), with 7 < 20 broken by number.
+  const issues = [
+    {
+      number: 20,
+      title: 'twenty',
+      state: 'OPEN',
+      body: `t\n${s(4)}\n${e('S')}`,
+    },
+    { number: 7, title: 'seven', state: 'OPEN', body: `t\n${s(4)}\n${e('S')}` },
+    { number: 13, title: 'thirteen', state: 'OPEN', body: `t\n${s(4)}` },
+    { number: 4, title: 'four', state: 'OPEN', body: `t\n${s(4)}\n${e('L')}` },
+  ];
+  const result = filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  });
+  assert.deepEqual(
+    result.orphans.map((o) => o.number),
+    [7, 20, 13, 4],
+  );
+  // The parsed hint is emitted per orphan for the cheap A4 Step 2 read.
+  assert.equal(result.orphans.find((o) => o.number === 7)?.effort, 'S');
+  assert.equal(result.orphans.find((o) => o.number === 13)?.effort, null);
+  assert.equal(result.orphans.find((o) => o.number === 4)?.effort, 'L');
+});
+
 test('filterOrphanIssues leaves orphans unrouted when suitability is disabled', () => {
   const m = (n: number) => `<!-- idd-skill-autopilot-suitability: ${n} -->`;
   const issues = [

@@ -23,6 +23,7 @@
       "classification": "execution",
       "roadmapMarkerId": "",
       "autopilotSuitability": 5,
+      "effort": "S",
       "sourceRoots": [100],
       "activeClaim": {
         "present": true,
@@ -41,6 +42,7 @@
       "classification": "execution",
       "roadmapMarkerId": "",
       "autopilotSuitability": null,
+      "effort": null,
       "sourceRoots": [100, 200],
       "activeClaim": {
         "present": false,

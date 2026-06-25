@@ -18,6 +18,7 @@ import {
   parseAutopilotSuitability,
   rankAndRouteBySuitability,
 } from './autopilot-suitability.mjs';
+import { effortOrdinal, parseEffort } from './effort.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 const BLOCKED_LABELS = new Set([
@@ -176,6 +177,12 @@ export function filterOrphanIssues(issues, options = {}) {
             ? options.markerPrefix
             : undefined,
         ),
+        effort: parseEffort(
+          issue.body,
+          typeof options.markerPrefix === 'string'
+            ? options.markerPrefix
+            : undefined,
+        ),
       });
       continue;
     }
@@ -190,22 +197,30 @@ export function filterOrphanIssues(issues, options = {}) {
     filtered[result.reason].push(entry);
   }
   // Rank the orphan candidate list by authored autopilot-suitability
-  // score. Pre-sort by issue number so equal scores resolve by lowest
-  // number (the Step 2 tie-break) rather than by API fetch order.
+  // score. Pre-sort by the soft effort tie-breaker (lower effort first,
+  // with a missing hint at the neutral middle) and then issue number, so
+  // the stable score sort below resolves equal scores by effort and then
+  // lowest number (the Step 2 tie-breaks) rather than by API fetch order.
   // Below-floor routing is opt-in (autopilot runs only): in attended
   // discovery the low-score issues stay selectable, just ranked last.
   // Advisory throughout — the A4.5/A5 gates still run on any selected
   // candidate, and unscored issues are never routed out (fail-safe).
-  const orphansByNumber = [...orphans].sort(
-    (left, right) => left.number - right.number,
+  const orphansByEffortThenNumber = [...orphans].sort(
+    (left, right) =>
+      effortOrdinal(left.effort) - effortOrdinal(right.effort) ||
+      left.number - right.number,
   );
-  const { ranked, routedToHuman } = rankAndRouteBySuitability(orphansByNumber, {
-    floor:
-      options.autopilotSuitabilityFloor ?? DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
-    enabled: options.autopilotSuitabilityEnabled !== false,
-    routeBelowFloor: options.autopilot === true,
-    getScore: (orphan) => orphan.autopilotSuitability,
-  });
+  const { ranked, routedToHuman } = rankAndRouteBySuitability(
+    orphansByEffortThenNumber,
+    {
+      floor:
+        options.autopilotSuitabilityFloor ??
+        DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
+      enabled: options.autopilotSuitabilityEnabled !== false,
+      routeBelowFloor: options.autopilot === true,
+      getScore: (orphan) => orphan.autopilotSuitability,
+    },
+  );
   const counts = {
     scanned: issues.length,
     orphans: ranked.length,

@@ -357,6 +357,10 @@ Validation expectations:
 - an autopilot-suitability footer at the end of the body (visible
   line + `<!-- <marker-prefix>-autopilot-suitability: N -->` marker;
   see [Autopilot-suitability score](#autopilot-suitability-score))
+- an optional effort footer next to it (visible line +
+  `<!-- <marker-prefix>-effort: S|M|L -->` marker; see
+  [Effort hint](#effort-hint)) — a soft Discover selection tie-breaker,
+  fail-safe on absence
 
 Validation expectations:
 
@@ -378,6 +382,10 @@ Validation expectations:
 - one `<!-- <marker-prefix>-roadmap-id: <roadmap-id> -->` marker
 - an autopilot-suitability footer at the end of the body (visible
   line + `<!-- <marker-prefix>-autopilot-suitability: N -->` marker)
+- an optional effort footer next to it (visible line +
+  `<!-- <marker-prefix>-effort: S|M|L -->` marker; see
+  [Effort hint](#effort-hint)) — a soft Discover selection tie-breaker,
+  fail-safe on absence
 
 Validation expectations:
 
@@ -400,6 +408,10 @@ Validation expectations:
 - optional dependency line or sequential roadmap marker when needed
 - an autopilot-suitability footer at the end of the body (visible
   line + `<!-- <marker-prefix>-autopilot-suitability: N -->` marker)
+- an optional effort footer next to it (visible line +
+  `<!-- <marker-prefix>-effort: S|M|L -->` marker; see
+  [Effort hint](#effort-hint)) — a soft Discover selection tie-breaker,
+  fail-safe on absence
 
 Validation expectations:
 
@@ -511,6 +523,58 @@ score footer is next edited by the authoring flow, add one. No
 bulk backfill of the existing backlog is required. The claim-state
 precondition still applies — never add the footer to the body of an
 actively-claimed or open-PR issue; defer it to a follow-up instead.
+
+## Effort hint
+
+Authored issues may also carry an **effort hint** — an author-time
+`S | M | L` size estimate, recorded once while context is fresh, that
+Discover consumes as a **soft selection tie-breaker** so autopilot tends
+to clear small issues first and leave large ones for a fresh session.
+Effort is distinct from the autopilot-suitability score: suitability
+captures _autonomy_ (can an agent finish unattended), while effort
+captures _size_ (a fully-autonomous issue can still be large).
+
+| Hint | Meaning | Typical signals                                                                                     |
+| ---- | ------- | --------------------------------------------------------------------------------------------------- |
+| S    | Small   | One module / a few files; a single reviewable change; little or no review back-and-forth expected   |
+| M    | Medium  | A helper plus its callers, or one instruction surface with mirrors and tests                        |
+| L    | Large   | A new helper family, multi-file instruction rewrites, or work that tends to span many review rounds |
+
+The hint is recorded as a **footer at the end of the issue body** — a
+visible line paired with a hidden, prefix-aware machine marker, beside
+the autopilot-suitability footer:
+
+```text
+---
+
+_Effort: S | M | L -- author-estimated size; a soft autopilot
+selection tie-breaker only._
+
+<!-- {marker-prefix}-effort: S|M|L -->
+```
+
+Binding rules:
+
+- **Authoritative value = the HTML marker**, read prefix-aware exactly
+  as `autopilot-suitability` is. `S | M | L` is upper-cased on parse.
+  The visible line is a human-readable mirror authoring keeps in sync;
+  discovery parses only the marker.
+- **Authoring marker, not operational marker.** Like
+  `autopilot-suitability`, it is body content and must never be added to
+  `OPERATIONAL_MARKERS` or subjected to F4 minimization.
+- **Soft tie-breaker, never a gate.** Effort only reorders candidates
+  **within** a single suitability-score band, after the score and
+  optional desync rules and **before** the lowest-issue-number tie-break.
+  It never skips, gates, crosses a score band, or bypasses the A4.5/A5
+  gates, and a large (`L`) issue stays fully claimable when it is the only
+  ready work.
+- **Fail-safe on absence.** A missing, non-`S|M|L`, or conflicting
+  marker means "no effort hint": selection behaves exactly as it does
+  today (a missing hint sorts as the neutral middle, as-if `M`).
+  Pre-existing issues with no effort footer keep flowing.
+
+Backfill is opportunistic and follows the same claim-state precondition
+as the suitability footer.
 
 ## Publication boundary
 
