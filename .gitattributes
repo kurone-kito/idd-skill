@@ -43,6 +43,7 @@ scripts/phase-id-resolver.mjs linguist-generated=true
 scripts/policy-helpers.mjs linguist-generated=true
 scripts/pre-merge-readiness.mjs linguist-generated=true
 scripts/protocol-helpers.mjs linguist-generated=true
+scripts/resolve-review-thread.mjs linguist-generated=true
 scripts/resume-claim-routing.mjs linguist-generated=true
 scripts/resume-route-selection.mjs linguist-generated=true
 scripts/review-activity-snapshot.mjs linguist-generated=true

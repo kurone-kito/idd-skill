@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/resolve-review-thread.schema.json",
+  "title": "Resolve Review Thread Result",
+  "description": "Dry-run plan or apply result for the E13 reply-and-resolve write-side helper: post a reply to the thread that owns a review comment and resolve that thread in one invocation.",
+  "type": "object",
+  "required": ["mode", "prNumber", "commentId", "alreadyResolved"],
+  "additionalProperties": false,
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["dry-run", "apply"]
+    },
+    "prNumber": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "commentId": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "threadId": {
+      "description": "GraphQL node id of the resolved review thread; omitted when no thread owns the comment.",
+      "type": "string"
+    },
+    "alreadyResolved": {
+      "type": "boolean"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["applied", "failed"]
+    },
+    "replyId": {
+      "type": "integer"
+    },
+    "error": {
+      "type": "string"
+    }
+  }
+}

@@ -103,6 +103,11 @@ In the idd-skill source repository, the following optional helpers were adopted:
   on a PR — emitting or posting the canonical E6 `**Rejected** — {bot} did
   not review HEAD …` marker-first, one comment per notice, idempotently and
   fail-closed (only classifier-recognized notices)
+- `scripts/resolve-review-thread.mjs` for the E13 write-side disposition:
+  post the reply to the review thread that owns a review comment **and**
+  resolve that thread in one invocation — dry-run by default, `--apply`
+  re-validates the active claim and posts the reply before resolving
+  (a failed reply never leaves a silently-resolved thread)
 
 **Operator Recovery Helpers:**
 
@@ -526,6 +531,31 @@ The adopted helper boundaries are intentionally narrow:
 - The written E6 non-review-notice rule in
   `idd-review-triage.instructions.md` stays authoritative; this helper is
   the helper-first convenience path with the manual `gh api` fallback
+  retained.
+
+### E13 reply-and-resolve (resolve-review-thread)
+
+- Command:
+  `node scripts/resolve-review-thread.mjs --pr <number> --comment-id <id>`
+  (dry-run); add `--body "<disposition>" --apply --claim-issue <n>
+  --claim-id <id>` to post the reply and resolve the thread. Optional
+  `--owner` / `--repo` / `--agent-id` / `--trusted-marker-logins`.
+- Maps `--comment-id` (the review comment's REST id) to its owning review
+  thread via the GraphQL `reviewThreads` `databaseId`, then in `--apply`
+  posts the reply (REST `pulls/.../comments/{id}/replies`) and resolves the
+  thread (GraphQL `resolveReviewThread`). Reply first, resolve second, so a
+  failed reply never resolves the thread without a disposition.
+- **Dry-run** reports the resolved `threadId` and current `alreadyResolved`
+  state without posting; a comment with no owning thread reports
+  `threadId: null` with an `error` note.
+- **Fail-closed**: `--apply` requires `--body` and the
+  `--claim-issue` / `--claim-id` pair, and re-validates the active claim
+  (scoped to trusted marker authors, aborting on a targeting
+  `forced-handoff`) immediately before the reply.
+- Stable contract: [`resolve-review-thread.schema.json`][resolve-review-thread-schema].
+- The written E13 reply-and-resolve rule in
+  `idd-review-fix.instructions.md` stays authoritative; this helper is the
+  helper-first convenience path with the manual REST + GraphQL fallback
   retained.
 
 ## Stable Helper Evidence Outputs
@@ -1138,3 +1168,4 @@ replace the written decision tables.
 [disposition-non-review-notices-schema]: https://kurone-kito.github.io/idd-skill/schemas/disposition-non-review-notices.schema.json
 [idd-merge-execute-schema]: https://kurone-kito.github.io/idd-skill/schemas/idd-merge-execute.schema.json
 [pre-merge-readiness-schema]: https://kurone-kito.github.io/idd-skill/schemas/pre-merge-readiness.schema.json
+[resolve-review-thread-schema]: https://kurone-kito.github.io/idd-skill/schemas/resolve-review-thread.schema.json

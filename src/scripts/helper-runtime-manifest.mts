@@ -360,6 +360,16 @@ const HELPER_COMMANDS: HelperCommand[] = [
     contractPaths: ['schemas/pre-merge-readiness.schema.json'],
   },
   {
+    id: 'resolve-review-thread',
+    scriptName: 'idd:resolve-review-thread',
+    binName: 'idd-resolve-review-thread',
+    entryPath: 'scripts/resolve-review-thread.mjs',
+    vendoredCommand: 'node scripts/resolve-review-thread.mjs',
+    description:
+      'Post the E13 reply and resolve the owning review thread in one invocation (dry-run by default; --apply mutates).',
+    contractPaths: ['schemas/resolve-review-thread.schema.json'],
+  },
+  {
     id: 'resume-claim-routing',
     scriptName: 'idd:resume-claim-routing',
     binName: 'idd-resume-claim-routing',
