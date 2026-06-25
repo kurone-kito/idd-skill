@@ -229,6 +229,35 @@ test('buildDispositionPlan keys advisory bots by suffix-insensitive identity', (
   assert.equal(plan.planned[0].botLogin, 'coderabbitai');
 });
 
+test('buildDispositionPlan breaks oldest-first ties deterministically by id', () => {
+  // Two same-bot notices share a timestamp; the lower-id one is covered first.
+  const ts = '2026-05-12T00:00:00Z';
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(2, CODEX, CODEX_NOTICE, ts),
+        notice(1, CODEX, CODEX_NOTICE, ts),
+        notice(
+          3,
+          'kurone-kito',
+          '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD abc1234 (usage); this is not a completed review',
+          ts,
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    plan.skipped.map((entry) => entry.noticeId),
+    [1],
+  );
+  assert.deepEqual(
+    plan.planned.map((entry) => entry.noticeId),
+    [2],
+  );
+});
+
 test('a combined disposition naming several bots covers only one notice', () => {
   const plan = buildDispositionPlan(
     {

@@ -154,8 +154,20 @@ export function buildDispositionPlan(
       createdAt: String(comment.createdAt ?? ''),
     }))
     .sort((left, right) => {
-      const delta = Date.parse(left.createdAt) - Date.parse(right.createdAt);
-      return Number.isNaN(delta) ? 0 : delta;
+      // Oldest-first, with a deterministic tie-breaker so the oldest-first
+      // pairing is stable: comments with equal (or invalid) timestamps fall back
+      // to the monotonic comment id, and an invalid timestamp sorts last.
+      const leftTime = Date.parse(left.createdAt);
+      const rightTime = Date.parse(right.createdAt);
+      const leftValid = !Number.isNaN(leftTime);
+      const rightValid = !Number.isNaN(rightTime);
+      if (leftValid && rightValid && leftTime !== rightTime) {
+        return leftTime - rightTime;
+      }
+      if (leftValid !== rightValid) {
+        return leftValid ? -1 : 1;
+      }
+      return left.id - right.id;
     });
 
   // Trusted IDD non-review-notice dispositions, grouped per advisory bot
@@ -600,15 +612,19 @@ if (isMainModule(import.meta.url)) {
   // current notice instead of an earlier notice with an identical body.
   const knownViewerCommentIds = viewerCommentIds(owner, repo, pr, viewerLogin);
   let claimLost = false;
-  for (const item of plan.planned) {
+  for (let index = 0; index < plan.planned.length; index += 1) {
+    const item = plan.planned[index];
     if (!revalidateClaim()) {
-      // Claim lost mid-loop: stop writing and surface the remaining notices as
-      // failed rather than posting them under a claim we no longer hold.
+      // Claim lost mid-loop: stop writing and surface the current AND all
+      // remaining notices as failed rather than posting them under a claim we no
+      // longer hold, so the apply report names every notice left un-dispositioned.
       claimLost = true;
-      failed.push({
-        noticeId: item.noticeId,
-        error: 'claim revalidation failed before post',
-      });
+      for (const remaining of plan.planned.slice(index)) {
+        failed.push({
+          noticeId: remaining.noticeId,
+          error: 'claim revalidation failed before post',
+        });
+      }
       break;
     }
     let posted: { id: number } | null = null;
