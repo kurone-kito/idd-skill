@@ -432,11 +432,12 @@ Route based on `branchState` from the helper (or `mergeable` /
    pinentry / hardware touch) and a fallback signing wrapper (a
    `git commit-ssh`-style alias or
    `-c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`),
-   **start the merge with that wrapper and continue with the wrapper's
-   own `--continue` form**, so `git merge --continue` does not revert the
-   merge commit to the stalling primary signing. This is the normal-path
-   complement to the recovery re-signing and mirrors the D1 rebase note
-   in `idd-pr-submit.instructions.md`.
+   **run the step 2 `git merge origin/main` through that wrapper — not the
+   plain command — and continue with the wrapper's own `--continue` form**;
+   the wrapper must own the whole operation, so `git merge --continue` does
+   not revert the merge commit to the stalling primary signing. This is the
+   normal-path complement to the recovery re-signing and mirrors the D1
+   rebase note in `idd-pr-submit.instructions.md`.
 4. Run **post-fix-validate**.
 5. Push the feature branch normally (no force push required for merge
    commits).

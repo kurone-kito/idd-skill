@@ -62,10 +62,11 @@ conflicts, and complete the merge. On a signed-commit repo with
 non-interactive-hostile primary signing (GPG pinentry / hardware touch)
 and a fallback signing wrapper (a `git commit-ssh`-style alias or
 `-c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`),
-**start the merge with that wrapper and continue with the wrapper's own
-`--continue` form**, so `git merge --continue` does not revert the merge
-commit to the stalling primary signing — the normal-path complement to
-the existing detach/cherry-pick recovery re-signing.
+**run that `git merge origin/main` through the wrapper — not the plain
+command — and continue with the wrapper's own `--continue` form**; the
+wrapper must own the whole operation, so `git merge --continue` does not
+revert the merge commit to the stalling primary signing — the normal-path
+complement to the existing detach/cherry-pick recovery re-signing.
 
 **Active review gate**: if the PR has unresolved review threads,
 unreplied comments, or any reviewer's latest state is

@@ -45,12 +45,13 @@ On a signed-commit repo whose primary signing is non-interactive-hostile
 (GPG pinentry or a hardware-touch path) but that provides a fallback
 signing wrapper (e.g. a `git commit-ssh` alias, or
 `-c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`),
-**start the rebase with that wrapper and continue it with the wrapper's
-own `--continue` form**. Plain `git rebase --continue` re-signs the
-replayed commit through the configured primary signing, which stalls
-non-interactively right after the conflict is already resolved. This is
-the normal-path complement to the recovery-path re-signing in Post-rebase
-verification below.
+**run the initial `git rebase origin/main` above through that wrapper —
+not the plain command — and continue it with the wrapper's own
+`--continue` form**; the wrapper must own the whole operation. Plain
+`git rebase --continue` re-signs the replayed commit through the
+configured primary signing, which stalls non-interactively right after
+the conflict is already resolved. This is the normal-path complement to
+the recovery-path re-signing in Post-rebase verification below.
 
 ### Post-rebase verification
 
