@@ -275,35 +275,35 @@
       "replacements": [
         {
           "from": "| Name                    | Commands                         |",
-          "to": "| Name                    | Commands                                                                                                                                     |"
+          "to": "| Name                    | Commands                                                                                                                                                                |"
         },
         {
           "from": "| ----------------------- | -------------------------------- |",
-          "to": "| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |"
+          "to": "| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |"
         },
         {
           "from": "| **fix-validate**        | `{{FIX_VALIDATE_COMMANDS}}`      |",
-          "to": "| **fix-validate**        | `npx dprint fmt \"**/*.md\" && npx markdownlint-cli2 --fix \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\"`                                       |"
+          "to": "| **fix-validate**        | `npx biome check --write && npx dprint fmt \"**/*.md\" && npx markdownlint-cli2 --fix \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\"`                                       |"
         },
         {
           "from": "| **pre-push-validate**   | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |",
-          "to": "| **pre-push-validate**   | `npx dprint check \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress`                                        |"
+          "to": "| **pre-push-validate**   | `npx biome check && npx dprint check \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress`                                                |"
         },
         {
           "from": "| **post-fix-validate**   | `{{POST_FIX_VALIDATE_COMMANDS}}` |",
-          "to": "| **post-fix-validate**   | `npx dprint fmt \"**/*.md\" && npx markdownlint-cli2 --fix \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress` |"
+          "to": "| **post-fix-validate**   | `npx biome check --write && npx dprint fmt \"**/*.md\" && npx markdownlint-cli2 --fix \"**/*.md\" && npx markdownlint-cli2 \"**/*.md\" && npx cspell lint \"**\" --no-progress` |"
         },
         {
           "from": "| **install-deps**        | `{{INSTALL_DEPS_COMMAND}}`       |",
-          "to": "| **install-deps**        | `pnpm install --frozen-lockfile`                                                                                                             |"
+          "to": "| **install-deps**        | `pnpm install --frozen-lockfile`                                                                                                                                        |"
         },
         {
           "from": "| **issue-scope**         | `roadmap-first`                  |",
-          "to": "| **issue-scope**         | `roadmap-first`                                                                                                                              |"
+          "to": "| **issue-scope**         | `roadmap-first`                                                                                                                                                         |"
         },
         {
           "from": "| **orphan-first-policy** | `none`                           |",
-          "to": "| **orphan-first-policy** | `none`                                                                                                                                       |"
+          "to": "| **orphan-first-policy** | `none`                                                                                                                                                                  |"
         },
         {
           "from": "use `npx <tool>` if Node.js and `npx` are available",
