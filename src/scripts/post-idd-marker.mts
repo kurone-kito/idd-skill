@@ -18,6 +18,8 @@
 // manual POST path it replaces already requires.
 
 import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   renderAdvisoryWaitMarker,
@@ -153,12 +155,19 @@ export function parseArgs(argv: string[]): CliArgs {
       continue;
     }
     if (!token.startsWith('--')) {
-      // The sole positional argument is the issue/PR number.
+      // The sole positional argument is the issue/PR number. Match the whole
+      // token as a positive integer BEFORE converting: Number.parseInt would
+      // silently accept a suffixed typo like `1047abc` / `1047-draft` as 1047
+      // and, with --apply, post the marker to the wrong target. Fail closed.
       if (args.number !== null) {
         throw new Error(`unexpected positional argument: ${token}`);
       }
       const parsed = Number.parseInt(token, 10);
-      if (!Number.isInteger(parsed) || parsed <= 0) {
+      if (
+        !/^\d+$/.test(token) ||
+        !Number.isSafeInteger(parsed) ||
+        parsed <= 0
+      ) {
         throw new Error(`invalid issue/PR number: ${token}`);
       }
       args.number = parsed;
@@ -249,7 +258,11 @@ function isMainModule(moduleUrl: string): boolean {
   if (!entry) {
     return false;
   }
-  return moduleUrl === `file://${entry}` || moduleUrl.endsWith(entry);
+  // Compare decoded filesystem paths (matching the emit-marker / manifest entry
+  // guards). A raw `file://${entry}` string compare fails when the install path
+  // contains spaces: import.meta.url percent-encodes them while process.argv[1]
+  // does not, so the CLI body would silently never run.
+  return fileURLToPath(moduleUrl) === resolve(entry);
 }
 
 if (isMainModule(import.meta.url)) {

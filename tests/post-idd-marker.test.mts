@@ -260,9 +260,14 @@ test('parseArgs reads structural flags, the positional number, and renderer fiel
   });
 });
 
-test('parseArgs rejects a second positional and a non-numeric number', () => {
+test('parseArgs rejects a second positional, non-numeric, and suffixed numbers', () => {
   assert.throws(() => parseArgs(['1047', '2048']), /unexpected positional/);
   assert.throws(() => parseArgs(['not-a-number']), /invalid issue\/PR number/);
+  // A numeric prefix plus a typo/suffix must fail closed, not parse to 1047 —
+  // otherwise --apply could post the marker to the wrong target.
+  assert.throws(() => parseArgs(['1047abc']), /invalid issue\/PR number/);
+  assert.throws(() => parseArgs(['1047-draft']), /invalid issue\/PR number/);
+  assert.throws(() => parseArgs(['0']), /invalid issue\/PR number/);
 });
 
 test('a dry-run envelope validates against the schema', () => {
