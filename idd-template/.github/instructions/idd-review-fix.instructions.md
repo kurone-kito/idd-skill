@@ -85,9 +85,10 @@ unambiguous:
 - `**Accepted** — fixed in {commit-sha or comma-separated list}: {brief explanation}`
 
 - **Review threads**: after posting your reply, **immediately resolve
-  the thread**. When helper runtime is enabled,
-  `resolve-review-thread --pr <number> --comment-id <id> --apply` (with
-  `--body`, `--claim-issue`, `--claim-id`; see `docs/idd-helper-scripts.md`)
+  the thread**. When helper runtime is enabled, the profile-selected
+  resolve-review-thread command (`--pr <number> --comment-id <id> --apply`,
+  with `--body` / `--claim-issue` / `--claim-id`; see
+  `docs/idd-helper-scripts.md`)
   posts the reply and resolves the thread in one call — dry-run without
   `--apply`, replying before resolving so a failed reply never leaves a
   silently-resolved thread; the manual REST reply + GraphQL
