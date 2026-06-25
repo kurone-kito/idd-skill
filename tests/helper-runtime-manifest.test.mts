@@ -545,3 +545,22 @@ test('manifest CLI rejects flags that are missing required values', () => {
     /missing value for argument: --profile/,
   );
 });
+
+test("every manifest helper binName is exposed in package.json's bin map", () => {
+  // Guard against a registered helper whose executable is never published for
+  // package-manager-profile installs (the gap #1053 review caught for
+  // idd-post-idd-marker): the manifest, package.json bin map, and bin shim file
+  // must agree for every helper.
+  const { commandCatalog } = buildHelperRuntimeManifest({
+    targetRoot: REPO_ROOT,
+  });
+  const bin = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'))
+    .bin as Record<string, string>;
+  for (const command of commandCatalog) {
+    assert.equal(
+      bin[command.binName],
+      `./bin/${command.binName}.mjs`,
+      `package.json bin map must expose ${command.binName} as ./bin/${command.binName}.mjs`,
+    );
+  }
+});
