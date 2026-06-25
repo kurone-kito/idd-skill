@@ -18,6 +18,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { parseAutopilotSuitability } from './autopilot-suitability.mts';
 import { parseIsoDurationToMs } from './policy-helpers.mts';
 import {
   resolveActiveClaim,
@@ -409,7 +410,7 @@ function runCli(): void {
     const issue = fetchIssue(repoRef, number);
     return {
       number,
-      score: parseSuitabilityScore(issue.body, policy.markerPrefix),
+      score: parseAutopilotSuitability(issue.body, policy.markerPrefix),
       candidateFiles: parseCandidateFiles(issue.body),
     };
   });
@@ -445,14 +446,16 @@ function runCli(): void {
  * Discover the concurrently-active set: every issue closed by an open PR
  * (repo-wide), plus candidate issues that already carry a non-stale claim.
  * Active-by-claim covers every issue with a remote `issue/<n>-*` branch (every
- * IDD claim creates one once pushed), resolved via the shared claim-state rules
- * — not just the candidate set — so a claim held by another session is detected
- * even though it is outside the unclaimed candidates being ranked. A claim whose
- * branch is not yet pushed is picked up once it appears remotely. Active-by-PR
- * is a best-effort scan of open PRs (bounded by the PR-list page cap). Both
- * stay bounded — no repo-wide comment scan — which is the fetch cost
- * `--check-overlap` gates; the overlap signal is an advisory A4 Step 2
- * tie-breaker, so best-effort coverage is acceptable.
+ * IDD claim creates one once pushed), resolved with the standard `claimed-by`
+ * claim-state rules — not just the candidate set — so a claim held by another
+ * session is detected even though it is outside the unclaimed candidates being
+ * ranked. A claim whose branch is not yet pushed is picked up once it appears
+ * remotely. Active-by-PR is a best-effort scan of open PRs (bounded by the
+ * PR-list page cap). Both stay bounded — no repo-wide comment scan — which is
+ * the fetch cost `--check-overlap` gates; the overlap signal is an advisory A4
+ * Step 2 tie-breaker, so best-effort coverage is acceptable. Edge cases the
+ * advisory signal does not specially resolve: legacy claim-id-less markers and
+ * forced-handoff-successor adoption (the default `resolveActiveClaim` path).
  */
 function discoverActiveIssues(options: {
   repoRef: string;
@@ -634,23 +637,6 @@ function fetchOpenPrLinkedIssues(repoRef: string): number[] {
   return [...numbers];
 }
 
-function parseSuitabilityScore(
-  body: unknown,
-  markerPrefix: string,
-): number | null {
-  const text = typeof body === 'string' ? body : '';
-  const match = text.match(
-    new RegExp(
-      `<!--\\s*${escapeRegex(markerPrefix)}-autopilot-suitability:\\s*([0-9]+)\\s*-->`,
-    ),
-  );
-  if (!match) {
-    return null;
-  }
-  const value = Number.parseInt(match[1], 10);
-  return value >= 1 && value <= 5 ? value : null;
-}
-
 function loadManifest(manifestPath: string): unknown {
   const targetPath = resolve(
     process.cwd(),
@@ -675,7 +661,8 @@ function loadPolicy(policyPath: string): {
   autopilotSuitabilityEnabled: boolean;
   claimStaleAgeMs: number;
 } {
-  const targetPath = policyPath
+  const explicit = policyPath.length > 0;
+  const targetPath = explicit
     ? resolve(process.cwd(), policyPath)
     : resolve(process.cwd(), '.github/idd/config.json');
   let config: {
@@ -686,7 +673,14 @@ function loadPolicy(policyPath: string): {
   } | null = null;
   try {
     config = JSON.parse(readFileSync(targetPath, 'utf8'));
-  } catch {
+  } catch (error) {
+    // Fail closed on an explicit --policy that cannot be loaded: silently
+    // using defaults would drop custom trusted actors / claim timing and let
+    // active claims disappear. An absent default config still falls back.
+    if (explicit) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`failed to load policy at ${targetPath}: ${message}`);
+    }
     config = null;
   }
   const markerPrefix =
@@ -808,7 +802,9 @@ Reports, per candidate, the high-contention shared files it would touch (from
 its '## Candidate files' section) and — with --check-overlap — whether any
 overlap an actively-claimed or open-PR issue. recommendedOrder applies the soft
 A4 Step 2 de-prioritization tie-breaker (score desc, then non-overlapping
-first within a score band, then issue number). Evidence-only: never a hard gate.
+first within a score band, then issue number); it does NOT apply
+discover.selectionDesync — the agent layers the overlap nudge after its own
+desync pick. Evidence-only: never a hard gate.
 
 Without --check-overlap no active-set discovery runs (no extra GitHub API
 cost); each candidate's high-contention files are still reported.
@@ -848,10 +844,6 @@ function runGh(args: string[]): string {
     }
     throw error;
   }
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function isCliExecution(): boolean {

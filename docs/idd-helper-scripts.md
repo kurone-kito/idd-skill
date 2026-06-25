@@ -276,7 +276,9 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
     `reason: "claim" | "pr", files: string[] }], overlapFlag: boolean }]`
   - `recommendedOrder`: `number[]` — candidate numbers after the soft
     tie-breaker (score desc, then non-overlapping first within a score band,
-    then issue number). Advisory only; never a hard gate.
+    then issue number). It does **not** apply `discover.selectionDesync`; the
+    agent layers the overlap nudge after its own desync pick. Advisory only;
+    never a hard gate.
   - `summary`: `{ candidateCount: number, flaggedCount: number,`
     `activeIssueCount: number }`
 - **Behavior boundary**: evidence-only and heuristic. `## Candidate files` are
