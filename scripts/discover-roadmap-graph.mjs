@@ -13,6 +13,7 @@ import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
 } from './autopilot-suitability.mjs';
+import { effortOrdinal, parseEffort } from './effort.mjs';
 import { parseIsoDurationToMs } from './policy-helpers.mjs';
 import {
   isStaleAt,
@@ -161,6 +162,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       classification: node.classification,
       roadmapMarkerId: node.roadmapMarkerId,
       autopilotSuitability: node.autopilotSuitability ?? null,
+      effort: node.effort ?? null,
       depth: node.depth,
     }))
     .sort(compareByNumber);
@@ -362,6 +364,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       classification: classification.kind,
       roadmapMarkerId: classification.roadmapMarkerId,
       autopilotSuitability: parseAutopilotSuitability(issue.body, markerPrefix),
+      effort: parseEffort(issue.body, markerPrefix),
       depth,
     });
     recordProvenancePath(issue.number, path);
@@ -472,6 +475,7 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
         classification: 'execution',
         roadmapMarkerId: node.roadmapMarkerId,
         autopilotSuitability: node.autopilotSuitability,
+        effort: node.effort,
         sourceRoots: [graph.root.number],
       });
     }
@@ -577,9 +581,17 @@ function compareUnionLeaves(left, right, floor) {
   // Unscored or out-of-range leaves rank at the configured floor.
   const leftEffective = leftScored ? left.autopilotSuitability : floor;
   const rightEffective = rightScored ? right.autopilotSuitability : floor;
+  // Soft effort tie-breaker (after the suitability score, before the
+  // lowest-issue-number fallback): within one effective-score band prefer
+  // the lower-effort leaf (S < M < L). A missing/invalid hint resolves to
+  // the neutral middle ordinal via effortOrdinal, so a band with no effort
+  // hints stays ordered by issue number exactly as before. This never
+  // crosses a score band and never drops a leaf — a large issue is still
+  // selectable when it is the only ready work.
   return (
     rightEffective - leftEffective ||
     Number(rightScored) - Number(leftScored) ||
+    effortOrdinal(left.effort) - effortOrdinal(right.effort) ||
     left.number - right.number
   );
 }

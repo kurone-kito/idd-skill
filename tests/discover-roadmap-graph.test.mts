@@ -880,6 +880,50 @@ test('all-roadmaps ranks unscored leaves at the configured floor', async () => {
   );
 });
 
+function scoredEffortExecutionIssue(
+  number: number,
+  score: number,
+  effort: string,
+  state = 'open',
+) {
+  return executionIssue(
+    number,
+    `task ${number}\n<!-- idd-skill-autopilot-suitability: ${score} -->\n<!-- idd-skill-effort: ${effort} -->`,
+    state,
+  );
+}
+
+// One epic, four same-score leaves with mixed effort hints.
+//   900 (epic-effort) → 901 (3, L), 902 (3, S), 903 (3, no hint), 904 (3, S)
+const EFFORT_TIE_ISSUES = new Map<number, unknown>([
+  [900, roadmapIssue(900, '- [ ] #901\n- [ ] #902\n- [ ] #903\n- [ ] #904', 'epic-effort')],
+  [901, scoredEffortExecutionIssue(901, 3, 'L')],
+  [902, scoredEffortExecutionIssue(902, 3, 'S')],
+  [903, scoredExecutionIssue(903, 3)],
+  [904, scoredEffortExecutionIssue(904, 3, 'S')],
+]);
+
+test('all-roadmaps applies the effort hint as a soft tie-breaker within a score band', async () => {
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [900],
+    loadIssue: async (issueNumber) => EFFORT_TIE_ISSUES.get(issueNumber) ?? null,
+  });
+
+  // All four share suitability 3, so the effort hint orders the band: the two
+  // `S` leaves first (lowest-number-tie-broken 902 < 904), then the no-hint
+  // neutral 903, then `L` 901. Effort never crosses a score band and never
+  // drops a leaf.
+  assert.deepEqual(
+    report.leaves.map((leaf) => leaf.number),
+    [902, 904, 903, 901],
+  );
+  // The parsed hint is emitted per leaf for the cheap A4 Step 2 read.
+  const byNumber = new Map(report.leaves.map((leaf) => [leaf.number, leaf]));
+  assert.equal(byNumber.get(902)?.effort, 'S');
+  assert.equal(byNumber.get(903)?.effort, null);
+  assert.equal(byNumber.get(901)?.effort, 'L');
+});
+
 test('all-roadmaps keeps scored work above an unscored leaf at the same effective score', async () => {
   const issues = new Map<number, unknown>([
     [900, roadmapIssue(900, '- [ ] #901\n- [ ] #902', 'epic-floor')],

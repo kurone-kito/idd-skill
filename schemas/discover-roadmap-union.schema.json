@@ -59,6 +59,7 @@
           "classification",
           "roadmapMarkerId",
           "autopilotSuitability",
+          "effort",
           "sourceRoots"
         ],
         "additionalProperties": false,
@@ -97,6 +98,15 @@
               3,
               4,
               5
+            ]
+          },
+          "effort": {
+            "description": "Authored effort hint (S | M | L) or null when no coherent marker is present. A soft A4 Step 2 selection tie-breaker only (after suitability/desync, before lowest issue number); fail-safe on absence, matching parseEffort at runtime.",
+            "enum": [
+              null,
+              "S",
+              "M",
+              "L"
             ]
           },
           "sourceRoots": {

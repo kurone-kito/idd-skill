@@ -156,6 +156,28 @@ rules.
   `status:blocked-by-human`, and a missing or out-of-range score is
   treated as having no score (evaluated normally, never skipped).
 
+### Effort hint
+
+Issues may also carry an author-time **effort hint** (`S | M | L`) that
+captures _size_, distinct from the suitability score's _autonomy_. Emit
+it as an optional end-of-body footer beside the suitability footer (a
+visible line plus a hidden, prefix-aware marker
+`<!-- {marker-prefix}-effort: S|M|L -->`). Discover consumes it as a
+**soft selection tie-breaker** so autopilot tends to clear small issues
+first and leave large ones for a fresh session. See the
+[Effort hint](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#effort-hint)
+section of the contract for the rubric, footer format, and binding
+rules.
+
+- `S` small · `M` medium · `L` large.
+- The hint only reorders candidates **within** one suitability-score
+  band (after the score and optional desync rules, before the
+  lowest-issue-number tie-break); it never skips, gates, crosses a score
+  band, or bypasses the A4.5/A5 gates, and a large issue stays claimable
+  when it is the only ready work.
+- A missing or invalid hint is **fail-safe**: selection behaves exactly
+  as today (a missing hint sorts as the neutral middle, as-if `M`).
+
 ## Specificity target
 
 Issue drafting should aim for a level of specificity where a
@@ -610,6 +632,10 @@ Required content:
 - an autopilot-suitability footer at the end of the body (visible line +
   `<!-- idd-skill-autopilot-suitability: N -->` marker; see
   [Autopilot-suitability score](#autopilot-suitability-score))
+- an optional effort footer next to it (visible line +
+  `<!-- idd-skill-effort: S|M|L -->` marker; see
+  [Effort hint](#effort-hint)) — a soft Discover selection tie-breaker,
+  fail-safe on absence
 
 Optional content:
 
@@ -650,6 +676,10 @@ Required content:
 - one `<!-- idd-skill-roadmap-id: <roadmap-id> -->` marker
 - an autopilot-suitability footer at the end of the body (visible line +
   `<!-- idd-skill-autopilot-suitability: N -->` marker)
+- an optional effort footer next to it (visible line +
+  `<!-- idd-skill-effort: S|M|L -->` marker; see
+  [Effort hint](#effort-hint)) — a soft Discover selection tie-breaker,
+  fail-safe on absence
 
 Recommended content inside `## Tracks`:
 
@@ -686,6 +716,10 @@ Required content:
 - `## Acceptance criteria`
 - an autopilot-suitability footer at the end of the body (visible line +
   `<!-- idd-skill-autopilot-suitability: N -->` marker)
+- an optional effort footer next to it (visible line +
+  `<!-- idd-skill-effort: S|M|L -->` marker; see
+  [Effort hint](#effort-hint)) — a soft Discover selection tie-breaker,
+  fail-safe on absence
 
 Optional content:
 

@@ -47,6 +47,7 @@ scripts/force-handoff.mjs linguist-generated=true
 scripts/external-check-waiver.mjs linguist-generated=true
 scripts/audit-pr-cleanup.mjs linguist-generated=true
 scripts/discover-shared-file-overlap.mjs linguist-generated=true
+scripts/effort.mjs linguist-generated=true
 idd-template/scripts/minimize-superseded-markers.mjs linguist-generated=true
 # Every bin/ shim is generated from src/bin/*.mts (whole directory).
 bin/**/*.mjs linguist-generated=true
