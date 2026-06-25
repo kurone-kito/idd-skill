@@ -17,18 +17,32 @@
 // only classifier-recognized notices are dispositioned; real reviews and review
 // threads are never touched.
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import {
   dispositionNamesAdvisoryBot,
   isAdvisoryNonReviewNotice,
   isNonReviewNoticeDisposition,
   normalizeTrustedMarkerLogins,
+  parseForcedHandoffComment,
   resolveActiveClaim,
+  resolveAdvisoryBotLogins,
 } from './protocol-helpers.mjs';
 
 const DEFAULT_ADVISORY_BOT_LOGINS = [
   'coderabbitai[bot]',
   'chatgpt-codex-connector[bot]',
 ];
+// CodeRabbit posts a completed review as a regular issue comment carrying this
+// marker (see `classifyRegularBotComment`), not a PR review. A bot that has one
+// has "reviewed" the PR, so its non-review notice must not be rejected.
+const CODERABBIT_SUMMARY_MARKER =
+  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->';
+/** True for a CodeRabbit completed-review summary comment. */
+export function isCodeRabbitCompletedSummary(body) {
+  return String(body ?? '')
+    .trimStart()
+    .startsWith(CODERABBIT_SUMMARY_MARKER);
+}
 /**
  * Derive the short `({reason})` clause for a non-review notice from its body.
  * Tightly tied to the categories `isAdvisoryNonReviewNotice` recognizes; falls
@@ -71,12 +85,13 @@ export function buildDispositionPlan(input, options = {}) {
   const trustedMarkerLogins = new Set(
     normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
   );
-  // Advisory bots that already have a completed review of the current HEAD (a
-  // distinct, non-notice review). Per the E6 "re-validate just before posting"
-  // rule, their notice must not be rejected: the gate accepts that review, and
-  // a later-timestamped `did not review HEAD` rejection could filter it out.
-  const botsWithCompletedHeadReview = new Set(
-    normalizeTrustedMarkerLogins(options.botsWithCompletedHeadReview ?? []),
+  // Advisory bots that already have a completed review (a distinct, non-notice
+  // PR review of the current HEAD, or a CodeRabbit completed-summary comment).
+  // Per the E6 "re-validate just before posting" rule, their notice must not be
+  // rejected: the gate accepts that review, and a later-timestamped `did not
+  // review HEAD` rejection could filter it out.
+  const botsWithCompletedReview = new Set(
+    normalizeTrustedMarkerLogins(options.botsWithCompletedReview ?? []),
   );
   const headSha = String(input.headSha ?? '');
   const comments = (Array.isArray(input.comments) ? input.comments : [])
@@ -126,9 +141,9 @@ export function buildDispositionPlan(input, options = {}) {
     ) {
       continue;
     }
-    if (botsWithCompletedHeadReview.has(comment.login)) {
-      // The bot has a completed review of the current HEAD; accept that review
-      // separately and leave the notice un-rejected (E6 race re-validation).
+    if (botsWithCompletedReview.has(comment.login)) {
+      // The bot has a completed review; accept that review separately and leave
+      // the notice un-rejected (E6 race re-validation).
       skipped.push({
         noticeId: comment.id,
         botLogin: comment.login,
@@ -264,28 +279,47 @@ disposition, one marker-first comment per notice. Idempotent and fail-closed.
   --agent-id <agent-id>          current session agent id
   --trusted-marker-logins a,b    logins whose existing dispositions count
                                  (default: your gh login, so re-runs are idempotent)
-  --advisory-bot-logins a,b      advisory bot logins (default: coderabbit + codex)
+  --advisory-bot-logins a,b      advisory bot logins (default: flag > IDD_ADVISORY_BOT_LOGINS
+                                 > .github/idd/config.json > coderabbit + codex)
   --apply                        post the dispositions (default: dry-run)
   -h, --help                     show this help
 `;
+function loadIddConfig() {
+  try {
+    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
+  } catch {
+    return null;
+  }
+}
 /**
- * Resolve the active claim id on an issue using the shared
- * `resolveActiveClaim` state machine, scoped to trusted marker authors. This
- * reuses the canonical claim parsing/validation (superseding, release,
- * forced-handoff) and — crucially — ignores claim markers posted by untrusted
- * authors, so a copied/forged `claimed-by` marker cannot satisfy revalidation.
+ * Re-fetch the claim issue and decide whether the supplied claim id is still the
+ * active claim. Scoped to trusted marker authors via the shared
+ * `resolveActiveClaim` state machine (so a copied/forged `claimed-by` marker
+ * from an untrusted author cannot satisfy the gate), and fails closed on any
+ * `forced-handoff` marker that targets this claim — regardless of the marker's
+ * author, since an authorizing maintainer is typically not in the trusted set.
+ * Aborting on a contested claim is always safe (the manual E6 path remains).
  */
-function resolveActiveClaimId(owner, repo, issue, isTrustedAuthor) {
+function claimStillActive(owner, repo, issue, claimId, isTrustedAuthor) {
   const comments = ghJsonPaginated([
     'api',
     `repos/${owner}/${repo}/issues/${issue}/comments`,
   ]);
+  for (const comment of comments) {
+    const forcedHandoff = parseForcedHandoffComment(
+      comment.body ?? '',
+      comment.created_at ?? '',
+    );
+    if (forcedHandoff && forcedHandoff.oldClaimId === claimId) {
+      return false;
+    }
+  }
   const events = comments.map((comment) => ({
     body: comment.body ?? '',
     createdAt: comment.created_at ?? '',
     author: { login: comment.user?.login ?? '' },
   }));
-  return resolveActiveClaim(events, isTrustedAuthor)?.claimId ?? null;
+  return resolveActiveClaim(events, isTrustedAuthor)?.claimId === claimId;
 }
 function postDisposition(owner, repo, pr, body) {
   // A disposition body is plain text starting with `**Rejected**` (not an
@@ -340,18 +374,29 @@ if (isMainModule(import.meta.url)) {
     args.trustedMarkerLogins.length > 0
       ? args.trustedMarkerLogins
       : [viewerLogin];
+  // Resolve advisory bot logins from flag > env > config (the same sources the
+  // sibling helpers use), falling back to the CodeRabbit/Codex defaults so a
+  // repo that configures custom advisory bots is not silently omitted.
+  const resolvedAdvisoryBotLogins = resolveAdvisoryBotLogins({
+    flagValue: args.advisoryBotLogins,
+    envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
+    config: loadIddConfig(),
+  }).logins;
   const advisoryBotLogins =
-    args.advisoryBotLogins.length > 0 ? args.advisoryBotLogins : undefined;
-  const headSha = ghText([
-    'api',
-    `repos/${owner}/${repo}/pulls/${pr}`,
-    '--jq',
-    '.head.sha',
-  ]);
-  // Build a plan from a fresh read of the PR's comments and reviews. Called once
-  // for dry-run and again immediately before --apply posts, so a disposition (or
-  // a completed review) another session raced in is reflected just-in-time.
+    resolvedAdvisoryBotLogins.length > 0
+      ? resolvedAdvisoryBotLogins
+      : DEFAULT_ADVISORY_BOT_LOGINS;
+  // Build a plan from a fresh read of the PR's HEAD, comments, and reviews.
+  // Called once for dry-run and again immediately before --apply posts, so a
+  // HEAD advance, a disposition, or a completed review another session raced in
+  // is reflected just-in-time (the apply path never reuses the dry-run snapshot).
   const planNow = () => {
+    const headSha = ghText([
+      'api',
+      `repos/${owner}/${repo}/pulls/${pr}`,
+      '--jq',
+      '.head.sha',
+    ]);
     const rawComments = ghJsonPaginated([
       'api',
       `repos/${owner}/${repo}/issues/${pr}/comments`,
@@ -366,24 +411,30 @@ if (isMainModule(import.meta.url)) {
       'api',
       `repos/${owner}/${repo}/pulls/${pr}/reviews`,
     ]);
-    // A bot that posted a real (non-notice) review of the current HEAD has
-    // "reviewed HEAD" — its notice must not be rejected (see buildDispositionPlan).
-    const botsWithCompletedHeadReview = Array.from(
+    // Bots with a completed review the gate will accept: a real (non-notice) PR
+    // review of the current HEAD, OR a CodeRabbit completed-summary comment
+    // (CodeRabbit reviews land as regular issue comments, not PR reviews). Their
+    // notice must not be rejected (see buildDispositionPlan).
+    const botsWithCompletedReview = Array.from(
       new Set(
-        reviews
-          .filter(
-            (review) =>
-              review.commit_id === headSha &&
-              COMPLETED_REVIEW_STATES.has(String(review.state ?? '')) &&
-              !isAdvisoryNonReviewNotice(review.body ?? ''),
-          )
-          .map((review) => review.user?.login ?? '')
-          .filter(Boolean),
+        [
+          ...reviews
+            .filter(
+              (review) =>
+                review.commit_id === headSha &&
+                COMPLETED_REVIEW_STATES.has(String(review.state ?? '')) &&
+                !isAdvisoryNonReviewNotice(review.body ?? ''),
+            )
+            .map((review) => review.user?.login ?? ''),
+          ...comments
+            .filter((comment) => isCodeRabbitCompletedSummary(comment.body))
+            .map((comment) => comment.login),
+        ].filter(Boolean),
       ),
     );
     return buildDispositionPlan(
       { headSha, comments },
-      { advisoryBotLogins, trustedMarkerLogins, botsWithCompletedHeadReview },
+      { advisoryBotLogins, trustedMarkerLogins, botsWithCompletedReview },
     );
   };
   if (!args.apply) {
@@ -392,25 +443,25 @@ if (isMainModule(import.meta.url)) {
     );
     process.exit(0);
   }
-  // --apply: re-validate the active claim immediately before posting, scoped to
-  // trusted marker authors so a forged claim marker cannot satisfy the gate.
+  // --apply: revalidate the active claim immediately before EACH post, scoped to
+  // trusted marker authors and failing closed on a forced handoff. Re-checking
+  // per post means a claim released, superseded, or handed off mid-loop stops
+  // the remaining writes instead of posting under a lost claim.
+  const claimIssue = args.claimIssue;
   const trustedAuthors = new Set(
     trustedMarkerLogins.map((login) => login.toLowerCase()),
   );
-  const activeClaimId = resolveActiveClaimId(
-    owner,
-    repo,
-    args.claimIssue,
-    (login) =>
-      trustedAuthors.has(
-        String(login ?? '')
-          .trim()
-          .toLowerCase(),
-      ),
-  );
-  if (activeClaimId !== args.claimId) {
+  const isTrustedAuthor = (login) =>
+    trustedAuthors.has(
+      String(login ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+  const revalidateClaim = () =>
+    claimStillActive(owner, repo, claimIssue, args.claimId, isTrustedAuthor);
+  if (!revalidateClaim()) {
     process.stderr.write(
-      `claim revalidation failed: active claim is "${activeClaimId ?? 'none'}", expected "${args.claimId}"\n`,
+      `claim revalidation failed: "${args.claimId}" is no longer the active claim on issue #${claimIssue}\n`,
     );
     process.exit(1);
   }
@@ -420,7 +471,18 @@ if (isMainModule(import.meta.url)) {
   const plan = planNow();
   const applied = [];
   const failed = [];
+  let claimLost = false;
   for (const item of plan.planned) {
+    if (!revalidateClaim()) {
+      // Claim lost mid-loop: stop writing and surface the remaining notices as
+      // failed rather than posting them under a claim we no longer hold.
+      claimLost = true;
+      failed.push({
+        noticeId: item.noticeId,
+        error: 'claim revalidation failed before post',
+      });
+      break;
+    }
     let posted = null;
     for (let attempt = 0; attempt < 2 && !posted; attempt += 1) {
       try {
@@ -440,7 +502,7 @@ if (isMainModule(import.meta.url)) {
   }
   const status = failed.length > 0 ? 'failed' : 'applied';
   process.stdout.write(
-    `${JSON.stringify({ mode: 'apply', prNumber: pr, headSha, status, applied, failed, skipped: plan.skipped }, null, 2)}\n`,
+    `${JSON.stringify({ mode: 'apply', prNumber: pr, headSha: plan.headSha, status, applied, failed, skipped: plan.skipped }, null, 2)}\n`,
   );
-  process.exit(failed.length > 0 ? 1 : 0);
+  process.exit(claimLost || failed.length > 0 ? 1 : 0);
 }

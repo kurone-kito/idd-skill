@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   buildDispositionBody,
   buildDispositionPlan,
+  isCodeRabbitCompletedSummary,
   type NoticeComment,
   noticeReason,
 } from '../src/scripts/disposition-non-review-notices.mts';
@@ -19,6 +20,8 @@ const CODEX_NOTICE =
   'You have reached your Codex usage limits for code reviews.';
 const CODERABBIT_NOTICE =
   '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> ## Review limit reached';
+const CODERABBIT_SUMMARY =
+  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->';
 // A full 40-char head SHA for the cases that validate against the schema, which
 // now constrains `headSha` to `^[0-9a-f]{40}$`.
 const HEAD_SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -199,7 +202,7 @@ test('buildDispositionPlan skips a notice when its bot has a completed HEAD revi
     },
     {
       trustedMarkerLogins: ['kurone-kito'],
-      botsWithCompletedHeadReview: [CODEX],
+      botsWithCompletedReview: [CODEX],
     },
   );
   // Codex has a completed review of HEAD, so its notice is left un-rejected
@@ -214,6 +217,35 @@ test('buildDispositionPlan skips a notice when its bot has a completed HEAD revi
       reason: entry.reason,
     })),
     [{ botLogin: CODEX, reason: 'completed-review-present' }],
+  );
+});
+
+test('isCodeRabbitCompletedSummary recognizes a CodeRabbit summary, not a notice', () => {
+  assert.equal(
+    isCodeRabbitCompletedSummary(`${CODERABBIT_SUMMARY}\n## Walkthrough`),
+    true,
+  );
+  assert.equal(isCodeRabbitCompletedSummary(CODERABBIT_NOTICE), false);
+  assert.equal(isCodeRabbitCompletedSummary('a human comment'), false);
+});
+
+test('buildDispositionPlan skips a CodeRabbit notice when a summary review is present', () => {
+  // The CLI feeds CodeRabbit's summary comment into botsWithCompletedReview; the
+  // plan then leaves CodeRabbit's rate-limit notice un-rejected.
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [notice(1, CODERABBIT, CODERABBIT_NOTICE)],
+    },
+    {
+      trustedMarkerLogins: ['kurone-kito'],
+      botsWithCompletedReview: [CODERABBIT],
+    },
+  );
+  assert.equal(plan.planned.length, 0);
+  assert.deepEqual(
+    plan.skipped.map((entry) => entry.reason),
+    ['completed-review-present'],
   );
 });
 
