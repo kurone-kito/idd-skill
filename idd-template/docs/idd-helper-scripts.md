@@ -22,6 +22,11 @@ In the idd-skill source repository, the following optional helpers were adopted:
   across limited scope, clear verification, and autonomous completion
   criteria (referenced in
   [kurone-kito/idd-skill#505](https://github.com/kurone-kito/idd-skill/issues/505))
+- `scripts/discover-shared-file-overlap.mjs` for read-only A4 Step 2
+  high-contention shared-file overlap evidence: it flags candidate issues
+  whose `## Candidate files` collide with actively-claimed / open-PR work on
+  the F-phase bundle instruction files (referenced in
+  [kurone-kito/idd-skill#1019](https://github.com/kurone-kito/idd-skill/issues/1019))
 - `scripts/suitability-triage.mjs` for A4.5 seven-check suitability
   evaluation (referenced in
   [kurone-kito/idd-skill#392](https://github.com/kurone-kito/idd-skill/issues/392))
@@ -233,6 +238,44 @@ one or more issues.
     "summary": { "total": 2, "viableCount": 1, "discardedCount": 1, "discardedByCriterion": { "limited_scope": 1, "autonomous_completion": 1 } }
   }
   ```
+
+### Discover Shared File Overlap Contract
+
+`scripts/discover-shared-file-overlap.mjs` is the read-only file-contention
+companion to the `discover-roadmap-graph` `--with-claim-state` claim-eligibility
+annotation. For a set of candidate issues it reports the high-contention shared
+files each would touch (parsed from its `## Candidate files` section) and
+whether any overlap an actively-claimed or open-PR issue, and it emits the soft
+A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
+
+- **Inputs**: `--candidate <number>` (repeatable) or `--candidates <n1,n2>`,
+  with optional `--owner <owner>`, `--repo <repo>`, `--policy <path>`,
+  `--manifest <path>` (default `audit/sync-manifest.json`), `--bundles
+  <id1,id2>` (default `bundle-review,bundle-merge`), `--now <ISO8601>`, and
+  `--check-overlap`. The cross-issue active-set discovery (open PRs plus
+  claimed-candidate comment scans, resolved with the shared claim-state rules)
+  is **gated behind `--check-overlap`** because it adds GitHub API cost; without
+  it each candidate's high-contention files are still reported.
+- **High-contention set**: the union of the named bundles' member files plus
+  `audit/sync-manifest.json`. Instruction files are keyed by their repo-wide
+  unique basename so a source path, mirror path, or bare citation all match.
+- **JSON output**:
+  - `repository`: `{ owner: string, repo: string }`
+  - `checkedOverlap`: `boolean`
+  - `highContentionFiles`: `string[]` (sorted)
+  - `candidates`: `[{ number: number, score: number | null,`
+    `effectiveScore: number, candidateFiles: string[],`
+    `highContentionTouched: string[], overlaps: [{ number: number,`
+    `reason: "claim" | "pr", files: string[] }], overlapFlag: boolean }]`
+  - `recommendedOrder`: `number[]` — candidate numbers after the soft
+    tie-breaker (score desc, then non-overlapping first within a score band,
+    then issue number). Advisory only; never a hard gate.
+  - `summary`: `{ candidateCount: number, flaggedCount: number,`
+    `activeIssueCount: number }`
+- **Behavior boundary**: evidence-only and heuristic. `## Candidate files` are
+  advisory cues, not an exhaustive manifest, so the overlap signal must stay a
+  soft A4 Step 2 tie-breaker — never a claim gate. The written discover
+  instructions remain authoritative.
 
 The exported template remains portable without a `scripts/` directory.
 Adopters can copy the helper separately when they want the same
