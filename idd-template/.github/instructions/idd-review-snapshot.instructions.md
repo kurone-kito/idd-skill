@@ -81,8 +81,11 @@ empty. Compute `{total-item-count}` as the total number of items in the
 snapshot (0 if empty). Persist all six values immediately by posting a
 PR comment with this format (when helper runtime is enabled, prefer the
 profile-selected post-idd-marker command — `--type watermark --target pr
-<pr-number> --apply` — to render and POST this marker in one step, so a
-hand-typed head SHA cannot mis-route the F2 review-currency check;
+<pr-number> <watermark-fields> --apply`, passing the same six values shown
+below as `--agent-id` / `--claim-id` / `--head-sha` / `--max-activity-at` /
+`--total-item-count` / `--ci-completed-at`, to render and POST this marker in
+one step, so a hand-typed head SHA cannot mis-route the F2 review-currency
+check;
 `emit-marker --type review-watermark` stays the emit-only render path and
 the manual HTTP `POST` below remains the fallback; see
 `docs/idd-helper-scripts.md`):
@@ -227,9 +230,10 @@ comments.
 After the critique pass completes, post a new `review-baseline` comment
 with the current HEAD SHA using this format (when helper runtime is
 enabled, prefer the profile-selected post-idd-marker command — `--type
-baseline --target pr <pr-number> --apply` — to render and POST it in one
-step; `emit-marker --type review-baseline` stays the emit-only render
-path; see `docs/idd-helper-scripts.md`):
+baseline --target pr <pr-number> --agent-id <id> --claim-id <id> --sha
+<head-sha> --apply` — to render and POST it in one step; `emit-marker
+--type review-baseline` stays the emit-only render path; see
+`docs/idd-helper-scripts.md`):
 
 ```markdown
 <!-- review-baseline: {agent-id} {claim-id} {SHA} -->
