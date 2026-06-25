@@ -41,6 +41,21 @@ them and continue the rebase. After completing the rebase, if any files
 were manually edited during conflict resolution, run **fix-validate**
 before proceeding.
 
+On a signed-commit repo whose primary signing is non-interactive-hostile
+(GPG pinentry or a hardware-touch path) but that provides a fallback
+signing wrapper for arbitrary git subcommands (pass
+`-c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true`
+to `git` before the subcommand — `git -c … rebase`, not `git rebase -c …`
+— or use a repo alias that wraps any subcommand; a commit-only alias like
+`git commit-ssh` will not run `rebase`),
+**run the initial `git rebase origin/main` above through that wrapper —
+not the plain command — and continue it with the wrapper's own
+`--continue` form**; the wrapper must own the whole operation. Plain
+`git rebase --continue` re-signs the replayed commit through the
+configured primary signing, which stalls non-interactively right after
+the conflict is already resolved. This is the normal-path complement to
+the recovery-path re-signing in Post-rebase verification below.
+
 ### Post-rebase verification
 
 In a sibling-worktree setup, a rebase can leave HEAD **detached at the
@@ -57,7 +72,11 @@ If HEAD is detached (current branch empty), **auto-recover once**: re-attach
 to the claimed branch with `git checkout {branch-name}` (the local commit is
 preserved on the branch ref), re-run the D1 rebase, then re-verify both
 checks. The re-rebase re-signs through the configured commit-signing path —
-do not pin a key. If recovery still fails (HEAD still detached or the
+do not hardcode an ad-hoc key. On the signed-commit repos in the rebase
+note above, run the re-rebase through that same fallback wrapper (the
+repo's blessed fallback, not an ad-hoc pin), since the plain re-rebase
+would stall on the non-interactive primary signing. If
+recovery still fails (HEAD still detached or the
 expected commit absent), post a hold note documenting the branch state and
 stop; do not push.
 
