@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/post-idd-marker.schema.json",
+  "title": "Post IDD Marker Result",
+  "description": "Dry-run body preview or apply result for POSTing a canonical IDD operational marker comment to an issue or PR.",
+  "type": "object",
+  "required": ["mode", "type", "target", "number"],
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["dry-run", "apply"]
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "claim",
+        "unclaim",
+        "watermark",
+        "baseline",
+        "advisory",
+        "advisory-recovery"
+      ]
+    },
+    "target": {
+      "type": "string",
+      "enum": ["issue", "pr"]
+    },
+    "number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "body": {
+      "type": "string"
+    },
+    "commentId": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "url": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

@@ -279,6 +279,16 @@ const HELPER_COMMANDS = [
     description: 'Resolve canonical phase IDs with legacy alias compatibility.',
   },
   {
+    id: 'post-idd-marker',
+    scriptName: 'idd:post-idd-marker',
+    binName: 'idd-post-idd-marker',
+    entryPath: 'scripts/post-idd-marker.mjs',
+    vendoredCommand: 'node scripts/post-idd-marker.mjs',
+    description:
+      'Render and POST a canonical IDD operational marker (claim / unclaim / watermark / baseline / advisory / advisory-recovery) via the reliable JSON path.',
+    contractPaths: ['schemas/post-idd-marker.schema.json'],
+  },
+  {
     id: 'pre-merge-readiness',
     scriptName: 'idd:pre-merge-readiness',
     binName: 'idd-pre-merge-readiness',

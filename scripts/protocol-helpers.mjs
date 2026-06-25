@@ -452,6 +452,47 @@ export function renderReviewBaselineMarker(payload) {
     `_${agentId}: critique baseline — IDD automation marker. Do not edit._`,
   ].join('\n');
 }
+// --- Write-side companion renderers (#1047) ---
+//
+// The post-idd-marker helper POSTs the same operational markers an agent emits
+// per cycle, so it needs a renderer for every type it can post. claim /
+// watermark / baseline already have renderers above; these three cover the
+// remaining post-idd-marker types so the body formats stay single-sourced.
+export function renderUnclaimedByMarker(payload) {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const claimId = normalizeNonWhitespaceToken(payload?.claimId);
+  const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
+  if (!agentId || !claimId || !timestamp) {
+    throw new Error('invalid unclaimed-by marker payload');
+  }
+  return [
+    `<!-- unclaimed-by: ${agentId} ${claimId} ${timestamp} -->`,
+    '',
+    `_${agentId}: issue claim released — IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
+// advisory-wait / advisory-wait-recovery are PLAIN-TEXT markers (no visible
+// note): the AW2 / shell-fallback recognizers anchor on `-->$` / `\s*$`, so a
+// trailing visible note would break them. They carry the PR HEAD SHA (not a
+// claim id) per the AW3 protocol.
+export function renderAdvisoryWaitMarker(payload) {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
+  const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
+  if (!agentId || !/^[0-9a-f]{40}$/.test(headSha) || !timestamp) {
+    throw new Error('invalid advisory-wait marker payload');
+  }
+  return `advisory-wait: ${agentId} ${headSha} ${timestamp}`;
+}
+export function renderAdvisoryWaitRecoveryMarker(payload) {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
+  const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
+  if (!agentId || !/^[0-9a-f]{40}$/.test(headSha) || !timestamp) {
+    throw new Error('invalid advisory-wait-recovery marker payload');
+  }
+  return `advisory-wait-recovery: ${agentId} ${headSha} ${timestamp}`;
+}
 function matchCheckSelectorLocal(name, selector, matchMode) {
   const n = String(name ?? '').trim();
   const s = String(selector ?? '').trim();
