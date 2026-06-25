@@ -18,8 +18,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { parseIsoDurationToMs } from './policy-helpers.mts';
 import {
-  isStaleAt,
   resolveActiveClaim,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
@@ -31,6 +31,7 @@ const DEFAULT_BUNDLE_IDS = ['bundle-review', 'bundle-merge'];
 /** Append-mostly shared surfaces that are not bundle members. */
 const DEFAULT_EXTRA_FILES = [DEFAULT_MANIFEST_PATH];
 const DEFAULT_AUTOPILOT_SUITABILITY_FLOOR = 3;
+const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 
 if (isCliExecution()) {
   runCli();
@@ -231,6 +232,7 @@ export function analyzeSharedFileOverlap(input: {
   activeIssues: ActiveIssueInput[];
   highContentionFiles: Iterable<string>;
   floor?: number;
+  suitabilityEnabled?: boolean;
 }): {
   candidates: OverlapCandidateResult[];
   recommendedOrder: number[];
@@ -241,6 +243,10 @@ export function analyzeSharedFileOverlap(input: {
   };
 } {
   const floor = input.floor ?? DEFAULT_AUTOPILOT_SUITABILITY_FLOOR;
+  // When the autopilot-suitability kill switch is off (A4 Step 2 ignores the
+  // score and selects by lowest issue number), equalize every effectiveScore so
+  // the recommended order is driven by overlap then issue number, not score.
+  const suitabilityEnabled = input.suitabilityEnabled !== false;
   const highContention = new Set(input.highContentionFiles);
 
   const activeTouched = input.activeIssues.map((active) => ({
@@ -276,7 +282,7 @@ export function analyzeSharedFileOverlap(input: {
       return {
         number: candidate.number,
         score,
-        effectiveScore: score ?? floor,
+        effectiveScore: suitabilityEnabled ? (score ?? floor) : 0,
         candidateFiles: candidate.candidateFiles,
         highContentionTouched,
         overlaps,
@@ -410,8 +416,8 @@ function runCli(): void {
   if (args.checkOverlap) {
     activeIssues = discoverActiveIssues({
       repoRef,
-      candidateNumbers: args.candidates,
       trustedActors: policy.trustedMarkerActors,
+      staleAgeMs: policy.claimStaleAgeMs,
       now,
     });
   }
@@ -421,6 +427,7 @@ function runCli(): void {
     activeIssues,
     highContentionFiles,
     floor: policy.autopilotSuitabilityFloor,
+    suitabilityEnabled: policy.autopilotSuitabilityEnabled,
   });
 
   const output = {
@@ -444,14 +451,14 @@ function runCli(): void {
  */
 function discoverActiveIssues(options: {
   repoRef: string;
-  candidateNumbers: number[];
   trustedActors: string[];
+  staleAgeMs: number;
   now: string;
 }): ActiveIssueInput[] {
-  const { repoRef, candidateNumbers, trustedActors, now } = options;
+  const { repoRef, trustedActors, staleAgeMs, now } = options;
   const active = new Map<number, ActiveIssueInput>();
 
-  // Active-by-PR: every issue closed by an open PR.
+  // Active-by-PR: every issue closed by an open PR (repo-wide).
   for (const number of fetchOpenPrLinkedIssues(repoRef)) {
     if (!active.has(number)) {
       const body = fetchIssue(repoRef, number).body;
@@ -463,16 +470,29 @@ function discoverActiveIssues(options: {
     }
   }
 
-  // Active-by-claim: candidate issues that already carry a non-stale claim.
+  // Active-by-claim: scan the issues that have a *remote* `issue/<n>-*` branch
+  // — every IDD claim creates one, published once its branch is pushed — so a
+  // non-stale claim held by another session is detected even though it is
+  // outside the (unclaimed) candidate set the ranking operates on. Bounded by
+  // the number of active issue branches, not a repo-wide comment scan; a claim
+  // whose branch is not yet pushed is picked up once it appears remotely. The
+  // configured claim stale age drives both the supersession check inside
+  // resolveActiveClaim and the non-stale filter here.
   const isTrusted = (login: string) =>
     trustedActors.some((actor) => actor.toLowerCase() === login.toLowerCase());
-  for (const number of candidateNumbers) {
+  const isStale = (activeCreatedAt: string, nextCreatedAt: string): boolean =>
+    new Date(nextCreatedAt).getTime() - new Date(activeCreatedAt).getTime() >=
+    staleAgeMs;
+  for (const number of fetchActiveClaimBranchNumbers(repoRef)) {
     if (active.has(number)) {
       continue;
     }
     const comments = fetchIssueComments(repoRef, number);
-    const claim = resolveActiveClaim(comments, isTrusted);
-    if (claim && !isStaleAt(claim.createdAt, now)) {
+    const claim = resolveActiveClaim(comments, {
+      isTrustedAuthor: isTrusted,
+      isStale,
+    });
+    if (claim && !isStale(claim.createdAt, now)) {
       const body = fetchIssue(repoRef, number).body;
       active.set(number, {
         number,
@@ -483,6 +503,23 @@ function discoverActiveIssues(options: {
   }
 
   return [...active.values()].sort((left, right) => left.number - right.number);
+}
+
+/** Issue numbers that currently have an `issue/<n>-*` branch on the remote. */
+function fetchActiveClaimBranchNumbers(repoRef: string): number[] {
+  const refs = ghJson([
+    'api',
+    `repos/${repoRef}/git/matching-refs/heads/issue/`,
+  ]);
+  const numbers = new Set<number>();
+  for (const ref of refs) {
+    const name = String((ref as { ref?: unknown }).ref ?? '');
+    const match = name.match(/^refs\/heads\/issue\/(\d+)-/);
+    if (match) {
+      numbers.add(Number.parseInt(match[1], 10));
+    }
+  }
+  return [...numbers];
 }
 
 interface FetchedIssue {
@@ -623,6 +660,8 @@ function loadPolicy(policyPath: string): {
   markerPrefix: string;
   trustedMarkerActors: string[];
   autopilotSuitabilityFloor: number;
+  autopilotSuitabilityEnabled: boolean;
+  claimStaleAgeMs: number;
 } {
   const targetPath = policyPath
     ? resolve(process.cwd(), policyPath)
@@ -630,7 +669,8 @@ function loadPolicy(policyPath: string): {
   let config: {
     markerPrefix?: unknown;
     trustedMarkerActors?: unknown;
-    autopilotSuitability?: { floor?: unknown } | null;
+    autopilotSuitability?: { floor?: unknown; enabled?: unknown } | null;
+    claimTiming?: { staleAge?: unknown } | null;
   } | null = null;
   try {
     config = JSON.parse(readFileSync(targetPath, 'utf8'));
@@ -650,10 +690,17 @@ function loadPolicy(policyPath: string): {
     typeof floorValue === 'number' && floorValue >= 1 && floorValue <= 5
       ? floorValue
       : DEFAULT_AUTOPILOT_SUITABILITY_FLOOR;
+  const autopilotSuitabilityEnabled =
+    config?.autopilotSuitability?.enabled !== false;
+  const claimStaleAgeMs =
+    parseIsoDurationToMs(config?.claimTiming?.staleAge) ??
+    DEFAULT_CLAIM_STALE_AGE_MS;
   return {
     markerPrefix,
     trustedMarkerActors: trusted.actors,
     autopilotSuitabilityFloor,
+    autopilotSuitabilityEnabled,
+    claimStaleAgeMs,
   };
 }
 
@@ -755,11 +802,13 @@ Without --check-overlap no active-set discovery runs (no extra GitHub API
 cost); each candidate's high-contention files are still reported.
 
 --check-overlap coverage: open-PR overlap is repo-wide (every issue closed by
-an open PR), but active-claim overlap is scanned only within the candidate set
-to avoid a repo-wide comment scan — a non-stale claim on a non-candidate issue
-with no open PR is not detected. The signal is an advisory A4 Step 2 hint, so
-this bounded coverage is acceptable; a claimed candidate becomes active for the
-next discovery run.
+an open PR). Active-claim overlap scans the issues that have a remote
+issue/<n>-* branch (every IDD claim creates one once pushed), resolving each
+with the configured claim stale age, so a non-stale claim held by another
+session is detected even when it is outside the unclaimed candidate set being
+ranked. It is bounded by the number of active issue branches, not a repo-wide
+comment scan; a claim whose branch is not yet pushed is picked up once it
+appears remotely.
 `);
 }
 

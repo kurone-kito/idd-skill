@@ -252,14 +252,17 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   with optional `--owner <owner>`, `--repo <repo>`, `--policy <path>`,
   `--manifest <path>` (default `audit/sync-manifest.json`), `--bundles
   <id1,id2>` (default `bundle-review,bundle-merge`), `--now <ISO8601>`, and
-  `--check-overlap`. The cross-issue active-set discovery (open PRs plus
-  claimed-candidate comment scans, resolved with the shared claim-state rules)
-  is **gated behind `--check-overlap`** because it adds GitHub API cost; without
-  it each candidate's high-contention files are still reported. **Coverage**:
-  open-PR overlap is repo-wide, but active-claim overlap is scanned only within
-  the candidate set (no repo-wide comment scan), so a non-stale claim on a
-  non-candidate issue with no open PR is not detected — acceptable for an
-  advisory tie-breaker, since a claimed candidate becomes active next run.
+  `--check-overlap`. The cross-issue active-set discovery (open PRs plus the
+  claim comments of issues that have a remote `issue/<n>-*` branch, resolved
+  with the shared claim-state rules and the configured claim stale age) is
+  **gated behind `--check-overlap`** because it adds GitHub API cost; without it
+  each candidate's high-contention files are still reported. **Coverage**:
+  open-PR overlap is repo-wide; active-claim overlap covers every issue that has
+  a remote `issue/<n>-*` branch (every IDD claim creates one once pushed), so a
+  non-stale claim held by another session is detected even when it is outside
+  the unclaimed candidate set being ranked. It is bounded by the number of
+  active issue branches, not a repo-wide comment scan; a claim whose branch is
+  not yet pushed is picked up once it appears remotely.
 - **High-contention set**: the union of the named bundles' member files plus
   `audit/sync-manifest.json`. Instruction files are keyed by their repo-wide
   unique basename so a source path, mirror path, or bare citation all match.

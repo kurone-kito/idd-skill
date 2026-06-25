@@ -340,3 +340,39 @@ test('analyzeSharedFileOverlap treats a missing score as the floor for ordering'
     3,
   );
 });
+
+test('analyzeSharedFileOverlap ignores the score when the suitability kill switch is off', () => {
+  const input = {
+    candidates: [
+      { number: 30, score: 3, candidateFiles: [] },
+      { number: 31, score: 5, candidateFiles: [] },
+    ],
+    activeIssues: [],
+    highContentionFiles: HIGH_CONTENTION,
+  };
+  // Enabled (default): score 5 ranks ahead of the lower-numbered score 3.
+  assert.deepEqual(analyzeSharedFileOverlap(input).recommendedOrder, [31, 30]);
+  // Disabled: scores are equalized, so the lower issue number wins (A4 Step 2
+  // falls back to lowest-number selection).
+  const disabled = analyzeSharedFileOverlap({
+    ...input,
+    suitabilityEnabled: false,
+  });
+  assert.deepEqual(disabled.recommendedOrder, [30, 31]);
+  assert.equal(disabled.candidates[0].effectiveScore, 0);
+});
+
+test('the suitability kill switch still de-prioritizes overlap before issue number', () => {
+  // Disabled scores → one band; within it, the colliding low number is moved
+  // after the clean higher number.
+  const result = analyzeSharedFileOverlap({
+    candidates: [
+      { number: 18, score: 5, candidateFiles: [MERGE_FILE] },
+      { number: 19, score: 3, candidateFiles: ['src/scripts/isolated.mts'] },
+    ],
+    activeIssues: [{ number: 991, reason: 'pr', candidateFiles: [MERGE_FILE] }],
+    highContentionFiles: HIGH_CONTENTION,
+    suitabilityEnabled: false,
+  });
+  assert.deepEqual(result.recommendedOrder, [19, 18]);
+});
