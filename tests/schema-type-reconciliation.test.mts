@@ -15,6 +15,7 @@ import type {
   ParsedClaimMarker,
   ParsedForcedHandoffMarker,
 } from '../src/scripts/protocol-helpers.mts';
+import type { ResolveReviewThreadReport } from '../src/scripts/resolve-review-thread.mts';
 import type { StalledSessionQuietCheckReport } from '../src/scripts/stalled-session-quiet-check.mts';
 import {
   checkSchemaKeywords,
@@ -958,6 +959,27 @@ const dispositionNonReviewNoticesFixture = {
   ],
 } satisfies DispositionReport;
 
+const resolveReviewThreadKeys = [
+  'mode',
+  'prNumber',
+  'commentId',
+  'threadId',
+  'alreadyResolved',
+  'status',
+  'replyId',
+  'error',
+] as const satisfies readonly (keyof ResolveReviewThreadReport)[];
+
+const resolveReviewThreadFixture = {
+  mode: 'apply',
+  prNumber: 7,
+  commentId: 1001,
+  threadId: 'thread-node-id',
+  alreadyResolved: false,
+  status: 'applied',
+  replyId: 4242,
+} satisfies ResolveReviewThreadReport;
+
 const postIddMarkerKeys = [
   'mode',
   'type',
@@ -984,6 +1006,13 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
     owningModule: 'src/scripts/disposition-non-review-notices.mts',
     keys: dispositionNonReviewNoticesKeys,
     fixture: dispositionNonReviewNoticesFixture,
+  },
+  {
+    schemaFile: 'resolve-review-thread.schema.json',
+    exportedType: 'ResolveReviewThreadReport',
+    owningModule: 'src/scripts/resolve-review-thread.mts',
+    keys: resolveReviewThreadKeys,
+    fixture: resolveReviewThreadFixture,
   },
   {
     schemaFile: 'post-idd-marker.schema.json',
