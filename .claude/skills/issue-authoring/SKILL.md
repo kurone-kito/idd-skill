@@ -72,8 +72,10 @@ needs-decision, blocked-by-human, and out-of-scope.
    - apply the label before updating an existing issue
    - create new issues with the label when supported, or apply the label
      immediately after creation
-   - if post-create label application fails, close, delete, or otherwise
-     make the created issue undiscoverable before stopping
+   - if post-create label application fails, close the created issue
+     before stopping; deletion needs admin permission the authoring
+     agent typically lacks (and `docs/permissions.md` forbids for normal
+     IDD), so it is not the default path
    - remove the label from all published issues only after the full set is
      published, the user confirms the result, and the user explicitly
      requests release from the authoring hold for IDD execution

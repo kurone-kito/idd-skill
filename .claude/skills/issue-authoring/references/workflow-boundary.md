@@ -26,8 +26,10 @@ The issue-authoring bundle fits into a three-phase handoff:
 - For new issues, bundled skill creates the issue with the authoring label
   when the publication command supports that; otherwise it applies the
   label immediately after creation
-- If post-create label application fails, bundled skill closes, deletes,
-  or otherwise makes the created issue undiscoverable before stopping
+- If post-create label application fails, bundled skill closes the created
+  issue before stopping; deletion needs admin permission the authoring
+  agent typically lacks (and `docs/permissions.md` forbids for normal IDD),
+  so it is not the default path
 - User verifies the published issues look correct
 - Bundled skill removes the authoring label from all published issues only
   after the full issue set is published, the user confirms the result, and
