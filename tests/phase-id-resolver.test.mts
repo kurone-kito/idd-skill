@@ -208,9 +208,19 @@ test('every resume-route-selection route resolves except the terminal stop senti
       continue;
     }
     const resolution = resolvePhaseId(route);
-    assert.ok(
+    // Assert canonical self-resolution, not merely "resolves to some canonical
+    // id": resume routes are themselves canonical phases, so a future route
+    // wired up as a legacy alias (matchedBy 'legacy-alias', or a canonicalPhaseId
+    // other than the route) must fail this guard rather than silently pass.
+    assert.equal(
+      resolution.matchedBy,
+      'canonical',
+      `resume route ${route} must stay canonical in the phase-id resolver`,
+    );
+    assert.equal(
       resolution.canonicalPhaseId,
-      `resume route ${route} must resolve via the phase-id resolver`,
+      route,
+      `resume route ${route} must resolve to itself`,
     );
   }
 
