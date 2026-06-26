@@ -5,7 +5,10 @@
 // generated .mjs. See docs/typescript-sources.md.
 
 import { Buffer } from 'node:buffer';
-import { normalizeAdvisoryWaitRuntimeOptions } from './advisory-wait-policy.mts';
+import {
+  DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+  normalizeAdvisoryWaitRuntimeOptions,
+} from './advisory-wait-policy.mts';
 import {
   getReviewEscalationChangesRequestedPolicy,
   parseIsoDurationToMs,
@@ -2303,20 +2306,46 @@ export function classifyCiChecks(checks: CheckLike[]) {
   };
 }
 
-export function isCopilotReviewerLogin(login: unknown): boolean {
+/**
+ * Match a review/reviewer login against the configured primary advisory bot.
+ *
+ * `primaryBotLogin` defaults to Copilot so existing callers stay behavior-
+ * preserving. For the Copilot default the historical dual match is kept
+ * (the exact `copilot` actor plus the `copilot-pull-request-reviewer*` GitHub
+ * App login family). A non-Copilot configured login is matched by exact
+ * normalized (trimmed, lower-cased) equality, since an arbitrary bot login has
+ * no analogous prefix family.
+ */
+export function isCopilotReviewerLogin(
+  login: unknown,
+  primaryBotLogin: string = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+): boolean {
   const normalized = String(login ?? '')
     .trim()
     .toLowerCase();
-  return (
-    normalized === 'copilot' ||
-    normalized.startsWith('copilot-pull-request-reviewer')
-  );
+  const configured =
+    String(primaryBotLogin ?? '')
+      .trim()
+      .toLowerCase() || DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  if (configured === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN) {
+    return (
+      normalized === 'copilot' ||
+      normalized.startsWith('copilot-pull-request-reviewer')
+    );
+  }
+  return normalized === configured;
 }
 
-export function findLastCopilotReviewCommit(reviews: ReviewLike[]): string {
+export function findLastCopilotReviewCommit(
+  reviews: ReviewLike[],
+  primaryBotLogin: string = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+): string {
   const latest = reviews
     .filter((review) =>
-      isCopilotReviewerLogin(review.user?.login ?? review.author?.login ?? ''),
+      isCopilotReviewerLogin(
+        review.user?.login ?? review.author?.login ?? '',
+        primaryBotLogin,
+      ),
     )
     .map((review) => ({
       submittedAt: review.submitted_at ?? review.submittedAt ?? '',
@@ -2332,13 +2361,15 @@ export function findLastCopilotReviewCommit(reviews: ReviewLike[]): string {
 
 export function isCopilotPending(
   requestedReviewers: RequestedReviewerLike[],
+  primaryBotLogin: string = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
 ): boolean {
   return requestedReviewers.some((reviewer) => {
     if (typeof reviewer === 'string') {
-      return isCopilotReviewerLogin(reviewer);
+      return isCopilotReviewerLogin(reviewer, primaryBotLogin);
     }
     return isCopilotReviewerLogin(
       reviewer?.login ?? reviewer?.user?.login ?? '',
+      primaryBotLogin,
     );
   });
 }
@@ -2346,6 +2377,7 @@ export function isCopilotPending(
 export function computeCopilotPendingCoversHead(
   timelineEvents: TimelineEventLike[],
   prHeadSha: string,
+  primaryBotLogin: string = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
 ): boolean {
   let headIndex = -1;
   let requestIndex = -1;
@@ -2362,7 +2394,7 @@ export function computeCopilotPendingCoversHead(
 
     if (eventName === 'review_requested') {
       const reviewerLogin = event?.requested_reviewer?.login ?? '';
-      if (isCopilotReviewerLogin(reviewerLogin)) {
+      if (isCopilotReviewerLogin(reviewerLogin, primaryBotLogin)) {
         requestIndex = index;
       }
     }
@@ -2671,6 +2703,7 @@ export function buildAdvisoryWaitSummary(
     settledWindowMinutes?: number;
     pollIntervalMinutes?: number;
     capExhaustedRoute?: string;
+    primaryBotLogin?: string;
   } = {},
 ) {
   const now = String(options.now ?? '');
@@ -2687,6 +2720,10 @@ export function buildAdvisoryWaitSummary(
   const configuredTrustedActors = normalizeTrustedMarkerLogins(
     options.configuredTrustedActors ?? [],
   );
+  const primaryBotLogin =
+    String(options.primaryBotLogin ?? '')
+      .trim()
+      .toLowerCase() || DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
   const markerSummary = summarizeAdvisoryWaitMarkers(
     comments,
     prHeadSha,
@@ -2695,11 +2732,15 @@ export function buildAdvisoryWaitSummary(
   const elapsedMinutes = markerSummary.sameHeadMarkerPresent
     ? minutesBetweenIso(markerSummary.earliestSameHeadAt, now)
     : 0;
-  const lastCopilotCommit = findLastCopilotReviewCommit(reviews);
-  const copilotPending = isCopilotPending(requestedReviewers);
+  const lastCopilotCommit = findLastCopilotReviewCommit(
+    reviews,
+    primaryBotLogin,
+  );
+  const copilotPending = isCopilotPending(requestedReviewers, primaryBotLogin);
   const copilotPendingCoversHead = computeCopilotPendingCoversHead(
     timelineEvents,
     prHeadSha,
+    primaryBotLogin,
   );
   const {
     requestCap,
@@ -4648,6 +4689,7 @@ export function buildPreMergeReadinessSummary(
     settledWindowMinutes?: number;
     pollIntervalMinutes?: number;
     capExhaustedRoute?: string;
+    primaryBotLogin?: string;
     waivableCheckSelectors?:
       | { selector?: unknown; matchMode?: unknown }[]
       | null;
@@ -4761,6 +4803,7 @@ export function buildPreMergeReadinessSummary(
       configuredTrustedActors: options.configuredTrustedActors,
       collaboratorTrustEnabled: options.collaboratorTrustEnabled,
       trustedMarkerLogins,
+      primaryBotLogin: options.primaryBotLogin,
     },
   );
   const claim = summarizeClaimValidation(claimEvents, {

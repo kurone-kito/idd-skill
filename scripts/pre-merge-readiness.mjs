@@ -7,7 +7,10 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { readAdvisoryWaitPolicy } from './advisory-wait-policy.mjs';
+import {
+  readAdvisoryPrimaryBotLogin,
+  readAdvisoryWaitPolicy,
+} from './advisory-wait-policy.mjs';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
@@ -176,6 +179,7 @@ export function collectPreMergeReadiness(argv) {
     operationalComments: [...comments, ...claimComments],
   });
   const advisoryWaitPolicy = readAdvisoryWaitPolicy();
+  const primaryBotLogin = readAdvisoryPrimaryBotLogin();
   const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
   const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
   // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
@@ -231,6 +235,7 @@ export function collectPreMergeReadiness(argv) {
       settledWindowMinutes: advisoryWaitPolicy.settledWindowMinutes,
       pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
       capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
+      primaryBotLogin,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity,
       forcedHandoffEnabled,
