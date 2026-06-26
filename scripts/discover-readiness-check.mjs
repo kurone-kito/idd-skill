@@ -46,6 +46,7 @@ if (isMainModule(import.meta.url)) {
     authoringStaleAgeMs: authoringPolicy.staleAgeMs,
     markerPrefix: resolveMarkerPrefix(policyConfig),
     autopilotSuitabilityFloor: resolveSuitabilityFloor(policyConfig),
+    autopilotSuitabilityEnabled: resolveSuitabilityEnabled(policyConfig),
     now: args.now || new Date(),
   });
   if (args.csv) {
@@ -64,6 +65,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     authoringStaleAgeMs = 4 * 60 * 60 * 1000,
     markerPrefix,
     autopilotSuitabilityFloor,
+    autopilotSuitabilityEnabled,
     now = new Date(),
   } = options ?? {};
   if (typeof loadIssue !== 'function') {
@@ -85,9 +87,18 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
   const suitabilityFloor = normalizeAutopilotSuitabilityFloor(
     autopilotSuitabilityFloor,
   );
+  // `autopilotSuitability.enabled: false` is the discovery kill switch: the
+  // ranker ignores the score entirely (see rankAndRouteBySuitability). Mirror
+  // that here so this readiness signal does not flag below-floor work the
+  // operator turned the suitability system off for.
+  const suitabilityEnabled = autopilotSuitabilityEnabled !== false;
   // Parse the authored autopilot-suitability score once per body and derive
-  // the below-floor flag. A null score ("no score") is never below floor.
+  // the below-floor flag. A null score ("no score") is never below floor; when
+  // the kill switch is off, force a fully neutral signal (ignore the score).
   const suitabilitySignal = (body) => {
+    if (!suitabilityEnabled) {
+      return { autopilotSuitability: null, belowFloor: false };
+    }
     const score = parseAutopilotSuitability(body, resolvedMarkerPrefix);
     return {
       autopilotSuitability: score,
@@ -564,6 +575,11 @@ function resolveSuitabilityFloor(config) {
   return normalizeAutopilotSuitabilityFloor(
     config?.autopilotSuitability?.floor,
   );
+}
+function resolveSuitabilityEnabled(config) {
+  // Match resolveAutopilotSuitabilityEnabled in discover-orphan-filter.mts:
+  // the kill switch is off only when explicitly set to `false`.
+  return config?.autopilotSuitability?.enabled !== false;
 }
 function runGh(args) {
   try {

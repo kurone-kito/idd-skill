@@ -506,3 +506,29 @@ test('parses the suitability score using a configured marker prefix', async () =
   assert.equal(summary.ready[0].autopilotSuitability, 1);
   assert.equal(summary.ready[0].belowFloor, true);
 });
+
+test('forces a neutral signal when the suitability kill switch is off', async () => {
+  const summary = await evaluateDiscoverReadiness([1501], {
+    autopilotSuitabilityEnabled: false,
+    loadIssue: async () => ({
+      number: 1501,
+      title: 'below floor but kill switch off',
+      state: 'OPEN',
+      body: 'human-led\n<!-- idd-skill-autopilot-suitability: 2 -->',
+      labels: [],
+    }),
+    findRoadmapsByMarker: async () => [],
+  });
+
+  // Kill switch off: the score is ignored entirely, so the signal is neutral
+  // even though the body carries a below-floor score. Classification is
+  // unchanged — the issue is still ready.
+  assert.deepEqual(summary.ready, [
+    {
+      number: 1501,
+      title: 'below floor but kill switch off',
+      autopilotSuitability: null,
+      belowFloor: false,
+    },
+  ]);
+});

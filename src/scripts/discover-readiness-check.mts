@@ -36,8 +36,11 @@ type InaccessibleIssueSentinel = typeof INACCESSIBLE_ISSUE_SENTINEL;
  * when the marker is absent, out of range, or incoherent (fail-safe).
  * `belowFloor` is `true` only when a score is present and strictly below
  * the configured floor; a "no score" issue is never flagged below floor,
- * matching the existing score semantics. The signal is advisory evidence
- * only — it never changes whether an issue is `ready` or `filteredOut`.
+ * matching the existing score semantics. When the `autopilotSuitability`
+ * kill switch is off (`enabled: false`), the signal is forced fully neutral
+ * (`null` / `false`), mirroring the discovery ranker that ignores the score
+ * entirely. The signal is advisory evidence only — it never changes whether
+ * an issue is `ready` or `filteredOut`.
  */
 export interface ReadinessSuitabilitySignal {
   autopilotSuitability: number | null;
@@ -99,6 +102,7 @@ interface EvaluateDiscoverReadinessOptions {
   authoringStaleAgeMs?: number;
   markerPrefix?: string;
   autopilotSuitabilityFloor?: number;
+  autopilotSuitabilityEnabled?: boolean;
   now?: Date | string;
 }
 
@@ -139,6 +143,7 @@ if (isMainModule(import.meta.url)) {
     authoringStaleAgeMs: authoringPolicy.staleAgeMs,
     markerPrefix: resolveMarkerPrefix(policyConfig),
     autopilotSuitabilityFloor: resolveSuitabilityFloor(policyConfig),
+    autopilotSuitabilityEnabled: resolveSuitabilityEnabled(policyConfig),
     now: args.now || new Date(),
   });
 
@@ -162,6 +167,7 @@ export async function evaluateDiscoverReadiness(
     authoringStaleAgeMs = 4 * 60 * 60 * 1000,
     markerPrefix,
     autopilotSuitabilityFloor,
+    autopilotSuitabilityEnabled,
     now = new Date(),
   } = options ?? {};
   if (typeof loadIssue !== 'function') {
@@ -184,9 +190,18 @@ export async function evaluateDiscoverReadiness(
   const suitabilityFloor = normalizeAutopilotSuitabilityFloor(
     autopilotSuitabilityFloor,
   );
+  // `autopilotSuitability.enabled: false` is the discovery kill switch: the
+  // ranker ignores the score entirely (see rankAndRouteBySuitability). Mirror
+  // that here so this readiness signal does not flag below-floor work the
+  // operator turned the suitability system off for.
+  const suitabilityEnabled = autopilotSuitabilityEnabled !== false;
   // Parse the authored autopilot-suitability score once per body and derive
-  // the below-floor flag. A null score ("no score") is never below floor.
+  // the below-floor flag. A null score ("no score") is never below floor; when
+  // the kill switch is off, force a fully neutral signal (ignore the score).
   const suitabilitySignal = (body: string): ReadinessSuitabilitySignal => {
+    if (!suitabilityEnabled) {
+      return { autopilotSuitability: null, belowFloor: false };
+    }
     const score = parseAutopilotSuitability(body, resolvedMarkerPrefix);
     return {
       autopilotSuitability: score,
@@ -734,6 +749,15 @@ function resolveSuitabilityFloor(config: unknown): number {
   return normalizeAutopilotSuitabilityFloor(
     (config as { autopilotSuitability?: { floor?: unknown } } | null)
       ?.autopilotSuitability?.floor,
+  );
+}
+
+function resolveSuitabilityEnabled(config: unknown): boolean {
+  // Match resolveAutopilotSuitabilityEnabled in discover-orphan-filter.mts:
+  // the kill switch is off only when explicitly set to `false`.
+  return (
+    (config as { autopilotSuitability?: { enabled?: unknown } } | null)
+      ?.autopilotSuitability?.enabled !== false
   );
 }
 
