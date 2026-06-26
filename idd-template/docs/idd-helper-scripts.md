@@ -191,10 +191,28 @@ default below is unchanged.
   - `leaves`: `[{ number: number, title: string, state: string,`
     `labels: string[], classification: "execution",`
     `roadmapMarkerId: string, autopilotSuitability: number | null,`
-    `sourceRoots: number[] }]` — the union of open execution leaves. Each
-    leaf records every roadmap root it is reachable from in `sourceRoots`
-    (provenance); a leaf shared by sibling epics appears **once** and is
-    never double-counted.
+    `effort: "S" | "M" | "L" | null, sourceRoots: number[] }]` — the union of
+    open execution leaves. Each leaf records every roadmap root it is reachable
+    from in `sourceRoots` (provenance); a leaf shared by sibling epics appears
+    **once** and is never double-counted.
+  - **Opt-in leaf annotations** (additive; absent flags leave the leaf shape
+    byte-stable and make no extra API call). `--with-claim-state` adds
+    `activeClaim` (always an object: `{ present, stale, claimId, agentId }`,
+    plus `ownedByCurrentSession` when `--current-claim-id` is passed) and
+    `claimEligible: boolean` on each open leaf. `--with-readiness` adds
+    `readiness: { ready: boolean, reasons: string[], authoringHeld: boolean,`
+    `startable: boolean }` — the A3 startability of each open leaf (dependency
+    resolution across visible `Blocked by #N` / `Depends on #N` / task-list refs
+    and hidden `{{PROJECT_MARKER_PREFIX}}-blocked-by` markers, plus
+    authoring-hold), where `reasons` lists the sorted filter reasons (e.g.
+    `blocked_by_open_issue:#N`) and is empty when `ready`, and `startable` is
+    `ready` **and** not claim-blocked (it folds
+    in `claimEligible` when `--with-claim-state` also ran; otherwise claim
+    eligibility is unknown and treated as non-blocking). `authoringHeld`
+    reports label **presence** only — `--with-readiness` does not compute the
+    stale-authoring warning (it would cost a discarded per-leaf timeline fetch
+    and does not change startability). Both annotations are **soft** discovery
+    hints — the A3/A4/A4.5/A5 gates remain authoritative.
   - `diagnostics`: same four buckets as single-root mode, deduped across
     every per-root enumeration.
   - `summary`: `{ rootCount: number, leafCount: number,`

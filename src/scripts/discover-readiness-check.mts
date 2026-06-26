@@ -734,7 +734,7 @@ export function buildRoadmapMarkerSearchQuery(
   return `repo:${owner}/${repo} is:issue in:body "<!-- ${markerPrefix}-roadmap-id: ${marker} -->"`;
 }
 
-function buildRoadmapMarkerResolver(
+export function buildRoadmapMarkerResolver(
   owner: string,
   repo: string,
   markerPrefix: string,
