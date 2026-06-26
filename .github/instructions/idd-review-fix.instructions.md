@@ -168,9 +168,9 @@ GitHub-enforced constraint.
 The advisory bot whose review is requested below is the configured
 **primary advisory bot** (`.github/idd/config.json`
 `advisoryWait.primaryBotLogin`), which defaults to Copilot. Substitute
-`{primary-advisory-bot}` in the commands below with that login (the
-default is `@copilot`); the advisory-wait helpers resolve the same
-identity from policy.
+`{primary-advisory-bot}` in the commands below with that bare login — the
+default is `copilot`, so the command resolves to `@copilot`. The
+advisory-wait helpers resolve the same identity from policy.
 
 1. Fetch `PR_HEAD_SHA`:
 
@@ -194,19 +194,19 @@ identity from policy.
      the advisory wait entirely and proceed directly to E15.
    - **REQUEST_NEEDED** (`COPILOT_PENDING` is `"false"`, or
      `COPILOT_PENDING` is `"true"` but current-head coverage is not
-     proven; request cap < `REQUEST_CAP`): request Copilot review and
-     immediately post a plain-text marker. If `COPILOT_PENDING` is
-     `"true"` in this branch, first remove the stale/unproven pending
-     reviewer request:
+     proven; request cap < `REQUEST_CAP`): request the primary advisory
+     bot's review and immediately post a plain-text marker. If
+     `COPILOT_PENDING` is `"true"` in this branch, first remove the
+     stale/unproven pending reviewer request:
 
      ```sh
      gh pr edit {pr-number} --remove-reviewer "@{primary-advisory-bot}"
      ```
 
-     If removal fails because Copilot is no longer pending, re-run
+     If removal fails because the bot is no longer pending, re-run
      AW1–AW3. If removal fails for any other reason, post the AW4
      pending-refresh-failed hold comment and stop. After removal
-     succeeds, request Copilot review:
+     succeeds, request the primary advisory bot's review:
 
      ```sh
      gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
