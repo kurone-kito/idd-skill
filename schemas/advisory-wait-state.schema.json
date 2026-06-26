@@ -151,6 +151,16 @@
         }
       },
       "additionalProperties": false
+    },
+    "trustedMarkerActors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "trustedMarkerActorsSource": {
+      "type": "string",
+      "enum": ["flag", "env", "config", "none"]
     }
   },
   "additionalProperties": false
