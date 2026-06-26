@@ -12,8 +12,13 @@ import {
   buildAuthoringLabelWarning,
   resolveAuthoringGuardPolicy,
 } from './authoring-label-guard.mjs';
+import {
+  normalizeAutopilotSuitabilityFloor,
+  parseAutopilotSuitability,
+} from './autopilot-suitability.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 
+const DEFAULT_MARKER_PREFIX = 'idd-skill';
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
 });
@@ -30,7 +35,8 @@ if (isMainModule(import.meta.url)) {
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
   const repo =
     args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
-  const authoringPolicy = resolveAuthoringGuardPolicy(loadPolicy(args.policy));
+  const policyConfig = loadPolicy(args.policy);
+  const authoringPolicy = resolveAuthoringGuardPolicy(policyConfig);
   const summary = await evaluateDiscoverReadiness(args.issueNumbers, {
     includeUnresolvable: args.includeUnresolvable,
     loadIssue: buildIssueLoader(owner, repo),
@@ -38,6 +44,9 @@ if (isMainModule(import.meta.url)) {
     findRoadmapsByMarker: buildRoadmapMarkerResolver(owner, repo),
     authoringLabelName: authoringPolicy.labelName,
     authoringStaleAgeMs: authoringPolicy.staleAgeMs,
+    markerPrefix: resolveMarkerPrefix(policyConfig),
+    autopilotSuitabilityFloor: resolveSuitabilityFloor(policyConfig),
+    autopilotSuitabilityEnabled: resolveSuitabilityEnabled(policyConfig),
     now: args.now || new Date(),
   });
   if (args.csv) {
@@ -54,6 +63,9 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     loadIssueLabelEvents,
     authoringLabelName = 'status:authoring',
     authoringStaleAgeMs = 4 * 60 * 60 * 1000,
+    markerPrefix,
+    autopilotSuitabilityFloor,
+    autopilotSuitabilityEnabled,
     now = new Date(),
   } = options ?? {};
   if (typeof loadIssue !== 'function') {
@@ -66,6 +78,33 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
       'evaluateDiscoverReadiness requires findRoadmapsByMarker(markerId)',
     );
   }
+  const resolvedMarkerPrefix =
+    typeof markerPrefix === 'string' && markerPrefix.length > 0
+      ? markerPrefix
+      : DEFAULT_MARKER_PREFIX;
+  // Delegate range/default validation to the shared normalizer so the 1-5
+  // rule and the default floor cannot drift from the discovery rankers.
+  const suitabilityFloor = normalizeAutopilotSuitabilityFloor(
+    autopilotSuitabilityFloor,
+  );
+  // `autopilotSuitability.enabled: false` is the discovery kill switch: the
+  // ranker ignores the score entirely (see rankAndRouteBySuitability). Mirror
+  // that here so this readiness signal does not flag below-floor work the
+  // operator turned the suitability system off for.
+  const suitabilityEnabled = autopilotSuitabilityEnabled !== false;
+  // Parse the authored autopilot-suitability score once per body and derive
+  // the below-floor flag. A null score ("no score") is never below floor; when
+  // the kill switch is off, force a fully neutral signal (ignore the score).
+  const suitabilitySignal = (body) => {
+    if (!suitabilityEnabled) {
+      return { autopilotSuitability: null, belowFloor: false };
+    }
+    const score = parseAutopilotSuitability(body, resolvedMarkerPrefix);
+    return {
+      autopilotSuitability: score,
+      belowFloor: score !== null && score < suitabilityFloor,
+    };
+  };
   const ready = [];
   const filteredOut = [];
   const unresolvable = [];
@@ -88,6 +127,9 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         number: issueNumber,
         title: '',
         reasons: [issueReason],
+        // No body is available for a not-found / inaccessible issue, so the
+        // score is "no score" and the issue is never flagged below floor.
+        ...suitabilitySignal(''),
       });
       continue;
     }
@@ -96,6 +138,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         number: issue.number,
         title: issue.title,
         reasons: ['issue_not_open'],
+        ...suitabilitySignal(issue.body),
       });
       continue;
     }
@@ -185,10 +228,12 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         reasons.add(`blocked_by_open_roadmap_marker:${marker}`);
       }
     }
+    const signal = suitabilitySignal(issue.body);
     if (reasons.size === 0) {
       ready.push({
         number: issue.number,
         title: issue.title,
+        ...signal,
       });
       continue;
     }
@@ -196,6 +241,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
       number: issue.number,
       title: issue.title,
       reasons: [...reasons].sort(),
+      ...signal,
     });
   }
   const filteredByReason = countReasons(filteredOut);
@@ -307,8 +353,8 @@ function printHelp() {
 
 Output schema (JSON mode):
   {
-    "ready": [{ "number": 123, "title": "..." }],
-    "filteredOut": [{ "number": 124, "title": "...", "reasons": ["..."] }],
+    "ready": [{ "number": 123, "title": "...", "autopilotSuitability": 4, "belowFloor": false }],
+    "filteredOut": [{ "number": 124, "title": "...", "reasons": ["..."], "autopilotSuitability": null, "belowFloor": false }],
     "unresolvable": [{ "issueNumber": 124, "kind": "...", "reference": "...", "reason": "..." }],
     "warnings": [{ "issueNumber": 124, "message": "Warning: ..." }],
     "summary": { "total": 2, "readyCount": 1, "filteredCount": 1, "unresolvableCount": 0, "filteredByReason": { "...": 1 } }
@@ -415,16 +461,21 @@ function countReasons(filteredOut) {
   return counts;
 }
 function renderCsv(summary) {
-  const lines = ['number,title,status,reasons'];
+  const lines = ['number,title,status,reasons,suitability,belowFloor'];
   for (const item of summary.ready) {
-    lines.push(`${item.number},${escapeCsv(item.title)},ready,`);
+    lines.push(
+      `${item.number},${escapeCsv(item.title)},ready,,${formatScore(item.autopilotSuitability)},${item.belowFloor}`,
+    );
   }
   for (const item of summary.filteredOut) {
     lines.push(
-      `${item.number},${escapeCsv(item.title)},filtered,${escapeCsv(item.reasons.join(';'))}`,
+      `${item.number},${escapeCsv(item.title)},filtered,${escapeCsv(item.reasons.join(';'))},${formatScore(item.autopilotSuitability)},${item.belowFloor}`,
     );
   }
   return `${lines.join('\n')}\n`;
+}
+function formatScore(score) {
+  return score === null ? '' : String(score);
 }
 function escapeCsv(value) {
   const text = String(value ?? '');
@@ -511,6 +562,24 @@ function loadPolicy(policyPath) {
   } catch {
     return {};
   }
+}
+function resolveMarkerPrefix(config) {
+  const prefix = config?.markerPrefix;
+  return typeof prefix === 'string' && prefix.length > 0
+    ? prefix
+    : DEFAULT_MARKER_PREFIX;
+}
+function resolveSuitabilityFloor(config) {
+  // Delegate range/default validation to the shared normalizer so the 1-5
+  // rule and the default cannot drift between modules.
+  return normalizeAutopilotSuitabilityFloor(
+    config?.autopilotSuitability?.floor,
+  );
+}
+function resolveSuitabilityEnabled(config) {
+  // Match resolveAutopilotSuitabilityEnabled in discover-orphan-filter.mts:
+  // the kill switch is off only when explicitly set to `false`.
+  return config?.autopilotSuitability?.enabled !== false;
 }
 function runGh(args) {
   try {
