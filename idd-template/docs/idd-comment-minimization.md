@@ -359,13 +359,16 @@ does not re-block the merge; it is an explicit record only.
 Post this comment to the PR after a successful or partial apply. The
 HTML comment token on the first line acts as a stable machine-readable
 marker so a resuming agent — or a concurrent `post-merge-cleanup`
-workflow run — can detect whether the evidence was already posted.
-**Skip the post only when this run minimized nothing new and a
-`<!-- idd-cleanup-evidence:` comment recording a successful outcome
-(`applied` / `clean`) already exists on the PR**, so the agent and the
-workflow never stack a duplicate success record. Still post when this
-run minimized candidates, or to correct an existing `failed` /
-`incomplete` / `permission-blocked` record:
+workflow run — can detect that evidence was already posted. The
+**agent-side** rule is status-aware: **skip the post only when this run
+minimized nothing new and a `<!-- idd-cleanup-evidence:` comment
+recording a successful outcome (`applied` / `clean`) already exists on
+the PR**, so the agent never stacks a duplicate success record; still
+post when this run minimized candidates, or to correct an existing
+`failed` / `incomplete` / `permission-blocked` record. The
+`post-merge-cleanup` workflow instead uses a simpler presence-only guard
+(it skips on any existing marker), which suffices for its single-shot
+post-merge run:
 
 ```markdown
 <!-- idd-cleanup-evidence: {status} applied:{N} failed:{N} skipped:{N} viewer-cannot-minimize:{N} -->
