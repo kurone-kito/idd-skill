@@ -266,6 +266,25 @@ Pending a maintainer sign-off on the final approach.
   assert.equal(result.pass, false);
 });
 
+test('verifiability treats a resolved heading with a later unrelated negation as resolved', () => {
+  // The negative lookahead must only reject a negator that precedes "resolved"
+  // ("not yet resolved"); an unrelated "not" *after* the resolution keeps the
+  // resolved-decision guard active.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Decision (resolved 2026-06-27); this does not change the public API
+The maintainer approval is recorded; option 1 was chosen.
+
+## Acceptance Criteria
+- [ ] the helper output contains the expected token
+- [ ] tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('actionability accepts checklist without Scope/Purpose headings', () => {
   const result = checkActionability({
     issue: {

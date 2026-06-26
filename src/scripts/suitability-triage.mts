@@ -175,10 +175,12 @@ const POLICY_OVERRIDE_PATTERN =
 const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 // A heading line such as "## Decision (resolved 2026-06-27)" records that a
 // human has already ruled on the issue's open question (see Check 7). The
-// negative lookbehind keeps a still-open heading ("Decision (not yet
-// resolved)", "Decision (to be resolved)") from counting as resolved.
+// negative lookahead keeps a still-open heading ("Decision (not yet
+// resolved)", "Decision (to be resolved)") from counting as resolved, and uses
+// a lookahead rather than a variable-length lookbehind so the assertion stays
+// portable across JavaScript regex engines.
 const RESOLVED_DECISION_PATTERN =
-  /^#{1,6}\s+Decision\b[^\n]*(?<!\b(?:not|never|yet|be|pending)\s)\bresolved\b/im;
+  /^#{1,6}\s+Decision\b(?![^\n]*\b(?:not|never|yet|pending|to\s+be)\b[^\n]*\bresolved\b)[^\n]*\bresolved\b/im;
 
 if (isCliExecution()) {
   runCli();
