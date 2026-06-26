@@ -17,6 +17,7 @@ import type {
   ParsedForcedHandoffMarker,
 } from './protocol-helpers.mts';
 import {
+  buildForcedHandoffEnableGate,
   isStaleAt,
   normalizeLinkedPrReference,
   parseClaimComment,
@@ -129,21 +130,14 @@ export function buildForcedHandoffEnabledGate(options: {
   forcedHandoffEnabled: boolean;
   expectedLinkedPrReferences: Set<string>;
 }): (forcedHandoff: ParsedForcedHandoffMarker) => boolean {
-  const { forcedHandoffEnabled, expectedLinkedPrReferences } = options;
-  return (forcedHandoff: ParsedForcedHandoffMarker) => {
-    if (!forcedHandoffEnabled) {
-      return false;
-    }
-    if (expectedLinkedPrReferences.size === 0) {
-      return true;
-    }
-    if (forcedHandoff.contextScope !== 'issue-plus-pr') {
-      return false;
-    }
-    return expectedLinkedPrReferences.has(
-      normalizeLinkedPrReference(forcedHandoff.linkedPr),
-    );
-  };
+  // Delegate to the shared builder so resume routing and the merge-gate /
+  // write-side helpers cannot drift. Resume routing never passes
+  // `prFirstCommitAt`, so this stays byte-identical to the prior behavior:
+  // an issue-only handoff against a PR-backed claim is rejected.
+  return buildForcedHandoffEnableGate({
+    forcedHandoffEnabled: options.forcedHandoffEnabled,
+    expectedLinkedPrReferences: options.expectedLinkedPrReferences,
+  });
 }
 
 export function evaluateResumeClaimRouting(

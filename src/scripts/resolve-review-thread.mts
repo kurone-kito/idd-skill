@@ -17,10 +17,15 @@
 
 import { execFileSync } from 'node:child_process';
 
+import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
+import {
+  isAuthorizedForcedHandoffActor,
+  readForcedHandoffAuthorityPolicy,
+  readForcedHandoffMode,
+} from './collaborator-permission.mts';
 import {
   type ParsedClaimMarker,
-  parseForcedHandoffComment,
-  resolveActiveClaim,
+  resolveActiveClaimForWriteGate,
 } from './protocol-helpers.mts';
 
 /** A comment-id page within a review thread's `comments` connection. */
@@ -449,14 +454,26 @@ function resolveThread(threadId: string): void {
   }
 }
 
+/** Forced-handoff revalidation inputs, resolved once per CLI invocation. */
+interface ForcedHandoffGateOptions {
+  forcedHandoffEnabled: boolean;
+  isAuthorizedForcedHandoff: (forcedBy: string) => boolean;
+}
+
 /**
  * Re-fetch the claim issue and return the active claim **owned by this session**
  * (its `claimId`, and `agentId` when supplied, match), or `null` when the claim
- * was lost. Scoped to trusted marker authors via the shared `resolveActiveClaim`
- * state machine, and fails closed (returns `null`) on any `forced-handoff`
- * marker that targets this claim. Aborting on a contested claim is always safe
- * (the manual E13 path remains). The returned `branch` lets the caller bind the
- * mutation to the PR whose head is that branch.
+ * was lost. Scoped to trusted marker authors via the shared
+ * `resolveActiveClaimForWriteGate` state machine. A forced-handoff marker is
+ * honored only when it is an operator-approved, authorized handoff
+ * (forced-handoff mode enabled, `forced-by` is an authorized maintainer, and
+ * the comment author matches `forced-by`); otherwise the original claim stays
+ * active and an unauthorized/forged successor's `--claim-id` still fails the
+ * ownership comparison below. This is an issue-scoped revalidation
+ * (`expectedLinkedPrs: null`), so a legitimate issue-only handoff is accepted.
+ * Aborting on a contested claim is always safe (the manual E13 path remains).
+ * The returned `branch` lets the caller bind the mutation to the PR whose head
+ * is that branch.
  */
 function activeOwnedClaim(
   owner: string,
@@ -465,26 +482,26 @@ function activeOwnedClaim(
   agentId: string,
   claimId: string,
   isTrustedAuthor: (login: string) => boolean,
+  forcedHandoffOptions: ForcedHandoffGateOptions,
 ): ParsedClaimMarker | null {
   const comments = ghJsonPaginated([
     'api',
     `repos/${owner}/${repo}/issues/${issue}/comments`,
   ]) as { body?: string; created_at?: string; user?: { login?: string } }[];
-  for (const comment of comments) {
-    const forcedHandoff = parseForcedHandoffComment(
-      comment.body ?? '',
-      comment.created_at ?? '',
-    );
-    if (forcedHandoff && forcedHandoff.oldClaimId === claimId) {
-      return null;
-    }
-  }
   const events = comments.map((comment) => ({
     body: comment.body ?? '',
     createdAt: comment.created_at ?? '',
     author: { login: comment.user?.login ?? '' },
   }));
-  const active = resolveActiveClaim(events, isTrustedAuthor);
+  const active = resolveActiveClaimForWriteGate(events, {
+    isTrustedAuthor,
+    forcedHandoffEnabled: forcedHandoffOptions.forcedHandoffEnabled,
+    // Issue-scoped revalidation: accept a legitimate issue-only handoff.
+    expectedLinkedPrs: null,
+    isAuthorizedForcedHandoff: (forcedBy) =>
+      forcedHandoffOptions.isAuthorizedForcedHandoff(forcedBy),
+    requireAuthorMatchesForcedBy: true,
+  });
   if (active?.claimId !== claimId) {
     return null;
   }
@@ -601,6 +618,26 @@ if (isMainModule(import.meta.url)) {
         .toLowerCase(),
     );
 
+  // Resolve the forced-handoff policy and build the collaborator-permission
+  // cache ONCE per CLI invocation (not on each assertClaim retry): re-reading
+  // .github/idd/config.json and re-hitting the collaborators API would be a
+  // needless I/O hot path. Mirrors force-handoff.mjs and the audit-pr-cleanup
+  // readActiveClaim comment.
+  const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
+  const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
+  const forcedHandoffPermissionCache: CollaboratorPermissionCache = new Map();
+  const forcedHandoffOptions: ForcedHandoffGateOptions = {
+    forcedHandoffEnabled,
+    isAuthorizedForcedHandoff: (forcedBy) =>
+      isAuthorizedForcedHandoffActor(
+        owner,
+        repo,
+        forcedBy,
+        forcedHandoffAuthorityPolicy,
+        forcedHandoffPermissionCache,
+      ),
+  };
+
   // Retain the posted reply id across a later failure so a partial apply (reply
   // posted, resolve not confirmed) reports the reply id instead of looking like
   // nothing was posted — that distinguishes "retry the resolve" from "re-post".
@@ -615,6 +652,7 @@ if (isMainModule(import.meta.url)) {
           args.agentId,
           args.claimId,
           isTrustedAuthor,
+          forcedHandoffOptions,
         );
         if (!active) {
           throw new Error(

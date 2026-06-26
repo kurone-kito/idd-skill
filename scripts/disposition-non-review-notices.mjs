@@ -19,13 +19,17 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import {
+  isAuthorizedForcedHandoffActor,
+  readForcedHandoffAuthorityPolicy,
+  readForcedHandoffMode,
+} from './collaborator-permission.mjs';
+import {
   advisoryBotIdentityToken,
   dispositionNamesAdvisoryBot,
   isAdvisoryNonReviewNotice,
   isNonReviewNoticeDisposition,
   normalizeTrustedMarkerLogins,
-  parseForcedHandoffComment,
-  resolveActiveClaim,
+  resolveActiveClaimForWriteGate,
   resolveAdvisoryBotLogins,
 } from './protocol-helpers.mjs';
 
@@ -291,32 +295,44 @@ function loadIddConfig() {
 /**
  * Re-fetch the claim issue and decide whether the supplied claim id is still the
  * active claim. Scoped to trusted marker authors via the shared
- * `resolveActiveClaim` state machine (so a copied/forged `claimed-by` marker
- * from an untrusted author cannot satisfy the gate), and fails closed on any
- * `forced-handoff` marker that targets this claim — regardless of the marker's
- * author, since an authorizing maintainer is typically not in the trusted set.
- * Aborting on a contested claim is always safe (the manual E6 path remains).
+ * `resolveActiveClaimForWriteGate` state machine (so a copied/forged
+ * `claimed-by` marker from an untrusted author cannot satisfy the gate). A
+ * forced-handoff marker is honored only when it is an operator-approved,
+ * authorized handoff (forced-handoff mode enabled, `forced-by` is an
+ * authorized maintainer, and the comment author matches `forced-by`);
+ * otherwise the original claim stays active and an unauthorized/forged
+ * successor `--claim-id` still fails the `=== claimId` comparison. This is an
+ * issue-scoped revalidation (`expectedLinkedPrs: null`), so a legitimate
+ * issue-only handoff is accepted. Aborting on a contested claim is always
+ * safe (the manual E6 path remains).
  */
-function claimStillActive(owner, repo, issue, claimId, isTrustedAuthor) {
+function claimStillActive(
+  owner,
+  repo,
+  issue,
+  claimId,
+  isTrustedAuthor,
+  forcedHandoffOptions,
+) {
   const comments = ghJsonPaginated([
     'api',
     `repos/${owner}/${repo}/issues/${issue}/comments`,
   ]);
-  for (const comment of comments) {
-    const forcedHandoff = parseForcedHandoffComment(
-      comment.body ?? '',
-      comment.created_at ?? '',
-    );
-    if (forcedHandoff && forcedHandoff.oldClaimId === claimId) {
-      return false;
-    }
-  }
   const events = comments.map((comment) => ({
     body: comment.body ?? '',
     createdAt: comment.created_at ?? '',
     author: { login: comment.user?.login ?? '' },
   }));
-  return resolveActiveClaim(events, isTrustedAuthor)?.claimId === claimId;
+  const active = resolveActiveClaimForWriteGate(events, {
+    isTrustedAuthor,
+    forcedHandoffEnabled: forcedHandoffOptions.forcedHandoffEnabled,
+    // Issue-scoped revalidation: accept a legitimate issue-only handoff.
+    expectedLinkedPrs: null,
+    isAuthorizedForcedHandoff: (forcedBy) =>
+      forcedHandoffOptions.isAuthorizedForcedHandoff(forcedBy),
+    requireAuthorMatchesForcedBy: true,
+  });
+  return active?.claimId === claimId;
 }
 function postDisposition(owner, repo, pr, body) {
   // A disposition body is plain text starting with `**Rejected**` (not an
@@ -470,8 +486,34 @@ if (isMainModule(import.meta.url)) {
         .trim()
         .toLowerCase(),
     );
+  // Resolve the forced-handoff policy and build the collaborator-permission
+  // cache ONCE per CLI invocation (not per revalidation loop): re-reading
+  // .github/idd/config.json and re-hitting the collaborators API on every
+  // post would be a needless I/O hot path. Mirrors force-handoff.mjs and the
+  // audit-pr-cleanup readActiveClaim comment.
+  const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
+  const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
+  const forcedHandoffPermissionCache = new Map();
+  const forcedHandoffOptions = {
+    forcedHandoffEnabled,
+    isAuthorizedForcedHandoff: (forcedBy) =>
+      isAuthorizedForcedHandoffActor(
+        owner,
+        repo,
+        forcedBy,
+        forcedHandoffAuthorityPolicy,
+        forcedHandoffPermissionCache,
+      ),
+  };
   const revalidateClaim = () =>
-    claimStillActive(owner, repo, claimIssue, args.claimId, isTrustedAuthor);
+    claimStillActive(
+      owner,
+      repo,
+      claimIssue,
+      args.claimId,
+      isTrustedAuthor,
+      forcedHandoffOptions,
+    );
   if (!revalidateClaim()) {
     process.stderr.write(
       `claim revalidation failed: "${args.claimId}" is no longer the active claim on issue #${claimIssue}\n`,

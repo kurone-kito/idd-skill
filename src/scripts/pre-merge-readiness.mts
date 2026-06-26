@@ -64,6 +64,14 @@ interface CheckPayload {
   completedAt?: string | null;
 }
 
+/** Commit payload fields consumed by the Part B first-commit-time resolver. */
+interface PrCommitPayload {
+  commit?: {
+    author?: { date?: string | null } | null;
+    committer?: { date?: string | null } | null;
+  } | null;
+}
+
 /** Timeline event payload fields consumed by the Copilot coverage check. */
 interface TimelineEventPayload {
   event?: string | null;
@@ -348,6 +356,23 @@ export function collectPreMergeReadiness(
   const advisoryWaitPolicy = readAdvisoryWaitPolicy();
   const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
   const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
+  // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
+  // a legitimate issue-only handoff that predates the PR is honored even
+  // against a PR-backed claim. Resolve it only when forced handoffs are
+  // enabled, and fail closed to `null` (reject) on any lookup/parse error so
+  // a transient commits-API failure never aborts the readiness gate.
+  let prFirstCommitAt: string | null = null;
+  if (forcedHandoffEnabled) {
+    try {
+      const prCommits = ghApiJson(
+        `repos/${owner}/${repo}/pulls/${args.prNumber}/commits`,
+        true,
+      ) as PrCommitPayload[];
+      prFirstCommitAt = resolvePrFirstCommitAt(prCommits);
+    } catch {
+      prFirstCommitAt = null;
+    }
+  }
   const forcedHandoffPermissionCache: CollaboratorPermissionCache = new Map();
   const waivableCheckSelectors = readWaivableCheckSelectors();
 
@@ -387,6 +412,7 @@ export function collectPreMergeReadiness(
       waivableCheckSelectors,
       forcedHandoffEnabled,
       expectedLinkedPrs: [String(args.prNumber), prUrl].filter(Boolean),
+      prFirstCommitAt,
       isAuthorizedForcedHandoff: (forcedBy) =>
         isAuthorizedForcedHandoffActor(
           owner,
@@ -922,6 +948,36 @@ function ghApiJson(
     return parsePaginatedGhNdjson(raw);
   }
   return JSON.parse(raw);
+}
+
+/**
+ * Resolve the PR's first-commit time as an ISO string: the minimum across all
+ * commits of each commit's committer date (falling back to author date). The
+ * GitHub `pulls/{pr}/commits` listing is chronological, but compute the
+ * minimum defensively rather than relying on order. Returns `null` when no
+ * commit carries a parseable date, which makes the Part B gate fail closed
+ * (issue-only handoffs against a PR-backed claim stay rejected).
+ */
+function resolvePrFirstCommitAt(commits: PrCommitPayload[]): string | null {
+  let earliestMs: number | null = null;
+  let earliestIso: string | null = null;
+  for (const commit of commits) {
+    const date =
+      String(commit?.commit?.committer?.date ?? '').trim() ||
+      String(commit?.commit?.author?.date ?? '').trim();
+    if (!date) {
+      continue;
+    }
+    const ms = Date.parse(date);
+    if (!Number.isFinite(ms)) {
+      continue;
+    }
+    if (earliestMs === null || ms < earliestMs) {
+      earliestMs = ms;
+      earliestIso = date;
+    }
+  }
+  return earliestIso;
 }
 
 function runGh(args: string[], options: RunGhOptions = {}): string {
