@@ -358,6 +358,54 @@ test('classifies post-disposition advisory-bot comments as ack-only', () => {
   assert.equal(summary.effective.totalItemCount, 1);
 });
 
+test('ack-only classification matches a configured advisory bot across the [bot] suffix', () => {
+  // config stores one form, the bot's courtesy ack arrives in the other — the
+  // pre-#1118 raw Set.has() lookup missed this and broke the ack-only carve-out
+  // for a custom suffixless-configured bot.
+  const make = (configLogin: string, authorLogin: string) =>
+    buildActivitySnapshotSummary(
+      {
+        comments: [
+          {
+            id: 'C-1',
+            author: { login: 'idd-bot' },
+            body: '**Rejected** — rate-limit notice is not a completed review.',
+            createdAt: '2026-05-10T10:00:00Z',
+            updatedAt: '2026-05-10T10:00:00Z',
+          },
+          {
+            id: 'C-2',
+            author: { login: authorLogin },
+            body: 'Thanks for confirming!',
+            createdAt: '2026-05-10T09:00:00Z',
+            updatedAt: '2026-05-10T10:05:00Z',
+          },
+        ],
+        reviews: [],
+        threads: [],
+        checks: [],
+      },
+      {
+        trustedMarkerLogins: ['idd-bot'],
+        advisoryBotLogins: [configLogin],
+        advisoryBotLoginsSource: 'config',
+        dispositionAuthorLogins: ['idd-bot'],
+      },
+    );
+
+  for (const [configLogin, authorLogin] of [
+    ['advisory-bot', 'advisory-bot[bot]'],
+    ['advisory-bot[bot]', 'advisory-bot'],
+  ] as const) {
+    const summary = make(configLogin, authorLogin);
+    assert.deepEqual(
+      summary.ackOnly.items.map((item) => [item.kind, item.id]),
+      [['comment', 'C-2']],
+      `config ${configLogin} should ack-classify author ${authorLogin}`,
+    );
+  }
+});
+
 test('ack-only classification fails closed without config or dispositions', () => {
   const comments = [
     {
