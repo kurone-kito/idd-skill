@@ -86,13 +86,36 @@ const SUBJECTIVE_SUBJECT_PATTERN =
 const SUBJECTIVE_GATE_PATTERN = /\b(approval|sign-?off|decision|preference)\b/i;
 const OUTCOME_SIGNAL_PATTERN =
   /\b(pass|fail|result|output|contains|include|present|required|objective|measurable|deterministic)\b/i;
-const EXPLICIT_UNSAFE_DIRECTIVE_PATTERN =
-  /\b(execute|run|paste|install|invoke)\b[\s\S]{0,100}(?:this|untrusted|user-provided|user input|from user|from the user)\b/i;
+// Check 3 precision: an unsafe execution directive tells the agent to act on
+// *supplied / untrusted* content, not any command verb that merely lands near
+// the ordinary determiner "this". Match the strong untrusted-origin signals, or
+// a determiner that points at supplied content followed (within two words) by a
+// runnable-content noun ("run this script", "paste the following command").
+// Prose that documents a tool's own behavior ("run the helper; this prints the
+// body") no longer false-fires. The piped `curl … | sh`, `sudo`-wrapped
+// pipeline, and `eval(` catches stay in the separate UNSAFE_PATTERNS loop.
+const UNSAFE_DIRECTIVE_VERB = '(?:execute|run|paste|install|invoke)';
+const SUPPLIED_CONTENT_NOUN =
+  '(?:command|script|code|snippet|payload|url|link|instruction|input|file|attachment|gist|one-?liner|program|binary|shell)s?';
+// `[\x60'"]?` (an optional backtick / quote, written hex so it can live inside
+// a String.raw template) lets the noun be wrapped in inline code, so
+// "run this `script`" is still caught.
+const SUPPLIED_CONTENT_REFERENCE = String.raw`(?:this|that|following|attached|pasted|provided|the\s+(?:following|above|below|attached|pasted|provided))\s+(?:\S+\s+){0,2}?[\x60'"]?${SUPPLIED_CONTENT_NOUN}`;
+const EXPLICIT_UNSAFE_DIRECTIVE_PATTERN = new RegExp(
+  String.raw`\b${UNSAFE_DIRECTIVE_VERB}\b[\s\S]{0,100}\b(?:untrusted|user-provided|user input|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_REFERENCE})\b`,
+  'i',
+);
 const NEGATION_PATTERN =
   /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
 const POLICY_OVERRIDE_PATTERN =
   /\b(ignore|bypass|override|disable|disable|skip|turn off|suppress|disable)\b[\s\S]{0,60}\b(repo|repository|policy|workflow|idd|process|check|gate|requirement)\b/i;
 const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
+// A heading line such as "## Decision (resolved 2026-06-27)" records that a
+// human has already ruled on the issue's open question (see Check 7). The
+// negative lookbehind keeps a still-open heading ("Decision (not yet
+// resolved)", "Decision (to be resolved)") from counting as resolved.
+const RESOLVED_DECISION_PATTERN =
+  /^#{1,6}\s+Decision\b[^\n]*(?<!\b(?:not|never|yet|be|pending)\s)\bresolved\b/im;
 if (isCliExecution()) {
   runCli();
 }
@@ -498,7 +521,17 @@ export function checkVerifiability(context) {
       )
     );
   })();
-  if (hasSubjectiveApproval) {
+  // A body that carries BOTH a resolved-decision marker (a
+  // "## Decision (resolved …)" section) AND a concrete, objectively-verifiable
+  // acceptance-criteria section is treated as having had its subjective call
+  // already settled by a human, so its prose merely *describes* that prior
+  // approval/decision. This is a soft heuristic for a soft advisory gate: it
+  // co-occurrence-matches the two signals rather than proving the decision
+  // resolves the exact approval wording, which is an accepted trade-off for
+  // maintainer-authored issues. An approval-gated body with no resolved
+  // decision still routes to needs-decision.
+  const hasResolvedDecision = RESOLVED_DECISION_PATTERN.test(body);
+  if (hasSubjectiveApproval && !(hasResolvedDecision && hasObjectiveCriteria)) {
     return {
       pass: false,
       evidence: 'Issue success depends on subjective approval or judgment.',
