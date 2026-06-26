@@ -5744,14 +5744,30 @@ function hasCodeownerOwners(rule: CodeownersRule | null | undefined): boolean {
   );
 }
 
-function isGateAdvisoryBotLogin(
+// True when a PR-author login belongs to a gate-relevant advisory bot — a known
+// review bot (CodeRabbit/Codex/Copilot defaults) or a configured
+// `advisoryBotLogins` entry. The GitHub `[bot]` suffix is normalized
+// symmetrically via `advisoryBotIdentityToken` on both the incoming login and
+// each configured entry, so a custom bot matches whether the config or the
+// author login stores the suffixed (`my-bot[bot]`) or suffixless (`my-bot`)
+// form. Fail-closed on an empty token.
+export function isGateAdvisoryBotLogin(
   login: unknown,
   advisoryBotLogins: Set<string>,
 ): boolean {
-  const normalized = String(login ?? '')
-    .trim()
-    .toLowerCase();
-  return isKnownReviewBot(normalized) || advisoryBotLogins.has(normalized);
+  const token = advisoryBotIdentityToken(login);
+  if (!token) {
+    return false;
+  }
+  if (isKnownReviewBot(token)) {
+    return true;
+  }
+  for (const configured of advisoryBotLogins) {
+    if (advisoryBotIdentityToken(configured) === token) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function _isOperationalOrDigestComment(body: string): boolean {
