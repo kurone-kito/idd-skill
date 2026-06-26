@@ -333,6 +333,33 @@ test('policy schema rejects an unknown worktreeGuard subkey', () => {
   );
 });
 
+test('policy schema rejects a whitespace-only branchPatterns entry', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  // A whitespace-only glob can never match a branch; the runtime already
+  // trims it away and falls back to the defaults, so the `\S` pattern
+  // rejects it at validation time instead of letting it pass silently.
+  instance.worktreeGuard = { enabled: true, branchPatterns: ['   '] };
+  assert.ok(
+    validate(instance, schema).length > 0,
+    'expected a whitespace-only branchPatterns entry to be rejected',
+  );
+});
+
+test('policy schema accepts non-whitespace branchPatterns globs', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.worktreeGuard = {
+    enabled: true,
+    branchPatterns: ['issue/*', 'roadmap-audit/*'],
+  };
+  assert.deepEqual(validate(instance, schema), []);
+});
+
 test('policy schema accepts missing helperRuntime as instructions-only fallback', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(
