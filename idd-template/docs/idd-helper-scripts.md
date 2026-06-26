@@ -832,7 +832,8 @@ Interpretation rules:
   `--head-sha` / `--max-activity-at` / `--total-item-count` /
   `--ci-completed-at` from a fresh `review-activity-snapshot` of PR `<n>` and
   posts the marker to PR `<n>`, so only `--agent-id` / `--claim-id` (+ `--apply`)
-  are still supplied (`--target` defaults to `pr`). It maps the snapshot's
+  are still supplied (it always targets the PR; an explicit non-pr `--target`
+  is rejected). It maps the snapshot's
   `latestPassingCiCompletedAt` to `--ci-completed-at` (the latest _passing_ CI
   completion, matching the E1 `{latest-ci-completed-at}` contract), forwards
   optional `--trusted-marker-logins` / `--advisory-bot-logins` to the snapshot

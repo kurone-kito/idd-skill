@@ -226,7 +226,8 @@ its claim-revalidation gate before --apply, as the manual POST path it replaces.
                        --total-item-count / --ci-completed-at from the live
                        review-activity-snapshot of PR <n> and post the watermark
                        to PR <n>, so only --agent-id / --claim-id (and --apply)
-                       are still needed (target defaults to pr). Not network-free.
+                       are still needed (always targets the PR; an explicit
+                       non-pr --target is rejected). Not network-free.
   --apply              POST the marker (default: dry-run prints it in a JSON envelope)
   --owner <owner>      repo owner (default: gh repo view)
   --repo <repo>        repo name (default: gh repo view)
@@ -355,9 +356,17 @@ if (isMainModule(import.meta.url)) {
       process.stderr.write('--from-pr is only valid for --type watermark\n');
       process.exit(1);
     }
-    if (!args.target) {
-      args.target = 'pr';
+    // --from-pr always posts the watermark to PR <n>. `--target` is
+    // descriptive-only (issue/pr both POST to the same /issues/<n>/comments
+    // endpoint), but an `issue`-targeted snapshot watermark is incoherent, so
+    // fail closed on an explicit non-pr target rather than recording it.
+    if (args.target && args.target !== 'pr') {
+      process.stderr.write(
+        `--from-pr always targets the PR; remove --target ${args.target}\n`,
+      );
+      process.exit(1);
     }
+    args.target = 'pr';
     if (args.number === null) {
       args.number = args.fromPr;
     } else if (args.number !== args.fromPr) {

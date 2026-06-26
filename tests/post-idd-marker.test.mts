@@ -643,3 +643,22 @@ test('--from-pr is rejected for a non-watermark type', () => {
   ]);
   assert.match(stderr, /--from-pr is only valid for --type watermark/);
 });
+
+test('--from-pr fails closed on an explicit non-pr --target', () => {
+  // A watermark always belongs on the PR; an issue-targeted snapshot watermark
+  // is incoherent, so an explicit --target issue is rejected (not defaulted).
+  const stderr = runCliExpectingFailure([
+    join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+    '--type',
+    'watermark',
+    '--target',
+    'issue',
+    '--from-pr',
+    '1200',
+    '--agent-id',
+    'a',
+    '--claim-id',
+    'c',
+  ]);
+  assert.match(stderr, /--from-pr always targets the PR/);
+});
