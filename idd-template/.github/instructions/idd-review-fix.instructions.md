@@ -220,6 +220,24 @@ names regardless of the configured bot.
      comment block.
    - **WAIT**, or after a **REQUEST_NEEDED** or **RECOVERY_NEEDED**
      marker is posted: enter the active polling loop below.
+5. **Optional secondary advisory bot (non-gating).** When the helper reports
+   `secondaryRequestNeeded: true` — or, in the shell fallback, when AW3 yields
+   **CAP_EXHAUSTED** or a stalled / rate-limited **SATISFIED** (closed by the
+   elapsed settle/pending window while the primary never reviewed the current
+   HEAD), `advisoryWait.secondaryBotLogin` is configured, and that secondary
+   has **not** already been `review_requested` after the current HEAD's
+   `committed` event — request the secondary bot **once** for the current HEAD:
+
+   ```sh
+   gh pr edit {pr-number} --add-reviewer "@{secondary-advisory-bot}"
+   ```
+
+   Post **no** `advisory-wait:` marker for the secondary (it must never satisfy
+   the primary gate or consume the primary cap), and do **not** let it change
+   the AW3 route — continue the primary route exactly as decided above (e.g.
+   `CAP_EXHAUSTED` still follows `CAP_EXHAUSTED_ROUTE`). The secondary's review
+   is ordinary advisory input, returned to review-triage by the E1 snapshot if
+   it lands before merge. Skipped entirely when no secondary is configured.
 
 Copilot and CI advisory bot comments are advisory; unanswered ones do
 not block merge.

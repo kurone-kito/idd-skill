@@ -2403,6 +2403,57 @@ export function computeCopilotPendingCoversHead(
   return headIndex !== -1 && requestIndex !== -1 && requestIndex > headIndex;
 }
 
+/**
+ * True when the OPTIONAL secondary advisory bot has already been requested for
+ * the current HEAD — i.e. a `review_requested` event for `secondaryBotLogin`
+ * follows the current HEAD's `committed` event in the PR timeline. This is the
+ * once-per-HEAD guard for the non-gating secondary supplement (issue #1099),
+ * reusing the same timeline evidence as {@link computeCopilotPendingCoversHead}
+ * so no new marker is needed: when HEAD advances, the new `committed` event
+ * sits after the prior secondary request and the guard resets to `false`.
+ *
+ * The secondary is matched by exact normalized login equality (NOT the Copilot
+ * family). An empty `secondaryBotLogin` short-circuits to `false` so an
+ * unconfigured secondary never matches anything.
+ */
+export function computeSecondaryRequestedForHead(
+  timelineEvents: TimelineEventLike[],
+  prHeadSha: string,
+  secondaryBotLogin: string,
+): boolean {
+  const configured = String(secondaryBotLogin ?? '')
+    .trim()
+    .toLowerCase();
+  if (configured === '') {
+    return false;
+  }
+
+  let headIndex = -1;
+  let requestIndex = -1;
+
+  timelineEvents.forEach((event, index) => {
+    const eventName = String(event?.event ?? '');
+    if (eventName === 'committed') {
+      const sha = String(event?.sha ?? event?.commit_id ?? '');
+      if (sha === prHeadSha) {
+        headIndex = index;
+      }
+      return;
+    }
+
+    if (eventName === 'review_requested') {
+      const reviewerLogin = String(event?.requested_reviewer?.login ?? '')
+        .trim()
+        .toLowerCase();
+      if (reviewerLogin === configured) {
+        requestIndex = index;
+      }
+    }
+  });
+
+  return headIndex !== -1 && requestIndex !== -1 && requestIndex > headIndex;
+}
+
 export function normalizeTrustedMarkerLogins(
   logins: unknown[] | null | undefined,
 ): string[] {
@@ -2704,6 +2755,7 @@ export function buildAdvisoryWaitSummary(
     pollIntervalMinutes?: number;
     capExhaustedRoute?: string;
     primaryBotLogin?: string;
+    secondaryBotLogin?: string;
   } = {},
 ) {
   const now = String(options.now ?? '');
@@ -2750,36 +2802,64 @@ export function buildAdvisoryWaitSummary(
     capExhaustedRoute,
   } = normalizeAdvisoryWaitRuntimeOptions(options);
 
+  const outcomeInput = {
+    lastCopilotCommit,
+    prHeadSha,
+    copilotPending,
+    copilotPendingCoversHead,
+    sameHeadMarkerPresent: markerSummary.sameHeadMarkerPresent,
+    requestMarkerCount: markerSummary.requestMarkerCount,
+    elapsedMinutes,
+    requestCap,
+    pendingWindowMinutes,
+    settledWindowMinutes,
+  };
+  const outcome = evaluateAdvisoryWaitOutcome(outcomeInput);
+  const f3Outcome = evaluateAdvisoryWaitF3Outcome(outcomeInput);
+
+  // Optional NON-GATING secondary advisory bot (issue #1099). Resolved AFTER
+  // `outcome` and never fed into `outcomeInput`, so it can never satisfy or
+  // alter the primary advisory-wait gate (contract a). A secondary equal to the
+  // primary is treated as unconfigured (misconfiguration guard).
+  const secondaryBotLogin = String(options.secondaryBotLogin ?? '')
+    .trim()
+    .toLowerCase();
+  const secondaryConfigured =
+    secondaryBotLogin !== '' && secondaryBotLogin !== primaryBotLogin;
+  // Once per HEAD, read from the GitHub timeline (a `review_requested` for the
+  // secondary after the current HEAD's `committed` event) — no marker is posted
+  // for the secondary, so it never receives a primary `advisory-wait` marker
+  // and never burns the primary cap (contract b).
+  const secondaryAlreadyRequested =
+    secondaryConfigured &&
+    computeSecondaryRequestedForHead(
+      timelineEvents,
+      prHeadSha,
+      secondaryBotLogin,
+    );
+  // Request the secondary once per HEAD only when a follow-up pass is genuinely
+  // needed (the primary has not reviewed HEAD) AND the primary is
+  // cap-exhausted, or stalled/rate-limited (the wait was closed by the elapsed
+  // settle/pending window rather than by a HEAD review). REQUEST_NEEDED (primary
+  // still requestable), WAIT (still in-window), and RECOVERY_NEEDED (active
+  // recovery) deliberately do not trigger the supplement.
+  const secondaryRequestNeeded =
+    secondaryConfigured &&
+    !secondaryAlreadyRequested &&
+    lastCopilotCommit !== prHeadSha &&
+    (outcome === 'CAP_EXHAUSTED' ||
+      (outcome === 'SATISFIED' && markerSummary.sameHeadMarkerPresent));
+
   return {
     protocolVersion: '1',
     prHeadSha,
     lastCopilotCommit,
     copilotPending,
     copilotPendingCoversHead,
-    outcome: evaluateAdvisoryWaitOutcome({
-      lastCopilotCommit,
-      prHeadSha,
-      copilotPending,
-      copilotPendingCoversHead,
-      sameHeadMarkerPresent: markerSummary.sameHeadMarkerPresent,
-      requestMarkerCount: markerSummary.requestMarkerCount,
-      elapsedMinutes,
-      requestCap,
-      pendingWindowMinutes,
-      settledWindowMinutes,
-    }),
-    f3Outcome: evaluateAdvisoryWaitF3Outcome({
-      lastCopilotCommit,
-      prHeadSha,
-      copilotPending,
-      copilotPendingCoversHead,
-      sameHeadMarkerPresent: markerSummary.sameHeadMarkerPresent,
-      requestMarkerCount: markerSummary.requestMarkerCount,
-      elapsedMinutes,
-      requestCap,
-      pendingWindowMinutes,
-      settledWindowMinutes,
-    }),
+    outcome,
+    f3Outcome,
+    secondaryBotLogin: secondaryConfigured ? secondaryBotLogin : '',
+    secondaryRequestNeeded,
     now,
     requestCap,
     pendingWindowMinutes,

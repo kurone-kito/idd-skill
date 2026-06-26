@@ -12,6 +12,8 @@
     "copilotPendingCoversHead",
     "outcome",
     "f3Outcome",
+    "secondaryBotLogin",
+    "secondaryRequestNeeded",
     "now",
     "requestCap",
     "pendingWindowMinutes",
@@ -65,6 +67,14 @@
         "CAP_EXHAUSTED",
         "WAIT"
       ]
+    },
+    "secondaryBotLogin": {
+      "type": "string",
+      "description": "Resolved OPTIONAL secondary advisory bot login (lower-cased), or empty when no secondary is configured. Non-gating supplement; never satisfies the primary advisory-wait gate."
+    },
+    "secondaryRequestNeeded": {
+      "type": "boolean",
+      "description": "True when the configured secondary advisory bot should be requested once for the current HEAD because the primary is cap-exhausted or stalled/rate-limited. Non-gating: never alters outcome/f3Outcome and posts no advisory-wait marker."
     },
     "now": {
       "type": "string",

@@ -262,6 +262,10 @@
         "primaryBotLogin": {
           "type": "string",
           "minLength": 1
+        },
+        "secondaryBotLogin": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
