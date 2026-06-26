@@ -488,7 +488,7 @@ function configuredTrustedMarkerAuthors(): Set<string> {
   try {
     config = JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
   } catch {
-    // No readable config; fall back to env-only resolution.
+    // No readable or parseable config; fall back to env-only resolution.
   }
   const { actors } = resolveTrustedMarkerActors({
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
