@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://kurone-kito.github.io/idd-skill/schemas/disposition-non-review-notices.schema.json",
   "title": "Non-Review-Notice Disposition Plan",
-  "description": "Dry-run plan or apply result for auto-dispositioning advisory non-review notices on a PR (E6 PATH B).",
+  "description": "Dry-run plan or apply result for auto-dispositioning advisory non-review notices and the CodeRabbit summary walkthrough on a PR (E6 PATH B).",
   "type": "object",
   "required": ["mode", "prNumber", "headSha", "skipped"],
   "properties": {
@@ -28,7 +28,10 @@
           "noticeId": { "type": "integer" },
           "botLogin": { "type": "string" },
           "reason": { "type": "string" },
-          "body": { "type": "string", "pattern": "^\\*\\*Rejected\\*\\*" }
+          "body": {
+            "type": "string",
+            "pattern": "^\\*\\*(Rejected|Accepted)\\*\\*"
+          }
         }
       }
     },

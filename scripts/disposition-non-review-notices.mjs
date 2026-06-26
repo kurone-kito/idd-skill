@@ -13,9 +13,18 @@
 // #1018 author-scoped carry-forward attributes it. This helper detects those
 // notices with the single-sourced `isAdvisoryNonReviewNotice` classifier and
 // emits (dry-run) or posts (`--apply`) the canonical disposition, skipping
-// notices already dispositioned so a re-run is idempotent. It is fail-closed:
-// only classifier-recognized notices are dispositioned; real reviews and review
-// threads are never touched.
+// notices already dispositioned so a re-run is idempotent.
+//
+// It also auto-dispositions the CodeRabbit summary walkthrough (#1122): a
+// completed-review regular comment that recurs on every autopilot PR and the
+// gate scores through its general updatedAt-aware 1:1 pairing. Unlike a notice it
+// is `**Accepted**` (not `**Rejected**`), and because CodeRabbit edits the summary
+// each re-review the helper re-dispositions the CURRENT summary per HEAD by
+// timestamp (not a count carry-forward), so a stale acceptance can never mask a
+// finding folded into a later summary body.
+//
+// It is fail-closed: only classifier-recognized notices and the exact summary
+// marker are dispositioned; real reviews and review threads are never touched.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import {
@@ -25,9 +34,13 @@ import {
 } from './collaborator-permission.mjs';
 import {
   advisoryBotIdentityToken,
+  compareIsoTimestamps,
   dispositionNamesAdvisoryBot,
+  effectiveRegularCommentActivityAt,
   isAdvisoryNonReviewNotice,
   isNonReviewNoticeDisposition,
+  isReviewSummaryComment,
+  isReviewSummaryDisposition,
   normalizeTrustedMarkerLogins,
   resolveActiveClaimForWriteGate,
   resolveAdvisoryBotLogins,
@@ -62,6 +75,20 @@ export function buildDispositionBody(botLogin, headSha, reason) {
   return `**Rejected** — ${botLogin} did not review HEAD ${headSha} (${reason}); this is not a completed review`;
 }
 /**
+ * Build the canonical `**Accepted**` disposition body for a CodeRabbit summary
+ * walkthrough (#1122): marker-first, naming the bot by its GitHub **login** and
+ * the current head SHA. The login form (`coderabbitai[bot]`) is deliberate — it
+ * does not contain the standalone word "CodeRabbit", so the gate's
+ * `classifyRegularBotComment` createdAt-based RESOLVED path (which requires
+ * `/\bCodeRabbit\b/`) never permanently clears the summary; clearing happens only
+ * through the general updatedAt-aware pairing, giving the safer per-HEAD
+ * re-disposition. The `summary walkthrough` phrase is what `isReviewSummaryDisposition`
+ * keys on, so keep the two in lockstep.
+ */
+export function buildSummaryDispositionBody(botLogin, headSha) {
+  return `**Accepted** — ${botLogin} summary walkthrough at HEAD ${headSha}; actionable comments, if any, are dispositioned as their own review threads`;
+}
+/**
  * Plan the dispositions for a PR's regular comments. Pure: takes the fetched
  * comments and returns which advisory non-review notices need a disposition and
  * which already have one. Per advisory bot, the count of trusted IDD non-review
@@ -69,6 +96,16 @@ export function buildDispositionBody(botLogin, headSha, reason) {
  * (oldest-first); the remainder are planned. This mirrors the gate's
  * author-scoped 1:1 carry-forward, so the helper never posts a disposition the
  * gate would not credit and never double-posts on a re-run.
+ *
+ * It also plans an `**Accepted**` for the CodeRabbit summary walkthrough (#1122),
+ * which the gate scores through its general updatedAt-aware 1:1 pairing rather
+ * than the notice carry-forward. The summary is re-dispositioned per HEAD by
+ * timestamp: it is skipped only when a trusted summary disposition naming the bot
+ * is strictly newer than the summary's updatedAt-aware activity (and skipped
+ * outright when CodeRabbit already reports "No actionable comments were
+ * generated", which the gate classifies RESOLVED). The two paths are disjoint:
+ * notices are `**Rejected**`, summaries are `**Accepted**`, and neither
+ * disposition predicate matches the other.
  */
 export function buildDispositionPlan(input, options = {}) {
   // Key all advisory-bot comparisons by the suffix-insensitive identity token
@@ -92,6 +129,10 @@ export function buildDispositionPlan(input, options = {}) {
         .toLowerCase(),
       body: String(comment.body ?? ''),
       createdAt: String(comment.createdAt ?? ''),
+      // Preserve updatedAt so the summary-walkthrough path can score the summary
+      // and its dispositions through `effectiveRegularCommentActivityAt`,
+      // matching the gate's updatedAt-aware pairing.
+      updatedAt: String(comment.updatedAt ?? ''),
     }))
     .sort((left, right) => {
       // Oldest-first, with a deterministic tie-breaker so the oldest-first
@@ -170,6 +211,98 @@ export function buildDispositionPlan(input, options = {}) {
       botLogin: comment.login,
       reason,
       body: buildDispositionBody(comment.login, headSha, reason),
+    });
+  }
+  // CodeRabbit summary walkthrough auto-disposition (#1122). Separate from the
+  // notice path above: the gate scores the summary through its general
+  // updatedAt-aware 1:1 timestamp pairing (not the notice carry-forward), and
+  // CodeRabbit edits the summary on each re-review, so re-disposition the CURRENT
+  // summary per HEAD by timestamp. Mirror the gate's greedy oldest-first pairing:
+  // each summary consumes at most ONE trusted summary disposition that names the
+  // bot AND is strictly newer than the summary's updatedAt-aware activity; an
+  // uncovered summary is planned. Greedy consumption (not a bare existence check)
+  // means two coexisting summaries with a single newer disposition leave the
+  // second one planned — matching the gate and erring toward posting (an extra
+  // unpaired `**Accepted**` is inert, while under-posting strands the gate).
+  const summaryDispositions = comments
+    .filter(
+      (comment) =>
+        trustedMarkerLogins.has(comment.login) &&
+        isReviewSummaryDisposition({ body: comment.body }),
+    )
+    .map((comment) => ({
+      body: comment.body,
+      activityAt: effectiveRegularCommentActivityAt(comment),
+      consumed: false,
+    }));
+  // The gate pairs greedily across the GLOBAL outstanding set, so a summary's
+  // `**Accepted**` marker can be consumed by an OLDER undispositioned non-agent
+  // comment (a human reviewer or a non-notice bot), leaving the summary still
+  // flagged. The helper only models summary↔summary-disposition pairing, so when
+  // such an older comment exists it must NOT treat the summary as covered — it
+  // errs toward posting (#1122). Notices are excluded because the gate carves
+  // them and their dispositions out of the general pool; agent-authored comments
+  // (operational markers, digests, the dispositions themselves) are excluded via
+  // `trustedMarkerLogins`; other summaries are handled by the greedy pass above.
+  const markerCouldBeStolen = (dispositionActivityAt) =>
+    comments.some(
+      (other) =>
+        !trustedMarkerLogins.has(other.login) &&
+        !isAdvisoryNonReviewNotice(other.body) &&
+        !isReviewSummaryComment(other.body) &&
+        compareIsoTimestamps(
+          effectiveRegularCommentActivityAt(other),
+          dispositionActivityAt,
+        ) < 0,
+    );
+  for (const comment of comments) {
+    const identity = advisoryBotIdentityToken(comment.login);
+    if (
+      !advisoryBotIdentities.has(identity) ||
+      !isReviewSummaryComment(comment.body) ||
+      // A notice (rate-limit / usage-limit) that also carries the summary marker
+      // is dispositioned `**Rejected**` by the notice path above; never also
+      // `**Accepted**` it here, so a comment id gets at most one disposition.
+      isAdvisoryNonReviewNotice(comment.body)
+    ) {
+      continue;
+    }
+    // The gate already classifies a "No actionable comments were generated"
+    // summary as RESOLVED, so it never enters `missingRegularComments` and needs
+    // no disposition — auto-posting one would add brand-new noise.
+    if (/No actionable comments were generated/i.test(comment.body)) {
+      skipped.push({
+        noticeId: comment.id,
+        botLogin: comment.login,
+        reason: 'summary-resolved-no-actionable-comments',
+      });
+      continue;
+    }
+    const summaryActivityAt = effectiveRegularCommentActivityAt(comment);
+    // Consume the oldest unconsumed disposition naming this bot that is strictly
+    // newer than the summary, mirroring the gate's greedy `markerCursor`.
+    const cover = summaryDispositions.find(
+      (disposition) =>
+        !disposition.consumed &&
+        dispositionNamesAdvisoryBot(disposition.body, comment.login) &&
+        compareIsoTimestamps(disposition.activityAt, summaryActivityAt) > 0,
+    );
+    // Skip only when the marker is both newer than the summary AND cannot be
+    // stolen by an older non-agent comment under the gate's global pairing.
+    if (cover && !markerCouldBeStolen(cover.activityAt)) {
+      cover.consumed = true;
+      skipped.push({
+        noticeId: comment.id,
+        botLogin: comment.login,
+        reason: 'already-dispositioned',
+      });
+      continue;
+    }
+    planned.push({
+      noticeId: comment.id,
+      botLogin: comment.login,
+      reason: 'summary walkthrough',
+      body: buildSummaryDispositionBody(comment.login, headSha),
     });
   }
   return { headSha, planned, skipped };
@@ -268,9 +401,11 @@ function isMainModule(moduleUrl) {
 }
 const USAGE = `usage: node scripts/disposition-non-review-notices.mjs --pr <number> [options]
 
-Detect advisory non-review notices on a PR and emit (default) or post
-(--apply) the canonical E6 \`**Rejected** — {bot} did not review HEAD …\`
-disposition, one marker-first comment per notice. Idempotent and fail-closed.
+Detect advisory non-review notices and the CodeRabbit summary walkthrough on a PR
+and emit (default) or post (--apply) the canonical E6 disposition: a marker-first
+\`**Rejected** — {bot} did not review HEAD …\` per notice, and a marker-first
+\`**Accepted** — {bot} summary walkthrough …\` per current summary (re-dispositioned
+per HEAD). Idempotent and fail-closed.
 
   --pr <number>                  PR number (required)
   --owner <owner>                repo owner (default: gh repo view)
@@ -335,9 +470,10 @@ function claimStillActive(
   return active?.claimId === claimId;
 }
 function postDisposition(owner, repo, pr, body) {
-  // A disposition body is plain text starting with `**Rejected**` (not an
-  // HTML-comment-first marker), so the `-f body=` field path posts it
-  // reliably; gh sends `{"body": <value>}` to the comments API.
+  // A disposition body is plain text starting with `**Rejected**` (notice) or
+  // `**Accepted**` (summary walkthrough) — not an HTML-comment-first marker — so
+  // the `-f body=` field path posts it reliably; gh sends `{"body": <value>}` to
+  // the comments API.
   return ghJson([
     'api',
     '--method',
@@ -460,6 +596,10 @@ if (isMainModule(import.meta.url)) {
       login: comment.user?.login ?? '',
       body: comment.body ?? '',
       createdAt: comment.created_at ?? '',
+      // The issues-comments API returns updated_at (bumped when CodeRabbit edits
+      // its summary); the summary path scores it through the gate's
+      // updatedAt-aware activity.
+      updatedAt: comment.updated_at ?? '',
     }));
     return buildDispositionPlan(
       { headSha, comments },
