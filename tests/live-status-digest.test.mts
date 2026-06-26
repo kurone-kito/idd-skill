@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-
+// Importing the CLI module directly is only possible now that its top-level
+// statements are guarded behind isCliExecution(); previously the import parsed
+// process.argv and called process.exit, aborting the test process.
+import {
+  __resetTrustedMarkerCachesForTest,
+  configuredTrustedMarkerAuthors,
+  isTrustedMarkerAuthor,
+  trustCollaboratorMarkers,
+} from '../src/scripts/live-status-digest.mts';
 import {
   applyDigestUpsert,
   findLiveStatusDigestComments,
@@ -213,12 +221,14 @@ test('applyDigestUpsert skips the claim check and mutation on a duplicate plan',
   assert.deepEqual(calls, []);
 });
 
-// configuredTrustedMarkerAuthors() in live-status-digest.mts now builds its
-// cached set from new Set(resolveTrustedMarkerActors({ envValue, config }).actors),
+// configuredTrustedMarkerAuthors() in live-status-digest.mts builds its cached
+// set from new Set(resolveTrustedMarkerActors({ envValue, config }).actors),
 // reading .github/idd/config.json the same way trustCollaboratorMarkers() does.
-// live-status-digest.mts itself runs its CLI on import (top-level statements),
-// so these tests lock the env -> config ladder it now relies on via the shared
-// resolver rather than importing the un-importable CLI module.
+// These cases lock the env -> config ladder against synthetic config objects via
+// the shared resolver, in isolation from the module's real-config read. The
+// module's own configuredTrustedMarkerAuthors() is now exercised directly in the
+// "Direct-import coverage" tests below, which #1120 made possible by guarding the
+// CLI behind isCliExecution().
 function configuredTrustedMarkerSet(
   envValue: string,
   config: { trustedMarkerActors?: unknown } | null,
@@ -249,4 +259,95 @@ test('configured trusted-marker authors are empty with neither env nor config', 
     [...configuredTrustedMarkerSet('', { trustedMarkerActors: [] })],
     [],
   );
+});
+
+// --- Direct-import coverage of the CLI module's trusted-marker-author logic.
+// These exercise paths that could not be unit-tested before #1120, because
+// importing live-status-digest.mts parsed process.argv and called
+// process.exit, aborting the test process. They stay hermetic (no `gh`
+// subprocess) by seeding the cached current-viewer login.
+
+function withEnv(
+  vars: Record<string, string | undefined>,
+  body: () => void,
+): void {
+  const saved = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(vars)) {
+    saved.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    body();
+  } finally {
+    for (const [key, value] of saved) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+test('configuredTrustedMarkerAuthors resolves the env actor and caches it', () => {
+  withEnv({ IDD_TRUSTED_MARKER_ACTORS: 'alpha-bot' }, () => {
+    __resetTrustedMarkerCachesForTest();
+    assert.deepEqual([...configuredTrustedMarkerAuthors()], ['alpha-bot']);
+
+    // The set is cached: a later env change is ignored until the cache resets.
+    process.env.IDD_TRUSTED_MARKER_ACTORS = 'beta-bot';
+    assert.deepEqual([...configuredTrustedMarkerAuthors()], ['alpha-bot']);
+
+    // After a reset the new env value is resolved.
+    __resetTrustedMarkerCachesForTest();
+    assert.deepEqual([...configuredTrustedMarkerAuthors()], ['beta-bot']);
+  });
+  __resetTrustedMarkerCachesForTest();
+});
+
+test('trustCollaboratorMarkers gates on the env flag (config has no override)', () => {
+  withEnv({ IDD_TRUST_COLLABORATOR_MARKERS: 'true' }, () => {
+    assert.equal(trustCollaboratorMarkers(), true);
+  });
+  withEnv({ IDD_TRUST_COLLABORATOR_MARKERS: undefined }, () => {
+    assert.equal(trustCollaboratorMarkers(), false);
+  });
+});
+
+test('isTrustedMarkerAuthor matches a configured author without touching gh', () => {
+  withEnv(
+    {
+      IDD_TRUSTED_MARKER_ACTORS: 'configured-bot',
+      IDD_TRUST_COLLABORATOR_MARKERS: undefined,
+    },
+    () => {
+      // Seed an empty viewer login so the viewer branch never matches and no
+      // `gh api user` subprocess runs.
+      __resetTrustedMarkerCachesForTest({ currentViewerLogin: '' });
+
+      // Configured-author match (case-insensitive).
+      assert.equal(isTrustedMarkerAuthor('o', 'r', 'configured-bot'), true);
+      assert.equal(isTrustedMarkerAuthor('o', 'r', 'Configured-Bot'), true);
+
+      // Empty login fails closed.
+      assert.equal(isTrustedMarkerAuthor('o', 'r', ''), false);
+
+      // Not configured + collaborator-trust gate off -> false, without
+      // consulting the collaborator permission API.
+      assert.equal(isTrustedMarkerAuthor('o', 'r', 'random-bot'), false);
+    },
+  );
+  __resetTrustedMarkerCachesForTest();
+});
+
+test('isTrustedMarkerAuthor matches the seeded current viewer login', () => {
+  __resetTrustedMarkerCachesForTest({ currentViewerLogin: 'me-the-viewer' });
+  assert.equal(isTrustedMarkerAuthor('o', 'r', 'me-the-viewer'), true);
+  // Case-insensitive against the normalized viewer login.
+  assert.equal(isTrustedMarkerAuthor('o', 'r', 'Me-The-Viewer'), true);
+  __resetTrustedMarkerCachesForTest();
 });
