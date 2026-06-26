@@ -1027,7 +1027,12 @@ function hasOpenClosingPr(
     }
     after = connection.pageInfo.endCursor ?? null;
     if (!after) {
-      return false;
+      // hasNextPage with no endCursor: an incomplete / unexpected connection
+      // read. Throw so the per-issue catch fails closed (blocks the child)
+      // rather than treating a partial page as "no open PR".
+      throw new Error(
+        'incomplete closing-PR pagination: hasNextPage with no endCursor',
+      );
     }
   }
 }
@@ -1081,7 +1086,12 @@ function hasOpenConnectedPr(
     }
     after = connection.pageInfo.endCursor ?? null;
     if (!after) {
-      break;
+      // hasNextPage with no endCursor: reconciling a truncated timeline could
+      // miss a later CONNECTED open PR. Throw so the per-issue catch fails
+      // closed (blocks the child) instead of trusting the partial stream.
+      throw new Error(
+        'incomplete connected-PR timeline pagination: hasNextPage with no endCursor',
+      );
     }
   }
   return reconcileConnectedOpenPrs(events).length > 0;

@@ -460,6 +460,54 @@ test('resolveOpenLinkedPrIssues blocks a present connection with an OPEN closing
   assert.deepEqual(resolveOpenLinkedPrIssues('o', 'r', [1048], runner), [1048]);
 });
 
+test('resolveOpenLinkedPrIssues fails closed on a truncated closing-PR page (hasNextPage, no endCursor)', () => {
+  const runner = fakeGraphqlRunner({
+    closing: {
+      data: {
+        repository: {
+          issue: {
+            closedByPullRequestsReferences: {
+              nodes: [{ state: 'MERGED' }],
+              pageInfo: { hasNextPage: true, endCursor: null },
+            },
+          },
+        },
+      },
+    },
+  });
+  assert.deepEqual(resolveOpenLinkedPrIssues('o', 'r', [1048], runner), [1048]);
+});
+
+test('resolveOpenLinkedPrIssues fails closed on a truncated connected-PR timeline (hasNextPage, no endCursor)', () => {
+  const runner = fakeGraphqlRunner({
+    closing: {
+      data: {
+        repository: {
+          issue: {
+            closedByPullRequestsReferences: {
+              nodes: [],
+              pageInfo: { hasNextPage: false },
+            },
+          },
+        },
+      },
+    },
+    timeline: {
+      data: {
+        repository: {
+          issue: {
+            timelineItems: {
+              nodes: [],
+              pageInfo: { hasNextPage: true, endCursor: null },
+            },
+          },
+        },
+      },
+    },
+  });
+  assert.deepEqual(resolveOpenLinkedPrIssues('o', 'r', [1048], runner), [1048]);
+});
+
 test('unresolved, inaccessible, and cycle diagnostics each surface a blocker', () => {
   const report = readyReport();
   report.diagnostics.unresolvedReferences = [
