@@ -3994,6 +3994,20 @@ test('resolveToleratedGhFailure prefers an allowed HTTP status over a tolerated 
   );
 });
 
+test('resolveToleratedGhFailure derives an allowed status from a JSON error body when stderr lacks (HTTP nnn)', () => {
+  // deriveGhHttpStatus also reads a JSON "status" field, so a 404 whose status
+  // appears only in the body (not in an stderr `(HTTP 404)` suffix) still
+  // resolves to empty for an allowed 404 — robustness the local regex lacked.
+  const error = Object.assign(new Error('Command failed'), {
+    status: 1,
+    stdout: '{"message":"Not Found","status":"404"}',
+  });
+  assert.equal(
+    resolveToleratedGhFailure(error, { allowHttpStatuses: [404] }),
+    '',
+  );
+});
+
 test('resolveToleratedGhFailure re-throws (returns undefined) for a non-allowed HTTP status', () => {
   const error = ghHttpErrorWithStdout(
     403,

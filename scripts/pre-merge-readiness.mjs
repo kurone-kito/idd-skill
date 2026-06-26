@@ -756,12 +756,13 @@ function resolvePrFirstCommitAt(commits) {
  * Decide how a thrown `gh` failure is tolerated, returning the string result to
  * use or `undefined` when the caller must re-throw.
  *
- * - `allowHttpStatuses` matches the HTTP status parsed from stderr and yields an
- *   **empty** string. `gh api` writes the JSON error body to stdout on a
- *   non-2xx response (a 404 prints `{"message":"Not Found",…}`), so returning
- *   that body would make `ghApiJson` parse the error object instead of `{}` /
- *   `[]`. An allowed status never carries useful data, so the empty result lets
- *   `ghApiJson` resolve it to an empty object / array.
+ * - `allowHttpStatuses` matches the HTTP status derived from the gh error via
+ *   the shared `deriveGhHttpStatus` (the same extractor `fetchBranchRulesets`
+ *   uses) and yields an **empty** string. `gh api` writes the JSON error body to
+ *   stdout on a non-2xx response (a 404 prints `{"message":"Not Found",…}`), so
+ *   returning that body would make `ghApiJson` parse the error object instead of
+ *   `{}` / `[]`. An allowed status never carries useful data, so the empty
+ *   result lets `ghApiJson` resolve it to an empty object / array.
  * - `allowStatuses` matches the process exit code and returns stdout **only**
  *   when the body is genuinely the wanted JSON (`gh` commands that exit non-zero
  *   yet still print the data, e.g. the checks rollup).
@@ -774,9 +775,11 @@ function resolvePrFirstCommitAt(commits) {
  * today; it keeps the resolver correct for any future combined call.
  */
 export function resolveToleratedGhFailure(error, options = {}) {
-  const stderr = String(error?.stderr ?? '');
-  const httpStatus = Number(stderr.match(/HTTP\s+(\d+)/i)?.[1] ?? -1);
-  if ((options.allowHttpStatuses ?? []).includes(httpStatus)) {
+  const httpStatus = deriveGhHttpStatus(error);
+  if (
+    httpStatus !== null &&
+    (options.allowHttpStatuses ?? []).includes(httpStatus)
+  ) {
     return '';
   }
   const status = Number(error?.status ?? -1);
