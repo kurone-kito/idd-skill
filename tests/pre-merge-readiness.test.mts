@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import {
   fetchBranchRulesets,
   parseArgs,
+  resolveToleratedGhFailure,
 } from '../src/scripts/pre-merge-readiness.mts';
 import {
   buildActivitySnapshotSummary,
@@ -3950,6 +3951,67 @@ test('fetchBranchRulesets propagates a non-404 fetch error instead of coercing t
         throw boom;
       }),
     (error: unknown) => error === boom,
+  );
+});
+
+// gh api writes the JSON error body to stdout on a non-2xx response, so an
+// allowed HTTP status must yield an empty result rather than that error object.
+const ghHttpErrorWithStdout = (
+  httpStatus: number,
+  label: string,
+  stdout: string,
+) => Object.assign(ghHttpError(httpStatus, label), { stdout });
+
+test('resolveToleratedGhFailure yields empty for an allowed HTTP status, not the gh error body on stdout', () => {
+  const error = ghHttpErrorWithStdout(
+    404,
+    'Not Found',
+    '{"message":"Not Found","documentation_url":"https://docs","status":"404"}',
+  );
+  // Empty (not the 3-key error object) is what ghApiJson coerces to {} / []
+  // for an allowed 404 — see its `if (!raw) return paginate ? [] : {}` branch.
+  assert.equal(
+    resolveToleratedGhFailure(error, { allowHttpStatuses: [404] }),
+    '',
+  );
+});
+
+test('resolveToleratedGhFailure re-throws (returns undefined) for a non-allowed HTTP status', () => {
+  const error = ghHttpErrorWithStdout(
+    403,
+    'API rate limit exceeded',
+    '{"message":"API rate limit exceeded"}',
+  );
+  assert.equal(
+    resolveToleratedGhFailure(error, { allowHttpStatuses: [404] }),
+    undefined,
+  );
+});
+
+test('resolveToleratedGhFailure keeps the allowStatuses path returning JSON stdout', () => {
+  // The exit-code path is unchanged: it returns stdout when the body is the
+  // wanted JSON (e.g. the checks rollup exits non-zero but still prints data).
+  const error = Object.assign(new Error('Command failed'), {
+    status: 8,
+    stdout: '[{"state":"SUCCESS"}]',
+  });
+  assert.equal(
+    resolveToleratedGhFailure(error, { allowStatuses: [1, 8] }),
+    '[{"state":"SUCCESS"}]',
+  );
+});
+
+test('resolveToleratedGhFailure ignores non-JSON allowStatuses stdout and falls through', () => {
+  // A tolerated exit code whose stdout is not JSON is not a usable result; with
+  // no matching HTTP status it returns undefined so runGh re-throws.
+  const error = Object.assign(new Error('Command failed'), {
+    status: 1,
+    stdout: 'some plain log line',
+    stderr: 'gh: boom',
+  });
+  assert.equal(
+    resolveToleratedGhFailure(error, { allowStatuses: [1] }),
+    undefined,
   );
 });
 

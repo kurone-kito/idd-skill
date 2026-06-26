@@ -1015,6 +1015,39 @@ function resolvePrFirstCommitAt(commits: PrCommitPayload[]): string | null {
   return earliestIso;
 }
 
+/**
+ * Decide how a thrown `gh` failure is tolerated, returning the string result to
+ * use or `undefined` when the caller must re-throw.
+ *
+ * - `allowStatuses` matches the process exit code and returns stdout **only**
+ *   when the body is genuinely the wanted JSON (`gh` commands that exit non-zero
+ *   yet still print the data, e.g. the checks rollup).
+ * - `allowHttpStatuses` matches the HTTP status parsed from stderr and yields an
+ *   **empty** string. `gh api` writes the JSON error body to stdout on a
+ *   non-2xx response (a 404 prints `{"message":"Not Found",…}`), so returning
+ *   that body would make `ghApiJson` parse the error object instead of `{}` /
+ *   `[]`. An allowed status never carries useful data, so the empty result lets
+ *   `ghApiJson` resolve it to an empty object / array.
+ */
+export function resolveToleratedGhFailure(
+  error: unknown,
+  options: RunGhOptions = {},
+): string | undefined {
+  const status = Number((error as { status?: unknown } | null)?.status ?? -1);
+  if ((options.allowStatuses ?? []).includes(status)) {
+    const stdout = String((error as { stdout?: unknown } | null)?.stdout ?? '');
+    if (/^\s*[[{]/.test(stdout)) {
+      return stdout;
+    }
+  }
+  const stderr = String((error as { stderr?: unknown } | null)?.stderr ?? '');
+  const httpStatus = Number(stderr.match(/HTTP\s+(\d+)/i)?.[1] ?? -1);
+  if ((options.allowHttpStatuses ?? []).includes(httpStatus)) {
+    return '';
+  }
+  return undefined;
+}
+
 function runGh(args: string[], options: RunGhOptions = {}): string {
   try {
     return execFileSync('gh', args, {
@@ -1022,19 +1055,9 @@ function runGh(args: string[], options: RunGhOptions = {}): string {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    const status = Number((error as { status?: unknown } | null)?.status ?? -1);
-    if ((options.allowStatuses ?? []).includes(status)) {
-      const stdout = String(
-        (error as { stdout?: unknown } | null)?.stdout ?? '',
-      );
-      if (/^\s*[[{]/.test(stdout)) {
-        return stdout;
-      }
-    }
-    const stderr = String((error as { stderr?: unknown } | null)?.stderr ?? '');
-    const httpStatus = Number(stderr.match(/HTTP\s+(\d+)/i)?.[1] ?? -1);
-    if ((options.allowHttpStatuses ?? []).includes(httpStatus)) {
-      return String((error as { stdout?: unknown } | null)?.stdout ?? '');
+    const tolerated = resolveToleratedGhFailure(error, options);
+    if (tolerated !== undefined) {
+      return tolerated;
     }
     throw error;
   }
