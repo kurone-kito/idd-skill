@@ -158,19 +158,19 @@ add-reviewer command (the reliable trigger). The REST `requested_reviewers`
 endpoint called with a bot's **display name** silently no-ops and wastes a
 full advisory-wait cycle, so do not use that path to request a re-review.
 
-**Copilot**: after every push, regardless of any reviewer's state,
-request a Copilot re-review if Copilot has not yet reviewed the current
-HEAD SHA. Subject to the configured Copilot re-review request cap
-(`REQUEST_CAP` from helper output or `.github/idd/config.json`
-`advisoryWait.requestCap`; default 30). This is a process limit, not a
-GitHub-enforced constraint.
+**Primary advisory bot** (default Copilot): after every push, regardless
+of any reviewer's state, request a re-review from the configured primary
+advisory bot (`.github/idd/config.json` `advisoryWait.primaryBotLogin`,
+which defaults to Copilot) if it has not yet reviewed the current HEAD
+SHA. Subject to the configured re-review request cap (`REQUEST_CAP` from
+helper output or `.github/idd/config.json` `advisoryWait.requestCap`;
+default 30). This is a process limit, not a GitHub-enforced constraint.
 
-The advisory bot whose review is requested below is the configured
-**primary advisory bot** (`.github/idd/config.json`
-`advisoryWait.primaryBotLogin`), which defaults to Copilot. Substitute
-`{primary-advisory-bot}` in the commands below with that bare login — the
-default is `copilot`, so the command resolves to `@copilot`. The
-advisory-wait helpers resolve the same identity from policy.
+Substitute `{primary-advisory-bot}` in the commands below with that bare
+login — the default is `copilot`, so the command resolves to `@copilot`.
+The advisory-wait helpers resolve the same identity from policy. The AW
+helper output fields keep their `COPILOT_PENDING` / `LAST_COPILOT_COMMIT`
+names regardless of the configured bot.
 
 1. Fetch `PR_HEAD_SHA`:
 
@@ -179,14 +179,14 @@ advisory-wait helpers resolve the same identity from policy.
    ```
 
 2. Run **AW1** (`idd-advisory-wait.instructions.md`). If **SATISFIED** →
-   E14 Copilot processing is done; proceed to E15.
+   E14 advisory-bot processing is done; proceed to E15.
 3. Run **AW2** to fetch markers.
 4. Apply the **AW3** decision table:
    - **SATISFIED** → proceed to E15.
    - **HOLD** → post the hold comment from **AW4** and stop.
    - **RECOVERY_NEEDED** (`COPILOT_PENDING` is `"true"`, no same-head
      marker): post the recovery marker from **AW3-R**. Do not request
-     another Copilot review.
+     another review from the bot.
    - **CAP_EXHAUSTED** (`REQUEST_MARKER_COUNT` ≥ `REQUEST_CAP`, no
      same-head marker) →
      if `CAP_EXHAUSTED_ROUTE` is `hold`, post the hold comment from
@@ -224,7 +224,7 @@ advisory-wait helpers resolve the same identity from policy.
 Copilot and CI advisory bot comments are advisory; unanswered ones do
 not block merge.
 
-Whenever E14 posts a Copilot request marker, recovery marker, or hold
+Whenever E14 posts an advisory request marker, recovery marker, or hold
 comment, update the digest after that side effect with the current
 advisory state. Use the marker or hold comment as `Authoritative by`,
 set `Open blockers` to the advisory wait or hold reason, and set
