@@ -337,10 +337,20 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     if (cached) {
       return cached;
     }
+    // #1072: skip the per-node native sub-issue GraphQL round-trip when the
+    // REST `sub_issues_summary.total` proves the issue has zero native
+    // sub-issues. `loadSubIssues` would return `[]` in that case, so the
+    // reference set — and every downstream edge, node, provenance path, and
+    // diagnostic — is byte-identical. A null total (summary absent / unknown)
+    // still queries, so behavior is unchanged for callers without the field.
+    const nativeSubIssues =
+      issue.subIssueSummaryTotal === 0
+        ? []
+        : normalizeSubIssueReferences(await loadSubIssues(issue.number));
     const references = [
       ...extractTaskListReferences(issue.body),
       ...extractKeywordReferences(issue.body, { currentRepoRef }),
-      ...normalizeSubIssueReferences(await loadSubIssues(issue.number)),
+      ...nativeSubIssues,
     ];
     referenceCache.set(issue.number, references);
     return references;
@@ -1119,7 +1129,20 @@ function normalizeIssue(issue) {
     body: String(issue.body ?? ''),
     labels: normalizeLabels(issue.labels),
     isPullRequest: Boolean(issue.pull_request),
+    subIssueSummaryTotal: extractSubIssueSummaryTotal(issue.sub_issues_summary),
   };
+}
+/**
+ * Read the native sub-issue count from a REST `sub_issues_summary` object.
+ * Returns the non-negative integer `total`, or null when the field is absent
+ * or not a coherent count — the "unknown" case that keeps the sub-issue query
+ * (fail-safe), so only a proven `0` skips it.
+ */
+function extractSubIssueSummaryTotal(summary) {
+  const total = summary?.total;
+  return typeof total === 'number' && Number.isInteger(total) && total >= 0
+    ? total
+    : null;
 }
 function normalizeLabels(labelsInput) {
   if (!labelsInput) {
