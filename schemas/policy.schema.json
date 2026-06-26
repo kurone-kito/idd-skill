@@ -460,7 +460,9 @@
           "minItems": 1,
           "items": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "pattern": "\\S",
+            "description": "Each entry must contain a non-whitespace character. This mirrors the runtime, which trims each glob and ignores blank entries (falling back to the defaults), so a whitespace-only pattern is rejected at validation time instead of silently never matching."
           },
           "description": "Branch globs the guard treats as implementation branches that must not live in the primary worktree (default [\"issue/*\", \"roadmap-audit/*\"] when absent)."
         }
