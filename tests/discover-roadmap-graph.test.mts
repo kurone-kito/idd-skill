@@ -476,6 +476,160 @@ test('includes GitHub sub-issue relationships in the graph', async () => {
   assert.deepEqual(graph.executionCandidates, [501]);
 });
 
+test('skips the native sub-issue query when sub_issues_summary.total is zero (#1072)', async () => {
+  const issues = new Map<number, unknown>([
+    [
+      600,
+      {
+        ...roadmapIssue(600, '- [ ] #601\n- [ ] #602', 'root-roadmap'),
+        sub_issues_summary: { total: 0, completed: 0, percent_completed: 0 },
+      },
+    ],
+    [
+      601,
+      { ...executionIssue(601, 'alpha'), sub_issues_summary: { total: 0 } },
+    ],
+    [602, { ...executionIssue(602, 'beta'), sub_issues_summary: { total: 0 } }],
+  ]);
+  let subIssueCalls = 0;
+
+  const graph = await enumerateRoadmapGraph(600, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    loadSubIssues: async (issueNumber) => {
+      subIssueCalls += 1;
+      return issueNumber === 600 ? [601, 602] : [];
+    },
+  });
+
+  // Reduced request count: every node proves zero native sub-issues via its
+  // summary, so the per-node sub-issue GraphQL round-trip is never made.
+  assert.equal(subIssueCalls, 0);
+  // Body task-list references are still traversed, so the graph is identical.
+  assert.deepEqual(graph.executionCandidates, [601, 602]);
+  assert.deepEqual(
+    graph.edges.map(
+      (edge) => `${edge.source}->${edge.target}:${edge.relationship}`,
+    ),
+    ['600->601:task-list', '600->602:task-list'],
+  );
+});
+
+test('still queries native sub-issues when sub_issues_summary.total is positive (#1072)', async () => {
+  const issues = new Map<number, unknown>([
+    [
+      610,
+      {
+        ...roadmapIssue(610, '', 'root-roadmap'),
+        sub_issues_summary: { total: 1 },
+      },
+    ],
+    [
+      611,
+      { ...executionIssue(611, 'child'), sub_issues_summary: { total: 0 } },
+    ],
+  ]);
+  let subIssueCalls = 0;
+
+  const graph = await enumerateRoadmapGraph(610, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    loadSubIssues: async (issueNumber) => {
+      subIssueCalls += 1;
+      return issueNumber === 610 ? [611] : [];
+    },
+  });
+
+  // Only the root (total:1) queries; the leaf #611 (total:0) is skipped.
+  assert.equal(subIssueCalls, 1);
+  assert.deepEqual(graph.edges, [
+    {
+      source: 610,
+      target: 611,
+      relationship: 'sub-issue',
+      evidence: 'GitHub sub-issue #611',
+    },
+  ]);
+  assert.deepEqual(graph.executionCandidates, [611]);
+});
+
+test('still queries native sub-issues when the summary is absent (fail-safe, #1072)', async () => {
+  const issues = new Map([
+    [620, roadmapIssue(620, '', 'root-roadmap')],
+    [621, executionIssue(621, 'child')],
+  ]);
+  let subIssueCalls = 0;
+
+  await enumerateRoadmapGraph(620, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    loadSubIssues: async (issueNumber) => {
+      subIssueCalls += 1;
+      return issueNumber === 620 ? [621] : [];
+    },
+  });
+
+  // No summary on either issue -> total unknown -> the query still runs for
+  // every node, so the skip never regresses callers without the field.
+  assert.equal(subIssueCalls, 2);
+});
+
+test('treats a malformed sub_issues_summary.total as unknown and still queries (#1072)', async () => {
+  // Only a coherent non-negative integer `0` skips; negative, non-integer, and
+  // string totals are "unknown" and must still query (fail-safe).
+  for (const malformedTotal of [-1, 1.5, '0', Number.NaN] as unknown[]) {
+    const issues = new Map<number, unknown>([
+      [
+        630,
+        {
+          ...roadmapIssue(630, '', 'root-roadmap'),
+          sub_issues_summary: { total: malformedTotal },
+        },
+      ],
+      [
+        631,
+        { ...executionIssue(631, 'child'), sub_issues_summary: { total: 0 } },
+      ],
+    ]);
+    let subIssueCalls = 0;
+
+    await enumerateRoadmapGraph(630, {
+      loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+      loadSubIssues: async (issueNumber) => {
+        subIssueCalls += 1;
+        return issueNumber === 630 ? [631] : [];
+      },
+    });
+
+    // #630's total is malformed -> unknown -> still queried; #631 (total:0)
+    // is skipped, so exactly one query is made regardless of the bad value.
+    assert.equal(subIssueCalls, 1, `total=${String(malformedTotal)}`);
+  }
+});
+
+test('never emits subIssueSummaryTotal in the report node shape (#1072)', async () => {
+  const issues = new Map<number, unknown>([
+    [
+      640,
+      {
+        ...roadmapIssue(640, '- [ ] #641', 'root-roadmap'),
+        sub_issues_summary: { total: 0 },
+      },
+    ],
+    [641, { ...executionIssue(641, 'leaf'), sub_issues_summary: { total: 0 } }],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(640, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  // The internal summary count must never leak into the byte-stable report
+  // node shape (it is a traversal-only field on NormalizedIssue).
+  for (const node of graph.nodes) {
+    assert.ok(
+      !Object.hasOwn(node, 'subIssueSummaryTotal'),
+      `node #${node.number} unexpectedly emitted subIssueSummaryTotal`,
+    );
+  }
+});
+
 test('surfaces incomplete descendant lookups instead of silently dropping them', async () => {
   const issues = new Map([[550, roadmapIssue(550, '', 'root-roadmap')]]);
 
