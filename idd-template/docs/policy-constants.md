@@ -253,11 +253,12 @@ pull-request-only bypass actor that can satisfy GitHub at F3.
 CI enforces two layers of instruction file size limits via `audit/sync-manifest.json`.
 
 A separate `audit-docs` guard (`docBudgetGuard` in
-`audit/sync-manifest.json`) cross-checks every hardcoded byte value in the
+`audit/sync-manifest.json`) cross-checks the hardcoded budget values in the
 maintained docs against these manifest budgets, so a documented number
-cannot silently drift from the manifest. Keep non-budget byte sizes out of
-the guarded files — or express them without the `bytes` suffix — because the
-guard flags any `bytes`-suffixed number that is not a current budget value.
+cannot silently drift from the manifest. It matches budget-shaped byte
+values — four or more digits, optionally comma-grouped, followed by
+`bytes` — so keep any non-budget value of that shape out of the guarded
+files, or express it without the `bytes` suffix.
 
 ### Per-file limits
 
