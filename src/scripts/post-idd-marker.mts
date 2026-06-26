@@ -18,7 +18,7 @@
 // manual POST path it replaces already requires.
 
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -118,6 +118,52 @@ export function buildMarkerBody(type: string, fields: MarkerFields): string {
   }
 }
 
+/**
+ * Map a `review-activity-snapshot` JSON object to the four snapshot-derived
+ * `--type watermark` field flags, so `--from-pr` can fill them automatically
+ * instead of the agent hand-copying a 40-char HEAD SHA and three timestamps.
+ *
+ * `ci-completed-at` is taken from `latestPassingCiCompletedAt` — the latest
+ * *passing* (or treated-as-passed) CI completion — NOT `latestCiCompletedAt`.
+ * That matches the E1 Step 2 `{latest-ci-completed-at}` definition and the
+ * pre-merge-readiness currency diff, which compares the watermark CI field
+ * against the live `latestPassingCiCompletedAt`; using the all-completed field
+ * would post a value that differs from the hand-computed one and trips a false
+ * F2 `ci-pass-drift`.
+ *
+ * The snapshot emits the `none` sentinel string (never `null`) for empty
+ * timestamps; both are tolerated and forwarded as `none`. Throws (fail-closed)
+ * when `headSha` / `totalItemCount` are absent or malformed so a broken
+ * snapshot can never post a bogus watermark. ISO/count shape validation is left
+ * to the single-sourced `renderReviewWatermarkMarker` reached via
+ * `buildMarkerBody`.
+ */
+export function watermarkFieldsFromSnapshot(snapshot: unknown): MarkerFields {
+  const snap = (snapshot ?? {}) as Record<string, unknown>;
+  const headSha = snap.headSha;
+  const totalItemCount = snap.totalItemCount;
+  if (typeof headSha !== 'string' || headSha.trim() === '') {
+    throw new Error('review-activity-snapshot is missing a usable headSha');
+  }
+  if (
+    typeof totalItemCount !== 'number' ||
+    !Number.isInteger(totalItemCount) ||
+    totalItemCount < 0
+  ) {
+    throw new Error(
+      'review-activity-snapshot is missing a usable totalItemCount',
+    );
+  }
+  const isoOrNone = (value: unknown): string =>
+    typeof value === 'string' && value.trim() !== '' ? value : 'none';
+  return {
+    'head-sha': headSha,
+    'max-activity-at': isoOrNone(snap.maxActivityUpdatedAt),
+    'total-item-count': String(totalItemCount),
+    'ci-completed-at': isoOrNone(snap.latestPassingCiCompletedAt),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
@@ -126,11 +172,30 @@ interface CliArgs {
   type: string;
   target: string;
   number: number | null;
+  /** `--from-pr <n>`: derive the watermark snapshot fields from PR <n>. */
+  fromPr: number | null;
   apply: boolean;
   owner: string;
   repo: string;
+  /** Forwarded to the `--from-pr` snapshot child (snapshot input, not a field). */
+  trustedMarkerLogins: string;
+  /** Forwarded to the `--from-pr` snapshot child (snapshot input, not a field). */
+  advisoryBotLogins: string;
   help: boolean;
   fields: MarkerFields;
+}
+
+/**
+ * Parse a whole-token positive integer, failing closed on a suffixed typo
+ * (`1047abc`), a non-numeric token, or a non-positive / unsafe magnitude — a
+ * mis-parsed target number could POST a marker to the wrong issue/PR.
+ */
+function parsePositiveIntToken(token: string, label: string): number {
+  const parsed = Number.parseInt(token, 10);
+  if (!/^\d+$/.test(token) || !Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label}: ${token}`);
+  }
+  return parsed;
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -138,9 +203,12 @@ export function parseArgs(argv: string[]): CliArgs {
     type: '',
     target: '',
     number: null,
+    fromPr: null,
     apply: false,
     owner: '',
     repo: '',
+    trustedMarkerLogins: '',
+    advisoryBotLogins: '',
     help: false,
     fields: {},
   };
@@ -162,15 +230,7 @@ export function parseArgs(argv: string[]): CliArgs {
       if (args.number !== null) {
         throw new Error(`unexpected positional argument: ${token}`);
       }
-      const parsed = Number.parseInt(token, 10);
-      if (
-        !/^\d+$/.test(token) ||
-        !Number.isSafeInteger(parsed) ||
-        parsed <= 0
-      ) {
-        throw new Error(`invalid issue/PR number: ${token}`);
-      }
-      args.number = parsed;
+      args.number = parsePositiveIntToken(token, 'invalid issue/PR number');
       continue;
     }
     const value = argv[index + 1];
@@ -182,10 +242,16 @@ export function parseArgs(argv: string[]): CliArgs {
       args.type = value;
     } else if (token === '--target') {
       args.target = value;
+    } else if (token === '--from-pr') {
+      args.fromPr = parsePositiveIntToken(value, 'invalid --from-pr number');
     } else if (token === '--owner') {
       args.owner = value;
     } else if (token === '--repo') {
       args.repo = value;
+    } else if (token === '--trusted-marker-logins') {
+      args.trustedMarkerLogins = value;
+    } else if (token === '--advisory-bot-logins') {
+      args.advisoryBotLogins = value;
     } else {
       // Any other --flag is a renderer field, stored under its kebab name.
       args.fields[token.slice(2)] = value;
@@ -205,7 +271,12 @@ its claim-revalidation gate before --apply, as the manual POST path it replaces.
 
   --type <type>        one of: ${MARKER_TYPES.join(', ')}
   --target <issue|pr>  the comment target kind (both use the issues comments API)
-  <number>             issue or PR number (positional, required)
+  <number>             issue or PR number (positional; required unless --from-pr)
+  --from-pr <n>        watermark only: derive --head-sha / --max-activity-at /
+                       --total-item-count / --ci-completed-at from the live
+                       review-activity-snapshot of PR <n> and post the watermark
+                       to PR <n>, so only --agent-id / --claim-id (and --apply)
+                       are still needed (target defaults to pr). Not network-free.
   --apply              POST the marker (default: dry-run prints it in a JSON envelope)
   --owner <owner>      repo owner (default: gh repo view)
   --repo <repo>        repo name (default: gh repo view)
@@ -215,9 +286,13 @@ Per-type field flags:
   claim              --agent-id --claim-id --supersedes --timestamp --branch
   unclaim            --agent-id --claim-id --timestamp
   watermark          --agent-id --claim-id --head-sha --max-activity-at --total-item-count --ci-completed-at
+                     (or --agent-id --claim-id --from-pr <n>)
   baseline           --agent-id --claim-id --sha
   advisory           --agent-id --head-sha --timestamp
   advisory-recovery  --agent-id --head-sha --timestamp
+
+--from-pr forwards optional --trusted-marker-logins / --advisory-bot-logins to
+the snapshot child so its counts match the manual review-activity-snapshot path.
 `;
 
 function ghText(args: string[]): string {
@@ -254,6 +329,50 @@ function postMarker(
   return JSON.parse(out) as { id: number; html_url: string };
 }
 
+/**
+ * Run the sibling read-only `review-activity-snapshot.mjs` for a PR and return
+ * its parsed JSON. This is the `--from-pr` half of the "compose the two existing
+ * helpers" path; the snapshot stays the single source of the activity/CI metrics
+ * and this write-side helper only renders+posts the watermark over them.
+ *
+ * The sibling is resolved relative to this module (both generated artifacts live
+ * in `scripts/`), so it works from any cwd. `--owner` / `--repo` are forwarded
+ * to avoid an extra `gh repo view` in the child, and the optional marker-actor
+ * lists are forwarded so the child's `totalItemCount` / `maxActivityUpdatedAt`
+ * filtering matches the manual `review-activity-snapshot` invocation.
+ */
+function runReviewActivitySnapshot(
+  prNumber: number,
+  owner: string,
+  repo: string,
+  trustedMarkerLogins: string,
+  advisoryBotLogins: string,
+): unknown {
+  const script = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    'review-activity-snapshot.mjs',
+  );
+  const snapshotArgs = [
+    script,
+    '--pr',
+    String(prNumber),
+    '--owner',
+    owner,
+    '--repo',
+    repo,
+  ];
+  if (trustedMarkerLogins) {
+    snapshotArgs.push('--trusted-marker-logins', trustedMarkerLogins);
+  }
+  if (advisoryBotLogins) {
+    snapshotArgs.push('--advisory-bot-logins', advisoryBotLogins);
+  }
+  const out = execFileSync(process.execPath, snapshotArgs, {
+    encoding: 'utf8',
+  });
+  return JSON.parse(out);
+}
+
 function isMainModule(moduleUrl: string): boolean {
   const entry = process.argv[1];
   if (!entry) {
@@ -286,6 +405,71 @@ if (isMainModule(import.meta.url)) {
     );
     process.exit(1);
   }
+
+  // `--from-pr <n>` snapshot-derivation mode (watermark only): default the post
+  // target to PR <n>, reject the manual snapshot fields as ambiguous, then
+  // derive head-sha / max-activity-at / total-item-count / ci-completed-at from
+  // the live review-activity-snapshot before the shared render + dry-run/apply
+  // path below. owner/repo are resolved here because the snapshot child needs
+  // them and the dry-run branch returns before the apply-path resolution.
+  if (args.fromPr !== null) {
+    if (args.type !== 'watermark') {
+      process.stderr.write('--from-pr is only valid for --type watermark\n');
+      process.exit(1);
+    }
+    if (!args.target) {
+      args.target = 'pr';
+    }
+    if (args.number === null) {
+      args.number = args.fromPr;
+    } else if (args.number !== args.fromPr) {
+      process.stderr.write(
+        'in --from-pr mode the positional number must be omitted or equal --from-pr\n',
+      );
+      process.exit(1);
+    }
+    const derivedFlags = [
+      'head-sha',
+      'max-activity-at',
+      'total-item-count',
+      'ci-completed-at',
+    ];
+    const conflicting = derivedFlags.filter((flag) => flag in args.fields);
+    if (conflicting.length > 0) {
+      process.stderr.write(
+        `--from-pr derives ${derivedFlags.join(' / ')} from the live snapshot; do not also pass: ${conflicting
+          .map((flag) => `--${flag}`)
+          .join(', ')}\n`,
+      );
+      process.exit(1);
+    }
+    // Resolve owner/repo inside the try: in --from-pr mode they are read
+    // eagerly (the snapshot child needs them and the dry-run branch returns
+    // before the apply-path resolution), so a `gh repo view` failure here is
+    // part of "derive from PR" and should report cleanly, not throw a raw stack.
+    try {
+      args.owner =
+        args.owner ||
+        ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+      args.repo =
+        args.repo ||
+        ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+      const snapshot = runReviewActivitySnapshot(
+        args.fromPr,
+        args.owner,
+        args.repo,
+        args.trustedMarkerLogins,
+        args.advisoryBotLogins,
+      );
+      Object.assign(args.fields, watermarkFieldsFromSnapshot(snapshot));
+    } catch (error) {
+      process.stderr.write(
+        `failed to derive watermark fields from PR ${args.fromPr}: ${(error as Error).message}\n`,
+      );
+      process.exit(1);
+    }
+  }
+
   if (!TARGET_KINDS.includes(args.target as TargetKind)) {
     process.stderr.write(
       `--target is required and must be one of: ${TARGET_KINDS.join(', ')}\n`,

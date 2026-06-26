@@ -80,15 +80,19 @@ the snapshot is
 empty. Compute `{total-item-count}` as the total number of items in the
 snapshot (0 if empty). Persist all six values immediately by posting a
 PR comment with this format (when helper runtime is enabled, prefer the
-profile-selected post-idd-marker command — `--type watermark --target pr
-<pr-number> <watermark-fields> --apply`, passing the same six values shown
-below as `--agent-id` / `--claim-id` / `--head-sha` / `--max-activity-at` /
-`--total-item-count` / `--ci-completed-at`, to render and POST this marker in
-one step, so a hand-typed head SHA cannot mis-route the F2 review-currency
-check;
-`emit-marker --type review-watermark` stays the emit-only render path and
-the manual HTTP `POST` below remains the fallback; see
-`docs/idd-helper-scripts.md`):
+**one-command** profile-selected post-idd-marker watermark path —
+`--type watermark --from-pr <pr-number> --agent-id <id> --claim-id <id> --apply`
+— which derives `{head-SHA}` / `{max-activity-updatedAt}` /
+`{total-item-count}` / `{latest-ci-completed-at}` from a fresh
+`review-activity-snapshot` of the PR and POSTs the marker in one step, so a
+hand-typed head SHA cannot mis-route the F2 review-currency check (forward
+`--trusted-marker-logins` here too when you pass it to the snapshot). The
+manual six-field form — `--type watermark --target pr <pr-number>
+<watermark-fields> --apply`, passing the same six values shown below as
+`--agent-id` / `--claim-id` / `--head-sha` / `--max-activity-at` /
+`--total-item-count` / `--ci-completed-at` — stays the fallback, as do
+`emit-marker --type review-watermark` for emit-only rendering and the manual
+HTTP `POST` below; see `docs/idd-helper-scripts.md`):
 
 ```markdown
 <!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->
