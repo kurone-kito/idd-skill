@@ -4,6 +4,19 @@
 // The scripts/phase-id-resolver.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never
 // the generated .mjs. See docs/typescript-sources.md.
+// Canonical machine-facing phase IDs. This set must cover every phase route
+// `resume-route-selection` can emit (documented enum
+// `D1|D4|E1|E15|Esync|F1|F2|stop`) so a route the resume helper selects always
+// resolves here instead of throwing `unknown_phase_id`;
+// `tests/phase-id-resolver.test.mts` guards that union. `Esync` (the E-phase
+// branch-resync route) is therefore listed below. Two deliberate boundaries:
+//   - `stop` is a terminal control signal (stop-and-report), not a phase, so it
+//     is intentionally NOT canonical and resolves to `unknown_phase_id`.
+//   - bare `A` is the collapsed routing-graph-only node in
+//     `schemas/phase-graph.json`; `resume-route-selection` never emits it, and
+//     this list enumerates the concrete discovery sub-phases `A0..A5` instead,
+//     so bare `A` is intentionally non-canonical (it resolves to
+//     `unknown_phase_id`) rather than being added here.
 const DEFAULT_CANONICAL_PHASE_IDS = [
   'A0',
   'A0_O',
@@ -44,6 +57,7 @@ const DEFAULT_CANONICAL_PHASE_IDS = [
   'E13',
   'E14',
   'E15',
+  'Esync',
   'F1',
   'F2',
   'F2_5',

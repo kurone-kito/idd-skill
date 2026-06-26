@@ -170,6 +170,104 @@ test('resolves separator-normalized canonical forms to the canonical id', () => 
   assert.equal(resolvePhaseId('A4.5').matchedBy, 'legacy-alias');
 });
 
+test('every resume-route-selection route resolves except the terminal stop sentinel', () => {
+  // resume-route-selection.mts can route a resume into one of the phases in its
+  // documented route enum (printHelp: "route": "D1|D4|E1|E15|Esync|F1|F2|stop").
+  // Every *phase* route in that union must resolve through the canonical
+  // phase-id resolver so the two helpers cannot drift apart; this guard fails if
+  // resume-route-selection gains a documented route the resolver cannot resolve
+  // (the reason `Esync` was reconciled into the canonical list). Two routes are
+  // deliberately NOT canonical — documented here rather than silently added:
+  //   - `stop` is a terminal control signal (stop-and-report), not a phase, so
+  //     it must throw `unknown_phase_id` (asserted below).
+  //   - bare `A` is the collapsed routing-graph-only node in
+  //     schemas/phase-graph.json; resume-route-selection never emits it, and the
+  //     canonical list enumerates the concrete discovery sub-phases A0..A5
+  //     instead, so bare `A` is non-canonical and also throws (asserted below).
+  //     (A broader "every phase-graph node resolves" guard is a separate
+  //     concern, not this one.)
+  const documentedRoutes = readResumeRouteEnum();
+  const tableRoutes = readResumeDecisionTableRoutes();
+
+  // The two in-file route descriptions (help-text enum and decision table) must
+  // list the same routes, so a route added to one but not the other is caught.
+  assert.deepEqual(
+    [...new Set(documentedRoutes)].sort(),
+    [...new Set(tableRoutes)].sort(),
+    'resume-route-selection help enum and decision table must list the same routes',
+  );
+  assert.ok(
+    documentedRoutes.includes('Esync'),
+    'resume-route-selection route enum must include Esync',
+  );
+
+  const terminalSentinels = new Set(['stop']);
+  for (const route of documentedRoutes) {
+    if (terminalSentinels.has(route)) {
+      assertUnknownPhaseId(route);
+      continue;
+    }
+    const resolution = resolvePhaseId(route);
+    // Assert canonical self-resolution, not merely "resolves to some canonical
+    // id": resume routes are themselves canonical phases, so a future route
+    // wired up as a legacy alias (matchedBy 'legacy-alias', or a canonicalPhaseId
+    // other than the route) must fail this guard rather than silently pass.
+    assert.equal(
+      resolution.matchedBy,
+      'canonical',
+      `resume route ${route} must stay canonical in the phase-id resolver`,
+    );
+    assert.equal(
+      resolution.canonicalPhaseId,
+      route,
+      `resume route ${route} must resolve to itself`,
+    );
+  }
+
+  // Bare `A` is intentionally absent from the canonical list (see above).
+  assertUnknownPhaseId('A');
+});
+
 function readJson(relativePath: string): unknown {
   return JSON.parse(readFileSync(join(REPO_ROOT, relativePath), 'utf8'));
+}
+
+function assertUnknownPhaseId(input: string): void {
+  assert.throws(
+    () => resolvePhaseId(input),
+    (error) =>
+      Boolean(error) &&
+      (error as { code?: unknown }).code === 'unknown_phase_id',
+    `${input} must not resolve as a canonical phase id`,
+  );
+}
+
+function readResumeRouteSource(): string {
+  return readFileSync(
+    join(REPO_ROOT, 'src/scripts/resume-route-selection.mts'),
+    'utf8',
+  );
+}
+
+function readResumeRouteEnum(): string[] {
+  const match = readResumeRouteSource().match(/"route":\s*"([^"]+)"/);
+  assert.ok(
+    match,
+    'resume-route-selection.mts must document its route enum as "route": "..."',
+  );
+  return (match[1] ?? '')
+    .split('|')
+    .map((route) => route.trim())
+    .filter(Boolean);
+}
+
+function readResumeDecisionTableRoutes(): string[] {
+  const routes = [
+    ...readResumeRouteSource().matchAll(/route:\s*'([^']+)'/g),
+  ].map((entry) => entry[1]);
+  assert.ok(
+    routes.length > 0,
+    'resume-route-selection.mts decisionTable() must list route literals',
+  );
+  return routes;
 }
