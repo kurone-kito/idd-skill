@@ -422,6 +422,84 @@ export function collectInstructionSizeBudgetViolations(
   return { errors, notices: [] };
 }
 /**
+ * Collect "documentation budget drift" violations: a hardcoded byte value in a
+ * guarded doc that no longer matches any current `audit/sync-manifest.json`
+ * budget. Content-mirror checks only compare doc copies to each other, so a
+ * number that drifts from the *manifest* (the source of truth) passes them —
+ * this guard is the missing cross-check.
+ *
+ * Pure (no direct I/O) so it can be unit-tested; the audit pipeline supplies
+ * the reader. Unlike `collectInstructionSizeBudgetViolations` this runs
+ * unconditionally rather than scoped to changed files: the drift is triggered
+ * by editing the manifest (which leaves the doc file unchanged), so a
+ * doc-scoped check would miss a manifest-only budget bump.
+ *
+ * The valid set is the *union* of all current budget values, so the guard
+ * verifies membership, not position: it catches a value that drifted away from
+ * every budget (the manifest-bumped / doc-stale case this targets), but a
+ * value mislabeled with a *different* budget's number still passes — acceptable
+ * for the drift this guards.
+ *
+ * Matching requires a `bytes` suffix, so a doc that reads its limits live via
+ * `jq` carries no hardcoded number and is never flagged. The configured
+ * `files` must therefore not contain non-budget "N bytes" prose, or it would
+ * false-positive; keep the list tight.
+ */
+export function collectDocBudgetDriftViolations(
+  config,
+  sizeBudgets,
+  bundleBudgets,
+  readFile,
+) {
+  if (!config) {
+    return { errors: [], notices: [] };
+  }
+  const id = config.id ?? 'doc-budget-drift';
+  // Build the valid-value set only from manifest budgets actually present;
+  // never re-apply a default (a `?? 30000` fallback would let the set hold a
+  // value the manifest no longer declares, producing a false positive).
+  const validValues = new Set();
+  if (typeof sizeBudgets?.alwaysLoadedLimitBytes === 'number') {
+    validValues.add(sizeBudgets.alwaysLoadedLimitBytes);
+  }
+  if (typeof sizeBudgets?.phaseLimitBytes === 'number') {
+    validValues.add(sizeBudgets.phaseLimitBytes);
+  }
+  for (const budget of bundleBudgets ?? []) {
+    const limit = Number(budget.limitBytes);
+    if (Number.isFinite(limit)) {
+      validValues.add(limit);
+    }
+  }
+  if (validValues.size === 0) {
+    return {
+      errors: [],
+      notices: [
+        `${id}: skipped doc budget guard because no manifest budget values were available`,
+      ],
+    };
+  }
+  const sortedValid = [...validValues].sort((a, b) => a - b).join(', ');
+  const errors = [];
+  for (const path of config.files ?? []) {
+    const text = String(readFile(path) ?? '');
+    // Capture group 1 is the documented number; the `bytes` suffix keeps
+    // `\d{4,}` from matching years or issue numbers. Compare as integers so a
+    // comma-grouped doc value matches a plain manifest number.
+    for (const match of text.matchAll(
+      /(\d{1,3}(?:,\d{3})+|\d{4,})\s*bytes?\b/gi,
+    )) {
+      const documented = match[1];
+      if (!validValues.has(Number(documented.replace(/,/g, '')))) {
+        errors.push(
+          `${id}: ${path} states ${documented} bytes, which is not a current sync-manifest budget value (valid: ${sortedValid}); update the doc to a live value or read it via jq`,
+        );
+      }
+    }
+  }
+  return { errors, notices: [] };
+}
+/**
  * Collect duplicate `syncPairs` target violations. Pure (no I/O) so it can be
  * unit-tested and shared between the docs audit and sync-docs.
  *

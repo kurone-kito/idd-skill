@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  collectDocBudgetDriftViolations,
   collectDuplicateSyncPairTargets,
   collectInstructionSizeBudgetViolations,
   collectPolicyConfigDrift,
@@ -112,6 +113,67 @@ test('instruction size budget returns nothing for absent config', () => {
     },
   );
   assert.deepEqual(result, { errors: [], notices: [] });
+});
+
+const DOC_BUDGET_SIZE = {
+  alwaysLoadedLimitBytes: 20_000,
+  phaseLimitBytes: 32_200,
+};
+const DOC_BUDGET_BUNDLES = [{ limitBytes: 100_400 }, { limitBytes: 43_300 }];
+
+test('doc budget guard passes when documented values match the manifest', () => {
+  const texts: Record<string, string> = {
+    'README.md': '| Phase | 32,200 bytes |\n| Always | 20,000 bytes |',
+    // a hardcoded bundle value that still matches the manifest is allowed
+    'strategy.md': 'discovery bundle is 100,400 bytes',
+    // a doc that reads limits live via jq carries no number → never flagged
+    'jq.md':
+      "read the live values with jq '.bundleBudgets' audit/sync-manifest.json",
+  };
+  const result = collectDocBudgetDriftViolations(
+    { files: ['README.md', 'strategy.md', 'jq.md'] },
+    DOC_BUDGET_SIZE,
+    DOC_BUDGET_BUNDLES,
+    (path) => texts[path],
+  );
+  assert.deepEqual(result, { errors: [], notices: [] });
+});
+
+test('doc budget guard flags a value that drifted from every manifest budget', () => {
+  const result = collectDocBudgetDriftViolations(
+    { id: 'doc-budget-drift', files: ['README.md'] },
+    DOC_BUDGET_SIZE,
+    DOC_BUDGET_BUNDLES,
+    () => '| Phase instruction file | 30,000 bytes |',
+  );
+  assert.equal(result.errors.length, 1);
+  assert.match(
+    result.errors[0],
+    /doc-budget-drift: README\.md states 30,000 bytes, which is not a current sync-manifest budget value \(valid: 20000, 32200, 43300, 100400\)/,
+  );
+});
+
+test('doc budget guard is a no-op without config and notices on empty budgets', () => {
+  assert.deepEqual(
+    collectDocBudgetDriftViolations(
+      null,
+      DOC_BUDGET_SIZE,
+      DOC_BUDGET_BUNDLES,
+      () => {
+        throw new Error('must not read files when config is absent');
+      },
+    ),
+    { errors: [], notices: [] },
+  );
+  const noBudgets = collectDocBudgetDriftViolations(
+    { id: 'doc-budget-drift', files: ['README.md'] },
+    null,
+    [],
+    () => '32,200 bytes',
+  );
+  assert.deepEqual(noBudgets.errors, []);
+  assert.equal(noBudgets.notices.length, 1);
+  assert.match(noBudgets.notices[0], /skipped doc budget guard/);
 });
 
 test('config drift scenarios detect mismatches between config and overview defaults', () => {

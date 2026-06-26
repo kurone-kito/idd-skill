@@ -212,6 +212,16 @@
       "limitBytes": 95900
     }
   ],
+  "docBudgetGuard": {
+    "id": "doc-budget-drift",
+    "files": [
+      "README.md",
+      "README.ja.md",
+      "docs/policy-constants.md",
+      "idd-template/docs/policy-constants.md",
+      "docs/claude-skill-strategy.md"
+    ]
+  },
   "syncPairs": [
     {
       "id": "claude-skills-issue-authoring-contract",

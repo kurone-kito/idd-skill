@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  collectDocBudgetDriftViolations,
   collectDuplicateSyncPairTargets,
   collectInstructionSizeBudgetViolations,
   collectPolicyConfigDrift,
@@ -37,6 +38,7 @@ checkShellFileLists(
 checkSyncPairs(manifest.syncPairs ?? []);
 checkInstructionSizeBudgets(manifest.instructionSizeBudgets ?? null);
 checkBundleBudgets(manifest.bundleBudgets ?? []);
+checkDocBudgetNumbers();
 checkForbiddenPatterns(manifest.forbiddenPatterns ?? []);
 checkRootMarkdownAllowlist(manifest.rootMarkdownAllowlist ?? null);
 checkTypeSuppressionBudgets(manifest.typeSuppressionBudgets ?? null);
@@ -553,6 +555,19 @@ function checkBundleBudgets(budgets) {
       );
     }
   }
+}
+function checkDocBudgetNumbers() {
+  // Cross-check every hardcoded byte value in the guarded docs against the
+  // live manifest budgets. The pure helper supplies the logic; the audit
+  // pipeline supplies the file reader.
+  const result = collectDocBudgetDriftViolations(
+    manifest.docBudgetGuard ?? null,
+    manifest.instructionSizeBudgets ?? null,
+    manifest.bundleBudgets ?? [],
+    readText,
+  );
+  errors.push(...result.errors);
+  notices.push(...result.notices);
 }
 function listChangedFiles() {
   const candidates = [];
