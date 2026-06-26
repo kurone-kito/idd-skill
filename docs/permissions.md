@@ -188,6 +188,30 @@ Do not give routine IDD agents any of the following:
 - Billing, membership, team administration, SSO administration, or
   enterprise policy permissions.
 
+## Ask-First Shared-State Actions
+
+The list above is a hard credential-denial boundary. This section is
+different: it names actions an autonomous agent technically _can_ perform
+once the normal phase gates pass, but that change shared state widely
+enough to warrant a human in the loop first. Even under
+`fully_autonomous_merge`, an autonomous IDD run must ask for explicit
+human confirmation before either of the following, and must not proceed on
+standing instructions alone:
+
+- **Adding or upgrading a dependency** — any change that adds a new
+  dependency or bumps an existing one (for example editing a manifest such
+  as `package.json` or a lockfile). New dependency code runs in CI and on
+  contributor machines, so a maintainer should confirm the addition first.
+- **Changing a CI workflow** — any change under `.github/workflows/**`.
+  Workflow files run with repository credentials and shape the merge gates
+  themselves, so an agent should not alter them without confirmation.
+
+This is intentionally narrow: it complements, and does not replace, the
+merge ladder and the credential-denial list above. It is a confirmation
+gate, not a new autonomy authority — the agent still does not hold the
+merge token, and every other gate (claim ownership, review currency,
+advisory wait, CI, required reviews) continues to apply unchanged.
+
 ## Threat Model
 
 The main risks are not unique to IDD, but IDD makes them worth spelling
