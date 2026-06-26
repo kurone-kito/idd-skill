@@ -25,6 +25,21 @@ Fix all Accepted PATH A items from ReviewItems_snapshot. Run **fix-validate**.
 
 Commit fixes atomically — one logical change per commit.
 
+These two fix-side rules are the complement of the accept-side
+"Verify before accept" rule in `idd-review-triage.instructions.md` (E5);
+both cut the advisory-review round count:
+
+- **Fix the whole class, not just the flagged line.** When an accepted
+  finding is one instance of a systemic class, sweep the current diff
+  (and the adjacent touched sections) and fix every instance in the same
+  commit. Advisory reviewers surface issues incrementally, so a
+  whole-class fix converges in fewer rounds than fixing only the flagged
+  line and waiting for the next instance to be re-flagged.
+- **Verify any claim a fix adds.** When a fix introduces a precision — a
+  name, value, path, or described behavior — to satisfy a reviewer, check
+  it against the actual implementation before committing, so the fix does
+  not trade one inaccuracy for another and cost an extra round.
+
 ## E10 — Validate fixes with critique pass
 
 Run a critique pass to verify that the fixes in E9 address the root
