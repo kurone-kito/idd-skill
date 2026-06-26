@@ -160,9 +160,9 @@ same evidence comment shape, non-blocking on errors. Double-posting is
 prevented by the cleanup-evidence record itself, not by Actions
 concurrency: the workflow skips when any `<!-- idd-cleanup-evidence:`
 comment already exists, and the agent F4 step skips its own post when a
-prior success record (the workflow's included) is present. The
-workflow's PR-keyed `concurrency` group only serializes workflow runs
-against each other; it does not gate the agent's local F4.
+prior success record is already present — including the one the workflow
+posted. The workflow's PR-keyed `concurrency` group only serializes
+workflow runs against each other; it does not gate the agent's local F4.
 
 ## GitHub mechanism
 
