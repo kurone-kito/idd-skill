@@ -7,6 +7,8 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
   collaboratorPermission,
@@ -107,149 +109,170 @@ const collaboratorPermissionCache: CollaboratorPermissionCache = new Map();
 let cachedConfiguredTrustedMarkerAuthors: Set<string> | null = null;
 let cachedCurrentViewerLogin: string | null = null;
 
-const args = parseArgs(process.argv.slice(2));
-
-if (args.help) {
-  printUsage();
-  process.exit(0);
+if (isCliExecution()) {
+  main();
 }
 
-if (args.issue && args.pr) {
-  fail('choose only one of --issue or --pr');
-}
-if (!args.issue && !args.pr) {
-  fail('missing required --issue <number> or --pr <number>');
-}
-if (args.apply && args.dryRun) {
-  fail('choose only one of --dry-run or --apply');
-}
-if (!args.apply) {
-  args.dryRun = true;
-}
-if (args.apply && args.skipClaimCheck && (args.claimIssue || args.claimId)) {
-  fail(
-    '--skip-claim-check cannot be combined with --claim-issue or --claim-id',
+// The CLI body. Guarded behind isCliExecution() so importing this module (for
+// unit tests) does not parse process.argv, fail, or process.exit — matching the
+// sibling-helper convention (see isCliExecution() in branch-name.mts).
+function main(): void {
+  const args = parseArgs(process.argv.slice(2));
+
+  if (args.help) {
+    printUsage();
+    process.exit(0);
+  }
+
+  if (args.issue && args.pr) {
+    fail('choose only one of --issue or --pr');
+  }
+  if (!args.issue && !args.pr) {
+    fail('missing required --issue <number> or --pr <number>');
+  }
+  if (args.apply && args.dryRun) {
+    fail('choose only one of --dry-run or --apply');
+  }
+  if (!args.apply) {
+    args.dryRun = true;
+  }
+  if (args.apply && args.skipClaimCheck && (args.claimIssue || args.claimId)) {
+    fail(
+      '--skip-claim-check cannot be combined with --claim-issue or --claim-id',
+    );
+  }
+  if (
+    args.apply &&
+    !args.skipClaimCheck &&
+    (!args.claimIssue || !args.claimId)
+  ) {
+    fail(
+      '--apply requires --claim-issue and --claim-id, or explicit --skip-claim-check',
+    );
+  }
+
+  const repository = args.repo ?? detectRepository();
+  const [owner, repo] = parseRepository(repository);
+  const targetType = args.issue ? 'issue' : 'pr';
+  const targetNumber = parsePositiveInteger(
+    args.issue ?? args.pr,
+    `--${targetType}`,
   );
-}
-if (args.apply && !args.skipClaimCheck && (!args.claimIssue || !args.claimId)) {
-  fail(
-    '--apply requires --claim-issue and --claim-id, or explicit --skip-claim-check',
-  );
-}
+  const claimContext =
+    targetType === 'pr'
+      ? {
+          expectedLinkedPrs: buildExpectedLinkedPrReferences(
+            owner,
+            repo,
+            targetNumber,
+          ),
+        }
+      : {};
 
-const repository = args.repo ?? detectRepository();
-const [owner, repo] = parseRepository(repository);
-const targetType = args.issue ? 'issue' : 'pr';
-const targetNumber = parsePositiveInteger(
-  args.issue ?? args.pr,
-  `--${targetType}`,
-);
-const claimContext =
-  targetType === 'pr'
-    ? {
-        expectedLinkedPrs: buildExpectedLinkedPrReferences(
-          owner,
-          repo,
-          targetNumber,
-        ),
-      }
-    : {};
+  if (args.claimIssue) {
+    args.claimIssue = String(
+      parsePositiveInteger(args.claimIssue, '--claim-issue'),
+    );
+  }
 
-if (args.claimIssue) {
-  args.claimIssue = String(
-    parsePositiveInteger(args.claimIssue, '--claim-issue'),
-  );
-}
+  const fields = {
+    phase: args.phase,
+    claim: args.claim,
+    branch: args.branch,
+    lastChecked: args.lastChecked ?? currentIsoTimestamp(),
+    openBlockers: args.openBlockers,
+    nextAction: args.nextAction,
+    authoritativeBy: args.authoritativeBy,
+  };
 
-const fields = {
-  phase: args.phase,
-  claim: args.claim,
-  branch: args.branch,
-  lastChecked: args.lastChecked ?? currentIsoTimestamp(),
-  openBlockers: args.openBlockers,
-  nextAction: args.nextAction,
-  authoritativeBy: args.authoritativeBy,
-};
-
-const comments = fetchIssueComments(owner, repo, targetNumber);
-let planned: LiveStatusDigestPlan;
-try {
-  planned = planLiveStatusDigestUpsert(comments, fields);
-} catch (error) {
-  fail((error as Error).message);
-}
-const report: LiveStatusDigestReport = {
-  repository: `${owner}/${repo}`,
-  target: {
-    type: targetType,
-    number: targetNumber,
-  },
-  mode: args.apply ? 'apply' : 'dry-run',
-  action: planned.action,
-  canApply: planned.canApply,
-  commentId: planned.commentId ?? null,
-  url: planned.url ?? null,
-  duplicates: planned.duplicates ?? [],
-  repairPath: planned.repairPath ?? null,
-  applied: false,
-  body: args.includeBody ? planned.body : undefined,
-};
-
-if (planned.action === 'duplicate') {
-  writeReport(report, args.format);
-  process.exit(1);
-}
-
-if (args.apply) {
-  // The ordering invariant — re-fetch and re-plan, then revalidate the
-  // active claim immediately before the create/update mutation, with no
-  // write if the claim check throws — lives in applyDigestUpsert. The live
-  // `gh` I/O is injected here so that invariant stays unit-testable.
-  let outcome: DigestUpsertOutcome<LiveStatusDigestPlan>;
+  const comments = fetchIssueComments(owner, repo, targetNumber);
+  let planned: LiveStatusDigestPlan;
   try {
-    outcome = applyDigestUpsert<LiveStatusDigestPlan>({
-      skipClaimCheck: Boolean(args.skipClaimCheck),
-      refetchAndPlan: () =>
-        planLiveStatusDigestUpsert(
-          fetchIssueComments(owner, repo, targetNumber),
-          fields,
-        ),
-      assertClaim: () =>
-        assertActiveClaim(
-          owner,
-          repo,
-          args.claimIssue,
-          args.agentId,
-          args.claimId,
-          claimContext,
-        ),
-      createComment: (body) =>
-        createIssueComment(owner, repo, targetNumber, body),
-      updateComment: (commentId, body) =>
-        updateIssueComment(owner, repo, commentId, body),
-    });
+    planned = planLiveStatusDigestUpsert(comments, fields);
   } catch (error) {
     fail((error as Error).message);
   }
+  const report: LiveStatusDigestReport = {
+    repository: `${owner}/${repo}`,
+    target: {
+      type: targetType,
+      number: targetNumber,
+    },
+    mode: args.apply ? 'apply' : 'dry-run',
+    action: planned.action,
+    canApply: planned.canApply,
+    commentId: planned.commentId ?? null,
+    url: planned.url ?? null,
+    duplicates: planned.duplicates ?? [],
+    repairPath: planned.repairPath ?? null,
+    applied: false,
+    body: args.includeBody ? planned.body : undefined,
+  };
 
-  planned = outcome.planned;
-  updateReportFromPlan(report, planned);
-  if (outcome.outcome === 'duplicate') {
+  if (planned.action === 'duplicate') {
     writeReport(report, args.format);
     process.exit(1);
   }
-  if (outcome.outcome === 'created' || outcome.outcome === 'updated') {
-    report.applied = true;
-    report.commentId = outcome.commentId ?? report.commentId;
-    report.url = outcome.url ?? report.url;
+
+  if (args.apply) {
+    // The ordering invariant — re-fetch and re-plan, then revalidate the
+    // active claim immediately before the create/update mutation, with no
+    // write if the claim check throws — lives in applyDigestUpsert. The live
+    // `gh` I/O is injected here so that invariant stays unit-testable.
+    let outcome: DigestUpsertOutcome<LiveStatusDigestPlan>;
+    try {
+      outcome = applyDigestUpsert<LiveStatusDigestPlan>({
+        skipClaimCheck: Boolean(args.skipClaimCheck),
+        refetchAndPlan: () =>
+          planLiveStatusDigestUpsert(
+            fetchIssueComments(owner, repo, targetNumber),
+            fields,
+          ),
+        assertClaim: () =>
+          assertActiveClaim(
+            owner,
+            repo,
+            args.claimIssue,
+            args.agentId,
+            args.claimId,
+            claimContext,
+          ),
+        createComment: (body) =>
+          createIssueComment(owner, repo, targetNumber, body),
+        updateComment: (commentId, body) =>
+          updateIssueComment(owner, repo, commentId, body),
+      });
+    } catch (error) {
+      fail((error as Error).message);
+    }
+
+    planned = outcome.planned;
+    updateReportFromPlan(report, planned, args.includeBody);
+    if (outcome.outcome === 'duplicate') {
+      writeReport(report, args.format);
+      process.exit(1);
+    }
+    if (outcome.outcome === 'created' || outcome.outcome === 'updated') {
+      report.applied = true;
+      report.commentId = outcome.commentId ?? report.commentId;
+      report.url = outcome.url ?? report.url;
+    }
   }
+
+  writeReport(report, args.format);
 }
 
-writeReport(report, args.format);
+function isCliExecution(): boolean {
+  return (
+    Boolean(process.argv[1]) &&
+    fileURLToPath(import.meta.url) === resolve(process.argv[1])
+  );
+}
 
 function updateReportFromPlan(
   report: LiveStatusDigestReport,
   planned: LiveStatusDigestPlan,
+  includeBody = false,
 ): void {
   report.action = planned.action;
   report.canApply = planned.canApply;
@@ -257,7 +280,7 @@ function updateReportFromPlan(
   report.url = planned.url ?? null;
   report.duplicates = planned.duplicates ?? [];
   report.repairPath = planned.repairPath ?? null;
-  if (args.includeBody) {
+  if (includeBody) {
     report.body = planned.body;
   }
 }
@@ -422,7 +445,7 @@ function buildExpectedLinkedPrReferences(
   ];
 }
 
-function isTrustedMarkerAuthor(
+export function isTrustedMarkerAuthor(
   owner: string,
   repo: string,
   login: string,
@@ -476,7 +499,7 @@ function currentViewerLogin(): string {
   return cachedCurrentViewerLogin;
 }
 
-function configuredTrustedMarkerAuthors(): Set<string> {
+export function configuredTrustedMarkerAuthors(): Set<string> {
   if (cachedConfiguredTrustedMarkerAuthors) {
     return cachedConfiguredTrustedMarkerAuthors;
   }
@@ -498,7 +521,7 @@ function configuredTrustedMarkerAuthors(): Set<string> {
   return cachedConfiguredTrustedMarkerAuthors;
 }
 
-function trustCollaboratorMarkers(): boolean {
+export function trustCollaboratorMarkers(): boolean {
   try {
     return resolveCollaboratorMarkerTrust(
       JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
@@ -510,6 +533,21 @@ function trustCollaboratorMarkers(): boolean {
   return /^(1|true|yes)$/i.test(
     process.env.IDD_TRUST_COLLABORATOR_MARKERS ?? '',
   );
+}
+
+/**
+ * Test-only seam: clear the module-level trusted-marker caches so each unit
+ * test starts from a known state, and optionally seed the cached current-viewer
+ * login so `isTrustedMarkerAuthor` is deterministic without shelling out to
+ * `gh`. Not part of the CLI contract.
+ */
+export function __resetTrustedMarkerCachesForTest(
+  seed: { currentViewerLogin?: string } = {},
+): void {
+  trustedMarkerAuthorCache.clear();
+  collaboratorPermissionCache.clear();
+  cachedConfiguredTrustedMarkerAuthors = null;
+  cachedCurrentViewerLogin = seed.currentViewerLogin ?? null;
 }
 
 function detectRepository(): string {
