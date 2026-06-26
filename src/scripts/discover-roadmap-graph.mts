@@ -124,7 +124,13 @@ export interface LeafReadiness {
    * `blocked_by_open_roadmap_marker:<id>`, `label:status:authoring`.
    */
   reasons: string[];
-  /** True when the configured authoring-hold label is present on this leaf. */
+  /**
+   * True when the configured authoring-hold label is **present** on this leaf.
+   * Label-presence only: `--with-readiness` intentionally does not compute the
+   * stale-authoring warning (it would cost a discarded per-leaf timeline
+   * fetch and does not change startability — an authoring-held leaf is not
+   * startable regardless of staleness).
+   */
   authoringHeld: boolean;
   /**
    * Combined soft start hint: `ready` AND not claim-blocked. When claim state
@@ -998,7 +1004,11 @@ export async function enumerateAllRoadmapsGraph(
   // single batch call. Runs after the claim loop so `startable` can fold in
   // `claimEligible`. Gated on `options.readiness`, so the default path adds no
   // extra API call and the output shape stays byte-stable.
-  if (options.readiness) {
+  // `options.loadIssue` is required for any enumeration to succeed (each
+  // per-root `enumerateRoadmapGraph` above throws without it), so by here it is
+  // always a function; the typeof guard narrows the optional option type for
+  // the required `annotateReadiness` parameter without an unsafe cast.
+  if (options.readiness && typeof options.loadIssue === 'function') {
     await annotateReadiness(
       leaves,
       options.readiness,
@@ -1150,7 +1160,7 @@ interface ReadinessAnnotatable {
 async function annotateReadiness(
   entries: ReadinessAnnotatable[],
   readiness: ReadinessResolution,
-  loadIssue: ((issueNumber: number) => unknown) | undefined,
+  loadIssue: (issueNumber: number) => unknown,
   markerPrefix: string,
 ): Promise<void> {
   const openEntries = entries.filter(

@@ -573,7 +573,11 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
   // single batch call. Runs after the claim loop so `startable` can fold in
   // `claimEligible`. Gated on `options.readiness`, so the default path adds no
   // extra API call and the output shape stays byte-stable.
-  if (options.readiness) {
+  // `options.loadIssue` is required for any enumeration to succeed (each
+  // per-root `enumerateRoadmapGraph` above throws without it), so by here it is
+  // always a function; the typeof guard narrows the optional option type for
+  // the required `annotateReadiness` parameter without an unsafe cast.
+  if (options.readiness && typeof options.loadIssue === 'function') {
     await annotateReadiness(
       leaves,
       options.readiness,

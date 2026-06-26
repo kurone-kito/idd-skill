@@ -208,8 +208,11 @@ default below is unchanged.
     `blocked_by_open_issue:#N`) and is empty when `ready`, and `startable` is
     `ready` **and** not claim-blocked (it folds
     in `claimEligible` when `--with-claim-state` also ran; otherwise claim
-    eligibility is unknown and treated as non-blocking). Both annotations are
-    **soft** discovery hints — the A3/A4/A4.5/A5 gates remain authoritative.
+    eligibility is unknown and treated as non-blocking). `authoringHeld`
+    reports label **presence** only — `--with-readiness` does not compute the
+    stale-authoring warning (it would cost a discarded per-leaf timeline fetch
+    and does not change startability). Both annotations are **soft** discovery
+    hints — the A3/A4/A4.5/A5 gates remain authoritative.
   - `diagnostics`: same four buckets as single-root mode, deduped across
     every per-root enumeration.
   - `summary`: `{ rootCount: number, leafCount: number,`
