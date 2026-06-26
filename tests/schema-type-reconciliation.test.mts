@@ -47,11 +47,6 @@ import {
 // Documented, pinned discrepancies (do NOT silently widen these — each
 // pin breaks loudly when either side changes so a maintainer re-decides):
 //
-//   - advisory-wait-state / pre-merge-readiness: the CLIs print
-//     `trustedMarkerActors` + `trustedMarkerActorsSource` provenance
-//     fields that the schemas (additionalProperties: false) do not
-//     declare, so the real CLI documents do not validate against their
-//     published schemas. Tracked per entry as `reportOnlyKeys`.
 //   - stalled-session-quiet-check: the schema uses `format: "uri"` and
 //     union `type: ["string", "null"]`, which the in-repo validator
 //     does not support, so full-document validation cannot pass today.
@@ -80,13 +75,6 @@ interface SchemaTypeMapping {
   readonly owningModule: string;
   /** Top-level keys shared by the schema and the exported type. */
   readonly keys: readonly string[];
-  /**
-   * Keys present on the exported CLI report type (and in the real CLI
-   * output) that the schema intentionally does not declare yet. Pinned
-   * discrepancy: the suite asserts these stay undeclared in the schema
-   * and that the validator rejects them as additional properties.
-   */
-  readonly reportOnlyKeys?: readonly string[];
   /** Pinned checkSchemaKeywords output for validator-unsupported keywords. */
   readonly knownKeywordGaps?: readonly string[];
   /** Pinned validate() errors for validator-unsupported constructs. */
@@ -262,9 +250,6 @@ export const advisoryWaitStateKeys = [
   'sameHeadMarkerCount',
   'requestMarkerCount',
   'trustedMarkerSummary',
-] as const satisfies readonly (keyof AdvisoryWaitStateReport)[];
-
-export const advisoryWaitStateReportOnlyKeys = [
   'trustedMarkerActors',
   'trustedMarkerActorsSource',
 ] as const satisfies readonly (keyof AdvisoryWaitStateReport)[];
@@ -420,9 +405,6 @@ export const preMergeReadinessKeys = [
   'claim',
   'dispositionEvidence',
   'waiverEvidence',
-] as const satisfies readonly (keyof PreMergeReadinessReport)[];
-
-export const preMergeReadinessReportOnlyKeys = [
   'trustedMarkerActors',
   'trustedMarkerActorsSource',
 ] as const satisfies readonly (keyof PreMergeReadinessReport)[];
@@ -446,8 +428,7 @@ export const stalledSessionQuietCheckKeys = [
 //
 // Resolves to `true` only when `Covered` exhausts `keyof T`; assigning
 // `true` below therefore fails `pnpm run typecheck` the moment a key is
-// added to an exported type without being added to the key list (or, for
-// the two CLI reports, to the documented reportOnlyKeys).
+// added to an exported type without being added to the key list.
 // ---------------------------------------------------------------------------
 
 type CoversAllKeysOf<T, Covered extends PropertyKey> =
@@ -456,8 +437,7 @@ type CoversAllKeysOf<T, Covered extends PropertyKey> =
 const exhaustivenessWitnesses: {
   advisoryWaitState: CoversAllKeysOf<
     AdvisoryWaitStateReport,
-    | (typeof advisoryWaitStateKeys)[number]
-    | (typeof advisoryWaitStateReportOnlyKeys)[number]
+    (typeof advisoryWaitStateKeys)[number]
   >;
   branchConflictState: CoversAllKeysOf<
     BranchConflictResult,
@@ -1065,7 +1045,6 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
     exportedType: 'AdvisoryWaitStateReport',
     owningModule: 'src/scripts/advisory-wait-state.mts',
     keys: advisoryWaitStateKeys,
-    reportOnlyKeys: advisoryWaitStateReportOnlyKeys,
     fixture: advisoryWaitStateFixture,
   },
   {
@@ -1137,7 +1116,6 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
     exportedType: 'PreMergeReadinessReport',
     owningModule: 'src/scripts/pre-merge-readiness.mts',
     keys: preMergeReadinessKeys,
-    reportOnlyKeys: preMergeReadinessReportOnlyKeys,
     fixture: preMergeReadinessFixture,
   },
   {
@@ -1170,18 +1148,6 @@ const SCHEMAS_DIR = fileURLToPath(new URL('../schemas/', import.meta.url));
 
 function loadSchema(entry: SchemaTypeMapping): SchemaObject {
   return loadJson(`schemas/${entry.schemaFile}`) as SchemaObject;
-}
-
-/** Fixture restricted to the keys the schema declares. */
-function schemaShapeOf(entry: SchemaTypeMapping): Record<string, unknown> {
-  if (!entry.reportOnlyKeys) {
-    return entry.fixture;
-  }
-  const copy: Record<string, unknown> = { ...entry.fixture };
-  for (const key of entry.reportOnlyKeys) {
-    delete copy[key];
-  }
-  return copy;
 }
 
 // ---------------------------------------------------------------------------
@@ -1244,9 +1210,7 @@ for (const entry of SCHEMA_TYPE_MAP) {
   });
 
   test(`${entry.schemaFile}: canonical ${entry.exportedType} fixture validates against the schema`, () => {
-    const errors = [
-      ...validate(schemaShapeOf(entry), loadSchema(entry)),
-    ].sort();
+    const errors = [...validate(entry.fixture, loadSchema(entry))].sort();
     assert.deepEqual(errors, [...(entry.knownValidationGaps ?? [])].sort());
   });
 
@@ -1271,33 +1235,6 @@ for (const entry of SCHEMA_TYPE_MAP) {
       `schemas/${entry.schemaFile} requires key(s) absent from the ${entry.exportedType} key list: ${missing.join(', ')}`,
     );
   });
-
-  if (entry.reportOnlyKeys) {
-    test(`${entry.schemaFile}: CLI report-only keys stay undeclared in the schema (pinned drift)`, () => {
-      // Documented discrepancy: the CLI prints these provenance fields,
-      // but the schema (additionalProperties: false) rejects them, so
-      // the real CLI document does not validate against its published
-      // schema. The pins below break if the schema starts declaring the
-      // keys — remove them from reportOnlyKeys at that point.
-      const schema = loadSchema(entry);
-      const properties = schema.properties ?? {};
-      for (const key of entry.reportOnlyKeys ?? []) {
-        assert.ok(
-          !Object.hasOwn(properties, key),
-          `schemas/${entry.schemaFile} now declares "${key}" — move it from reportOnlyKeys into the key list`,
-        );
-      }
-      const errors = validate(entry.fixture, schema);
-      for (const key of entry.reportOnlyKeys ?? []) {
-        assert.ok(
-          errors.some((error) =>
-            error.includes(`additional property "${key}" not allowed`),
-          ),
-          `expected the full CLI report shape to be rejected for "${key}", got: ${errors.join('; ')}`,
-        );
-      }
-    });
-  }
 }
 
 // ---------------------------------------------------------------------------
