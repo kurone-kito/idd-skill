@@ -75,6 +75,70 @@ Resolve #107
   );
 });
 
+test('ignores roadmap-id markers quoted inside code regions (#1083)', () => {
+  // The #1083 shape: an execution-leaf issue *about* the marker system that
+  // quotes the marker inside inline code. It must not read as roadmap identity.
+  // (#1083 quoted the marker with a literal `${marker}` value; the value is
+  // irrelevant here — what matters is that a marker inside code is ignored.)
+  const inlineQuoted = [
+    '## Background',
+    '',
+    'buildRoadmapMarkerResolver builds a query',
+    '`"<!-- idd-skill-roadmap-id: some-prefix -->"` — fixed prefix.',
+  ].join('\n');
+  assert.equal(extractRoadmapMarkerId(inlineQuoted), '');
+  assert.deepEqual(classifyIssue({ body: inlineQuoted, labels: [] }), {
+    kind: 'execution',
+    roadmapMarkerId: '',
+  });
+
+  // Same for a marker quoted inside a fenced code block.
+  const fencedQuoted = [
+    'Example marker:',
+    '',
+    '```html',
+    '<!-- idd-skill-roadmap-id: example -->',
+    '```',
+  ].join('\n');
+  assert.equal(extractRoadmapMarkerId(fencedQuoted), '');
+  assert.equal(
+    classifyIssue({ body: fencedQuoted, labels: [] }).kind,
+    'execution',
+  );
+
+  // A real raw-HTML-comment marker outside any code region still matches, and a
+  // real marker elsewhere in a body that also quotes one in code is still found.
+  assert.equal(
+    extractRoadmapMarkerId('<!-- idd-skill-roadmap-id: real -->'),
+    'real',
+  );
+  const mixed = [
+    '<!-- idd-skill-roadmap-id: real-root -->',
+    'and an example: `<!-- idd-skill-roadmap-id: nope -->`',
+  ].join('\n');
+  assert.equal(extractRoadmapMarkerId(mixed), 'real-root');
+});
+
+test('an invalid backtick fence opener does not mask a later roadmap marker', () => {
+  // CommonMark §4.5: a backtick-fence opener's info string may not contain a
+  // backtick, so this line is NOT a fence opener and must not blank the rest of
+  // the body — the real marker below it still resolves.
+  const body = [
+    '```js `not a fence`',
+    '<!-- idd-skill-roadmap-id: real -->',
+  ].join('\n');
+  assert.equal(extractRoadmapMarkerId(body), 'real');
+
+  // A tilde fence's info string MAY contain a backtick, so it is a real opener
+  // and does mask a quoted marker inside it.
+  const tildeFenced = [
+    '~~~ has`backtick',
+    '<!-- idd-skill-roadmap-id: hidden -->',
+    '~~~',
+  ].join('\n');
+  assert.equal(extractRoadmapMarkerId(tildeFenced), '');
+});
+
 test('extractKeywordReferences parses blocked dependencies and multi-target lists', () => {
   const body = `
 Refs #201, #202
