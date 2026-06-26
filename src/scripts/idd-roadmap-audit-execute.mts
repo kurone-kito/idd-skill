@@ -607,6 +607,19 @@ export async function runRoadmapAuditExecute(
     return { verdict, exitCode: 1 };
   }
 
+  // Validate + normalize the apply-time clock ONCE, before any mutation: an
+  // unparseable "now" would mis-evaluate claim staleness, and an offset /
+  // sub-second form would reach the unclaim renderer (which accepts only `…Z`
+  // second-precision) and throw AFTER the comment + close had already landed.
+  // The single normalized value is reused for every staleness check AND the
+  // release marker.
+  const rawNow = resolvedDeps.now();
+  const nowIso = normalizeApplyNow(rawNow);
+  if (nowIso === null) {
+    verdict.result = `invalid "now" value "${rawNow}"; expected a parseable ISO timestamp (no mutation)`;
+    return { verdict, exitCode: 1 };
+  }
+
   // Early claim re-validation (defense in depth): bail before the graph
   // re-fetch if ownership is already gone.
   const earlyClaim = resolvedDeps.revalidateClaim({
@@ -614,7 +627,7 @@ export async function runRoadmapAuditExecute(
     roadmapNumber,
     expectedClaimId: args.claimId,
     expectedAgentId: args.agentId,
-    nowIso: resolvedDeps.now(),
+    nowIso,
   });
   if (!earlyClaim.owned) {
     verdict.result = `claim not owned on re-validation (reason="${earlyClaim.reason}"); no mutation`;
@@ -641,9 +654,7 @@ export async function runRoadmapAuditExecute(
   }
 
   // The graph re-fetch can span many API calls during which another session
-  // can take over, so the LAST gate before any mutation is a fresh claim
-  // re-validation. Its activeClaim + "now" are the ones used for the release.
-  const nowIso = resolvedDeps.now();
+  // can take over, so re-validate ownership immediately before posting.
   const claim = resolvedDeps.revalidateClaim({
     issueNumber: roadmapNumber,
     roadmapNumber,
@@ -656,20 +667,34 @@ export async function runRoadmapAuditExecute(
     return { verdict, exitCode: 1 };
   }
 
-  // All gates hold: compose the body from the re-validated graph, then post
-  // the evidence comment, close the roadmap, and release the claim in order.
+  // Post the evidence comment (non-destructive), THEN re-validate ownership one
+  // final time immediately before the CLOSE: a takeover landing in the
+  // comment→close gap must not let us close under a claim we no longer own. An
+  // already-posted evidence comment before an aborted close is harmless — the
+  // successor session simply re-audits — but a wrongful close is destructive.
   const finalEvidenceBody = buildRoadmapCompletionAuditBody(revalidated);
   verdict.evidenceBody = finalEvidenceBody;
-
   resolvedDeps.postEvidenceComment(roadmapNumber, finalEvidenceBody);
+
+  const preCloseClaim = resolvedDeps.revalidateClaim({
+    issueNumber: roadmapNumber,
+    roadmapNumber,
+    expectedClaimId: args.claimId,
+    expectedAgentId: args.agentId,
+    nowIso,
+  });
+  if (!preCloseClaim.owned) {
+    verdict.result = `claim lost in the comment→close gap (reason="${preCloseClaim.reason}"); evidence comment posted but roadmap NOT closed`;
+    return { verdict, exitCode: 1 };
+  }
+
+  // Ownership held through the comment: close, then release using the last
+  // verdict's activeClaim and the normalized second-precision "now".
   resolvedDeps.closeRoadmap(roadmapNumber);
   resolvedDeps.releaseClaim(roadmapNumber, {
-    agentId: claim.activeClaim.agentId,
-    claimId: claim.activeClaim.claimId,
-    // The unclaim marker only accepts second-precision ISO; truncate any
-    // sub-second digits so a millisecond `now()` never throws after the
-    // comment + close already landed (a partial, unrecoverable mutation).
-    timestamp: toSecondPrecisionIso(nowIso),
+    agentId: preCloseClaim.activeClaim.agentId,
+    claimId: preCloseClaim.activeClaim.claimId,
+    timestamp: nowIso,
   });
 
   verdict.closed = true;
@@ -691,6 +716,25 @@ function closedDescendantNumbers(report: RoadmapGraphReport): number[] {
 /** Truncate any sub-second fraction so an ISO stamp is `YYYY-MM-DDTHH:mm:ssZ`. */
 function toSecondPrecisionIso(iso: string): string {
   return String(iso).replace(/\.\d+Z$/, 'Z');
+}
+
+/**
+ * Validate and normalize the apply-time "now" to UTC second-precision ISO
+ * (`YYYY-MM-DDTHH:mm:ssZ`), or `null` when unparseable. The caller fails closed
+ * on `null` BEFORE any mutation: an unparseable value would mis-evaluate claim
+ * staleness (NaN comparisons read as not-stale), and an offset / sub-second
+ * form (e.g. `…+09:00`) would otherwise reach `renderUnclaimedByMarker` — which
+ * accepts only `…Z` second-precision — and throw AFTER the comment + close had
+ * already landed. Normalizing through `toISOString()` also converts any zone
+ * offset to UTC, so the single normalized value is safe for both the staleness
+ * checks and the release marker.
+ */
+function normalizeApplyNow(raw: string): string | null {
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return toSecondPrecisionIso(parsed.toISOString());
 }
 
 // ---------------------------------------------------------------------------
@@ -870,42 +914,84 @@ function loadIssueComments(
  *     `fetchOpenLinkedPrReferences` shape.
  *
  * Both queries paginate fully (the connected stream MUST be read whole so a
- * later DISCONNECTED is never missed). On a per-issue lookup error the issue is
- * conservatively treated as blocked (fail closed) so a transient failure can
- * never green-light a close.
+ * later DISCONNECTED is never missed). Fails closed: a per-issue lookup error,
+ * OR an ABSENT lookup connection (`issue: null` / connection `null`|`undefined`
+ * — a deleted / transferred / inaccessible issue, or partial GraphQL data),
+ * treats the issue as blocked. An absent connection is distinct from a
+ * genuinely present-but-empty `nodes: []` (legitimately no PR on that signal),
+ * which does NOT block on that signal. The GraphQL runner is injectable so the
+ * absence distinction is unit-testable without `gh`.
  */
-function resolveOpenLinkedPrIssues(
+export function resolveOpenLinkedPrIssues(
   owner: string,
   repo: string,
   issueNumbers: number[],
+  runGraphql: LinkedPrGraphqlRunner = ghGraphql,
 ): number[] {
   const blocked: number[] = [];
   for (const issueNumber of issueNumbers) {
     try {
       if (
-        hasOpenClosingPr(owner, repo, issueNumber) ||
-        hasOpenConnectedPr(owner, repo, issueNumber)
+        hasOpenClosingPr(owner, repo, issueNumber, runGraphql) ||
+        hasOpenConnectedPr(owner, repo, issueNumber, runGraphql)
       ) {
         blocked.push(issueNumber);
       }
     } catch {
-      // Fail closed: an undeterminable PR state blocks the close.
+      // Fail closed: an undeterminable / absent PR state blocks the close.
       blocked.push(issueNumber);
     }
   }
   return blocked;
 }
 
+/** One paginated `gh api graphql` page runner (injectable for tests). */
+type LinkedPrGraphqlRunner = (
+  query: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  after: string | null,
+) => unknown;
+
+/**
+ * Narrow a parsed GraphQL response to the named connection on its issue node,
+ * THROWING (→ fail closed) when the issue is `null`/absent or the connection
+ * itself is `null`/`undefined`. A present connection (even with empty `nodes`)
+ * is returned as-is so a legitimately PR-free issue is not treated as blocked.
+ */
+function requireIssueConnection<T>(
+  parsed: unknown,
+  pick: (issue: Record<string, unknown>) => T | null | undefined,
+  label: string,
+): T {
+  const issue = (
+    parsed as {
+      data?: { repository?: { issue?: Record<string, unknown> | null } | null };
+    } | null
+  )?.data?.repository?.issue;
+  if (issue === null || issue === undefined) {
+    throw new Error(`${label}: issue is null/absent (fail closed)`);
+  }
+  const connection = pick(issue);
+  if (connection === null || connection === undefined) {
+    throw new Error(`${label}: connection is null/absent (fail closed)`);
+  }
+  return connection;
+}
+
 /**
  * True when the issue has an OPEN PR that reference-closes it. Pages through
  * `closedByPullRequestsReferences` and short-circuits on the first OPEN PR
  * (one is enough to block); truncating the list could miss an OPEN blocker on
- * a later page, wrongly green-lighting a close.
+ * a later page, wrongly green-lighting a close. Throws (→ blocked) on an absent
+ * connection.
  */
 function hasOpenClosingPr(
   owner: string,
   repo: string,
   issueNumber: number,
+  runGraphql: LinkedPrGraphqlRunner,
 ): boolean {
   const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
   repository(owner:$owner,name:$repo){
@@ -919,25 +1005,24 @@ function hasOpenClosingPr(
 }`;
   let after: string | null = null;
   for (;;) {
-    const parsed = ghGraphql(query, owner, repo, issueNumber, after) as {
-      data?: {
-        repository?: {
-          issue?: {
-            closedByPullRequestsReferences?: {
+    const parsed = runGraphql(query, owner, repo, issueNumber, after);
+    const connection = requireIssueConnection(
+      parsed,
+      (issue) =>
+        issue.closedByPullRequestsReferences as
+          | {
               nodes?: { state?: unknown }[] | null;
               pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
-            } | null;
-          } | null;
-        } | null;
-      };
-    };
-    const connection =
-      parsed.data?.repository?.issue?.closedByPullRequestsReferences;
-    const nodes = connection?.nodes ?? [];
+            }
+          | null
+          | undefined,
+      'closedByPullRequestsReferences',
+    );
+    const nodes = connection.nodes ?? [];
     if (nodes.some((node) => String(node?.state ?? '') === 'OPEN')) {
       return true;
     }
-    if (!connection?.pageInfo?.hasNextPage) {
+    if (!connection.pageInfo?.hasNextPage) {
       return false;
     }
     after = connection.pageInfo.endCursor ?? null;
@@ -952,11 +1037,13 @@ function hasOpenClosingPr(
  * relationship without a closing keyword). Pages the CONNECTED/DISCONNECTED
  * timeline in full — the whole stream is needed so a later DISCONNECTED is not
  * missed — then reconciles it via the pure {@link reconcileConnectedOpenPrs}.
+ * Throws (→ blocked) on an absent connection.
  */
 function hasOpenConnectedPr(
   owner: string,
   repo: string,
   issueNumber: number,
+  runGraphql: LinkedPrGraphqlRunner,
 ): boolean {
   const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
   repository(owner:$owner,name:$repo){
@@ -975,21 +1062,21 @@ function hasOpenConnectedPr(
   const events: ConnectedPrEvent[] = [];
   let after: string | null = null;
   for (;;) {
-    const parsed = ghGraphql(query, owner, repo, issueNumber, after) as {
-      data?: {
-        repository?: {
-          issue?: {
-            timelineItems?: {
+    const parsed = runGraphql(query, owner, repo, issueNumber, after);
+    const connection = requireIssueConnection(
+      parsed,
+      (issue) =>
+        issue.timelineItems as
+          | {
               nodes?: unknown[] | null;
               pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
-            } | null;
-          } | null;
-        } | null;
-      };
-    };
-    const connection = parsed.data?.repository?.issue?.timelineItems;
-    events.push(...parseConnectedPrEvents(connection?.nodes ?? []));
-    if (!connection?.pageInfo?.hasNextPage) {
+            }
+          | null
+          | undefined,
+      'timelineItems',
+    );
+    events.push(...parseConnectedPrEvents(connection.nodes ?? []));
+    if (!connection.pageInfo?.hasNextPage) {
       break;
     }
     after = connection.pageInfo.endCursor ?? null;

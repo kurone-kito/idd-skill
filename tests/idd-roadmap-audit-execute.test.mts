@@ -9,6 +9,7 @@ import {
   evaluateRoadmapClaim,
   type RoadmapAuditExecuteDeps,
   reconcileConnectedOpenPrs,
+  resolveOpenLinkedPrIssues,
   runRoadmapAuditExecute,
 } from '../src/scripts/idd-roadmap-audit-execute.mts';
 import { renderClaimedByMarker } from '../src/scripts/protocol-helpers.mts';
@@ -371,6 +372,92 @@ test('a closed child with an OPEN CONNECTED-only PR yields an open-linked-pr blo
     }),
     [],
   );
+});
+
+// ---------------------------------------------------------------------------
+// resolveOpenLinkedPrIssues (injected GraphQL runner) — absent-connection
+// fail-closed distinction
+// ---------------------------------------------------------------------------
+
+// Build a fake page runner that answers the closing-refs vs timeline queries.
+function fakeGraphqlRunner(responses: {
+  closing?: unknown;
+  timeline?: unknown;
+}) {
+  return (query: string) =>
+    query.includes('timelineItems') ? responses.timeline : responses.closing;
+}
+
+test('resolveOpenLinkedPrIssues fails closed when the issue node is null/absent', () => {
+  const runner = fakeGraphqlRunner({
+    closing: { data: { repository: { issue: null } } },
+    timeline: { data: { repository: { issue: null } } },
+  });
+  assert.deepEqual(resolveOpenLinkedPrIssues('o', 'r', [1048], runner), [1048]);
+});
+
+test('resolveOpenLinkedPrIssues fails closed when a lookup connection is null/absent', () => {
+  // Present (empty) timeline, but a null closing-refs connection → blocked.
+  const runner = fakeGraphqlRunner({
+    closing: {
+      data: { repository: { issue: { closedByPullRequestsReferences: null } } },
+    },
+    timeline: {
+      data: {
+        repository: {
+          issue: {
+            timelineItems: { nodes: [], pageInfo: { hasNextPage: false } },
+          },
+        },
+      },
+    },
+  });
+  assert.deepEqual(resolveOpenLinkedPrIssues('o', 'r', [1048], runner), [1048]);
+});
+
+test('resolveOpenLinkedPrIssues does NOT block a present-but-empty connection', () => {
+  const runner = fakeGraphqlRunner({
+    closing: {
+      data: {
+        repository: {
+          issue: {
+            closedByPullRequestsReferences: {
+              nodes: [],
+              pageInfo: { hasNextPage: false },
+            },
+          },
+        },
+      },
+    },
+    timeline: {
+      data: {
+        repository: {
+          issue: {
+            timelineItems: { nodes: [], pageInfo: { hasNextPage: false } },
+          },
+        },
+      },
+    },
+  });
+  assert.deepEqual(resolveOpenLinkedPrIssues('o', 'r', [1048], runner), []);
+});
+
+test('resolveOpenLinkedPrIssues blocks a present connection with an OPEN closing PR', () => {
+  const runner = fakeGraphqlRunner({
+    closing: {
+      data: {
+        repository: {
+          issue: {
+            closedByPullRequestsReferences: {
+              nodes: [{ state: 'OPEN' }],
+              pageInfo: { hasNextPage: false },
+            },
+          },
+        },
+      },
+    },
+  });
+  assert.deepEqual(resolveOpenLinkedPrIssues('o', 'r', [1048], runner), [1048]);
 });
 
 test('unresolved, inaccessible, and cycle diagnostics each surface a blocker', () => {
@@ -817,6 +904,77 @@ test('--apply re-validates the claim AFTER the graph re-fetch (last gate before 
   assert.equal(claimChecks, 2);
   assert.deepEqual(calls.closed, []);
   assert.deepEqual(calls.comments, []);
+});
+
+test('--apply fails closed on an unparseable now (no mutation, no claim check)', async () => {
+  const { deps, calls } = makeDeps(readyReport(), {
+    now: () => 'not-a-real-date',
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(verdict.closed, false);
+  assert.match(verdict.result, /invalid "now"/);
+  assert.equal(exitCode, 1);
+  assert.deepEqual(calls.comments, []);
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.released, []);
+  // Validation precedes any claim check (and thus any mutation).
+  assert.equal(calls.claimChecks, 0);
+});
+
+test('--apply normalizes an offset-form now to second-precision UTC for the release marker', async () => {
+  const { deps, calls } = makeDeps(readyReport(), {
+    now: () => '2026-06-26T01:00:00+09:00',
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(exitCode, 0);
+  assert.equal(verdict.closed, true);
+  // 2026-06-26T01:00:00+09:00 == 2026-06-25T16:00:00Z, truncated to seconds.
+  assert.equal(calls.released[0]?.timestamp, '2026-06-25T16:00:00Z');
+});
+
+test('--apply aborts the CLOSE when the claim is lost in the comment→close gap', async () => {
+  // Owned through the early + pre-comment checks, lost on the pre-close check.
+  let checks = 0;
+  const ownedVerdict = () => ({
+    owned: true,
+    reason: 'match',
+    stale: false,
+    activeClaim: {
+      agentId: AGENT_ID,
+      claimId: CLAIM_ID,
+      supersedes: 'none',
+      branch: CLAIM_BRANCH,
+      createdAt: '2026-06-26T00:00:00Z',
+    },
+  });
+  const { deps, calls } = makeDeps(readyReport(), {
+    revalidateClaim: () => {
+      checks += 1;
+      if (checks >= 3) {
+        return {
+          owned: false,
+          reason: 'claim-stale',
+          stale: true,
+          activeClaim: ownedVerdict().activeClaim,
+        };
+      }
+      return ownedVerdict();
+    },
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(verdict.closed, false);
+  assert.equal(verdict.claimReleased, false);
+  assert.match(verdict.result, /comment→close gap/);
+  assert.equal(exitCode, 1);
+  // The evidence comment WAS posted (harmless), but the close/release were not.
+  assert.equal(calls.comments.length, 1);
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.released, []);
+  // early + pre-comment + pre-close re-validations all ran.
+  assert.equal(checks, 3);
 });
 
 test('missing --roadmap is rejected', async () => {
