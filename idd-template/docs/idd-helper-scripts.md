@@ -556,7 +556,9 @@ The adopted helper boundaries are intentionally narrow:
   than the notice carry-forward. Because CodeRabbit edits the summary on each
   re-review, the acceptance is re-dispositioned **per HEAD** by timestamp
   (skipped only while a trusted acceptance naming the bot is strictly newer
-  than the summary's activity), and is skipped outright when CodeRabbit
+  than the summary's activity and no older undispositioned non-agent comment
+  could consume it under the gate's global pairing), and is skipped outright
+  when CodeRabbit
   already reports "No actionable comments were generated" (the gate classifies
   that RESOLVED). It never resolves a review thread — actionable findings stay
   their own threads, gated independently. The body names the bot by its login

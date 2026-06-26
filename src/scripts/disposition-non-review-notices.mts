@@ -311,6 +311,27 @@ export function buildDispositionPlan(
       activityAt: effectiveRegularCommentActivityAt(comment),
       consumed: false,
     }));
+
+  // The gate pairs greedily across the GLOBAL outstanding set, so a summary's
+  // `**Accepted**` marker can be consumed by an OLDER undispositioned non-agent
+  // comment (a human reviewer or a non-notice bot), leaving the summary still
+  // flagged. The helper only models summary↔summary-disposition pairing, so when
+  // such an older comment exists it must NOT treat the summary as covered — it
+  // errs toward posting (#1122). Notices are excluded because the gate carves
+  // them and their dispositions out of the general pool; agent-authored comments
+  // (operational markers, digests, the dispositions themselves) are excluded via
+  // `trustedMarkerLogins`; other summaries are handled by the greedy pass above.
+  const markerCouldBeStolen = (dispositionActivityAt: string): boolean =>
+    comments.some(
+      (other) =>
+        !trustedMarkerLogins.has(other.login) &&
+        !isAdvisoryNonReviewNotice(other.body) &&
+        !isReviewSummaryComment(other.body) &&
+        compareIsoTimestamps(
+          effectiveRegularCommentActivityAt(other),
+          dispositionActivityAt,
+        ) < 0,
+    );
   for (const comment of comments) {
     const identity = advisoryBotIdentityToken(comment.login);
     if (
@@ -343,7 +364,9 @@ export function buildDispositionPlan(
         dispositionNamesAdvisoryBot(disposition.body, comment.login) &&
         compareIsoTimestamps(disposition.activityAt, summaryActivityAt) > 0,
     );
-    if (cover) {
+    // Skip only when the marker is both newer than the summary AND cannot be
+    // stolen by an older non-agent comment under the gate's global pairing.
+    if (cover && !markerCouldBeStolen(cover.activityAt)) {
       cover.consumed = true;
       skipped.push({
         noticeId: comment.id,

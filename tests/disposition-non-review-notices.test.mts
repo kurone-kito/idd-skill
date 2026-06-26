@@ -480,6 +480,42 @@ test('buildDispositionPlan rejects (does not also accept) a summary that is itse
   assert.equal(plan.skipped.length, 0);
 });
 
+test('buildDispositionPlan re-plans a summary whose acceptance an older non-agent comment could steal', () => {
+  // #1122 (Copilot finding): under the gate's GLOBAL greedy pairing, a summary's
+  // **Accepted** can be consumed by an OLDER undispositioned non-agent comment,
+  // leaving the summary still flagged. The helper only models summary↔summary
+  // pairing, so it must err toward posting when such an older comment exists.
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        // An older human comment with no disposition of its own (a potential thief).
+        notice(
+          1,
+          'reviewer-a',
+          'Please rename foo to bar.',
+          '2026-05-12T00:00:00Z',
+        ),
+        notice(2, CODERABBIT, CODERABBIT_SUMMARY, '2026-05-12T00:30:00Z'),
+        notice(
+          3,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODERABBIT, 'abc1234'),
+          '2026-05-12T01:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  // The acceptance (id 3) could be stolen by the older human comment (id 1), so
+  // the summary (id 2) is re-planned rather than skipped.
+  assert.deepEqual(
+    plan.planned.map((entry) => entry.noticeId),
+    [2],
+  );
+  assert.equal(plan.skipped.length, 0);
+});
+
 test('gate agreement: the planned **Accepted** clears the summary from missingRegularComments', () => {
   const summary = {
     id: 1,
