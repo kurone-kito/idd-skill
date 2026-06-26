@@ -266,6 +266,25 @@ Pending a maintainer sign-off on the final approach.
   assert.equal(result.pass, false);
 });
 
+test('verifiability treats a resolved heading with an earlier unrelated negator as resolved', () => {
+  // The negation guard must match only a still-open phrase that directly
+  // negates "resolved"; an unrelated negator earlier on the heading line
+  // ("not user-facing; resolved …") must still count as resolved.
+  const result = checkVerifiability({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## Decision (not user-facing; resolved 2026-06-27)
+The maintainer approval is recorded; option 1 was chosen.
+
+## Acceptance Criteria
+- [ ] the helper output contains the expected token
+- [ ] tests pass
+`,
+    },
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('verifiability treats a resolved heading with a later unrelated negation as resolved', () => {
   // The negative lookahead must only reject a negator that precedes "resolved"
   // ("not yet resolved"); an unrelated "not" *after* the resolution keeps the
