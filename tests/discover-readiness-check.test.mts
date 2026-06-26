@@ -173,7 +173,14 @@ test('open roadmap dependencies are ignored as parent epics', async () => {
   });
 
   assert.deepEqual(summary.filteredOut, []);
-  assert.deepEqual(summary.ready, [{ number: 401, title: 'candidate' }]);
+  assert.deepEqual(summary.ready, [
+    {
+      number: 401,
+      title: 'candidate',
+      autopilotSuitability: null,
+      belowFloor: false,
+    },
+  ]);
 });
 
 test('returns empty unresolvable list when include-unresolvable is disabled', async () => {
@@ -247,6 +254,8 @@ test('treats inaccessible target issue as unresolvable', async () => {
       number: 701,
       title: '',
       reasons: ['issue_inaccessible'],
+      autopilotSuitability: null,
+      belowFloor: false,
     },
   ]);
   assert.deepEqual(summary.unresolvable, [
@@ -316,4 +325,184 @@ test('isInaccessibleIssueLookupError fails closed on auth, rate-limit, and 404',
     isInaccessibleIssueLookupError(ghError('connect ETIMEDOUT')),
     false,
   );
+});
+
+test('surfaces autopilot-suitability score and below-floor flag without changing classification', async () => {
+  const issues = new Map([
+    [
+      1001,
+      {
+        number: 1001,
+        title: 'scored above floor',
+        state: 'OPEN',
+        body: 'work\n<!-- idd-skill-autopilot-suitability: 4 -->',
+        labels: [],
+      },
+    ],
+    [
+      1002,
+      {
+        number: 1002,
+        title: 'scored below floor',
+        state: 'OPEN',
+        body: 'human-led\n<!-- idd-skill-autopilot-suitability: 2 -->',
+        labels: [],
+      },
+    ],
+    [
+      1003,
+      {
+        number: 1003,
+        title: 'unscored',
+        state: 'OPEN',
+        body: 'no marker here',
+        labels: [],
+      },
+    ],
+  ]);
+
+  const summary = await evaluateDiscoverReadiness([1001, 1002, 1003], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+
+  // Signal-only: every issue clears the readiness filters and stays `ready`,
+  // including the below-floor one. The new fields never reclassify.
+  assert.deepEqual(
+    summary.ready.map((item) => item.number),
+    [1001, 1002, 1003],
+  );
+  assert.equal(summary.filteredOut.length, 0);
+
+  const byNumber = new Map(summary.ready.map((item) => [item.number, item]));
+  assert.deepEqual(
+    { ...byNumber.get(1001) },
+    {
+      number: 1001,
+      title: 'scored above floor',
+      autopilotSuitability: 4,
+      belowFloor: false,
+    },
+  );
+  assert.deepEqual(
+    { ...byNumber.get(1002) },
+    {
+      number: 1002,
+      title: 'scored below floor',
+      autopilotSuitability: 2,
+      belowFloor: true,
+    },
+  );
+  assert.deepEqual(
+    { ...byNumber.get(1003) },
+    {
+      number: 1003,
+      title: 'unscored',
+      autopilotSuitability: null,
+      belowFloor: false,
+    },
+  );
+});
+
+test('surfaces the suitability signal on filtered-out issues too', async () => {
+  const summary = await evaluateDiscoverReadiness([1101], {
+    loadIssue: async () => ({
+      number: 1101,
+      title: 'blocked and scored',
+      state: 'OPEN',
+      body: 'blocked\n<!-- idd-skill-autopilot-suitability: 5 -->',
+      labels: [{ name: 'status:needs-decision' }],
+    }),
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.ready.length, 0);
+  assert.deepEqual(summary.filteredOut, [
+    {
+      number: 1101,
+      title: 'blocked and scored',
+      reasons: ['label:status:needs-decision'],
+      autopilotSuitability: 5,
+      belowFloor: false,
+    },
+  ]);
+});
+
+test('honors a configured floor and treats an out-of-range score as no score', async () => {
+  const issues = new Map([
+    [
+      1201,
+      {
+        number: 1201,
+        title: 'score 3 under floor 4',
+        state: 'OPEN',
+        body: '<!-- idd-skill-autopilot-suitability: 3 -->',
+        labels: [],
+      },
+    ],
+    [
+      1202,
+      {
+        number: 1202,
+        title: 'out of range score',
+        state: 'OPEN',
+        body: '<!-- idd-skill-autopilot-suitability: 9 -->',
+        labels: [],
+      },
+    ],
+  ]);
+
+  const summary = await evaluateDiscoverReadiness([1201, 1202], {
+    autopilotSuitabilityFloor: 4,
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+
+  const byNumber = new Map(summary.ready.map((item) => [item.number, item]));
+  assert.equal(byNumber.get(1201)?.autopilotSuitability, 3);
+  assert.equal(byNumber.get(1201)?.belowFloor, true);
+  // An out-of-range marker is "no score" (fail-safe) and never below floor.
+  assert.equal(byNumber.get(1202)?.autopilotSuitability, null);
+  assert.equal(byNumber.get(1202)?.belowFloor, false);
+});
+
+test('surfaces the suitability signal on a not-open scored issue', async () => {
+  const summary = await evaluateDiscoverReadiness([1401], {
+    loadIssue: async () => ({
+      number: 1401,
+      title: 'closed but scored',
+      state: 'CLOSED',
+      body: 'done\n<!-- idd-skill-autopilot-suitability: 3 -->',
+      labels: [],
+    }),
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.ready.length, 0);
+  assert.deepEqual(summary.filteredOut, [
+    {
+      number: 1401,
+      title: 'closed but scored',
+      reasons: ['issue_not_open'],
+      autopilotSuitability: 3,
+      belowFloor: false,
+    },
+  ]);
+});
+
+test('parses the suitability score using a configured marker prefix', async () => {
+  const summary = await evaluateDiscoverReadiness([1301], {
+    markerPrefix: 'acme',
+    loadIssue: async () => ({
+      number: 1301,
+      title: 'custom prefix',
+      state: 'OPEN',
+      body: '<!-- acme-autopilot-suitability: 1 -->',
+      labels: [],
+    }),
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.equal(summary.ready[0].autopilotSuitability, 1);
+  assert.equal(summary.ready[0].belowFloor, true);
 });
