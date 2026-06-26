@@ -324,14 +324,6 @@ export function collectPreMergeReadiness(
   )
     .map((file) => String(file.filename ?? ''))
     .filter(Boolean);
-  // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
-  // a legitimate issue-only handoff that predates the PR is honored even
-  // against a PR-backed claim. Resolve it from the earliest commit on the PR.
-  const prCommits = ghApiJson(
-    `repos/${owner}/${repo}/pulls/${args.prNumber}/commits`,
-    true,
-  ) as PrCommitPayload[];
-  const prFirstCommitAt = resolvePrFirstCommitAt(prCommits);
   const codeownersText = fetchCodeownersText(owner, repo, baseRefName);
   const eligibleCodeownerUserLogins = resolveEligibleCodeownerUserLogins(
     owner,
@@ -364,6 +356,23 @@ export function collectPreMergeReadiness(
   const advisoryWaitPolicy = readAdvisoryWaitPolicy();
   const forcedHandoffAuthorityPolicy = readForcedHandoffAuthorityPolicy();
   const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
+  // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
+  // a legitimate issue-only handoff that predates the PR is honored even
+  // against a PR-backed claim. Resolve it only when forced handoffs are
+  // enabled, and fail closed to `null` (reject) on any lookup/parse error so
+  // a transient commits-API failure never aborts the readiness gate.
+  let prFirstCommitAt: string | null = null;
+  if (forcedHandoffEnabled) {
+    try {
+      const prCommits = ghApiJson(
+        `repos/${owner}/${repo}/pulls/${args.prNumber}/commits`,
+        true,
+      ) as PrCommitPayload[];
+      prFirstCommitAt = resolvePrFirstCommitAt(prCommits);
+    } catch {
+      prFirstCommitAt = null;
+    }
+  }
   const forcedHandoffPermissionCache: CollaboratorPermissionCache = new Map();
   const waivableCheckSelectors = readWaivableCheckSelectors();
 
