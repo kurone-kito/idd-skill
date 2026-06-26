@@ -42,6 +42,14 @@ const BLOCKED_LABELS = new Set([
   'status:blocked-by-human',
   'status:needs-decision',
 ]);
+// Scope caveat (A1.5): this helper gates only the MECHANICAL completion
+// preconditions. It deliberately does NOT verify the roadmap's free-form
+// success criteria or autonomy-gap items — that is agent judgment "where
+// feasible" per the instruction — so the caller must confirm those separately
+// before --apply, exactly as the merge gate trusts that review actually
+// happened.
+const MECHANICAL_GATE_NOTE =
+  'Mechanical preconditions only: every descendant is closed/complete with no open / unresolved / inaccessible / linked-PR / nested-roadmap / childless / cycle / human-gate blocker. Separately verify the roadmap’s free-form success criteria and autonomy-gap items before --apply (this helper does not, just as the merge gate trusts that review happened).';
 /** Branch field that scopes a roadmap-audit coordination claim to one roadmap. */
 function roadmapAuditBranchPattern(roadmapNumber) {
   return new RegExp(`^roadmap-audit/${roadmapNumber}-`);
@@ -269,6 +277,37 @@ export function buildRoadmapCompletionAuditBody(report) {
   ].join('\n');
 }
 /**
+ * Reconcile a chronological CONNECTED / DISCONNECTED linked-PR event stream
+ * into the PR numbers that are CURRENTLY connected (the last event for the PR
+ * is a connect, with no later disconnect) AND in the `OPEN` state. Mirrors
+ * resume-claim-routing's `fetchOpenLinkedPrReferences` reconciliation so an
+ * open PR merely linked (no closing keyword) still blocks a roadmap close,
+ * while a CONNECTED-then-DISCONNECTED PR or a connected MERGED PR does not.
+ * Pure so it is unit-testable without `gh`.
+ */
+export function reconcileConnectedOpenPrs(events) {
+  const connected = new Map();
+  const states = new Map();
+  for (const event of events) {
+    if (!Number.isInteger(event.prNumber)) {
+      continue;
+    }
+    if (event.type === 'connected') {
+      connected.set(event.prNumber, true);
+      states.set(event.prNumber, String(event.state ?? ''));
+    } else if (event.type === 'disconnected') {
+      connected.set(event.prNumber, false);
+    }
+  }
+  const open = [];
+  for (const [prNumber, isConnected] of connected) {
+    if (isConnected && states.get(prNumber) === 'OPEN') {
+      open.push(prNumber);
+    }
+  }
+  return open.sort((left, right) => left - right);
+}
+/**
  * Re-validate the roadmap-audit claim from the live claim-marker stream. The
  * shared `summarizeClaimValidation` resolver decides claim ownership exactly
  * as the merge gate does (trusted-author gated, claim-id / agent-id match).
@@ -375,7 +414,9 @@ export async function runRoadmapAuditExecute(argv, deps) {
     result: '',
   };
   if (!args.apply) {
-    // Dry-run: read-only. Never mutate.
+    // Dry-run: read-only. Never mutate. Surface the scope caveat so a caller
+    // does not mistake a mechanical "ready" for a full success-criteria audit.
+    verdict.result = MECHANICAL_GATE_NOTE;
     return { verdict, exitCode: ready ? 0 : 1 };
   }
   if (!ready) {
@@ -608,17 +649,49 @@ function loadIssueComments(owner, repo, issueNumber) {
   });
 }
 /**
- * Resolve which of `issueNumbers` still have an OPEN linked / closing PR.
+ * Resolve which of `issueNumbers` still have an OPEN linked PR — covering A1.5's
+ * "open linked OR closing PR". Two GraphQL signals per issue, either of which
+ * blocks (issue-level short-circuit, `||`):
  *
- * Uses one GraphQL field per issue — `closedByPullRequestsReferences`, the PRs
- * that reference-close the issue — and keeps a number only when at least one
- * such PR is still in the `OPEN` state. MERGED / CLOSED PRs are obsolete and
- * never block (the field returns merged PRs even with
- * `includeClosedPrs:false`, so the `OPEN`-state filter is what matters). On a
- * per-issue lookup error the issue is conservatively treated as having an open
- * PR (fail closed) so a transient failure can never green-light a close.
+ *  1. `closedByPullRequestsReferences` — PRs that reference-CLOSE the issue via
+ *     a closing keyword — kept only when at least one is still `OPEN` (MERGED /
+ *     CLOSED are obsolete; the field returns merged PRs even with
+ *     `includeClosedPrs:false`, so the `OPEN`-state filter is what matters); and
+ *  2. CONNECTED / DISCONNECTED timeline events — a PR manually linked via
+ *     GitHub's Development relationship with NO closing keyword — reconciled
+ *     (`CONNECTED_EVENT` with no later `DISCONNECTED_EVENT` for the same PR) and
+ *     kept only when that PR is still `OPEN`. Mirrors resume-claim-routing's
+ *     `fetchOpenLinkedPrReferences` shape.
+ *
+ * Both queries paginate fully (the connected stream MUST be read whole so a
+ * later DISCONNECTED is never missed). On a per-issue lookup error the issue is
+ * conservatively treated as blocked (fail closed) so a transient failure can
+ * never green-light a close.
  */
 function resolveOpenLinkedPrIssues(owner, repo, issueNumbers) {
+  const blocked = [];
+  for (const issueNumber of issueNumbers) {
+    try {
+      if (
+        hasOpenClosingPr(owner, repo, issueNumber) ||
+        hasOpenConnectedPr(owner, repo, issueNumber)
+      ) {
+        blocked.push(issueNumber);
+      }
+    } catch {
+      // Fail closed: an undeterminable PR state blocks the close.
+      blocked.push(issueNumber);
+    }
+  }
+  return blocked;
+}
+/**
+ * True when the issue has an OPEN PR that reference-closes it. Pages through
+ * `closedByPullRequestsReferences` and short-circuits on the first OPEN PR
+ * (one is enough to block); truncating the list could miss an OPEN blocker on
+ * a later page, wrongly green-lighting a close.
+ */
+function hasOpenClosingPr(owner, repo, issueNumber) {
   const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
   repository(owner:$owner,name:$repo){
     issue(number:$number){
@@ -629,56 +702,105 @@ function resolveOpenLinkedPrIssues(owner, repo, issueNumbers) {
     }
   }
 }`;
-  const blocked = [];
-  for (const issueNumber of issueNumbers) {
-    try {
-      // Page through every reference until an OPEN PR is found (short-circuit:
-      // one is enough to block) or the connection is exhausted; `first:20`
-      // could otherwise truncate the list and miss an OPEN blocker on a later
-      // page, which for a fail-closed gate would wrongly green-light a close.
-      let after = null;
-      let isBlocked = false;
-      for (;;) {
-        const apiArgs = [
-          'api',
-          'graphql',
-          '-f',
-          `query=${query}`,
-          '-f',
-          `owner=${owner}`,
-          '-f',
-          `repo=${repo}`,
-          '-F',
-          `number=${issueNumber}`,
-        ];
-        if (after) {
-          apiArgs.push('-f', `after=${after}`);
-        }
-        const parsed = JSON.parse(ghText(apiArgs));
-        const connection =
-          parsed.data?.repository?.issue?.closedByPullRequestsReferences;
-        const nodes = connection?.nodes ?? [];
-        if (nodes.some((node) => String(node?.state ?? '') === 'OPEN')) {
-          isBlocked = true;
-          break;
-        }
-        if (!connection?.pageInfo?.hasNextPage) {
-          break;
-        }
-        after = connection.pageInfo.endCursor ?? null;
-        if (!after) {
-          break;
-        }
-      }
-      if (isBlocked) {
-        blocked.push(issueNumber);
-      }
-    } catch {
-      // Fail closed: an undeterminable PR state blocks the close.
-      blocked.push(issueNumber);
+  let after = null;
+  for (;;) {
+    const parsed = ghGraphql(query, owner, repo, issueNumber, after);
+    const connection =
+      parsed.data?.repository?.issue?.closedByPullRequestsReferences;
+    const nodes = connection?.nodes ?? [];
+    if (nodes.some((node) => String(node?.state ?? '') === 'OPEN')) {
+      return true;
+    }
+    if (!connection?.pageInfo?.hasNextPage) {
+      return false;
+    }
+    after = connection.pageInfo.endCursor ?? null;
+    if (!after) {
+      return false;
     }
   }
-  return blocked;
+}
+/**
+ * True when the issue has a currently-CONNECTED, OPEN linked PR (Development
+ * relationship without a closing keyword). Pages the CONNECTED/DISCONNECTED
+ * timeline in full — the whole stream is needed so a later DISCONNECTED is not
+ * missed — then reconciles it via the pure {@link reconcileConnectedOpenPrs}.
+ */
+function hasOpenConnectedPr(owner, repo, issueNumber) {
+  const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
+  repository(owner:$owner,name:$repo){
+    issue(number:$number){
+      timelineItems(first:50,after:$after,itemTypes:[CONNECTED_EVENT,DISCONNECTED_EVENT]){
+        nodes {
+          __typename
+          ... on ConnectedEvent { subject { __typename ... on PullRequest { number state } } }
+          ... on DisconnectedEvent { subject { __typename ... on PullRequest { number } } }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`;
+  const events = [];
+  let after = null;
+  for (;;) {
+    const parsed = ghGraphql(query, owner, repo, issueNumber, after);
+    const connection = parsed.data?.repository?.issue?.timelineItems;
+    events.push(...parseConnectedPrEvents(connection?.nodes ?? []));
+    if (!connection?.pageInfo?.hasNextPage) {
+      break;
+    }
+    after = connection.pageInfo.endCursor ?? null;
+    if (!after) {
+      break;
+    }
+  }
+  return reconcileConnectedOpenPrs(events).length > 0;
+}
+/** Run one `gh api graphql` page, passing `after` only when set. */
+function ghGraphql(query, owner, repo, issueNumber, after) {
+  const apiArgs = [
+    'api',
+    'graphql',
+    '-f',
+    `query=${query}`,
+    '-f',
+    `owner=${owner}`,
+    '-f',
+    `repo=${repo}`,
+    '-F',
+    `number=${issueNumber}`,
+  ];
+  if (after) {
+    apiArgs.push('-f', `after=${after}`);
+  }
+  return JSON.parse(ghText(apiArgs));
+}
+/** Coerce raw CONNECTED/DISCONNECTED timeline nodes into reconcile events. */
+function parseConnectedPrEvents(nodes) {
+  const events = [];
+  for (const node of nodes) {
+    const record = node;
+    const subject = record?.subject;
+    if (subject?.__typename !== 'PullRequest') {
+      continue;
+    }
+    const prNumber =
+      typeof subject.number === 'number' ? subject.number : Number.NaN;
+    if (!Number.isInteger(prNumber)) {
+      continue;
+    }
+    if (record?.__typename === 'ConnectedEvent') {
+      events.push({
+        type: 'connected',
+        prNumber,
+        state: String(subject.state ?? ''),
+      });
+    } else if (record?.__typename === 'DisconnectedEvent') {
+      events.push({ type: 'disconnected', prNumber });
+    }
+  }
+  return events;
 }
 /**
  * POST a comment body as a JSON document (`{"body": …}`) via `gh api --input
@@ -825,6 +947,13 @@ function printHelp() {
   (branch roadmap-audit/<roadmap>-<slug>) and match --claim-id (required under
   --apply) and, when given, --agent-id. --owner and --repo must be passed
   together or not at all.
+
+  SCOPE: this helper gates only the MECHANICAL completion preconditions (all
+  descendants closed/complete; no open / unresolved / inaccessible / linked-PR
+  / nested-roadmap / childless / cycle / human-gate blocker). It does NOT verify
+  the roadmap's free-form success criteria or autonomy-gap items — the caller
+  must confirm those separately before --apply, exactly as the merge gate
+  trusts that review actually happened.
 `);
 }
 function isMainModule(moduleUrl) {

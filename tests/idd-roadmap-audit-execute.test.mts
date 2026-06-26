@@ -4,9 +4,11 @@ import { test } from 'node:test';
 import type { RoadmapGraphReport } from '../src/scripts/discover-roadmap-graph.mts';
 import {
   buildRoadmapCompletionAuditBody,
+  type ConnectedPrEvent,
   evaluateRoadmapAuditGates,
   evaluateRoadmapClaim,
   type RoadmapAuditExecuteDeps,
+  reconcileConnectedOpenPrs,
   runRoadmapAuditExecute,
 } from '../src/scripts/idd-roadmap-audit-execute.mts';
 import { renderClaimedByMarker } from '../src/scripts/protocol-helpers.mts';
@@ -289,6 +291,84 @@ test('a closed child with an OPEN linked PR is unresolved; a merged PR is not', 
   // With no open linked PRs (the merged-PR case), nothing blocks.
   assert.deepEqual(
     evaluateRoadmapAuditGates(report, { openLinkedPrIssues: [] }),
+    [],
+  );
+});
+
+// ---------------------------------------------------------------------------
+// reconcileConnectedOpenPrs (pure) — CONNECTED/DISCONNECTED linked-PR signal
+// ---------------------------------------------------------------------------
+
+test('a CONNECTED OPEN PR with no later DISCONNECT reconciles as open-linked', () => {
+  const events: ConnectedPrEvent[] = [
+    { type: 'connected', prNumber: 2001, state: 'OPEN' },
+  ];
+  assert.deepEqual(reconcileConnectedOpenPrs(events), [2001]);
+});
+
+test('a CONNECTED then DISCONNECTED PR is not open-linked', () => {
+  const events: ConnectedPrEvent[] = [
+    { type: 'connected', prNumber: 2001, state: 'OPEN' },
+    { type: 'disconnected', prNumber: 2001 },
+  ];
+  assert.deepEqual(reconcileConnectedOpenPrs(events), []);
+});
+
+test('a CONNECTED MERGED PR is not open-linked', () => {
+  const events: ConnectedPrEvent[] = [
+    { type: 'connected', prNumber: 2001, state: 'MERGED' },
+  ];
+  assert.deepEqual(reconcileConnectedOpenPrs(events), []);
+});
+
+test('a DISCONNECTED then re-CONNECTED OPEN PR is open-linked again (last event wins)', () => {
+  const events: ConnectedPrEvent[] = [
+    { type: 'connected', prNumber: 2001, state: 'OPEN' },
+    { type: 'disconnected', prNumber: 2001 },
+    { type: 'connected', prNumber: 2001, state: 'OPEN' },
+  ];
+  assert.deepEqual(reconcileConnectedOpenPrs(events), [2001]);
+});
+
+test('reconciliation keeps only the still-connected OPEN PRs across several', () => {
+  const events: ConnectedPrEvent[] = [
+    { type: 'connected', prNumber: 3001, state: 'OPEN' }, // stays open
+    { type: 'connected', prNumber: 3002, state: 'OPEN' },
+    { type: 'disconnected', prNumber: 3002 }, // disconnected
+    { type: 'connected', prNumber: 3003, state: 'MERGED' }, // merged
+  ];
+  assert.deepEqual(reconcileConnectedOpenPrs(events), [3001]);
+});
+
+test('a closed child with an OPEN CONNECTED-only PR yields an open-linked-pr blocker', () => {
+  // End-to-end wiring without mocking gh: the resolver maps a child to the
+  // blocked set when reconcileConnectedOpenPrs over its timeline is non-empty.
+  const connectedOpen: ConnectedPrEvent[] = [
+    { type: 'connected', prNumber: 2001, state: 'OPEN' },
+  ];
+  const childBlocked = reconcileConnectedOpenPrs(connectedOpen).length > 0;
+  assert.equal(childBlocked, true);
+
+  const report = readyReport(); // #1048 is a closed child
+  const blockers = evaluateRoadmapAuditGates(report, {
+    openLinkedPrIssues: childBlocked ? [1048] : [],
+  });
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    ['open-linked-pr'],
+  );
+
+  // A connected-then-disconnected PR leaves the child unblocked.
+  const disconnected: ConnectedPrEvent[] = [
+    ...connectedOpen,
+    { type: 'disconnected', prNumber: 2001 },
+  ];
+  const stillBlocked = reconcileConnectedOpenPrs(disconnected).length > 0;
+  assert.equal(stillBlocked, false);
+  assert.deepEqual(
+    evaluateRoadmapAuditGates(report, {
+      openLinkedPrIssues: stillBlocked ? [1048] : [],
+    }),
     [],
   );
 });
