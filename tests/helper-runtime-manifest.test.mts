@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -561,6 +567,139 @@ test("every manifest helper binName is exposed in package.json's bin map", () =>
       bin[command.binName],
       `./bin/${command.binName}.mjs`,
       `package.json bin map must expose ${command.binName} as ./bin/${command.binName}.mjs`,
+    );
+  }
+});
+
+const INSTRUCTIONS_DIR = join(REPO_ROOT, '.github/instructions');
+
+function readInstructionFiles(): { name: string; source: string }[] {
+  return readdirSync(INSTRUCTIONS_DIR)
+    .filter((name) => name.endsWith('.instructions.md'))
+    .map((name) => ({
+      name,
+      source: readFileSync(join(INSTRUCTIONS_DIR, name), 'utf8'),
+    }));
+}
+
+// Collect every helper the instruction files tell adopters to RUN as
+// `node scripts/<name>.mjs`. That runnable-invocation form is the scoped signal
+// for a "documented CLI adopter helper": it deliberately excludes shared
+// libraries that appear only as bare `scripts/<name>.mjs` import/function
+// mentions (protocol-helpers, policy-helpers) and dev/CI tooling the
+// instructions never invoke (build-ts, sync-docs, verify-workshop-integrity,
+// merged-pr-feedback-sweep).
+function collectDocumentedCliAdopterHelpers(): Set<string> {
+  const referenced = new Set<string>();
+  for (const { source } of readInstructionFiles()) {
+    for (const match of source.matchAll(
+      /\bnode (scripts\/[a-z0-9-]+\.mjs)\b/g,
+    )) {
+      referenced.add(match[1]);
+    }
+  }
+  return referenced;
+}
+
+test('every documented CLI adopter helper (node scripts/<name>.mjs in instructions) is registered', () => {
+  // A documented CLI adopter helper that is neither registered in HELPER_COMMANDS
+  // nor imported by a registered helper is silently absent from vendored-node
+  // `managedFiles`, so an adopter copying that list never receives it and the
+  // documented `node scripts/<name>.mjs` invocation fails. Guards the
+  // kurone-kito/idd-skill#1084 gap where minimize-superseded-markers was a real
+  // invocable, instruction-documented CLI yet unregistered (it imports only node
+  // builtins, so nothing pulled it into the import closure either).
+  const referenced = collectDocumentedCliAdopterHelpers();
+
+  // Sanity: the scan still finds the documented-helper surface, so this guard
+  // cannot silently pass if the instruction invocation form is restructured.
+  assert.ok(
+    referenced.size > 0,
+    'expected the instruction files to document at least one `node scripts/<name>.mjs` adopter helper',
+  );
+  // Anchor on the #1084 subject helper so the guard stays bound to the regression
+  // it closes; idd-claim / idd-review-snapshot / idd-advisory-wait document it.
+  assert.ok(
+    referenced.has('scripts/minimize-superseded-markers.mjs'),
+    'expected the instruction files to document `node scripts/minimize-superseded-markers.mjs`',
+  );
+
+  const { commandCatalog } = buildHelperRuntimeManifest({
+    targetRoot: REPO_ROOT,
+  });
+  const registeredEntryPaths = new Set(
+    commandCatalog.map((command) => command.entryPath),
+  );
+  const unregistered = [...referenced]
+    .filter((entryPath) => !registeredEntryPaths.has(entryPath))
+    .sort();
+
+  assert.deepEqual(
+    unregistered,
+    [],
+    `documented CLI adopter helpers missing from HELPER_COMMANDS: ${unregistered.join(', ')}`,
+  );
+});
+
+test('the registration guard scopes out instruction-referenced libraries and dev tooling', () => {
+  // Pins why the guard above does not false-positive: shared libraries are
+  // referenced in the instructions as bare `scripts/<name>.mjs` paths (import /
+  // function sources) but are never `node`-invoked, so they stay out of the
+  // documented-CLI domain and out of HELPER_COMMANDS — they reach vendored
+  // `managedFiles` transitively through the registered helpers that import them.
+  const allInstructions = readInstructionFiles()
+    .map((file) => file.source)
+    .join('\n');
+  const documentedCliHelpers = collectDocumentedCliAdopterHelpers();
+  const { commandCatalog } = buildHelperRuntimeManifest({
+    targetRoot: REPO_ROOT,
+  });
+  const registeredEntryPaths = new Set(
+    commandCatalog.map((command) => command.entryPath),
+  );
+
+  for (const library of [
+    'scripts/protocol-helpers.mjs',
+    'scripts/policy-helpers.mjs',
+  ]) {
+    assert.ok(
+      allInstructions.includes(library),
+      `expected the instruction files to reference the ${library} library`,
+    );
+    assert.equal(
+      allInstructions.includes(`node ${library}`),
+      false,
+      `${library} is a library and must not be documented as a runnable node command`,
+    );
+    assert.equal(
+      documentedCliHelpers.has(library),
+      false,
+      `${library} must not be treated as a documented CLI adopter helper`,
+    );
+    assert.equal(
+      registeredEntryPaths.has(library),
+      false,
+      `${library} is a library and must not be registered in HELPER_COMMANDS`,
+    );
+  }
+
+  // Dev/CI tooling and the maintainer-only post-merge sweep are likewise never
+  // adopter-run commands, so they stay unregistered too.
+  for (const nonAdopterTool of [
+    'scripts/build-ts.mjs',
+    'scripts/sync-docs.mjs',
+    'scripts/verify-workshop-integrity.mjs',
+    'scripts/merged-pr-feedback-sweep.mjs',
+  ]) {
+    assert.equal(
+      documentedCliHelpers.has(nonAdopterTool),
+      false,
+      `${nonAdopterTool} is not an adopter CLI helper and must not be in the documented domain`,
+    );
+    assert.equal(
+      registeredEntryPaths.has(nonAdopterTool),
+      false,
+      `${nonAdopterTool} is not an adopter CLI helper and must not be registered in HELPER_COMMANDS`,
     );
   }
 });
