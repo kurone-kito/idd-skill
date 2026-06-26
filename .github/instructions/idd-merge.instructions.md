@@ -276,12 +276,12 @@ Before any mutating action in F3, apply the
      ```
 
      After apply, record the outcome — but **skip the post when the PR
-     already carries a fresh `<!-- idd-cleanup-evidence:` comment** (for
-     example one the `post-merge-cleanup` workflow posted within seconds
-     of the merge). The marker is a resume-detection token, so a second
-     copy is only noise; this mirrors the workflow's own
-     duplicate-evidence guard. See `docs/idd-comment-minimization.md`
-     for the exact formats:
+     already carries a `<!-- idd-cleanup-evidence:` comment**: the check
+     is presence-based — any comment whose body starts with that token,
+     matching the workflow's own guard — for example one the
+     `post-merge-cleanup` workflow posted within seconds of the merge.
+     The marker is a resume-detection token, so a second copy is only
+     noise. See `docs/idd-comment-minimization.md` for the exact formats:
 
      If the apply `status` is `applied`: post the evidence comment
      format (with `status`, `applied`, `failed`, `skipped`, and
@@ -309,10 +309,10 @@ Before any mutating action in F3, apply the
    Re-validate the active claim before each mutation. After GraphQL
    cleanup, post an evidence comment summarizing the outcome (status,
    applied count, skipped count with reasons) — unless the PR already
-   carries a fresh `<!-- idd-cleanup-evidence:` comment, in which case
-   skip the duplicate post. If the viewer cannot minimize any detected
-   candidates, post a cleanup-permission-blocked comment instead of
-   exiting silently.
+   carries a `<!-- idd-cleanup-evidence:` comment (presence-based: any
+   body starting with that token), in which case skip the duplicate
+   post. If the viewer cannot minimize any detected candidates, post a
+   cleanup-permission-blocked comment instead of exiting silently.
 
    See `docs/idd-comment-minimization.md` for the evidence comment
    format, cleanup-failure comment format, permission-blocked comment
