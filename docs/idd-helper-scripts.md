@@ -201,10 +201,12 @@ default below is unchanged.
     plus `ownedByCurrentSession` when `--current-claim-id` is passed) and
     `claimEligible: boolean` on each open leaf. `--with-readiness` adds
     `readiness: { ready: boolean, reasons: string[], authoringHeld: boolean,`
-    `startable: boolean }` — the A3 startability of each open leaf
-    (blocked-by-dependency resolution + authoring-hold), where `reasons` lists
-    the sorted filter reasons (e.g. `blocked_by_open_issue:#N`) and is empty
-    when `ready`, and `startable` is `ready` **and** not claim-blocked (it folds
+    `startable: boolean }` — the A3 startability of each open leaf (dependency
+    resolution across visible `Blocked by #N` / `Depends on #N` / task-list refs
+    and hidden `{{PROJECT_MARKER_PREFIX}}-blocked-by` markers, plus
+    authoring-hold), where `reasons` lists the sorted filter reasons (e.g.
+    `blocked_by_open_issue:#N`) and is empty when `ready`, and `startable` is
+    `ready` **and** not claim-blocked (it folds
     in `claimEligible` when `--with-claim-state` also ran; otherwise claim
     eligibility is unknown and treated as non-blocking). Both annotations are
     **soft** discovery hints — the A3/A4/A4.5/A5 gates remain authoritative.

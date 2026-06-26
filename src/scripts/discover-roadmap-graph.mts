@@ -113,9 +113,10 @@ export interface LeafActiveClaim {
 export interface LeafReadiness {
   /**
    * Passes every A3 readiness filter — no `status:blocked-by-human` /
-   * `status:needs-decision` / authoring-hold label, and every visible
-   * `Blocked by #N` / hidden `{prefix}-blocked-by` dependency resolves to a
-   * closed issue.
+   * `status:needs-decision` / authoring-hold label, and every dependency
+   * resolves to a closed issue: visible `Blocked by #N` / `Depends on #N` /
+   * task-list refs and hidden `{prefix}-blocked-by` roadmap markers, exactly
+   * as `evaluateDiscoverReadiness` evaluates them.
    */
   ready: boolean;
   /**
@@ -1784,10 +1785,11 @@ function printHelp() {
   claim gate (idd-claim.instructions.md) remains the real protection.
 
   --with-readiness (opt-in) annotates each OPEN execution leaf with its A3
-  startability by composing the discover-readiness-check helper (blocked-by
+  startability by composing the discover-readiness-check helper (dependency
   resolution + authoring-hold). Each annotated leaf gains:
     "readiness": { "ready": bool, "reasons": [str], "authoringHeld": bool, "startable": bool }
-      ready      = no blocking label + every Blocked by #N / {prefix}-blocked-by dep is closed
+      ready      = no blocking label + every dep closed (Blocked by #N / Depends on #N
+                   / task-list refs / {prefix}-blocked-by markers)
       reasons    = sorted filter reasons (e.g. "blocked_by_open_issue:#N"); empty when ready
       startable  = ready AND not claim-blocked (folds in claimEligible when --with-claim-state
                    also ran; otherwise claim eligibility is unknown and treated as non-blocking)
