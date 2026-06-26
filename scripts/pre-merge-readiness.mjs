@@ -13,6 +13,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
+import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
   normalizePolicyConfig,
   resolveCollaboratorMarkerTrust,
@@ -468,7 +469,31 @@ function fetchCodeownersText(owner, repo, ref) {
   );
   return selectCodeownersText(payloads);
 }
-function fetchBranchRulesets(owner, repo, branchRules) {
+/**
+ * Fetch each referenced ruleset's detail, skipping ones that no longer exist.
+ *
+ * A 404 means the ruleset is gone, so it is mapped to `{}` and dropped by the
+ * trailing empty-object filter. Any other status (403, rate limit, transient
+ * failure) is re-thrown so the F2/F3 merge gate fails closed and falls back to
+ * the written-rules path, instead of fabricating a "no ruleset" result that
+ * would silently over-block a legitimately configured bypass.
+ *
+ * The 404 must be discriminated on the *thrown* status: `gh api` writes a 404
+ * response body to stdout, so `allowHttpStatuses: [404]` would return that
+ * non-empty error object and the `Object.keys(...).length > 0` filter would
+ * keep it as a junk ruleset. Letting the 404 throw and matching it here yields
+ * the empty/skipped result the gate expects.
+ *
+ * `fetchRulesetDetail` is injectable for tests; production uses the default
+ * `gh api` call.
+ */
+export function fetchBranchRulesets(
+  owner,
+  repo,
+  branchRules,
+  fetchRulesetDetail = (path) =>
+    ghApiJson(path, false, ['-H', 'Accept: application/vnd.github+json']),
+) {
   const rulesetPaths = [];
   const seenPaths = new Set();
   for (const rule of branchRules ?? []) {
@@ -486,14 +511,12 @@ function fetchBranchRulesets(owner, repo, branchRules) {
   return rulesetPaths
     .map((path) => {
       try {
-        return ghApiJson(
-          path,
-          false,
-          ['-H', 'Accept: application/vnd.github+json'],
-          { allowHttpStatuses: [404] },
-        );
-      } catch {
-        return {};
+        return fetchRulesetDetail(path);
+      } catch (error) {
+        if (deriveGhHttpStatus(error) === 404) {
+          return {};
+        }
+        throw error;
       }
     })
     .filter((ruleset) => Object.keys(ruleset).length > 0);

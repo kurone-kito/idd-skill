@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
+import { fetchBranchRulesets } from '../src/scripts/pre-merge-readiness.mts';
 import {
   buildActivitySnapshotSummary,
   buildAdvisoryWaitSummary,
@@ -3720,6 +3721,52 @@ test('Part B: summarizeClaimValidation rejects an issue-only handoff after the P
   assert.equal(summary.claimLost, false);
   assert.equal(summary.reason, 'match');
   assert.equal(summary.activeClaim.claimId, 'claim-20260512T090000Z-337-old');
+});
+
+// Shape of a real execFileSync('gh', ...) failure: exit code 1 with the true
+// HTTP status carried in stderr (mirrors gh-http-status.test.mts). gh writes a
+// 404 response body to stdout, so fetchBranchRulesets must discriminate on the
+// thrown status rather than on an empty body.
+const ghHttpError = (httpStatus: number, label: string) =>
+  Object.assign(new Error('Command failed'), {
+    status: 1,
+    stderr: `gh: ${label} (HTTP ${httpStatus})`,
+  });
+
+const oneRulesetRule = [{ ruleset_id: 1 }] as Parameters<
+  typeof fetchBranchRulesets
+>[2];
+
+test('fetchBranchRulesets skips a 404 ruleset detail without throwing', () => {
+  const seen: string[] = [];
+  const result = fetchBranchRulesets('o', 'r', oneRulesetRule, (path) => {
+    seen.push(path);
+    throw ghHttpError(404, 'Not Found');
+  });
+  assert.equal(seen.length, 1);
+  assert.match(seen[0] ?? '', /\/rulesets\/1$/);
+  assert.deepEqual(result, []);
+});
+
+test('fetchBranchRulesets keeps real rulesets and drops empty results', () => {
+  const rules = [{ ruleset_id: 1 }, { ruleset_id: 2 }] as Parameters<
+    typeof fetchBranchRulesets
+  >[2];
+  const result = fetchBranchRulesets('o', 'r', rules, (path) =>
+    path.endsWith('/1') ? { id: 1, current_user_can_bypass: 'always' } : {},
+  );
+  assert.deepEqual(result, [{ id: 1, current_user_can_bypass: 'always' }]);
+});
+
+test('fetchBranchRulesets propagates a non-404 fetch error instead of coercing to "no ruleset"', () => {
+  const boom = ghHttpError(403, 'API rate limit exceeded');
+  assert.throws(
+    () =>
+      fetchBranchRulesets('o', 'r', oneRulesetRule, () => {
+        throw boom;
+      }),
+    (error: unknown) => error === boom,
+  );
 });
 
 function readJson(relativePath: string) {
