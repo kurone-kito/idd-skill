@@ -119,6 +119,26 @@ test('ignores roadmap-id markers quoted inside code regions (#1083)', () => {
   assert.equal(extractRoadmapMarkerId(mixed), 'real-root');
 });
 
+test('an invalid backtick fence opener does not mask a later roadmap marker', () => {
+  // CommonMark §4.5: a backtick-fence opener's info string may not contain a
+  // backtick, so this line is NOT a fence opener and must not blank the rest of
+  // the body — the real marker below it still resolves.
+  const body = [
+    '```js `not a fence`',
+    '<!-- idd-skill-roadmap-id: real -->',
+  ].join('\n');
+  assert.equal(extractRoadmapMarkerId(body), 'real');
+
+  // A tilde fence's info string MAY contain a backtick, so it is a real opener
+  // and does mask a quoted marker inside it.
+  const tildeFenced = [
+    '~~~ has`backtick',
+    '<!-- idd-skill-roadmap-id: hidden -->',
+    '~~~',
+  ].join('\n');
+  assert.equal(extractRoadmapMarkerId(tildeFenced), '');
+});
+
 test('extractKeywordReferences parses blocked dependencies and multi-target lists', () => {
   const body = `
 Refs #201, #202

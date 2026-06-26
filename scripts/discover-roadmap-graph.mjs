@@ -848,16 +848,21 @@ function stripMarkdownCodeRegions(text) {
     const openMatch = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
     if (openMatch) {
       const marker = openMatch[1];
-      const onlyWhitespaceAfter = /^\s*$/.test(openMatch[2]);
+      const info = openMatch[2];
+      const fenceChar = marker[0];
       if (fence === null) {
-        fence = { char: marker[0], length: marker.length };
-        out.push('');
-        continue;
-      }
-      if (
-        marker[0] === fence.char &&
+        // CommonMark §4.5: a backtick-fence opener's info string may not
+        // contain a backtick (that would be ambiguous with a close or inline
+        // code), so such a line is not a fence opener and stays content.
+        if (fenceChar !== '`' || !info.includes('`')) {
+          fence = { char: fenceChar, length: marker.length };
+          out.push('');
+          continue;
+        }
+      } else if (
+        fenceChar === fence.char &&
         marker.length >= fence.length &&
-        onlyWhitespaceAfter
+        /^\s*$/.test(info)
       ) {
         fence = null;
         out.push('');
