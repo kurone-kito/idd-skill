@@ -2847,11 +2847,7 @@ export function buildActivitySnapshotSummary(
     dispositionAuthorLogins.delete(login);
   }
   const isAdvisoryBot = (login: unknown) =>
-    advisoryBotLogins.has(
-      String(login ?? '')
-        .trim()
-        .toLowerCase(),
-    );
+    isConfiguredAdvisoryBotLogin(login, advisoryBotLogins);
   const isDispositionAuthor = (login: unknown) =>
     dispositionAuthorLogins.has(
       String(login ?? '')
@@ -3517,10 +3513,9 @@ export function summarizeDispositionEvidenceForGate(
     // marker nor the terminal `**Rejection confirmed by maintainer**` marker.
     return postDispositionBlockingFeedback.every(
       (comment) =>
-        advisoryBotLogins.has(
-          String(comment.author?.login ?? '')
-            .trim()
-            .toLowerCase(),
+        isConfiguredAdvisoryBotLogin(
+          comment.author?.login,
+          advisoryBotLogins,
         ) &&
         !isDispositionComment({ body: String(comment.body ?? '') }) &&
         !isRejectionConfirmedDisposition({ body: String(comment.body ?? '') }),
@@ -5843,8 +5838,27 @@ export function isGateAdvisoryBotLogin(
   if (!token) {
     return false;
   }
-  if (isKnownReviewBot(token)) {
-    return true;
+  return (
+    isKnownReviewBot(token) ||
+    isConfiguredAdvisoryBotLogin(login, advisoryBotLogins)
+  );
+}
+
+// True when a login matches a **configured** `advisoryBotLogins` entry, with the
+// GitHub `[bot]` suffix normalized symmetrically via `advisoryBotIdentityToken`
+// on both the incoming login and each configured entry — so a custom bot matches
+// whether either side stores the suffixed (`my-bot[bot]`) or suffixless
+// (`my-bot`) form. Unlike `isGateAdvisoryBotLogin`, this does **not** also match
+// `isKnownReviewBot`: the advisory courtesy-ack carve-outs must recognize only
+// configured advisory bots, so a Copilot/known-review-bot ack is never
+// reclassified as a configured-advisory-bot ack. Fail-closed on an empty token.
+export function isConfiguredAdvisoryBotLogin(
+  login: unknown,
+  advisoryBotLogins: Set<string>,
+): boolean {
+  const token = advisoryBotIdentityToken(login);
+  if (!token) {
+    return false;
   }
   for (const configured of advisoryBotLogins) {
     if (advisoryBotIdentityToken(configured) === token) {

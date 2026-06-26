@@ -1860,6 +1860,63 @@ test('disposition evidence flags an ack-only-post-disposition resolved thread wi
   assert.equal(summary.soleCauseAckOnlyPostDisposition, true);
 });
 
+test('disposition evidence recognizes a post-disposition ack across the advisory-bot [bot] suffix (#1118)', () => {
+  // A custom advisory bot configured suffixless whose courtesy ack arrives
+  // suffixed (or vice-versa) must still be recognized as ack-only — the
+  // pre-#1118 raw Set.has() lookup missed it and forced a needless
+  // return-to-e1.
+  const make = (configLogin: string, ackAuthorLogin: string) =>
+    summarizeDispositionEvidenceForGate(
+      {
+        comments: [],
+        threads: [
+          {
+            id: 'thread-ack',
+            isResolved: true,
+            comments: {
+              pageInfo: { hasNextPage: false },
+              nodes: [
+                {
+                  author: { login: 'reviewer-a' },
+                  createdAt: '2026-05-12T00:00:00Z',
+                  body: 'please reconsider this',
+                },
+                {
+                  author: { login: 'idd-bot' },
+                  createdAt: '2026-05-12T00:30:00Z',
+                  body: '**Rejected** — verified: not applicable here',
+                },
+                {
+                  author: { login: ackAuthorLogin },
+                  createdAt: '2026-05-12T02:00:00Z',
+                  body: 'Thanks for confirming.',
+                },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        iddAgentLogins: ['idd-bot'],
+        advisoryBotLogins: [configLogin],
+        snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+      },
+    );
+
+  for (const [configLogin, ackAuthorLogin] of [
+    ['advisory-bot', 'advisory-bot[bot]'],
+    ['advisory-bot[bot]', 'advisory-bot'],
+  ] as const) {
+    const summary = make(configLogin, ackAuthorLogin);
+    assert.equal(
+      summary.missingThreads[0].ackOnlyPostDisposition,
+      true,
+      `config ${configLogin} should ack-classify ${ackAuthorLogin}`,
+    );
+    assert.equal(summary.soleCauseAckOnlyPostDisposition, true);
+  }
+});
+
 test('disposition evidence does not flag a resolved thread with substantive post-disposition feedback (#978)', () => {
   const summary = summarizeDispositionEvidenceForGate(
     {
