@@ -728,7 +728,7 @@ function normalizeClaimComments(raw) {
  * comparison is applied with the configured age. Mirrors
  * resume-claim-routing's `isStaleByAge`.
  */
-function isClaimStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs) {
+export function isClaimStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs) {
   if (staleAgeMs === DEFAULT_CLAIM_STALE_AGE_MS) {
     return isStaleAt(activeCreatedAt, nextCreatedAt);
   }
@@ -1187,7 +1187,7 @@ async function getIssue(issueNumber, cache, loadIssue) {
   cache.set(issueNumber, issue);
   return issue;
 }
-function buildIssueLoader(owner, repo) {
+export function buildIssueLoader(owner, repo) {
   return async (issueNumber) => {
     const args = [
       'api',
@@ -1212,7 +1212,7 @@ function buildIssueLoader(owner, repo) {
     }
   };
 }
-function buildSubIssueLoader(owner, repo) {
+export function buildSubIssueLoader(owner, repo) {
   return async (issueNumber) => {
     const numbers = [];
     let after = '';

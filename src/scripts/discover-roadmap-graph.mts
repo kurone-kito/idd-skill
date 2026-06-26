@@ -1126,7 +1126,7 @@ function normalizeClaimComments(
  * comparison is applied with the configured age. Mirrors
  * resume-claim-routing's `isStaleByAge`.
  */
-function isClaimStaleByAge(
+export function isClaimStaleByAge(
   activeCreatedAt: string,
   nextCreatedAt: string,
   staleAgeMs: number,
@@ -1656,7 +1656,7 @@ async function getIssue(
   return issue;
 }
 
-function buildIssueLoader(owner: string, repo: string) {
+export function buildIssueLoader(owner: string, repo: string) {
   return async (issueNumber: number) => {
     const args = [
       'api',
@@ -1682,7 +1682,7 @@ function buildIssueLoader(owner: string, repo: string) {
   };
 }
 
-function buildSubIssueLoader(owner: string, repo: string) {
+export function buildSubIssueLoader(owner: string, repo: string) {
   return async (issueNumber: number) => {
     const numbers: number[] = [];
     let after = '';

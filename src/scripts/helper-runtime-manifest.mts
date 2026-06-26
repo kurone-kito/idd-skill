@@ -415,6 +415,16 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Verify disposition marker presence on review items for E7 meta-check.',
   },
   {
+    id: 'roadmap-audit-execute',
+    scriptName: 'idd:roadmap-audit-execute',
+    binName: 'idd-roadmap-audit-execute',
+    entryPath: 'scripts/idd-roadmap-audit-execute.mjs',
+    vendoredCommand: 'node scripts/idd-roadmap-audit-execute.mjs',
+    description:
+      'Evaluate the A1.5 roadmap completion audit (dry-run) and, with --apply, post the evidence comment, close the roadmap, and release the claim.',
+    contractPaths: ['schemas/idd-roadmap-audit-execute.schema.json'],
+  },
+  {
     id: 'stalled-session-quiet-check',
     scriptName: 'idd:stalled-session-quiet-check',
     binName: 'idd-stalled-session-quiet-check',

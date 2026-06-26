@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/idd-roadmap-audit-execute.schema.json",
+  "title": "IDD Roadmap Audit Execute",
+  "description": "A1.5 roadmap-completion-audit verdict and (under --apply) execution result for a roadmap issue.",
+  "type": "object",
+  "required": [
+    "protocolVersion",
+    "decisionAuthority",
+    "mode",
+    "roadmapNumber",
+    "ready",
+    "blockers",
+    "evidenceBody",
+    "closed",
+    "claimReleased",
+    "result"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "pattern": "^1$"
+    },
+    "decisionAuthority": {
+      "type": "string",
+      "enum": ["instructions"]
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["dry-run", "apply"]
+    },
+    "roadmapNumber": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "ready": {
+      "type": "boolean"
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "detail"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "roadmap-blocked",
+              "childless",
+              "open-child",
+              "nested-roadmap",
+              "open-linked-pr",
+              "unresolved-reference",
+              "inaccessible-reference",
+              "cycle"
+            ]
+          },
+          "target": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "provenance": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidenceBody": {
+      "type": "string"
+    },
+    "closed": {
+      "type": "boolean"
+    },
+    "claimReleased": {
+      "type": "boolean"
+    },
+    "result": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

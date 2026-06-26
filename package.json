@@ -36,6 +36,7 @@
     "idd-resume-route-selection": "./bin/idd-resume-route-selection.mjs",
     "idd-review-activity-snapshot": "./bin/idd-review-activity-snapshot.mjs",
     "idd-review-disposition-verify": "./bin/idd-review-disposition-verify.mjs",
+    "idd-roadmap-audit-execute": "./bin/idd-roadmap-audit-execute.mjs",
     "idd-stalled-session-quiet-check": "./bin/idd-stalled-session-quiet-check.mjs",
     "idd-suitability-triage": "./bin/idd-suitability-triage.mjs"
   },
