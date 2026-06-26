@@ -478,7 +478,10 @@ function normalizeAuthorityEvidence(evidence, actor, repoOwner, policy) {
       permission === 'write';
   } else {
     authorized =
-      roleName === 'admin' || roleName === 'maintain' || permission === 'admin';
+      roleName === 'admin' ||
+      roleName === 'maintain' ||
+      permission === 'admin' ||
+      permission === 'maintain';
   }
   const error = known
     ? ''
