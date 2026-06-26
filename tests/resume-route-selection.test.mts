@@ -159,7 +159,7 @@ test('routes F1 when PR exists, CI succeeded, no pending reviews, and branch sta
   assert.equal(result.reason, 'pr-ci-success-branch-computing');
 });
 
-test('routes F2 when PR exists, CI succeeded, no pending reviews, and branchState is not provided (defaults to clean)', () => {
+test('routes stop when PR exists, CI succeeded, no pending reviews, and branchState is not provided (fail-closed to unknown)', () => {
   const result = selectResumeRoute({
     prExists: true,
     requiredChecksGenerated: true,
@@ -167,7 +167,41 @@ test('routes F2 when PR exists, CI succeeded, no pending reviews, and branchStat
     reviewExists: false,
     reviewPending: false,
   });
-  assert.equal(result.route, 'F2');
+  assert.equal(result.route, 'stop');
+  assert.equal(result.reason, 'pr-ci-success-branch-dirty-or-unknown');
+  assert.equal(result.state.branchState, 'unknown');
+});
+
+test('routes stop when a non-string branchState is supplied (fail-closed to unknown)', () => {
+  for (const branchState of [123, null, true, {}, ['clean']]) {
+    const result = selectResumeRoute({
+      prExists: true,
+      requiredChecksGenerated: true,
+      ciSuccess: true,
+      reviewExists: false,
+      reviewPending: false,
+      branchState,
+    });
+    assert.equal(result.route, 'stop');
+    assert.equal(result.reason, 'pr-ci-success-branch-dirty-or-unknown');
+    assert.equal(result.state.branchState, 'unknown');
+  }
+});
+
+test('routes stop when an unrecognized branchState string is supplied (fail-closed to unknown)', () => {
+  for (const branchState of ['GARBAGE', 'CORRUPT', 'Clean', '']) {
+    const result = selectResumeRoute({
+      prExists: true,
+      requiredChecksGenerated: true,
+      ciSuccess: true,
+      reviewExists: false,
+      reviewPending: false,
+      branchState,
+    });
+    assert.equal(result.route, 'stop');
+    assert.equal(result.reason, 'pr-ci-success-branch-dirty-or-unknown');
+    assert.equal(result.state.branchState, 'unknown');
+  }
 });
 
 test('routes E15 when PR exists, CI fails, and reviews exist', () => {

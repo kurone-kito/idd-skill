@@ -23,6 +23,20 @@ const PASS_EQUIVALENT_STATES = new Set([
   'neutral',
   'not_applicable',
 ]);
+/**
+ * The documented branch-state taxonomy: every value {@link classifyBranchState}
+ * can return and that {@link selectResumeRoute} routes on. A caller-supplied
+ * `branchState` outside this set is unrecognized and normalizes to the cautious
+ * `'unknown'` (which routes to `stop`) rather than the permissive `'clean'`.
+ */
+const BRANCH_STATES = new Set([
+  'clean',
+  'behind-no-conflict',
+  'content-conflict',
+  'dirty',
+  'computing',
+  'unknown',
+]);
 if (isCliExecution()) {
   runCli();
 }
@@ -369,7 +383,10 @@ function normalizeState(input) {
     reviewExists: input.reviewExists === true,
     reviewPending: input.reviewPending === true,
     branchState:
-      typeof input.branchState === 'string' ? input.branchState : 'clean',
+      typeof input.branchState === 'string' &&
+      BRANCH_STATES.has(input.branchState)
+        ? input.branchState
+        : 'unknown',
   };
 }
 function result(route, reason, state, reasonParts) {
