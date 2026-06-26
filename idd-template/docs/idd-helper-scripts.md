@@ -828,6 +828,18 @@ Interpretation rules:
   --total-item-count --ci-completed-at`; `baseline` takes `--agent-id
   --claim-id --sha`; `advisory` / `advisory-recovery` take `--agent-id
   --head-sha --timestamp`.
+- One-command watermark (`watermark` only): `--from-pr <n>` derives
+  `--head-sha` / `--max-activity-at` / `--total-item-count` /
+  `--ci-completed-at` from a fresh `review-activity-snapshot` of PR `<n>` and
+  posts the marker to PR `<n>`, so only `--agent-id` / `--claim-id` (+ `--apply`)
+  are still supplied (it always targets the PR; an explicit non-pr `--target`
+  is rejected). It maps the snapshot's
+  `latestPassingCiCompletedAt` to `--ci-completed-at` (the latest _passing_ CI
+  completion, matching the E1 `{latest-ci-completed-at}` contract), forwards
+  optional `--trusted-marker-logins` / `--advisory-bot-logins` to the snapshot
+  child so its counts match the manual path, and rejects the four manual
+  snapshot fields as ambiguous. Unlike the manual dry-run it reads from GitHub
+  (it spawns the snapshot), but still posts nothing without `--apply`.
 - **No claim/state gating** (the `emit-marker` philosophy): this is a
   single-marker render+POST primitive, so the calling phase must run its
   claim-revalidation gate before `--apply`, exactly as the manual POST path it

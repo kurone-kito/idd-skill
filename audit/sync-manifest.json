@@ -195,7 +195,7 @@
         ".github/instructions/idd-review-snapshot.instructions.md",
         ".github/instructions/idd-review-triage.instructions.md"
       ],
-      "limitBytes": 108200
+      "limitBytes": 108800
     },
     {
       "id": "bundle-merge",

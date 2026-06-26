@@ -10,6 +10,7 @@ import {
   buildMarkerBody,
   MARKER_TYPES,
   parseArgs,
+  watermarkFieldsFromSnapshot,
 } from '../src/scripts/post-idd-marker.mts';
 import {
   operationalMarkerPrefix,
@@ -400,4 +401,264 @@ process.exit(1);
       branch: 'issue/1047-foo',
     }),
   });
+});
+
+// --- #1134: --from-pr snapshot-derivation mode for the watermark ---
+
+test('watermarkFieldsFromSnapshot maps the four snapshot fields (real values)', () => {
+  assert.deepEqual(
+    watermarkFieldsFromSnapshot({
+      headSha: SHA,
+      totalItemCount: 7,
+      maxActivityUpdatedAt: '2026-06-25T12:00:00Z',
+      latestPassingCiCompletedAt: '2026-06-25T11:59:00Z',
+    }),
+    {
+      'head-sha': SHA,
+      'max-activity-at': '2026-06-25T12:00:00Z',
+      'total-item-count': '7',
+      'ci-completed-at': '2026-06-25T11:59:00Z',
+    },
+  );
+});
+
+test('watermarkFieldsFromSnapshot uses latestPassingCiCompletedAt, NOT latestCiCompletedAt', () => {
+  // A failing/in-progress check can complete AFTER the latest pass, so the two
+  // snapshot CI fields differ. The watermark must record the latest *pass*, or
+  // F2 review-currency trips a false `ci-pass-drift`.
+  const fields = watermarkFieldsFromSnapshot({
+    headSha: SHA,
+    totalItemCount: 1,
+    maxActivityUpdatedAt: 'none',
+    latestPassingCiCompletedAt: '2026-06-25T11:00:00Z',
+    latestCiCompletedAt: '2026-06-25T11:30:00Z',
+  });
+  assert.equal(fields['ci-completed-at'], '2026-06-25T11:00:00Z');
+});
+
+test('watermarkFieldsFromSnapshot forwards the none sentinel for empty timestamps', () => {
+  // The snapshot emits the string `none` (never null) for an empty universe.
+  assert.deepEqual(
+    watermarkFieldsFromSnapshot({
+      headSha: SHA,
+      totalItemCount: 0,
+      maxActivityUpdatedAt: 'none',
+      latestPassingCiCompletedAt: 'none',
+    }),
+    {
+      'head-sha': SHA,
+      'max-activity-at': 'none',
+      'total-item-count': '0',
+      'ci-completed-at': 'none',
+    },
+  );
+});
+
+test('watermarkFieldsFromSnapshot fails closed on a malformed snapshot', () => {
+  assert.throws(
+    () => watermarkFieldsFromSnapshot({ totalItemCount: 0 }),
+    /missing a usable headSha/,
+  );
+  assert.throws(
+    () => watermarkFieldsFromSnapshot({ headSha: SHA }),
+    /missing a usable totalItemCount/,
+  );
+  assert.throws(
+    () => watermarkFieldsFromSnapshot({ headSha: SHA, totalItemCount: -1 }),
+    /missing a usable totalItemCount/,
+  );
+  assert.throws(() => watermarkFieldsFromSnapshot(null), /headSha/);
+});
+
+test('watermarkFieldsFromSnapshot output round-trips through the watermark parser', () => {
+  const body = buildMarkerBody('watermark', {
+    'agent-id': 'claude-02f8159e',
+    'claim-id': 'claim-1134-02f8159e',
+    ...watermarkFieldsFromSnapshot({
+      headSha: SHA,
+      totalItemCount: 3,
+      maxActivityUpdatedAt: '2026-06-25T12:00:00Z',
+      latestPassingCiCompletedAt: '2026-06-25T11:59:00Z',
+    }),
+  });
+  assert.deepEqual(parseReviewWatermarkComment(body, CREATED_AT), {
+    agentId: 'claude-02f8159e',
+    claimId: 'claim-1134-02f8159e',
+    headSha: SHA,
+    maxActivityUpdatedAt: '2026-06-25T12:00:00Z',
+    totalItemCount: 3,
+    // The parser stores the 6th field under `latestCiCompletedAt`; pre-merge
+    // currency reads it back AS the latest-passing CI time.
+    latestCiCompletedAt: '2026-06-25T11:59:00Z',
+    createdAt: CREATED_AT,
+  });
+});
+
+test('parseArgs reads --from-pr and the forwarded snapshot-actor lists', () => {
+  const args = parseArgs([
+    '--type',
+    'watermark',
+    '--from-pr',
+    '1200',
+    '--agent-id',
+    'a',
+    '--claim-id',
+    'c',
+    '--trusted-marker-logins',
+    'kurone-kito',
+    '--apply',
+  ]);
+  assert.equal(args.fromPr, 1200);
+  assert.equal(args.trustedMarkerLogins, 'kurone-kito');
+  // --from-pr / --trusted-marker-logins are structural, not renderer fields.
+  assert.deepEqual(args.fields, { 'agent-id': 'a', 'claim-id': 'c' });
+});
+
+test('parseArgs rejects a non-numeric / suffixed --from-pr', () => {
+  assert.throws(
+    () => parseArgs(['--from-pr', '1200abc']),
+    /invalid --from-pr number/,
+  );
+  assert.throws(
+    () => parseArgs(['--from-pr', '0']),
+    /invalid --from-pr number/,
+  );
+});
+
+test('--from-pr CLI composes review-activity-snapshot and prints the derived watermark (dry-run)', () => {
+  // Stub `gh` on PATH so the real subprocess composition runs offline: the
+  // post-idd-marker.mjs CLI resolves its sibling review-activity-snapshot.mjs,
+  // which makes the read calls below; the stub answers each by argv.
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-cli-'));
+  const ghPath = join(tempRoot, 'gh');
+  writeFileSync(
+    ghPath,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const out = (s) => { fs.writeSync(1, s); process.exit(0); };
+if (args[0] === 'pr' && args[1] === 'view') out('${SHA}\\n');
+if (args[0] === 'pr' && args[1] === 'checks') {
+  out(JSON.stringify([{ name: 'ci', state: 'SUCCESS', completedAt: '2026-06-25T11:00:00Z' }]));
+}
+if (args[0] === 'api' && args[1] === 'graphql') {
+  out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } } } }));
+}
+if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out('[]');
+if (args[0] === 'api' && /\\/comments$/.test(args[1])) {
+  out(JSON.stringify([{ body: 'hi', created_at: '2026-06-25T10:00:00Z', updated_at: '2026-06-25T10:30:00Z', user: { login: 'someone' } }]));
+}
+fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
+`,
+  );
+  chmodSync(ghPath, 0o755);
+
+  const output = execFileSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+      '--type',
+      'watermark',
+      '--from-pr',
+      '1200',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--agent-id',
+      'claude-02f8159e',
+      '--claim-id',
+      'claim-1134-02f8159e',
+    ],
+    {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
+    },
+  );
+
+  assert.deepEqual(JSON.parse(output), {
+    mode: 'dry-run',
+    type: 'watermark',
+    target: 'pr',
+    number: 1200,
+    body: buildMarkerBody('watermark', {
+      'agent-id': 'claude-02f8159e',
+      'claim-id': 'claim-1134-02f8159e',
+      'head-sha': SHA,
+      'max-activity-at': '2026-06-25T10:30:00Z',
+      'total-item-count': '1',
+      'ci-completed-at': '2026-06-25T11:00:00Z',
+    }),
+  });
+});
+
+// Run the CLI expecting a non-zero exit; return its stderr. These guards fire
+// before any `gh` call, so no stub is needed (and `gh` is removed from PATH to
+// prove the rejection is argument-only, never a network side effect).
+function runCliExpectingFailure(argv: string[]): string {
+  try {
+    execFileSync(process.execPath, [...argv], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: '' },
+    });
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    return failure.stderr ?? '';
+  }
+  throw new Error('expected the CLI to exit non-zero');
+}
+
+test('--from-pr rejects manual snapshot fields as ambiguous (before any gh call)', () => {
+  const stderr = runCliExpectingFailure([
+    join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+    '--type',
+    'watermark',
+    '--from-pr',
+    '1200',
+    '--head-sha',
+    SHA,
+    '--agent-id',
+    'a',
+    '--claim-id',
+    'c',
+  ]);
+  assert.match(stderr, /--from-pr derives .* do not also pass: --head-sha/);
+});
+
+test('--from-pr is rejected for a non-watermark type', () => {
+  const stderr = runCliExpectingFailure([
+    join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+    '--type',
+    'claim',
+    '--from-pr',
+    '1200',
+    '--agent-id',
+    'a',
+    '--claim-id',
+    'c',
+  ]);
+  assert.match(stderr, /--from-pr is only valid for --type watermark/);
+});
+
+test('--from-pr fails closed on an explicit non-pr --target', () => {
+  // A watermark always belongs on the PR; an issue-targeted snapshot watermark
+  // is incoherent, so an explicit --target issue is rejected (not defaulted).
+  const stderr = runCliExpectingFailure([
+    join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+    '--type',
+    'watermark',
+    '--target',
+    'issue',
+    '--from-pr',
+    '1200',
+    '--agent-id',
+    'a',
+    '--claim-id',
+    'c',
+  ]);
+  assert.match(stderr, /--from-pr always targets the PR/);
 });
