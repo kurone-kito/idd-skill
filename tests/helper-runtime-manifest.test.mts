@@ -592,8 +592,11 @@ function readInstructionFiles(): { name: string; source: string }[] {
 function collectDocumentedCliAdopterHelpers(): Set<string> {
   const referenced = new Set<string>();
   for (const { source } of readInstructionFiles()) {
+    // Tolerate any inter-token whitespace (tabs, runs of spaces, a wrapped
+    // line) between `node` and the script path so a harmless reformat of an
+    // instruction snippet cannot silently shrink the guard's domain.
     for (const match of source.matchAll(
-      /\bnode (scripts\/[a-z0-9-]+\.mjs)\b/g,
+      /\bnode\s+(scripts\/[a-z0-9-]+\.mjs)\b/g,
     )) {
       referenced.add(match[1]);
     }
@@ -666,11 +669,9 @@ test('the registration guard scopes out instruction-referenced libraries and dev
       allInstructions.includes(library),
       `expected the instruction files to reference the ${library} library`,
     );
-    assert.equal(
-      allInstructions.includes(`node ${library}`),
-      false,
-      `${library} is a library and must not be documented as a runnable node command`,
-    );
+    // The shared scan uses the same whitespace-tolerant `node\s+scripts/...`
+    // regex, so this also proves the library is never written as a runnable
+    // node command (only as a bare import/function-source path).
     assert.equal(
       documentedCliHelpers.has(library),
       false,
