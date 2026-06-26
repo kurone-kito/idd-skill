@@ -3082,6 +3082,130 @@ test('summarizeExternalCheckWaivers: mixed valid, expired, and wrongClaim in sep
   assert.equal(result.wrongClaim.length, 1, 'one wrong-claim waiver');
 });
 
+test('summarizeExternalCheckWaivers: an empty active claim fails closed to wrongClaim', () => {
+  const head = 'a'.repeat(40);
+  const body = makeWaiverComment({ headSha: head, claimId: 'claim-123' });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+  };
+  // No active claim resolves at the gate (`activeClaimId === ''`); the
+  // otherwise-matching waiver must be rejected, not pass unbound.
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: '',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+  });
+  assert.equal(result.valid.length, 0, 'unbound waiver must not be valid');
+  assert.equal(result.wrongClaim.length, 1);
+});
+
+test('summarizeExternalCheckWaivers: an empty head SHA fails closed to wrongHead', () => {
+  const head = 'a'.repeat(40);
+  const body = makeWaiverComment({ headSha: head, claimId: 'claim-123' });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+  };
+  // No head SHA is known at the gate; the waiver cannot be bound to the
+  // current PR HEAD and must be rejected.
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: '',
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T00:00:00Z',
+  });
+  assert.equal(result.valid.length, 0, 'unbound waiver must not be valid');
+  assert.equal(result.wrongHead.length, 1);
+});
+
+test('summarizeExternalCheckWaivers: a window longer than maxValidity is rejected as expired', () => {
+  const head = 'a'.repeat(40);
+  // 48h validity window (created → expires), still in the future vs `now` so
+  // the ordinary already-expired check passes and the new window check fires.
+  const body = makeWaiverComment({
+    headSha: head,
+    claimId: 'claim-123',
+    expiresAt: '2026-05-19T00:00:00Z',
+  });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+  };
+  const opts = {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T01:00:00Z',
+  };
+  // Off by default: the window check does not fire, so the waiver is valid.
+  assert.equal(
+    summarizeExternalCheckWaivers([comment], opts).valid.length,
+    1,
+    'window check stays off when maxValidity is omitted',
+  );
+  // On: the 48h window exceeds PT24H, so the same waiver is now rejected.
+  const gated = summarizeExternalCheckWaivers([comment], {
+    ...opts,
+    maxValidity: 'PT24H',
+  });
+  assert.equal(gated.valid.length, 0, 'over-long window must not be valid');
+  assert.equal(gated.expired.length, 1);
+});
+
+test('summarizeExternalCheckWaivers: a window within maxValidity stays valid', () => {
+  const head = 'a'.repeat(40);
+  // 12h window, under the PT24H policy ceiling.
+  const body = makeWaiverComment({
+    headSha: head,
+    claimId: 'claim-123',
+    expiresAt: '2026-05-17T12:00:00Z',
+  });
+  const comment = {
+    body,
+    author: { login: 'kurone-kito' },
+    createdAt: '2026-05-17T00:00:00Z',
+  };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T01:00:00Z',
+    maxValidity: 'PT24H',
+  });
+  assert.equal(result.valid.length, 1);
+  assert.equal(result.expired.length, 0);
+});
+
+test('summarizeExternalCheckWaivers: an unknown creation time fails closed to expired when maxValidity is set', () => {
+  const head = 'a'.repeat(40);
+  const body = makeWaiverComment({
+    headSha: head,
+    claimId: 'claim-123',
+    expiresAt: '2026-05-19T00:00:00Z',
+  });
+  // No created_at / createdAt on the comment → parsed.createdAt resolves to
+  // 'none', so the window cannot be measured and the gate fails closed.
+  const comment = { body, author: { login: 'kurone-kito' } };
+  const result = summarizeExternalCheckWaivers([comment], {
+    prHeadSha: head,
+    activeClaimId: 'claim-123',
+    trustedMarkerLogins: ['kurone-kito'],
+    now: '2026-05-17T01:00:00Z',
+    maxValidity: 'PT24H',
+  });
+  assert.equal(
+    result.valid.length,
+    0,
+    'unknown creation time must not be valid',
+  );
+  assert.equal(result.expired.length, 1);
+});
+
 test('summarizeExternalCheckWaivers: non-waiver comments are skipped without error', () => {
   const comments = [
     {
