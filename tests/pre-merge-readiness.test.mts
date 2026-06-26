@@ -11,6 +11,7 @@ import {
   indexLatestGatingReviewsByAuthor,
   isAdvisoryNonReviewNotice,
   isNonReviewNoticeDisposition,
+  resolveActiveClaimForWriteGate,
   resolveCodeownersForFiles,
   resolveRulesetDetailPath,
   selectCodeownersText,
@@ -3404,6 +3405,283 @@ test('waiverEvidence with wrong-shape valid item fails schema validation', () =>
     validate(bad, readinessSchema).length > 0,
     'invalid waiverEvidence.valid shape must fail schema',
   );
+});
+
+// ---------------------------------------------------------------------------
+// resolveActiveClaimForWriteGate (#1058): the write-side merge-gate revalidator
+// must recognize an operator-approved forced-handoff successor's claim while
+// failing closed on unauthorized/forged markers exactly as Resume routing does.
+// ---------------------------------------------------------------------------
+
+const WG_OLD_CLAIM =
+  '<!-- claimed-by: cli-old claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat -->';
+
+function wgClaimEvent() {
+  return {
+    body: [WG_OLD_CLAIM, '', '_cli-old: issue claim - IDD marker._'].join('\n'),
+    createdAt: '2026-05-12T09:00:00Z',
+    author: { login: 'cli-old' },
+  };
+}
+
+function wgHandoffEvent(
+  overrides: {
+    contextScope?: string;
+    linkedPr?: string;
+    forcedBy?: string;
+    author?: string;
+    oldClaimId?: string;
+    branch?: string;
+    createdAt?: string;
+    timestamp?: string;
+  } = {},
+) {
+  const payload: Record<string, string> = {
+    'old-agent-id': 'cli-old',
+    'old-claim-id': overrides.oldClaimId ?? 'claim-20260512T090000Z-337-old',
+    'new-agent-id': 'cli-new',
+    'new-claim-id': 'claim-20260512T110000Z-337-new',
+    branch: overrides.branch ?? 'issue/337-feat',
+    'forced-by': overrides.forcedBy ?? 'kurone-kito',
+    reason: 'operator-approved-recovery',
+    timestamp: overrides.timestamp ?? '2026-05-12T11:00:00Z',
+    'context-scope': overrides.contextScope ?? 'issue-only',
+  };
+  if (overrides.linkedPr) {
+    payload['linked-pr'] = overrides.linkedPr;
+  }
+  return {
+    body: [
+      `<!-- forced-handoff: ${JSON.stringify(payload)} -->`,
+      '',
+      `Forced handoff approved by ${overrides.forcedBy ?? 'kurone-kito'}.`,
+    ].join('\n'),
+    createdAt: overrides.createdAt ?? '2026-05-12T11:00:05Z',
+    author: { login: overrides.author ?? overrides.forcedBy ?? 'kurone-kito' },
+  };
+}
+
+const wgTrusted = (login: string): boolean =>
+  ['cli-old', 'cli-new', 'kurone-kito', 'attacker'].includes(login);
+
+test('resolveActiveClaimForWriteGate recognizes an authorized issue-only handoff', () => {
+  const active = resolveActiveClaimForWriteGate(
+    [wgClaimEvent(), wgHandoffEvent()],
+    {
+      isTrustedAuthor: wgTrusted,
+      forcedHandoffEnabled: true,
+      expectedLinkedPrs: null,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+    },
+  );
+  assert.equal(active?.claimId, 'claim-20260512T110000Z-337-new');
+  assert.equal(active?.agentId, 'cli-new');
+});
+
+test('resolveActiveClaimForWriteGate keeps the original on an unauthorized approver', () => {
+  const active = resolveActiveClaimForWriteGate(
+    [wgClaimEvent(), wgHandoffEvent({ forcedBy: 'attacker' })],
+    {
+      isTrustedAuthor: wgTrusted,
+      forcedHandoffEnabled: true,
+      expectedLinkedPrs: null,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+    },
+  );
+  assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
+  assert.equal(active?.agentId, 'cli-old');
+});
+
+test('resolveActiveClaimForWriteGate keeps the original on a self-signed handoff', () => {
+  // Author (cli-old) does not match forced-by (kurone-kito): the strict
+  // requireAuthorMatchesForcedBy default rejects this self-attested handoff.
+  const active = resolveActiveClaimForWriteGate(
+    [wgClaimEvent(), wgHandoffEvent({ author: 'cli-old' })],
+    {
+      isTrustedAuthor: wgTrusted,
+      forcedHandoffEnabled: true,
+      expectedLinkedPrs: null,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+    },
+  );
+  assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
+});
+
+test('resolveActiveClaimForWriteGate keeps the original when mode is disabled', () => {
+  const active = resolveActiveClaimForWriteGate(
+    [wgClaimEvent(), wgHandoffEvent()],
+    {
+      isTrustedAuthor: wgTrusted,
+      forcedHandoffEnabled: false,
+      expectedLinkedPrs: null,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+    },
+  );
+  assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
+});
+
+test('resolveActiveClaimForWriteGate is inert on an old-claim-id mismatch', () => {
+  const active = resolveActiveClaimForWriteGate(
+    [
+      wgClaimEvent(),
+      wgHandoffEvent({ oldClaimId: 'claim-does-not-match-active' }),
+    ],
+    {
+      isTrustedAuthor: wgTrusted,
+      forcedHandoffEnabled: true,
+      expectedLinkedPrs: null,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+    },
+  );
+  assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
+});
+
+test('resolveActiveClaimForWriteGate is inert on a branch mismatch', () => {
+  const active = resolveActiveClaimForWriteGate(
+    [wgClaimEvent(), wgHandoffEvent({ branch: 'issue/999-other' })],
+    {
+      isTrustedAuthor: wgTrusted,
+      forcedHandoffEnabled: true,
+      expectedLinkedPrs: null,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+    },
+  );
+  assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
+});
+
+test('resolveActiveClaimForWriteGate defaults isAuthorizedForcedHandoff to fail closed', () => {
+  // No isAuthorizedForcedHandoff supplied → allowlist ∅ → every handoff is
+  // treated as unauthorized, so the original claim stays active.
+  const active = resolveActiveClaimForWriteGate(
+    [wgClaimEvent(), wgHandoffEvent()],
+    {
+      isTrustedAuthor: wgTrusted,
+      forcedHandoffEnabled: true,
+      expectedLinkedPrs: null,
+    },
+  );
+  assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
+});
+
+test('resolveActiveClaimForWriteGate resolves a plain claim like a bare predicate call', () => {
+  const events = [wgClaimEvent()];
+  const writeGate = resolveActiveClaimForWriteGate(events, {
+    isTrustedAuthor: wgTrusted,
+  });
+  // A non-FH repo (no handoff marker) must resolve identically to the bare
+  // resolveActiveClaim(events, predicate) path.
+  assert.equal(writeGate?.claimId, 'claim-20260512T090000Z-337-old');
+  assert.equal(writeGate?.agentId, 'cli-old');
+});
+
+test('Part B: PR-backed claim accepts an issue-only handoff that predates the PR', () => {
+  // Handoff createdAt 2026-05-12T11:00:05Z is strictly before the PR first
+  // commit at 2026-05-12T12:00:00Z → accepted even though it is issue-only.
+  const active = resolveActiveClaimForWriteGate(
+    [wgClaimEvent(), wgHandoffEvent()],
+    {
+      isTrustedAuthor: wgTrusted,
+      forcedHandoffEnabled: true,
+      expectedLinkedPrs: ['#359'],
+      prFirstCommitAt: '2026-05-12T12:00:00Z',
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+    },
+  );
+  assert.equal(active?.claimId, 'claim-20260512T110000Z-337-new');
+});
+
+test('Part B: PR-backed claim rejects an issue-only handoff at/after the PR first commit', () => {
+  // Handoff createdAt 2026-05-12T11:00:05Z is NOT before the PR first commit
+  // at 2026-05-12T10:00:00Z → rejected; the original claim stays active.
+  const active = resolveActiveClaimForWriteGate(
+    [wgClaimEvent(), wgHandoffEvent()],
+    {
+      isTrustedAuthor: wgTrusted,
+      forcedHandoffEnabled: true,
+      expectedLinkedPrs: ['#359'],
+      prFirstCommitAt: '2026-05-12T10:00:00Z',
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+    },
+  );
+  assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
+});
+
+test('Part B: PR-backed claim rejects an issue-only handoff with no prFirstCommitAt', () => {
+  const active = resolveActiveClaimForWriteGate(
+    [wgClaimEvent(), wgHandoffEvent()],
+    {
+      isTrustedAuthor: wgTrusted,
+      forcedHandoffEnabled: true,
+      expectedLinkedPrs: ['#359'],
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+    },
+  );
+  assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
+});
+
+test('Part B: PR-backed claim accepts an issue-plus-pr handoff with a matching linked-pr', () => {
+  const active = resolveActiveClaimForWriteGate(
+    [
+      wgClaimEvent(),
+      wgHandoffEvent({ contextScope: 'issue-plus-pr', linkedPr: '359' }),
+    ],
+    {
+      isTrustedAuthor: wgTrusted,
+      forcedHandoffEnabled: true,
+      expectedLinkedPrs: ['#359'],
+      // prFirstCommitAt before the handoff: proves issue-plus-pr is honored
+      // by the linked-pr match, not by the predates-PR rule.
+      prFirstCommitAt: '2026-05-12T10:00:00Z',
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+    },
+  );
+  assert.equal(active?.claimId, 'claim-20260512T110000Z-337-new');
+});
+
+test('Part B: PR-backed claim rejects an issue-plus-pr handoff with a mismatching linked-pr', () => {
+  const active = resolveActiveClaimForWriteGate(
+    [
+      wgClaimEvent(),
+      wgHandoffEvent({ contextScope: 'issue-plus-pr', linkedPr: '999' }),
+    ],
+    {
+      isTrustedAuthor: wgTrusted,
+      forcedHandoffEnabled: true,
+      expectedLinkedPrs: ['#359'],
+      prFirstCommitAt: '2026-05-12T12:00:00Z',
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+    },
+  );
+  assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
+});
+
+test('Part B: summarizeClaimValidation accepts an issue-only handoff predating the PR', () => {
+  const summary = summarizeClaimValidation([wgClaimEvent(), wgHandoffEvent()], {
+    trustedMarkerLogins: ['cli-old', 'cli-new', 'kurone-kito'],
+    forcedHandoffEnabled: true,
+    isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+    expectedLinkedPrs: ['#359'],
+    prFirstCommitAt: '2026-05-12T12:00:00Z',
+    expectedClaimId: 'claim-20260512T110000Z-337-new',
+    expectedAgentId: 'cli-new',
+  });
+  assert.equal(summary.claimLost, false);
+  assert.equal(summary.reason, 'match');
+});
+
+test('Part B: summarizeClaimValidation rejects an issue-only handoff after the PR first commit', () => {
+  const summary = summarizeClaimValidation([wgClaimEvent(), wgHandoffEvent()], {
+    trustedMarkerLogins: ['cli-old', 'cli-new', 'kurone-kito'],
+    forcedHandoffEnabled: true,
+    isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'kurone-kito',
+    expectedLinkedPrs: ['#359'],
+    prFirstCommitAt: '2026-05-12T10:00:00Z',
+    expectedClaimId: 'claim-20260512T090000Z-337-old',
+    expectedAgentId: 'cli-old',
+  });
+  assert.equal(summary.claimLost, false);
+  assert.equal(summary.reason, 'match');
+  assert.equal(summary.activeClaim.claimId, 'claim-20260512T090000Z-337-old');
 });
 
 function readJson(relativePath: string) {

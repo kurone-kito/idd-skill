@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
+  buildForcedHandoffEnableGate,
   isStaleAt,
   normalizeLinkedPrReference,
   parseClaimComment,
@@ -40,21 +41,14 @@ if (isCliExecution()) {
  *   `issue-plus-pr` whose `linkedPr` matches one of the expected PRs.
  */
 export function buildForcedHandoffEnabledGate(options) {
-  const { forcedHandoffEnabled, expectedLinkedPrReferences } = options;
-  return (forcedHandoff) => {
-    if (!forcedHandoffEnabled) {
-      return false;
-    }
-    if (expectedLinkedPrReferences.size === 0) {
-      return true;
-    }
-    if (forcedHandoff.contextScope !== 'issue-plus-pr') {
-      return false;
-    }
-    return expectedLinkedPrReferences.has(
-      normalizeLinkedPrReference(forcedHandoff.linkedPr),
-    );
-  };
+  // Delegate to the shared builder so resume routing and the merge-gate /
+  // write-side helpers cannot drift. Resume routing never passes
+  // `prFirstCommitAt`, so this stays byte-identical to the prior behavior:
+  // an issue-only handoff against a PR-backed claim is rejected.
+  return buildForcedHandoffEnableGate({
+    forcedHandoffEnabled: options.forcedHandoffEnabled,
+    expectedLinkedPrReferences: options.expectedLinkedPrReferences,
+  });
 }
 export function evaluateResumeClaimRouting(input, options = {}) {
   const nowIso =

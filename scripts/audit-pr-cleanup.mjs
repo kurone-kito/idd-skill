@@ -61,6 +61,12 @@ const [owner, repo] = parseRepository(repository);
 const prNumber = parsePositiveInteger(args.pr, '--pr');
 const claimContext = {
   expectedLinkedPrs: buildExpectedLinkedPrReferences(owner, repo, prNumber),
+  // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
+  // a legitimate issue-only handoff that predates the PR is honored even
+  // against this PR-backed claim. Resolve it once for both claim asserts.
+  prFirstCommitAt: args.apply
+    ? fetchPrFirstCommitAt(owner, repo, prNumber)
+    : null,
 };
 if (args.claimIssue) {
   args.claimIssue = String(
@@ -514,6 +520,70 @@ function fetchPullRequest(owner, repo, number, options = {}) {
   }
   return pr;
 }
+/**
+ * Resolve the PR's first-commit time as an ISO string for the Part B
+ * forced-handoff rule (#1058): the minimum committed date (falling back to
+ * authored date) across the PR's commits. Returns `null` when no commit
+ * carries a parseable date — which makes the Part B gate fail closed
+ * (issue-only handoffs against a PR-backed claim stay rejected). Fails safe to
+ * `null` on any lookup error rather than aborting the claim assertion.
+ */
+function fetchPrFirstCommitAt(owner, repo, number) {
+  const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
+    repository(owner:$owner,name:$repo){
+      pullRequest(number:$number){
+        commits(first:100,after:$after){
+          nodes{commit{committedDate authoredDate}}
+          pageInfo{hasNextPage endCursor}
+        }
+      }
+    }
+  }`;
+  let earliestMs = null;
+  let earliestIso = null;
+  let after = null;
+  try {
+    for (;;) {
+      const result = ghGraphql(
+        query,
+        { owner, repo, number, after },
+        // Fail safe: a lookup error throws (caught below) instead of aborting
+        // the whole claim assertion via the default process-exit path.
+        { throwOnError: true },
+      );
+      const connection = result?.data?.repository?.pullRequest?.commits;
+      if (!connection) {
+        break;
+      }
+      for (const node of connection.nodes ?? []) {
+        const date =
+          String(node?.commit?.committedDate ?? '').trim() ||
+          String(node?.commit?.authoredDate ?? '').trim();
+        if (!date) {
+          continue;
+        }
+        const ms = Date.parse(date);
+        if (!Number.isFinite(ms)) {
+          continue;
+        }
+        if (earliestMs === null || ms < earliestMs) {
+          earliestMs = ms;
+          earliestIso = date;
+        }
+      }
+      if (!connection.pageInfo?.hasNextPage) {
+        break;
+      }
+      after = connection.pageInfo.endCursor ?? null;
+      if (!after) {
+        break;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return earliestIso;
+}
 function fetchIssueComments(owner, repo, number, options = {}) {
   const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
     repository(owner:$owner,name:$repo){
@@ -773,6 +843,7 @@ function readActiveClaim(owner, repo, issueNumber, options = {}) {
     trustedMarkerLogins: resolveTrustedMarkerLogins(owner, repo, comments),
     forcedHandoffEnabled: readForcedHandoffMode() === 'human-gated',
     expectedLinkedPrs: options.expectedLinkedPrs ?? [],
+    prFirstCommitAt: options.prFirstCommitAt ?? null,
     isAuthorizedForcedHandoff: (forcedBy) =>
       isAuthorizedForcedHandoffActor(
         owner,

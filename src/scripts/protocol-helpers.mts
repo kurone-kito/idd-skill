@@ -4342,12 +4342,120 @@ export function resolveRulesetDetailPath(
   return `repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/rulesets/${rulesetId}`;
 }
 
+/**
+ * Build the `isForcedHandoffEnabled` gate shared by every claim-revalidation
+ * path (resume routing, the merge-gate, and the write-side helpers).
+ *
+ * Semantics:
+ *
+ * - forced-handoff mode disabled → never honor;
+ * - no open linked PR backs the claim (`expectedLinkedPrReferences` empty) →
+ *   honor an `issue-only` (or any) handoff as before;
+ * - an open linked PR backs the claim:
+ *   - `issue-plus-pr` handoff → require `linkedPr` to match one of the
+ *     expected PRs (unchanged behavior);
+ *   - `issue-only` handoff → accept it IFF a `prFirstCommitAt` is supplied
+ *     AND the handoff's `createdAt` is a valid ISO timestamp strictly before
+ *     it (the handoff predates the PR, so the successor created the PR after
+ *     taking over the issue). Any other `issue-only` handoff is rejected.
+ *
+ * The `prFirstCommitAt` parameter is the Part B extension (#1058). Callers
+ * that do not pass it keep the original behavior byte-identical: an
+ * `issue-only` handoff against a PR-backed claim is rejected.
+ */
+export function buildForcedHandoffEnableGate(options: {
+  forcedHandoffEnabled: boolean;
+  expectedLinkedPrReferences: Set<string>;
+  prFirstCommitAt?: string | null;
+}): (forcedHandoff: ParsedForcedHandoffMarker) => boolean {
+  const { forcedHandoffEnabled, expectedLinkedPrReferences } = options;
+  const prFirstCommitAt =
+    typeof options.prFirstCommitAt === 'string' ? options.prFirstCommitAt : '';
+  return (forcedHandoff: ParsedForcedHandoffMarker) => {
+    if (!forcedHandoffEnabled) {
+      return false;
+    }
+    if (expectedLinkedPrReferences.size === 0) {
+      return true;
+    }
+    if (forcedHandoff.contextScope === 'issue-plus-pr') {
+      return expectedLinkedPrReferences.has(
+        normalizeLinkedPrReference(forcedHandoff.linkedPr),
+      );
+    }
+    // issue-only handoff against a PR-backed claim: accept only when it
+    // predates the PR's first commit (a robust ISO compare; either side
+    // unparseable → fail closed = reject).
+    return isStrictlyBeforeIso(forcedHandoff.createdAt, prFirstCommitAt);
+  };
+}
+
+/**
+ * Resolve the active claim for a write-side merge-gate revalidation, honoring
+ * an operator-approved forced handoff while failing closed on
+ * unauthorized/forged markers exactly as the Resume routing path does.
+ *
+ * This is the centralized, pure (no I/O) helper used by the write-side
+ * helpers (disposition-non-review-notices, resolve-review-thread) so they no
+ * longer ignore forced handoffs. It builds the same forced-handoff enable
+ * gate as `summarizeClaimValidation` / `buildForcedHandoffEnabledGate`
+ * (extended with the Part B time rule) and delegates the rest of the
+ * fail-closed enforcement to `applyClaimEvent` rule 7.
+ *
+ * - `forcedHandoffEnabled` defaults to `false` (forced handoffs ignored).
+ * - `expectedLinkedPrs` of `null`/empty marks an issue-scoped revalidation:
+ *   an `issue-only` handoff is accepted (issue takeover). A non-empty set
+ *   marks a PR-backed claim and applies the `issue-plus-pr` / `prFirstCommitAt`
+ *   rules.
+ * - `isAuthorizedForcedHandoff` defaults to an allowlist of ∅ ⇒ always false
+ *   (every handoff is treated as unauthorized) when not supplied, so callers
+ *   that forget to wire it fail closed.
+ * - `requireAuthorMatchesForcedBy` defaults to `true` (the strict
+ *   self-signed-hijack block used by Resume routing).
+ */
+export function resolveActiveClaimForWriteGate(
+  events: CommentLike[],
+  options: {
+    isTrustedAuthor: (login: string) => boolean;
+    forcedHandoffEnabled?: boolean;
+    expectedLinkedPrs?: unknown[] | null;
+    prFirstCommitAt?: string | null;
+    isAuthorizedForcedHandoff?: (
+      forcedBy: string,
+      forcedHandoff: ParsedForcedHandoffMarker,
+      event: CommentLike,
+    ) => boolean;
+    requireAuthorMatchesForcedBy?: boolean;
+  },
+): ParsedClaimMarker | null {
+  const expectedLinkedPrReferences = new Set(
+    (options.expectedLinkedPrs ?? [])
+      .map((value) => normalizeLinkedPrReference(value))
+      .filter(Boolean),
+  );
+  const isForcedHandoffEnabled = buildForcedHandoffEnableGate({
+    forcedHandoffEnabled: options.forcedHandoffEnabled === true,
+    expectedLinkedPrReferences,
+    prFirstCommitAt: options.prFirstCommitAt ?? null,
+  });
+  return resolveActiveClaim(events, {
+    isTrustedAuthor: options.isTrustedAuthor,
+    isForcedHandoffEnabled,
+    isAuthorizedForcedHandoff:
+      typeof options.isAuthorizedForcedHandoff === 'function'
+        ? options.isAuthorizedForcedHandoff
+        : () => false,
+    requireAuthorMatchesForcedBy: options.requireAuthorMatchesForcedBy ?? true,
+  });
+}
+
 export function summarizeClaimValidation(
   claimEvents: CommentLike[] = [],
   options: {
     trustedMarkerLogins?: unknown[] | null;
     authorizedForcedHandoffLogins?: unknown[] | null;
     expectedLinkedPrs?: unknown[] | null;
+    prFirstCommitAt?: string | null;
     expectedClaimId?: unknown;
     expectedAgentId?: unknown;
     isTrustedAuthor?: (login: string) => boolean;
@@ -4391,20 +4499,11 @@ export function summarizeClaimValidation(
     isForcedHandoffEnabled:
       typeof options.isForcedHandoffEnabled === 'function'
         ? options.isForcedHandoffEnabled
-        : (forcedHandoff: ParsedForcedHandoffMarker) => {
-            if (options.forcedHandoffEnabled !== true) {
-              return false;
-            }
-            if (expectedLinkedPrReferences.size === 0) {
-              return true;
-            }
-            if (forcedHandoff.contextScope !== 'issue-plus-pr') {
-              return false;
-            }
-            return expectedLinkedPrReferences.has(
-              normalizeLinkedPrReference(forcedHandoff.linkedPr),
-            );
-          },
+        : buildForcedHandoffEnableGate({
+            forcedHandoffEnabled: options.forcedHandoffEnabled === true,
+            expectedLinkedPrReferences,
+            prFirstCommitAt: options.prFirstCommitAt ?? null,
+          }),
     isAuthorizedForcedHandoff:
       typeof options.isAuthorizedForcedHandoff === 'function'
         ? options.isAuthorizedForcedHandoff
@@ -4496,6 +4595,7 @@ export function buildPreMergeReadinessSummary(
     configuredTrustedActors?: unknown[] | null;
     forcedHandoffEnabled?: boolean;
     expectedLinkedPrs?: unknown[] | null;
+    prFirstCommitAt?: string | null;
     authorizedForcedHandoffLogins?: unknown[] | null;
     isAuthorizedForcedHandoff?: (
       forcedBy: string,
@@ -4627,6 +4727,7 @@ export function buildPreMergeReadinessSummary(
     trustedMarkerLogins,
     forcedHandoffEnabled: options.forcedHandoffEnabled === true,
     expectedLinkedPrs: options.expectedLinkedPrs ?? [],
+    prFirstCommitAt: options.prFirstCommitAt ?? null,
     authorizedForcedHandoffLogins: options.authorizedForcedHandoffLogins,
     isAuthorizedForcedHandoff: options.isAuthorizedForcedHandoff,
     isForcedHandoffEnabled: options.isForcedHandoffEnabled,
@@ -4810,6 +4911,25 @@ function createdAtToSecond(
     return null;
   }
   return Math.floor(time / 1000);
+}
+
+/**
+ * Robust ISO timestamp comparison: returns true only when both `left` and
+ * `right` parse to valid instants and `left` is strictly before `right`. If
+ * either side is missing or unparseable, returns false (fail closed). Used by
+ * the forced-handoff enable gate to decide whether an `issue-only` handoff
+ * predates a PR's first commit.
+ */
+function isStrictlyBeforeIso(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  const leftTime = createdAtToTime(left);
+  const rightTime = createdAtToTime(right);
+  if (leftTime === null || rightTime === null) {
+    return false;
+  }
+  return leftTime < rightTime;
 }
 
 export function resolveActiveClaim(
