@@ -720,7 +720,9 @@ function createProductionDeps(
         issueNumber,
         renderUnclaimedByMarker(fields),
       ),
-    now: () => new Date().toISOString(),
+    // Honor a caller-supplied --now (deterministic staleness + release
+    // timestamps for tests / replays); fall back to the wall clock.
+    now: () => args.now || new Date().toISOString(),
   };
 }
 
@@ -815,11 +817,12 @@ function resolveOpenLinkedPrIssues(
   repo: string,
   issueNumbers: number[],
 ): number[] {
-  const query = `query($owner:String!,$repo:String!,$number:Int!){
+  const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
   repository(owner:$owner,name:$repo){
     issue(number:$number){
-      closedByPullRequestsReferences(first:20,includeClosedPrs:false){
-        nodes { number state }
+      closedByPullRequestsReferences(first:50,after:$after,includeClosedPrs:false){
+        nodes { state }
+        pageInfo { hasNextPage endCursor }
       }
     }
   }
@@ -827,33 +830,59 @@ function resolveOpenLinkedPrIssues(
   const blocked: number[] = [];
   for (const issueNumber of issueNumbers) {
     try {
-      const raw = ghText([
-        'api',
-        'graphql',
-        '-f',
-        `query=${query}`,
-        '-f',
-        `owner=${owner}`,
-        '-f',
-        `repo=${repo}`,
-        '-F',
-        `number=${issueNumber}`,
-      ]);
-      const parsed = JSON.parse(raw) as {
-        data?: {
-          repository?: {
-            issue?: {
-              closedByPullRequestsReferences?: {
-                nodes?: { state?: unknown }[] | null;
+      // Page through every reference until an OPEN PR is found (short-circuit:
+      // one is enough to block) or the connection is exhausted; `first:20`
+      // could otherwise truncate the list and miss an OPEN blocker on a later
+      // page, which for a fail-closed gate would wrongly green-light a close.
+      let after: string | null = null;
+      let isBlocked = false;
+      for (;;) {
+        const apiArgs = [
+          'api',
+          'graphql',
+          '-f',
+          `query=${query}`,
+          '-f',
+          `owner=${owner}`,
+          '-f',
+          `repo=${repo}`,
+          '-F',
+          `number=${issueNumber}`,
+        ];
+        if (after) {
+          apiArgs.push('-f', `after=${after}`);
+        }
+        const parsed = JSON.parse(ghText(apiArgs)) as {
+          data?: {
+            repository?: {
+              issue?: {
+                closedByPullRequestsReferences?: {
+                  nodes?: { state?: unknown }[] | null;
+                  pageInfo?: {
+                    hasNextPage?: boolean;
+                    endCursor?: string | null;
+                  } | null;
+                } | null;
               } | null;
             } | null;
-          } | null;
+          };
         };
-      };
-      const nodes =
-        parsed.data?.repository?.issue?.closedByPullRequestsReferences?.nodes ??
-        [];
-      if (nodes.some((node) => String(node?.state ?? '') === 'OPEN')) {
+        const connection =
+          parsed.data?.repository?.issue?.closedByPullRequestsReferences;
+        const nodes = connection?.nodes ?? [];
+        if (nodes.some((node) => String(node?.state ?? '') === 'OPEN')) {
+          isBlocked = true;
+          break;
+        }
+        if (!connection?.pageInfo?.hasNextPage) {
+          break;
+        }
+        after = connection.pageInfo.endCursor ?? null;
+        if (!after) {
+          break;
+        }
+      }
+      if (isBlocked) {
         blocked.push(issueNumber);
       }
     } catch {
@@ -1020,9 +1049,11 @@ function printHelp(): void {
   roadmap graph immediately before mutating, then post the evidence comment,
   close the roadmap as completed, and release the claim. Fails closed (exit 1,
   no mutation) on any lost / stale / non-owned claim or any blocker. The claim
-  is re-validated against --claim-issue (default: the roadmap) and must match
-  --claim-id (required under --apply) and, when given, --agent-id. --owner and
-  --repo must be passed together or not at all.
+  is re-validated against the roadmap issue; --claim-issue, when provided, must
+  equal --roadmap. The active claim must be a roadmap-audit-scoped claim
+  (branch roadmap-audit/<roadmap>-<slug>) and match --claim-id (required under
+  --apply) and, when given, --agent-id. --owner and --repo must be passed
+  together or not at all.
 `);
 }
 
