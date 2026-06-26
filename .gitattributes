@@ -36,6 +36,7 @@ scripts/forced-handoff-marker.mjs linguist-generated=true
 scripts/helper-runtime-manifest.mjs linguist-generated=true
 scripts/idd-doctor.mjs linguist-generated=true
 scripts/idd-merge-execute.mjs linguist-generated=true
+scripts/idd-roadmap-audit-execute.mjs linguist-generated=true
 scripts/live-status-digest.mjs linguist-generated=true
 scripts/merged-pr-feedback-sweep.mjs linguist-generated=true
 scripts/minimize-superseded-markers.mjs linguist-generated=true

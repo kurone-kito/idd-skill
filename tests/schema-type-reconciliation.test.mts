@@ -8,6 +8,7 @@ import type { BranchConflictResult } from '../src/scripts/branch-conflict-state.
 import type { RoadmapGraphUnionReport } from '../src/scripts/discover-roadmap-graph.mts';
 import type { DispositionReport } from '../src/scripts/disposition-non-review-notices.mts';
 import type { IddMergeExecuteVerdict } from '../src/scripts/idd-merge-execute.mts';
+import type { IddRoadmapAuditExecuteVerdict } from '../src/scripts/idd-roadmap-audit-execute.mts';
 import type { PostIddMarkerResult } from '../src/scripts/post-idd-marker.mts';
 import type { PreMergeReadinessReport } from '../src/scripts/pre-merge-readiness.mts';
 import type {
@@ -312,6 +313,19 @@ export const iddMergeExecuteKeys = [
   'mergeResult',
 ] as const satisfies readonly (keyof IddMergeExecuteVerdict)[];
 
+export const iddRoadmapAuditExecuteKeys = [
+  'protocolVersion',
+  'decisionAuthority',
+  'mode',
+  'roadmapNumber',
+  'ready',
+  'blockers',
+  'evidenceBody',
+  'closed',
+  'claimReleased',
+  'result',
+] as const satisfies readonly (keyof IddRoadmapAuditExecuteVerdict)[];
+
 export const forcedHandoffMarkerKeys = [
   'oldAgentId',
   'oldClaimId',
@@ -465,6 +479,10 @@ const exhaustivenessWitnesses: {
     IddMergeExecuteVerdict,
     (typeof iddMergeExecuteKeys)[number]
   >;
+  iddRoadmapAuditExecute: CoversAllKeysOf<
+    IddRoadmapAuditExecuteVerdict,
+    (typeof iddRoadmapAuditExecuteKeys)[number]
+  >;
   liveStatusDigest: CoversAllKeysOf<
     LiveStatusDigestFields,
     (typeof liveStatusDigestKeys)[number]
@@ -488,6 +506,7 @@ const exhaustivenessWitnesses: {
   discoverRoadmapUnion: true,
   forcedHandoffMarker: true,
   iddMergeExecute: true,
+  iddRoadmapAuditExecute: true,
   liveStatusDigest: true,
   phaseGraph: true,
   policyConfig: true,
@@ -648,6 +667,26 @@ const iddMergeExecuteFixture = {
   merged: false,
   mergeResult: '',
 } satisfies IddMergeExecuteVerdict;
+
+const iddRoadmapAuditExecuteFixture = {
+  protocolVersion: '1',
+  decisionAuthority: 'instructions',
+  mode: 'dry-run',
+  roadmapNumber: 995,
+  ready: false,
+  blockers: [
+    {
+      kind: 'open-child',
+      target: 1071,
+      provenance: [995, 1071],
+      detail: 'execution leaf #1071 is OPEN',
+    },
+  ],
+  evidenceBody: '',
+  closed: false,
+  claimReleased: false,
+  result: '',
+} satisfies IddRoadmapAuditExecuteVerdict;
 
 const liveStatusDigestFixture = {
   phase: 'E1',
@@ -1063,6 +1102,13 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
     owningModule: 'src/scripts/idd-merge-execute.mts',
     keys: iddMergeExecuteKeys,
     fixture: iddMergeExecuteFixture,
+  },
+  {
+    schemaFile: 'idd-roadmap-audit-execute.schema.json',
+    exportedType: 'IddRoadmapAuditExecuteVerdict',
+    owningModule: 'src/scripts/idd-roadmap-audit-execute.mts',
+    keys: iddRoadmapAuditExecuteKeys,
+    fixture: iddRoadmapAuditExecuteFixture,
   },
   {
     schemaFile: 'live-status-digest.schema.json',
