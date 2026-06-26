@@ -95,6 +95,37 @@ test('pre-merge readiness optionally emits disposition evidence', () => {
   assert.deepEqual(validate(summary, readinessSchema), []);
 });
 
+test('pre-merge readiness always carries waiverEvidence and the schema requires it', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(fixture.input, fixture.options);
+
+  // The summary literal always attaches waiverEvidence (unlike the gated
+  // dispositionEvidence), so a normal output carries it and validates.
+  assert.ok(
+    summary.waiverEvidence && typeof summary.waiverEvidence === 'object',
+    'waiverEvidence is always present',
+  );
+  assert.equal('dispositionEvidence' in summary, false);
+  assert.deepEqual(validate(summary, readinessSchema), []);
+
+  // Dropping the always-present envelope must fail validation now that the
+  // schema lists waiverEvidence in its root `required`.
+  const withoutWaiver = JSON.parse(JSON.stringify(summary));
+  delete withoutWaiver.waiverEvidence;
+  assert.ok(validate(withoutWaiver, readinessSchema).length > 0);
+
+  // dispositionEvidence stays optional: an output that never emits it still
+  // validates (the clean summary above), and dropping it from an output that
+  // did emit it also validates.
+  const withDisposition = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+  });
+  const withoutDisposition = JSON.parse(JSON.stringify(withDisposition));
+  delete withoutDisposition.dispositionEvidence;
+  assert.deepEqual(validate(withoutDisposition, readinessSchema), []);
+});
+
 test('pre-merge readiness exposes effective advisory policy', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
   const summary = buildPreMergeReadinessSummary(fixture.input, {

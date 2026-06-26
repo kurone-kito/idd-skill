@@ -15,7 +15,8 @@
     "reviewerStates",
     "advisoryWait",
     "ci",
-    "claim"
+    "claim",
+    "waiverEvidence"
   ],
   "additionalProperties": false,
   "properties": {
