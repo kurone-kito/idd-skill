@@ -441,7 +441,7 @@ function isMainModule(metaUrl: string): boolean {
   }
 }
 
-function parseArgs(argv: string[]): {
+export function parseArgs(argv: string[]): {
   help: boolean;
   prNumber: string | null;
   owner: string | null;
@@ -454,15 +454,40 @@ function parseArgs(argv: string[]): {
     repo: string | null;
   } = { help: false, prNumber: null, owner: null, repo: null };
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--help' || argv[i] === '-h') {
+    const token = argv[i];
+    const value = argv[i + 1];
+    // Reject a missing value (undefined) or a flag-shaped value so that
+    // `--pr --json` fails fast instead of consuming `--json` as the value.
+    const requireValue = (): string => {
+      if (value === undefined || String(value).startsWith('--')) {
+        throw new Error(`missing value for argument: ${token}`);
+      }
+      return value;
+    };
+    if (token === '--help' || token === '-h') {
       args.help = true;
-    } else if (argv[i] === '--pr' && argv[i + 1]) {
-      args.prNumber = String(argv[++i]);
-    } else if (argv[i] === '--owner' && argv[i + 1]) {
-      args.owner = String(argv[++i]);
-    } else if (argv[i] === '--repo' && argv[i + 1]) {
-      args.repo = String(argv[++i]);
+      continue;
     }
+    if (token === '--pr') {
+      const raw = requireValue();
+      if (!/^[1-9]\d*$/.test(raw)) {
+        throw new Error(`invalid --pr value: ${raw}`);
+      }
+      args.prNumber = raw;
+      i++;
+      continue;
+    }
+    if (token === '--owner') {
+      args.owner = requireValue();
+      i++;
+      continue;
+    }
+    if (token === '--repo') {
+      args.repo = requireValue();
+      i++;
+      continue;
+    }
+    throw new Error(`unknown argument: ${token}`);
   }
   return args;
 }

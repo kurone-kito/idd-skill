@@ -4,6 +4,7 @@ import { test } from 'node:test';
 
 import {
   classifyBranchConflictState,
+  parseArgs,
   parseConflictFiles,
 } from '../src/scripts/branch-conflict-state.mts';
 
@@ -232,4 +233,31 @@ test('classifyBranchConflictState: published is false when head SHA is absent', 
     _testPrData: fixture.prData,
   });
   assert.equal(result.published, false);
+});
+
+test('parseArgs: valid --pr parses to a positive-integer string', () => {
+  const args = parseArgs(['--pr', '1082', '--owner', 'o', '--repo', 'r']);
+  assert.equal(args.prNumber, '1082');
+  assert.equal(args.owner, 'o');
+  assert.equal(args.repo, 'r');
+  assert.equal(args.help, false);
+});
+
+test('parseArgs: a flag-shaped --pr value throws instead of consuming the flag', () => {
+  // `--pr --json` must fail fast, not assign `--json` as the PR number.
+  assert.throws(() => parseArgs(['--pr', '--json']), /missing value/);
+  assert.throws(() => parseArgs(['--owner', '--repo']), /missing value/);
+  // A trailing flag with no value at all also fails closed.
+  assert.throws(() => parseArgs(['--pr']), /missing value/);
+});
+
+test('parseArgs: an unknown argument throws', () => {
+  assert.throws(() => parseArgs(['--bogus']), /unknown argument/);
+  assert.throws(() => parseArgs(['1082']), /unknown argument/);
+});
+
+test('parseArgs: a non-positive / non-integer --pr throws a clear message', () => {
+  assert.throws(() => parseArgs(['--pr', '0']), /invalid --pr value/);
+  assert.throws(() => parseArgs(['--pr', '-5']), /invalid --pr value/);
+  assert.throws(() => parseArgs(['--pr', '12abc']), /invalid --pr value/);
 });

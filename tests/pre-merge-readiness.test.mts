@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { fetchBranchRulesets } from '../src/scripts/pre-merge-readiness.mts';
+import {
+  fetchBranchRulesets,
+  parseArgs,
+} from '../src/scripts/pre-merge-readiness.mts';
 import {
   buildActivitySnapshotSummary,
   buildAdvisoryWaitSummary,
@@ -3766,6 +3769,37 @@ test('fetchBranchRulesets propagates a non-404 fetch error instead of coercing t
         throw boom;
       }),
     (error: unknown) => error === boom,
+  );
+});
+
+test('parseArgs: valid --pr / --claim-issue parse to positive integers', () => {
+  const args = parseArgs(['--pr', '1082', '--claim-issue', '1076']);
+  assert.equal(args.prNumber, 1082);
+  assert.equal(args.claimIssueNumber, 1076);
+});
+
+test('parseArgs: a flag-shaped value throws instead of consuming the flag', () => {
+  // `--pr --json` must fail fast, not parse `--json` into the PR number.
+  assert.throws(() => parseArgs(['--pr', '--json']), /missing value/);
+  assert.throws(
+    () => parseArgs(['--pr', '1082', '--claim-issue', '--owner']),
+    /missing value/,
+  );
+  assert.throws(() => parseArgs(['--pr']), /missing value/);
+});
+
+test('parseArgs: an unknown argument throws', () => {
+  assert.throws(() => parseArgs(['--bogus']), /unknown argument/);
+  assert.throws(() => parseArgs(['1082']), /unknown argument/);
+});
+
+test('parseArgs: a non-positive / non-integer number throws a clear message', () => {
+  assert.throws(() => parseArgs(['--pr', '0']), /invalid --pr value/);
+  assert.throws(() => parseArgs(['--pr', '-5']), /invalid --pr value/);
+  assert.throws(() => parseArgs(['--pr', '12abc']), /invalid --pr value/);
+  assert.throws(
+    () => parseArgs(['--claim-issue', '0']),
+    /invalid --claim-issue value/,
   );
 });
 
