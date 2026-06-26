@@ -277,8 +277,8 @@ Before any mutating action in F3, apply the
 
      After apply, record the outcome. **First apply the dedupe guard:
      skip posting when the PR already carries a `<!-- idd-cleanup-evidence:`
-     comment that records a successful outcome** (`status` `applied` or
-     `clean`) — for example one the `post-merge-cleanup` workflow posted
+     comment that records a successful outcome** (`status` is `applied`
+     or `clean`) — for example one the `post-merge-cleanup` workflow posted
      within seconds of the merge — so the agent never stacks a second
      success record. The guard does **not** fire on an existing `failed`
      / `incomplete` / `permission-blocked` record: post your evidence so
@@ -314,8 +314,9 @@ Before any mutating action in F3, apply the
    applied count, skipped count with reasons) — unless the PR already
    carries a `<!-- idd-cleanup-evidence:` comment recording a successful
    outcome (`applied` / `clean`), in which case skip the duplicate post
-   (still post to correct an existing `failed` / `incomplete` record).
-   If the viewer cannot minimize any detected candidates, post a
+   (still post to correct an existing `failed` / `incomplete` /
+   `permission-blocked` record). If the viewer cannot minimize any
+   detected candidates, post a
    cleanup-permission-blocked comment instead of exiting silently.
 
    See `docs/idd-comment-minimization.md` for the evidence comment
