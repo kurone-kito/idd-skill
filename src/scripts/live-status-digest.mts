@@ -21,6 +21,7 @@ import {
   normalizeTrustedMarkerLogins,
   parsePaginatedGhNdjson,
   planLiveStatusDigestUpsert,
+  resolveTrustedMarkerActors,
   summarizeClaimValidation,
 } from './protocol-helpers.mts';
 
@@ -480,12 +481,20 @@ function configuredTrustedMarkerAuthors(): Set<string> {
     return cachedConfiguredTrustedMarkerAuthors;
   }
 
-  cachedConfiguredTrustedMarkerAuthors = new Set(
-    (process.env.IDD_TRUSTED_MARKER_ACTORS ?? '')
-      .split(',')
-      .map((login) => login.trim().toLowerCase())
-      .filter(Boolean),
-  );
+  // Read config.json the same way trustCollaboratorMarkers() does, then defer
+  // to the shared flag-less env -> config ladder (env still wins over config),
+  // so trusted-marker authors are no longer env-only in this script.
+  let config: { trustedMarkerActors?: unknown } | null = null;
+  try {
+    config = JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
+  } catch {
+    // No readable config; fall back to env-only resolution.
+  }
+  const { actors } = resolveTrustedMarkerActors({
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+    config,
+  });
+  cachedConfiguredTrustedMarkerAuthors = new Set(actors);
   return cachedConfiguredTrustedMarkerAuthors;
 }
 

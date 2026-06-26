@@ -7,6 +7,7 @@ import {
   LIVE_STATUS_DIGEST_MARKER,
   planLiveStatusDigestUpsert,
   renderLiveStatusDigest,
+  resolveTrustedMarkerActors,
 } from '../src/scripts/protocol-helpers.mts';
 
 const fields = {
@@ -210,4 +211,42 @@ test('applyDigestUpsert skips the claim check and mutation on a duplicate plan',
   });
   assert.equal(result.outcome, 'duplicate');
   assert.deepEqual(calls, []);
+});
+
+// configuredTrustedMarkerAuthors() in live-status-digest.mts now builds its
+// cached set from new Set(resolveTrustedMarkerActors({ envValue, config }).actors),
+// reading .github/idd/config.json the same way trustCollaboratorMarkers() does.
+// live-status-digest.mts itself runs its CLI on import (top-level statements),
+// so these tests lock the env -> config ladder it now relies on via the shared
+// resolver rather than importing the un-importable CLI module.
+function configuredTrustedMarkerSet(
+  envValue: string,
+  config: { trustedMarkerActors?: unknown } | null,
+): Set<string> {
+  return new Set(resolveTrustedMarkerActors({ envValue, config }).actors);
+}
+
+test('configured trusted-marker authors fall back to config.json trustedMarkerActors', () => {
+  // No env var, but config supplies trustedMarkerActors -> use config
+  // (the env -> config fallback this script previously lacked).
+  const authors = configuredTrustedMarkerSet('', {
+    trustedMarkerActors: ['Config-Bot', 'another-bot'],
+  });
+  assert.deepEqual([...authors].sort(), ['another-bot', 'config-bot']);
+});
+
+test('configured trusted-marker authors keep env winning over config', () => {
+  // Env still wins when both are present (unchanged precedence).
+  const authors = configuredTrustedMarkerSet('env-bot', {
+    trustedMarkerActors: ['config-bot'],
+  });
+  assert.deepEqual([...authors], ['env-bot']);
+});
+
+test('configured trusted-marker authors are empty with neither env nor config', () => {
+  assert.deepEqual([...configuredTrustedMarkerSet('', null)], []);
+  assert.deepEqual(
+    [...configuredTrustedMarkerSet('', { trustedMarkerActors: [] })],
+    [],
+  );
 });
