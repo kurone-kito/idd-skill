@@ -3976,6 +3976,24 @@ test('resolveToleratedGhFailure yields empty for an allowed HTTP status, not the
   );
 });
 
+test('resolveToleratedGhFailure prefers an allowed HTTP status over a tolerated exit code', () => {
+  // Both options set on the same failure: a tolerated 404 whose JSON error body
+  // also lands on stdout under a tolerated exit code must still yield empty — the
+  // allowHttpStatuses branch wins so the error body never leaks through.
+  const error = ghHttpErrorWithStdout(
+    404,
+    'Not Found',
+    '{"message":"Not Found","status":"404"}',
+  );
+  assert.equal(
+    resolveToleratedGhFailure(error, {
+      allowStatuses: [1],
+      allowHttpStatuses: [404],
+    }),
+    '',
+  );
+});
+
 test('resolveToleratedGhFailure re-throws (returns undefined) for a non-allowed HTTP status', () => {
   const error = ghHttpErrorWithStdout(
     403,

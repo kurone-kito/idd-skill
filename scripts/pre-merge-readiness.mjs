@@ -756,28 +756,35 @@ function resolvePrFirstCommitAt(commits) {
  * Decide how a thrown `gh` failure is tolerated, returning the string result to
  * use or `undefined` when the caller must re-throw.
  *
- * - `allowStatuses` matches the process exit code and returns stdout **only**
- *   when the body is genuinely the wanted JSON (`gh` commands that exit non-zero
- *   yet still print the data, e.g. the checks rollup).
  * - `allowHttpStatuses` matches the HTTP status parsed from stderr and yields an
  *   **empty** string. `gh api` writes the JSON error body to stdout on a
  *   non-2xx response (a 404 prints `{"message":"Not Found",…}`), so returning
  *   that body would make `ghApiJson` parse the error object instead of `{}` /
  *   `[]`. An allowed status never carries useful data, so the empty result lets
  *   `ghApiJson` resolve it to an empty object / array.
+ * - `allowStatuses` matches the process exit code and returns stdout **only**
+ *   when the body is genuinely the wanted JSON (`gh` commands that exit non-zero
+ *   yet still print the data, e.g. the checks rollup).
+ *
+ * The HTTP-status branch is checked **first**: an explicitly tolerated HTTP
+ * status must always yield empty, even when the exit code is also tolerated and
+ * the error body on stdout happens to be JSON. Checking `allowStatuses` first
+ * would return that error body and reintroduce the very parsing bug this guards
+ * against. No current caller sets both options, so the order is behavior-neutral
+ * today; it keeps the resolver correct for any future combined call.
  */
 export function resolveToleratedGhFailure(error, options = {}) {
+  const stderr = String(error?.stderr ?? '');
+  const httpStatus = Number(stderr.match(/HTTP\s+(\d+)/i)?.[1] ?? -1);
+  if ((options.allowHttpStatuses ?? []).includes(httpStatus)) {
+    return '';
+  }
   const status = Number(error?.status ?? -1);
   if ((options.allowStatuses ?? []).includes(status)) {
     const stdout = String(error?.stdout ?? '');
     if (/^\s*[[{]/.test(stdout)) {
       return stdout;
     }
-  }
-  const stderr = String(error?.stderr ?? '');
-  const httpStatus = Number(stderr.match(/HTTP\s+(\d+)/i)?.[1] ?? -1);
-  if ((options.allowHttpStatuses ?? []).includes(httpStatus)) {
-    return '';
   }
   return undefined;
 }
