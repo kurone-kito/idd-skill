@@ -21,6 +21,7 @@ import {
   rankAndRouteBySuitability,
 } from './autopilot-suitability.mts';
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
+import { createMarkerRegex } from './marker-regex.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 const BLOCKED_LABELS = new Set([
@@ -703,13 +704,6 @@ function isCliExecution(): boolean {
   );
 }
 
-function createMarkerRegex(prefix: string, suffix: string): RegExp {
-  return new RegExp(
-    `<!--\\s*${escapeRegex(prefix)}-${suffix}\\b[\\s\\S]*?-->`,
-    'i',
-  );
-}
-
 function normalizeMarkerPrefix(prefix: unknown): string {
   if (typeof prefix !== 'string' || prefix.length === 0) {
     return DEFAULT_MARKER_PREFIX;
@@ -721,10 +715,6 @@ function normalizeAuthoringLabelName(labelName: unknown): string {
   return typeof labelName === 'string' && labelName.length > 0
     ? labelName
     : 'status:authoring';
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function fetchOpenIssues(repoRef: string) {

@@ -19,6 +19,7 @@ import {
   rankAndRouteBySuitability,
 } from './autopilot-suitability.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
+import { createMarkerRegex } from './marker-regex.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 const BLOCKED_LABELS = new Set([
@@ -528,12 +529,6 @@ function isCliExecution() {
       fileURLToPath(import.meta.url) === resolve(process.argv[1]),
   );
 }
-function createMarkerRegex(prefix, suffix) {
-  return new RegExp(
-    `<!--\\s*${escapeRegex(prefix)}-${suffix}\\b[\\s\\S]*?-->`,
-    'i',
-  );
-}
 function normalizeMarkerPrefix(prefix) {
   if (typeof prefix !== 'string' || prefix.length === 0) {
     return DEFAULT_MARKER_PREFIX;
@@ -544,9 +539,6 @@ function normalizeAuthoringLabelName(labelName) {
   return typeof labelName === 'string' && labelName.length > 0
     ? labelName
     : 'status:authoring';
-}
-function escapeRegex(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 function fetchOpenIssues(repoRef) {
   const issues = [];

@@ -201,6 +201,7 @@ export function collectPreMergeReadiness(argv) {
   }
   const forcedHandoffPermissionCache = new Map();
   const waivableCheckSelectors = readWaivableCheckSelectors();
+  const externalCheckWaiverMaxValidity = readExternalCheckWaiverMaxValidity();
   const summary = buildPreMergeReadinessSummary(
     {
       prHeadSha,
@@ -236,6 +237,7 @@ export function collectPreMergeReadiness(argv) {
       capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
       primaryBotLogin,
       waivableCheckSelectors,
+      externalCheckWaiverMaxValidity,
       forcedHandoffEnabled,
       expectedLinkedPrs: [String(args.prNumber), prUrl].filter(Boolean),
       prFirstCommitAt,
@@ -798,6 +800,20 @@ function readWaivableCheckSelectors() {
     ];
   } catch {
     return [];
+  }
+}
+// Configured external-check waiver validity window (`ciGate.
+// externalCheckWaivers.maxValidity`). The consume side re-enforces it so a
+// waiver whose `expiresAt - createdAt` outlives the policy window cannot count
+// as valid. `normalizePolicyConfig` already defaults this to `PT24H`; an absent
+// or unreadable config falls back to the same authoring default.
+function readExternalCheckWaiverMaxValidity() {
+  try {
+    return normalizePolicyConfig(
+      JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
+    ).ciGate.externalCheckWaivers.maxValidity;
+  } catch {
+    return 'PT24H';
   }
 }
 function loadIddConfig() {

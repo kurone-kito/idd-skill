@@ -17,6 +17,7 @@ import {
   parseAutopilotSuitability,
 } from './autopilot-suitability.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import { escapeRegex } from './marker-regex.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
@@ -37,14 +38,15 @@ if (isMainModule(import.meta.url)) {
     args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
   const policyConfig = loadPolicy(args.policy);
   const authoringPolicy = resolveAuthoringGuardPolicy(policyConfig);
+  const markerPrefix = resolveMarkerPrefix(policyConfig);
   const summary = await evaluateDiscoverReadiness(args.issueNumbers, {
     includeUnresolvable: args.includeUnresolvable,
     loadIssue: buildIssueLoader(owner, repo),
     loadIssueLabelEvents: buildIssueLabelEventsLoader(owner, repo),
-    findRoadmapsByMarker: buildRoadmapMarkerResolver(owner, repo),
+    findRoadmapsByMarker: buildRoadmapMarkerResolver(owner, repo, markerPrefix),
     authoringLabelName: authoringPolicy.labelName,
     authoringStaleAgeMs: authoringPolicy.staleAgeMs,
-    markerPrefix: resolveMarkerPrefix(policyConfig),
+    markerPrefix,
     autopilotSuitabilityFloor: resolveSuitabilityFloor(policyConfig),
     autopilotSuitabilityEnabled: resolveSuitabilityEnabled(policyConfig),
     now: args.now || new Date(),
@@ -208,7 +210,10 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         reasons.add(`blocked_by_open_issue:#${blockedNumber}`);
       }
     }
-    for (const marker of extractBlockedByRoadmapMarkers(issue.body)) {
+    for (const marker of extractBlockedByRoadmapMarkers(
+      issue.body,
+      resolvedMarkerPrefix,
+    )) {
       const markerMatches = await getRoadmapsByMarker(
         marker,
         markerCache,
@@ -265,9 +270,19 @@ export function extractBlockedByIssueNumbers(body) {
     [...matches].map((match) => Number.parseInt(match[1], 10)),
   );
 }
-export function extractBlockedByRoadmapMarkers(body) {
+export function extractBlockedByRoadmapMarkers(
+  body,
+  markerPrefix = DEFAULT_MARKER_PREFIX,
+) {
+  // Regex-escape the configurable prefix so a namespaced adopter prefix
+  // (which may contain a metacharacter) cannot corrupt or break the
+  // extraction pattern. For the default `idd-skill` this is byte-identical
+  // to the prior hardcoded literal.
   const matches = body.matchAll(
-    /<!--\s*idd-skill-blocked-by:\s*([^\s>]+)\s*-->/gi,
+    new RegExp(
+      `<!--\\s*${escapeRegex(markerPrefix)}-blocked-by:\\s*([^\\s>]+)\\s*-->`,
+      'gi',
+    ),
   );
   return [...new Set([...matches].map((match) => match[1]))];
 }
@@ -537,9 +552,25 @@ function fetchIssueLabelEvents(repoRef, issueNumber) {
   }
   return events;
 }
-function buildRoadmapMarkerResolver(owner, repo) {
+export function buildRoadmapMarkerSearchQuery(
+  owner,
+  repo,
+  markerPrefix,
+  marker,
+) {
+  // Thread the configurable prefix into the GitHub search query WITHOUT
+  // regex-escaping: this is a literal `in:body` search term, so escaping the
+  // prefix would corrupt the exact marker string the resolver looks for.
+  return `repo:${owner}/${repo} is:issue in:body "<!-- ${markerPrefix}-roadmap-id: ${marker} -->"`;
+}
+function buildRoadmapMarkerResolver(owner, repo, markerPrefix) {
   return async (marker) => {
-    const query = `repo:${owner}/${repo} is:issue in:body "<!-- idd-skill-roadmap-id: ${marker} -->"`;
+    const query = buildRoadmapMarkerSearchQuery(
+      owner,
+      repo,
+      markerPrefix,
+      marker,
+    );
     const encodedQuery = encodeURIComponent(query);
     const result = runGh([
       'api',

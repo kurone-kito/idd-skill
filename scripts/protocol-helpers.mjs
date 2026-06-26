@@ -8,7 +8,10 @@ import {
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   normalizeAdvisoryWaitRuntimeOptions,
 } from './advisory-wait-policy.mjs';
-import { getReviewEscalationChangesRequestedPolicy } from './policy-helpers.mjs';
+import {
+  getReviewEscalationChangesRequestedPolicy,
+  parseIsoDurationToMs,
+} from './policy-helpers.mjs';
 
 const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
 const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)`;
@@ -558,12 +561,14 @@ export function summarizeExternalCheckWaivers(
     trustedMarkerLogins = [],
     now = '',
     waivableSelectors = null,
+    maxValidity = '',
   } = {},
 ) {
   const trustedSet = new Set(normalizeTrustedMarkerLogins(trustedMarkerLogins));
   const nowMs = isValidIsoTimestamp(now) ? new Date(now).getTime() : Date.now();
   const headShaLower = String(prHeadSha).toLowerCase();
   const activeClaimLower = String(activeClaimId);
+  const maxValidityMs = parseIsoDurationToMs(maxValidity);
   const valid = [];
   const expired = [];
   const wrongHead = [];
@@ -596,7 +601,9 @@ export function summarizeExternalCheckWaivers(
       });
       continue;
     }
-    if (headShaLower && parsed.headSha !== headShaLower) {
+    // Fail closed on an empty head SHA: an unbound waiver must never ride
+    // along when the gate cannot prove it targets the current PR HEAD.
+    if (!headShaLower || parsed.headSha !== headShaLower) {
       wrongHead.push({
         authorLogin,
         checkSelector: parsed.checkSelector,
@@ -604,7 +611,10 @@ export function summarizeExternalCheckWaivers(
       });
       continue;
     }
-    if (activeClaimLower && parsed.claimId !== activeClaimLower) {
+    // Fail closed on an empty active claim: when no claim resolves at the gate
+    // (`activeClaimLower === ''`), a waiver cannot be bound to an owner and is
+    // rejected rather than passing unbound.
+    if (!activeClaimLower || parsed.claimId !== activeClaimLower) {
       wrongClaim.push({
         authorLogin,
         checkSelector: parsed.checkSelector,
@@ -620,6 +630,25 @@ export function summarizeExternalCheckWaivers(
         expiresAt: parsed.expiresAt,
       });
       continue;
+    }
+    // Re-enforce the configured maxValidity window at consume time. Authoring
+    // already clamps `expiresAt - createdAt` (planExternalCheckWaiver's
+    // withinMaxValidity), but a hand-edited or policy-drifted marker can still
+    // carry an over-long window, so the shared merge gate re-checks it and
+    // fails closed when the creation timestamp is unknown (`createdAt: 'none'`).
+    if (typeof maxValidityMs === 'number' && Number.isFinite(maxValidityMs)) {
+      const createdMs = new Date(parsed.createdAt).getTime();
+      if (
+        !Number.isFinite(createdMs) ||
+        expiresMs - createdMs > maxValidityMs
+      ) {
+        expired.push({
+          authorLogin,
+          checkSelector: parsed.checkSelector,
+          expiresAt: parsed.expiresAt,
+        });
+        continue;
+      }
     }
     // When the policy declares its waivable surface, a valid waiver still only
     // counts when its selector can name a configured-waivable check; otherwise
@@ -3658,6 +3687,7 @@ export function buildPreMergeReadinessSummary(
     trustedMarkerLogins,
     now,
     waivableSelectors: waivableCheckSelectors,
+    maxValidity: options.externalCheckWaiverMaxValidity ?? '',
   });
   const ci = summarizeRequiredChecks(checks, branchRules, branchProtection, {
     waivers: waiverEvidence,
