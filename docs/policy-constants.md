@@ -297,6 +297,20 @@ rather than bumping to an exact fit** — an exact-fit bump leaves the next
 concurrent session with zero free bytes, forcing an immediate rebase and
 re-bump.
 
+**Near-ceiling exception.** That prefer-raise default assumes there is still
+headroom to ratchet into. When a bundle, or an individual per-file
+instruction file, already sits in a high-utilization band — roughly **95%
+or more** of its `limitBytes` (or of the per-file phase cap) — flip the
+default and **prefer trimming or splitting the net addition over another
+ratchet bump**. The trade-off inverts only here, at the top of the range:
+below the band, the churn and terminology-drift cost of trimming outweighs a
+small raise; near the ceiling, each further bump raises the
+**always-resident review/merge instruction floor** — the `bundle-review` and
+`bundle-merge` members load on every F-phase session — which is the scarcest
+budget for smaller-context models. Read the two as one policy: raise by
+default while headroom remains, and trim or split once headroom is nearly
+gone.
+
 ### High-contention shared files
 
 A small set of files concentrates concurrent autopilot edits and therefore
