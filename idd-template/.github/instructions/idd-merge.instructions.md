@@ -275,12 +275,22 @@ Before any mutating action in F3, apply the
        --claim-issue <issue-number> --claim-id <claim-id> --format table
      ```
 
-     After apply, post a comment to the PR recording the outcome. See
-     `docs/idd-comment-minimization.md` for the exact format:
+     After apply, record the outcome — but **skip the post when the PR
+     already carries a fresh `<!-- idd-cleanup-evidence:` comment** (for
+     example one the `post-merge-cleanup` workflow posted within seconds
+     of the merge). The marker is a resume-detection token, so a second
+     copy is only noise; this mirrors the workflow's own
+     duplicate-evidence guard. See `docs/idd-comment-minimization.md`
+     for the exact formats:
 
      If the apply `status` is `applied`: post the evidence comment
      format (with `status`, `applied`, `failed`, `skipped`, and
      `viewer-cannot-minimize` counts). Proceed to step 3.
+
+     If the apply `status` is `clean`: no candidates remained — the
+     cleanup already converged (typically the workflow minimized them
+     first). Do not post a duplicate evidence comment; proceed to
+     step 3.
 
      If the apply `status` is `failed` or `incomplete`: post the
      cleanup-failure comment format instead. Include the
@@ -298,9 +308,11 @@ Before any mutating action in F3, apply the
    already-minimized comments and comments the viewer cannot minimize.
    Re-validate the active claim before each mutation. After GraphQL
    cleanup, post an evidence comment summarizing the outcome (status,
-   applied count, skipped count with reasons). If the viewer cannot
-   minimize any detected candidates, post a
-   cleanup-permission-blocked comment instead of exiting silently.
+   applied count, skipped count with reasons) — unless the PR already
+   carries a fresh `<!-- idd-cleanup-evidence:` comment, in which case
+   skip the duplicate post. If the viewer cannot minimize any detected
+   candidates, post a cleanup-permission-blocked comment instead of
+   exiting silently.
 
    See `docs/idd-comment-minimization.md` for the evidence comment
    format, cleanup-failure comment format, permission-blocked comment
