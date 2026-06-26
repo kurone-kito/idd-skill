@@ -271,6 +271,15 @@ const HELPER_COMMANDS = [
     contractPaths: ['schemas/idd-merge-execute.schema.json'],
   },
   {
+    id: 'minimize-superseded-markers',
+    scriptName: 'idd:minimize-superseded-markers',
+    binName: 'idd-minimize-superseded-markers',
+    entryPath: 'scripts/minimize-superseded-markers.mjs',
+    vendoredCommand: 'node scripts/minimize-superseded-markers.mjs',
+    description:
+      'Minimize superseded claim-chain or resolved review markers as OUTDATED/RESOLVED, gated by trusted marker author.',
+  },
+  {
     id: 'phase-id-resolver',
     scriptName: 'idd:phase-id-resolver',
     binName: 'idd-phase-id-resolver',
