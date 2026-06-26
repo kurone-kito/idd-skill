@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  buildRoadmapMarkerSearchQuery,
   evaluateDiscoverReadiness,
   extractBlockedByIssueNumbers,
   extractBlockedByRoadmapMarkers,
@@ -28,6 +29,91 @@ Depends on #56
   assert.deepEqual(extractBlockedByIssueNumbers(body), [12, 34]);
   assert.deepEqual(extractDependencyIssueNumbers(body), [56, 78]);
   assert.deepEqual(extractBlockedByRoadmapMarkers(body), ['parent-roadmap']);
+});
+
+test('extractBlockedByRoadmapMarkers honors a configured marker prefix', () => {
+  const body = `
+<!-- idd-skill-blocked-by: default-prefixed -->
+<!-- acme-blocked-by: custom-prefixed -->
+`;
+  // The default prefix extracts only its own marker.
+  assert.deepEqual(extractBlockedByRoadmapMarkers(body), ['default-prefixed']);
+  // A configured prefix extracts only the matching marker, ignoring the
+  // default-prefixed one.
+  assert.deepEqual(extractBlockedByRoadmapMarkers(body, 'acme'), [
+    'custom-prefixed',
+  ]);
+});
+
+test('extractBlockedByRoadmapMarkers regex-escapes a metacharacter prefix', () => {
+  // Without escaping, the unbalanced parenthesis would make `a(b` an invalid
+  // regex (unterminated group) and throw; escaping keeps it a literal match.
+  const body = '<!-- a(b-blocked-by: grouped -->';
+  assert.deepEqual(extractBlockedByRoadmapMarkers(body, 'a(b'), ['grouped']);
+});
+
+test('buildRoadmapMarkerSearchQuery threads the prefix as a literal, unescaped term', () => {
+  // Default prefix.
+  assert.equal(
+    buildRoadmapMarkerSearchQuery('o', 'r', 'idd-skill', '1076'),
+    'repo:o/r is:issue in:body "<!-- idd-skill-roadmap-id: 1076 -->"',
+  );
+  // A configured prefix threads through verbatim.
+  assert.equal(
+    buildRoadmapMarkerSearchQuery('o', 'r', 'acme', '1076'),
+    'repo:o/r is:issue in:body "<!-- acme-roadmap-id: 1076 -->"',
+  );
+  // A regex metacharacter in the prefix stays LITERAL (not escaped): the
+  // search query is a plain string, so escaping would corrupt the term.
+  assert.equal(
+    buildRoadmapMarkerSearchQuery('o', 'r', 'a.b', '1076'),
+    'repo:o/r is:issue in:body "<!-- a.b-roadmap-id: 1076 -->"',
+  );
+});
+
+test('threads a configured marker prefix into blocked-by extraction and roadmap-id search', async () => {
+  const issues = new Map([
+    [
+      1601,
+      {
+        number: 1601,
+        title: 'custom-prefixed blocked-by',
+        state: 'OPEN',
+        body: '<!-- acme-blocked-by: roadmap-y -->',
+        labels: [],
+      },
+    ],
+  ]);
+  const searchedMarkers: string[] = [];
+  const summary = await evaluateDiscoverReadiness([1601], {
+    includeUnresolvable: true,
+    markerPrefix: 'acme',
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async (marker) => {
+      searchedMarkers.push(marker);
+      return marker === 'roadmap-y'
+        ? [
+            {
+              number: 998,
+              title: 'roadmap',
+              state: 'OPEN',
+              body: '',
+              labels: [{ name: 'roadmap' }],
+            },
+          ]
+        : [];
+    },
+  });
+
+  // The acme-prefixed blocked-by marker is extracted (the default idd-skill
+  // prefix would not have matched it) and resolved through the roadmap-id
+  // lookup, so the issue is filtered as blocked by the open roadmap.
+  assert.deepEqual(searchedMarkers, ['roadmap-y']);
+  assert.equal(summary.ready.length, 0);
+  assert.match(
+    summary.filteredOut[0].reasons.join(','),
+    /blocked_by_open_roadmap_marker:roadmap-y/,
+  );
 });
 
 test('filters issue with blocked labels', async () => {
