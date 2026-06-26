@@ -120,16 +120,14 @@ the worker session by explicit opt-in. Choose and record one profile in
 
 ## Footprint and sizing guidance
 
-IDD keeps instruction growth mechanically bounded. The maintained budget
-values are tracked in policy docs and enforced by audit metadata rather
-than hand-counted file totals:
+IDD keeps instruction growth mechanically bounded. The table below lists
+the stable per-file caps; per-bundle limits are read live from the
+manifest with the `jq` command below, so the doc cannot drift:
 
-| Budget type                           | Maintained value |
-| ------------------------------------- | ---------------- |
-| Always-loaded instruction file        | 20,000 bytes     |
-| Phase instruction file                | 30,000 bytes     |
-| Discovery bundle (`bundle-discovery`) | 75,300 bytes     |
-| Resume bundle (`bundle-resume`)       | 46,000 bytes     |
+| Budget type                    | Maintained value |
+| ------------------------------ | ---------------- |
+| Always-loaded instruction file | 20,000 bytes     |
+| Phase instruction file         | 32,200 bytes     |
 
 See [Policy constants: Runtime Instruction Size and Bundle
 Budgets](docs/policy-constants.md#runtime-instruction-size-and-bundle-budgets)
