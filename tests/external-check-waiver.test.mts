@@ -150,6 +150,28 @@ test('planExternalCheckWaiver fails closed for unauthorized write-only actors', 
   assert.match(report.blockingReasons.join('\n'), /not authorized/);
 });
 
+test('planExternalCheckWaiver authorizes a permission:maintain actor with empty role_name under the default policy', () => {
+  const input = buildBaseInput();
+  // A real maintainer that the collaborator-permission endpoint reports with
+  // permission: "maintain" and an absent role_name (e.g. GitHub Enterprise
+  // Server / custom org roles). Under owners-and-maintainers-only (the default
+  // policy) this must resolve as authorized, mirroring the rest of the file.
+  input.actor = 'maintain-collaborator';
+  input.authority = {
+    known: true,
+    permission: 'maintain',
+    roleName: '',
+  };
+
+  const report = planExternalCheckWaiver(input, {
+    now: new Date('2026-05-17T06:00:00Z'),
+    repoOwner: 'kurone-kito',
+  });
+
+  assert.equal(report.canApply, true);
+  assert.equal(report.blockingReasons.length, 0);
+});
+
 test('planExternalCheckWaiver fails closed for non-waivable checks', () => {
   const input = buildBaseInput();
   input.requestedSelector = 'lint';

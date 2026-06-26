@@ -763,7 +763,10 @@ function normalizeAuthorityEvidence(
       permission === 'write';
   } else {
     authorized =
-      roleName === 'admin' || roleName === 'maintain' || permission === 'admin';
+      roleName === 'admin' ||
+      roleName === 'maintain' ||
+      permission === 'admin' ||
+      permission === 'maintain';
   }
 
   const error = known
