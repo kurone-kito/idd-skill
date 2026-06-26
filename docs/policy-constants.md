@@ -257,7 +257,7 @@ CI enforces two layers of instruction file size limits via `audit/sync-manifest.
 | Limit type    | Value        | Applies to                                                                 |
 | ------------- | ------------ | -------------------------------------------------------------------------- |
 | Always-loaded | 20,000 bytes | Files with `applyTo: "**"` in `.github/instructions/idd-*.instructions.md` |
-| Phase         | 30,000 bytes | Other files in `.github/instructions/idd-*.instructions.md`                |
+| Phase         | 32,200 bytes | Other files in `.github/instructions/idd-*.instructions.md`                |
 
 ### Bundle limits
 

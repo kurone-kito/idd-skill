@@ -68,10 +68,11 @@ request remains the start condition.
 ## Context Economics
 
 The bundle budgets in `audit/sync-manifest.json` cap the combined size
-of the instruction files loaded together on each phase path (discovery
-81,920 bytes; resume 46,000; work 34,900; review 92,400; merge 80,600;
-plus per-file caps of 20,000 bytes for always-loaded and 30,000 bytes
-for phase files). Two observations follow:
+of the instruction files loaded together on each phase path (one budget
+per discovery / resume / work / review / merge bundle, plus per-file caps
+for always-loaded and phase files; read the live values with
+`jq '.instructionSizeBudgets, .bundleBudgets' audit/sync-manifest.json`).
+Two observations follow:
 
 - A skill wrapper does not shrink any of that content; it changes only
   _when_ content enters the context. Claude Code already loads phase

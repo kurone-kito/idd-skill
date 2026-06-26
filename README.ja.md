@@ -118,15 +118,15 @@ IDD は Markdown ネイティブですが、依存関係なしではありませ
 
 ## フットプリントと導入規模の目安
 
-IDD は instruction の増加を、手作業のファイル数カウントではなく、
-メンテされる予算値と監査メタデータで機械的に上限管理します。
+IDD は instruction の増加を機械的に上限管理します。下表に記載する
+2 つのファイル単位上限はハードコードですが、変動の大きいバンドル単位
+上限はハードコードせず下記 `jq` コマンドで manifest から直接読むため、
+バンドル値はドキュメント上で drift しません。
 
-| 予算タイプ                            | 維持される値 |
-| ------------------------------------- | ------------ |
-| 常時ロード instruction ファイル       | 20,000 bytes |
-| フェーズ instruction ファイル         | 30,000 bytes |
-| Discovery bundle (`bundle-discovery`) | 75,300 bytes |
-| Resume bundle (`bundle-resume`)       | 46,000 bytes |
+| 予算タイプ                      | 維持される値 |
+| ------------------------------- | ------------ |
+| 常時ロード instruction ファイル | 20,000 bytes |
+| フェーズ instruction ファイル   | 32,200 bytes |
 
 正規の値と所有箇所は
 [Policy constants: Runtime Instruction Size and Bundle Budgets](docs/policy-constants.md#runtime-instruction-size-and-bundle-budgets)
