@@ -275,22 +275,25 @@ Before any mutating action in F3, apply the
        --claim-issue <issue-number> --claim-id <claim-id> --format table
      ```
 
-     After apply, record the outcome — but **skip the post when the PR
-     already carries a `<!-- idd-cleanup-evidence:` comment**: the check
-     is presence-based — any comment whose body starts with that token,
-     matching the workflow's own guard — for example one the
-     `post-merge-cleanup` workflow posted within seconds of the merge.
-     The marker is a resume-detection token, so a second copy is only
-     noise. See `docs/idd-comment-minimization.md` for the exact formats:
+     After apply, record the outcome. **First apply the dedupe guard:
+     skip posting when the PR already carries a `<!-- idd-cleanup-evidence:`
+     comment that records a successful outcome** (`status` `applied` or
+     `clean`) — for example one the `post-merge-cleanup` workflow posted
+     within seconds of the merge — so the agent never stacks a second
+     success record. The guard does **not** fire on an existing `failed`
+     / `incomplete` / `permission-blocked` record: post your evidence so
+     a converged manual run corrects the PR rather than leaving a stale
+     failure as the record. When you post, see
+     `docs/idd-comment-minimization.md` for the exact formats:
 
      If the apply `status` is `applied`: post the evidence comment
      format (with `status`, `applied`, `failed`, `skipped`, and
      `viewer-cannot-minimize` counts). Proceed to step 3.
 
-     If the apply `status` is `clean`: no candidates remained — the
-     cleanup already converged (typically the workflow minimized them
-     first). Do not post a duplicate evidence comment; proceed to
-     step 3.
+     If the apply `status` is `clean`: the cleanup already converged
+     (typically the workflow minimized first), so the guard above
+     usually skips this post; otherwise record the converged outcome.
+     Proceed to step 3.
 
      If the apply `status` is `failed` or `incomplete`: post the
      cleanup-failure comment format instead. Include the
@@ -309,9 +312,10 @@ Before any mutating action in F3, apply the
    Re-validate the active claim before each mutation. After GraphQL
    cleanup, post an evidence comment summarizing the outcome (status,
    applied count, skipped count with reasons) — unless the PR already
-   carries a `<!-- idd-cleanup-evidence:` comment (presence-based: any
-   body starting with that token), in which case skip the duplicate
-   post. If the viewer cannot minimize any detected candidates, post a
+   carries a `<!-- idd-cleanup-evidence:` comment recording a successful
+   outcome (`applied` / `clean`), in which case skip the duplicate post
+   (still post to correct an existing `failed` / `incomplete` record).
+   If the viewer cannot minimize any detected candidates, post a
    cleanup-permission-blocked comment instead of exiting silently.
 
    See `docs/idd-comment-minimization.md` for the evidence comment
