@@ -273,7 +273,7 @@ function warnDeprecatedFlag(deprecated, canonical) {
     `warning: ${deprecated} is deprecated; use ${canonical} instead.\n`,
   );
 }
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const parsed = {
     prNumber: null,
     claimIssueNumber: null,
@@ -289,65 +289,81 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const value = argv[index + 1];
+    // Reject a missing value (undefined) or a flag-shaped value so that
+    // `--pr --json` fails fast instead of consuming `--json` as the value.
+    const requireValue = () => {
+      if (value === undefined || String(value).startsWith('--')) {
+        throw new Error(`missing value for argument: ${token}`);
+      }
+      return value;
+    };
+    // Positive-integer guard shared by both numeric flags below.
+    const requirePositiveInteger = () => {
+      const raw = requireValue();
+      if (!/^[1-9]\d*$/.test(raw)) {
+        throw new Error(`invalid ${token} value: ${raw}`);
+      }
+      return Number(raw);
+    };
     if (token === '--pr') {
-      parsed.prNumber = Number.parseInt(value ?? '', 10);
+      parsed.prNumber = requirePositiveInteger();
       index += 1;
       continue;
     }
     if (token === '--claim-issue') {
-      parsed.claimIssueNumber = Number.parseInt(value ?? '', 10);
+      parsed.claimIssueNumber = requirePositiveInteger();
       index += 1;
       continue;
     }
     if (token === '--owner') {
-      parsed.owner = value ?? '';
+      parsed.owner = requireValue();
       index += 1;
       continue;
     }
     if (token === '--repo') {
-      parsed.repo = value ?? '';
+      parsed.repo = requireValue();
       index += 1;
       continue;
     }
     if (token === '--trusted-marker-logins') {
-      parsed.trustedMarkerLogins = value ?? '';
+      parsed.trustedMarkerLogins = requireValue();
       index += 1;
       continue;
     }
     if (token === '--idd-agent-logins') {
-      parsed.iddAgentLogins = value ?? '';
+      parsed.iddAgentLogins = requireValue();
       index += 1;
       continue;
     }
     if (token === '--advisory-bot-logins') {
-      parsed.advisoryBotLogins = value ?? '';
+      parsed.advisoryBotLogins = requireValue();
       index += 1;
       continue;
     }
     if (token === '--claim-id') {
-      parsed.expectedClaimId = value ?? '';
+      parsed.expectedClaimId = requireValue();
       index += 1;
       continue;
     }
     if (token === '--expected-claim-id') {
       warnDeprecatedFlag('--expected-claim-id', '--claim-id');
-      parsed.expectedClaimId = value ?? '';
+      parsed.expectedClaimId = requireValue();
       index += 1;
       continue;
     }
     if (token === '--agent-id') {
-      parsed.expectedAgentId = value ?? '';
+      parsed.expectedAgentId = requireValue();
       index += 1;
       continue;
     }
     if (token === '--expected-agent-id') {
       warnDeprecatedFlag('--expected-agent-id', '--agent-id');
-      parsed.expectedAgentId = value ?? '';
+      parsed.expectedAgentId = requireValue();
       index += 1;
       continue;
     }
     if (token === '--now') {
-      parsed.now = value ?? '';
+      parsed.now = requireValue();
       index += 1;
       continue;
     }
@@ -356,15 +372,6 @@ function parseArgs(argv) {
       process.exit(0);
     }
     throw new Error(`unknown argument: ${token}`);
-  }
-  if (!Number.isInteger(parsed.prNumber) || (parsed.prNumber ?? 0) < 1) {
-    parsed.prNumber = null;
-  }
-  if (
-    !Number.isInteger(parsed.claimIssueNumber) ||
-    (parsed.claimIssueNumber ?? 0) < 1
-  ) {
-    parsed.claimIssueNumber = null;
   }
   return parsed;
 }
