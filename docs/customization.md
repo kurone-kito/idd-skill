@@ -236,6 +236,18 @@ contracts and any instruction text that references the effective wait
 values. The three duration keys accept positive whole-minute ISO 8601
 durations only; zero-length values and second-based values are invalid.
 
+`advisoryWait.primaryBotLogin` selects the advisory bot whose review the
+advisory-wait gate tracks (default Copilot), and
+`advisoryWait.secondaryBotLogin` names an **optional, non-gating** secondary
+bot. When the primary is cap-exhausted or stalled / rate-limited, the
+secondary is requested once per HEAD as a supplement; it never satisfies the
+primary advisory-wait gate, never receives a primary `advisory-wait` marker,
+and its review is ordinary advisory input. Omitting `secondaryBotLogin` (or
+setting it equal to the primary) disables the supplement, keeping behavior
+identical to a primary-only policy. Configure the secondary to a requestable
+reviewer whose request appears on the PR timeline so the once-per-HEAD guard
+can observe it.
+
 `advisoryWait.capExhaustedRoute` is intentionally fail-closed. The
 default `phase-specific` behavior keeps the current E14 skip / F2-F3
 hold split, while `hold` is a stricter override that also stops E14 on

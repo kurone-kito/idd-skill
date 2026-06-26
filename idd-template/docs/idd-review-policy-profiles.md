@@ -108,6 +108,22 @@ If the external bot can produce blocking `CHANGES_REQUESTED` reviews or
 decision-relevant comments, classify those items as PATH A unless the
 operator explicitly narrows them.
 
+### Configuring a primary and an optional secondary advisory bot
+
+The `advisoryWait.primaryBotLogin` and `advisoryWait.secondaryBotLogin`
+config fields let a profile choose which bot the advisory-wait gate tracks and
+add an **optional, non-gating** fallback. Set `primaryBotLogin` to route the
+gate to a non-Copilot bot (it defaults to Copilot). Set `secondaryBotLogin`
+to a second requestable review bot when the repository wants a fallback while
+the primary is throttled: IDD then requests the secondary **once per HEAD**
+only when the primary is cap-exhausted or stalled / rate-limited. The
+secondary is a **supplement only** — it never satisfies the primary
+advisory-wait gate, never receives a primary `advisory-wait` marker, and its
+output is ordinary advisory input (classified PATH A / PATH B by the snapshot
+and triage rules). Leaving `secondaryBotLogin` unset (or equal to the primary)
+keeps single-bot behavior. Pick a secondary whose `--add-reviewer` request
+appears on the PR timeline so the once-per-HEAD guard can observe it.
+
 ## PR Review Profile Edit Surfaces
 
 Use this checklist when a repository records a PR review profile during
