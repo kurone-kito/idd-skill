@@ -121,8 +121,9 @@ the worker session by explicit opt-in. Choose and record one profile in
 ## Footprint and sizing guidance
 
 IDD keeps instruction growth mechanically bounded. The table below lists
-the stable per-file caps; per-bundle limits are read live from the
-manifest with the `jq` command below, so the doc cannot drift:
+the two stable per-file caps; the volatile per-bundle limits are read
+live from the manifest (the `jq` command below) rather than hardcoded
+here, so those bundle values cannot drift in the docs:
 
 | Budget type                    | Maintained value |
 | ------------------------------ | ---------------- |
