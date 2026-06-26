@@ -168,9 +168,12 @@ files are edited.
 The current policy schema and helper runtime now support
 `.github/idd/config.json` `advisoryWait.requestCap`,
 `advisoryWait.pendingWindow`, `advisoryWait.settledWindow`,
-`advisoryWait.pollInterval`, and `advisoryWait.capExhaustedRoute`.
-Omitted keys keep the distributed defaults below. The three duration
-keys accept positive whole-minute ISO 8601 durations only.
+`advisoryWait.pollInterval`, `advisoryWait.capExhaustedRoute`, and
+`advisoryWait.primaryBotLogin`. Omitted keys keep the distributed
+defaults below. The three duration keys accept positive whole-minute ISO
+8601 durations only. `advisoryWait.primaryBotLogin` selects the advisory
+bot whose review the advisory-wait gate tracks; it defaults to Copilot,
+so omitting it preserves the Copilot-advisory behavior exactly.
 
 | Policy default                          | Distributed value                                                           | Owning surface                                                                                                                                                                                                       | Onboarding expectation                                                                       |
 | --------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
@@ -180,6 +183,7 @@ keys accept positive whole-minute ISO 8601 durations only.
 | Active advisory polling interval        | 2 min                                                                       | [Review fix](../.github/instructions/idd-review-fix.instructions.md), [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md), [Pre-merge](../.github/instructions/idd-pre-merge.instructions.md) | Tune only with the advisory wait instructions and the repository's rate-limit tolerance.     |
 | Advisory cap exhausted routing in E14   | Skip the advisory wait and proceed to E15                                   | [Review fix](../.github/instructions/idd-review-fix.instructions.md)                                                                                                                                                 | Keep unless a stricter profile requires maintainer review after the cap is exhausted.        |
 | Advisory cap exhausted routing in F2/F3 | Hold and require maintainer action                                          | [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md), [Pre-merge](../.github/instructions/idd-pre-merge.instructions.md), [Merge](../.github/instructions/idd-merge.instructions.md)           | Treat as a merge safety gate; customize only with explicit repository policy.                |
+| Primary advisory bot login              | Copilot (`advisoryWait.primaryBotLogin`)                                    | [Review fix](../.github/instructions/idd-review-fix.instructions.md), [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md)                                                                     | Keep Copilot unless the repository routes the advisory-wait gate to a different primary bot. |
 | Human re-review response wait           | 30 min after addressed `CHANGES_REQUESTED` feedback has a re-review request | [Pre-merge](../.github/instructions/idd-pre-merge.instructions.md)                                                                                                                                                   | Keep unless the repository has a different required-reviewer response window.                |
 
 ## CI Wait Defaults

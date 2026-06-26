@@ -12,6 +12,7 @@ export const DEFAULT_ADVISORY_REQUEST_CAP = 30;
 export const DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES = 30;
 export const DEFAULT_ADVISORY_SETTLED_WINDOW_MINUTES = 10;
 export const DEFAULT_ADVISORY_POLL_INTERVAL_MINUTES = 2;
+export const DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN = 'copilot';
 export const ADVISORY_CAP_EXHAUSTED_ROUTE_DEFAULT = 'phase-specific';
 export const ADVISORY_CAP_EXHAUSTED_ROUTES = new Set([
   'phase-specific',
@@ -68,6 +69,43 @@ export function resolveAdvisoryWaitPolicy(
       advisoryWait.capExhaustedRoute,
     ),
   };
+}
+
+function normalizeConfiguredPrimaryBotLogin(value: unknown): string {
+  return typeof value === 'string' && value.trim().length > 0
+    ? value.trim().toLowerCase()
+    : DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+}
+
+/**
+ * Resolve the configured primary advisory bot login from a parsed policy
+ * object, defaulting to Copilot so the advisory-wait gate is behavior-
+ * preserving when `advisoryWait.primaryBotLogin` is absent. Kept separate
+ * from {@link resolveAdvisoryWaitPolicy} so the timing-policy shape stays a
+ * stable five-key object.
+ */
+export function resolveAdvisoryPrimaryBotLogin(config: unknown = {}): string {
+  const advisoryWait = ((config as { advisoryWait?: unknown } | null)
+    ?.advisoryWait ?? {}) as Record<string, unknown>;
+  return normalizeConfiguredPrimaryBotLogin(advisoryWait.primaryBotLogin);
+}
+
+/**
+ * Read the configured primary advisory bot login from a policy file, failing
+ * closed to Copilot when the file is missing, unreadable, or schema-invalid.
+ */
+export function readAdvisoryPrimaryBotLogin(
+  path: string = '.github/idd/config.json',
+): string {
+  try {
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    if (validate(config, POLICY_SCHEMA).length > 0) {
+      return DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+    }
+    return resolveAdvisoryPrimaryBotLogin(config);
+  } catch {
+    return DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  }
 }
 
 export function normalizeAdvisoryWaitRuntimeOptions(

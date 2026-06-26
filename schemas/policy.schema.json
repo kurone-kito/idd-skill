@@ -258,6 +258,10 @@
         "capExhaustedRoute": {
           "type": "string",
           "enum": ["phase-specific", "hold"]
+        },
+        "primaryBotLogin": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },

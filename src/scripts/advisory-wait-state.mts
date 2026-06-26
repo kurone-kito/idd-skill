@@ -8,7 +8,10 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
-import { readAdvisoryWaitPolicy } from './advisory-wait-policy.mts';
+import {
+  readAdvisoryPrimaryBotLogin,
+  readAdvisoryWaitPolicy,
+} from './advisory-wait-policy.mts';
 import type { TrustedMarkerActorResolution } from './protocol-helpers.mts';
 import {
   buildAdvisoryWaitSummary,
@@ -125,6 +128,7 @@ const trustedMarkerLogins = normalizeTrustedMarkerLogins([
     : []),
 ]);
 const advisoryWaitPolicy = readAdvisoryWaitPolicy();
+const primaryBotLogin = readAdvisoryPrimaryBotLogin();
 
 const summary = buildAdvisoryWaitSummary(
   {
@@ -141,6 +145,7 @@ const summary = buildAdvisoryWaitSummary(
     settledWindowMinutes: advisoryWaitPolicy.settledWindowMinutes,
     pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
     capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
+    primaryBotLogin,
     viewerLogin,
     configuredTrustedActors,
     collaboratorTrustEnabled,

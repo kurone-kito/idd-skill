@@ -4,12 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
+  DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+  readAdvisoryPrimaryBotLogin,
   readAdvisoryWaitPolicy,
+  resolveAdvisoryPrimaryBotLogin,
   resolveAdvisoryWaitPolicy,
 } from '../src/scripts/advisory-wait-policy.mts';
 import {
   buildAdvisoryWaitSummary,
   classifyCiChecks,
+  isCopilotReviewerLogin,
   operationalMarkerPrefix,
   unsafeTextReason,
 } from '../src/scripts/protocol-helpers.mts';
@@ -288,6 +292,128 @@ test('advisory wait policy only applies file overrides from schema-valid policy 
     pollIntervalMinutes: 2,
     capExhaustedRoute: 'phase-specific',
   });
+});
+
+test('isCopilotReviewerLogin keeps the dual Copilot match by default and matches a configured bot exactly', () => {
+  // Default (Copilot): exact `copilot` plus the GitHub App login family.
+  assert.equal(isCopilotReviewerLogin('copilot'), true);
+  assert.equal(isCopilotReviewerLogin('Copilot'), true);
+  assert.equal(
+    isCopilotReviewerLogin('copilot-pull-request-reviewer[bot]'),
+    true,
+  );
+  assert.equal(isCopilotReviewerLogin('coderabbitai[bot]'), false);
+  assert.equal(isCopilotReviewerLogin(''), false);
+  // An explicit Copilot default behaves identically to the implicit default.
+  assert.equal(
+    isCopilotReviewerLogin('copilot-pull-request-reviewer[bot]', 'copilot'),
+    true,
+  );
+
+  // A configured non-Copilot bot is matched by exact normalized equality only,
+  // and the Copilot prefix family no longer matches.
+  assert.equal(
+    isCopilotReviewerLogin('coderabbitai[bot]', 'coderabbitai[bot]'),
+    true,
+  );
+  assert.equal(
+    isCopilotReviewerLogin('CodeRabbitAI[bot]', 'coderabbitai[bot]'),
+    true,
+  );
+  assert.equal(
+    isCopilotReviewerLogin(
+      'copilot-pull-request-reviewer[bot]',
+      'coderabbitai[bot]',
+    ),
+    false,
+  );
+  // A blank configured login falls back to the Copilot default.
+  assert.equal(isCopilotReviewerLogin('copilot', '   '), true);
+});
+
+test('advisory wait summary resolves coverage against a configured primary bot', () => {
+  const headSha = 'b'.repeat(40);
+  const input = {
+    prHeadSha: headSha,
+    reviews: [
+      {
+        user: { login: 'coderabbitai[bot]' },
+        submitted_at: '2026-05-11T17:01:00Z',
+        commit_id: headSha,
+      },
+      // A Copilot review must be ignored when the primary bot is CodeRabbit.
+      {
+        user: { login: 'copilot-pull-request-reviewer[bot]' },
+        submitted_at: '2026-05-11T17:02:00Z',
+        commit_id: 'c'.repeat(40),
+      },
+    ],
+    requestedReviewers: [{ login: 'coderabbitai[bot]' }],
+    timelineEvents: [],
+    comments: [],
+  };
+
+  const customBot = buildAdvisoryWaitSummary(input, {
+    now: '2026-05-11T17:05:00Z',
+    primaryBotLogin: 'coderabbitai[bot]',
+  });
+  // Coverage is computed against the CodeRabbit review on HEAD, and the
+  // CodeRabbit pending request is detected; the Copilot review is ignored.
+  assert.equal(customBot.lastCopilotCommit, headSha);
+  assert.equal(customBot.copilotPending, true);
+
+  // With the default (Copilot) primary bot, the same payload resolves against
+  // the Copilot review (off HEAD) and no Copilot pending request.
+  const defaultBot = buildAdvisoryWaitSummary(input, {
+    now: '2026-05-11T17:05:00Z',
+  });
+  assert.equal(defaultBot.lastCopilotCommit, 'c'.repeat(40));
+  assert.equal(defaultBot.copilotPending, false);
+});
+
+test('primary advisory bot login resolves defaults, overrides, and fail-safe fallbacks', () => {
+  assert.equal(DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN, 'copilot');
+  assert.equal(resolveAdvisoryPrimaryBotLogin({}), 'copilot');
+  assert.equal(resolveAdvisoryPrimaryBotLogin(), 'copilot');
+  assert.equal(
+    resolveAdvisoryPrimaryBotLogin({
+      advisoryWait: { primaryBotLogin: 'CodeRabbitAI[bot]' },
+    }),
+    'coderabbitai[bot]',
+  );
+  assert.equal(
+    resolveAdvisoryPrimaryBotLogin({ advisoryWait: { primaryBotLogin: '  ' } }),
+    'copilot',
+  );
+  assert.equal(
+    resolveAdvisoryPrimaryBotLogin({ advisoryWait: { primaryBotLogin: 42 } }),
+    'copilot',
+  );
+});
+
+test('readAdvisoryPrimaryBotLogin only applies a schema-valid file override', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-advisory-primary-bot-'));
+  const validPath = join(root, 'policy.valid.json');
+  const invalidPath = join(root, 'policy.invalid.json');
+  const validConfig = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  validConfig.advisoryWait = { primaryBotLogin: 'coderabbitai[bot]' };
+  writeFileSync(validPath, JSON.stringify(validConfig), 'utf8');
+  // A non-string primaryBotLogin violates the schema, so the file is
+  // schema-invalid and the reader fails closed to the Copilot default.
+  writeFileSync(
+    invalidPath,
+    JSON.stringify({ advisoryWait: { primaryBotLogin: 5 } }),
+    'utf8',
+  );
+
+  assert.equal(readAdvisoryPrimaryBotLogin(validPath), 'coderabbitai[bot]');
+  assert.equal(readAdvisoryPrimaryBotLogin(invalidPath), 'copilot');
+  assert.equal(
+    readAdvisoryPrimaryBotLogin(join(root, 'missing.json')),
+    'copilot',
+  );
 });
 
 test('advisory wait summary normalizes invalid direct options to defaults', () => {

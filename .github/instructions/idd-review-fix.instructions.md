@@ -165,6 +165,13 @@ HEAD SHA. Subject to the configured Copilot re-review request cap
 `advisoryWait.requestCap`; default 30). This is a process limit, not a
 GitHub-enforced constraint.
 
+The advisory bot whose review is requested below is the configured
+**primary advisory bot** (`.github/idd/config.json`
+`advisoryWait.primaryBotLogin`), which defaults to Copilot. Substitute
+`{primary-advisory-bot}` in the commands below with that login (the
+default is `@copilot`); the advisory-wait helpers resolve the same
+identity from policy.
+
 1. Fetch `PR_HEAD_SHA`:
 
    ```sh
@@ -193,7 +200,7 @@ GitHub-enforced constraint.
      reviewer request:
 
      ```sh
-     gh pr edit {pr-number} --remove-reviewer "@copilot"
+     gh pr edit {pr-number} --remove-reviewer "@{primary-advisory-bot}"
      ```
 
      If removal fails because Copilot is no longer pending, re-run
@@ -202,7 +209,7 @@ GitHub-enforced constraint.
      succeeds, request Copilot review:
 
      ```sh
-     gh pr edit {pr-number} --add-reviewer "@copilot"
+     gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
      ```
 
      ```text

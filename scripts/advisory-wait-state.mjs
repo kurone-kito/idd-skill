@@ -6,7 +6,10 @@
 // .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { readAdvisoryWaitPolicy } from './advisory-wait-policy.mjs';
+import {
+  readAdvisoryPrimaryBotLogin,
+  readAdvisoryWaitPolicy,
+} from './advisory-wait-policy.mjs';
 import {
   buildAdvisoryWaitSummary,
   normalizeTrustedMarkerLogins,
@@ -70,6 +73,7 @@ const trustedMarkerLogins = normalizeTrustedMarkerLogins([
     : []),
 ]);
 const advisoryWaitPolicy = readAdvisoryWaitPolicy();
+const primaryBotLogin = readAdvisoryPrimaryBotLogin();
 const summary = buildAdvisoryWaitSummary(
   {
     prHeadSha,
@@ -85,6 +89,7 @@ const summary = buildAdvisoryWaitSummary(
     settledWindowMinutes: advisoryWaitPolicy.settledWindowMinutes,
     pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
     capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
+    primaryBotLogin,
     viewerLogin,
     configuredTrustedActors,
     collaboratorTrustEnabled,
