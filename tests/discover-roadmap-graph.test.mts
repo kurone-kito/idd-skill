@@ -1795,3 +1795,151 @@ test('a PT0S staleAge falls back to the default 24h window, not 0ms', async () =
     assert.equal(leaf701?.claimEligible, false);
   }
 });
+
+// One epic (920) → a ready leaf (921), a leaf blocked by an open roadmap
+// marker (922), and an authoring-held leaf (923).
+function readinessGraphIssues() {
+  return new Map<number, unknown>([
+    [
+      920,
+      roadmapIssue(920, '- [ ] #921\n- [ ] #922\n- [ ] #923', 'epic-readiness'),
+    ],
+    [921, executionIssue(921, 'ready leaf 921')],
+    [
+      922,
+      executionIssue(
+        922,
+        'blocked leaf 922\n<!-- idd-skill-blocked-by: blocker-roadmap -->',
+      ),
+    ],
+    [
+      923,
+      {
+        number: 923,
+        title: 'issue 923',
+        state: 'open',
+        body: 'authoring leaf 923',
+        labels: [{ name: 'status:authoring' }],
+      },
+    ],
+  ]);
+}
+
+function readinessResolution() {
+  return {
+    findRoadmapsByMarker: async (markerId: string) =>
+      markerId === 'blocker-roadmap' ? [{ number: 990, state: 'OPEN' }] : [],
+    loadIssueLabelEvents: async () => [],
+    authoringLabelName: 'status:authoring',
+    authoringStaleAgeMs: 4 * 60 * 60 * 1000,
+    nowIso: '2026-06-26T00:00:00Z',
+  };
+}
+
+test('--with-readiness annotates open union leaves with a combined startable signal', async () => {
+  const issues = readinessGraphIssues();
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [920],
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    readiness: readinessResolution(),
+  });
+
+  const byNumber = new Map(report.leaves.map((leaf) => [leaf.number, leaf]));
+  // A fully-ready leaf is startable (no claim state was fetched, so claim
+  // eligibility is unknown and treated as non-blocking).
+  assert.deepEqual(byNumber.get(921)?.readiness, {
+    ready: true,
+    reasons: [],
+    authoringHeld: false,
+    startable: true,
+  });
+  // A leaf blocked by an open roadmap marker is not ready and not startable.
+  const r922 = byNumber.get(922)?.readiness;
+  assert.equal(r922?.ready, false);
+  assert.equal(r922?.startable, false);
+  assert.equal(r922?.authoringHeld, false);
+  assert.deepEqual(r922?.reasons, [
+    'blocked_by_open_roadmap_marker:blocker-roadmap',
+  ]);
+  // An authoring-held leaf is flagged and not startable.
+  const r923 = byNumber.get(923)?.readiness;
+  assert.equal(r923?.ready, false);
+  assert.equal(r923?.startable, false);
+  assert.equal(r923?.authoringHeld, true);
+  assert.ok(r923?.reasons.includes('label:status:authoring'));
+});
+
+test('--with-readiness is byte-stable when the flag is absent', async () => {
+  const issues = readinessGraphIssues();
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [920],
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  for (const leaf of report.leaves) {
+    assert.equal(
+      Object.hasOwn(leaf as unknown as Record<string, unknown>, 'readiness'),
+      false,
+    );
+  }
+});
+
+test('startable folds in claimEligible: a ready but claimed leaf is not startable', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT)]],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [700],
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+    readiness: readinessResolution(),
+  });
+
+  const byNumber = new Map(report.leaves.map((leaf) => [leaf.number, leaf]));
+  // 701 is readiness-ready but holds a fresh trusted claim → not startable.
+  assert.equal(byNumber.get(701)?.readiness?.ready, true);
+  assert.equal(byNumber.get(701)?.claimEligible, false);
+  assert.equal(byNumber.get(701)?.readiness?.startable, false);
+  // 702 is ready and unclaimed → startable.
+  assert.equal(byNumber.get(702)?.readiness?.ready, true);
+  assert.equal(byNumber.get(702)?.claimEligible, true);
+  assert.equal(byNumber.get(702)?.readiness?.startable, true);
+});
+
+test('--with-readiness on a single root annotates only open execution-leaf nodes', async () => {
+  const issues = new Map<number, unknown>([
+    [930, roadmapIssue(930, '- [ ] #931\n- [ ] #932', 'epic-single')],
+    // An open NESTED ROADMAP node (carries a roadmap-id marker), not a leaf.
+    [931, roadmapIssue(931, '', 'nested-single')],
+    [932, executionIssue(932, 'ready execution leaf')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(930, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    readiness: readinessResolution(),
+  });
+
+  const byNumber = new Map(graph.nodes.map((node) => [node.number, node]));
+  // The open execution leaf is annotated and ready/startable.
+  assert.equal(byNumber.get(932)?.readiness?.ready, true);
+  assert.equal(byNumber.get(932)?.readiness?.startable, true);
+  // The open nested-roadmap node and the root roadmap are NOT annotated — the
+  // executionCandidateSet filter excludes every non-execution node.
+  assert.equal(
+    Object.hasOwn(
+      byNumber.get(931) as unknown as Record<string, unknown>,
+      'readiness',
+    ),
+    false,
+  );
+  assert.equal(
+    Object.hasOwn(
+      byNumber.get(930) as unknown as Record<string, unknown>,
+      'readiness',
+    ),
+    false,
+  );
+});

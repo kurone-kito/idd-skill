@@ -8,11 +8,16 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mjs';
 import {
   isAutopilotSuitabilityScore,
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
 } from './autopilot-suitability.mjs';
+import {
+  buildRoadmapMarkerResolver,
+  evaluateDiscoverReadiness,
+} from './discover-readiness-check.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
 import { parseIsoDurationToMs } from './policy-helpers.mjs';
 import {
@@ -82,6 +87,13 @@ if (isMainModule(import.meta.url)) {
   const claimState = args.withClaimState
     ? buildClaimStateResolution(owner, repo, policy, args.currentClaimId)
     : undefined;
+  // The readiness annotation is strictly opt-in: only when --with-readiness is
+  // passed do we build the marker / label-event loaders and resolve the
+  // authoring-hold policy. The default path leaves `readiness` undefined, so no
+  // extra fetch is made and the output is byte-stable.
+  const readiness = args.withReadiness
+    ? buildReadinessResolution(owner, repo, policy)
+    : undefined;
   const report = args.allRoadmaps
     ? await enumerateAllRoadmapsGraph({
         markerPrefix: policy.markerPrefix,
@@ -96,6 +108,7 @@ if (isMainModule(import.meta.url)) {
           policy.markerPrefix,
         ),
         claimState,
+        readiness,
       })
     : await enumerateRoadmapGraph(args.issue, {
         markerPrefix: policy.markerPrefix,
@@ -104,6 +117,7 @@ if (isMainModule(import.meta.url)) {
         loadIssue: buildIssueLoader(owner, repo),
         loadSubIssues: buildSubIssueLoader(owner, repo),
         claimState,
+        readiness,
       });
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }
@@ -183,11 +197,17 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   if (!rootNode) {
     throw new Error(`root issue #${rootIssueNumber} was not recorded`);
   }
+  // Both opt-in annotation passes below operate on the open execution-leaf
+  // nodes, so resolve the execution-candidate set once — only when a pass
+  // actually runs, keeping the default path allocation-free and byte-stable.
+  const executionCandidateSet =
+    options.claimState || options.readiness
+      ? new Set(executionCandidates)
+      : null;
   // Opt-in (#1008): annotate each open execution-leaf node with active-claim
   // eligibility. Gated on `options.claimState` so the default path makes no
   // extra GitHub API call and the output shape stays byte-stable.
-  if (options.claimState) {
-    const executionCandidateSet = new Set(executionCandidates);
+  if (options.claimState && executionCandidateSet) {
     for (const node of nodes) {
       if (!executionCandidateSet.has(node.number)) {
         continue;
@@ -199,6 +219,21 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       node.activeClaim = annotated.activeClaim;
       node.claimEligible = annotated.claimEligible;
     }
+  }
+  // Opt-in (#1123): annotate each open execution-leaf node with its A3
+  // readiness in a single batch call, after the claim loop so `startable` can
+  // fold in `claimEligible`. Gated on `options.readiness` so the default path
+  // makes no extra API call and the output shape stays byte-stable.
+  if (options.readiness && executionCandidateSet) {
+    const executionNodes = nodes.filter((node) =>
+      executionCandidateSet.has(node.number),
+    );
+    await annotateReadiness(
+      executionNodes,
+      options.readiness,
+      loadIssue,
+      markerPrefix,
+    );
   }
   return {
     root: {
@@ -534,6 +569,18 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       leaf.claimEligible = annotated.claimEligible;
     }
   }
+  // Opt-in (#1123): annotate the open union leaves with their A3 readiness in a
+  // single batch call. Runs after the claim loop so `startable` can fold in
+  // `claimEligible`. Gated on `options.readiness`, so the default path adds no
+  // extra API call and the output shape stays byte-stable.
+  if (options.readiness) {
+    await annotateReadiness(
+      leaves,
+      options.readiness,
+      options.loadIssue,
+      markerPrefix,
+    );
+  }
   const scoredLeafCount = leaves.filter((leaf) =>
     isAutopilotSuitabilityScore(leaf.autopilotSuitability),
   ).length;
@@ -629,6 +676,61 @@ function normalizeOpenRoadmapRootNumbers(roots) {
         .filter((value) => Number.isInteger(value) && value > 0),
     ),
   ].sort((left, right) => left - right);
+}
+/**
+ * Annotate each OPEN entry with its A3 readiness verdict (`--with-readiness`)
+ * by composing the batch `evaluateDiscoverReadiness` helper over the open
+ * entry numbers — one call, reusing the enclosing enumeration's `loadIssue`
+ * and `markerPrefix` so no second issue loader is constructed. Closed entries
+ * are skipped (only open execution work is a start candidate).
+ *
+ * `evaluateDiscoverReadiness` classifies every input number into `ready` or
+ * `filteredOut` (an inaccessible/closed issue lands in `filteredOut` with a
+ * sentinel reason), so each open entry resolves to a definite verdict. The
+ * combined `startable` hint folds in `claimEligible` when `--with-claim-state`
+ * also ran; otherwise claim eligibility is unknown and treated as
+ * non-blocking. The suitability floor is left to the helper default because
+ * the readiness classification (labels + dependencies) does not read the
+ * score.
+ */
+async function annotateReadiness(entries, readiness, loadIssue, markerPrefix) {
+  const openEntries = entries.filter(
+    (entry) => String(entry.state).toUpperCase() === 'OPEN',
+  );
+  if (openEntries.length === 0) {
+    return;
+  }
+  const summary = await evaluateDiscoverReadiness(
+    openEntries.map((entry) => entry.number),
+    {
+      // We read only `ready` / `filteredOut[].reasons`, so the unresolvable
+      // bucket and the authoring-stale `warning` (and thus its
+      // `loadIssueLabelEvents` timeline fetch) are intentionally not wired —
+      // `authoringHeld` is label-presence-based and needs neither.
+      includeUnresolvable: false,
+      loadIssue,
+      findRoadmapsByMarker: readiness.findRoadmapsByMarker,
+      authoringLabelName: readiness.authoringLabelName,
+      authoringStaleAgeMs: readiness.authoringStaleAgeMs,
+      markerPrefix,
+      now: readiness.nowIso,
+    },
+  );
+  const readyNumbers = new Set(summary.ready.map((entry) => entry.number));
+  const reasonsByNumber = new Map(
+    summary.filteredOut.map((entry) => [entry.number, entry.reasons]),
+  );
+  const authoringReason = `label:${readiness.authoringLabelName}`;
+  for (const entry of openEntries) {
+    const ready = readyNumbers.has(entry.number);
+    const reasons = reasonsByNumber.get(entry.number) ?? [];
+    entry.readiness = {
+      ready,
+      reasons,
+      authoringHeld: reasons.includes(authoringReason),
+      startable: ready && entry.claimEligible !== false,
+    };
+  }
 }
 /**
  * Resolve one execution leaf's active-claim eligibility (#1008).
@@ -755,6 +857,22 @@ function buildClaimStateResolution(owner, repo, policy, currentClaimId) {
     staleAgeMs,
     nowIso: new Date().toISOString(),
     currentClaimId: String(currentClaimId ?? '').trim(),
+  };
+}
+/**
+ * Build the CLI-side readiness resolution: the roadmap-marker resolver (the
+ * one new GitHub API surface, an A3-authorized scoped body search) plus the
+ * resolved authoring-hold policy. Only invoked when `--with-readiness` is
+ * passed, so the resolver is never wired in the default path.
+ */
+function buildReadinessResolution(owner, repo, policy) {
+  const authoringPolicy = resolveAuthoringGuardPolicy(policy);
+  const markerPrefix = normalizeMarkerPrefix(policy.markerPrefix);
+  return {
+    findRoadmapsByMarker: buildRoadmapMarkerResolver(owner, repo, markerPrefix),
+    authoringLabelName: authoringPolicy.labelName,
+    authoringStaleAgeMs: authoringPolicy.staleAgeMs,
+    nowIso: new Date().toISOString(),
   };
 }
 /**
@@ -1042,6 +1160,7 @@ function parseArgs(argv) {
     repo: '',
     policy: '',
     withClaimState: false,
+    withReadiness: false,
     currentClaimId: '',
     help: false,
   };
@@ -1076,6 +1195,10 @@ function parseArgs(argv) {
       parsed.withClaimState = true;
       continue;
     }
+    if (token === '--with-readiness') {
+      parsed.withReadiness = true;
+      continue;
+    }
     if (token === '--current-claim-id') {
       // Only consume the next token as the id when it exists and is not itself
       // a flag, so `--current-claim-id --with-claim-state` does not swallow the
@@ -1097,8 +1220,8 @@ function parseArgs(argv) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/discover-roadmap-graph.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--current-claim-id <id>]
-  node scripts/discover-roadmap-graph.mjs --all-roadmaps [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--current-claim-id <id>]
+  node scripts/discover-roadmap-graph.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--with-readiness] [--current-claim-id <id>]
+  node scripts/discover-roadmap-graph.mjs --all-roadmaps [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--with-readiness] [--current-claim-id <id>]
 
   --issue and --all-roadmaps are mutually exclusive; exactly one is required.
   --all-roadmaps enumerates open execution leaves across every open roadmap
@@ -1120,6 +1243,18 @@ function printHelp() {
   new-format claimed-by markers and intentionally does NOT account for legacy
   claim-id-less markers or forced-handoff transfers; the authoritative A5
   claim gate (idd-claim.instructions.md) remains the real protection.
+
+  --with-readiness (opt-in) annotates each OPEN execution leaf with its A3
+  startability by composing the discover-readiness-check helper (blocked-by
+  resolution + authoring-hold). Each annotated leaf gains:
+    "readiness": { "ready": bool, "reasons": [str], "authoringHeld": bool, "startable": bool }
+      ready      = no blocking label + every Blocked by #N / {prefix}-blocked-by dep is closed
+      reasons    = sorted filter reasons (e.g. "blocked_by_open_issue:#N"); empty when ready
+      startable  = ready AND not claim-blocked (folds in claimEligible when --with-claim-state
+                   also ran; otherwise claim eligibility is unknown and treated as non-blocking)
+  Absent the flag, NO extra API calls are made and no readiness field is emitted
+  (the output shape is byte-stable). Like claimEligible this is a SOFT hint; the
+  A3/A4/A4.5/A5 gates remain authoritative.
 
 Output schema (JSON mode) — --issue single-root report:
   {

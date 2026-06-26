@@ -563,7 +563,7 @@ export function buildRoadmapMarkerSearchQuery(
   // prefix would corrupt the exact marker string the resolver looks for.
   return `repo:${owner}/${repo} is:issue in:body "<!-- ${markerPrefix}-roadmap-id: ${marker} -->"`;
 }
-function buildRoadmapMarkerResolver(owner, repo, markerPrefix) {
+export function buildRoadmapMarkerResolver(owner, repo, markerPrefix) {
   return async (marker) => {
     const query = buildRoadmapMarkerSearchQuery(
       owner,
