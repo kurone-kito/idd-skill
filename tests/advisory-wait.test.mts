@@ -6,13 +6,16 @@ import { test } from 'node:test';
 import {
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   readAdvisoryPrimaryBotLogin,
+  readAdvisorySecondaryBotLogin,
   readAdvisoryWaitPolicy,
   resolveAdvisoryPrimaryBotLogin,
+  resolveAdvisorySecondaryBotLogin,
   resolveAdvisoryWaitPolicy,
 } from '../src/scripts/advisory-wait-policy.mts';
 import {
   buildAdvisoryWaitSummary,
   classifyCiChecks,
+  computeSecondaryRequestedForHead,
   isCopilotReviewerLogin,
   operationalMarkerPrefix,
   unsafeTextReason,
@@ -414,6 +417,230 @@ test('readAdvisoryPrimaryBotLogin only applies a schema-valid file override', ()
     readAdvisoryPrimaryBotLogin(join(root, 'missing.json')),
     'copilot',
   );
+});
+
+test('secondary advisory bot login resolves to empty when absent and normalizes when present', () => {
+  // The secondary is OPTIONAL — absence resolves to '' (disabled), with no
+  // Copilot default, so it never accidentally matches the Copilot family.
+  assert.equal(resolveAdvisorySecondaryBotLogin({}), '');
+  assert.equal(resolveAdvisorySecondaryBotLogin(), '');
+  assert.equal(
+    resolveAdvisorySecondaryBotLogin({
+      advisoryWait: { secondaryBotLogin: 'CodeRabbitAI[bot]' },
+    }),
+    'coderabbitai[bot]',
+  );
+  assert.equal(
+    resolveAdvisorySecondaryBotLogin({
+      advisoryWait: { secondaryBotLogin: '  ' },
+    }),
+    '',
+  );
+  assert.equal(
+    resolveAdvisorySecondaryBotLogin({
+      advisoryWait: { secondaryBotLogin: 42 },
+    }),
+    '',
+  );
+});
+
+test('readAdvisorySecondaryBotLogin only applies a schema-valid file override, else empty', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-advisory-secondary-bot-'));
+  const validPath = join(root, 'policy.valid.json');
+  const invalidPath = join(root, 'policy.invalid.json');
+  const validConfig = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  validConfig.advisoryWait = { secondaryBotLogin: 'coderabbitai[bot]' };
+  writeFileSync(validPath, JSON.stringify(validConfig), 'utf8');
+  // A non-string secondaryBotLogin violates the schema, so the reader fails
+  // closed to '' (secondary disabled).
+  writeFileSync(
+    invalidPath,
+    JSON.stringify({ advisoryWait: { secondaryBotLogin: 5 } }),
+    'utf8',
+  );
+
+  assert.equal(readAdvisorySecondaryBotLogin(validPath), 'coderabbitai[bot]');
+  assert.equal(readAdvisorySecondaryBotLogin(invalidPath), '');
+  assert.equal(readAdvisorySecondaryBotLogin(join(root, 'missing.json')), '');
+});
+
+test('computeSecondaryRequestedForHead detects a same-HEAD secondary request and resets per HEAD', () => {
+  const head = 'b'.repeat(40);
+  // No timeline → not requested.
+  assert.equal(
+    computeSecondaryRequestedForHead([], head, 'coderabbitai[bot]'),
+    false,
+  );
+  // Empty login short-circuits, even with a matching request event.
+  assert.equal(
+    computeSecondaryRequestedForHead(
+      [
+        { event: 'committed', sha: head },
+        {
+          event: 'review_requested',
+          requested_reviewer: { login: 'coderabbitai[bot]' },
+        },
+      ],
+      head,
+      '',
+    ),
+    false,
+  );
+  // review_requested AFTER the HEAD committed event → requested (case-folded).
+  assert.equal(
+    computeSecondaryRequestedForHead(
+      [
+        { event: 'committed', sha: head },
+        {
+          event: 'review_requested',
+          requested_reviewer: { login: 'CodeRabbitAI[bot]' },
+        },
+      ],
+      head,
+      'coderabbitai[bot]',
+    ),
+    true,
+  );
+  // A request BEFORE the current HEAD committed event does not count — the
+  // per-HEAD reset that lets a new HEAD re-request the secondary.
+  assert.equal(
+    computeSecondaryRequestedForHead(
+      [
+        {
+          event: 'review_requested',
+          requested_reviewer: { login: 'coderabbitai[bot]' },
+        },
+        { event: 'committed', sha: head },
+      ],
+      head,
+      'coderabbitai[bot]',
+    ),
+    false,
+  );
+});
+
+test('secondary bot is requested once per HEAD when primary is cap-exhausted, without touching the gate', () => {
+  const fixture = readJson('fixtures/advisory-wait/cap-exhausted.json');
+  const base = {
+    prHeadSha: fixture.input.prHeadSha,
+    reviews: fixture.input.reviews,
+    requestedReviewers: fixture.input.requestedReviewers,
+    timelineEvents: fixture.input.timelineEvents,
+    comments: fixture.input.comments,
+  };
+  const opts = {
+    now: fixture.input.now,
+    requestCap: fixture.input.requestCap,
+    trustedMarkerLogins: fixture.input.trustedMarkerLogins,
+  };
+
+  const withoutSecondary = buildAdvisoryWaitSummary(base, opts);
+  const withSecondary = buildAdvisoryWaitSummary(base, {
+    ...opts,
+    secondaryBotLogin: 'coderabbitai[bot]',
+  });
+
+  // Trigger: primary cap-exhausted and never reviewed HEAD → request once.
+  assert.equal(withoutSecondary.outcome, 'CAP_EXHAUSTED');
+  assert.equal(withSecondary.secondaryRequestNeeded, true);
+  assert.equal(withSecondary.secondaryBotLogin, 'coderabbitai[bot]');
+  // No secondary configured ⇒ identical to the primary-only (#1098) behavior.
+  assert.equal(withoutSecondary.secondaryRequestNeeded, false);
+  assert.equal(withoutSecondary.secondaryBotLogin, '');
+
+  // Contract (a): the secondary never alters the primary gate.
+  assert.equal(withSecondary.outcome, withoutSecondary.outcome);
+  assert.equal(withSecondary.f3Outcome, withoutSecondary.f3Outcome);
+  assert.equal(withSecondary.copilotPending, withoutSecondary.copilotPending);
+  assert.equal(
+    withSecondary.lastCopilotCommit,
+    withoutSecondary.lastCopilotCommit,
+  );
+  // Contract (b): no primary advisory-wait marker / cap consumption is added.
+  assert.equal(
+    withSecondary.requestMarkerCount,
+    withoutSecondary.requestMarkerCount,
+  );
+  assert.equal(
+    withSecondary.sameHeadMarkerPresent,
+    withoutSecondary.sameHeadMarkerPresent,
+  );
+
+  // Once per HEAD: a secondary review_requested after HEAD suppresses re-request.
+  const alreadyRequested = buildAdvisoryWaitSummary(
+    {
+      ...base,
+      timelineEvents: [
+        { event: 'committed', sha: fixture.input.prHeadSha },
+        {
+          event: 'review_requested',
+          requested_reviewer: { login: 'coderabbitai[bot]' },
+        },
+      ],
+    },
+    { ...opts, secondaryBotLogin: 'coderabbitai[bot]' },
+  );
+  assert.equal(alreadyRequested.secondaryRequestNeeded, false);
+
+  // Misconfiguration: a secondary equal to the primary is treated as absent.
+  const samePrimary = buildAdvisoryWaitSummary(base, {
+    ...opts,
+    primaryBotLogin: 'coderabbitai[bot]',
+    secondaryBotLogin: 'coderabbitai[bot]',
+  });
+  assert.equal(samePrimary.secondaryRequestNeeded, false);
+  assert.equal(samePrimary.secondaryBotLogin, '');
+});
+
+test('secondary bot fires on a stalled settled-window wait but not on a HEAD-reviewed satisfy', () => {
+  // Stalled / rate-limited: SATISFIED via the elapsed settle window with no
+  // HEAD review (lastCopilotCommit empty) → request the secondary supplement.
+  const waitFixture = readJson('fixtures/advisory-wait/wait.json');
+  const stalled = buildAdvisoryWaitSummary(
+    {
+      prHeadSha: waitFixture.input.prHeadSha,
+      reviews: waitFixture.input.reviews,
+      requestedReviewers: waitFixture.input.requestedReviewers,
+      timelineEvents: waitFixture.input.timelineEvents,
+      comments: waitFixture.input.comments,
+    },
+    {
+      now: waitFixture.input.now,
+      // elapsed (4 min) >= 1 ⇒ SATISFIED by the window, not by a HEAD review.
+      settledWindowMinutes: 1,
+      trustedMarkerLogins: waitFixture.input.trustedMarkerLogins,
+      secondaryBotLogin: 'coderabbitai[bot]',
+    },
+  );
+  assert.equal(stalled.outcome, 'SATISFIED');
+  assert.equal(stalled.lastCopilotCommit, '');
+  assert.equal(stalled.secondaryRequestNeeded, true);
+
+  // A genuine HEAD review (SATISFIED with lastCopilotCommit === HEAD) needs no
+  // supplement — the follow-up the secondary exists for is not needed.
+  const satisfiedFixture = readJson('fixtures/advisory-wait/satisfied.json');
+  const headReviewed = buildAdvisoryWaitSummary(
+    {
+      prHeadSha: satisfiedFixture.input.prHeadSha,
+      reviews: satisfiedFixture.input.reviews,
+      requestedReviewers: satisfiedFixture.input.requestedReviewers,
+      timelineEvents: satisfiedFixture.input.timelineEvents,
+      comments: satisfiedFixture.input.comments,
+    },
+    {
+      now: satisfiedFixture.input.now,
+      trustedMarkerLogins: satisfiedFixture.input.trustedMarkerLogins,
+      secondaryBotLogin: 'coderabbitai[bot]',
+    },
+  );
+  assert.equal(headReviewed.outcome, 'SATISFIED');
+  assert.equal(
+    headReviewed.lastCopilotCommit,
+    satisfiedFixture.input.prHeadSha,
+  );
+  assert.equal(headReviewed.secondaryRequestNeeded, false);
 });
 
 test('advisory wait summary normalizes invalid direct options to defaults', () => {

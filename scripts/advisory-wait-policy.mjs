@@ -82,6 +82,46 @@ export function readAdvisoryPrimaryBotLogin(path = '.github/idd/config.json') {
     return DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
   }
 }
+/**
+ * Normalize a configured secondary advisory bot login. Unlike the primary
+ * (which fails closed to Copilot), the secondary is OPTIONAL: an absent,
+ * blank, or non-string value resolves to `''` so an unconfigured secondary
+ * stays fully disabled — the supplement never fires and behavior is identical
+ * to the primary-only path.
+ */
+function normalizeConfiguredSecondaryBotLogin(value) {
+  return typeof value === 'string' && value.trim().length > 0
+    ? value.trim().toLowerCase()
+    : '';
+}
+/**
+ * Resolve the OPTIONAL secondary advisory bot login from a parsed policy
+ * object, returning `''` (disabled) when `advisoryWait.secondaryBotLogin` is
+ * absent. The secondary is a non-gating supplement, so it has no Copilot
+ * default — absence must read as "no secondary".
+ */
+export function resolveAdvisorySecondaryBotLogin(config = {}) {
+  const advisoryWait = config?.advisoryWait ?? {};
+  return normalizeConfiguredSecondaryBotLogin(advisoryWait.secondaryBotLogin);
+}
+/**
+ * Read the OPTIONAL secondary advisory bot login from a policy file, failing
+ * closed to `''` (disabled) when the file is missing, unreadable, or
+ * schema-invalid.
+ */
+export function readAdvisorySecondaryBotLogin(
+  path = '.github/idd/config.json',
+) {
+  try {
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    if (validate(config, POLICY_SCHEMA).length > 0) {
+      return '';
+    }
+    return resolveAdvisorySecondaryBotLogin(config);
+  } catch {
+    return '';
+  }
+}
 export function normalizeAdvisoryWaitRuntimeOptions(options = {}) {
   const o = options ?? {};
   return {

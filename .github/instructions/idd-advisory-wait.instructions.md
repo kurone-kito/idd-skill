@@ -92,6 +92,15 @@ Required helper fields:
 - `capExhaustedRoute`
 - `trustedMarkerSummary`
 
+Optional non-gating secondary-bot fields (`secondaryBotLogin: ""` ⇒ disabled,
+behavior identical to the primary-only path):
+
+- `secondaryBotLogin` — resolved secondary advisory bot login, or empty when
+  none is configured (a secondary equal to the primary counts as none).
+- `secondaryRequestNeeded` — `true` when the secondary should be requested
+  once for the current HEAD. **Not** in the `outcome` / `f3Outcome` enums and
+  never changes any routing.
+
 Allowed `outcome` / `f3Outcome` values:
 
 - `SATISFIED`
@@ -128,6 +137,17 @@ to the distributed defaults named in `docs/policy-constants.md`:
 | `CAP_EXHAUSTED`   | use `CAP_EXHAUSTED_ROUTE`       | post cap-exhausted hold and stop | post cap-exhausted hold and stop      |
 | `WAIT`            | continue polling                | poll then restart F2 from top    | do not merge; return to F2            |
 | `HOLD`            | post hold and stop              | post hold and stop               | post hold and stop                    |
+
+### Secondary advisory bot supplement (non-gating)
+
+When `advisoryWait.secondaryBotLogin` is configured, the helper sets
+`secondaryRequestNeeded: true` alongside a `CAP_EXHAUSTED` or a stalled
+`SATISFIED` (closed by the elapsed window while the primary never reviewed
+HEAD). This is **orthogonal** to the table above: it changes no
+`outcome` / `f3Outcome` value or route, never satisfies the primary gate, and
+posts no `advisory-wait` marker. E14 then requests the secondary once per HEAD
+(see `idd-review-fix.instructions.md`); its review is ordinary advisory input,
+returned to review-triage by the E1 snapshot if it lands before merge.
 
 ### F3-specific interpretation
 

@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 
 import {
   readAdvisoryPrimaryBotLogin,
+  readAdvisorySecondaryBotLogin,
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mts';
 import type { TrustedMarkerActorResolution } from './protocol-helpers.mts';
@@ -129,6 +130,7 @@ const trustedMarkerLogins = normalizeTrustedMarkerLogins([
 ]);
 const advisoryWaitPolicy = readAdvisoryWaitPolicy();
 const primaryBotLogin = readAdvisoryPrimaryBotLogin();
+const secondaryBotLogin = readAdvisorySecondaryBotLogin();
 
 const summary = buildAdvisoryWaitSummary(
   {
@@ -146,6 +148,7 @@ const summary = buildAdvisoryWaitSummary(
     pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
     capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
     primaryBotLogin,
+    secondaryBotLogin,
     viewerLogin,
     configuredTrustedActors,
     collaboratorTrustEnabled,

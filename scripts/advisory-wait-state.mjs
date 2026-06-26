@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import {
   readAdvisoryPrimaryBotLogin,
+  readAdvisorySecondaryBotLogin,
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mjs';
 import {
@@ -74,6 +75,7 @@ const trustedMarkerLogins = normalizeTrustedMarkerLogins([
 ]);
 const advisoryWaitPolicy = readAdvisoryWaitPolicy();
 const primaryBotLogin = readAdvisoryPrimaryBotLogin();
+const secondaryBotLogin = readAdvisorySecondaryBotLogin();
 const summary = buildAdvisoryWaitSummary(
   {
     prHeadSha,
@@ -90,6 +92,7 @@ const summary = buildAdvisoryWaitSummary(
     pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
     capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
     primaryBotLogin,
+    secondaryBotLogin,
     viewerLogin,
     configuredTrustedActors,
     collaboratorTrustEnabled,
