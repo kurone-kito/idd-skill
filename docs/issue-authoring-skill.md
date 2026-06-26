@@ -402,9 +402,9 @@ label in the same publication command, such as `gh issue create --label`
 when the bundled GitHub CLI flow can use it. If the flow cannot label
 the issue atomically, apply the label immediately after creation. If
 post-create label application fails, close the created issue before
-stopping. Deletion needs repo-admin permission the authoring agent
-typically lacks (and `docs/permissions.md` forbids for normal IDD), so it
-is not the default path.
+stopping. Deletion needs admin permission the authoring agent typically
+lacks (and `docs/permissions.md` forbids for normal IDD), so it is not the
+default path.
 
 These guards keep partially published issue sets visible to the IDD
 discover guard while the full set is still being authored. Remove the

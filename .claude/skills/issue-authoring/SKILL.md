@@ -73,7 +73,7 @@ needs-decision, blocked-by-human, and out-of-scope.
    - create new issues with the label when supported, or apply the label
      immediately after creation
    - if post-create label application fails, close the created issue
-     before stopping; deletion needs repo-admin permission the authoring
+     before stopping; deletion needs admin permission the authoring
      agent typically lacks (and `docs/permissions.md` forbids for normal
      IDD), so it is not the default path
    - remove the label from all published issues only after the full set is
