@@ -4,9 +4,11 @@ import { test } from 'node:test';
 import {
   buildDispositionBody,
   buildDispositionPlan,
+  buildSummaryDispositionBody,
   type NoticeComment,
   noticeReason,
 } from '../src/scripts/disposition-non-review-notices.mts';
+import { summarizeDispositionEvidenceForGate } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
 const planSchema = loadJson(
@@ -19,6 +21,8 @@ const CODEX_NOTICE =
   'You have reached your Codex usage limits for code reviews.';
 const CODERABBIT_NOTICE =
   '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> ## Review limit reached';
+const CODERABBIT_SUMMARY =
+  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n## Walkthrough\nSome walkthrough text.';
 // A full 40-char head SHA for the cases that validate against the schema, which
 // now constrains `headSha` to `^[0-9a-f]{40}$`.
 const HEAD_SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -28,8 +32,11 @@ function notice(
   login: string,
   body: string,
   createdAt = `2026-05-12T00:00:0${id}Z`,
+  updatedAt?: string,
 ): NoticeComment {
-  return { id, login, body, createdAt };
+  return updatedAt === undefined
+    ? { id, login, body, createdAt }
+    : { id, login, body, createdAt, updatedAt };
 }
 
 test('buildDispositionBody is marker-first and names the bot login + head sha', () => {
@@ -160,11 +167,12 @@ test('buildDispositionPlan is fail-closed: real reviews and non-bot comments are
       comments: [
         // A real Codex review (not a notice) must not be dispositioned.
         notice(1, CODEX, 'I found an off-by-one in foo.mts at line 42.'),
-        // A real CodeRabbit summarize review (not a rate-limit notice).
+        // A CodeRabbit comment that is neither a rate-limit notice nor the
+        // summary walkthrough marker — the helper must not touch it.
         notice(
           2,
           CODERABBIT,
-          '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n## Walkthrough',
+          'A nudge from the bot, not an auto-generated marker.',
         ),
         // A human comment that merely mentions usage limits.
         notice(3, 'reviewer-a', 'please cap the Codex usage limits in config'),
@@ -188,27 +196,31 @@ test('buildDispositionPlan only considers configured advisory bots', () => {
   assert.equal(plan.planned.length, 0);
 });
 
-test('buildDispositionPlan plans a notice even when the bot also reviewed', () => {
+test('buildDispositionPlan plans both the notice (rejected) and the summary (accepted)', () => {
   // A persistent rate-limit notice stays in the gate's outstanding set until a
-  // disposition naming the bot carries it, even when the bot has a separate
-  // completed review. The helper always plans the undispositioned notice.
+  // disposition naming the bot carries it; the CodeRabbit summary walkthrough is a
+  // separate completed-review item the gate scores through its general
+  // updatedAt-aware pairing. The helper plans BOTH — the notice **Rejected** and
+  // the summary **Accepted**.
   const plan = buildDispositionPlan(
     {
       headSha: 'abc1234',
       comments: [
         notice(1, CODERABBIT, CODERABBIT_NOTICE),
-        // A separate CodeRabbit summary review (handled by the agent, not here).
-        notice(
-          2,
-          CODERABBIT,
-          '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n## Walkthrough',
-        ),
+        notice(2, CODERABBIT, CODERABBIT_SUMMARY),
       ],
     },
     { trustedMarkerLogins: ['kurone-kito'] },
   );
-  assert.equal(plan.planned.length, 1);
-  assert.equal(plan.planned[0].botLogin, CODERABBIT);
+  assert.equal(plan.planned.length, 2);
+  const rejected = plan.planned.find((entry) =>
+    entry.body.startsWith('**Rejected**'),
+  );
+  const accepted = plan.planned.find((entry) =>
+    entry.body.startsWith('**Accepted**'),
+  );
+  assert.ok(rejected && /did not review HEAD/.test(rejected.body));
+  assert.ok(accepted && /summary walkthrough/.test(accepted.body));
   assert.equal(plan.skipped.length, 0);
 });
 
@@ -280,6 +292,307 @@ test('a combined disposition naming several bots covers only one notice', () => 
   assert.equal(plan.planned.length, 1);
 });
 
+test('buildSummaryDispositionBody is marker-first, names the login + head sha, and avoids the word CodeRabbit', () => {
+  const body = buildSummaryDispositionBody(CODERABBIT, 'abc1234');
+  assert.ok(body.startsWith('**Accepted**'), 'marker must be first bytes');
+  assert.match(body, /coderabbitai\[bot\] summary walkthrough at HEAD abc1234/);
+  // The standalone word "CodeRabbit" would make the gate's createdAt-based
+  // RESOLVED path permanently clear the summary instead of per-HEAD
+  // re-disposition, so the body must use the login form only.
+  assert.doesNotMatch(body, /\bCodeRabbit\b/);
+});
+
+test('buildDispositionPlan plans an **Accepted** for an undispositioned CodeRabbit summary', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [notice(1, CODERABBIT, CODERABBIT_SUMMARY)],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 1);
+  const entry = plan.planned[0];
+  assert.equal(entry.botLogin, CODERABBIT);
+  assert.ok(entry.body.startsWith('**Accepted**'));
+  assert.match(
+    entry.body,
+    /coderabbitai\[bot\] summary walkthrough at HEAD abc1234/,
+  );
+  assert.doesNotMatch(entry.body, /\bCodeRabbit\b/);
+  assert.equal(plan.skipped.length, 0);
+});
+
+test('buildDispositionPlan skips a summary already accepted by a strictly-newer disposition', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, CODERABBIT, CODERABBIT_SUMMARY, '2026-05-12T00:00:00Z'),
+        // A trusted summary acceptance posted AFTER the summary's activity.
+        notice(
+          2,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODERABBIT, 'abc1234'),
+          '2026-05-12T01:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 0);
+  assert.deepEqual(
+    plan.skipped.map((entry) => entry.noticeId),
+    [1],
+  );
+});
+
+test('buildDispositionPlan re-plans the summary when its updatedAt bumps past the prior acceptance', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'def5678',
+      comments: [
+        // The prior acceptance predates the summary's latest edit.
+        notice(
+          1,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODERABBIT, 'abc1234'),
+          '2026-05-12T01:00:00Z',
+        ),
+        // CodeRabbit edited the summary AFTER the acceptance (updatedAt bumps).
+        notice(
+          2,
+          CODERABBIT,
+          CODERABBIT_SUMMARY,
+          '2026-05-12T00:00:00Z',
+          '2026-05-12T02:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 1);
+  assert.equal(plan.planned[0].noticeId, 2);
+  assert.ok(plan.planned[0].body.startsWith('**Accepted**'));
+});
+
+test('buildDispositionPlan only auto-dispositions summaries from configured advisory bots', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [notice(1, CODERABBIT, CODERABBIT_SUMMARY)],
+    },
+    { advisoryBotLogins: [CODEX], trustedMarkerLogins: ['kurone-kito'] },
+  );
+  // CodeRabbit is not in the configured advisory-bot set here.
+  assert.equal(plan.planned.length, 0);
+  assert.equal(plan.skipped.length, 0);
+});
+
+test('buildDispositionPlan does not treat a comment that merely quotes the summary marker as a summary', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(
+          1,
+          CODERABBIT,
+          'See the marker `<!-- This is an auto-generated comment: summarize by coderabbit.ai -->` referenced inline.',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 0);
+  assert.equal(plan.skipped.length, 0);
+});
+
+test('buildDispositionPlan does not auto-dispose a "no actionable comments" summary (gate already RESOLVED)', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(
+          1,
+          CODERABBIT,
+          '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n**Actionable comments posted: 0**\nNo actionable comments were generated.',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 0);
+  assert.deepEqual(
+    plan.skipped.map((entry) => entry.reason),
+    ['summary-resolved-no-actionable-comments'],
+  );
+});
+
+test('buildDispositionPlan greedily consumes one disposition per summary (two summaries, one disposition -> one planned)', () => {
+  // Two distinct summary comments coexist with a single newer acceptance. The
+  // gate's greedy 1:1 pairing clears only one, so the helper must leave the
+  // second planned (a bare existence check would wrongly skip both -> stuck gate).
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, CODERABBIT, CODERABBIT_SUMMARY, '2026-05-12T00:00:00Z'),
+        notice(2, CODERABBIT, CODERABBIT_SUMMARY, '2026-05-12T00:30:00Z'),
+        notice(
+          3,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODERABBIT, 'abc1234'),
+          '2026-05-12T01:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  // The oldest summary (id 1) consumes the acceptance; the second (id 2) is planned.
+  assert.deepEqual(
+    plan.skipped.map((entry) => entry.noticeId),
+    [1],
+  );
+  assert.deepEqual(
+    plan.planned.map((entry) => entry.noticeId),
+    [2],
+  );
+});
+
+test('buildDispositionPlan rejects (does not also accept) a summary that is itself a rate-limit notice', () => {
+  // A comment that carries the summary marker AND a rate-limit heading is a
+  // non-review notice: the notice path rejects it, and the summary path must not
+  // also accept it — a comment id gets at most one disposition.
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(
+          1,
+          CODERABBIT,
+          `${CODERABBIT_SUMMARY}\n\n> ## Review limit reached`,
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 1);
+  assert.ok(plan.planned[0].body.startsWith('**Rejected**'));
+  assert.equal(plan.skipped.length, 0);
+});
+
+test('gate agreement: the planned **Accepted** clears the summary from missingRegularComments', () => {
+  const summary = {
+    id: 1,
+    author: { login: CODERABBIT },
+    body: CODERABBIT_SUMMARY,
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const gateOptions = {
+    iddAgentLogins: ['kurone-kito'],
+    advisoryBotLogins: [CODERABBIT, CODEX],
+  };
+  // Before: the gate flags the undispositioned summary.
+  const before = summarizeDispositionEvidenceForGate(
+    { comments: [summary], threads: [] },
+    gateOptions,
+  );
+  assert.equal(before.missingRegularCommentCount, 1);
+
+  // The helper plans the **Accepted**; post it as an IDD-agent comment newer than
+  // the summary's activity.
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(
+          1,
+          CODERABBIT,
+          CODERABBIT_SUMMARY,
+          '2026-05-12T00:00:00Z',
+          '2026-05-12T00:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 1);
+  const accepted = {
+    id: 2,
+    author: { login: 'kurone-kito' },
+    body: plan.planned[0].body,
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+  };
+  // After: the gate no longer flags the summary.
+  const after = summarizeDispositionEvidenceForGate(
+    { comments: [summary, accepted], threads: [] },
+    gateOptions,
+  );
+  assert.equal(after.missingRegularCommentCount, 0);
+});
+
+test('gate agreement: the summary stays cleared alongside another outstanding comment', () => {
+  const summary = {
+    id: 1,
+    author: { login: CODERABBIT },
+    body: CODERABBIT_SUMMARY,
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const human = {
+    id: 2,
+    author: { login: 'reviewer-a' },
+    body: 'Please rename foo to bar.',
+    createdAt: '2026-05-12T00:30:00Z',
+    updatedAt: '2026-05-12T00:30:00Z',
+  };
+  const gateOptions = {
+    iddAgentLogins: ['kurone-kito'],
+    advisoryBotLogins: [CODERABBIT, CODEX],
+  };
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(
+          1,
+          CODERABBIT,
+          CODERABBIT_SUMMARY,
+          '2026-05-12T00:00:00Z',
+          '2026-05-12T00:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  // One disposition per outstanding comment: the helper's summary **Accepted**
+  // plus a manual disposition for the human comment. The gate's greedy pairing
+  // covers both.
+  const summaryAccepted = {
+    id: 3,
+    author: { login: 'kurone-kito' },
+    body: plan.planned[0].body,
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+  };
+  const humanDisposition = {
+    id: 4,
+    author: { login: 'kurone-kito' },
+    body: '**Accepted** — will rename in a follow-up',
+    createdAt: '2026-05-12T01:01:00Z',
+    updatedAt: '2026-05-12T01:01:00Z',
+  };
+  const after = summarizeDispositionEvidenceForGate(
+    {
+      comments: [summary, human, summaryAccepted, humanDisposition],
+      threads: [],
+    },
+    gateOptions,
+  );
+  assert.equal(after.missingRegularCommentCount, 0);
+});
+
 test('the dry-run and apply output envelopes validate against the schema', () => {
   const plan = buildDispositionPlan(
     {
@@ -287,9 +600,16 @@ test('the dry-run and apply output envelopes validate against the schema', () =>
       comments: [
         notice(1, CODEX, CODEX_NOTICE),
         notice(2, CODERABBIT, CODERABBIT_NOTICE),
+        // Include a summary so `planned` carries an **Accepted** body and the
+        // broadened schema pattern is exercised.
+        notice(3, CODERABBIT, CODERABBIT_SUMMARY),
       ],
     },
     { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.ok(
+    plan.planned.some((entry) => entry.body.startsWith('**Accepted**')),
+    'a summary **Accepted** must be planned',
   );
   const dryRun = { mode: 'dry-run', prNumber: 7, ...plan };
   assert.equal(validate(dryRun, planSchema).length, 0, 'dry-run output');

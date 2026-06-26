@@ -105,9 +105,11 @@ In the idd-skill source repository, the following optional helpers were adopted:
   marker presence verification across PATH A and PATH B items
 - `scripts/disposition-non-review-notices.mjs` for dry-run/apply
   dispositioning of advisory non-review notices (rate-limit / usage-limit)
-  on a PR — emitting or posting the canonical E6 `**Rejected** — {bot} did
-  not review HEAD …` marker-first, one comment per notice, idempotently and
-  fail-closed (only classifier-recognized notices)
+  and the CodeRabbit summary walkthrough on a PR — emitting or posting the
+  canonical E6 `**Rejected** — {bot} did not review HEAD …` per notice and
+  `**Accepted** — {bot} summary walkthrough …` per current summary,
+  marker-first, idempotently and fail-closed (only classifier-recognized
+  notices and the exact summary marker)
 - `scripts/resolve-review-thread.mjs` for the E13 write-side disposition:
   post the reply to the review thread that owns a review comment **and**
   resolve that thread in one invocation — dry-run by default, `--apply`
@@ -546,6 +548,20 @@ The adopted helper boundaries are intentionally narrow:
 - **Idempotent**: per advisory bot, existing trusted
   `isNonReviewNoticeDisposition` comments naming that bot already cover
   that many of its notices, so a re-run posts nothing new.
+- **CodeRabbit summary walkthrough (#1122)**: it also auto-posts a
+  marker-first `**Accepted** — {bot-login} summary walkthrough at HEAD
+  {sha} …` for the CodeRabbit summary marker
+  (`<!-- This is an auto-generated comment: summarize by coderabbit.ai -->`),
+  which the gate scores through its general updatedAt-aware pairing rather
+  than the notice carry-forward. Because CodeRabbit edits the summary on each
+  re-review, the acceptance is re-dispositioned **per HEAD** by timestamp
+  (skipped only while a trusted acceptance naming the bot is strictly newer
+  than the summary's activity), and is skipped outright when CodeRabbit
+  already reports "No actionable comments were generated" (the gate classifies
+  that RESOLVED). It never resolves a review thread — actionable findings stay
+  their own threads, gated independently. The body names the bot by its login
+  (never the standalone word "CodeRabbit") so per-HEAD re-disposition is
+  preserved.
 - **Fail-closed**: only classifier-recognized notices are dispositioned;
   real reviews and review threads are never touched. `--apply`
   re-validates the active claim and retries once on a transient post

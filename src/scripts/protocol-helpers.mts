@@ -1595,6 +1595,15 @@ export function isCodeRabbitLogin(login: string): boolean {
   return normalized === 'coderabbitai' || normalized === 'coderabbitai[bot]';
 }
 
+// The exact CodeRabbit summary-walkthrough marker. CodeRabbit prefixes its
+// auto-generated review summary with this HTML comment (distinct from the
+// `rate limited by coderabbit.ai` notice marker). Single-sourced here so the
+// comment-minimization classifier (`classifyRegularBotComment`) and the
+// disposition-evidence summary predicate (`isReviewSummaryComment`) recognize
+// byte-for-byte the same marker and cannot drift.
+export const CODERABBIT_SUMMARY_MARKER =
+  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->';
+
 export function classifyRegularBotComment(
   comment: CommentLike,
   comments: CommentLike[],
@@ -1612,11 +1621,7 @@ export function classifyRegularBotComment(
 
   const body = (comment.body ?? '').trimStart();
 
-  if (
-    body.startsWith(
-      '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->',
-    )
-  ) {
+  if (body.startsWith(CODERABBIT_SUMMARY_MARKER)) {
     if (/No actionable comments were generated/i.test(body)) {
       return {
         classifier: 'RESOLVED',
@@ -2239,6 +2244,42 @@ export function isNonReviewNoticeDisposition(comment: {
   const body = (comment.body ?? '').trimStart();
   return (
     body.startsWith('**Rejected**') && /\bdid not review HEAD\b/i.test(body)
+  );
+}
+
+// #1122 CodeRabbit summary-walkthrough auto-disposition classifiers.
+//
+// The CodeRabbit summary walkthrough is a regular comment whose body starts with
+// `CODERABBIT_SUMMARY_MARKER`. Unlike a non-review notice it IS a completed
+// review, so it is dispositioned `**Accepted**` (never `**Rejected**`). The gate
+// scores it through its general updatedAt-aware 1:1 pairing, and CodeRabbit edits
+// the summary on each re-review, so the disposition-non-review-notices helper
+// re-dispositions the CURRENT summary per HEAD rather than carrying an old
+// acceptance forward (a stale carry-forward could mask a finding folded into a
+// later summary body — the "a false positive is a false merge" hazard).
+
+// True when a regular comment is a CodeRabbit summary walkthrough. Detection is
+// start-anchored on the exact single-sourced marker (after trimming leading
+// whitespace) so a comment that merely quotes the marker in prose is not matched.
+export function isReviewSummaryComment(body: unknown): boolean {
+  return String(body ?? '')
+    .trimStart()
+    .startsWith(CODERABBIT_SUMMARY_MARKER);
+}
+
+// A trusted IDD disposition of a CodeRabbit summary walkthrough: the canonical
+// `**Accepted** — {bot} summary walkthrough …` reply the helper posts. Requires
+// the `**Accepted**` prefix (a summary is a completed review, so it is accepted,
+// never rejected) AND the `summary walkthrough` phrase, so an ordinary acceptance
+// of reviewer feedback is excluded. Tightly matched to `buildSummaryDispositionBody`
+// so a loose acceptance can never be miscredited (which would under-post and
+// strand the gate).
+export function isReviewSummaryDisposition(comment: {
+  body?: string | null;
+}): boolean {
+  const body = (comment.body ?? '').trimStart();
+  return (
+    body.startsWith('**Accepted**') && /\bsummary walkthrough\b/i.test(body)
   );
 }
 
@@ -5842,7 +5883,7 @@ function matchesCodeownersPattern(pattern: unknown, path: unknown): boolean {
   return new RegExp(source).test(normalizedPath);
 }
 
-function effectiveRegularCommentActivityAt(comment: {
+export function effectiveRegularCommentActivityAt(comment: {
   updatedAt?: unknown;
   createdAt: string;
 }): string {
@@ -6013,7 +6054,7 @@ function minutesBetweenIso(start: string, end: string): number {
   return Math.floor((endMs - startMs) / 60000);
 }
 
-function compareIsoTimestamps(left: unknown, right: unknown): number {
+export function compareIsoTimestamps(left: unknown, right: unknown): number {
   const leftComparable = normalizeComparableTimestamp(left);
   const rightComparable = normalizeComparableTimestamp(right);
   if (
