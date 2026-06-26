@@ -728,7 +728,7 @@ function normalizeClaimComments(raw) {
  * comparison is applied with the configured age. Mirrors
  * resume-claim-routing's `isStaleByAge`.
  */
-function isClaimStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs) {
+export function isClaimStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs) {
   if (staleAgeMs === DEFAULT_CLAIM_STALE_AGE_MS) {
     return isStaleAt(activeCreatedAt, nextCreatedAt);
   }

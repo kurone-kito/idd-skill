@@ -14,7 +14,8 @@
 // marker) happen under `--apply` once the roadmap is ready AND the
 // roadmap-audit claim re-validates immediately before the close. A roadmap
 // with an open / unresolved / inaccessible / nested-roadmap descendant, a
-// traversal cycle, or no explicit child work is NEVER closed.
+// closed child with an open linked PR, a traversal cycle, or no explicit child
+// work is NEVER closed.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -23,19 +24,28 @@ import {
   buildIssueLoader,
   buildSubIssueLoader,
   enumerateRoadmapGraph,
+  isClaimStaleByAge,
+  parseClaimStaleAgeMs,
 } from './discover-roadmap-graph.mjs';
 import {
-  isStaleAt,
   renderUnclaimedByMarker,
   resolveTrustedMarkerActors,
   summarizeClaimValidation,
 } from './protocol-helpers.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
+// Distributed `claim-stale-age` default (docs/policy-constants.md: 24 h). Used
+// only as the fallback when the policy declares no (or an invalid)
+// `claimTiming.staleAge`; mirrors discover-roadmap-graph's own default.
+const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 const BLOCKED_LABELS = new Set([
   'status:blocked-by-human',
   'status:needs-decision',
 ]);
+/** Branch field that scopes a roadmap-audit coordination claim to one roadmap. */
+function roadmapAuditBranchPattern(roadmapNumber) {
+  return new RegExp(`^roadmap-audit/${roadmapNumber}-`);
+}
 /**
  * Evaluate roadmap completion against `report` (a discover-roadmap-graph
  * single-root traversal). Every open / unresolved / inaccessible / nested-
@@ -45,10 +55,12 @@ const BLOCKED_LABELS = new Set([
  * criteria exactly — this helper adds no stricter sub-condition. Pure and
  * network-free so it is unit-testable apart from live GitHub.
  */
-export function evaluateRoadmapAuditGates(report) {
+export function evaluateRoadmapAuditGates(report, options = {}) {
   const blockers = [];
   const rootNumber = report.root.number;
   const pathTo = buildProvenanceLookup(report);
+  const openLinkedPrIssues = new Set(options.openLinkedPrIssues ?? []);
+  const reachableExecutionLeafCount = buildReachableLeafCounter(report);
   // Root carrying a human-gate label is never auto-closed.
   const rootNode = report.nodes.find((node) => node.number === rootNumber);
   const rootBlockedLabel = (rootNode?.labels ?? []).find((label) =>
@@ -80,25 +92,56 @@ export function evaluateRoadmapAuditGates(report) {
       detail: `execution leaf #${target}${node ? ` "${node.title}"` : ''} is OPEN`,
     });
   }
-  // Open nested roadmaps: a coordination/audit node that is still open blocks
-  // the parent close, regardless of its own leaf state (the parent can only
-  // close after the nested roadmap closes).
-  const openNestedRoadmaps = report.nodes
+  // Nested roadmaps block the parent close when they are either (a) still
+  // OPEN — a coordination/audit node closes bottom-up before its parent — or
+  // (b) malformed: zero reachable execution-leaf descendants, so a CLOSED
+  // nested roadmap can never be taken as proof of completion (A1.5). A closed
+  // nested roadmap WITH reachable leaves is fine on its own; any open leaf
+  // beneath it is surfaced separately as its own blocker.
+  const nestedRoadmaps = report.nodes
+    .filter(
+      (node) => node.classification === 'roadmap' && node.number !== rootNumber,
+    )
+    .sort((left, right) => left.number - right.number);
+  for (const node of nestedRoadmaps) {
+    if (reachableExecutionLeafCount(node.number) === 0) {
+      blockers.push({
+        kind: 'nested-roadmap',
+        target: node.number,
+        provenance: pathTo(node.number),
+        detail: `nested roadmap #${node.number} "${node.title}" has no reachable execution-leaf descendants; childless or malformed, not proof of completion`,
+      });
+      continue;
+    }
+    if (node.state === 'OPEN') {
+      blockers.push({
+        kind: 'nested-roadmap',
+        target: node.number,
+        provenance: pathTo(node.number),
+        detail: `nested roadmap #${node.number} "${node.title}" is OPEN; close it (bottom-up) before its parent`,
+      });
+    }
+  }
+  // A CLOSED child that still has an OPEN linked / closing PR is unresolved:
+  // the child looks done but its work is in flight (A1.5). Open children are
+  // already blocked above, so only closed descendants are flagged here. The
+  // open-PR set is injected as data so the evaluator stays pure.
+  const openLinkedPrTargets = report.nodes
     .filter(
       (node) =>
-        node.classification === 'roadmap' &&
         node.number !== rootNumber &&
-        node.state === 'OPEN',
+        node.state !== 'OPEN' &&
+        openLinkedPrIssues.has(node.number),
     )
     .map((node) => node.number)
-    .sort((a, b) => a - b);
-  for (const target of openNestedRoadmaps) {
+    .sort((left, right) => left - right);
+  for (const target of openLinkedPrTargets) {
     const node = report.nodes.find((entry) => entry.number === target);
     blockers.push({
-      kind: 'nested-roadmap',
+      kind: 'open-linked-pr',
       target,
       provenance: pathTo(target),
-      detail: `nested roadmap #${target}${node ? ` "${node.title}"` : ''} is OPEN; close it (bottom-up) before its parent`,
+      detail: `closed child #${target}${node ? ` "${node.title}"` : ''} still has an OPEN linked/closing PR; treat as unresolved until it merges or is obsoleted`,
     });
   }
   // Unresolved references (target issue not found / is a PR).
@@ -141,6 +184,48 @@ function buildProvenanceLookup(report) {
   return (target) => lookup.get(target) ?? [];
 }
 /**
+ * Count, for any node, how many distinct execution-leaf descendants are
+ * reachable from it via the enumerated graph edges (an execution-classified
+ * node present in `nodes`, open or closed). Uses only the graph/edge data the
+ * traversal already produced; a cycle-safe `visited` set bounds the walk. A
+ * count of 0 means the node has no reachable leaf descendants — childless /
+ * malformed per A1.5.
+ */
+function buildReachableLeafCounter(report) {
+  const adjacency = new Map();
+  for (const edge of report.edges) {
+    const targets = adjacency.get(edge.source) ?? [];
+    targets.push(edge.target);
+    adjacency.set(edge.source, targets);
+  }
+  const executionLeaves = new Set(
+    report.nodes
+      .filter((node) => node.classification === 'execution')
+      .map((node) => node.number),
+  );
+  return (from) => {
+    const visited = new Set([from]);
+    const stack = [from];
+    const leaves = new Set();
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (current === undefined) {
+        break;
+      }
+      for (const next of adjacency.get(current) ?? []) {
+        if (executionLeaves.has(next)) {
+          leaves.add(next);
+        }
+        if (!visited.has(next)) {
+          visited.add(next);
+          stack.push(next);
+        }
+      }
+    }
+    return leaves.size;
+  };
+}
+/**
  * Compose the canonical `IDD roadmap completion audit` evidence comment body.
  * Deterministic and network-free: it summarizes the audited graph (node /
  * edge / depth counts, closed descendants split by classification, and the
@@ -175,7 +260,7 @@ export function buildRoadmapCompletionAuditBody(report) {
     `- Closed descendants: ${descendants.length} (${executionCount} execution leaves, ${nestedRoadmapCount} nested roadmaps).`,
     `- Closed execution leaves: ${closedExecution || 'none'}.`,
     `- Closed nested roadmaps: ${closedNested || 'none'}.`,
-    '- Open / unresolved / inaccessible / nested-roadmap descendants: none.',
+    '- Open / unresolved / inaccessible / nested-roadmap / open-linked-PR descendants: none.',
     `- Diagnostics: ${report.summary.cycleCount} cycles, ${report.summary.unresolvedReferenceCount} unresolved references, ${report.summary.inaccessibleReferenceCount} inaccessible references, ${report.summary.duplicateReferenceCount} duplicate references.`,
     '',
     'Closing the roadmap as completed.',
@@ -186,12 +271,20 @@ export function buildRoadmapCompletionAuditBody(report) {
 /**
  * Re-validate the roadmap-audit claim from the live claim-marker stream. The
  * shared `summarizeClaimValidation` resolver decides claim ownership exactly
- * as the merge gate does (trusted-author gated, claim-id / agent-id match);
- * this helper additionally fails closed on a STALE claim (older than the
- * distributed `claim-stale-age` default of 24 h relative to `nowIso`), because
- * a stale claim is takeover-eligible and so cannot prove the caller still owns
- * the roadmap. Pure and network-free: the comment stream and trusted-author
- * predicate are injected so the fail-closed paths are unit-testable.
+ * as the merge gate does (trusted-author gated, claim-id / agent-id match).
+ * This helper additionally enforces the two roadmap-side ownership rules of
+ * A1.5:
+ *
+ *  1. the active claim's `branch` must be the `roadmap-audit/<roadmapNumber>-…`
+ *     coordination branch for THIS roadmap — a normal execution claim such as
+ *     `issue/123-fix` on the roadmap issue does NOT authorize closure; and
+ *  2. the claim must not be STALE relative to `nowIso`, using the configured
+ *     `claimTiming.staleAge` (`staleAgeMs`, default 24 h) via the shared
+ *     `isClaimStaleByAge` — a stale claim is takeover-eligible and so cannot
+ *     prove ongoing ownership.
+ *
+ * Pure and network-free: the comment stream, trusted-author predicate, and
+ * stale age are injected so every fail-closed path is unit-testable.
  */
 export function evaluateRoadmapClaim(comments, options) {
   const summary = summarizeClaimValidation(comments, {
@@ -207,10 +300,28 @@ export function evaluateRoadmapClaim(comments, options) {
       activeClaim: summary.activeClaim,
     };
   }
-  // The 24h stale math lives in the shared `isStaleAt`; reuse it verbatim
-  // against "now" so a claim older than the distributed default is takeover-
-  // eligible and therefore not owned for the purpose of a roadmap mutation.
-  const stale = isStaleAt(summary.activeClaim.createdAt, options.nowIso);
+  // Roadmap-side ownership requires the roadmap-audit coordination branch for
+  // exactly this roadmap; a normal execution claim on the roadmap issue does
+  // not authorize the close.
+  if (
+    !roadmapAuditBranchPattern(options.roadmapNumber).test(
+      summary.activeClaim.branch,
+    )
+  ) {
+    return {
+      owned: false,
+      reason: 'claim-branch-mismatch',
+      stale: false,
+      activeClaim: summary.activeClaim,
+    };
+  }
+  // Staleness uses the configured stale age (default 24 h); the math is reused
+  // verbatim from the shared `isClaimStaleByAge` rather than re-derived here.
+  const stale = isClaimStaleByAge(
+    summary.activeClaim.createdAt,
+    options.nowIso,
+    options.staleAgeMs ?? DEFAULT_CLAIM_STALE_AGE_MS,
+  );
   if (stale) {
     return {
       owned: false,
@@ -242,10 +353,13 @@ export async function runRoadmapAuditExecute(argv, deps) {
     throw new Error('missing required --roadmap <number> argument');
   }
   const roadmapNumber = args.roadmapNumber;
-  const claimIssue = args.claimIssue ?? roadmapNumber;
   const resolvedDeps = deps ?? createProductionDeps(args);
   const report = await resolvedDeps.collect(roadmapNumber);
-  const blockers = evaluateRoadmapAuditGates(report);
+  const blockers = evaluateRoadmapAuditGates(report, {
+    openLinkedPrIssues: resolvedDeps.resolveOpenLinkedPrIssues(
+      closedDescendantNumbers(report),
+    ),
+  });
   const ready = blockers.length === 0;
   const evidenceBody = ready ? buildRoadmapCompletionAuditBody(report) : '';
   const verdict = {
@@ -276,24 +390,36 @@ export async function runRoadmapAuditExecute(argv, deps) {
       'not-applied: --claim-id is required under --apply to re-validate roadmap-audit ownership';
     return { verdict, exitCode: 1 };
   }
-  const nowIso = resolvedDeps.now();
-  // Re-validate the roadmap-audit claim immediately before mutating; fail
-  // closed (no mutation) on any lost / stale / non-owned claim.
-  const claim = resolvedDeps.revalidateClaim({
-    issueNumber: claimIssue,
+  // The roadmap-audit claim is scoped to the EXACT roadmap being mutated; a
+  // divergent --claim-issue would validate ownership elsewhere while closing
+  // this roadmap. Reject it (fail closed) and always validate on the roadmap.
+  if (args.claimIssue !== null && args.claimIssue !== roadmapNumber) {
+    verdict.result = `claim-issue #${args.claimIssue} must equal the roadmap #${roadmapNumber}; roadmap-audit ownership is scoped to the exact roadmap`;
+    return { verdict, exitCode: 1 };
+  }
+  // Early claim re-validation (defense in depth): bail before the graph
+  // re-fetch if ownership is already gone.
+  const earlyClaim = resolvedDeps.revalidateClaim({
+    issueNumber: roadmapNumber,
+    roadmapNumber,
     expectedClaimId: args.claimId,
     expectedAgentId: args.agentId,
-    nowIso,
+    nowIso: resolvedDeps.now(),
   });
-  if (!claim.owned) {
-    verdict.result = `claim not owned on re-validation (reason="${claim.reason}"); no mutation`;
+  if (!earlyClaim.owned) {
+    verdict.result = `claim not owned on re-validation (reason="${earlyClaim.reason}"); no mutation`;
     return { verdict, exitCode: 1 };
   }
   // Re-fetch the roadmap + child state and confirm the audit input still
-  // holds; a roadmap that gained an open / unresolved / nested-roadmap
-  // descendant between the first read and now must NEVER be closed.
+  // holds; a roadmap that gained an open / unresolved / nested-roadmap /
+  // open-linked-PR descendant between the first read and now must NEVER be
+  // closed.
   const revalidated = await resolvedDeps.collect(roadmapNumber);
-  const revalidatedBlockers = evaluateRoadmapAuditGates(revalidated);
+  const revalidatedBlockers = evaluateRoadmapAuditGates(revalidated, {
+    openLinkedPrIssues: resolvedDeps.resolveOpenLinkedPrIssues(
+      closedDescendantNumbers(revalidated),
+    ),
+  });
   if (revalidatedBlockers.length > 0) {
     verdict.blockers = revalidatedBlockers;
     verdict.ready = false;
@@ -302,22 +428,52 @@ export async function runRoadmapAuditExecute(argv, deps) {
       're-validation found new completion blockers immediately before close; no mutation';
     return { verdict, exitCode: 1 };
   }
-  // Both gates hold: compose the body from the re-validated graph, then post
+  // The graph re-fetch can span many API calls during which another session
+  // can take over, so the LAST gate before any mutation is a fresh claim
+  // re-validation. Its activeClaim + "now" are the ones used for the release.
+  const nowIso = resolvedDeps.now();
+  const claim = resolvedDeps.revalidateClaim({
+    issueNumber: roadmapNumber,
+    roadmapNumber,
+    expectedClaimId: args.claimId,
+    expectedAgentId: args.agentId,
+    nowIso,
+  });
+  if (!claim.owned) {
+    verdict.result = `claim not owned immediately before mutation (reason="${claim.reason}"); no mutation`;
+    return { verdict, exitCode: 1 };
+  }
+  // All gates hold: compose the body from the re-validated graph, then post
   // the evidence comment, close the roadmap, and release the claim in order.
   const finalEvidenceBody = buildRoadmapCompletionAuditBody(revalidated);
   verdict.evidenceBody = finalEvidenceBody;
   resolvedDeps.postEvidenceComment(roadmapNumber, finalEvidenceBody);
   resolvedDeps.closeRoadmap(roadmapNumber);
-  resolvedDeps.releaseClaim(claimIssue, {
+  resolvedDeps.releaseClaim(roadmapNumber, {
     agentId: claim.activeClaim.agentId,
     claimId: claim.activeClaim.claimId,
-    timestamp: nowIso,
+    // The unclaim marker only accepts second-precision ISO; truncate any
+    // sub-second digits so a millisecond `now()` never throws after the
+    // comment + close already landed (a partial, unrecoverable mutation).
+    timestamp: toSecondPrecisionIso(nowIso),
   });
   verdict.closed = true;
   verdict.claimReleased = true;
   verdict.result =
     'roadmap closed as completed; evidence comment posted and roadmap-audit claim released';
   return { verdict, exitCode: 0 };
+}
+/** Closed (non-root) descendant issue numbers — the open-linked-PR candidates. */
+function closedDescendantNumbers(report) {
+  return report.nodes
+    .filter(
+      (node) => node.number !== report.root.number && node.state !== 'OPEN',
+    )
+    .map((node) => node.number);
+}
+/** Truncate any sub-second fraction so an ISO stamp is `YYYY-MM-DDTHH:mm:ssZ`. */
+function toSecondPrecisionIso(iso) {
+  return String(iso).replace(/\.\d+Z$/, 'Z');
 }
 // ---------------------------------------------------------------------------
 // Production dependency wiring (live gh + roadmap-graph traversal).
@@ -338,6 +494,12 @@ function createProductionDeps(args) {
     viewerLogin,
     rawConfig: rawConfig,
   });
+  // Honor the configured `claimTiming.staleAge` (docs/policy-constants.md);
+  // reuse discover-roadmap-graph's ISO-duration parser, falling back to the
+  // distributed 24 h default on an absent/invalid value.
+  const staleAgeMs =
+    parseClaimStaleAgeMs(rawConfig?.claimTiming?.staleAge) ??
+    DEFAULT_CLAIM_STALE_AGE_MS;
   const loadIssue = buildIssueLoader(owner, repo);
   const loadSubIssues = buildSubIssueLoader(owner, repo);
   return {
@@ -349,17 +511,22 @@ function createProductionDeps(args) {
         loadIssue,
         loadSubIssues,
       }),
+    resolveOpenLinkedPrIssues: (issueNumbers) =>
+      resolveOpenLinkedPrIssues(owner, repo, issueNumbers),
     revalidateClaim: ({
       issueNumber,
+      roadmapNumber,
       expectedClaimId,
       expectedAgentId,
       nowIso,
     }) =>
       evaluateRoadmapClaim(loadIssueComments(owner, repo, issueNumber), {
+        roadmapNumber,
         expectedClaimId,
         expectedAgentId,
         isTrustedAuthor,
         nowIso,
+        staleAgeMs,
       }),
     postEvidenceComment: (issueNumber, body) =>
       postIssueComment(owner, repo, issueNumber, body),
@@ -437,6 +604,56 @@ function loadIssueComments(owner, repo, issueNumber) {
       },
     };
   });
+}
+/**
+ * Resolve which of `issueNumbers` still have an OPEN linked / closing PR.
+ *
+ * Uses one GraphQL field per issue — `closedByPullRequestsReferences`, the PRs
+ * that reference-close the issue — and keeps a number only when at least one
+ * such PR is still in the `OPEN` state. MERGED / CLOSED PRs are obsolete and
+ * never block (the field returns merged PRs even with
+ * `includeClosedPrs:false`, so the `OPEN`-state filter is what matters). On a
+ * per-issue lookup error the issue is conservatively treated as having an open
+ * PR (fail closed) so a transient failure can never green-light a close.
+ */
+function resolveOpenLinkedPrIssues(owner, repo, issueNumbers) {
+  const query = `query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    issue(number:$number){
+      closedByPullRequestsReferences(first:20,includeClosedPrs:false){
+        nodes { number state }
+      }
+    }
+  }
+}`;
+  const blocked = [];
+  for (const issueNumber of issueNumbers) {
+    try {
+      const raw = ghText([
+        'api',
+        'graphql',
+        '-f',
+        `query=${query}`,
+        '-f',
+        `owner=${owner}`,
+        '-f',
+        `repo=${repo}`,
+        '-F',
+        `number=${issueNumber}`,
+      ]);
+      const parsed = JSON.parse(raw);
+      const nodes =
+        parsed.data?.repository?.issue?.closedByPullRequestsReferences?.nodes ??
+        [];
+      if (nodes.some((node) => String(node?.state ?? '') === 'OPEN')) {
+        blocked.push(issueNumber);
+      }
+    } catch {
+      // Fail closed: an undeterminable PR state blocks the close.
+      blocked.push(issueNumber);
+    }
+  }
+  return blocked;
 }
 /**
  * POST a comment body as a JSON document (`{"body": …}`) via `gh api --input

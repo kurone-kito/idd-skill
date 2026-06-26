@@ -49,6 +49,7 @@
               "childless",
               "open-child",
               "nested-roadmap",
+              "open-linked-pr",
               "unresolved-reference",
               "inaccessible-reference",
               "cycle"

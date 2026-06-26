@@ -117,34 +117,50 @@ function makeDeps(
   deps: RoadmapAuditExecuteDeps;
   calls: {
     collects: number;
+    claimChecks: number;
     comments: { issue: number; body: string }[];
     closed: number[];
-    released: { issue: number; agentId: string; claimId: string }[];
+    released: {
+      issue: number;
+      agentId: string;
+      claimId: string;
+      timestamp: string;
+    }[];
   };
 } {
   const calls = {
     collects: 0,
+    claimChecks: 0,
     comments: [] as { issue: number; body: string }[],
     closed: [] as number[],
-    released: [] as { issue: number; agentId: string; claimId: string }[],
+    released: [] as {
+      issue: number;
+      agentId: string;
+      claimId: string;
+      timestamp: string;
+    }[],
   };
   const deps: RoadmapAuditExecuteDeps = {
     collect: async () => {
       calls.collects += 1;
       return report;
     },
-    revalidateClaim: () => ({
-      owned: true,
-      reason: 'match',
-      stale: false,
-      activeClaim: {
-        agentId: AGENT_ID,
-        claimId: CLAIM_ID,
-        supersedes: 'none',
-        branch: CLAIM_BRANCH,
-        createdAt: '2026-06-26T00:00:00Z',
-      },
-    }),
+    resolveOpenLinkedPrIssues: () => [],
+    revalidateClaim: () => {
+      calls.claimChecks += 1;
+      return {
+        owned: true,
+        reason: 'match',
+        stale: false,
+        activeClaim: {
+          agentId: AGENT_ID,
+          claimId: CLAIM_ID,
+          supersedes: 'none',
+          branch: CLAIM_BRANCH,
+          createdAt: '2026-06-26T00:00:00Z',
+        },
+      };
+    },
     postEvidenceComment: (issue, body) => calls.comments.push({ issue, body }),
     closeRoadmap: (issue) => calls.closed.push(issue),
     releaseClaim: (issue, fields) =>
@@ -152,6 +168,7 @@ function makeDeps(
         issue,
         agentId: fields.agentId,
         claimId: fields.claimId,
+        timestamp: fields.timestamp,
       }),
     now: () => '2026-06-26T01:00:00Z',
     ...overrides,
@@ -207,14 +224,73 @@ test('an open nested roadmap descendant is never closeable', () => {
   assert.equal(blockers[0]?.target, 1100);
 });
 
-test('a closed nested roadmap does not block (bottom-up completion)', () => {
+test('a closed nested roadmap WITH a reachable closed leaf does not block', () => {
+  const report = readyReport();
+  report.nodes = [
+    ...report.nodes,
+    node({ number: 1100, classification: 'roadmap', state: 'CLOSED' }),
+    node({ number: 1101, classification: 'execution', state: 'CLOSED' }),
+  ];
+  report.edges = [
+    ...report.edges,
+    {
+      source: ROADMAP,
+      target: 1100,
+      relationship: 'task-list',
+      evidence: '- [x] #1100',
+    },
+    {
+      source: 1100,
+      target: 1101,
+      relationship: 'task-list',
+      evidence: '- [x] #1101',
+    },
+  ];
+  report.roadmapNodes = [1100];
+  assert.deepEqual(evaluateRoadmapAuditGates(report), []);
+});
+
+test('a closed nested roadmap with NO reachable leaves is childless/malformed → blocked', () => {
   const report = readyReport();
   report.nodes = [
     ...report.nodes,
     node({ number: 1100, classification: 'roadmap', state: 'CLOSED' }),
   ];
+  report.edges = [
+    ...report.edges,
+    {
+      source: ROADMAP,
+      target: 1100,
+      relationship: 'task-list',
+      evidence: '- [x] #1100',
+    },
+  ];
   report.roadmapNodes = [1100];
-  assert.deepEqual(evaluateRoadmapAuditGates(report), []);
+  const blockers = evaluateRoadmapAuditGates(report);
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    ['nested-roadmap'],
+  );
+  assert.match(blockers[0]?.detail ?? '', /no reachable execution-leaf/);
+});
+
+test('a closed child with an OPEN linked PR is unresolved; a merged PR is not', () => {
+  const report = readyReport();
+  // #1048 is a closed child; inject it as still having an open linked PR.
+  const blocked = evaluateRoadmapAuditGates(report, {
+    openLinkedPrIssues: [1048],
+  });
+  assert.deepEqual(
+    blocked.map((blocker) => blocker.kind),
+    ['open-linked-pr'],
+  );
+  assert.equal(blocked[0]?.target, 1048);
+
+  // With no open linked PRs (the merged-PR case), nothing blocks.
+  assert.deepEqual(
+    evaluateRoadmapAuditGates(report, { openLinkedPrIssues: [] }),
+    [],
+  );
 });
 
 test('unresolved, inaccessible, and cycle diagnostics each surface a blocker', () => {
@@ -294,7 +370,7 @@ test('the evidence body is the canonical IDD roadmap completion audit comment', 
   assert.match(body, /Closed execution leaves: #1047, #1048\./);
   assert.match(
     body,
-    /Open \/ unresolved \/ inaccessible \/ nested-roadmap descendants: none\./,
+    /Open \/ unresolved \/ inaccessible \/ nested-roadmap \/ open-linked-PR descendants: none\./,
   );
   assert.match(body, /Closing the roadmap as completed\./);
 });
@@ -303,8 +379,9 @@ test('the evidence body is the canonical IDD roadmap completion audit comment', 
 // evaluateRoadmapClaim (pure)
 // ---------------------------------------------------------------------------
 
-test('a present, matching, fresh claim is owned', () => {
+test('a present, matching, fresh, roadmap-audit-branch claim is owned', () => {
   const verdict = evaluateRoadmapClaim([claimComment()], {
+    roadmapNumber: ROADMAP,
     expectedClaimId: CLAIM_ID,
     expectedAgentId: AGENT_ID,
     isTrustedAuthor: () => true,
@@ -316,6 +393,7 @@ test('a present, matching, fresh claim is owned', () => {
 
 test('a missing or mismatched claim is not owned', () => {
   const missing = evaluateRoadmapClaim([], {
+    roadmapNumber: ROADMAP,
     expectedClaimId: CLAIM_ID,
     isTrustedAuthor: () => true,
     nowIso: '2026-06-26T01:00:00Z',
@@ -324,6 +402,7 @@ test('a missing or mismatched claim is not owned', () => {
   assert.equal(missing.reason, 'missing-active-claim');
 
   const mismatch = evaluateRoadmapClaim([claimComment({ claimId: 'other' })], {
+    roadmapNumber: ROADMAP,
     expectedClaimId: CLAIM_ID,
     isTrustedAuthor: () => true,
     nowIso: '2026-06-26T01:00:00Z',
@@ -332,8 +411,67 @@ test('a missing or mismatched claim is not owned', () => {
   assert.equal(mismatch.reason, 'claim-id-mismatch');
 });
 
-test('a stale (takeover-eligible) claim is not owned', () => {
+test('a non-roadmap-audit branch on the roadmap issue does NOT authorize closure', () => {
+  // A normal execution claim (issue/<n>-...) on the roadmap issue must not pass.
+  const executionClaim = {
+    body: renderClaimedByMarker({
+      agentId: AGENT_ID,
+      claimId: CLAIM_ID,
+      supersedes: 'none',
+      timestamp: '2026-06-26T00:00:00Z',
+      branch: `issue/${ROADMAP}-some-execution-task`,
+    }),
+    createdAt: '2026-06-26T00:00:00Z',
+    author: { login: 'kurone-kito' },
+  };
+  const verdict = evaluateRoadmapClaim([executionClaim], {
+    roadmapNumber: ROADMAP,
+    expectedClaimId: CLAIM_ID,
+    isTrustedAuthor: () => true,
+    nowIso: '2026-06-26T01:00:00Z',
+  });
+  assert.equal(verdict.owned, false);
+  assert.equal(verdict.reason, 'claim-branch-mismatch');
+
+  // ...and a roadmap-audit/<n>-... branch IS accepted.
+  const accepted = evaluateRoadmapClaim([claimComment()], {
+    roadmapNumber: ROADMAP,
+    expectedClaimId: CLAIM_ID,
+    isTrustedAuthor: () => true,
+    nowIso: '2026-06-26T01:00:00Z',
+  });
+  assert.equal(accepted.owned, true);
+});
+
+test('staleness honors the configured claim stale age', () => {
+  const comment = [claimComment()]; // claim createdAt 2026-06-26T00:00:00Z
+  const oneHourLater = '2026-06-26T01:00:00Z';
+
+  // A 30-minute stale age makes the 1h-old claim stale → not owned.
+  const shortened = evaluateRoadmapClaim(comment, {
+    roadmapNumber: ROADMAP,
+    expectedClaimId: CLAIM_ID,
+    isTrustedAuthor: () => true,
+    nowIso: oneHourLater,
+    staleAgeMs: 30 * 60 * 1000,
+  });
+  assert.equal(shortened.owned, false);
+  assert.equal(shortened.reason, 'claim-stale');
+
+  // A 48-hour stale age keeps the same 1h-old claim fresh → owned.
+  const lengthened = evaluateRoadmapClaim(comment, {
+    roadmapNumber: ROADMAP,
+    expectedClaimId: CLAIM_ID,
+    isTrustedAuthor: () => true,
+    nowIso: oneHourLater,
+    staleAgeMs: 48 * 60 * 60 * 1000,
+  });
+  assert.equal(lengthened.owned, true);
+});
+
+test('a stale (takeover-eligible) claim is not owned at the default age', () => {
   const verdict = evaluateRoadmapClaim([claimComment()], {
+    roadmapNumber: ROADMAP,
     expectedClaimId: CLAIM_ID,
     isTrustedAuthor: () => true,
     // > 24h after the claim createdAt → stale per the distributed default.
@@ -346,6 +484,7 @@ test('a stale (takeover-eligible) claim is not owned', () => {
 
 test('an untrusted claim author yields no active claim', () => {
   const verdict = evaluateRoadmapClaim([claimComment()], {
+    roadmapNumber: ROADMAP,
     expectedClaimId: CLAIM_ID,
     isTrustedAuthor: () => false,
     nowIso: '2026-06-26T01:00:00Z',
@@ -495,6 +634,109 @@ test('--apply without --claim-id fails closed (no mutation)', async () => {
   assert.match(verdict.result, /--claim-id is required/);
   assert.equal(exitCode, 1);
   assert.deepEqual(calls.closed, []);
+});
+
+test('--apply releases the claim with a second-precision timestamp even when now() has ms', async () => {
+  // Regression: renderUnclaimedByMarker rejects millisecond ISO, which would
+  // throw AFTER the comment + close already landed (a partial mutation).
+  const { deps, calls } = makeDeps(readyReport(), {
+    now: () => '2026-06-26T01:00:00.123Z',
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(exitCode, 0);
+  assert.equal(verdict.claimReleased, true);
+  assert.equal(calls.released.length, 1);
+  assert.equal(calls.released[0]?.timestamp, '2026-06-26T01:00:00Z');
+});
+
+test('--apply rejects a --claim-issue that differs from the roadmap (no mutation)', async () => {
+  const { deps, calls } = makeDeps(readyReport());
+  const { verdict, exitCode } = await runRoadmapAuditExecute(
+    [
+      '--roadmap',
+      String(ROADMAP),
+      '--claim-issue',
+      '994',
+      '--claim-id',
+      CLAIM_ID,
+      '--apply',
+    ],
+    deps,
+  );
+
+  assert.equal(verdict.closed, false);
+  assert.match(verdict.result, /must equal the roadmap/);
+  assert.equal(exitCode, 1);
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.comments, []);
+  assert.deepEqual(calls.released, []);
+});
+
+test('--apply accepts a --claim-issue that equals the roadmap', async () => {
+  const { deps, calls } = makeDeps(readyReport());
+  const { verdict, exitCode } = await runRoadmapAuditExecute(
+    [
+      '--roadmap',
+      String(ROADMAP),
+      '--claim-issue',
+      String(ROADMAP),
+      '--claim-id',
+      CLAIM_ID,
+      '--apply',
+    ],
+    deps,
+  );
+
+  assert.equal(verdict.closed, true);
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls.closed, [ROADMAP]);
+});
+
+test('--apply re-validates the claim AFTER the graph re-fetch (last gate before mutation)', async () => {
+  // Owned on the early check, lost on the pre-mutation check → no mutation.
+  let claimChecks = 0;
+  const { deps, calls } = makeDeps(readyReport(), {
+    revalidateClaim: () => {
+      claimChecks += 1;
+      if (claimChecks >= 2) {
+        return {
+          owned: false,
+          reason: 'claim-stale',
+          stale: true,
+          activeClaim: {
+            agentId: AGENT_ID,
+            claimId: CLAIM_ID,
+            supersedes: 'none',
+            branch: CLAIM_BRANCH,
+            createdAt: '2026-06-26T00:00:00Z',
+          },
+        };
+      }
+      return {
+        owned: true,
+        reason: 'match',
+        stale: false,
+        activeClaim: {
+          agentId: AGENT_ID,
+          claimId: CLAIM_ID,
+          supersedes: 'none',
+          branch: CLAIM_BRANCH,
+          createdAt: '2026-06-26T00:00:00Z',
+        },
+      };
+    },
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(verdict.closed, false);
+  assert.equal(verdict.claimReleased, false);
+  assert.match(verdict.result, /immediately before mutation/);
+  assert.equal(exitCode, 1);
+  // Two claim checks ran: the early one AND the post-re-fetch gate.
+  assert.equal(claimChecks, 2);
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.comments, []);
 });
 
 test('missing --roadmap is rejected', async () => {
