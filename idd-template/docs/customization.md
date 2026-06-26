@@ -242,9 +242,10 @@ advisory-wait gate tracks (default Copilot), and
 bot. When the primary is cap-exhausted or stalled / rate-limited, the
 secondary is requested once per HEAD as a supplement; it never satisfies the
 primary advisory-wait gate, never receives a primary `advisory-wait` marker,
-and its review is ordinary advisory input. Omitting `secondaryBotLogin` (or
-setting it equal to the primary) disables the supplement, keeping behavior
-identical to a primary-only policy. Configure the secondary to a requestable
+and its review is ordinary advisory input. Omitting
+`advisoryWait.secondaryBotLogin` (or setting it equal to the primary) disables
+the supplement, keeping behavior identical to a primary-only policy. Configure
+the secondary to a requestable
 reviewer whose request appears on the PR timeline so the once-per-HEAD guard
 can observe it.
 
