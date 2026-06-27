@@ -5,11 +5,10 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
-import { execFile, execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
 
 import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mts';
 import {
@@ -41,16 +40,54 @@ const GH_SEARCH_RESULT_CAP = 1000;
 // (or the `concurrency` option) tunes it, and `1` runs the fetches serially
 // (one in flight at a time).
 const DEFAULT_TRAVERSAL_CONCURRENCY = 8;
-// Promisified `gh` runner used ONLY by the traversal hot-path loaders
-// (`buildIssueLoader` / `buildSubIssueLoader`). Unlike the blocking
-// `execFileSync` runner — which serializes even concurrent `await`s because it
-// holds the event loop — `execFile` lets multiple `gh` subprocesses run in
-// parallel; the actual in-flight bound is enforced by the prefetch crawl's
-// `mapPool` using the resolved `concurrency` (default
-// `DEFAULT_TRAVERSAL_CONCURRENCY`). The non-hot-path callers (owner/repo
-// resolution, claim-state comments, `--all-roadmaps` search) keep the sync
-// runner, so their behavior is byte-unchanged.
-const execFileAsync = promisify(execFile);
+/**
+ * Async `gh` invocation used ONLY by the traversal hot-path loaders
+ * (`buildIssueLoader` / `buildSubIssueLoader`). Unlike the blocking
+ * `execFileSync` runner — which serializes even concurrent `await`s because it
+ * holds the event loop — this `spawn`-based runner lets multiple `gh`
+ * subprocesses run in parallel; the actual in-flight bound is enforced by the
+ * prefetch crawl's `mapPool` using the resolved `concurrency` (default
+ * {@link DEFAULT_TRAVERSAL_CONCURRENCY}). The non-hot-path callers (owner/repo
+ * resolution, claim-state comments, `--all-roadmaps` search) keep the sync
+ * runner, so their behavior is byte-unchanged.
+ *
+ * Stdio matches the sync runner exactly (`['ignore', 'pipe', 'pipe']`): stdin
+ * is ignored so `gh` never blocks on or reads an inherited/open stdin pipe,
+ * and stdout/stderr are piped for capture. Resolves with stdout on a zero
+ * exit; on a non-zero exit (or spawn error) rejects with an error carrying
+ * `.code` (exit status) and `.stderr`, the shape {@link wrapGhFailure} reads.
+ */
+function runGhCapture(args: string[]): Promise<string> {
+  return new Promise((resolveOutput, rejectOutput) => {
+    const child = spawn('gh', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.on('error', rejectOutput);
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolveOutput(stdout);
+        return;
+      }
+      const error = new Error(`gh exited with code ${code}`) as Error & {
+        code?: number | null;
+        stderr?: string;
+        stdout?: string;
+      };
+      error.code = code;
+      error.stderr = stderr;
+      error.stdout = stdout;
+      rejectOutput(error);
+    });
+  });
+}
 // Policy default claim stale age (`claimTiming.staleAge`, `PT24H`). Mirrors
 // the default baked into protocol-helpers' `isStaleAt`, so when the configured
 // stale age equals this default the shared `isStaleAt` path is
@@ -2379,7 +2416,7 @@ async function runGraphqlQuery(
   }
 
   try {
-    const { stdout } = await execFileAsync('gh', args, { encoding: 'utf8' });
+    const stdout = await runGhCapture(args);
     const parsed = JSON.parse(stdout.trim() || '{}') as { errors?: unknown };
     if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
       throw new Error(formatGraphqlErrors(parsed.errors));
@@ -2486,7 +2523,7 @@ async function runGhAsync(
   const { allowStatuses = [] } = options;
 
   try {
-    const { stdout } = await execFileAsync('gh', args, { encoding: 'utf8' });
+    const stdout = await runGhCapture(args);
     return stdout;
   } catch (error) {
     return wrapGhFailure(error, args, allowStatuses);
