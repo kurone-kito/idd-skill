@@ -1943,3 +1943,107 @@ test('--with-readiness on a single root annotates only open execution-leaf nodes
     false,
   );
 });
+
+const delay = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Build a `loadIssue` that records the peak number of concurrently in-flight
+ * fetches. Each call holds for a short delay so overlapping fetches are
+ * observable, letting a test assert whether siblings are issued in parallel.
+ */
+function trackingIssueLoader(issues: Map<number, unknown>) {
+  let inFlight = 0;
+  let peak = 0;
+  return {
+    peak: () => peak,
+    loadIssue: async (issueNumber: number) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      try {
+        await delay(5);
+        return issues.get(issueNumber) ?? null;
+      } finally {
+        inFlight -= 1;
+      }
+    },
+  };
+}
+
+test('prefetch crawl fetches sibling leaves concurrently (#1136)', async () => {
+  const leafNumbers = Array.from({ length: 20 }, (_, index) => 801 + index);
+  const body = leafNumbers.map((leaf) => `- [ ] #${leaf}`).join('\n');
+  const buildIssues = () => {
+    const map = new Map<number, unknown>();
+    map.set(800, roadmapIssue(800, body, 'wide-roadmap'));
+    for (const leaf of leafNumbers) {
+      map.set(leaf, {
+        ...executionIssue(leaf, `leaf ${leaf}`),
+        sub_issues_summary: { total: 0 },
+      });
+    }
+    return map;
+  };
+
+  // Default concurrency: the 20 sibling leaves must overlap in flight, proving
+  // the prefetch is parallel rather than serial.
+  const concurrent = trackingIssueLoader(buildIssues());
+  const concurrentGraph = await enumerateRoadmapGraph(800, {
+    loadIssue: concurrent.loadIssue,
+  });
+  assert.ok(
+    concurrent.peak() >= 2,
+    `expected overlapping sibling fetches, peak in-flight was ${concurrent.peak()}`,
+  );
+
+  // concurrency: 1 reproduces the old fully serial traversal (peak in-flight 1).
+  const serial = trackingIssueLoader(buildIssues());
+  const serialGraph = await enumerateRoadmapGraph(800, {
+    loadIssue: serial.loadIssue,
+    concurrency: 1,
+  });
+  assert.equal(
+    serial.peak(),
+    1,
+    `concurrency:1 must stay serial, peak in-flight was ${serial.peak()}`,
+  );
+
+  // Latency-only change: the report is byte-identical regardless of concurrency.
+  assert.deepEqual(concurrentGraph, serialGraph);
+  assert.deepEqual(concurrentGraph.executionCandidates, leafNumbers);
+});
+
+test('prefetch crawl output is invariant across concurrency on a nested graph (#1136)', async () => {
+  // A graph with a nested roadmap, a shared leaf reached from two parents, a
+  // cycle, and a 404 reference — exercises every detection path under
+  // concurrency to confirm the byte-identical contract holds beyond the wide
+  // fan-out case.
+  const issues = new Map<number, unknown>([
+    [840, roadmapIssue(840, '- [ ] #841\n- [ ] #842\nRefs #899', 'outer')],
+    [841, roadmapIssue(841, '- [ ] #843\n- [ ] #844', 'inner')],
+    [842, executionIssue(842, 'shared via two parents\nRefs #844')],
+    [843, executionIssue(843, 'leaf 843\nDepends on #840')],
+    [844, executionIssue(844, 'shared leaf 844')],
+  ]);
+  const run = (concurrency: number) =>
+    enumerateRoadmapGraph(840, {
+      loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+      concurrency,
+    });
+
+  const serialGraph = await run(1);
+  const concurrentGraph = await run(8);
+  assert.deepEqual(concurrentGraph, serialGraph);
+  // Sanity: the nested roadmap, cycle, and unresolved reference were detected.
+  assert.deepEqual(serialGraph.roadmapNodes, [841]);
+  assert.ok(serialGraph.summary.cycleCount >= 1);
+  assert.deepEqual(serialGraph.diagnostics.unresolvedReferences, [
+    {
+      source: 840,
+      target: 899,
+      relationship: 'reference',
+      evidence: 'Refs #899',
+      reason: 'issue_not_found',
+    },
+  ]);
+});

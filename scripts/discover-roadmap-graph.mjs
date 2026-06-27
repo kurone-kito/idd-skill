@@ -4,10 +4,11 @@
 // The scripts/discover-roadmap-graph.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mjs';
 import {
   isAutopilotSuitabilityScore,
@@ -31,6 +32,21 @@ const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // open-roadmap-roots loader pins each search at this cap and warns when a
 // single search returns the full cap (a possible silent truncation).
 const GH_SEARCH_RESULT_CAP = 1000;
+// #1136: default in-flight bound for the concurrent prefetch crawl. Each
+// in-flight slot is one live `gh` subprocess (one network round-trip), so the
+// bound caps parallel I/O without risking GitHub secondary rate limits. The
+// default trades a comfortable speed-up against politeness; `--concurrency`
+// (or the `concurrency` option) tunes it, and `1` reproduces the old serial
+// fetch exactly.
+const DEFAULT_TRAVERSAL_CONCURRENCY = 8;
+// Promisified `gh` runner used ONLY by the traversal hot-path loaders
+// (`buildIssueLoader` / `buildSubIssueLoader`). Unlike the blocking
+// `execFileSync` runner — which serializes even concurrent `await`s because it
+// holds the event loop — `execFile` lets up to `DEFAULT_TRAVERSAL_CONCURRENCY`
+// `gh` subprocesses run in parallel. The non-hot-path callers (owner/repo
+// resolution, claim-state comments, `--all-roadmaps` search) keep the sync
+// runner, so their behavior is byte-unchanged.
+const execFileAsync = promisify(execFile);
 // Policy default claim stale age (`claimTiming.staleAge`, `PT24H`). Mirrors
 // the default baked into protocol-helpers' `isStaleAt`, so when the configured
 // stale age equals this default the shared `isStaleAt` path is
@@ -109,6 +125,7 @@ if (isMainModule(import.meta.url)) {
         ),
         claimState,
         readiness,
+        concurrency: args.concurrency,
       })
     : await enumerateRoadmapGraph(args.issue, {
         markerPrefix: policy.markerPrefix,
@@ -118,8 +135,44 @@ if (isMainModule(import.meta.url)) {
         loadSubIssues: buildSubIssueLoader(owner, repo),
         claimState,
         readiness,
+        concurrency: args.concurrency,
       });
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+}
+/**
+ * Normalize the traversal `concurrency` option to an integer `>= 1`, falling
+ * back to {@link DEFAULT_TRAVERSAL_CONCURRENCY} for unset, non-integer, or
+ * `< 1` values. `1` is preserved so callers can force the serial path.
+ */
+function normalizeConcurrency(value) {
+  const numeric =
+    typeof value === 'number'
+      ? value
+      : Number.parseInt(String(value ?? ''), 10);
+  return Number.isInteger(numeric) && numeric >= 1
+    ? numeric
+    : DEFAULT_TRAVERSAL_CONCURRENCY;
+}
+/**
+ * Run `task` over `items` with at most `limit` invocations in flight at once,
+ * returning results in input order. A fixed pool of workers pulls from a shared
+ * cursor, so a slow item never blocks faster siblings (continuous, not
+ * lock-step batches). An empty input runs no workers; the first rejection
+ * propagates (mirroring the previous serial traversal's fail-closed abort).
+ */
+async function mapPool(items, limit, task) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await task(items[index]);
+    }
+  };
+  const workerCount = Math.min(Math.max(1, limit), items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
 }
 export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
@@ -166,6 +219,16 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   // Re-bind after the guards so the hoisted helper closures below see the
   // narrowed issue type.
   const rootIssue = fetchedRoot;
+  // #1136: warm issueCache + referenceCache with a bounded-concurrency prefetch
+  // crawl BEFORE the (unchanged) serial graph build below, so `visitIssue` runs
+  // entirely against warm caches and issues zero I/O. The crawl visits exactly
+  // the same reachable, accessible, non-PR node set the DFS expands, so the
+  // resulting graph stays byte-identical to a fully serial run — only the
+  // wall-clock changes.
+  await prefetchReachableIssues(
+    rootIssue.number,
+    normalizeConcurrency(options.concurrency),
+  );
   await visitIssue(rootIssue.number, [rootIssue.number]);
   const nodes = [...nodeRecords.values()]
     .map((node) => ({
@@ -390,6 +453,45 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     referenceCache.set(issue.number, references);
     return references;
   }
+  // #1136: bounded-concurrency BFS that warms issueCache + referenceCache for
+  // every reachable node before the serial graph build. It calls the same
+  // getIssue / getReferences the DFS uses (so caches and the
+  // subIssueSummaryTotal===0 skip are shared), but fans the frontier out
+  // through `mapPool`. A genuine loader error rejects here and propagates,
+  // matching the previous serial traversal's fail-closed abort; 404→null and
+  // 403/410/451→sentinel still resolve without throwing.
+  async function prefetchReachableIssues(startNumber, concurrency) {
+    const scheduled = new Set([startNumber]);
+    let frontier = [startNumber];
+    while (frontier.length > 0) {
+      const targetLists = await mapPool(
+        frontier,
+        concurrency,
+        expandForPrefetch,
+      );
+      const next = [];
+      for (const targets of targetLists) {
+        for (const target of targets) {
+          if (!scheduled.has(target)) {
+            scheduled.add(target);
+            next.push(target);
+          }
+        }
+      }
+      frontier = next;
+    }
+  }
+  // Fetch one node and return its reference targets for the next BFS frontier.
+  // Mirrors the DFS expansion guard: only accessible, non-PR issues are
+  // expanded (PRs / inaccessible / not-found contribute no children), so the
+  // crawl's reachable set equals the DFS's.
+  async function expandForPrefetch(issueNumber) {
+    const issue = await getIssue(issueNumber, issueCache, loadIssue);
+    if (!issue || isInaccessibleIssue(issue) || issue.isPullRequest) {
+      return [];
+    }
+    return (await getReferences(issue)).map((reference) => reference.target);
+  }
   function recordNode(issue, path) {
     const existing = nodeRecords.get(issue.number);
     const classification = classifyIssue(issue, markerPrefix);
@@ -491,6 +593,9 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       repo: options.repo,
       loadIssue: options.loadIssue,
       loadSubIssues: options.loadSubIssues,
+      // #1136: each per-root enumeration prefetches its own subtree
+      // concurrently; thread the same bound through.
+      concurrency: options.concurrency,
     });
     roots.push({
       number: graph.root.number,
@@ -1166,6 +1271,7 @@ function parseArgs(argv) {
     withClaimState: false,
     withReadiness: false,
     currentClaimId: '',
+    concurrency: 0,
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -1203,6 +1309,11 @@ function parseArgs(argv) {
       parsed.withReadiness = true;
       continue;
     }
+    if (token === '--concurrency') {
+      parsed.concurrency = Number.parseInt(String(value ?? ''), 10);
+      index += 1;
+      continue;
+    }
     if (token === '--current-claim-id') {
       // Only consume the next token as the id when it exists and is not itself
       // a flag, so `--current-claim-id --with-claim-state` does not swallow the
@@ -1224,10 +1335,14 @@ function parseArgs(argv) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/discover-roadmap-graph.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--with-readiness] [--current-claim-id <id>]
-  node scripts/discover-roadmap-graph.mjs --all-roadmaps [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--with-readiness] [--current-claim-id <id>]
+  node scripts/discover-roadmap-graph.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--with-readiness] [--current-claim-id <id>] [--concurrency <n>]
+  node scripts/discover-roadmap-graph.mjs --all-roadmaps [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--with-readiness] [--current-claim-id <id>] [--concurrency <n>]
 
   --issue and --all-roadmaps are mutually exclusive; exactly one is required.
+
+  --concurrency <n> (default 8) bounds how many issue fetches the traversal
+  prefetch keeps in flight at once. The graph is byte-identical for any n;
+  only wall-clock changes. Pass 1 to force the previous serial traversal.
   --all-roadmaps enumerates open execution leaves across every open roadmap
   root (the union), each tagged with its sourceRoots and ranked by
   autopilotSuitability (descending, tie-broken by ascending issue number).
@@ -1389,7 +1504,7 @@ export function buildIssueLoader(owner, repo) {
       '.',
     ];
     try {
-      const result = runGh(args, { allowStatuses: [404] }).trim();
+      const result = (await runGhAsync(args, { allowStatuses: [404] })).trim();
       if (!result || result === 'null') {
         return null;
       }
@@ -1418,7 +1533,7 @@ export function buildSubIssueLoader(owner, repo) {
       if (after) {
         variables.after = after;
       }
-      const result = runGraphqlQuery(SUB_ISSUES_QUERY, variables);
+      const result = await runGraphqlQuery(SUB_ISSUES_QUERY, variables);
       const connection = result?.data?.repository?.issue?.subIssues;
       if (
         !connection ||
@@ -1597,7 +1712,14 @@ function buildSearchIssuesRunner() {
     return Array.isArray(parsed) ? parsed : [];
   };
 }
-function runGraphqlQuery(query, variables) {
+/**
+ * Async GraphQL runner for the traversal sub-issue loader. Its sole caller
+ * (`buildSubIssueLoader`) is already async, so the runner uses the non-blocking
+ * `execFile` path — letting several sub-issue queries run in parallel under the
+ * prefetch crawl — while keeping the exact arg construction, error-array
+ * detection, and `gh api graphql failed: …` wrapping of the previous sync form.
+ */
+async function runGraphqlQuery(query, variables) {
   const args = ['api', 'graphql', '-f', `query=${query}`];
   for (const [name, value] of Object.entries(variables)) {
     if (value === '' || value === null || value === undefined) {
@@ -1607,11 +1729,8 @@ function runGraphqlQuery(query, variables) {
     args.push(flag, `${name}=${value}`);
   }
   try {
-    const raw = execFileSync('gh', args, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
-    const parsed = JSON.parse(raw || '{}');
+    const { stdout } = await execFileAsync('gh', args, { encoding: 'utf8' });
+    const parsed = JSON.parse(stdout.trim() || '{}');
     if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
       throw new Error(formatGraphqlErrors(parsed.errors));
     }
@@ -1639,6 +1758,41 @@ function loadPolicy(policyPath) {
 function ghText(args) {
   return runGh(args).trim();
 }
+/**
+ * Normalize a failed-`gh` error's exit status to a number.
+ *
+ * The synchronous `execFileSync` runner exposes the process exit code on
+ * `.status`; the promisified `execFile` runner exposes it on `.code`. Read
+ * `.status` first (sync), then fall back to `.code` (async), keeping only a
+ * numeric value so a spawn-error string code (e.g. `ENOENT`) resolves to
+ * `null` exactly as the previous sync-only path did.
+ */
+function resolveGhExitStatus(error) {
+  const candidate = error;
+  const rawStatus = candidate?.status ?? candidate?.code;
+  return typeof rawStatus === 'number' ? rawStatus : null;
+}
+/**
+ * Wrap a failed-`gh` error into the canonical `{ status, stderr }` shape that
+ * the issue-lookup classifiers (`isNotFoundIssueLookupError` /
+ * `isInaccessibleIssueLookupError`) read, so the sync and async runners produce
+ * byte-identical errors. Returns `''` when the exit status is tolerated
+ * (`allowStatuses`); otherwise throws the wrapped error.
+ */
+function wrapGhFailure(error, args, allowStatuses) {
+  const status = resolveGhExitStatus(error);
+  if (status !== null && allowStatuses.includes(status)) {
+    return '';
+  }
+  const stderr = String(error?.stderr ?? '').trim();
+  const prefix = `gh ${args.join(' ')}`;
+  const wrapped = new Error(
+    stderr ? `${prefix} failed: ${stderr}` : `${prefix} failed`,
+  );
+  wrapped.status = status;
+  wrapped.stderr = stderr;
+  throw wrapped;
+}
 function runGh(args, options = {}) {
   const { allowStatuses = [] } = options;
   try {
@@ -1647,19 +1801,23 @@ function runGh(args, options = {}) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    const rawStatus = error?.status;
-    const status = typeof rawStatus === 'number' ? rawStatus : null;
-    if (status !== null && allowStatuses.includes(status)) {
-      return '';
-    }
-    const stderr = String(error?.stderr ?? '').trim();
-    const prefix = `gh ${args.join(' ')}`;
-    const wrapped = new Error(
-      stderr ? `${prefix} failed: ${stderr}` : `${prefix} failed`,
-    );
-    wrapped.status = status;
-    wrapped.stderr = stderr;
-    throw wrapped;
+    return wrapGhFailure(error, args, allowStatuses);
+  }
+}
+/**
+ * Async sibling of {@link runGh} used only by the traversal hot-path loaders
+ * (`buildIssueLoader` / `buildSubIssueLoader`), so the bounded prefetch crawl
+ * can keep several `gh` subprocesses in flight. Behaviorally identical to
+ * {@link runGh}: same tolerated-status handling and the same wrapped-error
+ * shape (via {@link wrapGhFailure}).
+ */
+async function runGhAsync(args, options = {}) {
+  const { allowStatuses = [] } = options;
+  try {
+    const { stdout } = await execFileAsync('gh', args, { encoding: 'utf8' });
+    return stdout;
+  } catch (error) {
+    return wrapGhFailure(error, args, allowStatuses);
   }
 }
 function isInaccessibleIssue(value) {
