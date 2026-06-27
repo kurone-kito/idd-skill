@@ -44,8 +44,10 @@ const DEFAULT_TRAVERSAL_CONCURRENCY = 8;
 // Promisified `gh` runner used ONLY by the traversal hot-path loaders
 // (`buildIssueLoader` / `buildSubIssueLoader`). Unlike the blocking
 // `execFileSync` runner — which serializes even concurrent `await`s because it
-// holds the event loop — `execFile` lets up to `DEFAULT_TRAVERSAL_CONCURRENCY`
-// `gh` subprocesses run in parallel. The non-hot-path callers (owner/repo
+// holds the event loop — `execFile` lets multiple `gh` subprocesses run in
+// parallel; the actual in-flight bound is enforced by the prefetch crawl's
+// `mapPool` using the resolved `concurrency` (default
+// `DEFAULT_TRAVERSAL_CONCURRENCY`). The non-hot-path callers (owner/repo
 // resolution, claim-state comments, `--all-roadmaps` search) keep the sync
 // runner, so their behavior is byte-unchanged.
 const execFileAsync = promisify(execFile);
