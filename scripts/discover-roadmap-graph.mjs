@@ -36,8 +36,8 @@ const GH_SEARCH_RESULT_CAP = 1000;
 // in-flight slot is one live `gh` subprocess (one network round-trip), so the
 // bound caps parallel I/O without risking GitHub secondary rate limits. The
 // default trades a comfortable speed-up against politeness; `--concurrency`
-// (or the `concurrency` option) tunes it, and `1` reproduces the old serial
-// fetch exactly.
+// (or the `concurrency` option) tunes it, and `1` runs the fetches serially
+// (one in flight at a time).
 const DEFAULT_TRAVERSAL_CONCURRENCY = 8;
 // Promisified `gh` runner used ONLY by the traversal hot-path loaders
 // (`buildIssueLoader` / `buildSubIssueLoader`). Unlike the blocking
@@ -1310,8 +1310,14 @@ function parseArgs(argv) {
       continue;
     }
     if (token === '--concurrency') {
-      parsed.concurrency = Number.parseInt(String(value ?? ''), 10);
-      index += 1;
+      // Only consume the next token as the value when it exists and is not
+      // itself a flag, mirroring --current-claim-id, so
+      // `--concurrency --issue 700` does not swallow the following flag. A
+      // missing/flag value leaves concurrency unset (0 → normalized default).
+      if (value !== undefined && !value.startsWith('--')) {
+        parsed.concurrency = Number.parseInt(value, 10);
+        index += 1;
+      }
       continue;
     }
     if (token === '--current-claim-id') {
@@ -1342,7 +1348,7 @@ function printHelp() {
 
   --concurrency <n> (default 8) bounds how many issue fetches the traversal
   prefetch keeps in flight at once. The graph is byte-identical for any n;
-  only wall-clock changes. Pass 1 to force the previous serial traversal.
+  only fetch ordering and wall-clock change. Pass 1 to fetch serially.
   --all-roadmaps enumerates open execution leaves across every open roadmap
   root (the union), each tagged with its sourceRoots and ranked by
   autopilotSuitability (descending, tie-broken by ascending issue number).
