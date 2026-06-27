@@ -15,6 +15,7 @@ import {
   extractKeywordReferences,
   extractRoadmapMarkerId,
   extractTaskListReferences,
+  normalizeConcurrency,
   parseClaimStaleAgeMs,
   type SearchIssuesQuery,
   warnOnSearchResultCap,
@@ -2046,4 +2047,30 @@ test('prefetch crawl output is invariant across concurrency on a nested graph (#
       reason: 'issue_not_found',
     },
   ]);
+});
+
+test('normalizeConcurrency keeps integers >= 1 and falls back otherwise (#1136)', () => {
+  // DEFAULT_TRAVERSAL_CONCURRENCY is 8 (not exported); the fallback is asserted
+  // against that literal.
+  const DEFAULT = 8;
+
+  // Valid integers >= 1 (including the serial value 1) pass through.
+  assert.equal(normalizeConcurrency(1), 1);
+  assert.equal(normalizeConcurrency(4), 4);
+  assert.equal(normalizeConcurrency(16), 16);
+
+  // Out-of-range, non-integer, and garbage numbers fall back to the default.
+  assert.equal(normalizeConcurrency(0), DEFAULT);
+  assert.equal(normalizeConcurrency(-3), DEFAULT);
+  assert.equal(normalizeConcurrency(2.5), DEFAULT);
+  assert.equal(normalizeConcurrency(Number.NaN), DEFAULT);
+  assert.equal(normalizeConcurrency(undefined), DEFAULT);
+
+  // String input (the CLI path) parses with Number, not parseInt: a clean
+  // integer string is accepted; a non-integer string is NOT truncated.
+  assert.equal(normalizeConcurrency('4'), 4);
+  assert.equal(normalizeConcurrency('  3 '), 3);
+  assert.equal(normalizeConcurrency('2.5'), DEFAULT);
+  assert.equal(normalizeConcurrency('3px'), DEFAULT);
+  assert.equal(normalizeConcurrency(''), DEFAULT);
 });

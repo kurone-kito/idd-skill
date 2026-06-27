@@ -540,12 +540,15 @@ if (isMainModule(import.meta.url)) {
  * Normalize the traversal `concurrency` option to an integer `>= 1`, falling
  * back to {@link DEFAULT_TRAVERSAL_CONCURRENCY} for unset, non-integer, or
  * `< 1` values. `1` is preserved so callers can force the serial path.
+ *
+ * String input is parsed with `Number` (not `parseInt`) so a non-integer
+ * string such as `"2.5"` fails the `Number.isInteger` check and falls back to
+ * the default, instead of being silently truncated to `2`. This keeps CLI
+ * string input and typed numeric input consistent.
  */
-function normalizeConcurrency(value: unknown): number {
+export function normalizeConcurrency(value: unknown): number {
   const numeric =
-    typeof value === 'number'
-      ? value
-      : Number.parseInt(String(value ?? ''), 10);
+    typeof value === 'number' ? value : Number(String(value ?? '').trim());
   return Number.isInteger(numeric) && numeric >= 1
     ? numeric
     : DEFAULT_TRAVERSAL_CONCURRENCY;
@@ -1882,7 +1885,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       // `--concurrency --issue 700` does not swallow the following flag. A
       // missing/flag value leaves concurrency unset (0 → normalized default).
       if (value !== undefined && !value.startsWith('--')) {
-        parsed.concurrency = Number.parseInt(value, 10);
+        // Use Number (not parseInt) so a non-integer like "2.5" stays
+        // non-integer and normalizeConcurrency falls back to the default,
+        // rather than being truncated to 2.
+        parsed.concurrency = Number(value);
         index += 1;
       }
       continue;
