@@ -503,7 +503,10 @@ const FRONTMATTER_PATTERN = /^(---\n[\s\S]*?\n---\n)/;
 /**
  * Insert the generated-from banner into generated instruction content:
  * immediately after a leading YAML frontmatter block when one is present,
- * otherwise at the very top, followed by one blank line before the content.
+ * otherwise at the very top. The post-frontmatter content is kept verbatim, so
+ * for the canonical `---\n…\n---\n\n#` layout its existing blank line separates
+ * the banner from the content; a frontmatter-less file gets an explicit blank
+ * line after the banner.
  */
 export function injectGeneratedFromBanner(
   body: string,
@@ -549,13 +552,19 @@ export function stripGeneratedFromBanner(body: string): string {
 
 /**
  * Extract the source path a generated-from banner names (the line after the
- * opener), or `null` when the body carries no well-formed banner. Accepts the
- * banner at the top or immediately after a frontmatter block.
+ * opener), or `null` when the body carries no well-formed banner in the
+ * expected position: the very top, or immediately after a frontmatter block. A
+ * banner-shaped comment anywhere else in the body is deliberately not matched,
+ * so a misplaced banner is reported as missing rather than silently accepted.
  */
 export function parseGeneratedFromBannerSource(body: string): string | null {
+  const frontmatter = FRONTMATTER_PATTERN.exec(body);
+  // After a frontmatter block the inject adds a single leading `\n`; at the top
+  // there is none. Anchor with `^\n?` so only an in-position banner matches.
+  const scope = frontmatter ? body.slice(frontmatter[1].length) : body;
   const match = new RegExp(
-    `(?:^|\\n)${GENERATED_FROM_BANNER_OPEN}\\n([^\\n]+)\\n[\\s\\S]*?-->`,
-  ).exec(body);
+    `^\\n?${GENERATED_FROM_BANNER_OPEN}\\n([^\\n]+)\\n[\\s\\S]*?-->`,
+  ).exec(scope);
   return match ? match[1] : null;
 }
 

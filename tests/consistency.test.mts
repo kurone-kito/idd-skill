@@ -202,6 +202,15 @@ test('parseGeneratedFromBannerSource returns null without a banner', () => {
   assert.equal(parseGeneratedFromBannerSource('# Heading\n\nBody.\n'), null);
 });
 
+test('parseGeneratedFromBannerSource ignores a banner-shaped comment out of position', () => {
+  // A banner is only recognized at the top or immediately after frontmatter; a
+  // copy pasted mid-body must not be accepted as the generated-from banner.
+  const midBody = `# Heading\n\nSome text.\n\n${generatedFromBanner(
+    BANNER_SOURCE,
+  )}\n\nMore text.\n`;
+  assert.equal(parseGeneratedFromBannerSource(midBody), null);
+});
+
 test('collectGeneratedFromBannerViolations passes when the banner matches, fails on missing/wrong', () => {
   const target = '.github/instructions/idd-claim.instructions.md';
   const pairs = [
