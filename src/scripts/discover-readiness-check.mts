@@ -130,13 +130,17 @@ interface ParsedArgs {
   repo: string;
   policy: string;
   now: string;
+  // `--swarm-floor <N>`: when set, the CLI ignores the `--issue`/`--issues`
+  // requirement, sweeps every open issue (orphans included), and reports the
+  // at-or-above-floor eligible set. `null` keeps the default per-issue mode.
+  swarmFloor: number | null;
 }
 
 type CachedIssue = NormalizedIssue | InaccessibleIssueSentinel | null;
 
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
-  if (args.issueNumbers.length === 0) {
+  if (args.swarmFloor === null && args.issueNumbers.length === 0) {
     throw new Error(
       'missing required --issue <number> (repeatable) or --issues <n1,n2,...>',
     );
@@ -151,20 +155,40 @@ if (isMainModule(import.meta.url)) {
   const authoringPolicy = resolveAuthoringGuardPolicy(policyConfig);
   const markerPrefix = resolveMarkerPrefix(policyConfig);
 
-  const summary = await evaluateDiscoverReadiness(args.issueNumbers, {
+  // `--swarm-floor` sweeps every open issue (orphans included); otherwise
+  // evaluate exactly the issues the caller named.
+  const issueNumbers =
+    args.swarmFloor === null
+      ? args.issueNumbers
+      : listOpenIssueNumbers(owner, repo);
+
+  const summary = await evaluateDiscoverReadiness(issueNumbers, {
     includeUnresolvable: args.includeUnresolvable,
     loadIssue: buildIssueLoader(owner, repo),
-    loadIssueLabelEvents: buildIssueLabelEventsLoader(owner, repo),
+    // `--swarm-floor` output never surfaces the stale-authoring warning, so
+    // skip the per-issue timeline fetch this loader runs — over a whole-repo
+    // sweep that is one extra paginated API call per open issue. The
+    // authoring-label *filter* reads issue labels (always loaded), so
+    // eligibility is unchanged; only the unsurfaced warning is dropped.
+    loadIssueLabelEvents:
+      args.swarmFloor === null
+        ? buildIssueLabelEventsLoader(owner, repo)
+        : undefined,
     findRoadmapsByMarker: buildRoadmapMarkerResolver(owner, repo, markerPrefix),
     authoringLabelName: authoringPolicy.labelName,
     authoringStaleAgeMs: authoringPolicy.staleAgeMs,
     markerPrefix,
-    autopilotSuitabilityFloor: resolveSuitabilityFloor(policyConfig),
+    autopilotSuitabilityFloor:
+      args.swarmFloor ?? resolveSuitabilityFloor(policyConfig),
     autopilotSuitabilityEnabled: resolveSuitabilityEnabled(policyConfig),
     now: args.now || new Date(),
   });
 
-  if (args.csv) {
+  if (args.swarmFloor !== null) {
+    process.stdout.write(
+      `${JSON.stringify(summarizeSwarmFloorEligibility(summary), null, 2)}\n`,
+    );
+  } else if (args.csv) {
     process.stdout.write(renderCsv(summary));
   } else {
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
@@ -393,6 +417,46 @@ export async function evaluateDiscoverReadiness(
   };
 }
 
+export interface SwarmFloorEligibility {
+  eligible: ReadinessReadyIssue[];
+  eligible_count: number;
+  total: number;
+}
+
+/**
+ * Reduce a full readiness summary to the swarm-floor answer: the ready issues
+ * at or above the configured floor (a "no score" issue is never below floor,
+ * so it stays eligible, matching the discovery ranker), plus counts. Pure so
+ * the `--swarm-floor` CLI sweep and the tests share one definition.
+ */
+export function summarizeSwarmFloorEligibility(
+  summary: ReadinessSummary,
+): SwarmFloorEligibility {
+  const eligible = summary.ready.filter((issue) => !issue.belowFloor);
+  return {
+    eligible,
+    eligible_count: eligible.length,
+    total: summary.summary.total,
+  };
+}
+
+/**
+ * Parse and range-check the `--swarm-floor <N>` value. The floor is the
+ * autopilot-suitability 1-5 band, so a non-integer, fractional, or
+ * out-of-range value is a hard error rather than being silently coerced to
+ * the default floor — coercion would loosen the eligibility gate on a typo
+ * (e.g. `--swarm-floor 50` quietly answering at floor 3), which is exactly
+ * the mis-read this stop-condition query must avoid.
+ */
+export function parseSwarmFloorArg(value: string): number {
+  const raw = String(value ?? '').trim();
+  const floor = Number.parseInt(raw, 10);
+  if (!/^\d+$/.test(raw) || floor < 1 || floor > 5) {
+    throw new Error('--swarm-floor requires an integer 1-5');
+  }
+  return floor;
+}
+
 /**
  * Collect the `#N` references declared on a dependency-keyword line.
  *
@@ -494,6 +558,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     repo: string;
     policy: string;
     now: string;
+    swarmFloor: number | null;
   } = {
     issueNumbers: [],
     includeUnresolvable: false,
@@ -502,6 +567,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     repo: '',
     policy: '',
     now: '',
+    swarmFloor: null,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -537,6 +603,11 @@ function parseArgs(argv: string[]): ParsedArgs {
       index += 1;
       continue;
     }
+    if (token === '--swarm-floor') {
+      parsed.swarmFloor = parseSwarmFloorArg(value ?? '');
+      index += 1;
+      continue;
+    }
     if (token === '--include-unresolvable') {
       parsed.includeUnresolvable = true;
       continue;
@@ -563,6 +634,15 @@ function printHelp() {
   node scripts/discover-readiness-check.mjs --issue <number> [--issue <number> ...]
   node scripts/discover-readiness-check.mjs --issues <n1,n2,...>
     [--include-unresolvable] [--csv] [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>]
+  node scripts/discover-readiness-check.mjs --swarm-floor <N>
+    [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>]
+
+  --swarm-floor <N> ignores --issue/--issues, sweeps every open issue in the
+  repository (orphans included, pull requests excluded), runs readiness, and
+  reports the ready issues at or above autopilot-suitability floor N (an
+  integer 1-5) in one call. An out-of-range or non-integer N is a hard error
+  rather than a silent coercion. A "no score" issue is never below floor,
+  matching discovery ranking.
 
 Output schema (JSON mode):
   {
@@ -571,6 +651,13 @@ Output schema (JSON mode):
     "unresolvable": [{ "issueNumber": 124, "kind": "...", "reference": "...", "reason": "..." }],
     "warnings": [{ "issueNumber": 124, "message": "Warning: ..." }],
     "summary": { "total": 2, "readyCount": 1, "filteredCount": 1, "unresolvableCount": 0, "filteredByReason": { "...": 1 } }
+  }
+
+Output schema (--swarm-floor mode):
+  {
+    "eligible": [{ "number": 123, "title": "...", "autopilotSuitability": 4, "belowFloor": false }],
+    "eligible_count": 1,
+    "total": 7
   }
 `);
 }
@@ -825,6 +912,43 @@ export function buildRoadmapMarkerResolver(
     ]).trim();
     return JSON.parse(result || '[]');
   };
+}
+
+/**
+ * Every open issue number in the repository, orphans included. `--paginate`
+ * walks all pages; `select(.pull_request == null)` drops pull requests, which
+ * the REST issues endpoint otherwise returns alongside issues. Used by the
+ * `--swarm-floor` sweep to answer "is there any eligible work left?".
+ */
+function listOpenIssueNumbers(owner: string, repo: string): number[] {
+  return parseIssueNumberLines(
+    ghText([
+      'api',
+      '--paginate',
+      `repos/${owner}/${repo}/issues?state=open&per_page=100`,
+      '--jq',
+      '.[] | select(.pull_request == null) | .number',
+    ]),
+  );
+}
+
+/**
+ * Parse the newline-delimited issue numbers emitted by the
+ * `listOpenIssueNumbers` `gh api --jq` sweep into a deduped list of positive
+ * integers. Only **full-integer** lines are kept: blank, partially-numeric
+ * (`5abc`), or non-positive lines are dropped rather than truncated by
+ * `Number.parseInt`, so an empty sweep yields `[]`. Exported so the parse
+ * contract is unit-testable without a live `gh` call — pull requests are
+ * already excluded upstream by the `select(.pull_request == null)` jq filter.
+ */
+export function parseIssueNumberLines(raw: string): number[] {
+  return dedupeNumbers(
+    raw
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => /^\d+$/.test(line))
+      .map((line) => Number.parseInt(line, 10)),
+  );
 }
 
 function ghText(args: string[]): string {

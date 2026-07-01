@@ -8,6 +8,9 @@ import {
   extractBlockedByRoadmapMarkers,
   extractDependencyIssueNumbers,
   isInaccessibleIssueLookupError,
+  parseIssueNumberLines,
+  parseSwarmFloorArg,
+  summarizeSwarmFloorEligibility,
 } from '../src/scripts/discover-readiness-check.mts';
 
 // Shape of a wrapped runGh failure: process exit code 1 with the true
@@ -724,4 +727,144 @@ test('forces a neutral signal when the suitability kill switch is off', async ()
       belowFloor: false,
     },
   ]);
+});
+
+test('summarizeSwarmFloorEligibility keeps ready issues at or above the floor', () => {
+  // `belowFloor` drives eligibility: a scored-below-floor issue is dropped,
+  // while an at/above-floor score and a no-score (belowFloor:false) issue stay.
+  const result = summarizeSwarmFloorEligibility({
+    ready: [
+      {
+        number: 10,
+        title: 'above',
+        autopilotSuitability: 5,
+        belowFloor: false,
+      },
+      { number: 20, title: 'below', autopilotSuitability: 2, belowFloor: true },
+      {
+        number: 30,
+        title: 'no score',
+        autopilotSuitability: null,
+        belowFloor: false,
+      },
+    ],
+    filteredOut: [],
+    unresolvable: [],
+    warnings: [],
+    summary: {
+      total: 4,
+      readyCount: 3,
+      filteredCount: 1,
+      unresolvableCount: 0,
+      filteredByReason: { 'label:status:needs-decision': 1 },
+    },
+  });
+
+  assert.deepEqual(result, {
+    eligible: [
+      {
+        number: 10,
+        title: 'above',
+        autopilotSuitability: 5,
+        belowFloor: false,
+      },
+      {
+        number: 30,
+        title: 'no score',
+        autopilotSuitability: null,
+        belowFloor: false,
+      },
+    ],
+    eligible_count: 2,
+    total: 4,
+  });
+});
+
+test('swarm-floor sweep filters a swept issue set by the floor', async () => {
+  const issues = new Map([
+    [
+      10,
+      {
+        number: 10,
+        title: 'above floor',
+        state: 'OPEN',
+        body: '<!-- idd-skill-autopilot-suitability: 5 -->',
+        labels: [],
+      },
+    ],
+    [
+      20,
+      {
+        number: 20,
+        title: 'below floor',
+        state: 'OPEN',
+        body: '<!-- idd-skill-autopilot-suitability: 2 -->',
+        labels: [],
+      },
+    ],
+    [
+      30,
+      {
+        number: 30,
+        title: 'no score',
+        state: 'OPEN',
+        body: 'unscored',
+        labels: [],
+      },
+    ],
+    [
+      40,
+      {
+        number: 40,
+        title: 'blocked',
+        state: 'OPEN',
+        body: 'x',
+        labels: [{ name: 'status:needs-decision' }],
+      },
+    ],
+  ]);
+  const summary = await evaluateDiscoverReadiness([10, 20, 30, 40], {
+    autopilotSuitabilityFloor: 3,
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+  const result = summarizeSwarmFloorEligibility(summary);
+
+  // #20 is ready but below the floor (dropped); #40 is filtered out (blocked);
+  // #10 (scored >= floor) and #30 (no score) stay eligible.
+  assert.deepEqual(
+    result.eligible.map((issue) => issue.number),
+    [10, 30],
+  );
+  assert.equal(result.eligible_count, 2);
+  assert.equal(result.total, 4);
+});
+
+test('parseSwarmFloorArg accepts 1-5 and rejects out-of-range or non-integer values', () => {
+  // In-band integers pass through.
+  for (const n of [1, 2, 3, 4, 5]) {
+    assert.equal(parseSwarmFloorArg(String(n)), n);
+  }
+  // Out-of-range and non-integer inputs are hard errors, not silent coercion
+  // to the default floor (which would loosen the eligibility gate on a typo).
+  for (const bad of ['0', '6', '50', '-1', '3.5', '', '  ', 'abc', '3abc']) {
+    assert.throws(
+      () => parseSwarmFloorArg(bad),
+      /--swarm-floor requires an integer 1-5/,
+    );
+  }
+});
+
+test('parseIssueNumberLines dedupes positive integers and yields [] on empty output', () => {
+  // Empty / whitespace-only sweep output → no issues (the swarm loop stops).
+  assert.deepEqual(parseIssueNumberLines(''), []);
+  assert.deepEqual(parseIssueNumberLines('   \n\n  '), []);
+  // Newline-delimited numbers are parsed, trimmed, and de-duplicated in order.
+  assert.deepEqual(parseIssueNumberLines('10\n20\n10\n30'), [10, 20, 30]);
+  assert.deepEqual(parseIssueNumberLines('  42 \n\n 7 \n'), [42, 7]);
+  // Non-numeric or non-positive lines are dropped (fail-safe parsing).
+  assert.deepEqual(parseIssueNumberLines('5\nabc\n-1\n0\n8'), [5, 8]);
+  // A partially-numeric line is dropped whole, not truncated by parseInt:
+  // `99abc` must NOT become `99`.
+  assert.deepEqual(parseIssueNumberLines('99abc\n7'), [7]);
 });

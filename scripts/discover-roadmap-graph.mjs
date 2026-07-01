@@ -735,6 +735,20 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
   const sharedLeafCount = leaves.filter(
     (leaf) => leaf.sourceRoots.length > 1,
   ).length;
+  // Only meaningful when readiness was annotated above; the same gate keeps
+  // the flag-absent summary byte-stable (both counts stay absent).
+  const readinessAnnotated = Boolean(
+    options.readiness && typeof options.loadIssue === 'function',
+  );
+  const readinessCounts = readinessAnnotated
+    ? {
+        startableCount: leaves.filter(
+          (leaf) => leaf.readiness?.startable === true,
+        ).length,
+        readyCount: leaves.filter((leaf) => leaf.readiness?.ready === true)
+          .length,
+      }
+    : {};
   return {
     mode: 'all-roadmaps',
     roots: roots.sort(compareByNumber),
@@ -756,6 +770,7 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       leafCount: leaves.length,
       scoredLeafCount,
       sharedLeafCount,
+      ...readinessCounts,
       duplicateReferenceCount: duplicateReferences.size,
       cycleCount: cycles.size,
       inaccessibleReferenceCount: inaccessibleReferences.size,
@@ -1422,6 +1437,9 @@ top-level shape from the single-root report above):
       "unresolvedReferenceCount": 0
     }
   }
+  (Under --with-readiness the summary also carries "startableCount" and
+  "readyCount" aggregating the union leaves' readiness; both are absent
+  otherwise so the flag-absent output stays byte-stable.)
 `);
 }
 function normalizeIssue(issue) {

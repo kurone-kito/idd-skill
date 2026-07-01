@@ -1868,6 +1868,9 @@ test('--with-readiness annotates open union leaves with a combined startable sig
   assert.equal(r923?.startable, false);
   assert.equal(r923?.authoringHeld, true);
   assert.ok(r923?.reasons.includes('label:status:authoring'));
+  // The summary aggregates the same signal: only 921 is ready and startable.
+  assert.equal(report.summary.readyCount, 1);
+  assert.equal(report.summary.startableCount, 1);
 });
 
 test('--with-readiness is byte-stable when the flag is absent', async () => {
@@ -1883,6 +1886,11 @@ test('--with-readiness is byte-stable when the flag is absent', async () => {
       false,
     );
   }
+  // The summary aggregate counts are likewise absent without the flag, so the
+  // flag-absent output shape is unchanged.
+  const summaryKeys = report.summary as unknown as Record<string, unknown>;
+  assert.equal(Object.hasOwn(summaryKeys, 'startableCount'), false);
+  assert.equal(Object.hasOwn(summaryKeys, 'readyCount'), false);
 });
 
 test('startable folds in claimEligible: a ready but claimed leaf is not startable', async () => {
