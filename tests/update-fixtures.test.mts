@@ -8,6 +8,11 @@ import {
   regenerateFixtureText,
 } from '../src/scripts/update-fixtures.mts';
 
+// Resolve fixtures relative to this test file, not the process cwd, so the
+// suite is location-independent (e.g. under an IDE test runner) — matching the
+// `new URL('../', import.meta.url)` pattern in the other fixture-driven tests.
+const REPO_ROOT_URL = new URL('../', import.meta.url);
+
 const SAMPLE = `${JSON.stringify(
   {
     input: { prHeadSha: 'abc' },
@@ -61,17 +66,17 @@ test('regenerateFixtureText propagates a throwing builder instead of silently sk
 // deepEqual assertions in the per-suite fixture tests.
 for (const suite of FIXTURE_SUITES) {
   test(`${suite.name}: real builder round-trips every committed fixture (no-op)`, () => {
-    const files = readdirSync(suite.dir)
+    const suiteDirUrl = new URL(`${suite.dir}/`, REPO_ROOT_URL);
+    const files = readdirSync(suiteDirUrl)
       .filter((name) => name.endsWith('.json'))
       .sort();
     assert.ok(files.length > 0, `expected fixtures under ${suite.dir}`);
     for (const name of files) {
-      const path = `${suite.dir}/${name}`;
-      const original = readFileSync(path, 'utf8');
+      const original = readFileSync(new URL(name, suiteDirUrl), 'utf8');
       assert.equal(
         regenerateFixtureText(original, suite.build),
         original,
-        `${path} would be rewritten by an unchanged-code regeneration`,
+        `${suite.dir}/${name} would be rewritten by an unchanged-code regeneration`,
       );
     }
   });
