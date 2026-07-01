@@ -65,11 +65,16 @@ function findModuleEvalOrderViolations(
     for (let i = entryIndex + 1; i < lines.length; i += 1) {
       const line = lines[i];
       // Require a single `=` assignment operator (excluding `==`/`!=`/`<=`/`>=`
-      // via the neighbor character classes; whitespace is not required) so a
-      // bare `let x;` is not flagged. `const enum` — whose members may use `=`
-      // (`A = 1`) — is already excluded by MODULE_LEVEL_BINDING. Column 0
-      // excludes bindings nested inside the block or a function.
-      if (MODULE_LEVEL_BINDING.test(line) && /[^=!<>]=[^=]/.test(line)) {
+      // and the `=>` arrow via lookbehind/lookahead) so a bare `let x;` is not
+      // flagged. The lookarounds — rather than requiring a trailing character —
+      // still match a line ending in `=` (a multi-line initializer whose value
+      // is on the next line). `const enum`, whose members may use `=`, is
+      // already excluded by MODULE_LEVEL_BINDING. Column 0 excludes bindings
+      // nested inside the block or a function.
+      if (
+        MODULE_LEVEL_BINDING.test(line) &&
+        /(?<![=!<>])=(?![=>])/.test(line)
+      ) {
         violations.push(
           `${path}:${i + 1}: module-level binding initialized after the CLI entry ` +
             `block (opened at line ${entryIndex + 1}) — top-level-await TDZ risk; ` +
@@ -99,6 +104,24 @@ test('module-eval-order guard flags an initialized const after the entry block',
   ]);
   assert.equal(violations.length, 1);
   assert.match(violations[0], /sample\.mts:5:.*after the CLI entry block/);
+});
+
+test('module-eval-order guard flags a multi-line initializer whose line ends in `=`', () => {
+  const violations = findModuleEvalOrderViolations([
+    readModule(
+      'src/scripts/sample.mts',
+      [
+        'if (isMainModule(import.meta.url)) {',
+        '  await run(LATE);',
+        '}',
+        'const LATE =',
+        '  new Set([1, 2, 3]);',
+        '',
+      ].join('\n'),
+    ),
+  ]);
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /sample\.mts:4:/);
 });
 
 test('module-eval-order guard flags let and var too, and reports each', () => {
@@ -269,6 +292,9 @@ process.exit(1);
       cwd: REPO_ROOT,
       encoding: 'utf8',
       env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
+      // Fail fast instead of hanging the suite if the CLI ever blocks on an
+      // unexpected read (the stub gh answers or exits non-zero for every call).
+      timeout: 60_000,
     },
   );
 
