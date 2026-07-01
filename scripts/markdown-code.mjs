@@ -1,3 +1,8 @@
+// idd-generated-from: src/scripts/markdown-code.mts
+//
+// The scripts/markdown-code.mjs copy is generated from the .mts source named
+// above by `pnpm run build`. Edit the .mts source, never the generated .mjs.
+// See docs/typescript-sources.md.
 /**
  * Strip Markdown code regions (fenced blocks and inline code spans) from a body
  * before scanning it for machine-readable markers or dependency references. A
