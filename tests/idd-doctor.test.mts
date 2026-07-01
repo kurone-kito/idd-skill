@@ -9,6 +9,7 @@ import {
   checkProjectCommands,
   classifyBacklog,
   classifyPrimaryHead,
+  classifyWorktreeGuardActivation,
   classifyWorktreeHeadFinding,
   computeWindowStartIso,
   containsExampleRepoBackLink,
@@ -24,6 +25,7 @@ import {
   findPlaceholders,
   formatCleanupBacklogScanPreamble,
   formatCleanupBacklogScanProgress,
+  hookWiresWorktreeGuard,
   isGithubBackLinkHost,
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
@@ -433,6 +435,103 @@ test('classifyWorktreeHeadFinding labels roadmap-audit branches', () => {
   );
   assert.equal(finding?.level, 'error');
   assert.match(finding?.message ?? '', /a roadmap-audit branch/);
+});
+
+test('hookWiresWorktreeGuard detects a hook that sources the guard', () => {
+  assert.equal(
+    hookWiresWorktreeGuard(
+      '#!/bin/sh\n. "$(dirname "$0")/_idd-worktree-guard.sh"\n',
+    ),
+    true,
+  );
+});
+
+test('hookWiresWorktreeGuard rejects hooks that do not source the guard', () => {
+  assert.equal(hookWiresWorktreeGuard('#!/bin/sh\npnpm run lint\n'), false);
+  assert.equal(hookWiresWorktreeGuard(''), false);
+});
+
+test('hookWiresWorktreeGuard ignores a bare mention in a comment', () => {
+  // A leftover doc/comment line that names the helper but no longer sources
+  // it is inert and must not read as wired.
+  assert.equal(
+    hookWiresWorktreeGuard(
+      '#!/bin/sh\n# was: . "$(dirname "$0")/_idd-worktree-guard.sh"\necho hi\n',
+    ),
+    false,
+  );
+  // The `source` keyword variant (with indentation) still counts as wired.
+  assert.equal(
+    hookWiresWorktreeGuard(
+      '#!/bin/bash\n  source ./.githooks/_idd-worktree-guard.sh\n',
+    ),
+    true,
+  );
+});
+
+test('hookWiresWorktreeGuard treats a non-string (absent hook) as unwired', () => {
+  assert.equal(hookWiresWorktreeGuard(null), false);
+  assert.equal(hookWiresWorktreeGuard(undefined), false);
+});
+
+test('classifyWorktreeGuardActivation returns null when the guard is disabled', () => {
+  assert.equal(
+    classifyWorktreeGuardActivation({
+      guardEnabled: false,
+      headDetached: false,
+      hooksPath: null,
+      guardWired: false,
+    }),
+    null,
+  );
+});
+
+test('classifyWorktreeGuardActivation stays silent on a detached HEAD (CI-safe)', () => {
+  assert.equal(
+    classifyWorktreeGuardActivation({
+      guardEnabled: true,
+      headDetached: true,
+      hooksPath: null,
+      guardWired: false,
+    }),
+    null,
+  );
+});
+
+test('classifyWorktreeGuardActivation returns null when the guard is wired', () => {
+  assert.equal(
+    classifyWorktreeGuardActivation({
+      guardEnabled: true,
+      headDetached: false,
+      hooksPath: '.githooks',
+      guardWired: true,
+    }),
+    null,
+  );
+});
+
+test('classifyWorktreeGuardActivation warns (never errors) when enabled-but-inert', () => {
+  const finding = classifyWorktreeGuardActivation({
+    guardEnabled: true,
+    headDetached: false,
+    hooksPath: '.husky/_',
+    guardWired: false,
+  });
+  assert.equal(finding?.level, 'warning');
+  assert.match(finding?.message ?? '', /worktreeGuard\.enabled is true/);
+  assert.match(finding?.message ?? '', /core\.hooksPath = \.husky\/_/);
+  assert.match(finding?.message ?? '', /git config core\.hooksPath \.githooks/);
+});
+
+test('classifyWorktreeGuardActivation shows (unset) when core.hooksPath is absent', () => {
+  const finding = classifyWorktreeGuardActivation({
+    guardEnabled: true,
+    headDetached: false,
+    hooksPath: null,
+    guardWired: false,
+  });
+  assert.equal(finding?.level, 'warning');
+  assert.match(finding?.message ?? '', /core\.hooksPath = \(unset\)/);
 });
 
 test('readWorktreeGuardEnabled reads worktreeGuard.enabled from config', () => {
