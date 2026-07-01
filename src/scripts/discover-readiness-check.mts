@@ -150,7 +150,15 @@ if (isMainModule(import.meta.url)) {
   const summary = await evaluateDiscoverReadiness(issueNumbers, {
     includeUnresolvable: args.includeUnresolvable,
     loadIssue: buildIssueLoader(owner, repo),
-    loadIssueLabelEvents: buildIssueLabelEventsLoader(owner, repo),
+    // `--swarm-floor` output never surfaces the stale-authoring warning, so
+    // skip the per-issue timeline fetch this loader runs — over a whole-repo
+    // sweep that is one extra paginated API call per open issue. The
+    // authoring-label *filter* reads issue labels (always loaded), so
+    // eligibility is unchanged; only the unsurfaced warning is dropped.
+    loadIssueLabelEvents:
+      args.swarmFloor === null
+        ? buildIssueLabelEventsLoader(owner, repo)
+        : undefined,
     findRoadmapsByMarker: buildRoadmapMarkerResolver(owner, repo, markerPrefix),
     authoringLabelName: authoringPolicy.labelName,
     authoringStaleAgeMs: authoringPolicy.staleAgeMs,
