@@ -32,8 +32,13 @@ const SRC_SCRIPTS = fileURLToPath(new URL('../src/scripts/', import.meta.url));
 // are not flagged. It does NOT require the block to be the last statement.
 // ---------------------------------------------------------------------------
 
-/** Matches a top-level CLI entry-guard opener at column 0. */
-const ENTRY_GUARD = /^if \(.*(?:isMainModule|import\.meta\.url).*\)\s*\{/;
+/**
+ * Matches a top-level CLI entry-guard opener at column 0. Anchored to the two
+ * real signatures — an `isMainModule(` call or a `process.argv[1]` comparison —
+ * rather than any `import.meta.url` mention, so an unrelated top-level `if` that
+ * merely references `import.meta.url` is not mistaken for the entry block.
+ */
+const ENTRY_GUARD = /^if \(.*(?:isMainModule\(|process\.argv\[1\]).*\)\s*\{/;
 
 /** Matches a module-level (column 0) `const`/`let`/`var` declaration opener. */
 const MODULE_LEVEL_BINDING = /^(?:export )?(?:const|let|var)\b/;
@@ -55,8 +60,10 @@ function findModuleEvalOrderViolations(
     }
     for (let i = entryIndex + 1; i < lines.length; i += 1) {
       const line = lines[i];
-      // `= ` (with the space) avoids matching a bare `let x;` or `const enum`,
-      // and column 0 excludes bindings nested inside the block or a function.
+      // Require a single `=` assignment operator (excluding `==`/`!=`/`<=`/`>=`
+      // via the neighbor classes; whitespace is not required) so a bare
+      // `let x;` or a `const enum` — neither of which assigns — is not flagged.
+      // Column 0 already excludes bindings nested inside the block or a function.
       if (MODULE_LEVEL_BINDING.test(line) && /[^=!<>]=[^=]/.test(line)) {
         violations.push(
           `${path}:${i + 1}: module-level binding initialized after the CLI entry ` +
