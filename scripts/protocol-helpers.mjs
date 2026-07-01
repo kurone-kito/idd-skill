@@ -1394,9 +1394,22 @@ export function hasFreshDisposition(thread, options = {}) {
     );
   });
 }
+// A disposition marker may carry a single interior punctuation char `[.!:]`
+// immediately before the closing `**` — `**Accepted.**` (natural English
+// "Accepted. Fixed in…"), `**Accepted:**`, `**Accepted!**`, and the `Rejected`
+// equivalents — so a reply that punctuates the marker is still recognized. The
+// tolerance is bounded to that one char before `**`, so an interior-text body
+// like `**Accepted by reviewer, but…**` is NOT matched (fail-closed: a false
+// positive is a false merge). Start-anchored, so the marker must remain the
+// first bytes of the (leading-trimmed) body.
+const DISPOSITION_ACCEPTED_PREFIX_RE = /^\*\*Accepted[.!:]?\*\*/;
+const DISPOSITION_REJECTED_PREFIX_RE = /^\*\*Rejected[.!:]?\*\*/;
 export function isDispositionComment(comment) {
   const body = (comment.body ?? '').trimEnd();
-  return body.startsWith('**Accepted**') || body.startsWith('**Rejected**');
+  return (
+    DISPOSITION_ACCEPTED_PREFIX_RE.test(body) ||
+    DISPOSITION_REJECTED_PREFIX_RE.test(body)
+  );
 }
 // Terminal AMD-rejection marker. When a maintainer agrees with a rejection the
 // agent replies `**Rejection confirmed by maintainer** — {summary}` and resolves
@@ -1457,7 +1470,8 @@ export function isAdvisoryNonReviewNotice(body) {
 export function isNonReviewNoticeDisposition(comment) {
   const body = (comment.body ?? '').trimStart();
   return (
-    body.startsWith('**Rejected**') && /\bdid not review HEAD\b/i.test(body)
+    DISPOSITION_REJECTED_PREFIX_RE.test(body) &&
+    /\bdid not review HEAD\b/i.test(body)
   );
 }
 // #1122 CodeRabbit summary-walkthrough auto-disposition classifiers.
@@ -1488,7 +1502,8 @@ export function isReviewSummaryComment(body) {
 export function isReviewSummaryDisposition(comment) {
   const body = (comment.body ?? '').trimStart();
   return (
-    body.startsWith('**Accepted**') && /\bsummary walkthrough\b/i.test(body)
+    DISPOSITION_ACCEPTED_PREFIX_RE.test(body) &&
+    /\bsummary walkthrough\b/i.test(body)
   );
 }
 // The stable identity token of an advisory bot, used to attribute a non-review

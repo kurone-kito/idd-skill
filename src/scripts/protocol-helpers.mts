@@ -2168,11 +2168,25 @@ export function hasFreshDisposition(
   });
 }
 
+// A disposition marker may carry a single interior punctuation char `[.!:]`
+// immediately before the closing `**` — `**Accepted.**` (natural English
+// "Accepted. Fixed in…"), `**Accepted:**`, `**Accepted!**`, and the `Rejected`
+// equivalents — so a reply that punctuates the marker is still recognized. The
+// tolerance is bounded to that one char before `**`, so an interior-text body
+// like `**Accepted by reviewer, but…**` is NOT matched (fail-closed: a false
+// positive is a false merge). Start-anchored, so the marker must remain the
+// first bytes of the (leading-trimmed) body.
+const DISPOSITION_ACCEPTED_PREFIX_RE = /^\*\*Accepted[.!:]?\*\*/;
+const DISPOSITION_REJECTED_PREFIX_RE = /^\*\*Rejected[.!:]?\*\*/;
+
 export function isDispositionComment(comment: {
   body?: string | null;
 }): boolean {
   const body = (comment.body ?? '').trimEnd();
-  return body.startsWith('**Accepted**') || body.startsWith('**Rejected**');
+  return (
+    DISPOSITION_ACCEPTED_PREFIX_RE.test(body) ||
+    DISPOSITION_REJECTED_PREFIX_RE.test(body)
+  );
 }
 
 // Terminal AMD-rejection marker. When a maintainer agrees with a rejection the
@@ -2243,7 +2257,8 @@ export function isNonReviewNoticeDisposition(comment: {
 }): boolean {
   const body = (comment.body ?? '').trimStart();
   return (
-    body.startsWith('**Rejected**') && /\bdid not review HEAD\b/i.test(body)
+    DISPOSITION_REJECTED_PREFIX_RE.test(body) &&
+    /\bdid not review HEAD\b/i.test(body)
   );
 }
 
@@ -2279,7 +2294,8 @@ export function isReviewSummaryDisposition(comment: {
 }): boolean {
   const body = (comment.body ?? '').trimStart();
   return (
-    body.startsWith('**Accepted**') && /\bsummary walkthrough\b/i.test(body)
+    DISPOSITION_ACCEPTED_PREFIX_RE.test(body) &&
+    /\bsummary walkthrough\b/i.test(body)
   );
 }
 
