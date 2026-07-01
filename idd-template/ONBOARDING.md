@@ -70,6 +70,26 @@ IDD, treat the upgrade as a **named-gap import**, not a blind resync:
 3. Re-apply the Step 2 file import for the changed files, then re-run the
    Step 6 verification checklist and `idd-doctor` after reconciling.
 
+**Anatomy of a helper re-import (`vendored-node` profile).** If you vendor the
+shared helper bundle — the `vendored-node` profile, which physically copies the
+shared `protocol-helpers` core — a new **leaf helper** is rarely a standalone
+file drop:
+
+1. **Diff the shared core first.** The new helper usually imports a newer
+   `protocol-helpers` shared-core API absent from your older snapshot, so the
+   real work is a shared-core bump — budget that prerequisite before scoping the
+   leaf-helper slices.
+2. **Reconcile a hardened core additively.** If you hardened that core, treat
+   the bump as additive named-divergence reconciliation gated on your protected
+   tests: preserve the local hardening and append only the new exports rather
+   than wholesale-vendoring the core over it.
+3. **Watch the silent revert.** A wholesale core vendor can green-build while
+   silently reverting your protected local tests, so verify against those tests,
+   not just a clean compile.
+
+(npx-resolved profiles do not vend the core this way, so this note applies only
+when you copy helper files.)
+
 When you then audit whether re-imported roadmap work is actually done, judge
 **completion by auditing the implementation against the acceptance criteria**,
 not by a child issue's closed state — a skeleton or scaffold PR can merge and
