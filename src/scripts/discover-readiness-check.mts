@@ -921,13 +921,26 @@ export function buildRoadmapMarkerResolver(
  * `--swarm-floor` sweep to answer "is there any eligible work left?".
  */
 function listOpenIssueNumbers(owner: string, repo: string): number[] {
-  const raw = ghText([
-    'api',
-    '--paginate',
-    `repos/${owner}/${repo}/issues?state=open&per_page=100`,
-    '--jq',
-    '.[] | select(.pull_request == null) | .number',
-  ]);
+  return parseIssueNumberLines(
+    ghText([
+      'api',
+      '--paginate',
+      `repos/${owner}/${repo}/issues?state=open&per_page=100`,
+      '--jq',
+      '.[] | select(.pull_request == null) | .number',
+    ]),
+  );
+}
+
+/**
+ * Parse the newline-delimited issue numbers emitted by the
+ * `listOpenIssueNumbers` `gh api --jq` sweep into a deduped list of positive
+ * integers. Blank lines and any non-numeric output are dropped (via
+ * `dedupeNumbers`), so an empty sweep yields `[]`. Exported so the parse
+ * contract is unit-testable without a live `gh` call — pull requests are
+ * already excluded upstream by the `select(.pull_request == null)` jq filter.
+ */
+export function parseIssueNumberLines(raw: string): number[] {
   return dedupeNumbers(
     raw.split('\n').map((line) => Number.parseInt(line.trim(), 10)),
   );

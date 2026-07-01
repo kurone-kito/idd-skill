@@ -8,6 +8,7 @@ import {
   extractBlockedByRoadmapMarkers,
   extractDependencyIssueNumbers,
   isInaccessibleIssueLookupError,
+  parseIssueNumberLines,
   parseSwarmFloorArg,
   summarizeSwarmFloorEligibility,
 } from '../src/scripts/discover-readiness-check.mts';
@@ -852,4 +853,15 @@ test('parseSwarmFloorArg accepts 1-5 and rejects out-of-range or non-integer val
       /--swarm-floor requires an integer 1-5/,
     );
   }
+});
+
+test('parseIssueNumberLines dedupes positive integers and yields [] on empty output', () => {
+  // Empty / whitespace-only sweep output → no issues (the swarm loop stops).
+  assert.deepEqual(parseIssueNumberLines(''), []);
+  assert.deepEqual(parseIssueNumberLines('   \n\n  '), []);
+  // Newline-delimited numbers are parsed, trimmed, and de-duplicated in order.
+  assert.deepEqual(parseIssueNumberLines('10\n20\n10\n30'), [10, 20, 30]);
+  assert.deepEqual(parseIssueNumberLines('  42 \n\n 7 \n'), [42, 7]);
+  // Non-numeric or non-positive lines are dropped (fail-safe parsing).
+  assert.deepEqual(parseIssueNumberLines('5\nabc\n-1\n0\n8'), [5, 8]);
 });
