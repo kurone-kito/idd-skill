@@ -269,6 +269,17 @@
       "unauthorized": [],
       "malformed": [],
       "notConfigured": []
-    }
+    },
+    "ready": false,
+    "blockers": [
+      {
+        "gate": "ci",
+        "detail": "CI is not all-passing (status=\"missing\", noRequiredChecksConfigured=false, presentRunConclusion=\"all-passing\")"
+      },
+      {
+        "gate": "disposition-evidence",
+        "detail": "dispositionEvidence.route is \"missing\" (expected \"proceed\"), blockingCount=-1 (expected 0)"
+      }
+    ]
   }
 }

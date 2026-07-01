@@ -3668,6 +3668,114 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
     reason,
   };
 }
+function preMergeAsRecord(value) {
+  return value && typeof value === 'object' ? value : {};
+}
+function isPreMergeCiAllPassing(ci) {
+  if (ci.requiredChecksPassing === true || ci.status === 'success') {
+    return true;
+  }
+  return (
+    ci.noRequiredChecksConfigured === true &&
+    String(ci.presentRunConclusion ?? '') === 'all-passing'
+  );
+}
+function isPreMergeReviewSatisfied(reviewerStates) {
+  if (reviewerStates.requiredApprovalsSatisfied !== true) {
+    return false;
+  }
+  if (reviewerStates.codeownerApprovalSatisfied === true) {
+    return true;
+  }
+  const selfApproval = preMergeAsRecord(reviewerStates.codeownerSelfApproval);
+  return String(selfApproval.status ?? '') === 'clear';
+}
+/**
+ * Roll up the F2/F3 merge gates from a pre-merge-readiness report into the
+ * ordered blocker list. This is the single source of the merge-gate AND:
+ * `buildPreMergeReadinessSummary` embeds `{ ready, blockers }` computed from it,
+ * and `idd-merge-execute.evaluateMergeGates` delegates to it, so no caller
+ * re-implements the conjunction. The rollup is **strict** — it reads
+ * `dispositionEvidence.route === 'proceed'` directly and does NOT apply the
+ * `soleCauseAckOnlyPostDisposition` override (a separate flag the F2 checklist
+ * layers on top), so the fully-autonomous F3 executor keeps its fail-closed
+ * behavior. A gate whose evidence is missing or garbled fails closed (recorded
+ * as a blocker) rather than passing vacuously.
+ */
+export function computePreMergeReadinessBlockers(report) {
+  const blockers = [];
+  // Fail closed on a missing/invalid head: `prHeadSha` binds
+  // `--match-head-commit`, so a non-40-hex value must never yield a "ready"
+  // verdict with an unsafe merge binding.
+  const prHeadSha = String(report.prHeadSha ?? '');
+  if (!/^[0-9a-f]{40}$/.test(prHeadSha)) {
+    blockers.push({
+      gate: 'head-sha',
+      detail: `prHeadSha "${prHeadSha}" is not a 40-hex commit SHA; cannot bind a safe merge`,
+    });
+  }
+  const reviewCurrency = preMergeAsRecord(report.reviewCurrency);
+  const comparisonRoute = String(reviewCurrency.comparisonRoute ?? '');
+  if (comparisonRoute !== 'proceed') {
+    blockers.push({
+      gate: 'review-currency',
+      detail: `comparisonRoute is "${comparisonRoute}" (expected "proceed"): ${String(reviewCurrency.comparisonReason ?? 'unknown')}`,
+    });
+  }
+  const threads = preMergeAsRecord(report.threads);
+  const actionableCount = Number(threads.actionableCount ?? -1);
+  if (actionableCount !== 0) {
+    blockers.push({
+      gate: 'unresolved-threads',
+      detail: `actionableCount is ${actionableCount} (expected 0)`,
+    });
+  }
+  const advisoryWait = preMergeAsRecord(report.advisoryWait);
+  const f3Outcome = String(advisoryWait.f3Outcome ?? '');
+  if (f3Outcome !== 'SATISFIED') {
+    blockers.push({
+      gate: 'advisory-wait',
+      detail: `f3Outcome is "${f3Outcome}" (expected "SATISFIED")`,
+    });
+  }
+  const ci = preMergeAsRecord(report.ci);
+  if (!isPreMergeCiAllPassing(ci)) {
+    blockers.push({
+      gate: 'ci',
+      detail: `CI is not all-passing (status="${String(ci.status ?? '')}", noRequiredChecksConfigured=${Boolean(ci.noRequiredChecksConfigured)}, presentRunConclusion="${String(ci.presentRunConclusion ?? '')}")`,
+    });
+  }
+  const reviewerStates = preMergeAsRecord(report.reviewerStates);
+  if (!isPreMergeReviewSatisfied(reviewerStates)) {
+    const selfApproval = preMergeAsRecord(reviewerStates.codeownerSelfApproval);
+    blockers.push({
+      gate: 'required-reviews',
+      detail: `required/CODEOWNER reviews not satisfied (requiredApprovalsSatisfied=${Boolean(reviewerStates.requiredApprovalsSatisfied)}, codeownerApprovalSatisfied=${Boolean(reviewerStates.codeownerApprovalSatisfied)}, codeownerSelfApproval.status="${String(selfApproval.status ?? '')}")`,
+    });
+  }
+  const claim = preMergeAsRecord(report.claim);
+  if (claim.matchesExpectedClaim !== true) {
+    blockers.push({
+      gate: 'claim-ownership',
+      detail: `claim ownership does not match (reason="${String(claim.reason ?? 'unknown')}")`,
+    });
+  }
+  const dispositionEvidence = preMergeAsRecord(report.dispositionEvidence);
+  // The written F2/F3 gate requires BOTH `route === 'proceed'` AND
+  // `blockingCount === 0`. Fail closed on a non-zero or non-numeric
+  // blockingCount so a missing/garbled count is treated as a blocker.
+  const dispositionRoute = String(dispositionEvidence.route ?? '');
+  const dispositionBlockingCount = Number(
+    dispositionEvidence.blockingCount ?? -1,
+  );
+  if (dispositionRoute !== 'proceed' || dispositionBlockingCount !== 0) {
+    blockers.push({
+      gate: 'disposition-evidence',
+      detail: `dispositionEvidence.route is "${dispositionRoute || 'missing'}" (expected "proceed"), blockingCount=${dispositionBlockingCount} (expected 0)`,
+    });
+  }
+  return blockers;
+}
 export function buildPreMergeReadinessSummary(
   {
     prHeadSha,
@@ -3894,6 +4002,13 @@ export function buildPreMergeReadinessSummary(
   if (dispositionEvidence) {
     summary.dispositionEvidence = dispositionEvidence;
   }
+  // Top-level rollup so a consumer reads one `ready` boolean + `blockers[]`
+  // instead of hand-ANDing ~8 nested gates (a dropped clause would fail open).
+  // Strict by construction (see `computePreMergeReadinessBlockers`): the F2
+  // checklist applies the ack-only override on top of this, not inside it.
+  const blockers = computePreMergeReadinessBlockers(summary);
+  summary.ready = blockers.length === 0;
+  summary.blockers = blockers;
   return summary;
 }
 function normalizeLiveStatusDigestFields(fields) {

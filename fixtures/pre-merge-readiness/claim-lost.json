@@ -293,6 +293,17 @@
       "unauthorized": [],
       "malformed": [],
       "notConfigured": []
-    }
+    },
+    "ready": false,
+    "blockers": [
+      {
+        "gate": "claim-ownership",
+        "detail": "claim ownership does not match (reason=\"claim-id-mismatch\")"
+      },
+      {
+        "gate": "disposition-evidence",
+        "detail": "dispositionEvidence.route is \"missing\" (expected \"proceed\"), blockingCount=-1 (expected 0)"
+      }
+    ]
   }
 }

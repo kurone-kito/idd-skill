@@ -17,6 +17,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { collectPreMergeReadiness } from './pre-merge-readiness.mts';
+import { computePreMergeReadinessBlockers } from './protocol-helpers.mts';
 
 /** One failing F3 gate, keyed by the gate name plus a human detail. */
 export interface MergeBlocker {
@@ -59,138 +60,21 @@ interface IddMergeExecuteArgs {
 }
 
 /**
- * Evaluate every F3 gate against `report` (the pre-merge-readiness
- * summary). A gate failure is collected as a blocker; `ready` is true
- * only when no blocker is collected. The conditions mirror the written
- * F3 gate checklist exactly — this helper adds no stricter sub-condition.
+ * Evaluate every F3 gate against `report` (the pre-merge-readiness summary),
+ * returning one blocker per unmet gate (`ready` is true only when the list is
+ * empty). Delegates to the shared `computePreMergeReadinessBlockers` rollup in
+ * `protocol-helpers.mts` — the single source of the merge-gate AND that
+ * `buildPreMergeReadinessSummary` also embeds as `{ ready, blockers }` — so the
+ * conjunction is defined once and no caller re-implements it. Recomputing from
+ * the report's nested evidence (rather than trusting a possibly-absent
+ * `report.blockers` field) keeps the merge gate fail-closed; the conditions
+ * mirror the written F3 gate checklist exactly and add no stricter
+ * sub-condition.
  */
 export function evaluateMergeGates(
   report: Record<string, unknown>,
 ): MergeBlocker[] {
-  const blockers: MergeBlocker[] = [];
-
-  // Fail closed on a missing/invalid head: `prHeadSha` binds
-  // `--match-head-commit`, so a non-40-hex value must never yield a
-  // "ready" verdict with an unsafe merge binding.
-  const prHeadSha = String(report.prHeadSha ?? '');
-  if (!/^[0-9a-f]{40}$/.test(prHeadSha)) {
-    blockers.push({
-      gate: 'head-sha',
-      detail: `prHeadSha "${prHeadSha}" is not a 40-hex commit SHA; cannot bind a safe merge`,
-    });
-  }
-
-  const reviewCurrency = asRecord(report.reviewCurrency);
-  const comparisonRoute = String(reviewCurrency.comparisonRoute ?? '');
-  if (comparisonRoute !== 'proceed') {
-    blockers.push({
-      gate: 'review-currency',
-      detail: `comparisonRoute is "${comparisonRoute}" (expected "proceed"): ${String(
-        reviewCurrency.comparisonReason ?? 'unknown',
-      )}`,
-    });
-  }
-
-  const threads = asRecord(report.threads);
-  const actionableCount = Number(threads.actionableCount ?? -1);
-  if (actionableCount !== 0) {
-    blockers.push({
-      gate: 'unresolved-threads',
-      detail: `actionableCount is ${actionableCount} (expected 0)`,
-    });
-  }
-
-  const advisoryWait = asRecord(report.advisoryWait);
-  const f3Outcome = String(advisoryWait.f3Outcome ?? '');
-  if (f3Outcome !== 'SATISFIED') {
-    blockers.push({
-      gate: 'advisory-wait',
-      detail: `f3Outcome is "${f3Outcome}" (expected "SATISFIED")`,
-    });
-  }
-
-  const ci = asRecord(report.ci);
-  if (!isCiAllPassing(ci)) {
-    blockers.push({
-      gate: 'ci',
-      detail: `CI is not all-passing (status="${String(
-        ci.status ?? '',
-      )}", noRequiredChecksConfigured=${Boolean(
-        ci.noRequiredChecksConfigured,
-      )}, presentRunConclusion="${String(ci.presentRunConclusion ?? '')}")`,
-    });
-  }
-
-  const reviewerStates = asRecord(report.reviewerStates);
-  if (!isReviewSatisfied(reviewerStates)) {
-    const selfApproval = asRecord(reviewerStates.codeownerSelfApproval);
-    blockers.push({
-      gate: 'required-reviews',
-      detail: `required/CODEOWNER reviews not satisfied (requiredApprovalsSatisfied=${Boolean(
-        reviewerStates.requiredApprovalsSatisfied,
-      )}, codeownerApprovalSatisfied=${Boolean(
-        reviewerStates.codeownerApprovalSatisfied,
-      )}, codeownerSelfApproval.status="${String(selfApproval.status ?? '')}")`,
-    });
-  }
-
-  const claim = asRecord(report.claim);
-  if (claim.matchesExpectedClaim !== true) {
-    blockers.push({
-      gate: 'claim-ownership',
-      detail: `claim ownership does not match (reason="${String(
-        claim.reason ?? 'unknown',
-      )}")`,
-    });
-  }
-
-  const dispositionEvidence = asRecord(report.dispositionEvidence);
-  // The written F2/F3 gate requires BOTH `route === 'proceed'` AND
-  // `blockingCount === 0`. Fail closed on a non-zero or non-numeric
-  // blockingCount so a missing/garbled count is treated as a blocker.
-  const dispositionRoute = String(dispositionEvidence.route ?? '');
-  const dispositionBlockingCount = Number(
-    dispositionEvidence.blockingCount ?? -1,
-  );
-  if (dispositionRoute !== 'proceed' || dispositionBlockingCount !== 0) {
-    blockers.push({
-      gate: 'disposition-evidence',
-      detail: `dispositionEvidence.route is "${
-        dispositionRoute || 'missing'
-      }" (expected "proceed"), blockingCount=${dispositionBlockingCount} (expected 0)`,
-    });
-  }
-
-  return blockers;
-}
-
-// CI all-passing mirrors the F2/F3 rule: required checks pass, OR (no
-// required checks are configured AND every present run concludes passing).
-// `status === 'success'` already implies required checks passed; the
-// no-required-checks branch must not satisfy CI vacuously, so it requires
-// `presentRunConclusion === 'all-passing'`.
-function isCiAllPassing(ci: Record<string, unknown>): boolean {
-  if (ci.requiredChecksPassing === true || ci.status === 'success') {
-    return true;
-  }
-  return (
-    ci.noRequiredChecksConfigured === true &&
-    String(ci.presentRunConclusion ?? '') === 'all-passing'
-  );
-}
-
-// Required + CODEOWNER reviews are satisfied when the approval-count gate
-// passes and the CODEOWNER gate either passes outright or the self-approval
-// diagnostic is `clear` (a satisfiable bypass topology).
-function isReviewSatisfied(reviewerStates: Record<string, unknown>): boolean {
-  if (reviewerStates.requiredApprovalsSatisfied !== true) {
-    return false;
-  }
-  if (reviewerStates.codeownerApprovalSatisfied === true) {
-    return true;
-  }
-  const selfApproval = asRecord(reviewerStates.codeownerSelfApproval);
-  return String(selfApproval.status ?? '') === 'clear';
+  return computePreMergeReadinessBlockers(report);
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

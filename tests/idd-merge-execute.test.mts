@@ -6,6 +6,7 @@ import {
   type MergeExecuteDeps,
   runMergeExecute,
 } from '../src/scripts/idd-merge-execute.mts';
+import { computePreMergeReadinessBlockers } from '../src/scripts/protocol-helpers.mts';
 
 const HEAD = '1111111111111111111111111111111111111111';
 const DRIFTED = '2222222222222222222222222222222222222222';
@@ -406,5 +407,28 @@ test('missing --pr is rejected', () => {
     () =>
       runMergeExecute(['--claim-issue', '309'], depsFor(readyReport()).deps),
     /missing required --pr/,
+  );
+});
+
+test('evaluateMergeGates delegates to the shared computePreMergeReadinessBlockers rollup', () => {
+  // A fully ready report → no blockers, and both entry points agree.
+  assert.deepEqual(evaluateMergeGates(readyReport()), []);
+  assert.deepEqual(
+    computePreMergeReadinessBlockers(readyReport()),
+    evaluateMergeGates(readyReport()),
+  );
+
+  // A report failing several gates → the executor and the shared rollup return
+  // byte-identical blockers, in the same gate order.
+  const bad = readyReport();
+  bad.advisoryWait = { f3Outcome: 'WAIT' };
+  bad.ci = { status: 'failure', noRequiredChecksConfigured: false };
+  assert.deepEqual(
+    computePreMergeReadinessBlockers(bad),
+    evaluateMergeGates(bad),
+  );
+  assert.deepEqual(
+    evaluateMergeGates(bad).map((blocker) => blocker.gate),
+    ['advisory-wait', 'ci'],
   );
 });

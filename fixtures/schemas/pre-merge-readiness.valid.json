@@ -172,5 +172,12 @@
     "unauthorized": [],
     "malformed": [],
     "notConfigured": []
-  }
+  },
+  "ready": false,
+  "blockers": [
+    {
+      "gate": "ci",
+      "detail": "CI is not all-passing (example)"
+    }
+  ]
 }
