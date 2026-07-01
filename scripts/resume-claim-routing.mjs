@@ -162,6 +162,44 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     },
   };
 }
+/**
+ * Mechanical fresh-claim (A5) claimability gate.
+ *
+ * It reuses the shared `evaluateResumeClaimRouting` resolver (which itself
+ * builds on `resolveActiveClaim`) over a fresh marker fetch and maps the
+ * routing state to the fresh-claim vocabulary, so the write-side path never
+ * forks claim-state logic:
+ *
+ * - `unclaimed` → `claimable`
+ * - `stale` → `stale-reclaimable`
+ * - `non_inheritable` / `disputed` (a live competitor) → `already-claimed`
+ *
+ * A fresh claim owns no prior claim-id, so any `claimId` on `input` is ignored
+ * (the resolver's already-owned / same-second-loss branches need a checked id
+ * and would otherwise mask pure contention). `winningClaimId` is the active
+ * claim's `{claim-id}`, or `null` when there is no active claim or the active
+ * claim is a legacy (claim-id-less) marker. GitHub issue comments have no
+ * compare-and-swap, so this **narrows** the A5(c) TOCTOU window rather than
+ * closing it; the 24 h stale-takeover and same-second tie-break remain the
+ * race-recovery backstop.
+ */
+export function evaluateFreshClaimGate(input, options = {}) {
+  const routing = evaluateResumeClaimRouting(
+    { ...input, claimId: undefined },
+    options,
+  );
+  const verdict =
+    routing.state === 'unclaimed'
+      ? 'claimable'
+      : routing.state === 'stale'
+        ? 'stale-reclaimable'
+        : 'already-claimed';
+  return {
+    verdict,
+    winningClaimId: routing.active_claim?.claim_id ?? null,
+    reason: routing.reason,
+  };
+}
 function runCli() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -202,38 +240,49 @@ function runCli() {
   const expectedLinkedPrReferences = forcedHandoffEnabled
     ? fetchOpenLinkedPrReferences(repository, args.issue)
     : new Set();
+  const routingEvents = comments.map((comment) => ({
+    body: comment.body ?? '',
+    createdAt: comment.created_at ?? '',
+    author: { login: comment.user?.login ?? '' },
+  }));
+  const routingOptions = {
+    isTrustedAuthor: (login) =>
+      trustedSet.has(
+        String(login ?? '')
+          .trim()
+          .toLowerCase(),
+      ),
+    isForcedHandoffEnabled: buildForcedHandoffEnabledGate({
+      forcedHandoffEnabled,
+      expectedLinkedPrReferences,
+    }),
+    isAuthorizedForcedHandoff: (forcedBy) =>
+      isAuthorizedForcedHandoffActor(
+        owner,
+        repo,
+        forcedBy,
+        forcedHandoffAuthorityPolicy,
+        permissionCache,
+      ),
+  };
   const result = evaluateResumeClaimRouting(
     {
-      events: comments.map((comment) => ({
-        body: comment.body ?? '',
-        createdAt: comment.created_at ?? '',
-        author: { login: comment.user?.login ?? '' },
-      })),
+      events: routingEvents,
       claimId: args.claimId,
       staleAgeMs,
       now: args.now || undefined,
     },
-    {
-      isTrustedAuthor: (login) =>
-        trustedSet.has(
-          String(login ?? '')
-            .trim()
-            .toLowerCase(),
-        ),
-      isForcedHandoffEnabled: buildForcedHandoffEnabledGate({
-        forcedHandoffEnabled,
-        expectedLinkedPrReferences,
-      }),
-      isAuthorizedForcedHandoff: (forcedBy) =>
-        isAuthorizedForcedHandoffActor(
-          owner,
-          repo,
-          forcedBy,
-          forcedHandoffAuthorityPolicy,
-          permissionCache,
-        ),
-    },
+    routingOptions,
   );
+  // The fresh-claim (A5) gate re-uses the same resolver over the same markers
+  // but ignores any --claim-id (a fresh claim owns none yet), mapping the
+  // routing state to the write-side claimability vocabulary.
+  const freshClaimGate = args.freshClaimGate
+    ? evaluateFreshClaimGate(
+        { events: routingEvents, staleAgeMs, now: args.now || undefined },
+        routingOptions,
+      )
+    : null;
   const output = {
     repository: { owner, repo },
     issue: {
@@ -250,6 +299,14 @@ function runCli() {
       forced_handoff_authority_policy: forcedHandoffAuthorityPolicy,
     },
     ...result,
+    ...(freshClaimGate
+      ? {
+          fresh_claim_gate: {
+            verdict: freshClaimGate.verdict,
+            winning_claim_id: freshClaimGate.winningClaimId,
+          },
+        }
+      : {}),
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
@@ -480,6 +537,7 @@ function parseArgs(argv) {
     policy: '',
     staleAgeMs: 0,
     trustedMarkerLogins: '',
+    freshClaimGate: false,
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -536,6 +594,10 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (token === '--fresh-claim-gate') {
+      parsed.freshClaimGate = true;
+      continue;
+    }
     if (token === '--help' || token === '-h') {
       parsed.help = true;
       continue;
@@ -546,14 +608,22 @@ function parseArgs(argv) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--token <token>] [--claim-id <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"]
+  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--token <token>] [--claim-id <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate]
 
-Output schema:
+  --fresh-claim-gate  emit the write-side A5(c) claimability verdict for the
+                      issue from current marker state, ignoring --claim-id (a
+                      fresh claim owns none yet). Run it on a fresh fetch
+                      immediately before the claim write; it re-uses the same
+                      resolver so claim-state logic never forks.
+
+Output (selected fields; the JSON also carries repository / issue / policy /
+warnings / evidence):
 {
   "state": "unclaimed|already_owned|stale|non_inheritable|disputed",
   "action": "re_claim|takeover|keep|stop",
   "reason": "...",
-  "active_claim": {"agent_id":"...","claim_id":"...","created_at":"...","branch":"..."} | null
+  "active_claim": {"agent_id":"...","claim_id":"...","created_at":"...","branch":"..."} | null,
+  "fresh_claim_gate": {"verdict":"claimable|already-claimed|stale-reclaimable","winning_claim_id":"..."|null}  // only with --fresh-claim-gate
 }
 `);
 }
