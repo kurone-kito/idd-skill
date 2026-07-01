@@ -32,13 +32,17 @@ Depends on #56
 });
 
 test('extractBlockedByIssueNumbers captures every same-line ref and tolerates list/blockquote prefixes', () => {
-  // Comma- and space-separated multi-ref on one line.
+  // Comma-, space-, and "and"-separated multi-ref on one line.
   assert.deepEqual(
     extractBlockedByIssueNumbers('Blocked by #100, #200'),
     [100, 200],
   );
   assert.deepEqual(
     extractBlockedByIssueNumbers('Blocked by #100 #200'),
+    [100, 200],
+  );
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('Blocked by #100 and #200'),
     [100, 200],
   );
   // List-bullet and blockquote prefixes are matched.
@@ -51,6 +55,16 @@ test('extractBlockedByIssueNumbers captures every same-line ref and tolerates li
   );
   // Inline-code markers stay ignored (backtick prefix, #1121 boundary).
   assert.deepEqual(extractBlockedByIssueNumbers('`Blocked by #77`'), []);
+  // The contiguous dependency list is bounded: trailing prose and cross-repo
+  // mentions are excluded rather than mis-read as local blockers.
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('Blocked by #10 (see other/repo#20)'),
+    [10],
+  );
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('Blocked by #403; similar to #402'),
+    [403],
+  );
 });
 
 test('extractDependencyIssueNumbers captures every same-line Depends on ref and tolerates prefixes', () => {
@@ -62,6 +76,10 @@ test('extractDependencyIssueNumbers captures every same-line Depends on ref and 
     extractDependencyIssueNumbers('Depends on #100 #200'),
     [100, 200],
   );
+  assert.deepEqual(
+    extractDependencyIssueNumbers('Depends on #100 and #200'),
+    [100, 200],
+  );
   assert.deepEqual(extractDependencyIssueNumbers('- Depends on #55'), [55]);
   assert.deepEqual(extractDependencyIssueNumbers('> Depends on #66'), [66]);
   assert.deepEqual(
@@ -69,6 +87,15 @@ test('extractDependencyIssueNumbers captures every same-line Depends on ref and 
     [],
   );
   assert.deepEqual(extractDependencyIssueNumbers('`Depends on #77`'), []);
+  // Bounded list: prose and cross-repo mentions are excluded.
+  assert.deepEqual(
+    extractDependencyIssueNumbers('Depends on #403; similar to #402'),
+    [403],
+  );
+  assert.deepEqual(
+    extractDependencyIssueNumbers('Depends on #10 (see other/repo#20)'),
+    [10],
+  );
   // The `- [ ] #N` task-list branch keeps working alongside the relaxed
   // `Depends on` bullet prefix without double counting.
   assert.deepEqual(

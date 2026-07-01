@@ -276,27 +276,55 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
   };
 }
 /**
- * Collect every `#N` reference declared on a dependency-keyword line.
+ * Collect the `#N` references declared on a dependency-keyword line.
  *
  * A line is a dependency declaration when, after the shared
  * `DEPENDENCY_LINE_PREFIX` (indentation, blockquote, and/or a list bullet), it
- * begins with `keyword` immediately followed by at least one `#N`. Once such a
- * line is found, every `#(\d+)` on that same line is captured, so
+ * begins with `keyword` immediately followed by at least one `#N`. From there
+ * `consumeDependencyRefList` collects the contiguous dependency-ref list, so
  * `Blocked by #A, #B, #C` (comma- or space-separated) yields `[A, B, C]`. The
- * scan is bounded to the single matched line (`.*$` with the `m` flag, no `s`
- * flag), so refs never bleed across lines, and the backtick-excluding prefix
- * keeps inline-code markers unmatched (see `DEPENDENCY_LINE_PREFIX`).
+ * `m` flag (no `s` flag) keeps the match on the single keyword line, and the
+ * backtick-excluding prefix keeps inline-code markers unmatched (see
+ * `DEPENDENCY_LINE_PREFIX`).
  */
 function extractKeywordLineRefs(body, keyword) {
   const linePattern = new RegExp(
-    `${DEPENDENCY_LINE_PREFIX}${escapeRegex(keyword)}\\s+#\\d+.*$`,
+    `${DEPENDENCY_LINE_PREFIX}${escapeRegex(keyword)}\\s+(#\\d+.*)$`,
     'gim',
   );
   const numbers = [];
   for (const lineMatch of body.matchAll(linePattern)) {
-    for (const refMatch of lineMatch[0].matchAll(/#(\d+)\b/g)) {
-      numbers.push(Number.parseInt(refMatch[1], 10));
+    numbers.push(...consumeDependencyRefList(lineMatch[1]));
+  }
+  return numbers;
+}
+/**
+ * Consume the contiguous dependency-ref list at the start of `segment`: bare
+ * local `#N` entries separated by commas, "and", and/or whitespace. Parsing
+ * stops at the first token that is neither a bare local ref nor such a
+ * separator, so trailing prose (`; similar to #402`) and cross-repo mentions
+ * (`(see other/repo#20)`) are excluded instead of being mis-read as local
+ * blockers. This mirrors the separator-bounded reference parsing in
+ * `discover-roadmap-graph.mts`, extended to also accept a plain-whitespace
+ * separator so the space-separated multi-ref form is captured too.
+ */
+function consumeDependencyRefList(segment) {
+  const numbers = [];
+  let remaining = segment;
+  while (remaining) {
+    const refMatch = remaining.match(/^#(\d+)\b/);
+    if (!refMatch) {
+      break;
     }
+    numbers.push(Number.parseInt(refMatch[1], 10));
+    remaining = remaining.slice(refMatch[0].length);
+    const separatorMatch = remaining.match(
+      /^(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s+)/i,
+    );
+    if (!separatorMatch) {
+      break;
+    }
+    remaining = remaining.slice(separatorMatch[0].length);
   }
   return numbers;
 }
