@@ -176,10 +176,12 @@ export function evaluateResumeClaimRouting(input, options = {}) {
  *
  * A fresh claim owns no prior claim-id, so any `claimId` on `input` is ignored
  * (the resolver's already-owned / same-second-loss branches need a checked id
- * and would otherwise mask pure contention). `winningClaimId` names the active
- * claim, if any. GitHub issue comments have no compare-and-swap, so this
- * **narrows** the A5(c) TOCTOU window rather than closing it; the 24 h
- * stale-takeover and same-second tie-break remain the race-recovery backstop.
+ * and would otherwise mask pure contention). `winningClaimId` is the active
+ * claim's `{claim-id}`, or `null` when there is no active claim or the active
+ * claim is a legacy (claim-id-less) marker. GitHub issue comments have no
+ * compare-and-swap, so this **narrows** the A5(c) TOCTOU window rather than
+ * closing it; the 24 h stale-takeover and same-second tie-break remain the
+ * race-recovery backstop.
  */
 export function evaluateFreshClaimGate(input, options = {}) {
   const routing = evaluateResumeClaimRouting(
