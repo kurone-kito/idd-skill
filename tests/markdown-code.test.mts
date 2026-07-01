@@ -19,6 +19,26 @@ test('stripMarkdownCodeRegions masks inline code spans, preserving delimiters', 
   );
 });
 
+test('stripMarkdownCodeRegions keeps an inline span within one paragraph', () => {
+  // A single newline inside a span is still masked (CommonMark renders it as a
+  // space); the newline itself is preserved so line offsets do not shift.
+  assert.equal(
+    stripMarkdownCodeRegions('`multi\nline` tail'),
+    '`     \n    ` tail',
+  );
+  // A stray unclosed backtick must NOT mask across a blank line: the real
+  // `Blocked by #5` in the next paragraph stays intact (fail-open guard).
+  const body = ['a stray tick `', '', 'Blocked by #5', '', 'then `code`'].join(
+    '\n',
+  );
+  const stripped = stripMarkdownCodeRegions(body);
+  assert.ok(
+    stripped.includes('Blocked by #5'),
+    'a blank line ends the span, so the later dependency line is preserved',
+  );
+  assert.equal(stripped.split('\n')[4], 'then `    `');
+});
+
 test('stripMarkdownCodeRegions leaves HTML comments and plain text intact', () => {
   const body = 'plain <!-- idd-skill-blocked-by: parent --> text';
   assert.equal(stripMarkdownCodeRegions(body), body);

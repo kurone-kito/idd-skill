@@ -53,11 +53,15 @@ export function stripMarkdownCodeRegions(text: string): string {
     out.push(fence === null ? line : '');
   }
   // Inline code spans (`...`, ``...``): mask the inner content so a quoted
-  // marker no longer matches, keeping the backticks and surrounding text.
+  // marker no longer matches, keeping the backticks and surrounding text. The
+  // inner match allows a single newline (CommonMark renders it as a space) but
+  // stops at a blank line, which ends the paragraph: a code span cannot cross
+  // it. Allowing a blank line would let a stray unclosed backtick mask a real
+  // dependency line in a later paragraph — a fail-open miss.
   return out
     .join('\n')
     .replace(
-      /(`+)((?:(?!\1)[\s\S])+?)\1/g,
+      /(`+)((?:(?!\1)[^\r\n]|\r?\n(?![ \t]*\r?\n))+?)\1/g,
       (_match, ticks: string, inner: string) =>
         `${ticks}${inner.replace(/[^\r\n]/g, ' ')}${ticks}`,
     );
