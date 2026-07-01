@@ -8,8 +8,13 @@
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const MARKER_ACCEPTED_RE = /^\*\*Accepted\*\*\s+—/;
-const MARKER_REJECTED_RE = /^\*\*Rejected\*\*\s+—/;
+// Tolerate a single interior punctuation char `[.!:]` before the closing `**`
+// (`**Accepted.** — …`) so a punctuated marker still verifies, while keeping the
+// required `\s+—` separator (whitespace before the em-dash; nothing after it is
+// enforced). Bounded so an interior-text body is not matched — mirrors the
+// disposition-marker predicates in protocol-helpers.mts.
+const MARKER_ACCEPTED_RE = /^\*\*Accepted[.!:]?\*\*\s+—/;
+const MARKER_REJECTED_RE = /^\*\*Rejected[.!:]?\*\*\s+—/;
 const MARKER_REJECTION_CONFIRMED_RE =
   /^\*\*Rejection confirmed by maintainer\*\*\s+—/;
 const MARKER_AMD_RE = /^\*\*Awaiting maintainer decision\*\*\s+—/;

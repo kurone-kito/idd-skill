@@ -1394,9 +1394,25 @@ export function hasFreshDisposition(thread, options = {}) {
     );
   });
 }
+// A disposition marker may carry a single interior punctuation char `[.!:]`
+// immediately before the closing `**` — `**Accepted.**` (natural English
+// "Accepted. Fixed in…"), `**Accepted:**`, `**Accepted!**`, and the `Rejected`
+// equivalents — so a reply that punctuates the marker is still recognized. The
+// tolerance is bounded to that one char before `**`, so an interior-text body
+// like `**Accepted by reviewer, but…**` is NOT matched (fail-closed: a false
+// positive is a false merge). Start-anchored (`^`), so the marker must be the
+// first bytes of the body each caller passes: `isDispositionComment` uses
+// `trimEnd()` only, so leading whitespace is NOT stripped (preserving the
+// marker-first-bytes contract), while the notice / summary predicates below
+// `trimStart()` first.
+const DISPOSITION_ACCEPTED_PREFIX_RE = /^\*\*Accepted[.!:]?\*\*/;
+const DISPOSITION_REJECTED_PREFIX_RE = /^\*\*Rejected[.!:]?\*\*/;
 export function isDispositionComment(comment) {
   const body = (comment.body ?? '').trimEnd();
-  return body.startsWith('**Accepted**') || body.startsWith('**Rejected**');
+  return (
+    DISPOSITION_ACCEPTED_PREFIX_RE.test(body) ||
+    DISPOSITION_REJECTED_PREFIX_RE.test(body)
+  );
 }
 // Terminal AMD-rejection marker. When a maintainer agrees with a rejection the
 // agent replies `**Rejection confirmed by maintainer** — {summary}` and resolves
@@ -1451,13 +1467,16 @@ export function isAdvisoryNonReviewNotice(body) {
 }
 // A trusted IDD disposition of a non-review notice: the canonical
 // `**Rejected** — {bot} did not review HEAD {sha} ({reason}); this is not a
-// completed review` reply. Requires the `**Rejected**` prefix (a notice is
-// always rejected, never accepted) and the `did not review HEAD` phrase that
-// names the notice, so an ordinary rejection of reviewer feedback is excluded.
+// completed review` reply. Requires the `**Rejected**` prefix (via
+// `DISPOSITION_REJECTED_PREFIX_RE`, so the bounded trailing-punctuation variants
+// like `**Rejected.**` also count; a notice is always rejected, never accepted)
+// and the `did not review HEAD` phrase that names the notice, so an ordinary
+// rejection of reviewer feedback is excluded.
 export function isNonReviewNoticeDisposition(comment) {
   const body = (comment.body ?? '').trimStart();
   return (
-    body.startsWith('**Rejected**') && /\bdid not review HEAD\b/i.test(body)
+    DISPOSITION_REJECTED_PREFIX_RE.test(body) &&
+    /\bdid not review HEAD\b/i.test(body)
   );
 }
 // #1122 CodeRabbit summary-walkthrough auto-disposition classifiers.
@@ -1480,15 +1499,18 @@ export function isReviewSummaryComment(body) {
 }
 // A trusted IDD disposition of a CodeRabbit summary walkthrough: the canonical
 // `**Accepted** — {bot} summary walkthrough …` reply the helper posts. Requires
-// the `**Accepted**` prefix (a summary is a completed review, so it is accepted,
-// never rejected) AND the `summary walkthrough` phrase, so an ordinary acceptance
-// of reviewer feedback is excluded. Tightly matched to `buildSummaryDispositionBody`
-// so a loose acceptance can never be miscredited (which would under-post and
-// strand the gate).
+// the `**Accepted**` prefix (via `DISPOSITION_ACCEPTED_PREFIX_RE`, so the bounded
+// trailing-punctuation variants like `**Accepted.**` also count; a summary is a
+// completed review, so it is accepted, never rejected) AND the
+// `summary walkthrough` phrase, so an ordinary acceptance of reviewer feedback is
+// excluded. Tightly matched to `buildSummaryDispositionBody` so a loose
+// acceptance can never be miscredited (which would under-post and strand the
+// gate).
 export function isReviewSummaryDisposition(comment) {
   const body = (comment.body ?? '').trimStart();
   return (
-    body.startsWith('**Accepted**') && /\bsummary walkthrough\b/i.test(body)
+    DISPOSITION_ACCEPTED_PREFIX_RE.test(body) &&
+    /\bsummary walkthrough\b/i.test(body)
   );
 }
 // The stable identity token of an advisory bot, used to attribute a non-review
