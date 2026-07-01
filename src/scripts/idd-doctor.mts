@@ -7,7 +7,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   normalizeAutopilotSuitabilityFloor,
@@ -132,6 +132,7 @@ export function runDoctor({
   const worktreeGuardEnforced =
     strict === true || readWorktreeGuardEnabled(root);
   checkPrimaryWorktreeHead(root, report, { enforce: worktreeGuardEnforced });
+  checkWorktreeGuardActive(root, report);
   checkWorktreeHardeningPresence(root, report);
   checkPostMergeCleanupBacklog(
     root,
@@ -1126,6 +1127,136 @@ export function classifyWorktreeHeadFinding(
     level: enforce ? 'error' : 'warning',
     message: `primary worktree HEAD is on ${kindLabel} (${branch}) at ${primaryPath} — ${severity}. See B1 in .github/instructions/idd-work.instructions.md.`,
   };
+}
+
+/** Signals consumed by `classifyWorktreeGuardActivation` (all pre-resolved). */
+export interface WorktreeGuardActivationInput {
+  /** `worktreeGuard.enabled === true` in `.github/idd/config.json`. */
+  guardEnabled: boolean;
+  /** HEAD is detached (`git rev-parse --abbrev-ref HEAD` === `HEAD`). */
+  headDetached: boolean;
+  /** Resolved `core.hooksPath` value, or `null`/empty when unset. */
+  hooksPath: string | null;
+  /** The resolved hooks path actually wires the B1 guard. */
+  guardWired: boolean;
+}
+
+/**
+ * True when a git hook file body wires the B1 worktree guard, i.e. it sources
+ * the shared `_idd-worktree-guard.sh` helper. Pure (no I/O) so the
+ * wired/unwired classification can be unit-tested directly. A non-string
+ * (absent/unreadable hook) is treated as not wiring the guard.
+ */
+export function hookWiresWorktreeGuard(content: unknown): boolean {
+  return typeof content === 'string' && /_idd-worktree-guard\.sh/.test(content);
+}
+
+/**
+ * Decide whether the worktree guard is enabled-but-inert in the current
+ * environment and, if so, produce a warning finding. Pure (no I/O) so it can
+ * be unit-tested directly.
+ *
+ * The finding is intentionally a **warning**, never a blocking error: the
+ * idd-doctor CI health gate checks out a detached HEAD (which never wires the
+ * local hook) and must stay green. `headDetached` short-circuits that CI case,
+ * and a warning-level finding keeps the exit code zero even if it ever fires.
+ */
+export function classifyWorktreeGuardActivation({
+  guardEnabled,
+  headDetached,
+  hooksPath,
+  guardWired,
+}: WorktreeGuardActivationInput): WorktreeHeadFinding | null {
+  // Only runs when the guard is opted in.
+  if (!guardEnabled) {
+    return null;
+  }
+  // CI-safe: a detached HEAD (CI checkout of a raw SHA) never wires the hook
+  // and is not a real B1 environment, so stay silent — matching how
+  // `classifyPrimaryHead('HEAD')` reports no violation.
+  if (headDetached) {
+    return null;
+  }
+  // Correctly wired → nothing to report.
+  if (guardWired) {
+    return null;
+  }
+  const shown =
+    typeof hooksPath === 'string' && hooksPath.trim().length > 0
+      ? hooksPath.trim()
+      : '(unset)';
+  return {
+    level: 'warning',
+    message:
+      `worktreeGuard.enabled is true but the commit/push guard is not active ` +
+      `in this environment (core.hooksPath = ${shown}); B1 primary-worktree ` +
+      `commits will NOT be blocked here. Wire it with: ` +
+      `git config core.hooksPath .githooks`,
+  };
+}
+
+/**
+ * Read the `pre-commit` and `pre-push` hooks at the resolved `core.hooksPath`
+ * and report whether both wire the B1 guard. A relative hooks path resolves
+ * against the repository root; an absolute one is used as-is.
+ */
+function worktreeGuardWiredAt(root: string, hooksPath: string): boolean {
+  const directory = isAbsolute(hooksPath) ? hooksPath : join(root, hooksPath);
+  const read = (name: string): string | null => {
+    try {
+      return readFileSync(join(directory, name), 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  return (
+    hookWiresWorktreeGuard(read('pre-commit')) &&
+    hookWiresWorktreeGuard(read('pre-push'))
+  );
+}
+
+/**
+ * Warn when `worktreeGuard.enabled` is true but the commit/push guard is not
+ * actually wired in this environment (`core.hooksPath` unset or pointing at a
+ * directory that does not source the guard). A fresh coding-agent / ephemeral
+ * checkout never inherits the local `core.hooksPath`, so `enabled` alone can be
+ * silently unenforced. Warning-only and inert on a detached HEAD so the
+ * idd-doctor CI health gate stays green.
+ */
+function checkWorktreeGuardActive(root: string, report: DoctorReport) {
+  if (!readWorktreeGuardEnabled(root)) {
+    return;
+  }
+  // Resolve HEAD; skip on a detached HEAD (CI checks out a raw SHA) or when
+  // git is unavailable (fail-safe: no finding).
+  const headResult = runCommand(
+    'git',
+    ['rev-parse', '--abbrev-ref', 'HEAD'],
+    root,
+  );
+  if (!headResult.ok) {
+    return;
+  }
+  const headDetached = headResult.stdout.trim() === 'HEAD';
+  // Resolve the active hooks path. An unset core.hooksPath makes git exit
+  // non-zero, which reads as unset here.
+  const hooksResult = runCommand(
+    'git',
+    ['config', '--get', 'core.hooksPath'],
+    root,
+  );
+  const hooksPath = hooksResult.ok ? hooksResult.stdout.trim() : '';
+  const guardWired =
+    hooksPath.length > 0 && worktreeGuardWiredAt(root, hooksPath);
+  const finding = classifyWorktreeGuardActivation({
+    guardEnabled: true,
+    headDetached,
+    hooksPath: hooksPath.length > 0 ? hooksPath : null,
+    guardWired,
+  });
+  if (finding) {
+    report.warnings.push(finding.message);
+  }
 }
 
 export function computeWindowStartIso(
