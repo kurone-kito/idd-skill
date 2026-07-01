@@ -52,6 +52,7 @@
     "build:check": "pnpm run build && git diff HEAD --exit-code -- scripts bin .gitattributes",
     "test": "pnpm run test:scripts",
     "test:scripts": "node --test tests/*.test.mts",
+    "fixtures:update": "node scripts/update-fixtures.mjs",
     "docs:sync": "node scripts/sync-docs.mjs --apply",
     "docs:sync:check": "node scripts/sync-docs.mjs --check"
   },

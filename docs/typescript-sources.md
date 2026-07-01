@@ -95,3 +95,29 @@ stripping (`node --test tests/*.test.mts`). Unit tests import the typed
 signatures; CLI/integration tests keep spawning the emitted
 `scripts/*.mjs` / `bin/*.mjs` artifacts, which is exactly what adopters
 execute.
+
+### Regenerating `deepEqual` fixtures
+
+Some suites assert a builder's output against committed
+`fixtures/<suite>/*.json` `{ input, options, expected }` cases via a full
+`assert.deepEqual` (for example `tests/pre-merge-readiness.test.mts`). When
+an **intentional** output-shape change lands, recompute every `expected`
+instead of hand-editing each fixture:
+
+```sh
+pnpm run fixtures:update            # regenerate every registered suite
+pnpm run fixtures:update --suite pre-merge-readiness   # or just one
+```
+
+The tool (`src/scripts/update-fixtures.mts` → `scripts/update-fixtures.mjs`)
+recomputes each fixture's `expected` from the current builder and rewrites
+the file in the repo's canonical JSON form. On unchanged code it is a
+**no-op** (empty `git diff`), which round-trips the committed fixtures; a
+sibling suite registers by adding one `FIXTURE_SUITES` entry.
+
+> **Guardrail.** Regeneration blesses whatever the code currently emits, so
+> a blind regeneration can silently **mask a real regression** — the exact
+> anti-pattern IDD warns about. Use it only for a deliberate shape change,
+> and **review the emitted `git diff`**; it is not a substitute for
+> correctness. A normal `pnpm test` / CI run never regenerates (assert-only);
+> the tool is strictly opt-in.
