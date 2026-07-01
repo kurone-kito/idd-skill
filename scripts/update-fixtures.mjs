@@ -20,10 +20,32 @@
 //
 // Uses only node: builtins plus the in-repo builder imports, to stay compatible
 // with the repository's bare-node boundary.
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildPreMergeReadinessSummary } from './protocol-helpers.mjs';
+
+// Resolve the repository root by walking up to the nearest package.json, so the
+// suite directories resolve identically whether the tool runs as the emitted
+// scripts/update-fixtures.mjs (one level deep), the .mts source under Node type
+// stripping (two levels deep), or is invoked from any working directory. A fixed
+// cwd-relative path would target the wrong directory when run from a
+// subdirectory; mirrors the resolveRepoRoot pattern in validate-schemas.mts.
+function resolveRepoRoot(fromUrl) {
+  let dir = dirname(fileURLToPath(fromUrl));
+  for (let depth = 0; depth < 16; depth += 1) {
+    if (existsSync(join(dir, 'package.json'))) {
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  return dir;
+}
+const REPO_ROOT = resolveRepoRoot(import.meta.url);
 export const FIXTURE_SUITES = [
   {
     name: 'pre-merge-readiness',
@@ -64,16 +86,17 @@ export function regenerateFixtureText(rawJson, build) {
 /** Regenerate every fixture in a suite in place; returns the rewritten paths. */
 function regenerateSuite(suite) {
   const changed = [];
-  const fixtureFiles = readdirSync(suite.dir)
+  const suiteDir = resolve(REPO_ROOT, suite.dir);
+  const fixtureFiles = readdirSync(suiteDir)
     .filter((entry) => entry.endsWith('.json'))
     .sort();
   for (const name of fixtureFiles) {
-    const path = `${suite.dir}/${name}`;
-    const original = readFileSync(path, 'utf8');
+    const absolutePath = join(suiteDir, name);
+    const original = readFileSync(absolutePath, 'utf8');
     const updated = regenerateFixtureText(original, suite.build);
     if (updated !== original) {
-      writeFileSync(path, updated);
-      changed.push(path);
+      writeFileSync(absolutePath, updated);
+      changed.push(`${suite.dir}/${name}`);
     }
   }
   return changed;

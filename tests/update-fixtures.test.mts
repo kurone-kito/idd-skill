@@ -44,7 +44,7 @@ test('regenerateFixtureText keeps canonical JSON form and original key order', (
   ]);
 });
 
-test('unknown --suite / empty input surfaces via a thrown builder, not a silent skip', () => {
+test('regenerateFixtureText propagates a throwing builder instead of silently skipping', () => {
   assert.throws(
     () =>
       regenerateFixtureText('{"input":{},"options":{}}', () => {
