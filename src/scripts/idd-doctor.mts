@@ -1243,7 +1243,13 @@ function checkWorktreeGuardActive(root: string, report: DoctorReport) {
   if (!headResult.ok) {
     return;
   }
-  const headDetached = headResult.stdout.trim() === 'HEAD';
+  // A detached HEAD (CI checks out a raw SHA) never wires the local hook and is
+  // not a real B1 environment — return before touching core.hooksPath so the
+  // idd-doctor CI health gate stays green. classifyWorktreeGuardActivation also
+  // guards this case so it can be unit-tested directly.
+  if (headResult.stdout.trim() === 'HEAD') {
+    return;
+  }
   // Resolve the active hooks path. An unset core.hooksPath makes git exit
   // non-zero, which reads as unset here.
   const hooksResult = runCommand(
@@ -1256,7 +1262,7 @@ function checkWorktreeGuardActive(root: string, report: DoctorReport) {
     hooksPath.length > 0 && worktreeGuardWiredAt(root, hooksPath);
   const finding = classifyWorktreeGuardActivation({
     guardEnabled: true,
-    headDetached,
+    headDetached: false,
     hooksPath: hooksPath.length > 0 ? hooksPath : null,
     guardWired,
   });
