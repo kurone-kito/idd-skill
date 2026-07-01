@@ -308,3 +308,60 @@ process.exit(1);
   assert.equal(parsed.summary.readyCount, 1);
   assert.equal(parsed.ready[0].number, 900);
 });
+
+test('discover-viability-gate.mjs CLI runs the entry path without a load-time ReferenceError', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-discover-viability-cli-'));
+  const ghPath = join(tempRoot, 'gh');
+  writeFileSync(
+    ghPath,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+// buildIssueLoader: gh api repos/o/r/issues/901 --jq .
+if (args[0] === 'api' && args[1] === 'repos/o/r/issues/901') {
+  process.stdout.write(JSON.stringify({
+    number: 901,
+    title: 'viability smoke issue',
+    state: 'open',
+    // Wording clears all three A4 criteria (narrow scope + objective
+    // verification + no external coordination) so the issue lands in "viable".
+    body: 'A targeted single-file change verified by tests and acceptance criteria.',
+  }));
+  process.exit(0);
+}
+process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
+process.exit(1);
+`,
+  );
+  chmodSync(ghPath, 0o755);
+
+  const output = execFileSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/discover-viability-gate.mjs'),
+      '--issue',
+      '901',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+    ],
+    {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
+      // Fail fast instead of hanging the suite if the CLI ever blocks on an
+      // unexpected read (the stub gh answers or exits non-zero for every call).
+      timeout: 60_000,
+    },
+  );
+
+  assert.doesNotMatch(
+    output,
+    /ReferenceError|before initialization/,
+    'CLI output must not carry a load-time ReferenceError',
+  );
+  const parsed = JSON.parse(output);
+  assert.equal(parsed.summary.total, 1);
+  assert.equal(parsed.summary.viableCount, 1);
+  assert.equal(parsed.viable[0].number, 901);
+});
