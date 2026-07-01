@@ -582,13 +582,24 @@ function readInstructionFiles(): { name: string; source: string }[] {
     }));
 }
 
+// Dev/CI tooling that is not an adopter-run IDD helper. Most is never
+// `node`-invoked in the instructions, but the sync-docs generated-from banner
+// now tells maintainers to run `node scripts/sync-docs.mjs --apply`, so
+// sync-docs must be excluded explicitly rather than by absence. Adopters
+// receive the banner-free idd-template/ source, so they never see it either.
+const NON_ADOPTER_DEV_TOOLING = new Set([
+  'scripts/build-ts.mjs',
+  'scripts/sync-docs.mjs',
+  'scripts/verify-workshop-integrity.mjs',
+  'scripts/merged-pr-feedback-sweep.mjs',
+]);
+
 // Collect every helper the instruction files tell adopters to RUN as
 // `node scripts/<name>.mjs`. That runnable-invocation form is the scoped signal
 // for a "documented CLI adopter helper": it deliberately excludes shared
 // libraries that appear only as bare `scripts/<name>.mjs` import/function
-// mentions (protocol-helpers, policy-helpers) and dev/CI tooling the
-// instructions never invoke (build-ts, sync-docs, verify-workshop-integrity,
-// merged-pr-feedback-sweep).
+// mentions (protocol-helpers, policy-helpers) and the dev/CI tooling in
+// NON_ADOPTER_DEV_TOOLING above.
 function collectDocumentedCliAdopterHelpers(): Set<string> {
   const referenced = new Set<string>();
   for (const { source } of readInstructionFiles()) {
@@ -598,7 +609,9 @@ function collectDocumentedCliAdopterHelpers(): Set<string> {
     for (const match of source.matchAll(
       /\bnode\s+(scripts\/[a-z0-9-]+\.mjs)\b/g,
     )) {
-      referenced.add(match[1]);
+      if (!NON_ADOPTER_DEV_TOOLING.has(match[1])) {
+        referenced.add(match[1]);
+      }
     }
   }
   return referenced;
@@ -685,13 +698,10 @@ test('the registration guard scopes out instruction-referenced libraries and dev
   }
 
   // Dev/CI tooling and the maintainer-only post-merge sweep are likewise never
-  // adopter-run commands, so they stay unregistered too.
-  for (const nonAdopterTool of [
-    'scripts/build-ts.mjs',
-    'scripts/sync-docs.mjs',
-    'scripts/verify-workshop-integrity.mjs',
-    'scripts/merged-pr-feedback-sweep.mjs',
-  ]) {
+  // adopter-run commands, so they stay unregistered too. sync-docs is
+  // `node`-invoked by the generated-from banner but excluded via
+  // NON_ADOPTER_DEV_TOOLING, so the guard still scopes it out.
+  for (const nonAdopterTool of NON_ADOPTER_DEV_TOOLING) {
     assert.equal(
       documentedCliHelpers.has(nonAdopterTool),
       false,

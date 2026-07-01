@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
+import { stripGeneratedFromBanner } from '../src/scripts/consistency-helpers.mts';
+
 function read(relativePath: string) {
   return readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8');
 }
@@ -71,7 +73,9 @@ test('suitability instructions keep issue-author approval outside A4.5 outcomes'
   );
 
   assert.match(live, /Issue-author approval is a separate pre-claim gate\./);
-  assert.equal(template, live);
+  // The live target carries the sync-docs generated-from banner the template
+  // source does not; strip it before the content-mirror equality check.
+  assert.equal(template, stripGeneratedFromBanner(live));
 });
 
 test('overview documents the secure default issue-author approval config behavior', () => {
