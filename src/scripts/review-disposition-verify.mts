@@ -10,8 +10,9 @@ import { pathToFileURL } from 'node:url';
 
 // Tolerate a single interior punctuation char `[.!:]` before the closing `**`
 // (`**Accepted.** — …`) so a punctuated marker still verifies, while keeping the
-// required `— ` separator. Bounded so an interior-text body is not matched —
-// mirrors the disposition-marker predicates in protocol-helpers.mts.
+// required `\s+—` separator (whitespace before the em-dash; nothing after it is
+// enforced). Bounded so an interior-text body is not matched — mirrors the
+// disposition-marker predicates in protocol-helpers.mts.
 const MARKER_ACCEPTED_RE = /^\*\*Accepted[.!:]?\*\*\s+—/;
 const MARKER_REJECTED_RE = /^\*\*Rejected[.!:]?\*\*\s+—/;
 const MARKER_REJECTION_CONFIRMED_RE =
