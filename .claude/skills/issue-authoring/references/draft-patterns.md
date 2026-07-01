@@ -212,6 +212,42 @@ This is an artificial split when the three edits form one natural,
 cohesive authoring change. Do not break a single reviewable task into
 multiple sibling issues only to widen parallel execution.
 
+### Finalize or verify track that asserts sibling-produced state
+
+Anti-pattern — prose sequencing only:
+
+```md
+#450 — finalize the config, reconcile the docs, verify the combined result
+
+Blocked by #440
+
+_Runs after the wiring tracks #441-#445._
+```
+
+The hard `Blocked by #440` names only the build foundation, and the
+after-the-siblings ordering lives in prose. Once `#440` closes, Discover
+reports `#450` startable and A4.5 passes it (Actionability inspects the body,
+not completability) — but its acceptance criteria assert state that only the
+unmerged `#441`–`#445` produce, so claiming it means failing acceptance or
+doing the siblings' work.
+
+Correct — encode `Blocked by` on each sibling whose output the acceptance
+criteria depend on:
+
+```md
+#450 — finalize the config, reconcile the docs, verify the combined result
+
+Blocked by #440
+Blocked by #441
+Blocked by #442
+Blocked by #443
+Blocked by #444
+Blocked by #445
+```
+
+Now Discover and A4.5 defer `#450` until every sibling merges, so it is
+claimed only when its acceptance criteria can actually pass.
+
 Resolve `<marker-prefix>` from the target repository's onboarding or IDD
 docs before publishing the draft. Use `idd-skill` only when the target
 repository actually configured that prefix.

@@ -529,6 +529,15 @@ availability, or ordering constraint.
   tense is a recurring advisory-review-thrash pattern; "describe shipped
   behavior" is a true ordering constraint, so this edge is consistent
   with the encode-only-a-real-constraint rule above
+- when authoring a **finalize or verify track whose acceptance criteria
+  assert state produced by sibling implementation tracks**, encode
+  `Blocked by #NNN` on **each** such sibling rather than stating the
+  ordering only in prose. Discover and A4.5 honor the hard `Blocked by`
+  edge, not a prose "runs after the siblings" note: A4.5 Actionability
+  inspects the body, not completability, so a prose-sequenced finalize
+  track reports startable the moment its build foundation closes, and
+  claiming it then means either failing its acceptance criteria or doing
+  the siblings' unmerged work
 
 When an issue keeps a dependency edge, justify each dependency edge in
 the surrounding issue body and confirm that the split still preserves
