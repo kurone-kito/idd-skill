@@ -220,7 +220,12 @@ default below is unchanged.
   - `summary`: `{ rootCount: number, leafCount: number,`
     `scoredLeafCount: number, sharedLeafCount: number,`
     `duplicateReferenceCount: number, cycleCount: number,`
-    `inaccessibleReferenceCount: number, unresolvedReferenceCount: number }`
+    `inaccessibleReferenceCount: number, unresolvedReferenceCount: number }`.
+    Under `--with-readiness` the summary additionally carries
+    `startableCount` and `readyCount` (integers aggregating the leaves'
+    `readiness.startable` / `readiness.ready`), so a swarm controller reads
+    "is there more startable work?" without iterating every leaf; both are
+    absent otherwise so the flag-absent shape stays byte-stable.
   - **Ranking** (global-by-score): `leaves` is sorted by
     `autopilotSuitability` **descending**, tie-broken by issue number
     **ascending** (stable). A missing or out-of-range score is treated as
@@ -245,6 +250,34 @@ default below is unchanged.
   parsing; a zero-byte or partial read from a still-running (or
   just-finished) helper means **"still running," not** an A2 enumeration
   failure.
+
+### Discover Readiness Sweep (`--swarm-floor`)
+
+`scripts/discover-readiness-check.mjs --swarm-floor <N>` is the canonical
+end-of-session "is any startable work left?" one-liner. It ignores
+`--issue` / `--issues`, sweeps **every** open issue in the repository
+(orphans included, pull requests excluded), runs the same A3 readiness plus
+autopilot-suitability evaluation, and reports the issues that are ready
+**and** at or above floor `N`:
+
+```sh
+node scripts/discover-readiness-check.mjs --swarm-floor <N>
+```
+
+- **Output**: `{ eligible, eligible_count, total }` — `eligible` is the
+  ready-and-at/above-floor set (each `{ number, title, autopilotSuitability,
+  belowFloor }`), `eligible_count` its length, and `total` the number of open
+  issues swept. A "no score" issue is never below floor, matching the
+  discovery ranker, so it stays eligible.
+- **Use**: an `eligible_count == 0` result means Discover has no startable
+  work at floor `N`, so an autopilot / swarm loop may stop scriptably.
+- **Floor range**: `N` is the autopilot-suitability 1-5 band. A non-integer
+  or out-of-range `N` is a **hard error**, not a silent coercion to the
+  default floor — otherwise a typo (e.g. `--swarm-floor 50`) would quietly
+  answer at floor 3 and be misread as "floor-50 work exists."
+- **Boundary**: read-only and advisory — selecting the next issue still runs
+  the A3/A4/A4.5/A5 gates. Optional flags: `--owner` / `--repo` / `--policy`
+  / `--now`.
 
 ### Discover Viability Gate Contract
 

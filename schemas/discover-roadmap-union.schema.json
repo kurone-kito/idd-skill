@@ -327,6 +327,16 @@
           "type": "integer",
           "minimum": 0
         },
+        "startableCount": {
+          "description": "Count of union leaves with readiness.startable === true; present only under --with-readiness, absent otherwise so the flag-absent output stays byte-stable.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "readyCount": {
+          "description": "Count of union leaves with readiness.ready === true; present only under --with-readiness, absent otherwise.",
+          "type": "integer",
+          "minimum": 0
+        },
         "duplicateReferenceCount": {
           "type": "integer",
           "minimum": 0

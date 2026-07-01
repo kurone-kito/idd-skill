@@ -364,6 +364,13 @@ export interface RoadmapGraphUnionReport {
     leafCount: number;
     scoredLeafCount: number;
     sharedLeafCount: number;
+    // Aggregate readiness counts over the union leaves. Present only when
+    // `--with-readiness` annotated them; absent otherwise (like the per-leaf
+    // `readiness` field) so the flag-absent output stays byte-stable. Let a
+    // swarm controller read "is there more startable work?" without iterating
+    // every leaf.
+    startableCount?: number;
+    readyCount?: number;
     duplicateReferenceCount: number;
     cycleCount: number;
     inaccessibleReferenceCount: number;
@@ -1193,6 +1200,20 @@ export async function enumerateAllRoadmapsGraph(
   const sharedLeafCount = leaves.filter(
     (leaf) => leaf.sourceRoots.length > 1,
   ).length;
+  // Only meaningful when readiness was annotated above; the same gate keeps
+  // the flag-absent summary byte-stable (both counts stay absent).
+  const readinessAnnotated = Boolean(
+    options.readiness && typeof options.loadIssue === 'function',
+  );
+  const readinessCounts = readinessAnnotated
+    ? {
+        startableCount: leaves.filter(
+          (leaf) => leaf.readiness?.startable === true,
+        ).length,
+        readyCount: leaves.filter((leaf) => leaf.readiness?.ready === true)
+          .length,
+      }
+    : {};
 
   return {
     mode: 'all-roadmaps',
@@ -1215,6 +1236,7 @@ export async function enumerateAllRoadmapsGraph(
       leafCount: leaves.length,
       scoredLeafCount,
       sharedLeafCount,
+      ...readinessCounts,
       duplicateReferenceCount: duplicateReferences.size,
       cycleCount: cycles.size,
       inaccessibleReferenceCount: inaccessibleReferences.size,
@@ -2047,6 +2069,9 @@ top-level shape from the single-root report above):
       "unresolvedReferenceCount": 0
     }
   }
+  (Under --with-readiness the summary also carries "startableCount" and
+  "readyCount" aggregating the union leaves' readiness; both are absent
+  otherwise so the flag-absent output stays byte-stable.)
 `);
 }
 
