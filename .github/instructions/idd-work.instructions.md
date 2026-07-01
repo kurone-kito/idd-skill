@@ -142,6 +142,43 @@ through the Worktree creation steps above.
 
 ## B2 — Create and refine plan
 
+### B2.0 — Supersession re-check (before planning)
+
+A4.5's duplicate/supersession check ran once, at pre-claim triage. Under
+concurrent execution a sibling PR can ship the whole deliverable during the
+claim→plan gap, so re-check once the B1 worktree exists and **before writing
+any code or drafting the plan below**. This uses a mechanical file/close-based
+signal that is deliberately stronger than the A4.5 title/declaration heuristic;
+a weak **title-only** match is **not** a hit here. Keep it cheap: one fetch plus
+a bounded merged-PR scan.
+
+1. `git fetch origin main`.
+2. **Closed-by-a-merged-PR signal**: re-fetch the issue; if it is now closed
+   with a linked closing PR, the deliverable already shipped:
+
+   ```sh
+   gh issue view <number> --json state,closedByPullRequestsReferences \
+     --jq 'select(.state == "CLOSED") | .closedByPullRequestsReferences[].number'
+   ```
+
+3. **Same-target-files signal**: otherwise scan PRs merged **at or after the
+   active claim's `created_at`** (a small bounded window) and check whether any
+   changed a file the issue scopes under its `## Candidate files`:
+
+   ```sh
+   gh pr list --repo <owner>/<repo> --state merged \
+     --search "merged:>=<claim-created-at>" --json number,mergedAt --limit 50
+   # then, for each candidate, compare its files to the issue's Candidate files:
+   gh pr view <n> --json files --jq '.files[].path'
+   ```
+
+**On a hit → verify-then-close** (never silent re-implementation, and never an
+auto-close on a weak signal): confirm the issue's acceptance criteria already
+hold on current `main`, then close the issue with a comment referencing the
+superseding PR. If the criteria only **partly** hold, keep the issue open,
+record the overlap, and plan only the genuinely-remaining work. On no hit,
+continue with the plan below.
+
 Draft an implementation plan and post it as an issue comment. Then run a
 critique pass to review the plan for correctness and concreteness (see
 `idd-overview-appendix.instructions.md` for per-agent implementation). Post the
