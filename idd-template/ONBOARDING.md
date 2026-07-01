@@ -609,6 +609,33 @@ primary-worktree mistake leaves no trace in the pushed history — so
 this local hook, together with `idd-doctor --strict`, is the practical
 enforcement surface.
 
+#### Activation in a coding-agent / ephemeral environment
+
+The `git config core.hooksPath` step above is **local and uncommitted**, so
+any environment that starts from a fresh clone per task never inherits it: a
+coding agent such as the GitHub Copilot coding agent, an ephemeral container,
+or a throwaway checkout all begin unwired. There, `worktreeGuard.enabled:
+true` on its own enforces nothing — without `core.hooksPath` pointed at
+`.githooks` the shipped hooks never run, so a lightweight model can commit
+from the primary worktree undetected. CI cannot backstop this (the violation
+leaves no pushed-history trace and CI checks out a detached HEAD), so
+activation has to happen inside the agent's own setup.
+
+Wire the hooks as the agent's environment-setup step — the first thing it
+runs before any work, or the platform's setup mechanism (for the GitHub
+Copilot coding agent, its `copilot-setup-steps` workflow):
+
+```sh
+git config core.hooksPath .githooks && chmod +x .githooks/pre-commit .githooks/pre-push
+```
+
+Because the agent re-runs this every task, the guard stays active for the
+whole session. Confirm it actually took effect with `idd-doctor`, which
+surfaces an **enabled-but-inert** finding when `worktreeGuard.enabled` is
+`true` but `core.hooksPath` is not pointed at `.githooks` — the signal that
+the setup step silently did not run. This is activation guidance only; the
+adopter default stays opt-in **off**.
+
 ### Optional — run idd-doctor as a CI health gate
 
 For repositories that vendor the IDD helper scripts, running `idd-doctor`
