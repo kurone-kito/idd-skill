@@ -279,6 +279,13 @@
       "unauthorized": [],
       "malformed": [],
       "notConfigured": []
-    }
+    },
+    "ready": false,
+    "blockers": [
+      {
+        "gate": "disposition-evidence",
+        "detail": "dispositionEvidence.route is \"missing\" (expected \"proceed\"), blockingCount=-1 (expected 0)"
+      }
+    ]
   }
 }

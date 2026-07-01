@@ -11,6 +11,7 @@ import {
   buildActivitySnapshotSummary,
   buildAdvisoryWaitSummary,
   buildPreMergeReadinessSummary,
+  computePreMergeReadinessBlockers,
   deriveIddAgentLogins,
   findLastCopilotReviewCommit,
   indexLatestGatingReviewsByAuthor,
@@ -4083,3 +4084,30 @@ function readJson(relativePath: string) {
     readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8'),
   );
 }
+
+test('buildPreMergeReadinessSummary embeds a strict ready/blockers rollup', () => {
+  // A clean fixture built WITHOUT dispositionEvidence fails closed on that
+  // gate (it is absent), matching the executor's fail-closed behavior.
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(fixture.input, fixture.options);
+
+  // `ready` is exactly `blockers.length === 0`, and `blockers` is the shared
+  // rollup applied to the summary itself (single source of the merge-gate AND).
+  const blockers = summary.blockers as { gate: string }[];
+  assert.equal(summary.ready, blockers.length === 0);
+  assert.deepEqual(summary.blockers, computePreMergeReadinessBlockers(summary));
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.gate),
+    ['disposition-evidence'],
+  );
+
+  // With every gate satisfied (including a proceed disposition), the collector
+  // rolls up to ready:true / blockers:[].
+  const ready = buildPreMergeReadinessSummary(
+    { ...fixture.input },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+  const readyBlockers = ready.blockers as { gate: string }[];
+  assert.deepEqual(ready.blockers, computePreMergeReadinessBlockers(ready));
+  assert.equal(ready.ready, readyBlockers.length === 0);
+});

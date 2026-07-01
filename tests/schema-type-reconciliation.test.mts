@@ -409,6 +409,8 @@ export const preMergeReadinessKeys = [
   'waiverEvidence',
   'trustedMarkerActors',
   'trustedMarkerActorsSource',
+  'ready',
+  'blockers',
 ] as const satisfies readonly (keyof PreMergeReadinessReport)[];
 
 export const stalledSessionQuietCheckKeys = [
@@ -915,6 +917,8 @@ const preMergeReadinessFixture = {
   },
   trustedMarkerActors: ['copilot-cli'],
   trustedMarkerActorsSource: 'config',
+  ready: true,
+  blockers: [],
 } satisfies PreMergeReadinessReport;
 
 const stalledSessionQuietCheckFixture = {

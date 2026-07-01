@@ -16,7 +16,9 @@
     "advisoryWait",
     "ci",
     "claim",
-    "waiverEvidence"
+    "waiverEvidence",
+    "ready",
+    "blockers"
   ],
   "additionalProperties": false,
   "properties": {
@@ -1136,6 +1138,27 @@
     "trustedMarkerActorsSource": {
       "type": "string",
       "enum": ["flag", "env", "config", "none"]
+    },
+    "ready": {
+      "description": "Strict merge-gate rollup: true only when blockers is empty. Does NOT apply the dispositionEvidence.soleCauseAckOnlyPostDisposition override (a separate flag the F2 checklist layers on top).",
+      "type": "boolean"
+    },
+    "blockers": {
+      "description": "One entry per unmet F3 merge gate, in gate order; empty when ready.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["gate", "detail"],
+        "additionalProperties": false,
+        "properties": {
+          "gate": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }

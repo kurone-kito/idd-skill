@@ -265,6 +265,17 @@
       "unauthorized": [],
       "malformed": [],
       "notConfigured": []
-    }
+    },
+    "ready": false,
+    "blockers": [
+      {
+        "gate": "required-reviews",
+        "detail": "required/CODEOWNER reviews not satisfied (requiredApprovalsSatisfied=false, codeownerApprovalSatisfied=false, codeownerSelfApproval.status=\"clear\")"
+      },
+      {
+        "gate": "disposition-evidence",
+        "detail": "dispositionEvidence.route is \"missing\" (expected \"proceed\"), blockingCount=-1 (expected 0)"
+      }
+    ]
   }
 }
