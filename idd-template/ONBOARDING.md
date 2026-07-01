@@ -70,9 +70,10 @@ IDD, treat the upgrade as a **named-gap import**, not a blind resync:
 3. Re-apply the Step 2 file import for the changed files, then re-run the
    Step 6 verification checklist and `idd-doctor` after reconciling.
 
-**Anatomy of a helper re-import (vendored-helper case).** If you vendor the
+**Anatomy of a helper re-import (`vendored-node` profile).** If you vendor the
 shared helper bundle — the `vendored-node` profile, which physically copies the
-core — a new **leaf helper** is rarely a standalone file drop:
+shared `protocol-helpers` core — a new **leaf helper** is rarely a standalone
+file drop:
 
 1. **Diff the shared core first.** The new helper usually imports a newer
    `protocol-helpers` shared-core API absent from your older snapshot, so the
