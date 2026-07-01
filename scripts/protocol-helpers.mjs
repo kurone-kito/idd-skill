@@ -1400,8 +1400,11 @@ export function hasFreshDisposition(thread, options = {}) {
 // equivalents — so a reply that punctuates the marker is still recognized. The
 // tolerance is bounded to that one char before `**`, so an interior-text body
 // like `**Accepted by reviewer, but…**` is NOT matched (fail-closed: a false
-// positive is a false merge). Start-anchored, so the marker must remain the
-// first bytes of the (leading-trimmed) body.
+// positive is a false merge). Start-anchored (`^`), so the marker must be the
+// first bytes of the body each caller passes: `isDispositionComment` uses
+// `trimEnd()` only, so leading whitespace is NOT stripped (preserving the
+// marker-first-bytes contract), while the notice / summary predicates below
+// `trimStart()` first.
 const DISPOSITION_ACCEPTED_PREFIX_RE = /^\*\*Accepted[.!:]?\*\*/;
 const DISPOSITION_REJECTED_PREFIX_RE = /^\*\*Rejected[.!:]?\*\*/;
 export function isDispositionComment(comment) {
