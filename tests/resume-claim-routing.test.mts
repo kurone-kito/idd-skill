@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   buildForcedHandoffEnabledGate,
+  evaluateFreshClaimGate,
   evaluateResumeClaimRouting,
 } from '../src/scripts/resume-claim-routing.mts';
 
@@ -84,6 +85,81 @@ test('returns stale for stale active claim from another session', () => {
   assert.equal(result.state, 'stale');
   assert.equal(result.action, 'takeover');
   assert.equal(result.reason, 'active-claim-stale');
+});
+
+test('evaluateFreshClaimGate: no markers → claimable', () => {
+  const gate = evaluateFreshClaimGate(
+    { events: [], now: '2026-05-12T10:00:00Z' },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(gate.verdict, 'claimable');
+  assert.equal(gate.winningClaimId, null);
+});
+
+test('evaluateFreshClaimGate: fresh active claim from another session → already-claimed', () => {
+  const gate = evaluateFreshClaimGate(
+    {
+      // A stray --claim-id must be ignored: a fresh claim owns none yet, so a
+      // matching id must not mask an active competitor.
+      claimId: 'claim-other',
+      now: '2026-05-12T10:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T09:30:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-other supersedes: none 2026-05-12T09:30:00Z branch: issue/2-task -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(gate.verdict, 'already-claimed');
+  assert.equal(gate.winningClaimId, 'claim-other');
+});
+
+test('evaluateFreshClaimGate: stale active claim → stale-reclaimable', () => {
+  const gate = evaluateFreshClaimGate(
+    {
+      now: '2026-05-13T10:00:01Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/3-task -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(gate.verdict, 'stale-reclaimable');
+  assert.equal(gate.winningClaimId, 'claim-old');
+});
+
+test('evaluateFreshClaimGate: later competing claim → already-claimed (disputed)', () => {
+  const gate = evaluateFreshClaimGate(
+    {
+      now: '2026-05-12T10:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T09:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-first supersedes: none 2026-05-12T09:00:00Z branch: issue/4-task -->',
+        },
+        {
+          createdAt: '2026-05-12T09:00:30Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-second supersedes: none 2026-05-12T09:00:30Z branch: issue/4-task -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(gate.verdict, 'already-claimed');
+  assert.equal(gate.reason, 'later-competing-claim');
 });
 
 test('detects same-second tie-break loss as disputed', () => {

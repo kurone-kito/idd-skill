@@ -71,6 +71,33 @@ set. If the project is in use, the project status must be "not started".
 **(c) Claim state** — Re-read the issue and parse the **active claim**
 using the shared claim-state rules:
 
+When helper runtime is enabled, run the mechanical fresh-claim claimability
+gate on a fresh marker fetch **immediately before** the claim write as the
+canonical A5(c) evidence collector:
+
+```sh
+# source repo / vendored-node
+node scripts/resume-claim-routing.mjs --issue <number> --fresh-claim-gate
+```
+
+It reuses the shared `resolveActiveClaim` / `evaluateResumeClaimRouting`
+resolver (no forked claim-state logic) and returns a `fresh_claim_gate.verdict`
+of `claimable | already-claimed | stale-reclaimable` with the winning
+`{claim-id}`:
+
+- `claimable` → proceed to the claim write below.
+- `stale-reclaimable` → proceed with takeover (the stale path below).
+- `already-claimed` → the issue is held by a live competitor, or a later
+  competing / same-second claim raced in: **return to Discover** using the same
+  selection mode that produced this target (orphan-first: continue the A0-O
+  capable path; roadmap mode: continue the A3-ready path). Do not post a claim.
+
+GitHub issue comments have no compare-and-swap, so this **narrows** the
+claim→write TOCTOU window rather than closing it; the 24 h stale-takeover and
+same-second tie-break in the written rules below remain the race-recovery
+backstop. If the helper is unavailable or its output is malformed, fall back to
+the written rules below, which stay authoritative.
+
 Use the `claim-stale-age` policy default from `docs/policy-constants.md`
 for these stale checks (distributed default: `24 h`).
 
