@@ -1142,13 +1142,19 @@ export interface WorktreeGuardActivationInput {
 }
 
 /**
- * True when a git hook file body wires the B1 worktree guard, i.e. it sources
- * the shared `_idd-worktree-guard.sh` helper. Pure (no I/O) so the
+ * True when a git hook file body wires the B1 worktree guard, i.e. a `.`/
+ * `source` command loads the shared `_idd-worktree-guard.sh` helper. Matching
+ * the sourcing line (not a bare mention) means a hook that only names the
+ * helper in a comment — e.g. a leftover doc line after the source was removed —
+ * correctly reads as inert rather than wired. Pure (no I/O) so the
  * wired/unwired classification can be unit-tested directly. A non-string
  * (absent/unreadable hook) is treated as not wiring the guard.
  */
 export function hookWiresWorktreeGuard(content: unknown): boolean {
-  return typeof content === 'string' && /_idd-worktree-guard\.sh/.test(content);
+  return (
+    typeof content === 'string' &&
+    /^[ \t]*(?:\.|source)[ \t]+[^\n]*_idd-worktree-guard\.sh/m.test(content)
+  );
 }
 
 /**

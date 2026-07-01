@@ -451,6 +451,24 @@ test('hookWiresWorktreeGuard rejects hooks that do not source the guard', () => 
   assert.equal(hookWiresWorktreeGuard(''), false);
 });
 
+test('hookWiresWorktreeGuard ignores a bare mention in a comment', () => {
+  // A leftover doc/comment line that names the helper but no longer sources
+  // it is inert and must not read as wired.
+  assert.equal(
+    hookWiresWorktreeGuard(
+      '#!/bin/sh\n# was: . "$(dirname "$0")/_idd-worktree-guard.sh"\necho hi\n',
+    ),
+    false,
+  );
+  // The `source` keyword variant (with indentation) still counts as wired.
+  assert.equal(
+    hookWiresWorktreeGuard(
+      '#!/bin/bash\n  source ./.githooks/_idd-worktree-guard.sh\n',
+    ),
+    true,
+  );
+});
+
 test('hookWiresWorktreeGuard treats a non-string (absent hook) as unwired', () => {
   assert.equal(hookWiresWorktreeGuard(null), false);
   assert.equal(hookWiresWorktreeGuard(undefined), false);
