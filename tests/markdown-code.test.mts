@@ -24,6 +24,18 @@ test('stripMarkdownCodeRegions leaves HTML comments and plain text intact', () =
   assert.equal(stripMarkdownCodeRegions(body), body);
 });
 
+test('stripMarkdownCodeRegions treats a 4-space-indented fence marker as code, not a fence', () => {
+  // CommonMark §4.5: `    ~~~` (4 leading spaces) is indented code, not a fence
+  // opener, so it must NOT enter fence mode and blank the real lines after it.
+  const body = ['    ~~~', 'Blocked by #123', 'Depends on #456'].join('\n');
+  assert.equal(stripMarkdownCodeRegions(body), body);
+  // Up to three spaces still opens a fence.
+  assert.equal(
+    stripMarkdownCodeRegions(['   ~~~', 'inside #1', '   ~~~'].join('\n')),
+    ['', '', ''].join('\n'),
+  );
+});
+
 test('stripMarkdownCodeRegions does not let a shorter inner fence close a longer one', () => {
   const body = ['~~~~', '~~~', 'still inside #9', '~~~~', 'out'].join('\n');
   assert.equal(

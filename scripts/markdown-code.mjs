@@ -21,7 +21,11 @@ export function stripMarkdownCodeRegions(text) {
   const out = [];
   let fence = null;
   for (const line of lines) {
-    const openMatch = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
+    // CommonMark §4.5: a fence marker may be indented by at most three spaces;
+    // a marker with four or more leading spaces is an indented code line, not a
+    // fence, so accepting arbitrary leading whitespace here would wrongly enter
+    // fence mode on `    ~~~` and blank the real content that follows it.
+    const openMatch = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
     if (openMatch) {
       const marker = openMatch[1];
       const info = openMatch[2];

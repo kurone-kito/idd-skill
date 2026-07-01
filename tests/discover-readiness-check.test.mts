@@ -131,6 +131,11 @@ test('dependency parsers ignore code-fenced examples and stay on one line', () =
     '\n',
   );
   assert.deepEqual(extractBlockedByIssueNumbers(mixedBody), [12]);
+
+  // A 4-space-indented `~~~` is indented code, not a fence opener (CommonMark
+  // §4.5), so it must not swallow a real following blocker — a fail-open miss.
+  const indentedFakeFence = ['    ~~~', 'Blocked by #123'].join('\n');
+  assert.deepEqual(extractBlockedByIssueNumbers(indentedFakeFence), [123]);
 });
 
 test('extractBlockedByRoadmapMarkers honors a configured marker prefix', () => {
