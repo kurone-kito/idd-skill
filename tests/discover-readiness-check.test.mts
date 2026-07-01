@@ -864,4 +864,7 @@ test('parseIssueNumberLines dedupes positive integers and yields [] on empty out
   assert.deepEqual(parseIssueNumberLines('  42 \n\n 7 \n'), [42, 7]);
   // Non-numeric or non-positive lines are dropped (fail-safe parsing).
   assert.deepEqual(parseIssueNumberLines('5\nabc\n-1\n0\n8'), [5, 8]);
+  // A partially-numeric line is dropped whole, not truncated by parseInt:
+  // `99abc` must NOT become `99`.
+  assert.deepEqual(parseIssueNumberLines('99abc\n7'), [7]);
 });

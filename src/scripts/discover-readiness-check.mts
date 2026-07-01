@@ -935,14 +935,19 @@ function listOpenIssueNumbers(owner: string, repo: string): number[] {
 /**
  * Parse the newline-delimited issue numbers emitted by the
  * `listOpenIssueNumbers` `gh api --jq` sweep into a deduped list of positive
- * integers. Blank lines and any non-numeric output are dropped (via
- * `dedupeNumbers`), so an empty sweep yields `[]`. Exported so the parse
+ * integers. Only **full-integer** lines are kept: blank, partially-numeric
+ * (`5abc`), or non-positive lines are dropped rather than truncated by
+ * `Number.parseInt`, so an empty sweep yields `[]`. Exported so the parse
  * contract is unit-testable without a live `gh` call — pull requests are
  * already excluded upstream by the `select(.pull_request == null)` jq filter.
  */
 export function parseIssueNumberLines(raw: string): number[] {
   return dedupeNumbers(
-    raw.split('\n').map((line) => Number.parseInt(line.trim(), 10)),
+    raw
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => /^\d+$/.test(line))
+      .map((line) => Number.parseInt(line, 10)),
   );
 }
 
