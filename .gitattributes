@@ -55,6 +55,7 @@ scripts/review-disposition-verify.mjs linguist-generated=true
 scripts/stalled-session-quiet-check.mjs linguist-generated=true
 scripts/suitability-triage.mjs linguist-generated=true
 scripts/sync-docs.mjs linguist-generated=true
+scripts/update-fixtures.mjs linguist-generated=true
 scripts/validate-schemas.mjs linguist-generated=true
 scripts/verify-workshop-integrity.mjs linguist-generated=true
 idd-template/scripts/minimize-superseded-markers.mjs linguist-generated=true
