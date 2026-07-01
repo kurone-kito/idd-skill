@@ -810,7 +810,8 @@ function printHelp(): void {
                       immediately before the claim write; it re-uses the same
                       resolver so claim-state logic never forks.
 
-Output schema:
+Output (selected fields; the JSON also carries repository / issue / policy /
+warnings / evidence):
 {
   "state": "unclaimed|already_owned|stale|non_inheritable|disputed",
   "action": "re_claim|takeover|keep|stop",
