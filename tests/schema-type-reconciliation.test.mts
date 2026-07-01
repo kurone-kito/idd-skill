@@ -44,13 +44,13 @@ import {
 //      equal the schema's top-level `properties` keys, with `required`
 //      a subset. Adding a field on either side alone fails the suite.
 //
-// Documented, pinned discrepancies (do NOT silently widen these — each
-// pin breaks loudly when either side changes so a maintainer re-decides):
-//
-//   - stalled-session-quiet-check: the schema uses `format: "uri"` and
-//     union `type: ["string", "null"]`, which the in-repo validator
-//     does not support, so full-document validation cannot pass today.
-//     Tracked as `knownKeywordGaps` / `knownValidationGaps`.
+// Pinned-discrepancy mechanism (`knownKeywordGaps` / `knownValidationGaps`):
+// when a mapped schema uses a construct the in-repo validator does not
+// support, its expected checkSchemaKeywords / validate() output is pinned on
+// its entry so the gap breaks loudly if either side changes. There are
+// currently no pinned gaps: the validator supports every construct the mapped
+// schemas use — `format: "uri"` and union `type: ["string", "null"]` (both
+// exercised by stalled-session-quiet-check) are recognized.
 //
 // Depth limit: parity is asserted for top-level `properties` keys only;
 // nested object shapes are covered by the fixture + `satisfies` pair.
@@ -1127,19 +1127,6 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
     exportedType: 'StalledSessionQuietCheckReport',
     owningModule: 'src/scripts/stalled-session-quiet-check.mts',
     keys: stalledSessionQuietCheckKeys,
-    // Pinned validator gaps: the in-repo validator supports neither
-    // `format: "uri"` nor union `type: ["string", "null"]`, so the
-    // schema cannot fully validate any document today. Each pin breaks
-    // when the schema or the validator changes, forcing a re-decision.
-    knownKeywordGaps: [
-      '$.properties.pr.properties.html_url: unsupported format value "uri"',
-    ],
-    knownValidationGaps: [
-      '$.policy.claim_created_at: expected type "string,null", got "null"',
-      '$.latest_activity: expected type "string,null", got "null"',
-      '$.latest_activity_type: expected type "string,null", got "null"',
-      '$.evidence.blocking_activities[0].timestamp: expected type "string,null", got "string"',
-    ],
     fixture: stalledSessionQuietCheckFixture,
   },
 ];

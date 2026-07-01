@@ -17,7 +17,7 @@
  * Any other keyword in a schema triggers an error, preventing false
  * confidence from silently-ignored constraints.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -64,8 +64,13 @@ const ALLOWED_KEYWORDS = new Set([
   ...ANNOTATION_KEYWORDS,
   ...ENFORCED_KEYWORDS,
 ]);
-/** Format values this validator actively enforces. */
-const SUPPORTED_FORMATS = new Set(['date-time']);
+/**
+ * Format values this validator recognizes. `date-time` is actively enforced
+ * (see `validate`); `uri` is accepted as a documentation-only annotation that a
+ * full JSON Schema validator enforces but this lightweight one does not, so a
+ * schema may declare it without tripping the unsupported-format guard.
+ */
+const SUPPORTED_FORMATS = new Set(['date-time', 'uri']);
 /**
  * Check that a schema object only uses allowed keywords, recursively.
  */
@@ -126,7 +131,21 @@ export function validate(data, schema, path = '$') {
   const errors = [];
   const actualType = getType(data);
   if (s.type !== undefined) {
-    if (s.type === 'integer') {
+    if (Array.isArray(s.type)) {
+      // Union type (e.g. ["string", "null"]): valid when the value matches any
+      // listed type, where 'integer' means an integer-valued number.
+      const matches = s.type.some((t) =>
+        t === 'integer'
+          ? actualType === 'number' && Number.isInteger(data)
+          : actualType === t,
+      );
+      if (!matches) {
+        errors.push(
+          `${path}: expected type "${s.type.join('|')}", got "${actualType}"`,
+        );
+        return errors;
+      }
+    } else if (s.type === 'integer') {
       if (actualType !== 'number') {
         errors.push(`${path}: expected type "integer", got "${actualType}"`);
         return errors;
@@ -304,89 +323,70 @@ export function validateFixture(schemaPath, fixturePath, expectValid) {
   }
   return { ok: true, errors: [] };
 }
+/**
+ * Auto-discover schema/fixture validation cases under `root`: every
+ * `schemas/*.schema.json` is paired with `fixtures/schemas/<name>.valid.json`
+ * (expect-pass) and `<name>.invalid.json` (expect-fail). A schema missing
+ * either fixture is reported in `missing` rather than silently skipped, so the
+ * CLI can fail closed and a new schema cannot slip through unvalidated. Pure
+ * over the filesystem (globs and stats only), so it is unit-testable.
+ */
+export function discoverSchemaCases(root) {
+  const schemaFiles = readdirSync(join(root, 'schemas'))
+    .filter((file) => file.endsWith('.schema.json'))
+    .sort();
+  const cases = [];
+  const missing = [];
+  for (const file of schemaFiles) {
+    const name = file.slice(0, -'.schema.json'.length);
+    const schemaPath = `schemas/${file}`;
+    const validFixture = `fixtures/schemas/${name}.valid.json`;
+    const invalidFixture = `fixtures/schemas/${name}.invalid.json`;
+    const missingFixtures = [];
+    if (!existsSync(join(root, validFixture))) {
+      missingFixtures.push(validFixture);
+    }
+    if (!existsSync(join(root, invalidFixture))) {
+      missingFixtures.push(invalidFixture);
+    }
+    if (missingFixtures.length > 0) {
+      missing.push({ schema: schemaPath, missingFixtures });
+      continue;
+    }
+    cases.push({ schemaPath, fixturePath: validFixture, expectValid: true });
+    cases.push({
+      schemaPath,
+      fixturePath: invalidFixture,
+      expectValid: false,
+    });
+  }
+  return { cases, missing };
+}
 // CLI: run all schemas and fixtures when invoked directly.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const cases = [
-    [
-      'schemas/claim-marker.schema.json',
-      'fixtures/schemas/claim-marker.valid.json',
-      true,
-    ],
-    [
-      'schemas/claim-marker.schema.json',
-      'fixtures/schemas/claim-marker.invalid.json',
-      false,
-    ],
-    [
-      'schemas/forced-handoff-marker.schema.json',
-      'fixtures/schemas/forced-handoff-marker.valid.json',
-      true,
-    ],
-    [
-      'schemas/forced-handoff-marker.schema.json',
-      'fixtures/schemas/forced-handoff-marker.invalid.json',
-      false,
-    ],
-    [
-      'schemas/live-status-digest.schema.json',
-      'fixtures/schemas/live-status-digest.valid.json',
-      true,
-    ],
-    [
-      'schemas/live-status-digest.schema.json',
-      'fixtures/schemas/live-status-digest.invalid.json',
-      false,
-    ],
-    [
-      'schemas/advisory-wait-state.schema.json',
-      'fixtures/schemas/advisory-wait-state.valid.json',
-      true,
-    ],
-    [
-      'schemas/advisory-wait-state.schema.json',
-      'fixtures/schemas/advisory-wait-state.invalid.json',
-      false,
-    ],
-    [
-      'schemas/pre-merge-readiness.schema.json',
-      'fixtures/schemas/pre-merge-readiness.valid.json',
-      true,
-    ],
-    [
-      'schemas/pre-merge-readiness.schema.json',
-      'fixtures/schemas/pre-merge-readiness.invalid.json',
-      false,
-    ],
-    [
-      'schemas/idd-merge-execute.schema.json',
-      'fixtures/schemas/idd-merge-execute.valid.json',
-      true,
-    ],
-    [
-      'schemas/idd-merge-execute.schema.json',
-      'fixtures/schemas/idd-merge-execute.invalid.json',
-      false,
-    ],
-    ['schemas/policy.schema.json', 'fixtures/schemas/policy.valid.json', true],
-    [
-      'schemas/policy.schema.json',
-      'fixtures/schemas/policy.invalid.json',
-      false,
-    ],
-    [
-      'schemas/phase-graph.schema.json',
-      'fixtures/schemas/phase-graph.valid.json',
-      true,
-    ],
-    [
-      'schemas/phase-graph.schema.json',
-      'fixtures/schemas/phase-graph.invalid.json',
-      false,
-    ],
-    ['schemas/phase-graph.schema.json', 'schemas/phase-graph.json', true],
-  ];
+  const { cases, missing } = discoverSchemaCases(ROOT);
+  if (missing.length > 0) {
+    for (const entry of missing) {
+      console.error(
+        `✗  ${entry.schema}: missing fixture(s) ${entry.missingFixtures.join(', ')}`,
+      );
+    }
+    console.error(
+      `\n${missing.length} schema(s) have no fixtures. Add ` +
+        `fixtures/schemas/<name>.valid.json and <name>.invalid.json for each.`,
+    );
+    process.exit(1);
+  }
+  // phase-graph additionally validates its live data file (referential
+  // integrity via validateFixture's dedicated validatePhaseGraph hook) as an
+  // explicit override beyond the discovered valid/invalid fixture pair.
+  cases.push({
+    schemaPath: 'schemas/phase-graph.schema.json',
+    fixturePath: 'schemas/phase-graph.json',
+    expectValid: true,
+  });
   let failed = 0;
-  for (const [schemaPath, fixturePath, expectValid] of cases) {
+  for (const { schemaPath, fixturePath, expectValid } of cases) {
     const result = validateFixture(schemaPath, fixturePath, expectValid);
     const label = expectValid ? 'valid' : 'invalid';
     if (result.ok) {

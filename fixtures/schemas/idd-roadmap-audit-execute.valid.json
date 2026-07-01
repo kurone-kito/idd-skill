@@ -1,0 +1,12 @@
+{
+  "protocolVersion": "1",
+  "decisionAuthority": "instructions",
+  "mode": "dry-run",
+  "roadmapNumber": 1156,
+  "ready": true,
+  "blockers": [],
+  "evidenceBody": "All child issues are closed; the roadmap is ready to be audited closed.",
+  "closed": false,
+  "claimReleased": false,
+  "result": "ready"
+}

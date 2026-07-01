@@ -1,0 +1,20 @@
+{
+  "mode": "apply",
+  "prNumber": 994,
+  "headSha": "0123456789abcdef0123456789abcdef01234567",
+  "status": "applied",
+  "applied": [
+    {
+      "noticeId": 4200000001,
+      "commentId": 4200009001
+    }
+  ],
+  "failed": [],
+  "skipped": [
+    {
+      "noticeId": 4200000002,
+      "botLogin": "chatgpt-codex-connector[bot]",
+      "reason": "already-dispositioned"
+    }
+  ]
+}

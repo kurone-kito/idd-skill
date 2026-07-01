@@ -1,0 +1,17 @@
+{
+  "protocolVersion": "1",
+  "decisionAuthority": "instructions",
+  "mode": "apply",
+  "roadmapNumber": 1156,
+  "ready": false,
+  "blockers": [
+    {
+      "kind": "not-a-kind",
+      "detail": "example blocker with an out-of-enum kind"
+    }
+  ],
+  "evidenceBody": "Roadmap still has an open child.",
+  "closed": false,
+  "claimReleased": false,
+  "result": "blocked"
+}
