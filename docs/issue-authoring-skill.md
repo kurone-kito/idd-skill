@@ -349,6 +349,19 @@ Ask these checks:
    codebase — do not overload a name with a new shape or source.
 2. Flag values that are mutable at runtime — specify a live read at the
    point of use rather than a one-time capture at construction.
+3. When an issue proposes to **delete, replace, or "align to upstream"**
+   code, first check the target for an intentional-divergence signal — a
+   local change made on purpose to differ from upstream. If one is present,
+   require the issue body to acknowledge that divergence and justify
+   overriding it, rather than silently reverting hardening a consumer added
+   deliberately (blind "resync to upstream" resets are a recurring
+   Discover→plan-cycle waste when the divergence turns out to be
+   intentional). The recommended portable signal is a canonical inline
+   code-comment convention (for example a `do-not-revert:` / `idd-divergence:`
+   marker) — it travels with vendored files and needs no repo-wide label
+   taxonomy. An owner/CODEOWNERS marker or a referenced tracking issue may
+   also serve, but the code-comment convention is the recommended default.
+   Do not hard-code any single consumer's divergence-tracking mechanism.
 
 ## Alignment with A4.5 Suitability Gate
 
