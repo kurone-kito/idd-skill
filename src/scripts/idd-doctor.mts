@@ -1174,6 +1174,41 @@ export function classifyBacklog(
   };
 }
 
+/**
+ * Preamble line announcing how many merged PRs the backlog scan will visit.
+ * Pure so tests can assert the exact wording without running the network scan.
+ */
+export function formatCleanupBacklogScanPreamble(total: number): string {
+  const plural = total === 1 ? '' : 's';
+  return `post-merge cleanup backlog: scanning ${total} merged PR${plural} for F4 cleanup evidence…`;
+}
+
+/**
+ * Per-PR progress line for the backlog scan. Pure for the same reason as the
+ * preamble above.
+ */
+export function formatCleanupBacklogScanProgress(
+  scanned: number,
+  total: number,
+  prNumber: number,
+): string {
+  return `  [${scanned}/${total}] merged PR #${prNumber}`;
+}
+
+/**
+ * Emit a backlog-scan progress line. It writes to **stderr** by default so the
+ * `--json` report on stdout stays machine-parseable — a slow network-bound scan
+ * is then distinguishable from a hang without polluting stdout. The `stream`
+ * parameter exists only so tests can capture the output and assert it never
+ * reaches stdout.
+ */
+export function emitCleanupBacklogProgress(
+  line: string,
+  stream: { write: (chunk: string) => unknown } = process.stderr,
+): void {
+  stream.write(`${line}\n`);
+}
+
 function checkPostMergeCleanupBacklog(
   root: string,
   options: {
@@ -1265,13 +1300,29 @@ function checkPostMergeCleanupBacklog(
     return;
   }
 
+  // Stream per-PR progress to stderr so a slow, serial, network-bound scan of a
+  // large merge burst is distinguishable from a hang. Progress must stay on
+  // stderr so the `--json` report on stdout is never polluted.
+  emitCleanupBacklogProgress(
+    formatCleanupBacklogScanPreamble(mergedPrs.length),
+  );
+
   const missing: number[] = [];
   const evidenceFailures: number[] = [];
+  let scanned = 0;
   for (const pr of mergedPrs) {
     const number = (pr as { number?: unknown } | null)?.number;
     if (!Number.isInteger(number)) {
       continue;
     }
+    scanned += 1;
+    emitCleanupBacklogProgress(
+      formatCleanupBacklogScanProgress(
+        scanned,
+        mergedPrs.length,
+        number as number,
+      ),
+    );
     const evidence = runCommand(
       'gh',
       [
@@ -2198,7 +2249,11 @@ results; repositories with > 1000 merged PRs in the window get a
 representative sample. The check makes one gh api .../comments
 call per merged PR returned, which is intentionally simple — for
 very large or rate-limited repos consider raising the warn
-threshold or shortening the window.
+threshold or shortening the window. The scan streams per-PR
+progress to stderr so a slow network-bound run is distinguishable
+from a hang; stdout (including --json) stays free of progress. For
+a local run during a merge burst, pass --cleanup-backlog-window-days 1
+to keep it fast, mirroring what CI already does.
 `);
 }
 

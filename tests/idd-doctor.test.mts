@@ -15,12 +15,15 @@ import {
   containsWorkshopReference,
   DEFAULT_WORKTREE_GUARD_BRANCH_PATTERNS,
   decodeGithubReadmeBase64,
+  emitCleanupBacklogProgress,
   evaluateAutopilotSuitabilityConsistency,
   evaluateMarkerPrefixConsistency,
   extractMarkerPrefixes,
   findMissingWorkshopReferences,
   findMissingWorktreeHardening,
   findPlaceholders,
+  formatCleanupBacklogScanPreamble,
+  formatCleanupBacklogScanProgress,
   isGithubBackLinkHost,
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
@@ -722,6 +725,56 @@ test('computeWindowStartIso returns null for non-positive or non-finite windows'
   assert.equal(computeWindowStartIso(now, 'abc'), null);
   assert.equal(computeWindowStartIso(now, NaN), null);
   assert.equal(computeWindowStartIso(now, Infinity), null);
+});
+
+test('formatCleanupBacklogScan* produce the expected progress wording', () => {
+  assert.equal(
+    formatCleanupBacklogScanPreamble(3),
+    'post-merge cleanup backlog: scanning 3 merged PRs for F4 cleanup evidence…',
+  );
+  // Singular for exactly one PR.
+  assert.equal(
+    formatCleanupBacklogScanPreamble(1),
+    'post-merge cleanup backlog: scanning 1 merged PR for F4 cleanup evidence…',
+  );
+  assert.equal(
+    formatCleanupBacklogScanProgress(2, 10, 42),
+    '  [2/10] merged PR #42',
+  );
+});
+
+test('emitCleanupBacklogProgress writes to stderr, keeping --json stdout clean', () => {
+  // Capture both streams: the progress line must land on stderr and stdout
+  // (which carries the --json report) must stay untouched.
+  const stderrChunks: string[] = [];
+  const stdoutChunks: string[] = [];
+  const originalStderrWrite = process.stderr.write;
+  const originalStdoutWrite = process.stdout.write;
+  process.stderr.write = ((chunk: string) => {
+    stderrChunks.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  process.stdout.write = ((chunk: string) => {
+    stdoutChunks.push(String(chunk));
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    // Default sink is process.stderr.
+    emitCleanupBacklogProgress('  [1/2] merged PR #7');
+  } finally {
+    process.stderr.write = originalStderrWrite;
+    process.stdout.write = originalStdoutWrite;
+  }
+  assert.deepEqual(stderrChunks, ['  [1/2] merged PR #7\n']);
+  assert.deepEqual(stdoutChunks, []);
+});
+
+test('emitCleanupBacklogProgress writes to an injected sink verbatim', () => {
+  const sink: string[] = [];
+  emitCleanupBacklogProgress('preamble', {
+    write: (chunk) => sink.push(chunk),
+  });
+  assert.deepEqual(sink, ['preamble\n']);
 });
 
 test('classifyBacklog warns only when count strictly exceeds the threshold', () => {
