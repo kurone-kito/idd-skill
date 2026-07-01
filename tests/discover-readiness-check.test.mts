@@ -33,6 +33,113 @@ Depends on #56
   assert.deepEqual(extractBlockedByRoadmapMarkers(body), ['parent-roadmap']);
 });
 
+test('extractBlockedByIssueNumbers captures every same-line ref and tolerates list/blockquote prefixes', () => {
+  // Comma-, space-, and "and"-separated multi-ref on one line.
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('Blocked by #100, #200'),
+    [100, 200],
+  );
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('Blocked by #100 #200'),
+    [100, 200],
+  );
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('Blocked by #100 and #200'),
+    [100, 200],
+  );
+  // List-bullet and blockquote prefixes are matched.
+  assert.deepEqual(extractBlockedByIssueNumbers('- Blocked by #55'), [55]);
+  assert.deepEqual(extractBlockedByIssueNumbers('> Blocked by #66'), [66]);
+  // Mid-sentence prose is not a dependency declaration.
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('this is not blocked by #5'),
+    [],
+  );
+  // Inline-code markers stay ignored (backtick prefix, #1121 boundary).
+  assert.deepEqual(extractBlockedByIssueNumbers('`Blocked by #77`'), []);
+  // The contiguous dependency list is bounded: trailing prose and cross-repo
+  // mentions are excluded rather than mis-read as local blockers.
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('Blocked by #10 (see other/repo#20)'),
+    [10],
+  );
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('Blocked by #403; similar to #402'),
+    [403],
+  );
+});
+
+test('extractDependencyIssueNumbers captures every same-line Depends on ref and tolerates prefixes', () => {
+  assert.deepEqual(
+    extractDependencyIssueNumbers('Depends on #100, #200'),
+    [100, 200],
+  );
+  assert.deepEqual(
+    extractDependencyIssueNumbers('Depends on #100 #200'),
+    [100, 200],
+  );
+  assert.deepEqual(
+    extractDependencyIssueNumbers('Depends on #100 and #200'),
+    [100, 200],
+  );
+  assert.deepEqual(extractDependencyIssueNumbers('- Depends on #55'), [55]);
+  assert.deepEqual(extractDependencyIssueNumbers('> Depends on #66'), [66]);
+  assert.deepEqual(
+    extractDependencyIssueNumbers('this does not depend on #5'),
+    [],
+  );
+  assert.deepEqual(extractDependencyIssueNumbers('`Depends on #77`'), []);
+  // Bounded list: prose and cross-repo mentions are excluded.
+  assert.deepEqual(
+    extractDependencyIssueNumbers('Depends on #403; similar to #402'),
+    [403],
+  );
+  assert.deepEqual(
+    extractDependencyIssueNumbers('Depends on #10 (see other/repo#20)'),
+    [10],
+  );
+  // The `- [ ] #N` task-list branch keeps working alongside the relaxed
+  // `Depends on` bullet prefix without double counting.
+  assert.deepEqual(
+    extractDependencyIssueNumbers('- Depends on #55, #56\n- [ ] #78'),
+    [55, 56, 78],
+  );
+});
+
+test('dependency parsers ignore code-fenced examples and stay on one line', () => {
+  // A fenced example quoting the relaxed bullet/blockquote syntax is masked,
+  // so it is not read as a real blocker (the leading fence uses ~ to keep this
+  // template literal free of nested backtick fences).
+  const fencedBody = [
+    'Intro text',
+    '~~~markdown',
+    '- Blocked by #55',
+    '> Depends on #66',
+    '- [ ] #78',
+    '~~~',
+    'Outro text',
+  ].join('\n');
+  assert.deepEqual(extractBlockedByIssueNumbers(fencedBody), []);
+  assert.deepEqual(extractDependencyIssueNumbers(fencedBody), []);
+
+  // The keyword-to-ref gap must not span a newline: a bullet keyword line with
+  // a bare `#N` on the *next* line is not a same-line dependency declaration.
+  assert.deepEqual(extractBlockedByIssueNumbers('- Blocked by\n#123'), []);
+  assert.deepEqual(extractDependencyIssueNumbers('> Depends on\n#123'), []);
+
+  // A real out-of-fence dependency line alongside a fenced example still
+  // resolves to just the real reference.
+  const mixedBody = ['Blocked by #12', '~~~', 'Blocked by #999', '~~~'].join(
+    '\n',
+  );
+  assert.deepEqual(extractBlockedByIssueNumbers(mixedBody), [12]);
+
+  // A 4-space-indented `~~~` is indented code, not a fence opener (CommonMark
+  // §4.5), so it must not swallow a real following blocker — a fail-open miss.
+  const indentedFakeFence = ['    ~~~', 'Blocked by #123'].join('\n');
+  assert.deepEqual(extractBlockedByIssueNumbers(indentedFakeFence), [123]);
+});
+
 test('extractBlockedByRoadmapMarkers honors a configured marker prefix', () => {
   const body = `
 <!-- idd-skill-blocked-by: default-prefixed -->

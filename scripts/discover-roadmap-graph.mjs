@@ -19,6 +19,7 @@ import {
   evaluateDiscoverReadiness,
 } from './discover-readiness-check.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
+import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import { parseIsoDurationToMs } from './policy-helpers.mjs';
 import {
   isStaleAt,
@@ -1107,59 +1108,6 @@ function buildCommentLoader(owner, repo) {
  */
 export function parseClaimStaleAgeMs(value) {
   return parseIsoDurationToMs(String(value ?? '').trim());
-}
-/**
- * Strip Markdown code regions (fenced blocks and inline code spans) from a body
- * before scanning it for a roadmap-id marker. A genuine roadmap marker is a raw
- * HTML comment GitHub renders invisibly, never inside a code span or fence, so
- * an example marker an execution-leaf issue merely *quotes* in code (e.g. an
- * issue about the marker system) must not be read as roadmap identity. The
- * marker is itself an HTML comment, so HTML comments are deliberately NOT
- * stripped here — only code regions are. Masked regions keep their line count
- * and surrounding text so a real marker elsewhere in the body still matches.
- */
-function stripMarkdownCodeRegions(text) {
-  // Fenced blocks (``` or ~~~), tracking the fence char + length so a longer
-  // opening fence is not closed by a shorter inner fence (CommonMark §4.5).
-  const lines = text.split(/\r?\n/);
-  const out = [];
-  let fence = null;
-  for (const line of lines) {
-    const openMatch = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
-    if (openMatch) {
-      const marker = openMatch[1];
-      const info = openMatch[2];
-      const fenceChar = marker[0];
-      if (fence === null) {
-        // CommonMark §4.5: a backtick-fence opener's info string may not
-        // contain a backtick (that would be ambiguous with a close or inline
-        // code), so such a line is not a fence opener and stays content.
-        if (fenceChar !== '`' || !info.includes('`')) {
-          fence = { char: fenceChar, length: marker.length };
-          out.push('');
-          continue;
-        }
-      } else if (
-        fenceChar === fence.char &&
-        marker.length >= fence.length &&
-        /^\s*$/.test(info)
-      ) {
-        fence = null;
-        out.push('');
-        continue;
-      }
-    }
-    out.push(fence === null ? line : '');
-  }
-  // Inline code spans (`...`, ``...``): mask the inner content so a quoted
-  // marker no longer matches, keeping the backticks and surrounding text.
-  return out
-    .join('\n')
-    .replace(
-      /(`+)((?:(?!\1)[\s\S])+?)\1/g,
-      (_match, ticks, inner) =>
-        `${ticks}${inner.replace(/[^\r\n]/g, ' ')}${ticks}`,
-    );
 }
 export function extractRoadmapMarkerId(
   body,

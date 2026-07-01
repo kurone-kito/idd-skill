@@ -17,9 +17,23 @@ import {
   parseAutopilotSuitability,
 } from './autopilot-suitability.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import { escapeRegex } from './marker-regex.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
+// Leading-anchor source shared by the `Blocked by` / `Depends on` line parsers.
+// It tolerates optional indentation, nested blockquote (`>`) markers, and a
+// single list bullet (`-`/`*`/`+`) while staying line-anchored, so a dependency
+// written as `- Blocked by #55` or `> Depends on #66` is still recognized. The
+// extractors run `stripMarkdownCodeRegions` over the body first, so a
+// dependency line merely quoted inside inline code or a fenced block is already
+// masked out — treating code-quoted markers as false positives, consistent with
+// the #1121 repo behavior; excluding backticks from this prefix is a second
+// line of defense for the inline-code case. This const is declared before the
+// `isMainModule` CLI block on purpose so it is initialized when the CLI path
+// runs `extractBlockedByIssueNumbers` (a const declared after that block would
+// be in the temporal dead zone).
+const DEPENDENCY_LINE_PREFIX = String.raw`^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+)?`;
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
 });
@@ -313,10 +327,64 @@ export function parseSwarmFloorArg(value) {
   }
   return floor;
 }
+/**
+ * Collect the `#N` references declared on a dependency-keyword line.
+ *
+ * A line is a dependency declaration when, after the shared
+ * `DEPENDENCY_LINE_PREFIX` (indentation, blockquote, and/or a list bullet), it
+ * begins with `keyword` followed by horizontal whitespace and at least one
+ * `#N`. From there `consumeDependencyRefList` collects the contiguous
+ * dependency-ref list, so `Blocked by #A, #B, #C` (comma- or space-separated)
+ * yields `[A, B, C]`. The keyword-to-ref gap is `[ \t]+` (not `\s+`) so it
+ * cannot span a newline and swallow a bare `#N` on the following line, and the
+ * `.*$` capture plus the `m` flag (no `s` flag) keeps the match on the single
+ * keyword line. Callers pass a code-region-stripped body, so a quoted example
+ * line is already masked (see `DEPENDENCY_LINE_PREFIX`).
+ */
+function extractKeywordLineRefs(body, keyword) {
+  const linePattern = new RegExp(
+    `${DEPENDENCY_LINE_PREFIX}${escapeRegex(keyword)}[ \\t]+(#\\d+.*)$`,
+    'gim',
+  );
+  const numbers = [];
+  for (const lineMatch of body.matchAll(linePattern)) {
+    numbers.push(...consumeDependencyRefList(lineMatch[1]));
+  }
+  return numbers;
+}
+/**
+ * Consume the contiguous dependency-ref list at the start of `segment`: bare
+ * local `#N` entries separated by commas, "and", and/or whitespace. Parsing
+ * stops at the first token that is neither a bare local ref nor such a
+ * separator, so trailing prose (`; similar to #402`) and cross-repo mentions
+ * (`(see other/repo#20)`) are excluded instead of being mis-read as local
+ * blockers. This mirrors the separator-bounded reference parsing in
+ * `discover-roadmap-graph.mts`, extended to also accept a plain-whitespace
+ * separator so the space-separated multi-ref form is captured too.
+ */
+function consumeDependencyRefList(segment) {
+  const numbers = [];
+  let remaining = segment;
+  while (remaining) {
+    const refMatch = remaining.match(/^#(\d+)\b/);
+    if (!refMatch) {
+      break;
+    }
+    numbers.push(Number.parseInt(refMatch[1], 10));
+    remaining = remaining.slice(refMatch[0].length);
+    const separatorMatch = remaining.match(
+      /^(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s+)/i,
+    );
+    if (!separatorMatch) {
+      break;
+    }
+    remaining = remaining.slice(separatorMatch[0].length);
+  }
+  return numbers;
+}
 export function extractBlockedByIssueNumbers(body) {
-  const matches = body.matchAll(/^\s*Blocked by\s+#(\d+)\b/gim);
   return dedupeNumbers(
-    [...matches].map((match) => Number.parseInt(match[1], 10)),
+    extractKeywordLineRefs(stripMarkdownCodeRegions(body), 'Blocked by'),
   );
 }
 export function extractBlockedByRoadmapMarkers(
@@ -336,14 +404,13 @@ export function extractBlockedByRoadmapMarkers(
   return [...new Set([...matches].map((match) => match[1]))];
 }
 export function extractDependencyIssueNumbers(body) {
-  const explicitDependencies = [
-    ...body.matchAll(/^\s*Depends on\s+#(\d+)\b/gim),
-  ];
+  const stripped = stripMarkdownCodeRegions(body);
+  const explicitDependencies = extractKeywordLineRefs(stripped, 'Depends on');
   const taskListDependencies = [
-    ...body.matchAll(/^\s*-\s*\[(?: |x)\]\s+#(\d+)\b/gim),
+    ...stripped.matchAll(/^\s*-\s*\[(?: |x)\]\s+#(\d+)\b/gim),
   ];
   return dedupeNumbers([
-    ...explicitDependencies.map((match) => Number.parseInt(match[1], 10)),
+    ...explicitDependencies,
     ...taskListDependencies.map((match) => Number.parseInt(match[1], 10)),
   ]);
 }
