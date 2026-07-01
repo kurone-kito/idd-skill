@@ -2252,9 +2252,11 @@ export function isAdvisoryNonReviewNotice(body: unknown): boolean {
 
 // A trusted IDD disposition of a non-review notice: the canonical
 // `**Rejected** — {bot} did not review HEAD {sha} ({reason}); this is not a
-// completed review` reply. Requires the `**Rejected**` prefix (a notice is
-// always rejected, never accepted) and the `did not review HEAD` phrase that
-// names the notice, so an ordinary rejection of reviewer feedback is excluded.
+// completed review` reply. Requires the `**Rejected**` prefix (via
+// `DISPOSITION_REJECTED_PREFIX_RE`, so the bounded trailing-punctuation variants
+// like `**Rejected.**` also count; a notice is always rejected, never accepted)
+// and the `did not review HEAD` phrase that names the notice, so an ordinary
+// rejection of reviewer feedback is excluded.
 export function isNonReviewNoticeDisposition(comment: {
   body?: string | null;
 }): boolean {
@@ -2287,11 +2289,13 @@ export function isReviewSummaryComment(body: unknown): boolean {
 
 // A trusted IDD disposition of a CodeRabbit summary walkthrough: the canonical
 // `**Accepted** — {bot} summary walkthrough …` reply the helper posts. Requires
-// the `**Accepted**` prefix (a summary is a completed review, so it is accepted,
-// never rejected) AND the `summary walkthrough` phrase, so an ordinary acceptance
-// of reviewer feedback is excluded. Tightly matched to `buildSummaryDispositionBody`
-// so a loose acceptance can never be miscredited (which would under-post and
-// strand the gate).
+// the `**Accepted**` prefix (via `DISPOSITION_ACCEPTED_PREFIX_RE`, so the bounded
+// trailing-punctuation variants like `**Accepted.**` also count; a summary is a
+// completed review, so it is accepted, never rejected) AND the
+// `summary walkthrough` phrase, so an ordinary acceptance of reviewer feedback is
+// excluded. Tightly matched to `buildSummaryDispositionBody` so a loose
+// acceptance can never be miscredited (which would under-post and strand the
+// gate).
 export function isReviewSummaryDisposition(comment: {
   body?: string | null;
 }): boolean {
