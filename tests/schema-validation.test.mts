@@ -1,17 +1,30 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   parseClaimComment,
   parseForcedHandoffComment,
 } from '../src/scripts/protocol-helpers.mts';
 import {
   checkSchemaKeywords,
+  discoverSchemaCases,
   loadJson,
   validate,
   validateFixture,
   validatePhaseGraph,
 } from '../src/scripts/validate-schemas.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
 // Structural views of loaded JSON fixtures. Tests mutate or spread the
 // parsed documents to probe schema acceptance, so these casts stay
@@ -593,6 +606,89 @@ test('.github/idd/config.json validates against policy schema', () => {
     true,
   );
   assert.ok(ok, errors.join('\n'));
+});
+
+// ---------------------------------------------------------------------------
+// Auto-discovered schema/fixture coverage — no schema may be silently skipped
+// ---------------------------------------------------------------------------
+
+test('discoverSchemaCases covers every schemas/*.schema.json with a valid+invalid pair', () => {
+  const { cases, missing } = discoverSchemaCases(REPO_ROOT);
+  assert.deepEqual(
+    missing,
+    [],
+    `every schema needs valid+invalid fixtures; missing: ${JSON.stringify(missing)}`,
+  );
+  const schemaFiles = readdirSync(new URL('../schemas/', import.meta.url))
+    .filter((file) => file.endsWith('.schema.json'))
+    .sort();
+  // Every schema is covered by both a valid and an invalid case, so a newly
+  // added schema without fixtures can no longer slip past the CLI runner.
+  for (const file of schemaFiles) {
+    const forSchema = cases.filter((c) => c.schemaPath === `schemas/${file}`);
+    assert.ok(
+      forSchema.some((c) => c.expectValid),
+      `${file} is missing an expect-valid case`,
+    );
+    assert.ok(
+      forSchema.some((c) => !c.expectValid),
+      `${file} is missing an expect-invalid case`,
+    );
+  }
+});
+
+test('every auto-discovered schema case validates as expected', () => {
+  const { cases } = discoverSchemaCases(REPO_ROOT);
+  for (const { schemaPath, fixturePath, expectValid } of cases) {
+    const { ok, errors } = validateFixture(
+      schemaPath,
+      fixturePath,
+      expectValid,
+    );
+    assert.ok(
+      ok,
+      `${fixturePath} (${expectValid ? 'valid' : 'invalid'}): ${errors.join('; ')}`,
+    );
+  }
+});
+
+test('discoverSchemaCases reports a schema that has no fixtures', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-schema-discovery-'));
+  try {
+    mkdirSync(join(dir, 'schemas'));
+    writeFileSync(
+      join(dir, 'schemas', 'example.schema.json'),
+      '{"type":"object"}',
+    );
+    const { cases, missing } = discoverSchemaCases(dir);
+    assert.equal(cases.length, 0);
+    assert.deepEqual(missing, [
+      {
+        schema: 'schemas/example.schema.json',
+        missingFixtures: [
+          'fixtures/schemas/example.valid.json',
+          'fixtures/schemas/example.invalid.json',
+        ],
+      },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkSchemaKeywords accepts supported format: uri', () => {
+  assert.deepEqual(checkSchemaKeywords({ type: 'string', format: 'uri' }), []);
+});
+
+test('validate accepts a ["string","null"] union type and rejects other types', () => {
+  const schema = { type: ['string', 'null'] };
+  assert.deepEqual(validate(null, schema), []);
+  assert.deepEqual(validate('activity', schema), []);
+  const errors = validate(12345, schema);
+  assert.ok(
+    errors.some((e) => e.includes('expected type "string|null"')),
+    errors.join('\n'),
+  );
 });
 
 test('policy schema accepts foundation policy namespaces', () => {

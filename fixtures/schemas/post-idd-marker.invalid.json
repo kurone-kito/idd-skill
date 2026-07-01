@@ -1,0 +1,6 @@
+{
+  "mode": "apply",
+  "type": "heartbeat",
+  "target": "issue",
+  "number": 1146
+}

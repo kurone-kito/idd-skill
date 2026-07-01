@@ -1,0 +1,9 @@
+{
+  "mode": "apply",
+  "type": "claim",
+  "target": "issue",
+  "number": 1146,
+  "body": "<!-- claimed-by: agent-abc claim-123 supersedes: none 2026-07-01T17:11:51Z branch: issue/1146-example -->\n\n_agent: issue claim — IDD automation marker. Do not edit._",
+  "commentId": 4858165950,
+  "url": "https://github.com/kurone-kito/idd-skill/issues/1146#issuecomment-4858165950"
+}

@@ -1,0 +1,30 @@
+{
+  "repository": {
+    "owner": "kurone-kito",
+    "repo": "idd-skill"
+  },
+  "pr": {
+    "number": 994,
+    "title": "Example stalled-session PR",
+    "head_sha": "0123456789abcdef0123456789abcdef01234567",
+    "html_url": "https://github.com/kurone-kito/idd-skill/pull/994"
+  },
+  "policy": {
+    "quiet_window_ms": 3600000,
+    "claim_created_at": "2026-05-11T16:00:00Z"
+  },
+  "quiet_window_met": true,
+  "quiet_window_ms": 3600000,
+  "window_start": "2026-05-11T16:00:00Z",
+  "now": "2026-05-11T17:00:00Z",
+  "latest_activity": null,
+  "latest_activity_type": null,
+  "reason": "quiet window satisfied; no blocking activity in window",
+  "evidence": {
+    "activity_count_in_window": 0,
+    "blocking_activities": [],
+    "has_heartbeat_in_window": false,
+    "has_ci_running": false,
+    "has_branch_tip_movement": false
+  }
+}
