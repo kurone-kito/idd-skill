@@ -19,6 +19,7 @@ import {
   parseAutopilotSuitability,
 } from './autopilot-suitability.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
+import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import { escapeRegex } from './marker-regex.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
@@ -26,13 +27,15 @@ const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // Leading-anchor source shared by the `Blocked by` / `Depends on` line parsers.
 // It tolerates optional indentation, nested blockquote (`>`) markers, and a
 // single list bullet (`-`/`*`/`+`) while staying line-anchored, so a dependency
-// written as `- Blocked by #55` or `> Depends on #66` is still recognized. It
-// deliberately excludes backticks: an inline-code marker such as
-// `` `Blocked by #77` `` therefore stays unmatched, keeping code-quoted markers
-// treated as false positives — consistent with the #1121 repo behavior. This
-// const is declared before the `isMainModule` CLI block on purpose so it is
-// initialized when the CLI path runs `extractBlockedByIssueNumbers` (a const
-// declared after that block would be in the temporal dead zone).
+// written as `- Blocked by #55` or `> Depends on #66` is still recognized. The
+// extractors run `stripMarkdownCodeRegions` over the body first, so a
+// dependency line merely quoted inside inline code or a fenced block is already
+// masked out — treating code-quoted markers as false positives, consistent with
+// the #1121 repo behavior; excluding backticks from this prefix is a second
+// line of defense for the inline-code case. This const is declared before the
+// `isMainModule` CLI block on purpose so it is initialized when the CLI path
+// runs `extractBlockedByIssueNumbers` (a const declared after that block would
+// be in the temporal dead zone).
 const DEPENDENCY_LINE_PREFIX = String.raw`^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+)?`;
 
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
@@ -395,16 +398,18 @@ export async function evaluateDiscoverReadiness(
  *
  * A line is a dependency declaration when, after the shared
  * `DEPENDENCY_LINE_PREFIX` (indentation, blockquote, and/or a list bullet), it
- * begins with `keyword` immediately followed by at least one `#N`. From there
- * `consumeDependencyRefList` collects the contiguous dependency-ref list, so
- * `Blocked by #A, #B, #C` (comma- or space-separated) yields `[A, B, C]`. The
- * `m` flag (no `s` flag) keeps the match on the single keyword line, and the
- * backtick-excluding prefix keeps inline-code markers unmatched (see
- * `DEPENDENCY_LINE_PREFIX`).
+ * begins with `keyword` followed by horizontal whitespace and at least one
+ * `#N`. From there `consumeDependencyRefList` collects the contiguous
+ * dependency-ref list, so `Blocked by #A, #B, #C` (comma- or space-separated)
+ * yields `[A, B, C]`. The keyword-to-ref gap is `[ \t]+` (not `\s+`) so it
+ * cannot span a newline and swallow a bare `#N` on the following line, and the
+ * `.*$` capture plus the `m` flag (no `s` flag) keeps the match on the single
+ * keyword line. Callers pass a code-region-stripped body, so a quoted example
+ * line is already masked (see `DEPENDENCY_LINE_PREFIX`).
  */
 function extractKeywordLineRefs(body: string, keyword: string): number[] {
   const linePattern = new RegExp(
-    `${DEPENDENCY_LINE_PREFIX}${escapeRegex(keyword)}\\s+(#\\d+.*)$`,
+    `${DEPENDENCY_LINE_PREFIX}${escapeRegex(keyword)}[ \\t]+(#\\d+.*)$`,
     'gim',
   );
   const numbers: number[] = [];
@@ -446,7 +451,9 @@ function consumeDependencyRefList(segment: string): number[] {
 }
 
 export function extractBlockedByIssueNumbers(body: string): number[] {
-  return dedupeNumbers(extractKeywordLineRefs(body, 'Blocked by'));
+  return dedupeNumbers(
+    extractKeywordLineRefs(stripMarkdownCodeRegions(body), 'Blocked by'),
+  );
 }
 
 export function extractBlockedByRoadmapMarkers(
@@ -467,9 +474,10 @@ export function extractBlockedByRoadmapMarkers(
 }
 
 export function extractDependencyIssueNumbers(body: string): number[] {
-  const explicitDependencies = extractKeywordLineRefs(body, 'Depends on');
+  const stripped = stripMarkdownCodeRegions(body);
+  const explicitDependencies = extractKeywordLineRefs(stripped, 'Depends on');
   const taskListDependencies = [
-    ...body.matchAll(/^\s*-\s*\[(?: |x)\]\s+#(\d+)\b/gim),
+    ...stripped.matchAll(/^\s*-\s*\[(?: |x)\]\s+#(\d+)\b/gim),
   ];
   return dedupeNumbers([
     ...explicitDependencies,

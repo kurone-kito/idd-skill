@@ -104,6 +104,35 @@ test('extractDependencyIssueNumbers captures every same-line Depends on ref and 
   );
 });
 
+test('dependency parsers ignore code-fenced examples and stay on one line', () => {
+  // A fenced example quoting the relaxed bullet/blockquote syntax is masked,
+  // so it is not read as a real blocker (the leading fence uses ~ to keep this
+  // template literal free of nested backtick fences).
+  const fencedBody = [
+    'Intro text',
+    '~~~markdown',
+    '- Blocked by #55',
+    '> Depends on #66',
+    '- [ ] #78',
+    '~~~',
+    'Outro text',
+  ].join('\n');
+  assert.deepEqual(extractBlockedByIssueNumbers(fencedBody), []);
+  assert.deepEqual(extractDependencyIssueNumbers(fencedBody), []);
+
+  // The keyword-to-ref gap must not span a newline: a bullet keyword line with
+  // a bare `#N` on the *next* line is not a same-line dependency declaration.
+  assert.deepEqual(extractBlockedByIssueNumbers('- Blocked by\n#123'), []);
+  assert.deepEqual(extractDependencyIssueNumbers('> Depends on\n#123'), []);
+
+  // A real out-of-fence dependency line alongside a fenced example still
+  // resolves to just the real reference.
+  const mixedBody = ['Blocked by #12', '~~~', 'Blocked by #999', '~~~'].join(
+    '\n',
+  );
+  assert.deepEqual(extractBlockedByIssueNumbers(mixedBody), [12]);
+});
+
 test('extractBlockedByRoadmapMarkers honors a configured marker prefix', () => {
   const body = `
 <!-- idd-skill-blocked-by: default-prefixed -->
