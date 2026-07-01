@@ -23,6 +23,18 @@ import { escapeRegex } from './marker-regex.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 
+// Leading-anchor source shared by the `Blocked by` / `Depends on` line parsers.
+// It tolerates optional indentation, nested blockquote (`>`) markers, and a
+// single list bullet (`-`/`*`/`+`) while staying line-anchored, so a dependency
+// written as `- Blocked by #55` or `> Depends on #66` is still recognized. It
+// deliberately excludes backticks: an inline-code marker such as
+// `` `Blocked by #77` `` therefore stays unmatched, keeping code-quoted markers
+// treated as false positives — consistent with the #1121 repo behavior. This
+// const is declared before the `isMainModule` CLI block on purpose so it is
+// initialized when the CLI path runs `extractBlockedByIssueNumbers` (a const
+// declared after that block would be in the temporal dead zone).
+const DEPENDENCY_LINE_PREFIX = String.raw`^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+)?`;
+
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
 });
@@ -378,11 +390,34 @@ export async function evaluateDiscoverReadiness(
   };
 }
 
-export function extractBlockedByIssueNumbers(body: string): number[] {
-  const matches = body.matchAll(/^\s*Blocked by\s+#(\d+)\b/gim);
-  return dedupeNumbers(
-    [...matches].map((match) => Number.parseInt(match[1], 10)),
+/**
+ * Collect every `#N` reference declared on a dependency-keyword line.
+ *
+ * A line is a dependency declaration when, after the shared
+ * `DEPENDENCY_LINE_PREFIX` (indentation, blockquote, and/or a list bullet), it
+ * begins with `keyword` immediately followed by at least one `#N`. Once such a
+ * line is found, every `#(\d+)` on that same line is captured, so
+ * `Blocked by #A, #B, #C` (comma- or space-separated) yields `[A, B, C]`. The
+ * scan is bounded to the single matched line (`.*$` with the `m` flag, no `s`
+ * flag), so refs never bleed across lines, and the backtick-excluding prefix
+ * keeps inline-code markers unmatched (see `DEPENDENCY_LINE_PREFIX`).
+ */
+function extractKeywordLineRefs(body: string, keyword: string): number[] {
+  const linePattern = new RegExp(
+    `${DEPENDENCY_LINE_PREFIX}${escapeRegex(keyword)}\\s+#\\d+.*$`,
+    'gim',
   );
+  const numbers: number[] = [];
+  for (const lineMatch of body.matchAll(linePattern)) {
+    for (const refMatch of lineMatch[0].matchAll(/#(\d+)\b/g)) {
+      numbers.push(Number.parseInt(refMatch[1], 10));
+    }
+  }
+  return numbers;
+}
+
+export function extractBlockedByIssueNumbers(body: string): number[] {
+  return dedupeNumbers(extractKeywordLineRefs(body, 'Blocked by'));
 }
 
 export function extractBlockedByRoadmapMarkers(
@@ -403,14 +438,12 @@ export function extractBlockedByRoadmapMarkers(
 }
 
 export function extractDependencyIssueNumbers(body: string): number[] {
-  const explicitDependencies = [
-    ...body.matchAll(/^\s*Depends on\s+#(\d+)\b/gim),
-  ];
+  const explicitDependencies = extractKeywordLineRefs(body, 'Depends on');
   const taskListDependencies = [
     ...body.matchAll(/^\s*-\s*\[(?: |x)\]\s+#(\d+)\b/gim),
   ];
   return dedupeNumbers([
-    ...explicitDependencies.map((match) => Number.parseInt(match[1], 10)),
+    ...explicitDependencies,
     ...taskListDependencies.map((match) => Number.parseInt(match[1], 10)),
   ]);
 }

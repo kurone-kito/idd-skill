@@ -31,6 +31,52 @@ Depends on #56
   assert.deepEqual(extractBlockedByRoadmapMarkers(body), ['parent-roadmap']);
 });
 
+test('extractBlockedByIssueNumbers captures every same-line ref and tolerates list/blockquote prefixes', () => {
+  // Comma- and space-separated multi-ref on one line.
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('Blocked by #100, #200'),
+    [100, 200],
+  );
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('Blocked by #100 #200'),
+    [100, 200],
+  );
+  // List-bullet and blockquote prefixes are matched.
+  assert.deepEqual(extractBlockedByIssueNumbers('- Blocked by #55'), [55]);
+  assert.deepEqual(extractBlockedByIssueNumbers('> Blocked by #66'), [66]);
+  // Mid-sentence prose is not a dependency declaration.
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('this is not blocked by #5'),
+    [],
+  );
+  // Inline-code markers stay ignored (backtick prefix, #1121 boundary).
+  assert.deepEqual(extractBlockedByIssueNumbers('`Blocked by #77`'), []);
+});
+
+test('extractDependencyIssueNumbers captures every same-line Depends on ref and tolerates prefixes', () => {
+  assert.deepEqual(
+    extractDependencyIssueNumbers('Depends on #100, #200'),
+    [100, 200],
+  );
+  assert.deepEqual(
+    extractDependencyIssueNumbers('Depends on #100 #200'),
+    [100, 200],
+  );
+  assert.deepEqual(extractDependencyIssueNumbers('- Depends on #55'), [55]);
+  assert.deepEqual(extractDependencyIssueNumbers('> Depends on #66'), [66]);
+  assert.deepEqual(
+    extractDependencyIssueNumbers('this does not depend on #5'),
+    [],
+  );
+  assert.deepEqual(extractDependencyIssueNumbers('`Depends on #77`'), []);
+  // The `- [ ] #N` task-list branch keeps working alongside the relaxed
+  // `Depends on` bullet prefix without double counting.
+  assert.deepEqual(
+    extractDependencyIssueNumbers('- Depends on #55, #56\n- [ ] #78'),
+    [55, 56, 78],
+  );
+});
+
 test('extractBlockedByRoadmapMarkers honors a configured marker prefix', () => {
   const body = `
 <!-- idd-skill-blocked-by: default-prefixed -->
