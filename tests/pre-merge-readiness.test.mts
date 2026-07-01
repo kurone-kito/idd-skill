@@ -28,6 +28,7 @@ import {
   summarizeRegularCommentsForGate,
   summarizeRequiredChecks,
   summarizeReviewerStates,
+  summarizeReviewThreadsForGate,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
@@ -4110,4 +4111,182 @@ test('buildPreMergeReadinessSummary embeds a strict ready/blockers rollup', () =
   const readyBlockers = ready.blockers as { gate: string }[];
   assert.deepEqual(ready.blockers, computePreMergeReadinessBlockers(ready));
   assert.equal(ready.ready, readyBlockers.length === 0);
+});
+
+test('a trusted machine-disposition clears the notice/summary in both merge gates without promoting the author to a global IDD agent (#1182)', () => {
+  const opts = {
+    trustedMarkerLogins: ['kurone-kito'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+    prAuthorLogin: 'pr-author',
+  };
+  // Distinct, REAL advisory stickies — a CodeRabbit summary walkthrough and a
+  // CodeRabbit rate-limit non-review notice — and their matching machine
+  // dispositions.
+  const summarySticky = (id: number, at = '2026-07-01T11:00:00Z') => ({
+    id,
+    createdAt: at,
+    body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n\n## Walkthrough',
+    author: { login: 'coderabbitai[bot]' },
+  });
+  const noticeSticky = (id: number, at = '2026-07-01T11:00:00Z') => ({
+    id,
+    createdAt: at,
+    body: '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->',
+    author: { login: 'coderabbitai[bot]' },
+  });
+  const summaryDisp = (author: string, at = '2026-07-01T12:00:00Z') => ({
+    id: 10,
+    createdAt: at,
+    body: '**Accepted** — coderabbitai[bot] summary walkthrough; no action required',
+    author: { login: author },
+  });
+  const noticeDisp = (author: string, at = '2026-07-01T12:00:00Z') => ({
+    id: 11,
+    createdAt: at,
+    body: '**Rejected** — coderabbitai[bot] did not review HEAD abc (rate limited); this is not a completed review',
+    author: { login: author },
+  });
+  const human = (id: number, body: string, at: string) => ({
+    id,
+    createdAt: at,
+    body,
+    author: { login: 'some-human' },
+  });
+  const proceeds = (comments: unknown[]) =>
+    summarizeDispositionEvidenceForGate(
+      { comments: comments as never, threads: [] },
+      opts,
+    ).route === 'proceed';
+  const unreplied = (comments: unknown[]) =>
+    summarizeRegularCommentsForGate(comments as never, opts).count;
+
+  // Core #1182: a trusted-marker actor's machine disposition — notice OR summary
+  // — is honored per item in BOTH gates even without iddAgentLogins. Each is
+  // matched to the sticky OF THE SAME TYPE.
+  assert.equal(proceeds([summarySticky(1), summaryDisp('kurone-kito')]), true);
+  assert.equal(unreplied([summarySticky(1), summaryDisp('kurone-kito')]), 0);
+  assert.equal(proceeds([noticeSticky(1), noticeDisp('kurone-kito')]), true);
+  assert.equal(unreplied([noticeSticky(1), noticeDisp('kurone-kito')]), 0);
+
+  // Fail-open guard (the disposition never joins the generic pool): a trusted
+  // disposition whose sticky is absent must NOT clear an unrelated human comment.
+  const olderHuman = human(
+    2,
+    'Please fix this before merge.',
+    '2026-07-01T10:00:00Z',
+  );
+  assert.equal(proceeds([olderHuman, summaryDisp('kurone-kito')]), false);
+  assert.equal(proceeds([olderHuman, noticeDisp('kurone-kito')]), false);
+
+  // Type-matched: a notice disposition must NOT clear a summary sticky, and a
+  // summary disposition must NOT clear a notice sticky (the paths are disjoint).
+  assert.equal(proceeds([summarySticky(1), noticeDisp('kurone-kito')]), false);
+  assert.equal(unreplied([summarySticky(1), noticeDisp('kurone-kito')]), 1);
+  assert.equal(proceeds([noticeSticky(1), summaryDisp('kurone-kito')]), false);
+
+  // 1:1 consumption: two summary stickies and one disposition leave one blocking.
+  const twoSummaries = [
+    summarySticky(1, '2026-07-01T11:00:00Z'),
+    summarySticky(2, '2026-07-01T11:30:00Z'),
+    summaryDisp('kurone-kito'),
+  ];
+  assert.equal(proceeds(twoSummaries), false);
+  assert.equal(unreplied(twoSummaries), 1);
+
+  // #1122 stale-summary guard: a summary sticky EDITED after the disposition
+  // (its `updatedAt` post-dates the `**Accepted**`) is not cleared by that stale
+  // acceptance — a finding folded into the newer summary body must still block.
+  const editedSummary = {
+    id: 20,
+    createdAt: '2026-07-01T11:00:00Z',
+    updatedAt: '2026-07-01T13:00:00Z',
+    body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n\n## Walkthrough (revised)',
+    author: { login: 'coderabbitai[bot]' },
+  };
+  const staleAccepted = [
+    editedSummary,
+    summaryDisp('kurone-kito', '2026-07-01T12:00:00Z'),
+  ];
+  assert.equal(proceeds(staleAccepted), false);
+  assert.equal(unreplied(staleAccepted), 1);
+  // A non-review notice, by contrast, carries its disposition forward across a
+  // later re-post (the #1018 carry-forward is intentionally time-agnostic).
+  const repostedNotice = {
+    id: 21,
+    createdAt: '2026-07-01T11:00:00Z',
+    updatedAt: '2026-07-01T13:00:00Z',
+    body: '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->',
+    author: { login: 'coderabbitai[bot]' },
+  };
+  assert.equal(
+    proceeds([
+      repostedNotice,
+      noticeDisp('kurone-kito', '2026-07-01T12:00:00Z'),
+    ]),
+    true,
+  );
+
+  // A cleared sticky does not clear an unrelated still-unaddressed human comment.
+  const summaryPlusHuman = [
+    human(3, 'Rename this variable.', '2026-07-01T10:00:00Z'),
+    summarySticky(1),
+    summaryDisp('kurone-kito'),
+  ];
+  assert.equal(proceeds(summaryPlusHuman), false);
+  assert.equal(
+    summarizeDispositionEvidenceForGate(
+      { comments: summaryPlusHuman as never, threads: [] },
+      opts,
+    ).blockingCount,
+    1,
+  );
+
+  // Scoped, NOT a global identity: the disposition author is never promoted into
+  // iddAgentLogins (deriveIddAgentLogins derives only operational-marker
+  // authors), so the review-threads gate still treats that same actor's
+  // unresolved feedback as actionable-blocking — a global promotion would fail
+  // that merge gate open.
+  assert.deepEqual(
+    deriveIddAgentLogins({
+      trustedMarkerLogins: ['kurone-kito'],
+      operationalComments: [summaryDisp('kurone-kito')],
+    }),
+    [],
+  );
+  assert.ok(
+    summarizeReviewThreadsForGate(
+      [
+        {
+          id: 'T1',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: 'kurone-kito' },
+                body: 'This logic is wrong; fix before merge.',
+                createdAt: '2026-07-01T18:00:00Z',
+              },
+            ],
+          },
+        },
+      ],
+      { ...opts, iddAgentLogins: [] },
+    ).actionableCount >= 1,
+  );
+
+  // Fail-closed: a NON-trusted author's machine disposition is not honored, and a
+  // trusted actor's GENERAL `**Rejected**` review feedback is not a machine
+  // disposition, so it stays a real comment in both gates.
+  assert.equal(proceeds([summarySticky(1), summaryDisp('random-user')]), false);
+  const general = [
+    summarySticky(1),
+    {
+      id: 12,
+      createdAt: '2026-07-01T12:00:00Z',
+      body: '**Rejected** — I disagree with this',
+      author: { login: 'kurone-kito' },
+    },
+  ];
+  assert.equal(proceeds(general), false);
+  assert.equal(unreplied(general), 2);
 });
