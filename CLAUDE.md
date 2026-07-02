@@ -76,9 +76,12 @@ entry path and phase routing.
 
 ## Issue-authoring skill (dogfooded)
 
-`.claude/skills/issue-authoring/` is a generated, byte-identical copy
-of the canonical bundle at `skills/issue-authoring/`, so Claude Code
-auto-discovers the skill in this repository. Edit the canonical
-bundle, never the copy: `node scripts/sync-docs.mjs --apply`
-regenerates it and `node scripts/audit-docs.mjs --check` fails on
+The canonical issue-authoring skill bundle lives at
+`skills/issue-authoring/`. Edit the canonical bundle, never a
+generated copy: `node scripts/sync-docs.mjs --apply` regenerates
+derived copies and `node scripts/audit-docs.mjs --check` fails on
 drift.
+
+`.claude/skills/issue-authoring/` is a generated, byte-identical copy
+of the canonical bundle, so Claude Code auto-discovers the skill in
+this repository.

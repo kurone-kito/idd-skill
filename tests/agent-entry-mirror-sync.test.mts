@@ -1,0 +1,190 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { test } from 'node:test';
+
+const FILES = ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md'] as const;
+type EntryFile = (typeof FILES)[number];
+
+const TOOL_NAMES: Record<EntryFile, string> = {
+  'CLAUDE.md': 'Claude',
+  'AGENTS.md': 'Codex',
+  'GEMINI.md': 'Gemini',
+};
+
+const SHARED_TOP_LEVEL_SECTIONS = [
+  '## Minimum requirements',
+  '## Project standards',
+  '## Key workflow rules',
+  '## For IDD work',
+];
+
+test('the shared preamble (title + intro) stays textually identical across the three agent entry files', () => {
+  const preambles = FILES.map((file) =>
+    extractSection(
+      readText(file),
+      '# Guidelines for AI Agents',
+      '**Canonical reference**',
+    ),
+  );
+  assert.equal(
+    preambles[1],
+    preambles[0],
+    'AGENTS.md preamble must match CLAUDE.md',
+  );
+  assert.equal(
+    preambles[2],
+    preambles[0],
+    'GEMINI.md preamble must match CLAUDE.md',
+  );
+});
+
+test('shared top-level sections stay textually identical across CLAUDE.md, AGENTS.md, and GEMINI.md', () => {
+  for (const marker of SHARED_TOP_LEVEL_SECTIONS) {
+    const [claude, agents, gemini] = FILES.map((file) =>
+      extractTopLevelSection(readText(file), file, marker),
+    );
+    assert.equal(
+      agents,
+      claude,
+      `AGENTS.md must keep "${marker}" identical to CLAUDE.md`,
+    );
+    assert.equal(
+      gemini,
+      claude,
+      `GEMINI.md must keep "${marker}" identical to CLAUDE.md`,
+    );
+  }
+});
+
+test('Project standards keeps the Helper sources rule in every agent entry file', () => {
+  for (const file of FILES) {
+    const section = extractTopLevelSection(
+      readText(file),
+      file,
+      '## Project standards',
+    );
+    assert.match(
+      section,
+      /\*\*Helper sources\*\*: the helper logic is migrating to TypeScript wave/,
+      `${file} must keep the Helper sources rule`,
+    );
+    assert.ok(
+      section.includes(
+        'See [docs/typescript-sources.md](docs/typescript-sources.md).',
+      ),
+      `${file} must keep the Helper sources doc pointer`,
+    );
+  }
+});
+
+test('Issue-authoring skill section keeps the canonical-bundle rule identical, with Claude-only content appended only in CLAUDE.md', () => {
+  const heading = '## Issue-authoring skill (dogfooded)';
+  const claude = extractTopLevelSection(
+    readText('CLAUDE.md'),
+    'CLAUDE.md',
+    heading,
+  );
+  const agents = extractTopLevelSection(
+    readText('AGENTS.md'),
+    'AGENTS.md',
+    heading,
+  );
+  const gemini = extractTopLevelSection(
+    readText('GEMINI.md'),
+    'GEMINI.md',
+    heading,
+  );
+
+  assert.equal(
+    agents,
+    gemini,
+    'AGENTS.md and GEMINI.md must carry the identical (Claude-free) issue-authoring section',
+  );
+  assert.ok(
+    claude.startsWith(agents),
+    'CLAUDE.md must keep the shared canonical-bundle rule as an identical prefix of its issue-authoring section',
+  );
+  assert.notEqual(
+    claude,
+    agents,
+    'CLAUDE.md must still append the Claude-only auto-discovery sentence',
+  );
+
+  for (const [file, section] of [
+    ['AGENTS.md', agents],
+    ['GEMINI.md', gemini],
+  ] as const) {
+    assert.ok(
+      !section.includes('.claude/skills/'),
+      `${file} must not carry the Claude-only .claude/skills/ auto-discovery detail`,
+    );
+    assert.ok(
+      !section.includes('Claude'),
+      `${file} must not carry Claude-specific tool naming in the issue-authoring section`,
+    );
+  }
+  assert.ok(
+    claude.includes('.claude/skills/issue-authoring/'),
+    'CLAUDE.md must keep the .claude/skills/ auto-discovery sentence',
+  );
+});
+
+test('canonical-reference tool naming stays per-tool and does not cross-contaminate', () => {
+  for (const file of FILES) {
+    const section = extractSection(
+      readText(file),
+      '**Canonical reference**',
+      '## Minimum requirements',
+    );
+    const ownTool = TOOL_NAMES[file];
+    const otherTools = FILES.map((other) => TOOL_NAMES[other]).filter(
+      (name) => name !== ownTool,
+    );
+    assert.ok(
+      section.includes(ownTool),
+      `${file} canonical-reference paragraph must name ${ownTool}`,
+    );
+    for (const other of otherTools) {
+      assert.ok(
+        !section.includes(other),
+        `${file} canonical-reference paragraph must not name ${other}`,
+      );
+    }
+  }
+});
+
+function readText(relativePath: string): string {
+  return readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8');
+}
+
+function extractTopLevelSection(
+  text: string,
+  fileLabel: string,
+  startMarker: string,
+): string {
+  const nextSectionMarker = '\n## ';
+  const start = text.indexOf(startMarker);
+  assert.notEqual(
+    start,
+    -1,
+    `${fileLabel} is missing section marker: ${startMarker}`,
+  );
+  const nextSectionStart = text.indexOf(
+    nextSectionMarker,
+    start + startMarker.length,
+  );
+  const end = nextSectionStart === -1 ? text.length : nextSectionStart;
+  return text.slice(start, end).trim();
+}
+
+function extractSection(
+  text: string,
+  startMarker: string,
+  endMarker: string,
+): string {
+  const start = text.indexOf(startMarker);
+  assert.notEqual(start, -1, `Missing section marker: ${startMarker}`);
+  const end = text.indexOf(endMarker, start);
+  assert.notEqual(end, -1, `Missing section marker: ${endMarker}`);
+  return text.slice(start, end);
+}
