@@ -5991,6 +5991,14 @@ function hasExplicitDispositionAfter(
       ? options.isDispositionAuthor
       : (login: string) => !isKnownReviewBot(login);
   const targetTime = Date.parse(targetComment.createdAt ?? '');
+  // The disposition must attribute itself to this sticky's advisory bot. Accept
+  // either the product word (`CodeRabbit`) or the bot **login**
+  // (`coderabbitai[bot]`) — the canonical disposition-non-review-notices output
+  // names the login, which `\bCodeRabbit\b` misses (no word boundary before the
+  // trailing `ai`). Naming the login reuses the same `advisoryBotIdentityToken`
+  // attribution the rest of the gate relies on. Fail-closed: an unattributable
+  // disposition still matches nothing.
+  const targetBotLogin = String(targetComment.author?.login ?? '');
   return comments.some((comment) => {
     const author = String(comment.author?.login ?? '')
       .trim()
@@ -5998,7 +6006,10 @@ function hasExplicitDispositionAfter(
     if (!isDispositionAuthor(author) || !isDispositionComment(comment)) {
       return false;
     }
-    if (!/\bCodeRabbit\b/i.test(comment.body ?? '')) {
+    if (
+      !/\bCodeRabbit\b/i.test(comment.body ?? '') &&
+      !dispositionNamesAdvisoryBot(comment.body ?? '', targetBotLogin)
+    ) {
       return false;
     }
     const dispositionTime = Date.parse(comment.createdAt ?? '');
