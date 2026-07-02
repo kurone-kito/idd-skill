@@ -2050,6 +2050,17 @@ export function classifyReviewThreadForGate(
   return { classification: 'awaiting-reviewer' };
 }
 
+// Pre-merge gate invariant (review threads -> `threads.actionableCount`):
+// MERGE-BLOCKING. `computePreMergeReadinessBlockers` fails closed unless
+// `actionableCount === 0`. An IDD agent's (or the PR author's) latest thread
+// comment classifies `awaiting-reviewer`, which does NOT add to
+// `actionableCount`, so a recognition error here can fail OPEN: globally
+// promoting a non-agent into `iddAgentLogins` makes that actor's genuine
+// unresolved feedback classify `awaiting-reviewer` and stop blocking (when
+// conversation resolution is not required; otherwise it stays a blocking
+// `conversation-resolve-*`). Recognize dispositions PER ITEM; never globally
+// promote a non-agent into `iddAgentLogins`. See the consolidated invariants
+// above `summarizeDispositionEvidenceForGate` (#1182 / PR #1184).
 export function summarizeReviewThreadsForGate(
   threads: ThreadLike[],
   options: {
@@ -3374,6 +3385,14 @@ export function resolveLatestReviewWatermark(
   return latest;
 }
 
+// Pre-merge gate invariant (unreplied regular comments -> `unrepliedComments`):
+// INFORMATIONAL, NOT merge-blocking. `computePreMergeReadinessBlockers` pushes
+// no blocker for this count, so a wrong `iddAgentLogins` recognition only
+// miscounts cosmetically (promoting a non-agent here under-counts, since its
+// comments are excluded and its reply advances the watermark; missing a real
+// agent over-counts) -- it never opens or closes the merge gate. See the
+// consolidated invariants above `summarizeDispositionEvidenceForGate`
+// (#1182 / PR #1184).
 export function summarizeRegularCommentsForGate(
   comments: CommentLike[],
   options: {
@@ -3522,6 +3541,31 @@ export function summarizeRegularCommentsForGate(
   };
 }
 
+// Pre-merge gate invariants -- READ BEFORE MODIFYING ANY `iddAgentLogins`-KEYED
+// GATE HELPER. Three functions key disposition/reply recognition on
+// `iddAgentLogins`, and each reacts DIFFERENTLY when that recognition is wrong:
+//   1. `summarizeDispositionEvidenceForGate` (this fn) -- MERGE-BLOCKING (feeds
+//      `computePreMergeReadinessBlockers` via `dispositionEvidence`). Wrong
+//      recognition -> over-block (fail-closed).
+//   2. `summarizeReviewThreadsForGate` (`actionableCount`) -- MERGE-BLOCKING.
+//      Without required conversation resolution, an IDD agent's latest thread
+//      comment is `awaiting-reviewer` (non-blocking), so GLOBALLY promoting a
+//      non-agent into `iddAgentLogins` makes that actor's genuine unresolved
+//      feedback stop blocking -> fail-OPEN. Recognize dispositions PER ITEM;
+//      never globally promote a non-agent into `iddAgentLogins`.
+//   3. `summarizeRegularCommentsForGate` (`unrepliedComments`) --
+//      INFORMATIONAL, NOT a merge blocker. Wrong recognition -> cosmetic
+//      miscount only (never opens or closes the gate).
+// Notice vs summary matching asymmetry (implemented and documented in detail on
+// `matchTrustedAdvisoryStickyDispositions`): a non-review NOTICE disposition
+// matches time-agnostically -- it carries forward across a re-posted notice
+// while the bot still has not reviewed (the #1018 carry-forward) -- while a
+// SUMMARY disposition must be STRICTLY NEWER than the sticky, so a stale
+// `**Accepted**` cannot clear a summary re-edited after it (the #1122 "a false
+// positive is a false merge" hazard).
+// Working rule: verify every advisory finding on this code with a byte-exact
+// repro before accepting it. #1182 / PR #1184 cycled through five advisory
+// rounds, each surfacing a distinct fail mode of exactly these gates.
 export function summarizeDispositionEvidenceForGate(
   {
     comments = [],
