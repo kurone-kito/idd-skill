@@ -1539,6 +1539,115 @@ export function dispositionNamesAdvisoryBot(
     .toLowerCase()
     .includes(token);
 }
+// #1182 Match trusted machine advisory dispositions to the advisory-bot stickies
+// they address, so a disposition posted by a trusted-marker actor who is NOT a
+// resolved IDD agent (e.g. a second trusted session) is honored without being
+// promoted into a global IDD-agent identity. Matching is strict on FOUR axes:
+//   - bot: the disposition body must name the sticky author's bot login
+//     (`dispositionNamesAdvisoryBot`);
+//   - type: a `**Rejected** — {bot} did not review HEAD …` notice disposition
+//     clears only a non-review-notice sticky, and an `**Accepted** — {bot}
+//     summary walkthrough …` disposition clears only a CodeRabbit summary
+//     sticky — the notice/summary paths are disjoint in the helper that posts
+//     them, so a notice rejection must never hide a summary that still needs its
+//     own acceptance (or vice versa);
+//   - count: consumed 1:1, so one disposition cannot clear several stickies.
+//   - recency (summary only): a CodeRabbit summary walkthrough IS a completed
+//     review that CodeRabbit edits on each re-review (bumping the sticky's
+//     `activityAt`), so a summary disposition clears a summary sticky only when
+//     the disposition is strictly NEWER than the sticky — a stale `**Accepted**`
+//     can never clear a summary edited after it (the #1122 "a false positive is
+//     a false merge" hazard). Non-review notices intentionally skip this: a
+//     notice disposition carries forward across HEAD changes while the bot still
+//     has not reviewed (the #1018 carry-forward), so it need not post-date a
+//     re-posted notice.
+// IDD-agent-authored dispositions are excluded here — they are already scored by
+// the caller's own disposition pool / watermark — which also prevents a
+// viewer-authored (agent AND trusted) disposition from being double-counted. A
+// trusted disposition matched here is bound to its advisory item and NEVER flows
+// into any generic disposition pool, so an absent or already-resolved sticky
+// leaves the disposition unused: it can never clear an unrelated human comment.
+// Returns the set of `sortedIndex` values of the stickies that are dispositioned.
+function matchTrustedAdvisoryStickyDispositions(
+  comments,
+  advisoryBotLogins,
+  trustedMarkerLogins,
+  iddAgentLogins,
+) {
+  const dispositionedStickyIndexes = new Set();
+  const consumedDispositionIndexes = new Set();
+  const trustedDispositions = comments.filter(
+    (comment) =>
+      trustedMarkerLogins.has(comment.authorLogin) &&
+      !iddAgentLogins.has(comment.authorLogin),
+  );
+  const byActivityThenIndex = (left, right) => {
+    const leftTime = Date.parse(left.activityAt);
+    const rightTime = Date.parse(right.activityAt);
+    if (leftTime !== rightTime) {
+      return leftTime - rightTime;
+    }
+    return left.sortedIndex - right.sortedIndex;
+  };
+  const kinds = [
+    {
+      isSticky: (body) => isAdvisoryNonReviewNotice(body),
+      isDisposition: (body) => isNonReviewNoticeDisposition({ body }),
+      requireNewerDisposition: false,
+    },
+    {
+      isSticky: (body) => isReviewSummaryComment(body),
+      isDisposition: (body) => isReviewSummaryDisposition({ body }),
+      requireNewerDisposition: true,
+    },
+  ];
+  for (const kind of kinds) {
+    const stickiesByBot = new Map();
+    for (const comment of comments) {
+      if (
+        !isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) ||
+        !kind.isSticky(comment.body)
+      ) {
+        continue;
+      }
+      const list = stickiesByBot.get(comment.authorLogin) ?? [];
+      list.push(comment);
+      stickiesByBot.set(comment.authorLogin, list);
+    }
+    // Sort bot logins so a disposition naming more than one configured bot is
+    // consumed deterministically (by the lexicographically-first bot only).
+    for (const botLogin of [...stickiesByBot.keys()].sort()) {
+      const stickies = [...(stickiesByBot.get(botLogin) ?? [])].sort(
+        byActivityThenIndex,
+      );
+      const candidates = trustedDispositions
+        .filter(
+          (disposition) =>
+            kind.isDisposition(disposition.body) &&
+            dispositionNamesAdvisoryBot(disposition.body, botLogin),
+        )
+        .sort(byActivityThenIndex);
+      // Greedy oldest-first pairing: match each sticky to the earliest unconsumed
+      // matching disposition (that is strictly newer, when the kind requires it),
+      // so one disposition never clears several stickies and — for summaries — a
+      // disposition only clears a sticky it post-dates.
+      for (const sticky of stickies) {
+        const match = candidates.find(
+          (disposition) =>
+            !consumedDispositionIndexes.has(disposition.sortedIndex) &&
+            (!kind.requireNewerDisposition ||
+              compareIsoTimestamps(disposition.activityAt, sticky.activityAt) >
+                0),
+        );
+        if (match) {
+          dispositionedStickyIndexes.add(sticky.sortedIndex);
+          consumedDispositionIndexes.add(match.sortedIndex);
+        }
+      }
+    }
+  }
+  return dispositionedStickyIndexes;
+}
 export function classifyCiChecks(checks) {
   const normalized = checks.map((check) => ({
     name: check.name,
@@ -2396,6 +2505,24 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
     body: comment.body,
     createdAt: comment.createdAt,
   }));
+  // #1182 A trusted-marker actor's machine-generated advisory disposition — and
+  // the advisory-bot sticky it names, matched by bot + type + consumed 1:1 via
+  // `matchTrustedAdvisoryStickyDispositions` — is not an unreplied comment.
+  // Recognized per item, NOT by promoting the author to a global IDD agent (which
+  // would fail the thread gate open) and NOT by advancing the `lastIddReplyAt`
+  // watermark (which would clear unrelated earlier feedback). Keyed on the two
+  // machine forms only, so a trusted human's ordinary `**Accepted**` /
+  // `**Rejected**` review disposition stays a genuine comment.
+  const isTrustedMachineDisposition = (authorLogin, body) =>
+    trustedMarkerLogins.has(authorLogin) &&
+    (isNonReviewNoticeDisposition({ body }) ||
+      isReviewSummaryDisposition({ body }));
+  const dispositionedStickyIndexes = matchTrustedAdvisoryStickyDispositions(
+    normalized,
+    advisoryBotLogins,
+    trustedMarkerLogins,
+    iddAgentLogins,
+  );
   const items = normalized
     .filter(
       (comment) =>
@@ -2406,6 +2533,11 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
         ),
     )
     .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
+    .filter(
+      (comment) =>
+        !isTrustedMachineDisposition(comment.authorLogin, comment.body) &&
+        !dispositionedStickyIndexes.has(comment.sortedIndex),
+    )
     .filter(
       (comment) =>
         !lastIddReplyAt ||
@@ -2498,6 +2630,36 @@ export function summarizeDispositionEvidenceForGate(
     body: comment.body,
     createdAt: comment.createdAt,
   }));
+  // #1182 trusted machine-disposition recognition, scoped to this gate. A
+  // trusted-marker actor who authored one of the two machine-generated advisory
+  // disposition forms `disposition-non-review-notices` emits — `**Rejected** —
+  // {bot} did not review HEAD …` (`isNonReviewNoticeDisposition`) or
+  // `**Accepted** — {bot} summary walkthrough …` (`isReviewSummaryDisposition`)
+  // — must have that disposition honored even when the author was not resolved
+  // into `iddAgentLogins` (e.g. a second trusted session posted it). It is
+  // deliberately NOT promoted into a global IDD-agent identity: that same set is
+  // passed to `summarizeReviewThreadsForGate`, where an IDD-agent's latest
+  // thread comment is `awaiting-reviewer` rather than `actionable-blocking`, so
+  // a global promotion would let the actor's genuine unresolved review feedback
+  // stop blocking. Recognition stays HERE and covers ONLY the two machine forms
+  // — never the general `**Accepted**` / `**Rejected**` prefix — so a trusted
+  // human's ordinary review disposition is not swallowed. The disposition itself
+  // is dropped from the outstanding set (below); the advisory sticky it clears is
+  // matched by bot + type + 1:1 and bound to that item by
+  // `matchTrustedAdvisoryStickyDispositions` — never joining the generic 1:1
+  // pool, so a trusted disposition whose sticky is absent/already-resolved cannot
+  // clear an unrelated human comment.
+  const isTrustedMachineDisposition = (authorLogin, body) =>
+    trustedMarkerLogins.has(authorLogin) &&
+    (isNonReviewNoticeDisposition({ body }) ||
+      isReviewSummaryDisposition({ body }));
+  const trustedDispositionedStickyIndexes =
+    matchTrustedAdvisoryStickyDispositions(
+      normalizedComments,
+      advisoryBotLogins,
+      trustedMarkerLogins,
+      iddAgentLogins,
+    );
   const outstandingComments = normalizedComments
     .filter(
       (comment) =>
@@ -2507,7 +2669,11 @@ export function summarizeDispositionEvidenceForGate(
           trustedMarkerLogins,
         ),
     )
-    .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
+    .filter(
+      (comment) =>
+        !iddAgentLogins.has(comment.authorLogin) &&
+        !isTrustedMachineDisposition(comment.authorLogin, comment.body),
+    )
     .filter((comment) => {
       if (!isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins)) {
         return true;
@@ -2532,6 +2698,9 @@ export function summarizeDispositionEvidenceForGate(
         ) === null
       );
     });
+  // Only IDD-agent dispositions feed the generic 1:1 pool. Trusted machine
+  // dispositions are handled solely by `trustedDispositionedStickyIndexes`
+  // (bot + type matched), so they can never clear an unrelated regular comment.
   const dispositionComments = normalizedComments.filter(
     (comment) =>
       iddAgentLogins.has(comment.authorLogin) &&
@@ -2609,7 +2778,10 @@ export function summarizeDispositionEvidenceForGate(
   let markerCursor = 0;
   const missing = [];
   for (const comment of outstandingComments) {
-    if (carriedNoticeIndexes.has(comment.sortedIndex)) {
+    if (
+      carriedNoticeIndexes.has(comment.sortedIndex) ||
+      trustedDispositionedStickyIndexes.has(comment.sortedIndex)
+    ) {
       continue;
     }
     while (
