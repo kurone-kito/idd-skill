@@ -54,6 +54,7 @@ export function runDoctor({
   );
   checkPolicySignals(root, report);
   checkHelperRuntimeConfig(root, report);
+  checkClaimTimingConsistency(root, report);
   checkAgentEntryFiles(root, report);
   checkTemplateVersionSignal(root, report);
   const worktreeGuardEnforced =
@@ -747,6 +748,141 @@ function checkHelperRuntimeConfig(root, report) {
     report.passes.push(
       `${file} declares helper runtime profile "${helperRuntime.profile}"`,
     );
+  }
+}
+// Adding a future anchor is a one-line addition here — no new branching
+// logic — as long as its prose lives in the same Thresholds section
+// parsed by parseThresholdsProseHours.
+const CLAIM_TIMING_ANCHORS = [
+  {
+    configKey: 'staleAge',
+    label: 'claimTiming.staleAge',
+    proseHoursKey: 'staleAgeHours',
+  },
+  {
+    configKey: 'heartbeatInterval',
+    label: 'claimTiming.heartbeatInterval',
+    proseHoursKey: 'heartbeatIntervalHours',
+  },
+];
+/**
+ * Parse an ISO 8601 duration to whole hours. Returns null for a
+ * non-string, an unparseable value, a zero/negative duration (an
+ * operationally meaningless stale-age/heartbeat), or sub-hour precision
+ * (minutes/seconds) — the Thresholds prose only ever states whole hours,
+ * so a sub-hour config value has no prose counterpart to compare against.
+ */
+export function parseIsoDurationToHours(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(
+    value,
+  );
+  if (!match) {
+    return null;
+  }
+  const [, days, hours, minutes, seconds] = match;
+  if (Number(minutes ?? 0) !== 0 || Number(seconds ?? 0) !== 0) {
+    return null;
+  }
+  const totalHours = Number(days ?? 0) * 24 + Number(hours ?? 0);
+  return totalHours > 0 ? totalHours : null;
+}
+/**
+ * Extract the stale-age and heartbeat-interval hour values the
+ * `## Thresholds` section of overview-core prose states. Returns null for
+ * the whole result when the section heading itself is not found (the
+ * section was renamed or removed); returns null for an individual field
+ * when that field's anchor phrase is not found within an otherwise-present
+ * section (the bullet was reworded past recognition). Neither case is an
+ * error — the caller skips the comparison for what it cannot parse.
+ */
+export function parseThresholdsProseHours(overviewCoreText) {
+  const sectionStart = overviewCoreText.indexOf('## Thresholds');
+  if (sectionStart === -1) {
+    return null;
+  }
+  const nextHeading = overviewCoreText.indexOf('\n## ', sectionStart + 1);
+  const section = overviewCoreText.slice(
+    sectionStart,
+    nextHeading === -1 ? undefined : nextHeading,
+  );
+  const staleMatch = /\*\*Stale\*\*:[\s\S]*?≥\s*(\d+)\s*h\b/.exec(section);
+  const heartbeatMatch = /\*\*Heartbeat\*\*:[\s\S]*?every\s+(\d+)\s*h\b/.exec(
+    section,
+  );
+  return {
+    staleAgeHours: staleMatch ? Number(staleMatch[1]) : null,
+    heartbeatIntervalHours: heartbeatMatch ? Number(heartbeatMatch[1]) : null,
+  };
+}
+/**
+ * Compare `.github/idd/config.json`'s claimTiming values against the
+ * overview-core Thresholds prose. Returns a warning-level finding naming
+ * both locations and both values only when a config value and its
+ * matching prose value are both parseable AND numerically differ. Returns
+ * null (no finding) when the section/bullet cannot be parsed, when either
+ * side is unparseable, or when the values agree — this check never
+ * produces an error, per its acceptance criteria, and degrades silently
+ * on a customized adopter repo rather than false-failing it.
+ */
+export function classifyClaimTimingConsistency(claimTiming, overviewCoreText) {
+  if (!claimTiming) {
+    return null;
+  }
+  const prose = parseThresholdsProseHours(overviewCoreText);
+  if (!prose) {
+    return null;
+  }
+  const mismatches = [];
+  for (const anchor of CLAIM_TIMING_ANCHORS) {
+    const configHours = parseIsoDurationToHours(claimTiming[anchor.configKey]);
+    const proseHours = prose[anchor.proseHoursKey];
+    if (configHours === null || proseHours === null) {
+      continue;
+    }
+    if (configHours !== proseHours) {
+      mismatches.push(
+        `${anchor.label} is ${configHours} h in .github/idd/config.json but ` +
+          `${proseHours} h in the Thresholds section of ` +
+          '.github/instructions/idd-overview-core.instructions.md',
+      );
+    }
+  }
+  if (mismatches.length === 0) {
+    return null;
+  }
+  return {
+    level: 'warning',
+    message: `config↔instruction-prose policy-value drift: ${mismatches.join('; ')}.`,
+  };
+}
+function checkClaimTimingConsistency(root, report) {
+  const read = (relativePath) => {
+    try {
+      return readFileSync(join(root, relativePath), 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  const configText = read('.github/idd/config.json');
+  const overviewCoreText = read(
+    '.github/instructions/idd-overview-core.instructions.md',
+  );
+  if (configText === null || overviewCoreText === null) {
+    return;
+  }
+  let config;
+  try {
+    config = JSON.parse(configText);
+  } catch {
+    return;
+  }
+  const claimTiming = config?.claimTiming;
+  const finding = classifyClaimTimingConsistency(claimTiming, overviewCoreText);
+  if (finding) {
+    report.warnings.push(finding.message);
   }
 }
 function checkAgentEntryFiles(root, report) {
