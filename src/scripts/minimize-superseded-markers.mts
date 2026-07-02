@@ -6,8 +6,21 @@
 // never the generated .mjs. See docs/typescript-sources.md.
 
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
-import { loadIddConfig } from './idd-config.mts';
+// Deliberately NOT importing the shared loadIddConfig from ./idd-config.mts
+// here (see #1208's PR discussion): docs/idd-helper-scripts.md documents
+// that this helper "stays self-contained so the template copy works
+// without protocol-helpers.mjs" — the curated idd-template/scripts/
+// mirror carries only this one file, so any cross-file import (even a
+// small one) breaks the template copy with ERR_MODULE_NOT_FOUND.
+function loadIddConfig(): unknown {
+  try {
+    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
+  } catch {
+    return null;
+  }
+}
 
 const ALLOWED_CLASSIFIERS = new Set(['OUTDATED', 'RESOLVED']);
 const ALLOWED_FORMATS = new Set(['json', 'table']);
