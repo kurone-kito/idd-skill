@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+
+import {
+  extractTopLevelSection,
+  normalizeWhitespace,
+  readText,
+} from './test-utils.mts';
 
 const CANONICAL_DOC = 'docs/idd-workflow.md';
 const TEMPLATE_DOC = 'idd-template/docs/idd-workflow.md';
@@ -56,31 +61,3 @@ test('workflow onboarding guidance stays synced between docs and template', () =
     templateText.includes('helper-backed evidence collectors first'),
   );
 });
-
-function readText(relativePath: string): string {
-  return readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8');
-}
-
-function extractTopLevelSection(
-  text: string,
-  fileLabel: string,
-  startMarker: string,
-): string {
-  const nextSectionMarker = '\n## ';
-  const start = text.indexOf(startMarker);
-  assert.notEqual(
-    start,
-    -1,
-    `${fileLabel} is missing section marker: ${startMarker}`,
-  );
-  const nextSectionStart = text.indexOf(
-    nextSectionMarker,
-    start + startMarker.length,
-  );
-  const end = nextSectionStart === -1 ? text.length : nextSectionStart;
-  return text.slice(start, end).trim();
-}
-
-function normalizeWhitespace(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
-}

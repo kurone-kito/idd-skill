@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+
+import {
+  extractTopLevelSection,
+  normalizeWhitespace,
+  readText,
+} from './test-utils.mts';
 
 test('specificity guidance stays synced between canonical and bundled contract', () => {
   const canonicalFile = 'docs/issue-authoring-skill.md';
@@ -325,36 +330,3 @@ test('child issue validation keeps verification and dependency-marker guidance',
     }
   }
 });
-
-function readText(relativePath: string): string {
-  return readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8');
-}
-
-function extractTopLevelSection(
-  text: string,
-  fileLabel: string,
-  startMarker: string,
-): string {
-  const nextSectionMarker = '\n## ';
-
-  const start = text.indexOf(startMarker);
-  assert.notEqual(
-    start,
-    -1,
-    `${fileLabel} is missing section marker: ${startMarker}`,
-  );
-
-  // If the section is last in the file, compare through EOF instead of
-  // coupling the test to a specific following heading.
-  const nextSectionStart = text.indexOf(
-    nextSectionMarker,
-    start + startMarker.length,
-  );
-  const end = nextSectionStart === -1 ? text.length : nextSectionStart;
-
-  return text.slice(start, end).trim();
-}
-
-function normalizeWhitespace(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
-}
