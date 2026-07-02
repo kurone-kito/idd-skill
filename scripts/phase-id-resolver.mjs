@@ -17,6 +17,8 @@
 //     this list enumerates the concrete discovery sub-phases `A0..A5` instead,
 //     so bare `A` is intentionally non-canonical (it resolves to
 //     `unknown_phase_id`) rather than being added here.
+import { isCliExecution } from './gh-exec.mjs';
+
 const DEFAULT_CANONICAL_PHASE_IDS = [
   'A0',
   'A0_O',
@@ -74,7 +76,7 @@ const DEFAULT_LEGACY_ALIASES = {
   A4_5: ['A4.5', 'A4-5', 'A45'],
   F2_5: ['F2.5', 'F2-5', 'F25'],
 };
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 export function resolvePhaseId(input, options = {}) {
@@ -310,11 +312,4 @@ function compactObject(value) {
     }
   }
   return output;
-}
-function isCliExecution() {
-  try {
-    return import.meta.url === new URL(`file://${process.argv[1]}`).href;
-  } catch {
-    return false;
-  }
 }

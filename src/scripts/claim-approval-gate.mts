@@ -7,9 +7,12 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  isCliExecution,
+} from './gh-exec.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 
 const APPROVAL_POLICIES = new Set([
@@ -86,7 +89,7 @@ interface EvaluateInput {
   generatedPlanUpdatedAt?: unknown;
 }
 
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 
@@ -286,9 +289,16 @@ function runCli(): void {
 
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repoRef = `${owner}/${repo}`;
   const issue = ghJson(['api', `repos/${repoRef}/issues/${args.issue}`]) as {
     number?: unknown;
@@ -976,10 +986,6 @@ function ghJson(args: string[]): unknown {
   return JSON.parse(runGh(args).trim() || '{}');
 }
 
-function ghText(args: string[]): string {
-  return runGh(args).trim();
-}
-
 function runGh(args: string[]): string {
   try {
     return execFileSync('gh', args, {
@@ -998,11 +1004,4 @@ function runGh(args: string[]): string {
     }
     throw error;
   }
-}
-
-function isCliExecution(): boolean {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
 }

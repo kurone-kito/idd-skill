@@ -21,6 +21,7 @@ import {
   evaluateDiscoverReadiness,
 } from './discover-readiness-check.mts';
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
+import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import { parseIsoDurationToMs } from './policy-helpers.mts';
 import {
@@ -525,9 +526,16 @@ if (isMainModule(import.meta.url)) {
 
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_OPTIONS,
+    );
   const policy = loadPolicy(args.policy) as {
     markerPrefix?: unknown;
     autopilotSuitability?: { floor?: unknown };
@@ -2441,10 +2449,6 @@ function loadPolicy(policyPath: string): unknown {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`failed to load policy from ${targetPath}: ${detail}`);
   }
-}
-
-function ghText(args: string[]): string {
-  return runGh(args).trim();
 }
 
 /**

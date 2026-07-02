@@ -7,6 +7,8 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 
+import { ghText } from './gh-exec.mts';
+
 interface PrData {
   headRefOid?: unknown;
   baseRefOid?: unknown;
@@ -413,10 +415,6 @@ function normalizeNullable(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   const s = String(value);
   return s === '' || s === 'null' || s === 'undefined' ? null : s;
-}
-
-function ghText(args: string[]): string {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
 }
 
 function gitText(args: string[]): string {

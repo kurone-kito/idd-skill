@@ -5,6 +5,7 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync, spawnSync } from 'node:child_process';
+import { ghText } from './gh-exec.mjs';
 
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
@@ -322,9 +323,6 @@ function normalizeNullable(value) {
   if (value === null || value === undefined) return null;
   const s = String(value);
   return s === '' || s === 'null' || s === 'undefined' ? null : s;
-}
-function ghText(args) {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
 }
 function gitText(args) {
   try {

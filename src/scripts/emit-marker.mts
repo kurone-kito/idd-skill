@@ -11,9 +11,7 @@
 // agent posts it via the documented HTTP path. The render logic lives in
 // protocol-helpers; this is the thin CLI surface.
 
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
+import { isCliExecution } from './gh-exec.mts';
 import {
   renderClaimedByMarker,
   renderReviewBaselineMarker,
@@ -22,7 +20,7 @@ import {
 
 const MARKER_TYPES = ['claimed-by', 'review-watermark', 'review-baseline'];
 
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 
@@ -106,11 +104,4 @@ Prints the exact ready-to-post marker body (HTML token + visible note) to
 stdout. Emit-only: performs no network write. Post it via the documented
 HTTP path. The written marker formats remain the canonical fallback.
 `);
-}
-
-function isCliExecution(): boolean {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
 }

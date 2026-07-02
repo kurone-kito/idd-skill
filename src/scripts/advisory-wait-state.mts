@@ -6,15 +6,14 @@
 // .mjs. See docs/typescript-sources.md.
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
   readAdvisoryPrimaryBotLogin,
   readAdvisorySecondaryBotLogin,
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mts';
+import { ghText, isCliExecution, safeGhText } from './gh-exec.mts';
+import { loadIddConfig } from './idd-config.mts';
 import type { TrustedMarkerActorResolution } from './protocol-helpers.mts';
 import {
   buildAdvisoryWaitSummary,
@@ -71,14 +70,13 @@ export type AdvisoryWaitStateReport = ReturnType<
   trustedMarkerActorsSource: TrustedMarkerActorResolution['source'];
 };
 
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   main();
 }
 
-// The CLI body. Guarded behind isCliExecution() so importing this module (for
-// unit tests) does not parse process.argv, fail, or make a `gh` call —
-// matching the sibling-helper convention (see isCliExecution() in
-// live-status-digest.mts).
+// The CLI body. Guarded behind isCliExecution(import.meta.url) (shared,
+// see gh-exec.mts) so importing this module (for unit tests) does not
+// parse process.argv, fail, or make a `gh` call.
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
   if (!args.prNumber) {
@@ -182,13 +180,6 @@ function main(): void {
       null,
       2,
     )}\n`,
-  );
-}
-
-function isCliExecution(): boolean {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
   );
 }
 
@@ -298,28 +289,6 @@ function advisoryMarkerComment(body: string): boolean {
 
 function isTruthy(value: unknown): boolean {
   return /^(1|true|yes)$/i.test(String(value ?? '').trim());
-}
-
-function loadIddConfig(): { trustedMarkerActors?: unknown } | null {
-  try {
-    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8')) as {
-      trustedMarkerActors?: unknown;
-    };
-  } catch {
-    return null;
-  }
-}
-
-function ghText(args: string[]): string {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
-}
-
-function safeGhText(args: string[]): string {
-  try {
-    return ghText(args);
-  } catch {
-    return '';
-  }
 }
 
 function ghApiJson(

@@ -7,8 +7,6 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
   collaboratorPermission,
@@ -16,6 +14,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
+import { isCliExecution } from './gh-exec.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
 import {
   applyDigestUpsert,
@@ -109,13 +108,13 @@ const collaboratorPermissionCache: CollaboratorPermissionCache = new Map();
 let cachedConfiguredTrustedMarkerAuthors: Set<string> | null = null;
 let cachedCurrentViewerLogin: string | null = null;
 
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   main();
 }
 
-// The CLI body. Guarded behind isCliExecution() so importing this module (for
-// unit tests) does not parse process.argv, fail, or process.exit — matching the
-// sibling-helper convention (see isCliExecution() in branch-name.mts).
+// The CLI body. Guarded behind isCliExecution(import.meta.url) (shared,
+// see gh-exec.mts) so importing this module (for unit tests) does not
+// parse process.argv, fail, or process.exit.
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
 
@@ -260,13 +259,6 @@ function main(): void {
   }
 
   writeReport(report, args.format);
-}
-
-function isCliExecution(): boolean {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
 }
 
 function updateReportFromPlan(

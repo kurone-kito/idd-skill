@@ -5,14 +5,13 @@
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   readAdvisoryPrimaryBotLogin,
   readAdvisorySecondaryBotLogin,
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mjs';
+import { ghText, isCliExecution, safeGhText } from './gh-exec.mjs';
+import { loadIddConfig } from './idd-config.mjs';
 import {
   buildAdvisoryWaitSummary,
   normalizeTrustedMarkerLogins,
@@ -20,13 +19,12 @@ import {
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mjs';
 
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   main();
 }
-// The CLI body. Guarded behind isCliExecution() so importing this module (for
-// unit tests) does not parse process.argv, fail, or make a `gh` call —
-// matching the sibling-helper convention (see isCliExecution() in
-// live-status-digest.mts).
+// The CLI body. Guarded behind isCliExecution(import.meta.url) (shared,
+// see gh-exec.mts) so importing this module (for unit tests) does not
+// parse process.argv, fail, or make a `gh` call.
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.prNumber) {
@@ -126,12 +124,6 @@ function main() {
     )}\n`,
   );
 }
-function isCliExecution() {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
-}
 function parseArgs(argv) {
   const parsed = {
     prNumber: null,
@@ -224,23 +216,6 @@ function advisoryMarkerComment(body) {
 }
 function isTruthy(value) {
   return /^(1|true|yes)$/i.test(String(value ?? '').trim());
-}
-function loadIddConfig() {
-  try {
-    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
-  } catch {
-    return null;
-  }
-}
-function ghText(args) {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
-}
-function safeGhText(args) {
-  try {
-    return ghText(args);
-  } catch {
-    return '';
-  }
 }
 function ghApiJson(path, paginate = false, extraArgs = []) {
   const args = ['api', path, ...extraArgs];

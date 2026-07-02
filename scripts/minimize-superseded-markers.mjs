@@ -7,6 +7,21 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
+// Deliberately NOT importing the shared config-loader module (see #1208's
+// PR discussion): docs/idd-helper-scripts.md documents that this helper
+// "stays self-contained so the template copy works without
+// protocol-helpers.mjs" — the curated idd-template/scripts/ mirror
+// carries only this one file, so any cross-file import (even a small one)
+// breaks the template copy with ERR_MODULE_NOT_FOUND. This applies
+// regardless of extension, so keep this local copy in both the .mts
+// source and its generated .mjs/template-mirror artifacts.
+function loadIddConfig() {
+  try {
+    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
+  } catch {
+    return null;
+  }
+}
 const ALLOWED_CLASSIFIERS = new Set(['OUTDATED', 'RESOLVED']);
 const ALLOWED_FORMATS = new Set(['json', 'table']);
 const MINIMIZABLE_TYPENAMES = new Set([
@@ -332,13 +347,6 @@ function splitLoginCsv(value) {
     .split(',')
     .map((login) => login.trim())
     .filter((login) => login.length > 0);
-}
-function loadIddConfig() {
-  try {
-    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
-  } catch {
-    return null;
-  }
 }
 export function isTrustedAuthor(author, trustedSet) {
   if (!author) {

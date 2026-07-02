@@ -16,6 +16,7 @@ import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
 } from './autopilot-suitability.mjs';
+import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import { escapeRegex } from './marker-regex.mjs';
@@ -47,9 +48,16 @@ if (isMainModule(import.meta.url)) {
   }
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_OPTIONS,
+    );
   const policyConfig = loadPolicy(args.policy);
   const authoringPolicy = resolveAuthoringGuardPolicy(policyConfig);
   const markerPrefix = resolveMarkerPrefix(policyConfig);
@@ -727,13 +735,16 @@ export function buildRoadmapMarkerResolver(owner, repo, markerPrefix) {
  */
 function listOpenIssueNumbers(owner, repo) {
   return parseIssueNumberLines(
-    ghText([
-      'api',
-      '--paginate',
-      `repos/${owner}/${repo}/issues?state=open&per_page=100`,
-      '--jq',
-      '.[] | select(.pull_request == null) | .number',
-    ]),
+    ghText(
+      [
+        'api',
+        '--paginate',
+        `repos/${owner}/${repo}/issues?state=open&per_page=100`,
+        '--jq',
+        '.[] | select(.pull_request == null) | .number',
+      ],
+      GH_TEXT_LOOP_OPTIONS,
+    ),
   );
 }
 /**
@@ -753,9 +764,6 @@ export function parseIssueNumberLines(raw) {
       .filter((line) => /^\d+$/.test(line))
       .map((line) => Number.parseInt(line, 10)),
   );
-}
-function ghText(args) {
-  return runGh(args).trim();
 }
 function loadPolicy(policyPath) {
   const targetPath = policyPath

@@ -21,7 +21,6 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
 import {
   buildIssueLoader,
   buildSubIssueLoader,
@@ -30,6 +29,7 @@ import {
   parseClaimStaleAgeMs,
   type RoadmapGraphReport,
 } from './discover-roadmap-graph.mts';
+import { ghText, safeGhText } from './gh-exec.mts';
 import type { ClaimValidationSummary } from './protocol-helpers.mts';
 import {
   renderUnclaimedByMarker,
@@ -1197,18 +1197,6 @@ function loadPolicy(policyPath: string): unknown {
 function normalizeMarkerPrefix(markerPrefix: unknown): string {
   const normalized = String(markerPrefix ?? '').trim();
   return normalized || DEFAULT_MARKER_PREFIX;
-}
-
-function ghText(args: string[]): string {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
-}
-
-function safeGhText(args: string[]): string {
-  try {
-    return ghText(args);
-  } catch {
-    return '';
-  }
 }
 
 // ---------------------------------------------------------------------------

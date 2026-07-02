@@ -13,6 +13,8 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
+import { ghText, safeGhText } from './gh-exec.mjs';
+import { loadIddConfig } from './idd-config.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   parsePaginatedGhNdjson,
@@ -530,13 +532,6 @@ function buildTrustedMarkerLogins(
   }
   return { logins: trusted, sources };
 }
-function loadIddConfig() {
-  try {
-    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
-  } catch {
-    return null;
-  }
-}
 function normalizeIssueComment(comment) {
   return {
     body: comment.body ?? '',
@@ -592,16 +587,6 @@ function ghJson(args, slurp = false) {
     );
   }
   return JSON.parse(execFileSync('gh', finalArgs, { encoding: 'utf8' }));
-}
-function ghText(args) {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
-}
-function safeGhText(args) {
-  try {
-    return ghText(args);
-  } catch {
-    return '';
-  }
 }
 function readCollaboratorTrustEnabled(config = null) {
   try {

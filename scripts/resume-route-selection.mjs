@@ -5,8 +5,11 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  isCliExecution,
+} from './gh-exec.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 
 const RUNNING_STATES = new Set([
@@ -37,7 +40,7 @@ const BRANCH_STATES = new Set([
   'computing',
   'unknown',
 ]);
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 export function selectResumeRoute(input) {
@@ -137,9 +140,16 @@ function runCli() {
   }
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repository = `${owner}/${repo}`;
   const routingInput = collectRoutingInput({
     repository,
@@ -162,7 +172,10 @@ function runCli() {
 function collectRoutingInput({ repository, issueNumber }) {
   const prs = findIssueRelatedOpenPrs({ repository, issueNumber });
   const issuePr = prs.length === 1 ? prs[0] : null;
-  const viewerLogin = ghText(['api', 'user', '--jq', '.login']).toLowerCase();
+  const viewerLogin = ghText(
+    ['api', 'user', '--jq', '.login'],
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ).toLowerCase();
   const gitState = collectLocalGitState();
   if (!issuePr) {
     return {
@@ -577,9 +590,6 @@ export function recoverJsonFromGhFailure(error, options = {}) {
   }
   return { recovered: false, value: null };
 }
-function ghText(args) {
-  return runGh(args).trim();
-}
 function runGh(args) {
   try {
     return execFileSync('gh', args, {
@@ -627,10 +637,4 @@ function runGitAllowFailure(args) {
       stderr: String(error?.stderr ?? ''),
     };
   }
-}
-function isCliExecution() {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
 }

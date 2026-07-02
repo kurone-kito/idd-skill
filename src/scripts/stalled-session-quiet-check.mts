@@ -8,7 +8,12 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  isCliExecution,
+} from './gh-exec.mts';
 
 const DEFAULT_QUIET_WINDOW_MS = 30 * 60 * 1000;
 
@@ -62,7 +67,7 @@ interface QuietArgs {
   help: boolean;
 }
 
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 
@@ -190,9 +195,16 @@ function runCli(): void {
 
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repository = `${owner}/${repo}`;
   const now = args.now || new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
   const quietWindowMs =
@@ -475,10 +487,6 @@ function ghJson(args: string[]): unknown {
   return JSON.parse(runGh(args).trim() || 'null') ?? [];
 }
 
-function ghText(args: string[]): string {
-  return runGh(args).trim();
-}
-
 function runGh(args: string[]): string {
   try {
     return execFileSync('gh', args, {
@@ -491,11 +499,4 @@ function runGh(args: string[]): string {
     if (stderr) throw new Error(`gh command failed: ${stderr}`);
     throw error;
   }
-}
-
-function isCliExecution(): boolean {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
 }

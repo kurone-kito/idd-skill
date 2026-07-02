@@ -18,6 +18,9 @@
 //     this list enumerates the concrete discovery sub-phases `A0..A5` instead,
 //     so bare `A` is intentionally non-canonical (it resolves to
 //     `unknown_phase_id`) rather than being added here.
+
+import { isCliExecution } from './gh-exec.mts';
+
 const DEFAULT_CANONICAL_PHASE_IDS = [
   'A0',
   'A0_O',
@@ -94,7 +97,7 @@ interface CreateResolverOptions {
   legacyAliases?: Record<string, string[] | string>;
 }
 
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 
@@ -372,12 +375,4 @@ function compactObject(
     }
   }
   return output;
-}
-
-function isCliExecution(): boolean {
-  try {
-    return import.meta.url === new URL(`file://${process.argv[1]}`).href;
-  } catch {
-    return false;
-  }
 }

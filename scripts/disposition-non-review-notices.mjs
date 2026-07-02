@@ -26,12 +26,13 @@
 // It is fail-closed: only classifier-recognized notices and the exact summary
 // marker are dispositioned; real reviews and review threads are never touched.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
+import { ghText } from './gh-exec.mjs';
+import { loadIddConfig } from './idd-config.mjs';
 import {
   advisoryBotIdentityToken,
   compareIsoTimestamps,
@@ -369,9 +370,6 @@ function parseArgs(argv) {
   }
   return args;
 }
-function ghText(args) {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
-}
 function ghJson(args) {
   return JSON.parse(execFileSync('gh', args, { encoding: 'utf8' }));
 }
@@ -420,13 +418,6 @@ per HEAD). Idempotent and fail-closed.
   --apply                        post the dispositions (default: dry-run)
   -h, --help                     show this help
 `;
-function loadIddConfig() {
-  try {
-    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
-  } catch {
-    return null;
-  }
-}
 /**
  * Re-fetch the claim issue and decide whether the supplied claim id is still the
  * active claim. Scoped to trusted marker authors via the shared

@@ -21,6 +21,7 @@ import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { ghText } from './gh-exec.mts';
 import {
   renderAdvisoryWaitMarker,
   renderAdvisoryWaitRecoveryMarker,
@@ -295,10 +296,6 @@ Per-type field flags:
 --from-pr forwards optional --trusted-marker-logins / --advisory-bot-logins to
 the snapshot child so its counts match the manual review-activity-snapshot path.
 `;
-
-function ghText(args: string[]): string {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
-}
 
 /**
  * POST the marker body as a JSON document (`{"body": …}`) read from stdin via

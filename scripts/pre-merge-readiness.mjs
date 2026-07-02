@@ -16,7 +16,9 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
+import { GH_TEXT_LOOP_OPTIONS, ghText, safeGhText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import { loadIddConfig } from './idd-config.mjs';
 import {
   normalizePolicyConfig,
   resolveCollaboratorMarkerTrust,
@@ -49,22 +51,25 @@ export function collectPreMergeReadiness(argv) {
   }
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_OPTIONS,
+    );
   const repoRef = `${owner}/${repo}`;
-  const viewerLogin = safeGhText([
-    'api',
-    'user',
-    '--jq',
-    '.login',
-  ]).toLowerCase();
-  const viewerAppSlug = safeGhText([
-    'api',
-    'app',
-    '--jq',
-    '.slug // .app_slug // empty',
-  ]).toLowerCase();
+  const viewerLogin = safeGhText(
+    ['api', 'user', '--jq', '.login'],
+    GH_TEXT_LOOP_OPTIONS,
+  ).toLowerCase();
+  const viewerAppSlug = safeGhText(
+    ['api', 'app', '--jq', '.slug // .app_slug // empty'],
+    GH_TEXT_LOOP_OPTIONS,
+  ).toLowerCase();
   const iddConfig = loadIddConfig();
   const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
     resolveTrustedMarkerActors({
@@ -447,12 +452,15 @@ function resolveTrustedCollaboratorMarkerLogins(owner, repo, comments) {
     ),
   ];
   return markerAuthors.filter((login) => {
-    const permission = safeGhText([
-      'api',
-      `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-      '--jq',
-      '.permission',
-    ]).toLowerCase();
+    const permission = safeGhText(
+      [
+        'api',
+        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
+        '--jq',
+        '.permission',
+      ],
+      GH_TEXT_LOOP_OPTIONS,
+    ).toLowerCase();
     return (
       permission === 'admin' ||
       permission === 'maintain' ||
@@ -462,12 +470,15 @@ function resolveTrustedCollaboratorMarkerLogins(owner, repo, comments) {
 }
 function resolveEligibleCodeownerUserLogins(owner, repo, logins) {
   return normalizeTrustedMarkerLogins(logins).filter((login) => {
-    const permission = safeGhText([
-      'api',
-      `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-      '--jq',
-      '.permission',
-    ]).toLowerCase();
+    const permission = safeGhText(
+      [
+        'api',
+        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
+        '--jq',
+        '.permission',
+      ],
+      GH_TEXT_LOOP_OPTIONS,
+    ).toLowerCase();
     return (
       permission === 'admin' ||
       permission === 'maintain' ||
@@ -564,12 +575,15 @@ function resolveViewerClassicBypassTeamSlugs(
         extractTeamOrgFromHtmlUrl(team?.html_url) ??
         owner,
     ).trim();
-    const state = safeGhText([
-      'api',
-      `orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(slug)}/memberships/${encodeURIComponent(viewerLogin)}`,
-      '--jq',
-      '.state',
-    ]).toLowerCase();
+    const state = safeGhText(
+      [
+        'api',
+        `orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(slug)}/memberships/${encodeURIComponent(viewerLogin)}`,
+        '--jq',
+        '.state',
+      ],
+      GH_TEXT_LOOP_OPTIONS,
+    ).toLowerCase();
     if (state === 'active') {
       viewerTeams.add(slug);
     }
@@ -700,16 +714,6 @@ function ghGraphql(query, variables) {
 }
 function ghJson(args, options = {}) {
   return JSON.parse(runGh(args, options).trim() || '[]');
-}
-function ghText(args) {
-  return runGh(args).trim();
-}
-function safeGhText(args) {
-  try {
-    return ghText(args);
-  } catch {
-    return '';
-  }
 }
 function ghApiJson(path, paginate = false, extraArgs = [], options = {}) {
   const args = ['api', path, ...extraArgs];
@@ -857,12 +861,5 @@ function readExternalCheckWaiverMaxValidity() {
     ).ciGate.externalCheckWaivers.maxValidity;
   } catch {
     return 'PT24H';
-  }
-}
-function loadIddConfig() {
-  try {
-    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
-  } catch {
-    return null;
   }
 }

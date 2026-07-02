@@ -23,6 +23,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
+import { ghText } from './gh-exec.mts';
 import {
   type ParsedClaimMarker,
   resolveActiveClaimForWriteGate,
@@ -228,10 +229,6 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
   --apply                        post the reply and resolve the thread (default: dry-run)
   -h, --help                     show this help
 `;
-
-function ghText(args: string[]): string {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
-}
 
 function ghJson(args: string[]): unknown {
   return JSON.parse(execFileSync('gh', args, { encoding: 'utf8' }));

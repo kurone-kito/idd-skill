@@ -6,9 +6,12 @@
 // generated .mjs. See docs/typescript-sources.md.
 
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  isCliExecution,
+} from './gh-exec.mts';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
 
 /** Author reference embedded in GitHub REST payloads. */
@@ -129,7 +132,7 @@ const BRANCH_STATES = new Set([
   'unknown',
 ]);
 
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 
@@ -239,9 +242,16 @@ function runCli(): void {
 
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repository = `${owner}/${repo}`;
 
   const routingInput = collectRoutingInput({
@@ -283,7 +293,10 @@ function collectRoutingInput({
 }) {
   const prs = findIssueRelatedOpenPrs({ repository, issueNumber });
   const issuePr = prs.length === 1 ? prs[0] : null;
-  const viewerLogin = ghText(['api', 'user', '--jq', '.login']).toLowerCase();
+  const viewerLogin = ghText(
+    ['api', 'user', '--jq', '.login'],
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ).toLowerCase();
   const gitState = collectLocalGitState();
 
   if (!issuePr) {
@@ -779,10 +792,6 @@ export function recoverJsonFromGhFailure(
   return { recovered: false, value: null };
 }
 
-function ghText(args: string[]): string {
-  return runGh(args).trim();
-}
-
 function runGh(args: string[]): string {
   try {
     return execFileSync('gh', args, {
@@ -843,11 +852,4 @@ function runGitAllowFailure(args: string[]) {
       stderr: String((error as { stderr?: unknown } | null)?.stderr ?? ''),
     };
   }
-}
-
-function isCliExecution(): boolean {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
 }
