@@ -524,13 +524,13 @@ After scanning the current batch:
 
 When the entire viable candidate set is exhausted (the last row above),
 resolve the exit by scope: if the A3.5 approval-needed bucket is
-non-empty, stop with the approval-needed message (the approval hold takes
-precedence — not a true zero); otherwise, under `roadmap-first` scope
-route to the A0-O roadmap-first fallback (A0 trigger (b)) if it has not run
-this pass; under `issue-scope: roadmap`, or once that fallback is spent,
-report that all viable issues are currently claimed and stop (not an
-abort). Do not post `unclaimed-by` (no claim was made); retry later as
-claims go stale or new work appears.
+non-empty, report both the claimed-survivor exhaustion and the
+approval-needed hold, then stop (the approval hold takes precedence — not
+a true zero); otherwise, under `roadmap-first` scope route to the A0-O
+roadmap-first fallback (A0 trigger (b)) if it has not run this pass; under
+`issue-scope: roadmap`, or once that fallback is spent, report that all
+viable issues are currently claimed and stop (not an abort). Do not post
+`unclaimed-by` (no claim was made); retry later.
 
 See [Discover — A4 Step 1.5 Rationale](../../docs/idd-design-rationale.md#a4-step-15--rationale-active-claim-pre-scan)
 for why this pre-scan exists.
