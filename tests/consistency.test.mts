@@ -20,8 +20,8 @@ import {
   stripGeneratedFromBanner,
 } from '../src/scripts/consistency-helpers.mts';
 import { findPlaceholders } from '../src/scripts/idd-doctor.mts';
+import { readJson, readText } from './test-utils.mts';
 
-const FIXTURE_ROOT = new URL('./fixtures/', import.meta.url);
 const SUITABILITY_PATH = new URL(
   '../.github/instructions/idd-suitability.instructions.md',
   import.meta.url,
@@ -364,12 +364,16 @@ test('doc budget guard is a no-op without config and notices on empty budgets', 
 });
 
 test('config drift scenarios detect mismatches between config and overview defaults', () => {
-  const overview = readText('consistency/config/overview.txt');
+  const overview = readText('tests/fixtures/consistency/config/overview.txt');
   const missingRowOverview = readText(
-    'consistency/config/overview-missing-policy-row.txt',
+    'tests/fixtures/consistency/config/overview-missing-policy-row.txt',
   );
-  const aligned = readJson('consistency/config/aligned-config.json');
-  const drifted = readJson('consistency/config/drifted-config.json');
+  const aligned = readJson(
+    'tests/fixtures/consistency/config/aligned-config.json',
+  );
+  const drifted = readJson(
+    'tests/fixtures/consistency/config/drifted-config.json',
+  );
 
   assert.deepEqual(collectPolicyConfigDrift(aligned, overview), []);
   assert.deepEqual(collectPolicyConfigDrift(drifted, overview), [
@@ -795,7 +799,7 @@ test('A4.5 outcome fixtures match the documented check-to-outcome mapping', () =
   const text = readFileSync(SUITABILITY_PATH, 'utf8');
   const checks = extractCheckOutcomes(text);
   const outcomes = extractOutcomeTable(text);
-  const cases = readJson('consistency/a45-outcomes.json') as {
+  const cases = readJson('tests/fixtures/consistency/a45-outcomes.json') as {
     id: string;
     failedCheck: string;
     expectedOutcome: string;
@@ -931,14 +935,6 @@ function extractOutcomeTable(text: string): Map<string, string> {
       return [cells[0].replaceAll('`', ''), cells[2]] as [string, string];
     }),
   );
-}
-
-function readJson(relativePath: string): unknown {
-  return JSON.parse(readText(relativePath));
-}
-
-function readText(relativePath: string): string {
-  return readFileSync(new URL(relativePath, FIXTURE_ROOT), 'utf8');
 }
 
 test('package.json version stays aligned with iddVersion in the shipped and template configs', () => {

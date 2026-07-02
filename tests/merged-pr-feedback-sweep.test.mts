@@ -5,31 +5,13 @@ import {
   buildMergedPrFeedbackSweep,
   type MergedPrInput,
 } from '../src/scripts/merged-pr-feedback-sweep.mts';
+import { buildCommentThread } from './test-utils.mts';
 
 const OPTIONS = {
   trustedMarkerActors: ['kurone-kito'],
   advisoryBotLogins: ['coderabbitai[bot]'],
   iddAgentLogins: ['kurone-kito'],
 };
-
-function thread(
-  isResolved: boolean,
-  comments: { login: string; body: string; createdAt: string; url?: string }[],
-  path = 'src/x.mts',
-) {
-  return {
-    isResolved,
-    path,
-    comments: {
-      nodes: comments.map((c) => ({
-        body: c.body,
-        url: c.url ?? 'https://example/thread',
-        createdAt: c.createdAt,
-        author: { login: c.login },
-      })),
-    },
-  };
-}
 
 test('surfaces an unresolved reviewer thread with no disposition', () => {
   const prs: MergedPrInput[] = [
@@ -38,7 +20,7 @@ test('surfaces an unresolved reviewer thread with no disposition', () => {
       mergedAt: '2026-06-10T00:00:00Z',
       mergeCommit: 'abc',
       threads: [
-        thread(false, [
+        buildCommentThread(false, [
           {
             login: 'coderabbitai[bot]',
             body: 'This loop can deadlock.',
@@ -63,7 +45,7 @@ test('excludes a resolved thread', () => {
     {
       number: 2,
       threads: [
-        thread(true, [
+        buildCommentThread(true, [
           {
             login: 'coderabbitai[bot]',
             body: 'nit',
@@ -82,7 +64,7 @@ test('marks an unresolved thread dispositioned when the agent replied with a mar
     {
       number: 3,
       threads: [
-        thread(false, [
+        buildCommentThread(false, [
           {
             login: 'coderabbitai[bot]',
             body: 'concern',
@@ -106,7 +88,7 @@ test('marks an unresolved thread dispositioned on an IDD AMD reply', () => {
     {
       number: 3,
       threads: [
-        thread(false, [
+        buildCommentThread(false, [
           {
             login: 'coderabbitai[bot]',
             body: 'concern',
@@ -130,7 +112,7 @@ test('excludes a thread the IDD agent itself opened', () => {
     {
       number: 4,
       threads: [
-        thread(false, [
+        buildCommentThread(false, [
           {
             login: 'kurone-kito',
             body: 'self note',
@@ -204,7 +186,7 @@ test('a later thread-level IDD disposition addresses a top-level comment', () =>
       // The disposition lives inside a (resolved) review thread, not as a
       // top-level comment; it must still count as the "later disposition".
       threads: [
-        thread(true, [
+        buildCommentThread(true, [
           {
             login: 'coderabbitai[bot]',
             body: 'related concern',
@@ -404,7 +386,7 @@ test('summary aggregates across PRs and skips clean PRs', () => {
     {
       number: 11,
       threads: [
-        thread(false, [
+        buildCommentThread(false, [
           { login: 'h', body: 'x', createdAt: '2026-06-09T00:00:00Z' },
         ]),
       ],
@@ -419,7 +401,7 @@ test('summary aggregates across PRs and skips clean PRs', () => {
     {
       number: 12,
       threads: [
-        thread(true, [
+        buildCommentThread(true, [
           { login: 'h', body: 'z', createdAt: '2026-06-09T00:00:00Z' },
         ]),
       ],

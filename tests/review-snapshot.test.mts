@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
@@ -8,6 +7,7 @@ import {
   indexLatestGatingReviewsByAuthor,
   indexThreadsByReview,
 } from '../src/scripts/protocol-helpers.mts';
+import { readJson } from './test-utils.mts';
 
 type ReviewLike = Parameters<
   typeof indexLatestGatingReviewsByAuthor
@@ -22,19 +22,21 @@ interface SnapshotFixture {
   comments: CommentLike[];
 }
 
-const acceptedAll = readJson('fixtures/review-snapshots/accepted-all.json');
+const acceptedAll = readJson(
+  'fixtures/review-snapshots/accepted-all.json',
+) as SnapshotFixture;
 const changesRequested = readJson(
   'fixtures/review-snapshots/changes-requested.json',
-);
+) as SnapshotFixture;
 const latestGatingReview = readJson(
   'fixtures/review-snapshots/latest-gating-review.json',
-);
+) as SnapshotFixture;
 const truncatedThread = readJson(
   'fixtures/review-snapshots/truncated-thread.json',
-);
+) as SnapshotFixture;
 const newCommentAfterF2 = readJson(
   'fixtures/review-snapshots/new-comment-after-f2.json',
-);
+) as SnapshotFixture;
 
 test('indexes the latest gating review per author', () => {
   const index = indexLatestGatingReviewsByAuthor(acceptedAll.reviews);
@@ -541,9 +543,3 @@ test('activity snapshot ignores pending check sentinel timestamps', () => {
   assert.equal(summary.latestCiCompletedAt, 'none');
   assert.equal(summary.latestPassingCiCompletedAt, 'none');
 });
-
-function readJson(relativePath: string): SnapshotFixture {
-  return JSON.parse(
-    readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8'),
-  ) as SnapshotFixture;
-}

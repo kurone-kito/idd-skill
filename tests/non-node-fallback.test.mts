@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+
+import {
+  extractSection,
+  normalizeWhitespace,
+  readText,
+} from './test-utils.mts';
 
 test('customization docs keep npx fallback wording aligned', () => {
   for (const file of [
@@ -510,23 +515,3 @@ test('ci wait helper docs route non-vendored profiles through the selected comma
     );
   }
 });
-
-function readText(relativePath: string): string {
-  return readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8');
-}
-
-function normalizeWhitespace(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
-}
-
-function extractSection(
-  text: string,
-  startMarker: string,
-  endMarker: string,
-): string {
-  const start = text.indexOf(startMarker);
-  assert.notEqual(start, -1, `Missing section marker: ${startMarker}`);
-  const end = text.indexOf(endMarker, start);
-  assert.notEqual(end, -1, `Missing section marker: ${endMarker}`);
-  return text.slice(start, end);
-}

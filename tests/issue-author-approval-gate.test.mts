@@ -3,20 +3,10 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import { stripGeneratedFromBanner } from '../src/scripts/consistency-helpers.mts';
+import { extractSection } from './test-utils.mts';
 
 function read(relativePath: string) {
   return readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8');
-}
-
-function extractSection(
-  text: string,
-  startHeading: string,
-  endHeading?: string,
-) {
-  const start = text.indexOf(startHeading);
-  assert.notEqual(start, -1, `missing start heading: ${startHeading}`);
-  const end = endHeading ? text.indexOf(endHeading, start) : -1;
-  return text.slice(start, end === -1 ? undefined : end).trim();
 }
 
 test('discover instructions define approval-needed fallback routing', () => {

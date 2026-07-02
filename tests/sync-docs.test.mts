@@ -1,66 +1,15 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import {
-  cpSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
 
-// sync-docs.mts runs at module top level and calls process.exit, exporting
-// nothing, so it can only be exercised as a subprocess. The script resolves
-// its repository root by walking up from its own location to the nearest
-// package.json (resolveRepoRoot) and reads audit/sync-manifest.json relative
-// to that root — never from cwd. So a hermetic fixture must place package.json
-// and audit/sync-manifest.json next to a copy of the committed .mjs artifact.
-const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
-const SYNC_DOCS = join(REPO_ROOT, 'scripts/sync-docs.mjs');
-// sync-docs.mjs imports the shared banner/helper module, which in turn imports
-// policy-helpers; the hermetic fixture must carry that whole import closure so
-// the copied script resolves its siblings under the temp scripts/ dir.
-const SYNC_DOCS_DEPS = ['consistency-helpers.mjs', 'policy-helpers.mjs'];
+import { makeScaffoldedSyncRepo } from './test-utils.mts';
 
 interface RunResult {
   status: number;
   stdout: string;
   stderr: string;
-}
-
-// Build a self-contained fixture repo: package.json (so resolveRepoRoot stops
-// here), a copy of the real sync-docs.mjs under scripts/, the fixture
-// manifest, and any referenced source/target files.
-function makeRepo(
-  register: (cleanup: () => void) => void,
-  manifest: unknown,
-  files: Record<string, string> = {},
-): string {
-  const dir = mkdtempSync(join(tmpdir(), 'sync-docs-'));
-  register(() => rmSync(dir, { recursive: true, force: true }));
-
-  writeFile(dir, 'package.json', '{}\n');
-  mkdirSync(join(dir, 'scripts'), { recursive: true });
-  cpSync(SYNC_DOCS, join(dir, 'scripts', 'sync-docs.mjs'));
-  for (const dep of SYNC_DOCS_DEPS) {
-    cpSync(join(REPO_ROOT, 'scripts', dep), join(dir, 'scripts', dep));
-  }
-  writeFile(dir, 'audit/sync-manifest.json', JSON.stringify(manifest, null, 2));
-
-  for (const [rel, content] of Object.entries(files)) {
-    writeFile(dir, rel, content);
-  }
-  return dir;
-}
-
-function writeFile(dir: string, rel: string, content: string): void {
-  const abs = join(dir, rel);
-  mkdirSync(dirname(abs), { recursive: true });
-  writeFileSync(abs, content, 'utf8');
 }
 
 function read(dir: string, rel: string): string {
@@ -86,7 +35,7 @@ function run(dir: string, ...args: string[]): RunResult {
 }
 
 test('exact syncPair: --check reports drift without writing, --apply writes and is idempotent', (t) => {
-  const dir = makeRepo(
+  const dir = makeScaffoldedSyncRepo(
     (cleanup) => t.after(cleanup),
     {
       syncPairs: [
@@ -126,7 +75,7 @@ test('exact syncPair: --check reports drift without writing, --apply writes and 
 });
 
 test('contains and structure syncPair modes are skipped, not generated', (t) => {
-  const dir = makeRepo((cleanup) => t.after(cleanup), {
+  const dir = makeScaffoldedSyncRepo((cleanup) => t.after(cleanup), {
     syncPairs: [
       {
         id: 'pair-contains',
@@ -153,7 +102,7 @@ test('contains and structure syncPair modes are skipped, not generated', (t) => 
 });
 
 test('generatedBlock resolves explicit paths (prefix-stripped); absent paths render an empty list', (t) => {
-  const dir = makeRepo(
+  const dir = makeScaffoldedSyncRepo(
     (cleanup) => t.after(cleanup),
     {
       generatedBlocks: [
@@ -187,7 +136,7 @@ test('generatedBlock resolves explicit paths (prefix-stripped); absent paths ren
 });
 
 test('shell-file-list rewrites the "for FILE in" block from its source generatedBlock', (t) => {
-  const dir = makeRepo(
+  const dir = makeScaffoldedSyncRepo(
     (cleanup) => t.after(cleanup),
     {
       generatedBlocks: [
@@ -217,7 +166,7 @@ test('shell-file-list rewrites the "for FILE in" block from its source generated
 test('doStripPrefix mismatch sets nonZeroExit, independent of mode, short-circuiting all writes', (t) => {
   const docOriginal = blockFixture('blk');
   const otherOriginal = blockFixture('other');
-  const dir = makeRepo(
+  const dir = makeScaffoldedSyncRepo(
     (cleanup) => t.after(cleanup),
     {
       generatedBlocks: [
@@ -256,7 +205,7 @@ test('doStripPrefix mismatch sets nonZeroExit, independent of mode, short-circui
 });
 
 test('an unrecognized syncPair mode throws and exits non-zero', (t) => {
-  const dir = makeRepo((cleanup) => t.after(cleanup), {
+  const dir = makeScaffoldedSyncRepo((cleanup) => t.after(cleanup), {
     syncPairs: [
       {
         id: 'pair-bogus',
@@ -275,7 +224,7 @@ test('an unrecognized syncPair mode throws and exits non-zero', (t) => {
 });
 
 test('shell-file-list referencing an unknown generatedBlock sets nonZeroExit', (t) => {
-  const dir = makeRepo((cleanup) => t.after(cleanup), {
+  const dir = makeScaffoldedSyncRepo((cleanup) => t.after(cleanup), {
     shellFileLists: [
       { id: 'sl', file: 'sh.md', generatedBlock: 'does-not-exist' },
     ],
@@ -287,7 +236,7 @@ test('shell-file-list referencing an unknown generatedBlock sets nonZeroExit', (
 });
 
 test('generatedBlock with a missing target file sets nonZeroExit', (t) => {
-  const dir = makeRepo((cleanup) => t.after(cleanup), {
+  const dir = makeScaffoldedSyncRepo((cleanup) => t.after(cleanup), {
     generatedBlocks: [{ id: 'blk', file: 'missing.md', paths: ['x'] }],
   });
 
@@ -297,7 +246,7 @@ test('generatedBlock with a missing target file sets nonZeroExit', (t) => {
 });
 
 test('generatedBlock whose marker is absent sets nonZeroExit', (t) => {
-  const dir = makeRepo(
+  const dir = makeScaffoldedSyncRepo(
     (cleanup) => t.after(cleanup),
     { generatedBlocks: [{ id: 'blk', file: 'doc.md', paths: ['x'] }] },
     { 'doc.md': 'no markers here\n' },

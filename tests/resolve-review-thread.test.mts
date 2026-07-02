@@ -10,22 +10,9 @@ import {
   type ReviewThreadNode,
 } from '../src/scripts/resolve-review-thread.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
+import { buildReviewThreadNode } from './test-utils.mts';
 
 const resultSchema = loadJson('schemas/resolve-review-thread.schema.json');
-
-function thread(
-  id: string,
-  isResolved: boolean,
-  commentDatabaseIds: number[],
-): ReviewThreadNode {
-  return {
-    id,
-    isResolved,
-    comments: {
-      nodes: commentDatabaseIds.map((databaseId) => ({ databaseId })),
-    },
-  };
-}
 
 test('parseArgs reads the call shape and defaults to dry-run', () => {
   const args = parseArgs([
@@ -66,8 +53,8 @@ test('parseArgs reads the apply-mode claim inputs', () => {
 
 test('findThreadForComment maps a REST comment id to its owning thread and root comment', () => {
   const threads = [
-    thread('thread-a', false, [900, 901]),
-    thread('thread-b', true, [1001, 1002]),
+    buildReviewThreadNode('thread-a', false, [900, 901]),
+    buildReviewThreadNode('thread-b', true, [1001, 1002]),
   ];
   const match = findThreadForComment(threads, 1002);
   assert.deepEqual(match, {
@@ -81,7 +68,7 @@ test('findThreadForComment returns the top-level comment id when a later reply m
   // The reply must target the thread's first (top-level) comment, since GitHub
   // does not support replies to replies; matching a later reply still resolves
   // to the root comment id.
-  const threads = [thread('thread-x', false, [500, 777])];
+  const threads = [buildReviewThreadNode('thread-x', false, [500, 777])];
   assert.deepEqual(findThreadForComment(threads, 777), {
     threadId: 'thread-x',
     isResolved: false,
@@ -90,7 +77,7 @@ test('findThreadForComment returns the top-level comment id when a later reply m
 });
 
 test('findThreadForComment returns null when no thread owns the comment', () => {
-  const threads = [thread('thread-a', false, [900])];
+  const threads = [buildReviewThreadNode('thread-a', false, [900])];
   assert.equal(findThreadForComment(threads, 999), null);
 });
 
@@ -102,7 +89,7 @@ test('findThreadForComment ignores missing databaseId nodes safely', () => {
       comments: { nodes: [{ databaseId: null }] },
     },
     { id: 'thread-b', isResolved: false, comments: { nodes: null } },
-    thread('thread-c', false, [1001]),
+    buildReviewThreadNode('thread-c', false, [1001]),
   ];
   assert.deepEqual(findThreadForComment(threads, 1001), {
     threadId: 'thread-c',
