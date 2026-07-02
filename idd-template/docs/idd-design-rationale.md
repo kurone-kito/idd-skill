@@ -19,10 +19,10 @@ remain in the instruction files.
 The `roadmap-first` A0-O fallback originally fired only when **zero
 candidates reached A3.5** (trigger (a)) — A2 found no open execution
 leaves, or A3 filtered them all out as blocked. But a candidate can reach
-A3.5 and still be unworkable: the workshop leaves #553 (which runs a real
-external deployment) and #611 (a "published" convergence checkpoint)
-pass A3 readiness and A3.5 (the owner self-approves), then fail the A4
-viability gate (Autonomous completion). Because they reached A3.5, the
+A3.5 and still be unworkable: a workshop leaf that runs a real external
+deployment, or a "published" convergence checkpoint, can pass A3 readiness
+and A3.5 (the owner self-approves), then fail the A4 viability gate
+(Autonomous completion). Because they reached A3.5, the
 original trigger stayed suppressed, so A4 stopped with "no viable
 issue" and never fell back to A0-O even when claimable orphan issues
 existed — forcing an operator opt-in every loop. The same shadowing

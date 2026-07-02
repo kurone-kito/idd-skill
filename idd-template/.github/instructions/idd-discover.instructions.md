@@ -117,10 +117,11 @@ in `idd-overview-core.instructions.md` before any repo-wide orphan issue
 search.
 
 When A0-O runs as the `roadmap-first` fallback (not the `orphan-first`
-primary path), every "proceed to A1" / "skip to A1" exit below instead
-goes to the **A3 decision tree** — the roadmap path already ran and must
-not be re-entered (this prevents an A1 ↔ A0-O loop, e.g. under
-`public-disabled` on a public repo).
+primary path), every exit below that would re-enter **A1** or reach the
+**A3 decision tree** is redirected by the invoking trigger — trigger (a)
+to the A3 decision tree, trigger (b) (A4 exhaustion) to the A4 **"report
+and stop (not an abort)"** terminal — because the roadmap path already ran
+and must not be re-entered (no A1 ↔ A0-O or A4 ↔ A0-O loop).
 
 - If `orphan-first-policy` is `public-disabled`, first determine the
   repository visibility. If the repository is public, skip A0-O without
@@ -167,10 +168,8 @@ next step depends on which path invoked A0-O:
   to **A1** and continue with the normal
   A1 → A1.5 → A2 → A3 → A3.5 → A4 sequence.
 - **`roadmap-first` fallback**: the roadmap path already ran, so do **not**
-  re-enter A1. A **trigger (a)** entry (zero-reach-A3.5) goes straight to
-  the **A3 decision tree** (per the guard atop A0-O). A **trigger (b)**
-  entry (A4 Step 1 / Step 1.5 exhaustion) instead **reports and stops (not
-  an abort)** via that invoking A4 terminal.
+  re-enter A1. This exit is redirected by the invoking trigger per the
+  guard atop A0-O.
 
 The A3 decision tree (abort / ask operator in unattended mode) is
 reached when the active discovery path(s) produce zero results: for
@@ -487,12 +486,13 @@ If **no issue** survives the gate:
   that only approval-needed issues remain and stop without claim in
   unattended mode. In attended mode, ask the operator whether to obtain
   approval or opt out explicitly;
-- otherwise, in the **roadmap-traversal** candidate flow (A2→A3→A4 only;
-  the A0-T explicit-target gate never reaches here — a failed target stops
-  in A0-T with no fallback), route to the **A0-O** roadmap-first fallback
-  (A0 trigger (b)) if it has not run this pass; once spent, report the
-  discarded issues with the criterion each failed, then **stop** — do not
-  post `unclaimed-by` because no claim was made. This is not an abort.
+- otherwise, under **`roadmap-first`** scope in the roadmap-traversal flow
+  (A2→A3→A4; not the A0-T gate, which stops a failed target with no
+  fallback), route to the **A0-O** roadmap-first fallback (A0 trigger (b))
+  if it has not run this pass. Once spent, or under `issue-scope: roadmap`
+  (A0-O skipped), report the discarded issues with the criterion each
+  failed, then **stop** — do not post `unclaimed-by` because no claim was
+  made. This is not an abort.
 
 ### Step 1.5 — Active-claim pre-scan
 
@@ -525,12 +525,12 @@ After scanning the current batch:
 When the entire viable candidate set is exhausted (the last row above),
 resolve the exit by scope: if the A3.5 approval-needed bucket is
 non-empty, stop with the approval-needed message (the approval hold takes
-precedence — not a true zero); otherwise, under `roadmap-first`
-discovery, route to the A0-O roadmap-first fallback (A0 trigger (b)) if it
-has not run this pass, else report that all viable issues are currently
-claimed and stop (not an abort). Do not post `unclaimed-by` (no claim was
-made); retry later when claims may have become stale or new viable
-candidates appear.
+precedence — not a true zero); otherwise, under `roadmap-first` scope
+route to the A0-O roadmap-first fallback (A0 trigger (b)) if it has not run
+this pass; under `issue-scope: roadmap`, or once that fallback is spent,
+report that all viable issues are currently claimed and stop (not an
+abort). Do not post `unclaimed-by` (no claim was made); retry later as
+claims go stale or new work appears.
 
 See [Discover — A4 Step 1.5 Rationale](../../docs/idd-design-rationale.md#a4-step-15--rationale-active-claim-pre-scan)
 for why this pre-scan exists.
