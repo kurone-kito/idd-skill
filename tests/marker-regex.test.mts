@@ -8,6 +8,7 @@ import {
 
 test('escapeRegex escapes every RegExp metacharacter', () => {
   assert.equal(
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal ${} chars under test, not a forgotten template placeholder.
     escapeRegex('.*+?^${}()|[]\\'),
     '\\.\\*\\+\\?\\^\\$\\{\\}\\(\\)\\|\\[\\]\\\\',
   );

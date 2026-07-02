@@ -156,6 +156,9 @@ test('isAuthorizedForcedHandoffActor rejects an empty or blank login without tou
 // collapses maintain to write).
 const DEFAULT_POLICY_CASES: [string, string, boolean][] = [
   ['admin', 'admin', true],
+  // Isolates roleName === 'admin' as the sole cause: permission is 'write'
+  // here, so this only passes if the roleName clause is actually checked.
+  ['write', 'admin', true],
   ['write', 'maintain', true],
   ['admin', '', true],
   ['write', 'write', false],
@@ -184,7 +187,10 @@ for (const [permission, roleName, expected] of DEFAULT_POLICY_CASES) {
 // legacy permission write (so a custom write-base role_name still
 // satisfies the loose policy via the legacy field).
 const LOOSE_POLICY_CASES: [string, string, boolean][] = [
-  ['admin', 'admin', true],
+  // Isolates permission === 'admin' as the sole cause: roleName matches
+  // none of the roleName clauses, so this only passes if the legacy
+  // permission field is actually checked.
+  ['admin', 'custom-role', true],
   ['write', 'maintain', true],
   ['write', 'write', true],
   ['write', 'custom-role', true],
