@@ -11,6 +11,8 @@ import {
   buildActivitySnapshotSummary,
   buildAdvisoryWaitSummary,
   buildPreMergeReadinessSummary,
+  CODERABBIT_SUMMARY_MARKER,
+  classifyRegularBotComment,
   computePreMergeReadinessBlockers,
   deriveIddAgentLogins,
   findLastCopilotReviewCommit,
@@ -4290,3 +4292,66 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
   assert.equal(proceeds(general), false);
   assert.equal(unreplied(general), 2);
 });
+
+// #1191: classifyRegularBotComment → hasExplicitDispositionAfter must accept a
+// disposition that names the advisory bot LOGIN (`coderabbitai[bot]`) — the
+// canonical disposition-non-review-notices form — not only the `\bCodeRabbit\b`
+// product word, which the login never matches (no boundary before the `ai`).
+{
+  const summarySticky = {
+    id: 1,
+    createdAt: '2026-07-01T00:00:00Z',
+    body: `${CODERABBIT_SUMMARY_MARKER}\n\nSummary of changes.`,
+    author: { login: 'coderabbitai[bot]' },
+  };
+  const laterDisposition = (body: string) => ({
+    id: 2,
+    createdAt: '2026-07-01T01:00:00Z',
+    body,
+    author: { login: 'kurone-kito' },
+  });
+  const classify = (dispositionBody: string) =>
+    classifyRegularBotComment(
+      summarySticky,
+      [summarySticky, laterDisposition(dispositionBody)],
+      [],
+      { isDispositionAuthor: (login: string) => login === 'kurone-kito' },
+    );
+
+  test('#1191: a login-named disposition resolves a CodeRabbit summary sticky', () => {
+    const result = classify(
+      '**Accepted** — coderabbitai[bot] summary walkthrough confirmed; no action required.',
+    );
+    assert.equal(result?.classifier, 'RESOLVED');
+  });
+
+  test('#1191: the product-word disposition form still resolves the sticky', () => {
+    const result = classify(
+      "**Accepted** — CodeRabbit's summary reviewed; no action required.",
+    );
+    assert.equal(result?.classifier, 'RESOLVED');
+  });
+
+  test('#1191: a disposition naming neither login nor product word does not resolve (fail-closed)', () => {
+    const result = classify('**Accepted** — reviewed; no action required.');
+    assert.equal(result, null);
+  });
+
+  test('#1191: an IDD-scoped disposition author still excludes a reviewer-authored marker', () => {
+    const result = classifyRegularBotComment(
+      summarySticky,
+      [
+        summarySticky,
+        {
+          id: 3,
+          createdAt: '2026-07-01T01:00:00Z',
+          body: '**Accepted** — coderabbitai[bot] summary walkthrough looks fine.',
+          author: { login: 'some-reviewer' },
+        },
+      ],
+      [],
+      { isDispositionAuthor: (login: string) => login === 'kurone-kito' },
+    );
+    assert.equal(result, null);
+  });
+}
