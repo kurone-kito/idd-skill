@@ -582,13 +582,22 @@ function readInstructionFiles(): { name: string; source: string }[] {
     }));
 }
 
+// The one dev tool the instructions legitimately `node`-invoke without it being
+// an adopter helper: the sync-docs generated-from banner tells maintainers to
+// run `node scripts/sync-docs.mjs --apply`, so it must be excluded explicitly.
+// Every other dev tool (build-ts, verify-workshop-integrity, …) is excluded by
+// ABSENCE — it is never `node`-invoked in the instructions — so it is NOT added
+// here on purpose: adding it would let a future accidental `node scripts/X.mjs`
+// mention slip past the guard silently. Adopters receive the banner-free
+// idd-template/ source, so they never see the sync-docs invocation either.
+const BANNER_INVOKED_DEV_TOOL = 'scripts/sync-docs.mjs';
+
 // Collect every helper the instruction files tell adopters to RUN as
 // `node scripts/<name>.mjs`. That runnable-invocation form is the scoped signal
 // for a "documented CLI adopter helper": it deliberately excludes shared
 // libraries that appear only as bare `scripts/<name>.mjs` import/function
-// mentions (protocol-helpers, policy-helpers) and dev/CI tooling the
-// instructions never invoke (build-ts, sync-docs, verify-workshop-integrity,
-// merged-pr-feedback-sweep).
+// mentions (protocol-helpers, policy-helpers) and the single banner-invoked dev
+// tool above.
 function collectDocumentedCliAdopterHelpers(): Set<string> {
   const referenced = new Set<string>();
   for (const { source } of readInstructionFiles()) {
@@ -598,7 +607,9 @@ function collectDocumentedCliAdopterHelpers(): Set<string> {
     for (const match of source.matchAll(
       /\bnode\s+(scripts\/[a-z0-9-]+\.mjs)\b/g,
     )) {
-      referenced.add(match[1]);
+      if (match[1] !== BANNER_INVOKED_DEV_TOOL) {
+        referenced.add(match[1]);
+      }
     }
   }
   return referenced;
@@ -685,7 +696,11 @@ test('the registration guard scopes out instruction-referenced libraries and dev
   }
 
   // Dev/CI tooling and the maintainer-only post-merge sweep are likewise never
-  // adopter-run commands, so they stay unregistered too.
+  // adopter-run commands, so they stay unregistered too. build-ts /
+  // verify-workshop-integrity / merged-pr-feedback-sweep are excluded by
+  // absence (never `node`-invoked in the instructions); sync-docs is
+  // `node`-invoked by the generated-from banner but excluded via
+  // BANNER_INVOKED_DEV_TOOL, so the guard still scopes it out.
   for (const nonAdopterTool of [
     'scripts/build-ts.mjs',
     'scripts/sync-docs.mjs',

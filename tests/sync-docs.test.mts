@@ -21,6 +21,10 @@ import { fileURLToPath } from 'node:url';
 // and audit/sync-manifest.json next to a copy of the committed .mjs artifact.
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SYNC_DOCS = join(REPO_ROOT, 'scripts/sync-docs.mjs');
+// sync-docs.mjs imports the shared banner/helper module, which in turn imports
+// policy-helpers; the hermetic fixture must carry that whole import closure so
+// the copied script resolves its siblings under the temp scripts/ dir.
+const SYNC_DOCS_DEPS = ['consistency-helpers.mjs', 'policy-helpers.mjs'];
 
 interface RunResult {
   status: number;
@@ -42,6 +46,9 @@ function makeRepo(
   writeFile(dir, 'package.json', '{}\n');
   mkdirSync(join(dir, 'scripts'), { recursive: true });
   cpSync(SYNC_DOCS, join(dir, 'scripts', 'sync-docs.mjs'));
+  for (const dep of SYNC_DOCS_DEPS) {
+    cpSync(join(REPO_ROOT, 'scripts', dep), join(dir, 'scripts', dep));
+  }
   writeFile(dir, 'audit/sync-manifest.json', JSON.stringify(manifest, null, 2));
 
   for (const [rel, content] of Object.entries(files)) {
