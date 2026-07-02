@@ -1294,6 +1294,19 @@ export function classifyReviewThreadForGate(thread, options = {}) {
   }
   return { classification: 'awaiting-reviewer' };
 }
+// Pre-merge gate invariant (review threads -> `threads.actionableCount`):
+// MERGE-BLOCKING. `computePreMergeReadinessBlockers` fails closed unless
+// `actionableCount === 0`. An IDD agent's (or the PR author's) latest thread
+// comment classifies `awaiting-reviewer`, which does NOT add to
+// `actionableCount`, so a recognition error here can fail OPEN: globally
+// promoting a non-agent into `iddAgentLogins` makes that actor's genuine
+// unresolved feedback classify `awaiting-reviewer` and stop blocking (when
+// conversation resolution is not required; otherwise it stays a blocking
+// `conversation-resolve-*`). This gate classifies each thread by its own
+// latest-author identity (IDD agent / PR author), not by disposition
+// recognition; never globally promote a non-agent into `iddAgentLogins`. See
+// the consolidated invariants above `summarizeDispositionEvidenceForGate`
+// (#1182 / PR #1184).
 export function summarizeReviewThreadsForGate(threads, options = {}) {
   const summary = {
     actionableCount: 0,
@@ -2445,6 +2458,16 @@ export function resolveLatestReviewWatermark(comments, options = {}) {
   }
   return latest;
 }
+// Pre-merge gate invariant (unreplied regular comments -> `unrepliedComments`):
+// does NOT feed `computePreMergeReadinessBlockers` (no code-rollup blocker), but
+// it is NOT harmless -- the written F2 gate "Unreplied comments = 0" in
+// `idd-pre-merge.instructions.md` routes any non-IDD regular comment without a
+// later IDD reply back to review triage. So globally promoting a non-agent into
+// `iddAgentLogins` filters that actor's genuine unreplied feedback out of the F2
+// gate (fail-OPEN at the process level; its comments are excluded and its reply
+// advances the watermark), while missing a real agent over-counts. See the
+// consolidated invariants above `summarizeDispositionEvidenceForGate`
+// (#1182 / PR #1184).
 export function summarizeRegularCommentsForGate(comments, options = {}) {
   const iddAgentLogins = new Set(
     normalizeTrustedMarkerLogins(options.iddAgentLogins ?? []),
@@ -2578,6 +2601,41 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
     items,
   };
 }
+// Pre-merge gate invariants -- READ BEFORE MODIFYING ANY `iddAgentLogins`-KEYED
+// GATE HELPER. Three functions key disposition, reply, and thread-author
+// recognition on `iddAgentLogins`, and each reacts DIFFERENTLY when that
+// recognition is wrong:
+//   1. `summarizeDispositionEvidenceForGate` (this fn) -- MERGE-BLOCKING (feeds
+//      `computePreMergeReadinessBlockers` via `dispositionEvidence`). Both
+//      recognition-error directions matter: FAILING to recognize a real agent
+//      leaves its own disposition/reply in the outstanding set -> over-block
+//      (fail-closed); GLOBALLY promoting a non-agent instead drops that actor's
+//      genuine outstanding feedback (this fn excludes `iddAgentLogins` authors
+//      from `outstandingComments`), so `blockingCount` can fall to 0 ->
+//      fail-OPEN.
+//   2. `summarizeReviewThreadsForGate` (`actionableCount`) -- MERGE-BLOCKING.
+//      Without required conversation resolution, an IDD agent's latest thread
+//      comment is `awaiting-reviewer` (non-blocking), so GLOBALLY promoting a
+//      non-agent into `iddAgentLogins` makes that actor's genuine unresolved
+//      feedback stop blocking -> fail-OPEN. This gate keys on latest-author
+//      identity, not disposition recognition.
+//   3. `summarizeRegularCommentsForGate` (`unrepliedComments`) -- does NOT feed
+//      `computePreMergeReadinessBlockers`, but the written F2 gate "Unreplied
+//      comments = 0" (`idd-pre-merge.instructions.md`) still consumes it, so
+//      promoting a non-agent filters that actor's unreplied feedback out of
+//      that gate -> fail-OPEN at the process level (not harmless).
+// Across all three: never globally promote a non-agent into `iddAgentLogins` --
+// recognize each item by its own author.
+// Notice vs summary matching asymmetry (implemented and documented in detail on
+// `matchTrustedAdvisoryStickyDispositions`): a non-review NOTICE disposition
+// matches time-agnostically -- it carries forward across a re-posted notice
+// while the bot still has not reviewed (the #1018 carry-forward) -- while a
+// SUMMARY disposition must be STRICTLY NEWER than the sticky, so a stale
+// `**Accepted**` cannot clear a summary re-edited after it (the #1122 "a false
+// positive is a false merge" hazard).
+// Working rule: verify every advisory finding on this code with a byte-exact
+// repro before accepting it. #1182 / PR #1184 cycled through five advisory
+// rounds, each surfacing a distinct fail mode of exactly these gates.
 export function summarizeDispositionEvidenceForGate(
   { comments = [], threads = [] },
   options = {},
