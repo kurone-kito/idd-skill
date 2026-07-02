@@ -1,12 +1,5 @@
 import assert from 'node:assert/strict';
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
@@ -22,20 +15,7 @@ import {
   stripHtmlComments,
   stripInlineCodeSpans,
 } from '../src/scripts/verify-workshop-integrity.mts';
-
-function makeRepo() {
-  const root = mkdtempSync(join(tmpdir(), 'workshop-integrity-'));
-  return {
-    root,
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
-    write: (relPath: string, content: string) => {
-      const full = join(root, relPath);
-      mkdirSync(join(full, '..'), { recursive: true });
-      writeFileSync(full, content);
-      return full;
-    },
-  };
-}
+import { makeRepo } from './test-utils.mts';
 
 test('slugifyHeading mirrors GitHub heading slug algorithm', () => {
   assert.equal(slugifyHeading('Hello World'), 'hello-world');

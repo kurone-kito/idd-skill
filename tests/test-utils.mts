@@ -20,9 +20,16 @@ const SYNC_DOCS_SCRIPT = join(REPO_ROOT, 'scripts/sync-docs.mjs');
 // the copied script resolves its siblings under the temp scripts/ dir.
 const SYNC_DOCS_DEPS = ['consistency-helpers.mjs', 'policy-helpers.mjs'];
 
-/** Reads and JSON-parses a repo-root-relative fixture or schema file. */
-export function readJson<T = unknown>(relativePath: string): T {
-  return JSON.parse(readText(relativePath)) as T;
+/**
+ * Reads and JSON-parses a repo-root-relative fixture or schema file.
+ * Defaults to `any` (matching `JSON.parse`'s own declared return type, and
+ * every previously-untyped local copy of this function) so most callers need
+ * no change; pass an explicit `T` for the callers that already narrowed
+ * their local copy's return type (e.g. `readJson<SnapshotFixture>(...)`).
+ */
+// biome-ignore lint/suspicious/noExplicitAny: matches JSON.parse's own declared return type.
+export function readJson<T = any>(relativePath: string): T {
+  return JSON.parse(readText(relativePath));
 }
 
 /** Reads a repo-root-relative file as UTF-8 text. */

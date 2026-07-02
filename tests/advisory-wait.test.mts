@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -21,6 +21,7 @@ import {
   unsafeTextReason,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
+import { readJson } from './test-utils.mts';
 
 const ciSuccess = readJson('fixtures/ci/success.json');
 const ciPending = readJson('fixtures/ci/pending.json');
@@ -673,9 +674,3 @@ test('advisory wait summary normalizes invalid direct options to defaults', () =
   assert.equal(summary.pollIntervalMinutes, 2);
   assert.equal(summary.capExhaustedRoute, 'phase-specific');
 });
-
-function readJson(relativePath: string) {
-  return JSON.parse(
-    readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8'),
-  );
-}

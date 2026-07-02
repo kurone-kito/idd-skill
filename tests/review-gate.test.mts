@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
@@ -8,6 +7,7 @@ import {
   routeRejectedChangesRequestedReview,
   summarizeReviewThreadsForGate,
 } from '../src/scripts/protocol-helpers.mts';
+import { readJson } from './test-utils.mts';
 
 const changesRequestedRoutes = readJson(
   'fixtures/review-gate/changes-requested-routes.json',
@@ -59,9 +59,3 @@ test('classifies unresolved threads for awaiting-reviewer and conversation-resol
     }
   }
 });
-
-function readJson(relativePath: string) {
-  return JSON.parse(
-    readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8'),
-  );
-}

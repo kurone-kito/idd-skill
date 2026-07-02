@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
@@ -8,6 +7,7 @@ import {
   parseClaimComment,
   parseReleaseComment,
 } from '../src/scripts/protocol-helpers.mts';
+import { readText } from './test-utils.mts';
 
 const fixtures = {
   active: readText('fixtures/issue-comments/active-claim.md'),
@@ -182,7 +182,3 @@ test('matching heartbeat does not invoke the onAnomalousHeartbeat callback', () 
   );
   assert.equal(seen.length, 0);
 });
-
-function readText(relativePath: string): string {
-  return readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8');
-}

@@ -10,6 +10,7 @@ import {
   normalizePhaseIdToken,
   resolvePhaseId,
 } from '../src/scripts/phase-id-resolver.mts';
+import { readJson } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -227,10 +228,6 @@ test('every resume-route-selection route resolves except the terminal stop senti
   // Bare `A` is intentionally absent from the canonical list (see above).
   assertUnknownPhaseId('A');
 });
-
-function readJson(relativePath: string): unknown {
-  return JSON.parse(readFileSync(join(REPO_ROOT, relativePath), 'utf8'));
-}
 
 function assertUnknownPhaseId(input: string): void {
   assert.throws(

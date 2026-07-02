@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
@@ -33,6 +32,7 @@ import {
   summarizeReviewThreadsForGate,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
+import { readJson } from './test-utils.mts';
 
 const readinessSchema = loadJson('schemas/pre-merge-readiness.schema.json');
 
@@ -4081,12 +4081,6 @@ test('parseArgs: a non-positive / non-integer number throws a clear message', ()
     /invalid --claim-issue value/,
   );
 });
-
-function readJson(relativePath: string) {
-  return JSON.parse(
-    readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8'),
-  );
-}
 
 test('buildPreMergeReadinessSummary embeds a strict ready/blockers rollup', () => {
   // A clean fixture built WITHOUT dispositionEvidence fails closed on that
