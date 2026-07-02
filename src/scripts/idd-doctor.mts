@@ -894,6 +894,12 @@ function checkHelperRuntimeConfig(root: string, report: DoctorReport) {
   }
 }
 
+/** One reportable finding from the claimTiming config↔prose check. */
+export interface ClaimTimingFinding {
+  level: 'error' | 'warning';
+  message: string;
+}
+
 /** One config↔prose value pair this doctor cross-checks. */
 interface ClaimTimingAnchor {
   configKey: 'staleAge' | 'heartbeatInterval';
@@ -1017,7 +1023,7 @@ export function parseThresholdsProseHours(overviewCoreText: string): {
 export function classifyClaimTimingConsistency(
   claimTiming: { staleAge?: unknown; heartbeatInterval?: unknown } | undefined,
   overviewCoreText: string,
-): WorktreeHeadFinding | null {
+): ClaimTimingFinding | null {
   if (!claimTiming) {
     return null;
   }
