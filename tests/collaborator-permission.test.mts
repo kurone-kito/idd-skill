@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 
 import {
   type CollaboratorPermissionCache,
@@ -19,8 +19,17 @@ import {
 // stays untested here — it is exercised instead via the cache-seeding seam
 // below, which is the pure surface these functions actually expose.
 
+const configFileDirs: string[] = [];
+
+after(() => {
+  for (const dir of configFileDirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function makeConfigFile(content: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'forced-handoff-policy-'));
+  configFileDirs.push(dir);
   const path = join(dir, 'config.json');
   writeFileSync(path, content, 'utf8');
   return path;
