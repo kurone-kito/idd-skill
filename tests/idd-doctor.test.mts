@@ -6,8 +6,10 @@ import { test } from 'node:test';
 
 import {
   backLinkPatternFor,
+  checkClaimTimingConsistency,
   checkProjectCommands,
   classifyBacklog,
+  classifyClaimTimingConsistency,
   classifyPrimaryHead,
   classifyWorktreeGuardActivation,
   classifyWorktreeHeadFinding,
@@ -27,8 +29,10 @@ import {
   formatCleanupBacklogScanProgress,
   hookWiresWorktreeGuard,
   isGithubBackLinkHost,
+  parseIsoDurationToHours,
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
+  parseThresholdsProseHours,
   readWorktreeGuardBranchPatterns,
   readWorktreeGuardEnabled,
   scanFileForPlaceholders,
@@ -1648,6 +1652,255 @@ test('checkProjectCommands errors when no overview file carries the table', () =
     assert.equal(commands, null);
     assert.equal(report.errors.length, 1);
     assert.match(report.errors[0], /cannot find a Project commands table/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const THRESHOLDS_SECTION = `## Thresholds
+
+Ownership timing in this workflow uses the policy defaults
+\`claim-stale-age\` and \`claim-heartbeat-interval\` listed in
+\`docs/policy-constants.md\`.
+
+- **Stale**: an active claim whose latest **valid** \`claimed-by\`
+  comment's GitHub \`created_at\` is ≥ 24 h ago. Another session may take
+  it over by posting a fresh \`{claim-id}\` whose \`supersedes:\` value is
+  that active claim's \`{claim-id}\`.
+- **Heartbeat**: after re-validating ownership, re-post the claim
+  comment every 12 h while holding or when any phase is expected to
+  exceed 12 h. The latest **valid** \`claimed-by\` comment for the same
+  \`{claim-id}\` resets the stale clock. Embed timestamps are ignored;
+  only the GitHub \`created_at\` of the comment itself counts.
+
+## Fail-closed default
+
+Some other section.
+`;
+
+test('parseIsoDurationToHours parses whole-hour and whole-day ISO 8601 durations', () => {
+  assert.equal(parseIsoDurationToHours('PT24H'), 24);
+  assert.equal(parseIsoDurationToHours('P1D'), 24);
+  assert.equal(parseIsoDurationToHours('PT12H'), 12);
+});
+
+test('parseIsoDurationToHours returns null for non-string, malformed, zero, and sub-hour values', () => {
+  assert.equal(parseIsoDurationToHours(24), null);
+  assert.equal(parseIsoDurationToHours(undefined), null);
+  assert.equal(parseIsoDurationToHours('not a duration'), null);
+  assert.equal(parseIsoDurationToHours('PT0H'), null);
+  assert.equal(parseIsoDurationToHours('PT30M'), null);
+});
+
+test('parseIsoDurationToHours rejects dangling designators the policy schema also rejects', () => {
+  // Regression test: the original regex had no lookaheads, so `P1DT`
+  // (a "D" component followed by a dangling "T" with no H/M/S after it)
+  // matched and silently resolved to 24h — a schema-invalid value that
+  // should be treated as unparseable, not silently normalized.
+  assert.equal(parseIsoDurationToHours('P1DT'), null);
+  assert.equal(parseIsoDurationToHours('P'), null);
+  assert.equal(parseIsoDurationToHours('PT'), null);
+});
+
+test('parseThresholdsProseHours extracts the current stale-age and heartbeat-interval hours', () => {
+  assert.deepEqual(parseThresholdsProseHours(THRESHOLDS_SECTION), {
+    staleAgeHours: 24,
+    heartbeatIntervalHours: 12,
+  });
+});
+
+test('parseThresholdsProseHours returns null when the Thresholds heading is missing', () => {
+  assert.equal(
+    parseThresholdsProseHours('## Some Other Section\n\nNo thresholds here.\n'),
+    null,
+  );
+});
+
+test('parseThresholdsProseHours degrades per-field when a bullet is reworded past recognition', () => {
+  const reworded = `## Thresholds
+
+- **Stale**: claims expire after a while.
+- **Heartbeat**: after re-validating ownership, re-post the claim
+  comment every 12 h while holding.
+
+## Fail-closed default
+`;
+  assert.deepEqual(parseThresholdsProseHours(reworded), {
+    staleAgeHours: null,
+    heartbeatIntervalHours: 12,
+  });
+});
+
+test('classifyClaimTimingConsistency returns null when config and prose agree (this repo today)', () => {
+  assert.equal(
+    classifyClaimTimingConsistency(
+      { staleAge: 'PT24H', heartbeatInterval: 'PT12H' },
+      THRESHOLDS_SECTION,
+    ),
+    null,
+  );
+});
+
+test('classifyClaimTimingConsistency warns naming both locations and both values on a seeded mismatch', () => {
+  const finding = classifyClaimTimingConsistency(
+    { staleAge: 'PT48H', heartbeatInterval: 'PT12H' },
+    THRESHOLDS_SECTION,
+  );
+  assert.equal(finding?.level, 'warning');
+  assert.match(finding?.message ?? '', /claimTiming\.staleAge is 48 h/);
+  assert.match(finding?.message ?? '', /24 h in the Thresholds section/);
+  assert.match(finding?.message ?? '', /\.github\/idd\/config\.json/);
+  assert.match(
+    finding?.message ?? '',
+    /\.github\/instructions\/idd-overview-core\.instructions\.md/,
+  );
+  // heartbeatInterval agrees (12 h both sides), so only staleAge is named.
+  assert.doesNotMatch(finding?.message ?? '', /heartbeatInterval/);
+});
+
+test('classifyClaimTimingConsistency reports every mismatching anchor, not just the first', () => {
+  const finding = classifyClaimTimingConsistency(
+    { staleAge: 'PT48H', heartbeatInterval: 'PT6H' },
+    THRESHOLDS_SECTION,
+  );
+  assert.match(finding?.message ?? '', /claimTiming\.staleAge is 48 h/);
+  assert.match(finding?.message ?? '', /claimTiming\.heartbeatInterval is 6 h/);
+});
+
+test('classifyClaimTimingConsistency skips (no warning, no error) when the section is unparseable', () => {
+  assert.equal(
+    classifyClaimTimingConsistency(
+      { staleAge: 'PT48H', heartbeatInterval: 'PT6H' },
+      '# A repo with no Thresholds section at all.\n',
+    ),
+    null,
+  );
+});
+
+test('classifyClaimTimingConsistency skips when claimTiming is absent from config', () => {
+  assert.equal(
+    classifyClaimTimingConsistency(undefined, THRESHOLDS_SECTION),
+    null,
+  );
+});
+
+test('classifyClaimTimingConsistency skips when the config value itself is unparseable', () => {
+  assert.equal(
+    classifyClaimTimingConsistency(
+      { staleAge: 'not-a-duration', heartbeatInterval: 'PT12H' },
+      THRESHOLDS_SECTION,
+    ),
+    null,
+  );
+});
+
+test("parseThresholdsProseHours does not let one bullet's number leak into the other", () => {
+  // Regression test: the anchor regexes must be bounded to their OWN
+  // bullet's text. Before the extractBulletText fix, an unbounded
+  // [\s\S]*? could cross from a Stale bullet with no "≥ N h" of its own
+  // into the Heartbeat bullet's unrelated "≥ 48 h" text, silently
+  // misattributing that number as the stale-age value.
+  const rewordedWithUnrelatedNumber = `## Thresholds
+
+- **Stale**: claims expire after a while, see policy docs for specifics.
+- **Heartbeat**: re-post the claim comment every 12 h while holding;
+  note a hard SLA ceiling of ≥ 48 h before escalation applies.
+
+## Fail-closed default
+`;
+  assert.deepEqual(parseThresholdsProseHours(rewordedWithUnrelatedNumber), {
+    staleAgeHours: null,
+    heartbeatIntervalHours: 12,
+  });
+});
+
+test('parseThresholdsProseHours does not let a later bullet leak into an earlier one either', () => {
+  const rewordedWithUnrelatedNumber = `## Thresholds
+
+- **Stale**: an active claim is stale ≥ 24 h ago.
+- **Heartbeat**: re-post while holding; no fixed cadence stated here.
+
+## Fail-closed default
+`;
+  assert.deepEqual(parseThresholdsProseHours(rewordedWithUnrelatedNumber), {
+    staleAgeHours: 24,
+    heartbeatIntervalHours: null,
+  });
+});
+
+test('parseThresholdsProseHours still bounds bullets correctly when the list is indented', () => {
+  // Regression test: the bullet-boundary search originally looked only
+  // for the literal "\n- " substring, so an indented sub-list (or a
+  // "*"/"+" marker) would not be recognized as a boundary and the slice
+  // could run past the intended bullet, re-enabling the cross-bullet
+  // leak this file's other regression tests guard against.
+  const indented = `## Thresholds
+
+  - **Stale**: claims expire after a while, no number stated here.
+  - **Heartbeat**: re-post the claim comment every 12 h while holding.
+
+## Fail-closed default
+`;
+  assert.deepEqual(parseThresholdsProseHours(indented), {
+    staleAgeHours: null,
+    heartbeatIntervalHours: 12,
+  });
+});
+
+test('checkClaimTimingConsistency pushes a warning when config and prose disagree', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-claim-timing-'));
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({
+        claimTiming: { staleAge: 'PT48H', heartbeatInterval: 'PT12H' },
+      }),
+    );
+    mkdirSync(join(dir, '.github/instructions'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/instructions/idd-overview-core.instructions.md'),
+      THRESHOLDS_SECTION,
+    );
+
+    const report = emptyReport(dir);
+    checkClaimTimingConsistency(dir, report);
+    assert.equal(report.errors.length, 0);
+    assert.equal(report.warnings.length, 1);
+    assert.match(report.warnings[0], /claimTiming\.staleAge is 48 h/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkClaimTimingConsistency pushes no warning when config and prose agree, or when a file is missing', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-claim-timing-'));
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({
+        claimTiming: { staleAge: 'PT24H', heartbeatInterval: 'PT12H' },
+      }),
+    );
+    mkdirSync(join(dir, '.github/instructions'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/instructions/idd-overview-core.instructions.md'),
+      THRESHOLDS_SECTION,
+    );
+
+    const agreeingReport = emptyReport(dir);
+    checkClaimTimingConsistency(dir, agreeingReport);
+    assert.equal(agreeingReport.warnings.length, 0);
+    assert.equal(agreeingReport.errors.length, 0);
+
+    // No config.json at all: this check is not the file-presence gate —
+    // it skips rather than erroring.
+    rmSync(join(dir, '.github/idd/config.json'));
+    const missingConfigReport = emptyReport(dir);
+    checkClaimTimingConsistency(dir, missingConfigReport);
+    assert.equal(missingConfigReport.warnings.length, 0);
+    assert.equal(missingConfigReport.errors.length, 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

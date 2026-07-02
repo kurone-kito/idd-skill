@@ -54,6 +54,7 @@ export function runDoctor({
   );
   checkPolicySignals(root, report);
   checkHelperRuntimeConfig(root, report);
+  checkClaimTimingConsistency(root, report);
   checkAgentEntryFiles(root, report);
   checkTemplateVersionSignal(root, report);
   const worktreeGuardEnforced =
@@ -747,6 +748,182 @@ function checkHelperRuntimeConfig(root, report) {
     report.passes.push(
       `${file} declares helper runtime profile "${helperRuntime.profile}"`,
     );
+  }
+}
+// Adding a future anchor is a one-line addition here — no new branching
+// logic — as long as its prose lives in the same Thresholds section
+// parsed by parseThresholdsProseHours.
+const CLAIM_TIMING_ANCHORS = [
+  {
+    configKey: 'staleAge',
+    label: 'claimTiming.staleAge',
+    proseHoursKey: 'staleAgeHours',
+  },
+  {
+    configKey: 'heartbeatInterval',
+    label: 'claimTiming.heartbeatInterval',
+    proseHoursKey: 'heartbeatIntervalHours',
+  },
+];
+/**
+ * Parse an ISO 8601 duration to whole hours. Returns null when the input
+ * is not a string, does not match the ISO 8601 duration grammar, carries
+ * sub-hour precision (minutes/seconds) — the Thresholds prose only ever
+ * states whole hours, so a sub-hour config value has no prose counterpart
+ * to compare against — or resolves to zero hours (`PT0H`, ...), which
+ * matches the grammar but is operationally meaningless as a
+ * stale-age/heartbeat value. A negative duration cannot occur: the
+ * grammar has no sign, so a leading `-` fails the `^P` anchor outright.
+ *
+ * The lookaheads (`(?=\d|T\d)` after `P`, `(?=\d)` after `T`) mirror
+ * `schemas/policy.schema.json`'s `claimTiming.staleAge`/
+ * `heartbeatInterval` pattern exactly, so this rejects the same
+ * dangling-designator strings the schema does (bare `P`, bare `PT`,
+ * `P1DT` with no time components after `T`) at the match stage, instead
+ * of accepting them as a syntactically-valid zero/malformed duration
+ * that a looser grammar would silently normalize.
+ */
+export function parseIsoDurationToHours(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const match =
+    /^P(?=\d|T\d)(?:(\d+)D)?(?:T(?=\d)(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(
+      value,
+    );
+  if (!match) {
+    return null;
+  }
+  const [, days, hours, minutes, seconds] = match;
+  if (Number(minutes ?? 0) !== 0 || Number(seconds ?? 0) !== 0) {
+    return null;
+  }
+  const totalHours = Number(days ?? 0) * 24 + Number(hours ?? 0);
+  return totalHours > 0 ? totalHours : null;
+}
+// Matches the start of the next Markdown list item: a newline, optional
+// leading indentation (nested/indented lists), then one of the three
+// common bullet markers and at least one space. Whitespace-tolerant so
+// an indented or differently-marked list still bounds correctly instead
+// of letting the slice run past the intended bullet.
+const NEXT_BULLET_PATTERN = /\n[ \t]*[-*+]\s+/;
+/**
+ * Slice `section` down to just the bullet introduced by `bulletLabel`
+ * (e.g. `**Stale**:`), stopping before the next list item (see
+ * {@link NEXT_BULLET_PATTERN}) or at the end of `section`. Returns null
+ * when `bulletLabel` is not found. Bounding the slice to one bullet is
+ * what stops the anchor regexes in {@link parseThresholdsProseHours}
+ * from crossing into an unrelated number that happens to appear in a
+ * *different* bullet.
+ */
+function extractBulletText(section, bulletLabel) {
+  const start = section.indexOf(bulletLabel);
+  if (start === -1) {
+    return null;
+  }
+  const rest = section.slice(start);
+  const nextBulletMatch = NEXT_BULLET_PATTERN.exec(rest);
+  return nextBulletMatch ? rest.slice(0, nextBulletMatch.index) : rest;
+}
+/**
+ * Extract the stale-age and heartbeat-interval hour values the
+ * `## Thresholds` section of overview-core prose states. Returns null for
+ * the whole result when the section heading itself is not found (the
+ * section was renamed or removed); returns null for an individual field
+ * when that field's own bullet, or its anchor phrase within that bullet,
+ * is not found (the bullet was reworded past recognition or removed).
+ * Neither case is an error — the caller skips the comparison for what it
+ * cannot parse. Each anchor regex is matched only within its own
+ * bullet's text (see {@link extractBulletText}), so a number in an
+ * unrelated bullet is never misattributed to this field.
+ */
+export function parseThresholdsProseHours(overviewCoreText) {
+  const sectionStart = overviewCoreText.indexOf('## Thresholds');
+  if (sectionStart === -1) {
+    return null;
+  }
+  const nextHeading = overviewCoreText.indexOf('\n## ', sectionStart + 1);
+  const section = overviewCoreText.slice(
+    sectionStart,
+    nextHeading === -1 ? undefined : nextHeading,
+  );
+  const staleBullet = extractBulletText(section, '**Stale**:');
+  const heartbeatBullet = extractBulletText(section, '**Heartbeat**:');
+  const staleMatch = staleBullet ? /≥\s*(\d+)\s*h\b/.exec(staleBullet) : null;
+  const heartbeatMatch = heartbeatBullet
+    ? /every\s+(\d+)\s*h\b/.exec(heartbeatBullet)
+    : null;
+  return {
+    staleAgeHours: staleMatch ? Number(staleMatch[1]) : null,
+    heartbeatIntervalHours: heartbeatMatch ? Number(heartbeatMatch[1]) : null,
+  };
+}
+/**
+ * Compare `.github/idd/config.json`'s claimTiming values against the
+ * overview-core Thresholds prose. Returns a warning-level finding naming
+ * both locations and both values only when a config value and its
+ * matching prose value are both parseable AND numerically differ. Returns
+ * null (no finding) when the section/bullet cannot be parsed, when either
+ * side is unparseable, or when the values agree — this check never
+ * produces an error, per its acceptance criteria, and degrades silently
+ * on a customized adopter repo rather than false-failing it.
+ */
+export function classifyClaimTimingConsistency(claimTiming, overviewCoreText) {
+  if (!claimTiming) {
+    return null;
+  }
+  const prose = parseThresholdsProseHours(overviewCoreText);
+  if (!prose) {
+    return null;
+  }
+  const mismatches = [];
+  for (const anchor of CLAIM_TIMING_ANCHORS) {
+    const configHours = parseIsoDurationToHours(claimTiming[anchor.configKey]);
+    const proseHours = prose[anchor.proseHoursKey];
+    if (configHours === null || proseHours === null) {
+      continue;
+    }
+    if (configHours !== proseHours) {
+      mismatches.push(
+        `${anchor.label} is ${configHours} h in .github/idd/config.json but ` +
+          `${proseHours} h in the Thresholds section of ` +
+          '.github/instructions/idd-overview-core.instructions.md',
+      );
+    }
+  }
+  if (mismatches.length === 0) {
+    return null;
+  }
+  return {
+    level: 'warning',
+    message: `config↔instruction-prose policy-value drift: ${mismatches.join('; ')}.`,
+  };
+}
+export function checkClaimTimingConsistency(root, report) {
+  const read = (relativePath) => {
+    try {
+      return readFileSync(join(root, relativePath), 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  const configText = read('.github/idd/config.json');
+  const overviewCoreText = read(
+    '.github/instructions/idd-overview-core.instructions.md',
+  );
+  if (configText === null || overviewCoreText === null) {
+    return;
+  }
+  let config;
+  try {
+    config = JSON.parse(configText);
+  } catch {
+    return;
+  }
+  const claimTiming = config?.claimTiming;
+  const finding = classifyClaimTimingConsistency(claimTiming, overviewCoreText);
+  if (finding) {
+    report.warnings.push(finding.message);
   }
 }
 function checkAgentEntryFiles(root, report) {
