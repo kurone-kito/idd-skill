@@ -92,16 +92,21 @@ Read the **issue-scope** value from the Project commands table in
 
 - If `issue-scope` is `roadmap`: skip A0-O and proceed to A1 as normal.
 - If `issue-scope` is `roadmap-first` (the default): proceed to A1 as
-  normal. When the
-  roadmap path yields **zero candidates reaching A3.5** — i.e. A2
-  enumerated no open execution leaves, or A3 filtered them all out as
-  blocked — fall back to **A0-O** before entering the A3 decision tree.
-  This reuses the A0-O orphan search **only** as a post-roadmap fallback;
-  the roadmap path stays primary (unlike `orphan-first`, where A0-O is the
-  first path). If candidates do reach A3.5 but it holds
-  them all as
-  approval-needed, do **not** fall back: A3.5's stop/ask behavior
-  governs, so the fallback never re-scopes around the approval gate.
+  normal. Fall back to **A0-O** before entering the A3 decision tree when
+  the roadmap path yields **no viable, startable, unclaimed candidate** —
+  via **trigger (a)** (zero candidates reach A3.5 — A2 enumerated no open
+  execution leaves, or A3 filtered them all out as blocked) or **trigger
+  (b)** (candidates reach A3.5 but none is workable — A4 Step 1 viability
+  discards every A3.5-startable candidate, or A4 Step 1.5 eliminates the
+  last one). Run A0-O **at most once** as this fallback per Discover pass;
+  once spent, a later A4 exhaustion reports and stops per A4 Step 1 / Step
+  1.5 (not an abort) without re-entering A0-O. This reuses A0-O **only** as
+  a post-roadmap fallback;
+  the roadmap path stays primary (unlike `orphan-first`). If candidates
+  reach A3.5 but it holds them all as approval-needed, do **not** fall
+  back: the approval hold governs and a non-empty approval-needed bucket
+  is not a true zero. See
+  [A0-O fallback triggers](../../docs/idd-design-rationale.md#a0-o-roadmap-first-fallback-triggers).
 - If `issue-scope` is `orphan-first`: proceed to A0-O.
 
 ## A0-O — Discover orphan issues
@@ -111,10 +116,11 @@ in `idd-overview-core.instructions.md` before any repo-wide orphan issue
 search.
 
 When A0-O runs as the `roadmap-first` fallback (not the `orphan-first`
-primary path), every "proceed to A1" / "skip to A1" exit below instead
-goes to the **A3 decision tree** — the roadmap path already ran and must
-not be re-entered (this prevents an A1 ↔ A0-O loop, e.g. under
-`public-disabled` on a public repo).
+primary path), every exit below that would re-enter **A1** or reach the
+**A3 decision tree** is redirected by the invoking trigger — trigger (a)
+to the A3 decision tree, trigger (b) (A4 exhaustion) to the A4 **"report
+and stop (not an abort)"** terminal — because the roadmap path already ran
+and must not be re-entered (no A1 ↔ A0-O or A4 ↔ A0-O loop).
 
 - If `orphan-first-policy` is `public-disabled`, first determine the
   repository visibility. If the repository is public, skip A0-O without
@@ -159,8 +165,8 @@ next step depends on which path invoked A0-O:
   to **A1** and continue with the normal
   A1 → A1.5 → A2 → A3 → A3.5 → A4 sequence.
 - **`roadmap-first` fallback**: the roadmap path already ran, so do **not**
-  re-enter A1. Per the guard at the top of A0-O, this exit goes straight to
-  the **A3 decision tree**.
+  re-enter A1. This exit is redirected by the invoking trigger per the
+  guard atop A0-O.
 
 The A3 decision tree (abort / ask operator in unattended mode) is
 reached when the active discovery path(s) produce zero results: for
@@ -460,9 +466,13 @@ If **no issue** survives the gate:
   that only approval-needed issues remain and stop without claim in
   unattended mode. In attended mode, ask the operator whether to obtain
   approval or opt out explicitly;
-- otherwise report the full list of discarded issues with the criterion
-  or criteria each failed, then **stop** — do not post `unclaimed-by`
-  because no claim was made. This is not an abort.
+- otherwise, under **`roadmap-first`** scope in the roadmap-traversal flow
+  (A2→A3→A4; not the A0-T gate, which stops a failed target with no
+  fallback), route to the **A0-O** roadmap-first fallback (A0 trigger (b))
+  if it has not run this pass. Once spent, or under `issue-scope: roadmap`
+  (A0-O skipped), report the discarded issues with the criterion each
+  failed, then **stop** — do not post `unclaimed-by` because no claim was
+  made. This is not an abort.
 
 ### Step 1.5 — Active-claim pre-scan
 
@@ -486,11 +496,21 @@ in ascending issue-number order:
 
 After scanning the current batch:
 
-| Batch outcome                                                                       | Action                                                                                                                                                                                                  |
-| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| At least one eligible candidate in the batch                                        | Proceed to Step 2 to rank and select.                                                                                                                                                                   |
-| All `N` in this batch are claimed but viable survivors remain                       | Continue with the next batch (`N+1`–`2N`, then `2N+1`–`3N`, …) until an eligible candidate is found.                                                                                                    |
-| Entire viable candidate set exhausted (all surviving viable candidates are claimed) | Report that all viable issues are currently claimed; stop. Do not post `unclaimed-by` (no claim was made). Not an abort; retry later when claims may have become stale or new viable candidates appear. |
+| Batch outcome                                                                       | Action                                                                                               |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| At least one eligible candidate in the batch                                        | Proceed to Step 2 to rank and select.                                                                |
+| All `N` in this batch are claimed but viable survivors remain                       | Continue with the next batch (`N+1`–`2N`, then `2N+1`–`3N`, …) until an eligible candidate is found. |
+| Entire viable candidate set exhausted (all surviving viable candidates are claimed) | Resolve the exit by scope (see the note below).                                                      |
+
+When the entire viable candidate set is exhausted (the last row above),
+resolve the exit by scope: if the A3.5 approval-needed bucket is
+non-empty, report both the claimed-survivor exhaustion and the
+approval-needed hold, then stop (the approval hold takes precedence — not
+a true zero); otherwise, under `roadmap-first` scope route to the A0-O
+roadmap-first fallback (A0 trigger (b)) if it has not run this pass; under
+`issue-scope: roadmap`, or once that fallback is spent, report that all
+viable issues are currently claimed and stop (not an abort). Do not post
+`unclaimed-by` (no claim was made); retry later.
 
 See [Discover — A4 Step 1.5 Rationale](../../docs/idd-design-rationale.md#a4-step-15--rationale-active-claim-pre-scan)
 for why this pre-scan exists.
@@ -514,47 +534,36 @@ neither skip below-floor candidates nor reorder by score — and select by
 `.github/idd/config.json` `discover.selectionDesync` is `session-offset`
 (default `off`) and the chosen highest-score tie band has more than one
 eligible candidate, pick the band entry at index
-`selectDesyncedIndex(session-token, band-size)` instead of index 0 —
-`scripts/policy-helpers.mjs` exports it as a pure, deterministic
-`hash(session-token) mod band-size` over the band ordered by ascending
-issue number, where `session-token` is this session's `{agent-id}` (use
-the recommended unique per-session agent-id suffix; it is available at
-selection time, unlike `{claim-id}`, which A5 only generates after
-selection). This
-proactively spreads concurrent autopilot sessions across **different**
-eligible issues to cut the claim races that A4 Step 1.5 and A5(e) only
-resolve reactively. It reorders **only within** a single score tie band —
-never across score bands — and never bypasses A4.5/A5. Same-issue branch
-convergence is preserved because the branch name derives from the issue,
-not selection order. With `off`, a single-entry band, or no applicable
-score, keep the deterministic **lowest issue number** pick.
+`selectDesyncedIndex(session-token, band-size)` instead of index 0 (a
+pure, deterministic `hash(session-token) mod band-size` from
+`scripts/policy-helpers.mjs`, over the band ordered by ascending issue
+number, `session-token` being this session's `{agent-id}`). It reorders
+**only within** a single score tie band, never across score bands, and
+never bypasses A4.5/A5. With `off`, a single-entry band, or no applicable
+score, keep the deterministic **lowest issue number** pick. See
+[rationale](../../docs/idd-design-rationale.md#a4-step-2--rationale-concurrent-selection-desync).
 
 **Author-recorded effort hint (soft tie-breaker).** When candidates remain
 tied after the score and optional desync rules, prefer the **lower-effort**
-candidate **before** the lowest-issue-number tie-break, so autopilot tends to
-clear small issues first and leave large ones for a fresh session. Read the
-authored `<!-- idd-skill-effort: S|M|L -->` footer (or the
-`discover-roadmap-graph` node's `effort`): order `S` < `M` < `L`, and a
-missing or invalid hint is treated as the **neutral middle** (as-if `M`), so a
-band with no effort hints keeps the lowest-issue-number order exactly as
-before. This is a **soft** rule: it reorders **only within** a single score
-tie band, never skips, gates, or crosses a score band, and a large (`L`) issue
-stays fully claimable when it is the only ready work. The
-`discover-roadmap-graph` union already emits this order, so it is a cheap read;
-the pick still passes A4.5/A5 unchanged.
+candidate **before** the lowest-issue-number tie-break. Read the authored
+`<!-- idd-skill-effort: S|M|L -->` footer (or the `discover-roadmap-graph`
+node's `effort`): order `S` < `M` < `L`, and a missing or invalid hint is
+treated as the **neutral middle** (as-if `M`), so a band with no effort hints
+keeps the lowest-issue-number order exactly as before. This is a **soft**
+rule: it reorders **only within** a single score tie band, never skips,
+gates, or crosses a score band; the `discover-roadmap-graph` union already
+emits this order.
 
 **High-contention shared-file overlap (advisory).** Concurrent autopilot
 sessions tend to edit the same F-phase bundle instruction files
-(`bundle-review` / `bundle-merge`) and `audit/sync-manifest.json`, so a
-colliding pick costs a later merge-from-main conflict. As a **soft**
-tie-breaker layered after the score / desync / effort / lowest-number
-rules, prefer a candidate whose `## Candidate files` do **not** overlap an
-actively-claimed or open-PR issue on one of those files; the optional
-`discover-shared-file-overlap` helper (see
+(`bundle-review` / `bundle-merge`) and `audit/sync-manifest.json`. As a
+**soft** tie-breaker layered after the score / desync / effort /
+lowest-number rules, prefer a candidate whose `## Candidate files` do
+**not** overlap an actively-claimed or open-PR issue on one of those files;
+the optional `discover-shared-file-overlap` helper (see
 [IDD helper scripts](../../docs/idd-helper-scripts.md)) reports each candidate's
-`overlapFlag` and a `recommendedOrder`. This is **never a hard gate** — overlap
-never overrides the score or crosses a score band, and a colliding candidate
-stays claimable when it is the only ready work. See the
+`overlapFlag` and a `recommendedOrder`. This is **never a hard gate** —
+overlap never overrides the score or crosses a score band. See the
 [high-contention shared-file convention](../../docs/policy-constants.md#high-contention-shared-files).
 
 After picking, proceed to **A4.5** (`idd-suitability.instructions.md`).
