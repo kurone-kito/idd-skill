@@ -184,9 +184,14 @@ export function collectPreMergeReadiness(argv) {
   const forcedHandoffEnabled = readForcedHandoffMode() === 'human-gated';
   // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
   // a legitimate issue-only handoff that predates the PR is honored even
-  // against a PR-backed claim. Resolve it only when forced handoffs are
-  // enabled, and fail closed to `null` (reject) on any lookup/parse error so
-  // a transient commits-API failure never aborts the readiness gate.
+  // against a PR-backed claim. This allowance is applied on the merge side
+  // only; resume-claim-routing.mts intentionally never passes prFirstCommitAt
+  // (an issue-only handoff against a PR-backed claim stays rejected there) —
+  // the merge-only half of the documented strict-resume vs. lenient-relay-merge
+  // split (see docs/idd-design-rationale.md, "Claim resolution"). Resolve it
+  // only when forced handoffs are enabled, and fail closed to `null` (reject)
+  // on any lookup/parse error so a transient commits-API failure never aborts
+  // the readiness gate.
   let prFirstCommitAt = null;
   if (forcedHandoffEnabled) {
     try {

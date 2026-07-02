@@ -61,3 +61,39 @@ same-issue branch convergence that A5(e) and the `branch-name` helper rely
 on. The desync never crosses score bands and never bypasses the A4.5/A5
 gates; the in-band offset function is replaceable without affecting these
 invariants.
+
+## Claim resolution
+
+### Forced-handoff strictness: strict resume vs. lenient relay-merge
+
+Both the resume-routing read (`evaluateResumeClaimRouting` in
+`resume-claim-routing.mts`) and the pre-merge write-gate
+(`summarizeClaimValidation` in `protocol-helpers.mts`) resolve the active claim
+through the **single** shared `resolveActiveClaim`, so there is no forked
+claim-state logic. They deliberately pass **different** forced-handoff options,
+and that difference is intentional policy, not drift:
+
+- **Resume routing is strict.** It sets `requireAuthorMatchesForcedBy: true`
+  (rule 7's author/`forcedBy` binding) and never passes `prFirstCommitAt`.
+  Resume is a _takeover_ decision, so it must block the same-identity
+  self-signed hijack and reject an issue-only handoff that targets a PR-backed
+  claim.
+- **The merge write-gate is lenient.** It leaves `requireAuthorMatchesForcedBy`
+  at its off default and passes `prFirstCommitAt`, applying the Part-B allowance
+  (kurone-kito/idd-skill#1058, an issue-only handoff predating the PR). The
+  merge gate re-validates an _already-verified_ session and must tolerate a
+  maintainer-authorized handoff relayed by a separate automation actor;
+  authorization then rests on `isAuthorizedForcedHandoff` alone.
+
+Because the two callers apply different strictness, they can return **different
+verdicts for the same corrected-handoff state** — resume may report
+`already_owned` while the merge gate reports `claimLost`. This is expected: the
+verdicts answer different questions (may I take over? vs. does this verified
+session still own the write?).
+
+The split is kept intentionally (see kurone-kito/idd-skill#1155): the structural
+risk the adopter raised — two divergent resolvers — is already removed by the
+shared `resolveActiveClaim`, and forcing both sides strict would break the
+legitimate relay use-case. Any future change here must preserve the single
+resolver (do not fork `resolveActiveClaim`) and the resume-side
+self-signed-hijack block.
