@@ -80,10 +80,10 @@ and that difference is intentional policy, not drift:
   claim.
 - **The merge write-gate is lenient.** It leaves `requireAuthorMatchesForcedBy`
   at its off default and passes `prFirstCommitAt`, applying the Part-B allowance
-  (#1058, an issue-only handoff predating the PR). The merge gate re-validates
-  an _already-verified_ session and must tolerate a maintainer-authorized
-  handoff relayed by a separate automation actor; authorization then rests on
-  `isAuthorizedForcedHandoff` alone.
+  (kurone-kito/idd-skill#1058, an issue-only handoff predating the PR). The
+  merge gate re-validates an _already-verified_ session and must tolerate a
+  maintainer-authorized handoff relayed by a separate automation actor;
+  authorization then rests on `isAuthorizedForcedHandoff` alone.
 
 Because the two callers apply different strictness, they can return **different
 verdicts for the same corrected-handoff state** — resume may report
@@ -91,8 +91,9 @@ verdicts for the same corrected-handoff state** — resume may report
 verdicts answer different questions (may I take over? vs. does this verified
 session still own the write?).
 
-The split is kept intentionally (see #1155): the structural risk the adopter
-raised — two divergent resolvers — is already removed by the shared
-`resolveActiveClaim`, and forcing both sides strict would break the legitimate
-relay use-case. Any future change here must preserve the single resolver (do not
-fork `resolveActiveClaim`) and the resume-side self-signed-hijack block.
+The split is kept intentionally (see kurone-kito/idd-skill#1155): the structural
+risk the adopter raised — two divergent resolvers — is already removed by the
+shared `resolveActiveClaim`, and forcing both sides strict would break the
+legitimate relay use-case. Any future change here must preserve the single
+resolver (do not fork `resolveActiveClaim`) and the resume-side
+self-signed-hijack block.
