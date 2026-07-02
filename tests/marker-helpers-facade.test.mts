@@ -37,7 +37,7 @@ test('protocol-helpers re-exports every sampled marker-helpers name by identity'
   for (const name of SAMPLE_NAMES) {
     const viaFacade = (facade as Record<string, unknown>)[name];
     const viaDirect = (direct as Record<string, unknown>)[name];
-    assert.notEqual(
+    assert.notStrictEqual(
       viaDirect,
       undefined,
       `marker-helpers.mts must export ${name}`,

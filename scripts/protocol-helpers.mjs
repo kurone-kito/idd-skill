@@ -10,11 +10,11 @@ import {
 } from './advisory-wait-policy.mjs';
 
 // Façade re-export (wave 1 of the protocol-helpers split; see #1209): every
-// marker render/parse primitive now lives in marker-helpers.mts. Re-exporting
-// it here keeps every existing call site (`from './protocol-helpers.mts'`)
-// unchanged. The named imports below are this module's own internal uses of
-// those moved names; see marker-helpers.mts for the layering rule (it must
-// never import back from this file).
+// marker render/parse primitive now lives in the marker-helpers module.
+// Re-exporting it here keeps every existing call site importing from
+// protocol-helpers unchanged. The named imports below are this module's own
+// internal uses of those moved names; see marker-helpers for the layering
+// rule (it must never import back from this file).
 export * from './marker-helpers.mjs';
 
 import {

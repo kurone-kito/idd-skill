@@ -8,15 +8,15 @@
 // split; see #1209): the render*/parse* functions for the claim, watermark,
 // baseline, advisory-wait, forced-handoff, and external-check-waiver
 // HTML-comment markers, plus the marker-field validation helpers they
-// share. protocol-helpers.mts re-exports every name below (`export * from
-// './marker-helpers.mts'`), so existing call sites are unaffected.
+// share. The protocol-helpers module re-exports every name below (a plain
+// `export * from` re-export), so existing call sites are unaffected.
 //
-// Layering: this module MUST NOT import from protocol-helpers.mts — that
-// would form an import cycle, since protocol-helpers.mts imports from here.
-// Gate-level aggregation that folds many markers together with trust/policy
-// context (summarizeExternalCheckWaivers, summarizeAdvisoryWaitMarkers,
+// Layering: this module MUST NOT import from protocol-helpers — that would
+// form an import cycle, since protocol-helpers imports from here. Gate-level
+// aggregation that folds many markers together with trust/policy context
+// (summarizeExternalCheckWaivers, summarizeAdvisoryWaitMarkers,
 // resolveLatestReviewWatermark, deriveIddAgentLogins, and friends) stays in
-// protocol-helpers.mts on purpose: those depend on the broader trusted-actor
+// protocol-helpers on purpose: those depend on the broader trusted-actor
 // resolution machinery there (normalizeTrustedMarkerLogins and friends), and
 // moving them here would force exactly that forbidden back-import. Only the
 // single-marker parse/render primitives move in this wave.
