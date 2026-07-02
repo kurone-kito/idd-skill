@@ -896,7 +896,7 @@ function checkHelperRuntimeConfig(root: string, report: DoctorReport) {
 
 /** One reportable finding from the claimTiming config↔prose check. */
 export interface ClaimTimingFinding {
-  level: 'error' | 'warning';
+  level: 'warning';
   message: string;
 }
 
