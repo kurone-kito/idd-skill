@@ -520,10 +520,14 @@ function resolveClaimState(
         isStale: (activeCreatedAt, nextCreatedAt) =>
           isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs),
         // Resume routing enforces the rule-7 author/forcedBy binding to
-        // block the same-identity self-signed hijack path. Other callers
-        // of summarizeClaimValidation default to off because they may
-        // receive maintainer-authorized handoffs posted by a separate
-        // automation actor on behalf of the maintainer.
+        // block the same-identity self-signed hijack path — the strict half
+        // of the strict-resume vs. lenient-relay-merge split (see
+        // docs/idd-design-rationale.md, "Claim resolution"). The merge-side
+        // summarizeClaimValidation path leaves it off because it may receive a
+        // maintainer-authorized handoff relayed by a separate automation actor,
+        // so the two callers can return different verdicts for the same
+        // corrected-handoff state (resume `already_owned` vs. merge
+        // `claimLost`) by design.
         requireAuthorMatchesForcedBy: true,
         onAnomalousHeartbeat,
         onIgnoredForcedHandoff,

@@ -4949,6 +4949,20 @@ export function summarizeClaimValidation(
               .toLowerCase(),
           );
 
+  // Merge-side write-gate forced-handoff strictness — intentionally the
+  // lenient half of the strict-resume vs. lenient-relay-merge split (see
+  // docs/idd-design-rationale.md, "Claim resolution"). This call leaves
+  // `requireAuthorMatchesForcedBy` at its lenient default (off) so a
+  // maintainer-authorized handoff relayed by a separate automation actor is
+  // still honored — authorization rests on `isAuthorizedForcedHandoff` alone —
+  // and it passes `prFirstCommitAt` so the Part-B allowance (#1058, an
+  // issue-only handoff predating the PR) applies. resume-claim-routing.mts
+  // deliberately does the opposite (`requireAuthorMatchesForcedBy: true`, no
+  // `prFirstCommitAt`) because a takeover decision must block the same-identity
+  // self-signed hijack. The two callers can therefore return different verdicts
+  // for the same corrected-handoff state (resume `already_owned` vs. merge
+  // `claimLost`) by design; both still funnel through the single
+  // resolveActiveClaim resolver.
   const activeClaim = resolveActiveClaim(claimEvents, {
     isTrustedAuthor: trustedAuthorPredicate,
     isForcedHandoffEnabled:
