@@ -252,7 +252,10 @@ test('evaluateMarkerPrefixConsistency catches a cross-type prefix mismatch hidde
     { roadmap: ['alpha'], blockedBy: [] },
     { roadmap: [], blockedBy: ['beta'] },
   );
-  assert.ok(result.error && /inconsistent/.test(result.error), result.error);
+  assert.ok(
+    result.error && /inconsistent/.test(result.error),
+    result.error ?? 'expected an inconsistency error, got none',
+  );
 });
 
 test('evaluateMarkerPrefixConsistency reports a within-file roadmap/blocked-by mismatch', () => {
