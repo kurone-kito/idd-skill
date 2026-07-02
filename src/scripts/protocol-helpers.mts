@@ -3545,8 +3545,13 @@ export function summarizeRegularCommentsForGate(
 // GATE HELPER. Three functions key disposition/reply recognition on
 // `iddAgentLogins`, and each reacts DIFFERENTLY when that recognition is wrong:
 //   1. `summarizeDispositionEvidenceForGate` (this fn) -- MERGE-BLOCKING (feeds
-//      `computePreMergeReadinessBlockers` via `dispositionEvidence`). Wrong
-//      recognition -> over-block (fail-closed).
+//      `computePreMergeReadinessBlockers` via `dispositionEvidence`). Both
+//      recognition-error directions matter: FAILING to recognize a real agent
+//      leaves its own disposition/reply in the outstanding set -> over-block
+//      (fail-closed); GLOBALLY promoting a non-agent instead drops that actor's
+//      genuine outstanding feedback (this fn excludes `iddAgentLogins` authors
+//      from `outstandingComments`), so `blockingCount` can fall to 0 ->
+//      fail-OPEN.
 //   2. `summarizeReviewThreadsForGate` (`actionableCount`) -- MERGE-BLOCKING.
 //      Without required conversation resolution, an IDD agent's latest thread
 //      comment is `awaiting-reviewer` (non-blocking), so GLOBALLY promoting a
