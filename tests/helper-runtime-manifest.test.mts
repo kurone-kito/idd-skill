@@ -582,24 +582,22 @@ function readInstructionFiles(): { name: string; source: string }[] {
     }));
 }
 
-// Dev/CI tooling that is not an adopter-run IDD helper. Most is never
-// `node`-invoked in the instructions, but the sync-docs generated-from banner
-// now tells maintainers to run `node scripts/sync-docs.mjs --apply`, so
-// sync-docs must be excluded explicitly rather than by absence. Adopters
-// receive the banner-free idd-template/ source, so they never see it either.
-const NON_ADOPTER_DEV_TOOLING = new Set([
-  'scripts/build-ts.mjs',
-  'scripts/sync-docs.mjs',
-  'scripts/verify-workshop-integrity.mjs',
-  'scripts/merged-pr-feedback-sweep.mjs',
-]);
+// The one dev tool the instructions legitimately `node`-invoke without it being
+// an adopter helper: the sync-docs generated-from banner tells maintainers to
+// run `node scripts/sync-docs.mjs --apply`, so it must be excluded explicitly.
+// Every other dev tool (build-ts, verify-workshop-integrity, …) is excluded by
+// ABSENCE — it is never `node`-invoked in the instructions — so it is NOT added
+// here on purpose: adding it would let a future accidental `node scripts/X.mjs`
+// mention slip past the guard silently. Adopters receive the banner-free
+// idd-template/ source, so they never see the sync-docs invocation either.
+const BANNER_INVOKED_DEV_TOOL = 'scripts/sync-docs.mjs';
 
 // Collect every helper the instruction files tell adopters to RUN as
 // `node scripts/<name>.mjs`. That runnable-invocation form is the scoped signal
 // for a "documented CLI adopter helper": it deliberately excludes shared
 // libraries that appear only as bare `scripts/<name>.mjs` import/function
-// mentions (protocol-helpers, policy-helpers) and the dev/CI tooling in
-// NON_ADOPTER_DEV_TOOLING above.
+// mentions (protocol-helpers, policy-helpers) and the single banner-invoked dev
+// tool above.
 function collectDocumentedCliAdopterHelpers(): Set<string> {
   const referenced = new Set<string>();
   for (const { source } of readInstructionFiles()) {
@@ -609,7 +607,7 @@ function collectDocumentedCliAdopterHelpers(): Set<string> {
     for (const match of source.matchAll(
       /\bnode\s+(scripts\/[a-z0-9-]+\.mjs)\b/g,
     )) {
-      if (!NON_ADOPTER_DEV_TOOLING.has(match[1])) {
+      if (match[1] !== BANNER_INVOKED_DEV_TOOL) {
         referenced.add(match[1]);
       }
     }
@@ -698,10 +696,17 @@ test('the registration guard scopes out instruction-referenced libraries and dev
   }
 
   // Dev/CI tooling and the maintainer-only post-merge sweep are likewise never
-  // adopter-run commands, so they stay unregistered too. sync-docs is
+  // adopter-run commands, so they stay unregistered too. build-ts /
+  // verify-workshop-integrity / merged-pr-feedback-sweep are excluded by
+  // absence (never `node`-invoked in the instructions); sync-docs is
   // `node`-invoked by the generated-from banner but excluded via
-  // NON_ADOPTER_DEV_TOOLING, so the guard still scopes it out.
-  for (const nonAdopterTool of NON_ADOPTER_DEV_TOOLING) {
+  // BANNER_INVOKED_DEV_TOOL, so the guard still scopes it out.
+  for (const nonAdopterTool of [
+    'scripts/build-ts.mjs',
+    'scripts/sync-docs.mjs',
+    'scripts/verify-workshop-integrity.mjs',
+    'scripts/merged-pr-feedback-sweep.mjs',
+  ]) {
     assert.equal(
       documentedCliHelpers.has(nonAdopterTool),
       false,
