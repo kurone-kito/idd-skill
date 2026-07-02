@@ -93,7 +93,7 @@ export function makeRepo(): {
     cleanup: () => rmSync(root, { recursive: true, force: true }),
     write: (relPath: string, content: string) => {
       const full = join(root, relPath);
-      mkdirSync(join(full, '..'), { recursive: true });
+      mkdirSync(dirname(full), { recursive: true });
       writeFileSync(full, content);
       return full;
     },
