@@ -766,11 +766,14 @@ const CLAIM_TIMING_ANCHORS = [
   },
 ];
 /**
- * Parse an ISO 8601 duration to whole hours. Returns null for a
- * non-string, an unparseable value, a zero/negative duration (an
- * operationally meaningless stale-age/heartbeat), or sub-hour precision
- * (minutes/seconds) — the Thresholds prose only ever states whole hours,
- * so a sub-hour config value has no prose counterpart to compare against.
+ * Parse an ISO 8601 duration to whole hours. Returns null when the input
+ * is not a string, does not match the ISO 8601 duration grammar, carries
+ * sub-hour precision (minutes/seconds) — the Thresholds prose only ever
+ * states whole hours, so a sub-hour config value has no prose counterpart
+ * to compare against — or resolves to zero hours (`P`, `PT`, `PT0H`, ...),
+ * which matches the grammar but is operationally meaningless as a
+ * stale-age/heartbeat value. A negative duration cannot occur: the
+ * grammar has no sign, so a leading `-` fails the `^P` anchor outright.
  */
 export function parseIsoDurationToHours(value) {
   if (typeof value !== 'string') {
@@ -790,13 +793,32 @@ export function parseIsoDurationToHours(value) {
   return totalHours > 0 ? totalHours : null;
 }
 /**
+ * Slice `section` down to just the bullet introduced by `bulletLabel`
+ * (e.g. `**Stale**:`), stopping before the next `- ` list item or at the
+ * end of `section`. Returns null when `bulletLabel` is not found. Bounding
+ * the slice to one bullet is what stops the anchor regexes in
+ * {@link parseThresholdsProseHours} from crossing into an unrelated
+ * number that happens to appear in a *different* bullet.
+ */
+function extractBulletText(section, bulletLabel) {
+  const start = section.indexOf(bulletLabel);
+  if (start === -1) {
+    return null;
+  }
+  const nextBullet = section.indexOf('\n- ', start + 1);
+  return section.slice(start, nextBullet === -1 ? undefined : nextBullet);
+}
+/**
  * Extract the stale-age and heartbeat-interval hour values the
  * `## Thresholds` section of overview-core prose states. Returns null for
  * the whole result when the section heading itself is not found (the
  * section was renamed or removed); returns null for an individual field
- * when that field's anchor phrase is not found within an otherwise-present
- * section (the bullet was reworded past recognition). Neither case is an
- * error — the caller skips the comparison for what it cannot parse.
+ * when that field's own bullet, or its anchor phrase within that bullet,
+ * is not found (the bullet was reworded past recognition or removed).
+ * Neither case is an error — the caller skips the comparison for what it
+ * cannot parse. Each anchor regex is matched only within its own
+ * bullet's text (see {@link extractBulletText}), so a number in an
+ * unrelated bullet is never misattributed to this field.
  */
 export function parseThresholdsProseHours(overviewCoreText) {
   const sectionStart = overviewCoreText.indexOf('## Thresholds');
@@ -808,10 +830,12 @@ export function parseThresholdsProseHours(overviewCoreText) {
     sectionStart,
     nextHeading === -1 ? undefined : nextHeading,
   );
-  const staleMatch = /\*\*Stale\*\*:[\s\S]*?≥\s*(\d+)\s*h\b/.exec(section);
-  const heartbeatMatch = /\*\*Heartbeat\*\*:[\s\S]*?every\s+(\d+)\s*h\b/.exec(
-    section,
-  );
+  const staleBullet = extractBulletText(section, '**Stale**:');
+  const heartbeatBullet = extractBulletText(section, '**Heartbeat**:');
+  const staleMatch = staleBullet ? /≥\s*(\d+)\s*h\b/.exec(staleBullet) : null;
+  const heartbeatMatch = heartbeatBullet
+    ? /every\s+(\d+)\s*h\b/.exec(heartbeatBullet)
+    : null;
   return {
     staleAgeHours: staleMatch ? Number(staleMatch[1]) : null,
     heartbeatIntervalHours: heartbeatMatch ? Number(heartbeatMatch[1]) : null,
@@ -858,7 +882,7 @@ export function classifyClaimTimingConsistency(claimTiming, overviewCoreText) {
     message: `config↔instruction-prose policy-value drift: ${mismatches.join('; ')}.`,
   };
 }
-function checkClaimTimingConsistency(root, report) {
+export function checkClaimTimingConsistency(root, report) {
   const read = (relativePath) => {
     try {
       return readFileSync(join(root, relativePath), 'utf8');
