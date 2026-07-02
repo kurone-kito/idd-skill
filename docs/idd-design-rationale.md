@@ -14,6 +14,48 @@ remain in the instruction files.
 
 ## Discover
 
+### A0-O roadmap-first fallback triggers
+
+The `roadmap-first` A0-O fallback originally fired only when **zero
+candidates reached A3.5** — A2 found no open execution leaves, or A3
+filtered them all out as blocked. But a candidate can reach A3.5 and
+still be unworkable: the workshop leaves #553 (which runs a real
+external deployment) and #611 (a "published" convergence checkpoint)
+pass A3 readiness and A3.5 (the owner self-approves), then fail the A4
+viability gate (Autonomous completion). Because they reached A3.5, the
+original trigger stayed suppressed, so A4 stopped with "no viable
+issue" and never fell back to A0-O even when claimable orphan issues
+existed — forcing an operator opt-in every loop. The same shadowing
+occurred when A4 Step 1.5 eliminated the last A3.5-startable candidate.
+
+Trigger (b) closes that gap: the fallback also fires when the roadmap
+path yields no viable, startable, unclaimed candidate because A4
+Step 1 viability discards them all or Step 1.5 eliminates the last.
+Three guards keep it safe:
+
+- **Approval hold precedence.** A non-empty A3.5 approval-needed
+  bucket is not a true zero; the fallback fires on viability/claim
+  exhaustion only, never on the approval hold, so it never re-scopes
+  around the approval gate.
+- **True zero only.** It fires only when no viable, startable,
+  unclaimed roadmap candidate remains — never when A4 discards some
+  candidates but keeps others.
+- **At most once per pass.** A0-O runs at most once as the
+  roadmap-first fallback per Discover pass. Once spent (via trigger
+  (a) or (b)), a later A4 Step 1 / Step 1.5 exhaustion reports and
+  stops (not an abort) without re-entering A0-O; A0-O's own
+  zero-orphan result separately routes to the A3 decision tree. This
+  prevents an A1 ↔ A0-O or A4 ↔ A0-O loop.
+
+When both the roadmap path (whether it returned zero A3.5-reaching
+candidates or exhausted at A4 viability / active-claim) and the orphan
+fallback yield nothing, discovery lands in the A3 decision tree,
+exactly as the zero-reach-A3.5 case did before.
+
+The `orphan-first` symmetric case — orphan candidates all failing A4,
+which would fall back to the roadmap path — is a separate concern and
+out of scope here.
+
 ### A3 — Diagnostic: all candidates blocked by an open roadmap
 
 When the A3 decision tree reports zero ready-to-start candidates and
