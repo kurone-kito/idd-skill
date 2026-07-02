@@ -95,9 +95,9 @@ Read the **issue-scope** value from the Project commands table in
 - If `issue-scope` is `roadmap-first` (the default): proceed to A1 as
   normal. Fall back to **A0-O** before entering the A3 decision tree when
   the roadmap path yields **no viable, startable, unclaimed candidate** —
-  either (a) **zero candidates reach A3.5** (A2 enumerated no open
-  execution leaves, or A3 filtered them all out as blocked), or (b)
-  **candidates reach A3.5 but none is workable** (A4 Step 1 viability
+  via **trigger (a)** (zero candidates reach A3.5 — A2 enumerated no open
+  execution leaves, or A3 filtered them all out as blocked) or **trigger
+  (b)** (candidates reach A3.5 but none is workable — A4 Step 1 viability
   discards every A3.5-startable candidate, or A4 Step 1.5 eliminates the
   last one). Run A0-O **at most once** as this fallback per Discover pass;
   once spent, a later A4 exhaustion reports and stops per A4 Step 1 / Step

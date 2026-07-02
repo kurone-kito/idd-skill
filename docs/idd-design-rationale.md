@@ -17,9 +17,9 @@ remain in the instruction files.
 ### A0-O roadmap-first fallback triggers
 
 The `roadmap-first` A0-O fallback originally fired only when **zero
-candidates reached A3.5** — A2 found no open execution leaves, or A3
-filtered them all out as blocked. But a candidate can reach A3.5 and
-still be unworkable: the workshop leaves #553 (which runs a real
+candidates reached A3.5** (trigger (a)) — A2 found no open execution
+leaves, or A3 filtered them all out as blocked. But a candidate can reach
+A3.5 and still be unworkable: the workshop leaves #553 (which runs a real
 external deployment) and #611 (a "published" convergence checkpoint)
 pass A3 readiness and A3.5 (the owner self-approves), then fail the A4
 viability gate (Autonomous completion). Because they reached A3.5, the
