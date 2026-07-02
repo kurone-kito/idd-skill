@@ -365,3 +365,83 @@ process.exit(1);
   assert.equal(parsed.summary.viableCount, 1);
   assert.equal(parsed.viable[0].number, 901);
 });
+
+// ---------------------------------------------------------------------------
+// #1210 — CLI-subprocess smoke tests for the three isCliExecution()-guarded
+// helpers (advisory-wait-state, review-activity-snapshot, audit-pr-cleanup).
+//
+// Unlike the two smoke tests above, --help and the missing-required-arg path
+// in all three binaries return before any `gh` invocation (verified by
+// reading the source), so no stubbed `gh` on PATH is needed here. These pin
+// the exact pre-existing stdout/stderr/exit-code behavior byte-for-byte
+// across the isCliExecution() refactor.
+// ---------------------------------------------------------------------------
+
+for (const [binary, helpText] of [
+  [
+    'advisory-wait-state.mjs',
+    'Usage:\n  node scripts/advisory-wait-state.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--now <ISO8601>]\n',
+  ],
+  [
+    'review-activity-snapshot.mjs',
+    'Usage:\n  node scripts/review-activity-snapshot.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <login1,login2>]\n',
+  ],
+] as const) {
+  test(`${binary} --help prints usage and exits 0`, () => {
+    const output = execFileSync(
+      process.execPath,
+      [join(REPO_ROOT, 'scripts', binary), '--help'],
+      { encoding: 'utf8', timeout: 60_000 },
+    );
+    assert.equal(output, helpText);
+  });
+
+  test(`${binary} without --pr fails before any gh invocation`, () => {
+    assert.throws(
+      () => {
+        execFileSync(process.execPath, [join(REPO_ROOT, 'scripts', binary)], {
+          encoding: 'utf8',
+          timeout: 60_000,
+        });
+      },
+      (error: unknown) => {
+        const status = (error as { status?: unknown }).status;
+        const stderr = String((error as { stderr?: unknown }).stderr ?? '');
+        assert.equal(status, 1);
+        assert.match(stderr, /Error: missing required --pr <number> argument/);
+        assert.doesNotMatch(stderr, /ReferenceError|before initialization/);
+        return true;
+      },
+    );
+  });
+}
+
+test('audit-pr-cleanup.mjs --help prints usage and exits 0', () => {
+  const output = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/audit-pr-cleanup.mjs'), '--help'],
+    { encoding: 'utf8', timeout: 60_000 },
+  );
+  assert.match(output, /^usage: node scripts\/audit-pr-cleanup\.mjs/);
+  assert.match(output, /--claim-issue <number>/);
+});
+
+test('audit-pr-cleanup.mjs without --pr fails before any gh invocation', () => {
+  assert.throws(
+    () => {
+      execFileSync(
+        process.execPath,
+        [join(REPO_ROOT, 'scripts/audit-pr-cleanup.mjs')],
+        { encoding: 'utf8', timeout: 60_000 },
+      );
+    },
+    (error: unknown) => {
+      const status = (error as { status?: unknown }).status;
+      const stderr = String((error as { stderr?: unknown }).stderr ?? '');
+      assert.equal(status, 2);
+      assert.match(stderr, /^error: missing required --pr <number>/);
+      assert.doesNotMatch(stderr, /ReferenceError|before initialization/);
+      return true;
+    },
+  );
+});

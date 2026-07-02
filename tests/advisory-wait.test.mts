@@ -674,3 +674,19 @@ test('advisory wait summary normalizes invalid direct options to defaults', () =
   assert.equal(summary.pollIntervalMinutes, 2);
   assert.equal(summary.capExhaustedRoute, 'phase-specific');
 });
+
+// Importing the CLI module directly is only possible now that its top-level
+// statements are guarded behind isCliExecution() (#1210); previously the
+// import parsed process.argv and called a `gh` command, aborting the test
+// process when no --pr argument or gh binary was available.
+test('importing advisory-wait-state.mts has no import-time side effect', async () => {
+  const originalPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    await assert.doesNotReject(
+      import('../src/scripts/advisory-wait-state.mts'),
+    );
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});

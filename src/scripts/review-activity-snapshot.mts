@@ -7,6 +7,8 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   buildActivitySnapshotSummary,
@@ -82,101 +84,118 @@ interface ReviewActivitySnapshotArgs {
   advisoryBotLogins: string;
 }
 
-const args = parseArgs(process.argv.slice(2));
-if (!args.prNumber) {
-  throw new Error('missing required --pr <number> argument');
+if (isCliExecution()) {
+  main();
 }
 
-const owner =
-  args.owner ||
-  ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-const repo =
-  args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
-const repoRef = `${owner}/${repo}`;
-const iddConfig = loadIddConfig();
-const { actors: trustedMarkerLogins, source: trustedMarkerActorsSource } =
-  resolveTrustedMarkerActors({
-    flagValue: args.trustedMarkerLogins,
-    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-    config: iddConfig,
-  });
-const { logins: advisoryBotLogins, source: advisoryBotLoginsSource } =
-  resolveAdvisoryBotLogins({
-    flagValue: args.advisoryBotLogins,
-    envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
-    config: iddConfig,
-  });
+// The CLI body. Guarded behind isCliExecution() so importing this module (for
+// unit tests) does not parse process.argv, fail, or make a `gh` call —
+// matching the sibling-helper convention (see isCliExecution() in
+// live-status-digest.mts).
+function main(): void {
+  const args = parseArgs(process.argv.slice(2));
+  if (!args.prNumber) {
+    throw new Error('missing required --pr <number> argument');
+  }
 
-const headSha = ghText([
-  'pr',
-  'view',
-  String(args.prNumber),
-  '-R',
-  repoRef,
-  '--json',
-  'headRefOid',
-  '--jq',
-  '.headRefOid',
-]);
-const checks = ghJson(
-  [
+  const owner =
+    args.owner ||
+    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+  const repo =
+    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+  const repoRef = `${owner}/${repo}`;
+  const iddConfig = loadIddConfig();
+  const { actors: trustedMarkerLogins, source: trustedMarkerActorsSource } =
+    resolveTrustedMarkerActors({
+      flagValue: args.trustedMarkerLogins,
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+      config: iddConfig,
+    });
+  const { logins: advisoryBotLogins, source: advisoryBotLoginsSource } =
+    resolveAdvisoryBotLogins({
+      flagValue: args.advisoryBotLogins,
+      envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
+      config: iddConfig,
+    });
+
+  const headSha = ghText([
     'pr',
-    'checks',
+    'view',
     String(args.prNumber),
     '-R',
     repoRef,
     '--json',
-    'name,state,completedAt',
+    'headRefOid',
     '--jq',
-    '.',
-  ],
-  { allowStatuses: [1, 8] },
-) as CheckPayload[];
-const reviews = ghApiJson(
-  `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
-  true,
-) as ReviewPayload[];
-const comments = ghApiJson(
-  `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
-  true,
-) as IssueCommentPayload[];
-const threads = fetchReviewThreads(owner, repo, args.prNumber);
+    '.headRefOid',
+  ]);
+  const checks = ghJson(
+    [
+      'pr',
+      'checks',
+      String(args.prNumber),
+      '-R',
+      repoRef,
+      '--json',
+      'name,state,completedAt',
+      '--jq',
+      '.',
+    ],
+    { allowStatuses: [1, 8] },
+  ) as CheckPayload[];
+  const reviews = ghApiJson(
+    `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
+    true,
+  ) as ReviewPayload[];
+  const comments = ghApiJson(
+    `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
+    true,
+  ) as IssueCommentPayload[];
+  const threads = fetchReviewThreads(owner, repo, args.prNumber);
 
-const summary = buildActivitySnapshotSummary(
-  {
-    comments: comments.map(normalizeComment),
-    reviews: reviews.map(normalizeReview),
-    threads: threads.map(normalizeThread),
-    checks,
-  },
-  {
-    trustedMarkerLogins,
-    advisoryBotLogins,
-    advisoryBotLoginsSource,
-    // Advisory bots are excluded from disposition authorship inside the
-    // summary builder, so the trusted-marker set is a safe default here.
-    dispositionAuthorLogins: trustedMarkerLogins,
-  },
-);
-
-process.stdout.write(
-  `${JSON.stringify(
+  const summary = buildActivitySnapshotSummary(
     {
-      headSha,
-      trustedMarkerActors: trustedMarkerLogins,
-      trustedMarkerActorsSource,
-      totalItemCount: summary.totalItemCount,
-      maxActivityUpdatedAt: summary.maxActivityUpdatedAt,
-      latestCiCompletedAt: summary.latestCiCompletedAt,
-      latestPassingCiCompletedAt: summary.latestPassingCiCompletedAt,
-      counts: summary.counts,
-      ackOnly: summary.ackOnly,
-      effective: summary.effective,
+      comments: comments.map(normalizeComment),
+      reviews: reviews.map(normalizeReview),
+      threads: threads.map(normalizeThread),
+      checks,
     },
-    null,
-    2,
-  )}\n`,
-);
+    {
+      trustedMarkerLogins,
+      advisoryBotLogins,
+      advisoryBotLoginsSource,
+      // Advisory bots are excluded from disposition authorship inside the
+      // summary builder, so the trusted-marker set is a safe default here.
+      dispositionAuthorLogins: trustedMarkerLogins,
+    },
+  );
+
+  process.stdout.write(
+    `${JSON.stringify(
+      {
+        headSha,
+        trustedMarkerActors: trustedMarkerLogins,
+        trustedMarkerActorsSource,
+        totalItemCount: summary.totalItemCount,
+        maxActivityUpdatedAt: summary.maxActivityUpdatedAt,
+        latestCiCompletedAt: summary.latestCiCompletedAt,
+        latestPassingCiCompletedAt: summary.latestPassingCiCompletedAt,
+        counts: summary.counts,
+        ackOnly: summary.ackOnly,
+        effective: summary.effective,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+function isCliExecution(): boolean {
+  return (
+    Boolean(process.argv[1]) &&
+    fileURLToPath(import.meta.url) === resolve(process.argv[1])
+  );
+}
 
 function loadIddConfig(): {
   trustedMarkerActors?: unknown;
