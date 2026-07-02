@@ -2337,7 +2337,7 @@ export function dispositionNamesAdvisoryBot(
 // #1182 Match trusted machine advisory dispositions to the advisory-bot stickies
 // they address, so a disposition posted by a trusted-marker actor who is NOT a
 // resolved IDD agent (e.g. a second trusted session) is honored without being
-// promoted into a global IDD-agent identity. Matching is strict on THREE axes:
+// promoted into a global IDD-agent identity. Matching is strict on FOUR axes:
 //   - bot: the disposition body must name the sticky author's bot login
 //     (`dispositionNamesAdvisoryBot`);
 //   - type: a `**Rejected** — {bot} did not review HEAD …` notice disposition

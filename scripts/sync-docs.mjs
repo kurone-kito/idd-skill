@@ -22,6 +22,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  injectGeneratedFromBanner,
+  isBannerScopedInstructionTarget,
+} from './consistency-helpers.mjs';
 
 // Resolve the repository root by walking up to the nearest package.json,
 // so the source resolves the same root whether it runs as the emitted
@@ -116,9 +120,15 @@ function processSyncPairs(pairs) {
     seenTargets.add(target);
     if (mode === 'exact' || mode === 'concreted') {
       const sourceText = readText(source);
-      const generated = normalizeText(
+      let generated = normalizeText(
         applyReplacements(sourceText, replacements),
       );
+      // Stamp the generated-from banner into generated instruction targets so
+      // agents/humans see the file is generated and edit the idd-template/
+      // source instead. Injected at generation time, not stored in the source.
+      if (isBannerScopedInstructionTarget(target, mode)) {
+        generated = normalizeText(injectGeneratedFromBanner(generated, source));
+      }
       const current = tryReadText(target);
       if (current === null || normalizeText(current) !== generated) {
         diffs.push({ target, content: generated });

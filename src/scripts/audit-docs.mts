@@ -17,10 +17,13 @@ import type {
 import {
   collectDocBudgetDriftViolations,
   collectDuplicateSyncPairTargets,
+  collectGeneratedFromBannerViolations,
   collectInstructionSizeBudgetViolations,
   collectPolicyConfigDrift,
   collectRootMarkdownAllowlistViolations,
   collectTypeSuppressionViolations,
+  isBannerScopedInstructionTarget,
+  stripGeneratedFromBanner,
 } from './consistency-helpers.mts';
 
 interface ReadmePair {
@@ -118,6 +121,7 @@ checkShellFileLists(
   manifest.generatedBlocks ?? [],
 );
 checkSyncPairs(manifest.syncPairs ?? []);
+checkGeneratedFromBanners(manifest.syncPairs ?? []);
 checkInstructionSizeBudgets(manifest.instructionSizeBudgets ?? null);
 checkBundleBudgets(manifest.bundleBudgets ?? []);
 checkDocBudgetNumbers();
@@ -436,7 +440,17 @@ function checkSyncPairs(pairs: SyncPair[]) {
     const target = readText(pair.target);
 
     if (pair.mode === 'exact' || pair.mode === 'concreted') {
-      if (normalizeText(source) !== normalizeText(target)) {
+      // Generated instruction targets carry a sync-docs-injected generated-from
+      // banner the source does not; strip it before the content comparison so
+      // this check stays about content only. The banner itself is verified
+      // separately by checkGeneratedFromBanners.
+      const targetContent = isBannerScopedInstructionTarget(
+        pair.target,
+        pair.mode,
+      )
+        ? stripGeneratedFromBanner(target)
+        : target;
+      if (normalizeText(source) !== normalizeText(targetContent)) {
         errors.push(
           `${pair.id}: ${pair.source} and ${pair.target} differ in ${pair.mode} mode`,
         );
@@ -457,6 +471,15 @@ function checkSyncPairs(pairs: SyncPair[]) {
 
     errors.push(`${pair.id}: unsupported sync mode ${pair.mode}`);
   }
+}
+
+// Verify that every generated instruction target carries the exact
+// sync-docs-injected generated-from banner naming its source. A missing,
+// malformed, or wrong-source banner fails the audit with a targeted message
+// (checkSyncPairs already covers content drift after stripping the banner). The
+// pure helper carries the logic so it can be unit-tested.
+function checkGeneratedFromBanners(pairs: SyncPair[]) {
+  errors.push(...collectGeneratedFromBannerViolations(pairs, readText));
 }
 
 function checkContainsPair(pair: SyncPair) {
@@ -693,7 +716,10 @@ function checkBundleBudgets(budgets: BundleBudget[]) {
     let totalBytes = 0;
     for (const file of files) {
       const text = readText(file);
-      totalBytes += Buffer.byteLength(text, 'utf8');
+      // Exclude the generated-from banner from the bundle total: it is
+      // mechanical metadata sync-docs stamps in, not authored content, so it
+      // must never push a bundle over budget (a no-op on files without one).
+      totalBytes += Buffer.byteLength(stripGeneratedFromBanner(text), 'utf8');
     }
     if (totalBytes > limitBytes) {
       errors.push(
