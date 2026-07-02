@@ -18,7 +18,11 @@ import {
   rankAndRouteBySuitability,
 } from './autopilot-suitability.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
-import { ghText, isCliExecution } from './gh-exec.mjs';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  isCliExecution,
+} from './gh-exec.mjs';
 import { createMarkerRegex } from './marker-regex.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
@@ -251,9 +255,16 @@ function runCli() {
   }
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repoRef = `${owner}/${repo}`;
   const policy = loadPolicy(args.policy);
   const openIssues = fetchOpenIssues(repoRef);
@@ -471,17 +482,20 @@ function resolveIssueState(
 }
 function fetchIssueState(repoRef, issueNumber) {
   try {
-    const state = ghText([
-      'issue',
-      'view',
-      String(issueNumber),
-      '--repo',
-      repoRef,
-      '--json',
-      'state',
-      '--jq',
-      '.state',
-    ]);
+    const state = ghText(
+      [
+        'issue',
+        'view',
+        String(issueNumber),
+        '--repo',
+        repoRef,
+        '--json',
+        'state',
+        '--jq',
+        '.state',
+      ],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
     return state || 'UNRESOLVABLE';
   } catch {
     return 'UNRESOLVABLE';

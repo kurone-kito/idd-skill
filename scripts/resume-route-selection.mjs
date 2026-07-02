@@ -5,7 +5,11 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { ghText, isCliExecution } from './gh-exec.mjs';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  isCliExecution,
+} from './gh-exec.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 
 const RUNNING_STATES = new Set([
@@ -136,9 +140,16 @@ function runCli() {
   }
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repository = `${owner}/${repo}`;
   const routingInput = collectRoutingInput({
     repository,
@@ -161,7 +172,10 @@ function runCli() {
 function collectRoutingInput({ repository, issueNumber }) {
   const prs = findIssueRelatedOpenPrs({ repository, issueNumber });
   const issuePr = prs.length === 1 ? prs[0] : null;
-  const viewerLogin = ghText(['api', 'user', '--jq', '.login']).toLowerCase();
+  const viewerLogin = ghText(
+    ['api', 'user', '--jq', '.login'],
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ).toLowerCase();
   const gitState = collectLocalGitState();
   if (!issuePr) {
     return {

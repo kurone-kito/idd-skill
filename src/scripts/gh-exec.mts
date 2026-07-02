@@ -26,12 +26,39 @@ import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
 export interface GhTextOptions {
   /**
    * Override child-process stdio. Most callers rely on `execFileSync`'s
-   * own default (`pipe` for all three streams); `discover-viability-gate.mts`
-   * explicitly ignores stdin (`['ignore', 'pipe', 'pipe']`) to avoid an
-   * open-but-unwritten stdin pipe across its high-volume `gh` call loop.
+   * own default (`pipe` for all three streams); several high-volume-loop
+   * callers instead ignore stdin (`['ignore', 'pipe', 'pipe']`) to avoid
+   * an open-but-unwritten stdin pipe. See {@link GH_TEXT_LOOP_OPTIONS}.
    */
   stdio?: StdioOptions;
+  /**
+   * Override the `execFileSync` timeout (milliseconds). Several callers
+   * pair this with the `stdio` override above so a stalled `gh` (rate
+   * limiting, network stall, an unexpected interactive re-auth prompt)
+   * fails closed instead of hanging indefinitely. See
+   * {@link GH_TEXT_LOOP_TIMEOUT_OPTIONS}.
+   */
+  timeout?: number;
 }
+
+/**
+ * Shared `{ stdio }` override for callers that invoke `gh` in a tight or
+ * high-volume loop and want to avoid an open-but-unwritten stdin pipe, but
+ * did not previously pair it with a timeout.
+ */
+export const GH_TEXT_LOOP_OPTIONS: GhTextOptions = {
+  stdio: ['ignore', 'pipe', 'pipe'],
+};
+
+/**
+ * Shared `{ stdio, timeout }` override for callers that invoke `gh` in a
+ * tight or high-volume loop and previously paired the stdin-ignoring
+ * override with a 30s timeout so a stalled `gh` invocation fails closed.
+ */
+export const GH_TEXT_LOOP_TIMEOUT_OPTIONS: GhTextOptions = {
+  stdio: ['ignore', 'pipe', 'pipe'],
+  timeout: 30_000,
+};
 
 /**
  * Run `gh` synchronously and return its trimmed stdout.
@@ -44,13 +71,17 @@ export function ghText(args: string[], options: GhTextOptions = {}): string {
   return execFileSync('gh', args, {
     encoding: 'utf8',
     ...(options.stdio ? { stdio: options.stdio } : {}),
+    ...(options.timeout ? { timeout: options.timeout } : {}),
   }).trim();
 }
 
 /** {@link ghText}, swallowing any failure and returning `''` instead. */
-export function safeGhText(args: string[]): string {
+export function safeGhText(
+  args: string[],
+  options: GhTextOptions = {},
+): string {
   try {
-    return ghText(args);
+    return ghText(args, options);
   } catch {
     return '';
   }
@@ -98,21 +129,24 @@ export function ghApiJson(
   try {
     raw = execFileSync('gh', args, { encoding: 'utf8' });
   } catch (error) {
-    const status = Number((error as { status?: unknown } | null)?.status ?? -1);
+    const failure = error as { status?: unknown; stdout?: unknown } | null;
+    const status = Number(failure?.status ?? -1);
     if (!allowStatuses.includes(status)) {
       throw error;
     }
-    const stdout = String((error as { stdout?: unknown } | null)?.stdout ?? '');
+    const stdout = String(failure?.stdout ?? '');
     if (!/^\s*[[{]/.test(stdout)) {
       throw error;
     }
     raw = stdout;
   }
-  const trimmed = raw.trim();
   if (paginate) {
-    return trimmed ? parsePaginatedGhNdjson(trimmed) : [];
+    // parsePaginatedGhNdjson already trims and returns [] on empty input.
+    return parsePaginatedGhNdjson(raw);
   }
-  return JSON.parse(trimmed || '{}');
+  // JSON.parse itself ignores surrounding whitespace, so only trim to
+  // decide whether the output was empty.
+  return JSON.parse(raw.trim() || '{}');
 }
 
 /**

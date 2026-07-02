@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
+  GH_TEXT_LOOP_OPTIONS,
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghApiJson,
   ghText,
   isCliExecution,
@@ -73,10 +75,63 @@ process.exit(1);
   }
 });
 
+test('ghText forwards a timeout override and still returns the trimmed result when gh finishes in time', () => {
+  const restore = stubGh(`process.stdout.write('  fast  \\n');`);
+  try {
+    assert.equal(ghText(['repo', 'view'], { timeout: 30_000 }), 'fast');
+  } finally {
+    restore();
+  }
+});
+
+test('ghText times out (throws) when gh exceeds the configured timeout', () => {
+  const restore = stubGh(`
+// Block synchronously well past the configured timeout so execFileSync's
+// own timeout enforcement kills this process before it can exit cleanly.
+const start = Date.now();
+while (Date.now() - start < 2000) {
+  // busy-wait
+}
+process.stdout.write('too slow');
+`);
+  try {
+    assert.throws(() => ghText(['repo', 'view'], { timeout: 50 }));
+  } finally {
+    restore();
+  }
+});
+
+test('GH_TEXT_LOOP_OPTIONS and GH_TEXT_LOOP_TIMEOUT_OPTIONS both ignore stdin', () => {
+  const restore = stubGh(`process.stdout.write('  loop-safe  \\n');`);
+  try {
+    assert.equal(ghText(['repo', 'view'], GH_TEXT_LOOP_OPTIONS), 'loop-safe');
+    assert.equal(
+      ghText(['repo', 'view'], GH_TEXT_LOOP_TIMEOUT_OPTIONS),
+      'loop-safe',
+    );
+    assert.deepEqual(GH_TEXT_LOOP_OPTIONS.stdio, ['ignore', 'pipe', 'pipe']);
+    assert.equal(GH_TEXT_LOOP_TIMEOUT_OPTIONS.timeout, 30_000);
+  } finally {
+    restore();
+  }
+});
+
 test('safeGhText returns the trimmed value on success', () => {
   const restore = stubGh(`process.stdout.write('fine\\n');`);
   try {
     assert.equal(safeGhText(['repo', 'view']), 'fine');
+  } finally {
+    restore();
+  }
+});
+
+test('safeGhText forwards its options argument to ghText', () => {
+  const restore = stubGh(`process.stdout.write('  loop-safe  \\n');`);
+  try {
+    assert.equal(
+      safeGhText(['repo', 'view'], GH_TEXT_LOOP_OPTIONS),
+      'loop-safe',
+    );
   } finally {
     restore();
   }

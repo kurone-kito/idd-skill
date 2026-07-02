@@ -18,7 +18,11 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { parseAutopilotSuitability } from './autopilot-suitability.mts';
-import { ghText, isCliExecution } from './gh-exec.mts';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  isCliExecution,
+} from './gh-exec.mts';
 import { parseIsoDurationToMs } from './policy-helpers.mts';
 import {
   resolveActiveClaim,
@@ -393,9 +397,16 @@ function runCli(): void {
 
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repoRef = `${owner}/${repo}`;
   const policy = loadPolicy(args.policy);
   const now = args.now || new Date().toISOString();
@@ -522,13 +533,16 @@ function fetchActiveClaimBranchNumbers(repoRef: string): number[] {
   const numbers = new Set<number>();
   // `--paginate` follows the Link headers to the end, so a repo with many
   // issue branches does not silently drop branches past the first page.
-  const output = ghText([
-    'api',
-    '--paginate',
-    `repos/${repoRef}/git/matching-refs/heads/issue/`,
-    '--jq',
-    '.[].ref',
-  ]);
+  const output = ghText(
+    [
+      'api',
+      '--paginate',
+      `repos/${repoRef}/git/matching-refs/heads/issue/`,
+      '--jq',
+      '.[].ref',
+    ],
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  );
   for (const line of output.split('\n')) {
     const match = line.match(/^refs\/heads\/issue\/(\d+)-/);
     if (match) {
@@ -546,17 +560,20 @@ function fetchIssue(repoRef: string, number: number): FetchedIssue {
   // Fail closed: let a fetch failure surface rather than returning an empty
   // body, which would silently suppress this issue's candidate files and emit
   // a false "no overlap" result.
-  const body = ghText([
-    'issue',
-    'view',
-    String(number),
-    '--repo',
-    repoRef,
-    '--json',
-    'body',
-    '--jq',
-    '.body',
-  ]);
+  const body = ghText(
+    [
+      'issue',
+      'view',
+      String(number),
+      '--repo',
+      repoRef,
+      '--json',
+      'body',
+      '--jq',
+      '.body',
+    ],
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  );
   return { body };
 }
 

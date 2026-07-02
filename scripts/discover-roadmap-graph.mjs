@@ -19,7 +19,7 @@ import {
   evaluateDiscoverReadiness,
 } from './discover-readiness-check.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
-import { ghText } from './gh-exec.mjs';
+import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import { parseIsoDurationToMs } from './policy-helpers.mjs';
 import {
@@ -128,9 +128,16 @@ if (isMainModule(import.meta.url)) {
   }
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_OPTIONS,
+    );
   const policy = loadPolicy(args.policy);
   // The claim-state annotation is strictly opt-in: only when --with-claim-state
   // is passed do we build the comment loader (the sole new GitHub API surface)

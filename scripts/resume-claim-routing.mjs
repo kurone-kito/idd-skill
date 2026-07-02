@@ -8,7 +8,11 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
-import { ghText, isCliExecution } from './gh-exec.mjs';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  isCliExecution,
+} from './gh-exec.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   buildForcedHandoffEnableGate,
@@ -215,16 +219,26 @@ function runCli() {
   }
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repository = `${owner}/${repo}`;
   const policy = loadPolicy(args.policy, { strict: Boolean(args.policy) });
   const staleAgeMs = args.staleAgeMs > 0 ? args.staleAgeMs : policy.staleAgeMs;
   const trustedLogins = resolveTrustedLogins({
     fromArgs: args.trustedMarkerLogins,
     fromPolicy: policy.trustedMarkerActors,
-    currentLogin: ghText(['api', 'user', '--jq', '.login']),
+    currentLogin: ghText(
+      ['api', 'user', '--jq', '.login'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    ),
   });
   const trustedSet = new Set(trustedLogins.map((login) => login.toLowerCase()));
   const comments = fetchIssueComments(repository, args.issue);

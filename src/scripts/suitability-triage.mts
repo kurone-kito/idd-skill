@@ -7,7 +7,11 @@
 
 import { execFileSync } from 'node:child_process';
 
-import { ghText, isCliExecution } from './gh-exec.mts';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  isCliExecution,
+} from './gh-exec.mts';
 
 interface NormalizedIssue {
   number: number;
@@ -671,9 +675,16 @@ function runCli(): void {
 
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repoRef = `${owner}/${repo}`;
 
   const issue = fetchIssue(repoRef, args.issue);

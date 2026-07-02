@@ -6,7 +6,7 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ghText } from './gh-exec.mjs';
+import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 
 const CRITERIA = [
@@ -45,14 +45,16 @@ if (isMainModule(import.meta.url)) {
   }
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_OPTIONS,
+    );
   const repo =
     args.repo ||
-    ghText(['repo', 'view', '--json', 'name', '--jq', '.name'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_OPTIONS,
+    );
   const summary = await evaluateDiscoverViability(args.issueNumbers, {
     loadIssue: buildIssueLoader(owner, repo),
   });
@@ -332,7 +334,7 @@ function buildIssueLoader(owner, repo) {
   };
 }
 function ghJson(args) {
-  const text = ghText(args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  const text = ghText(args, GH_TEXT_LOOP_OPTIONS);
   if (!text) {
     return null;
   }

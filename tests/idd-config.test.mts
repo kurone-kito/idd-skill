@@ -7,10 +7,8 @@ import { test } from 'node:test';
 import { loadIddConfig } from '../src/scripts/idd-config.mts';
 
 // Every scenario runs inside its own freshly `mkdtempSync`-created sandbox
-// (never the real repo cwd) so each gets a distinct resolved config path —
-// this is what lets loadIddConfig's per-path memoization coexist safely with
-// per-test isolation (mirrors the sandboxing already used by
-// forced-handoff-marker.test.mts's `forcedHandoff.mode` tests).
+// (never the real repo cwd), mirroring the sandboxing already used by
+// forced-handoff-marker.test.mts's `forcedHandoff.mode` tests.
 function withSandboxCwd<T>(run: (sandbox: string) => T): T {
   const originalCwd = process.cwd();
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-idd-config-test-'));
@@ -56,19 +54,21 @@ test('loadIddConfig parses a valid config file', () => {
   });
 });
 
-test('loadIddConfig memoizes per resolved path: a later on-disk edit is not observed', () => {
+test('loadIddConfig always re-reads the file: a later on-disk edit in the same cwd is observed', () => {
   withSandboxCwd((sandbox) => {
     writeConfig(sandbox, JSON.stringify({ trustedMarkerActors: ['first'] }));
     assert.deepEqual(loadIddConfig(), { trustedMarkerActors: ['first'] });
 
-    // Overwrite the same file at the same resolved path — memoization means
-    // this change must not be observed by a later call from this same cwd.
+    // Overwrite the same file in the same cwd — a caller that reads config
+    // more than once per process (e.g. idd-merge-execute.mts's deliberate
+    // "re-validate immediately before merging" second pass) must observe
+    // this edit, not a stale cached value.
     writeConfig(sandbox, JSON.stringify({ trustedMarkerActors: ['second'] }));
-    assert.deepEqual(loadIddConfig(), { trustedMarkerActors: ['first'] });
+    assert.deepEqual(loadIddConfig(), { trustedMarkerActors: ['second'] });
   });
 });
 
-test('loadIddConfig reads fresh content for a different resolved path (a different sandbox)', () => {
+test('loadIddConfig reads fresh content for a different cwd (a different sandbox)', () => {
   withSandboxCwd((sandbox) => {
     writeConfig(sandbox, JSON.stringify({ trustedMarkerActors: ['third'] }));
     assert.deepEqual(loadIddConfig(), { trustedMarkerActors: ['third'] });

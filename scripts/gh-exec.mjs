@@ -19,6 +19,23 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 /**
+ * Shared `{ stdio }` override for callers that invoke `gh` in a tight or
+ * high-volume loop and want to avoid an open-but-unwritten stdin pipe, but
+ * did not previously pair it with a timeout.
+ */
+export const GH_TEXT_LOOP_OPTIONS = {
+  stdio: ['ignore', 'pipe', 'pipe'],
+};
+/**
+ * Shared `{ stdio, timeout }` override for callers that invoke `gh` in a
+ * tight or high-volume loop and previously paired the stdin-ignoring
+ * override with a 30s timeout so a stalled `gh` invocation fails closed.
+ */
+export const GH_TEXT_LOOP_TIMEOUT_OPTIONS = {
+  stdio: ['ignore', 'pipe', 'pipe'],
+  timeout: 30_000,
+};
+/**
  * Run `gh` synchronously and return its trimmed stdout.
  *
  * Throws (propagating the child-process error) on any non-zero exit —
@@ -29,12 +46,13 @@ export function ghText(args, options = {}) {
   return execFileSync('gh', args, {
     encoding: 'utf8',
     ...(options.stdio ? { stdio: options.stdio } : {}),
+    ...(options.timeout ? { timeout: options.timeout } : {}),
   }).trim();
 }
 /** {@link ghText}, swallowing any failure and returning `''` instead. */
-export function safeGhText(args) {
+export function safeGhText(args, options = {}) {
   try {
-    return ghText(args);
+    return ghText(args, options);
   } catch {
     return '';
   }
@@ -58,21 +76,24 @@ export function ghApiJson(path, options = {}) {
   try {
     raw = execFileSync('gh', args, { encoding: 'utf8' });
   } catch (error) {
-    const status = Number(error?.status ?? -1);
+    const failure = error;
+    const status = Number(failure?.status ?? -1);
     if (!allowStatuses.includes(status)) {
       throw error;
     }
-    const stdout = String(error?.stdout ?? '');
+    const stdout = String(failure?.stdout ?? '');
     if (!/^\s*[[{]/.test(stdout)) {
       throw error;
     }
     raw = stdout;
   }
-  const trimmed = raw.trim();
   if (paginate) {
-    return trimmed ? parsePaginatedGhNdjson(trimmed) : [];
+    // parsePaginatedGhNdjson already trims and returns [] on empty input.
+    return parsePaginatedGhNdjson(raw);
   }
-  return JSON.parse(trimmed || '{}');
+  // JSON.parse itself ignores surrounding whitespace, so only trim to
+  // decide whether the output was empty.
+  return JSON.parse(raw.trim() || '{}');
 }
 /**
  * True when this module is executing as the invoked CLI entry point

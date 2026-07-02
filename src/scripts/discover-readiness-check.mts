@@ -18,7 +18,7 @@ import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
 } from './autopilot-suitability.mts';
-import { ghText } from './gh-exec.mts';
+import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import { escapeRegex } from './marker-regex.mts';
@@ -149,9 +149,16 @@ if (isMainModule(import.meta.url)) {
 
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_OPTIONS,
+    );
   const policyConfig = loadPolicy(args.policy);
   const authoringPolicy = resolveAuthoringGuardPolicy(policyConfig);
   const markerPrefix = resolveMarkerPrefix(policyConfig);
@@ -923,13 +930,16 @@ export function buildRoadmapMarkerResolver(
  */
 function listOpenIssueNumbers(owner: string, repo: string): number[] {
   return parseIssueNumberLines(
-    ghText([
-      'api',
-      '--paginate',
-      `repos/${owner}/${repo}/issues?state=open&per_page=100`,
-      '--jq',
-      '.[] | select(.pull_request == null) | .number',
-    ]),
+    ghText(
+      [
+        'api',
+        '--paginate',
+        `repos/${owner}/${repo}/issues?state=open&per_page=100`,
+        '--jq',
+        '.[] | select(.pull_request == null) | .number',
+      ],
+      GH_TEXT_LOOP_OPTIONS,
+    ),
   );
 }
 

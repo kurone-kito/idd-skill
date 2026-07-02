@@ -5,7 +5,11 @@
 // source named above by `pnpm run build`. Edit the .mts source, never
 // the generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { ghText, isCliExecution } from './gh-exec.mjs';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  isCliExecution,
+} from './gh-exec.mjs';
 
 const BLOCKED_LABELS = new Set([
   'status:blocked-by-human',
@@ -561,9 +565,16 @@ function runCli() {
   }
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repoRef = `${owner}/${repo}`;
   const issue = fetchIssue(repoRef, args.issue);
   const duplicateCandidates = fetchDuplicateCandidates(repoRef, issue);
