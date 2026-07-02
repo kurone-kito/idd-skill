@@ -21,14 +21,13 @@ const SYNC_DOCS_SCRIPT = join(REPO_ROOT, 'scripts/sync-docs.mjs');
 const SYNC_DOCS_DEPS = ['consistency-helpers.mjs', 'policy-helpers.mjs'];
 
 /**
- * Reads and JSON-parses a repo-root-relative fixture or schema file.
- * Defaults to `any` (matching `JSON.parse`'s own declared return type, and
- * every previously-untyped local copy of this function) so most callers need
- * no change; pass an explicit `T` for the callers that already narrowed
- * their local copy's return type (e.g. `readJson<SnapshotFixture>(...)`).
+ * Reads and JSON-parses a repo-root-relative fixture or schema file. Left
+ * without a return-type annotation so it infers the same permissive type
+ * `JSON.parse` itself returns — matching every previously-untyped local
+ * copy of this function without a call-site change; callers that want a
+ * narrower shape cast the result (e.g. `readJson(path) as SnapshotFixture`).
  */
-// biome-ignore lint/suspicious/noExplicitAny: matches JSON.parse's own declared return type.
-export function readJson<T = any>(relativePath: string): T {
+export function readJson(relativePath: string) {
   return JSON.parse(readText(relativePath));
 }
 

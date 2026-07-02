@@ -22,21 +22,21 @@ interface SnapshotFixture {
   comments: CommentLike[];
 }
 
-const acceptedAll = readJson<SnapshotFixture>(
+const acceptedAll = readJson(
   'fixtures/review-snapshots/accepted-all.json',
-);
-const changesRequested = readJson<SnapshotFixture>(
+) as SnapshotFixture;
+const changesRequested = readJson(
   'fixtures/review-snapshots/changes-requested.json',
-);
-const latestGatingReview = readJson<SnapshotFixture>(
+) as SnapshotFixture;
+const latestGatingReview = readJson(
   'fixtures/review-snapshots/latest-gating-review.json',
-);
-const truncatedThread = readJson<SnapshotFixture>(
+) as SnapshotFixture;
+const truncatedThread = readJson(
   'fixtures/review-snapshots/truncated-thread.json',
-);
-const newCommentAfterF2 = readJson<SnapshotFixture>(
+) as SnapshotFixture;
+const newCommentAfterF2 = readJson(
   'fixtures/review-snapshots/new-comment-after-f2.json',
-);
+) as SnapshotFixture;
 
 test('indexes the latest gating review per author', () => {
   const index = indexLatestGatingReviewsByAuthor(acceptedAll.reviews);
