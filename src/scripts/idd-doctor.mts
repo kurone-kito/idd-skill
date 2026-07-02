@@ -928,18 +928,27 @@ const CLAIM_TIMING_ANCHORS: readonly ClaimTimingAnchor[] = [
  * is not a string, does not match the ISO 8601 duration grammar, carries
  * sub-hour precision (minutes/seconds) — the Thresholds prose only ever
  * states whole hours, so a sub-hour config value has no prose counterpart
- * to compare against — or resolves to zero hours (`P`, `PT`, `PT0H`, ...),
- * which matches the grammar but is operationally meaningless as a
+ * to compare against — or resolves to zero hours (`PT0H`, ...), which
+ * matches the grammar but is operationally meaningless as a
  * stale-age/heartbeat value. A negative duration cannot occur: the
  * grammar has no sign, so a leading `-` fails the `^P` anchor outright.
+ *
+ * The lookaheads (`(?=\d|T\d)` after `P`, `(?=\d)` after `T`) mirror
+ * `schemas/policy.schema.json`'s `claimTiming.staleAge`/
+ * `heartbeatInterval` pattern exactly, so this rejects the same
+ * dangling-designator strings the schema does (bare `P`, bare `PT`,
+ * `P1DT` with no time components after `T`) at the match stage, instead
+ * of accepting them as a syntactically-valid zero/malformed duration
+ * that a looser grammar would silently normalize.
  */
 export function parseIsoDurationToHours(value: unknown): number | null {
   if (typeof value !== 'string') {
     return null;
   }
-  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(
-    value,
-  );
+  const match =
+    /^P(?=\d|T\d)(?:(\d+)D)?(?:T(?=\d)(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(
+      value,
+    );
   if (!match) {
     return null;
   }
@@ -951,13 +960,21 @@ export function parseIsoDurationToHours(value: unknown): number | null {
   return totalHours > 0 ? totalHours : null;
 }
 
+// Matches the start of the next Markdown list item: a newline, optional
+// leading indentation (nested/indented lists), then one of the three
+// common bullet markers and at least one space. Whitespace-tolerant so
+// an indented or differently-marked list still bounds correctly instead
+// of letting the slice run past the intended bullet.
+const NEXT_BULLET_PATTERN = /\n[ \t]*[-*+]\s+/;
+
 /**
  * Slice `section` down to just the bullet introduced by `bulletLabel`
- * (e.g. `**Stale**:`), stopping before the next `- ` list item or at the
- * end of `section`. Returns null when `bulletLabel` is not found. Bounding
- * the slice to one bullet is what stops the anchor regexes in
- * {@link parseThresholdsProseHours} from crossing into an unrelated
- * number that happens to appear in a *different* bullet.
+ * (e.g. `**Stale**:`), stopping before the next list item (see
+ * {@link NEXT_BULLET_PATTERN}) or at the end of `section`. Returns null
+ * when `bulletLabel` is not found. Bounding the slice to one bullet is
+ * what stops the anchor regexes in {@link parseThresholdsProseHours}
+ * from crossing into an unrelated number that happens to appear in a
+ * *different* bullet.
  */
 function extractBulletText(
   section: string,
@@ -967,8 +984,9 @@ function extractBulletText(
   if (start === -1) {
     return null;
   }
-  const nextBullet = section.indexOf('\n- ', start + 1);
-  return section.slice(start, nextBullet === -1 ? undefined : nextBullet);
+  const rest = section.slice(start);
+  const nextBulletMatch = NEXT_BULLET_PATTERN.exec(rest);
+  return nextBulletMatch ? rest.slice(0, nextBulletMatch.index) : rest;
 }
 
 /**

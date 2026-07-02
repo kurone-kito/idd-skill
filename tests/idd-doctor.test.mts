@@ -1692,6 +1692,16 @@ test('parseIsoDurationToHours returns null for non-string, malformed, zero, and 
   assert.equal(parseIsoDurationToHours('PT30M'), null);
 });
 
+test('parseIsoDurationToHours rejects dangling designators the policy schema also rejects', () => {
+  // Regression test: the original regex had no lookaheads, so `P1DT`
+  // (a "D" component followed by a dangling "T" with no H/M/S after it)
+  // matched and silently resolved to 24h — a schema-invalid value that
+  // should be treated as unparseable, not silently normalized.
+  assert.equal(parseIsoDurationToHours('P1DT'), null);
+  assert.equal(parseIsoDurationToHours('P'), null);
+  assert.equal(parseIsoDurationToHours('PT'), null);
+});
+
 test('parseThresholdsProseHours extracts the current stale-age and heartbeat-interval hours', () => {
   assert.deepEqual(parseThresholdsProseHours(THRESHOLDS_SECTION), {
     staleAgeHours: 24,
@@ -1815,6 +1825,25 @@ test('parseThresholdsProseHours does not let a later bullet leak into an earlier
   assert.deepEqual(parseThresholdsProseHours(rewordedWithUnrelatedNumber), {
     staleAgeHours: 24,
     heartbeatIntervalHours: null,
+  });
+});
+
+test('parseThresholdsProseHours still bounds bullets correctly when the list is indented', () => {
+  // Regression test: the bullet-boundary search originally looked only
+  // for the literal "\n- " substring, so an indented sub-list (or a
+  // "*"/"+" marker) would not be recognized as a boundary and the slice
+  // could run past the intended bullet, re-enabling the cross-bullet
+  // leak this file's other regression tests guard against.
+  const indented = `## Thresholds
+
+  - **Stale**: claims expire after a while, no number stated here.
+  - **Heartbeat**: re-post the claim comment every 12 h while holding.
+
+## Fail-closed default
+`;
+  assert.deepEqual(parseThresholdsProseHours(indented), {
+    staleAgeHours: null,
+    heartbeatIntervalHours: 12,
   });
 });
 
