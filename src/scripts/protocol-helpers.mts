@@ -2058,9 +2058,11 @@ export function classifyReviewThreadForGate(
 // promoting a non-agent into `iddAgentLogins` makes that actor's genuine
 // unresolved feedback classify `awaiting-reviewer` and stop blocking (when
 // conversation resolution is not required; otherwise it stays a blocking
-// `conversation-resolve-*`). Recognize dispositions PER ITEM; never globally
-// promote a non-agent into `iddAgentLogins`. See the consolidated invariants
-// above `summarizeDispositionEvidenceForGate` (#1182 / PR #1184).
+// `conversation-resolve-*`). This gate classifies each thread by its own
+// latest-author identity (IDD agent / PR author), not by disposition
+// recognition; never globally promote a non-agent into `iddAgentLogins`. See
+// the consolidated invariants above `summarizeDispositionEvidenceForGate`
+// (#1182 / PR #1184).
 export function summarizeReviewThreadsForGate(
   threads: ThreadLike[],
   options: {
@@ -3386,11 +3388,13 @@ export function resolveLatestReviewWatermark(
 }
 
 // Pre-merge gate invariant (unreplied regular comments -> `unrepliedComments`):
-// INFORMATIONAL, NOT merge-blocking. `computePreMergeReadinessBlockers` pushes
-// no blocker for this count, so a wrong `iddAgentLogins` recognition only
-// miscounts cosmetically (promoting a non-agent here under-counts, since its
-// comments are excluded and its reply advances the watermark; missing a real
-// agent over-counts) -- it never opens or closes the merge gate. See the
+// does NOT feed `computePreMergeReadinessBlockers` (no code-rollup blocker), but
+// it is NOT harmless -- the written F2 gate "Unreplied comments = 0" in
+// `idd-pre-merge.instructions.md` routes any non-IDD regular comment without a
+// later IDD reply back to review triage. So globally promoting a non-agent into
+// `iddAgentLogins` filters that actor's genuine unreplied feedback out of the F2
+// gate (fail-OPEN at the process level; its comments are excluded and its reply
+// advances the watermark), while missing a real agent over-counts. See the
 // consolidated invariants above `summarizeDispositionEvidenceForGate`
 // (#1182 / PR #1184).
 export function summarizeRegularCommentsForGate(
@@ -3542,8 +3546,9 @@ export function summarizeRegularCommentsForGate(
 }
 
 // Pre-merge gate invariants -- READ BEFORE MODIFYING ANY `iddAgentLogins`-KEYED
-// GATE HELPER. Three functions key disposition/reply recognition on
-// `iddAgentLogins`, and each reacts DIFFERENTLY when that recognition is wrong:
+// GATE HELPER. Three functions key disposition, reply, and thread-author
+// recognition on `iddAgentLogins`, and each reacts DIFFERENTLY when that
+// recognition is wrong:
 //   1. `summarizeDispositionEvidenceForGate` (this fn) -- MERGE-BLOCKING (feeds
 //      `computePreMergeReadinessBlockers` via `dispositionEvidence`). Both
 //      recognition-error directions matter: FAILING to recognize a real agent
@@ -3556,11 +3561,15 @@ export function summarizeRegularCommentsForGate(
 //      Without required conversation resolution, an IDD agent's latest thread
 //      comment is `awaiting-reviewer` (non-blocking), so GLOBALLY promoting a
 //      non-agent into `iddAgentLogins` makes that actor's genuine unresolved
-//      feedback stop blocking -> fail-OPEN. Recognize dispositions PER ITEM;
-//      never globally promote a non-agent into `iddAgentLogins`.
-//   3. `summarizeRegularCommentsForGate` (`unrepliedComments`) --
-//      INFORMATIONAL, NOT a merge blocker. Wrong recognition -> cosmetic
-//      miscount only (never opens or closes the gate).
+//      feedback stop blocking -> fail-OPEN. This gate keys on latest-author
+//      identity, not disposition recognition.
+//   3. `summarizeRegularCommentsForGate` (`unrepliedComments`) -- does NOT feed
+//      `computePreMergeReadinessBlockers`, but the written F2 gate "Unreplied
+//      comments = 0" (`idd-pre-merge.instructions.md`) still consumes it, so
+//      promoting a non-agent filters that actor's unreplied feedback out of
+//      that gate -> fail-OPEN at the process level (not harmless).
+// Across all three: never globally promote a non-agent into `iddAgentLogins` --
+// recognize each item by its own author.
 // Notice vs summary matching asymmetry (implemented and documented in detail on
 // `matchTrustedAdvisoryStickyDispositions`): a non-review NOTICE disposition
 // matches time-agnostically -- it carries forward across a re-posted notice
