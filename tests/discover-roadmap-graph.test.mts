@@ -239,6 +239,82 @@ Depends on #403, #404 and #405
   ]);
 });
 
+test('extractKeywordReferences ignores refs quoted inside code regions (#1204)', () => {
+  // The #1142/#1143 shape: an execution leaf *about* the dependency parser
+  // quotes example `Blocked by` / `Depends on` refs in inline code and fences.
+  // Walking them as real edges made a completed roadmap permanently
+  // un-closeable by the mechanical audit — consistent with the #1121 boundary
+  // already applied to extractRoadmapMarkerId, these must not become edges.
+  const inline = 'an inline-code `Blocked by #77` example is ignored';
+  assert.deepEqual(extractKeywordReferences(inline), []);
+
+  const fenced = [
+    'Example from the parser fix:',
+    '',
+    '```md',
+    'Blocked by #100, #200',
+    'Depends on #66',
+    '```',
+  ].join('\n');
+  assert.deepEqual(extractKeywordReferences(fenced), []);
+});
+
+test('extractKeywordReferences keeps a real ref while dropping a code-quoted one on the same line', () => {
+  // Masking replaces inline-code inner chars with spaces but keeps the real
+  // reference; evidence stays the raw line because stripMarkdownCodeRegions
+  // preserves the line count so the raw and masked splits stay index-aligned.
+  const body = 'Depends on #303 (not the `Blocked by #5` example)';
+  assert.deepEqual(extractKeywordReferences(body), [
+    {
+      target: 303,
+      relationship: 'dependency',
+      evidence: 'Depends on #303 (not the `Blocked by #5` example)',
+    },
+  ]);
+});
+
+test('extractTaskListReferences ignores a checkbox quoted inside a fence (#1204)', () => {
+  const fenced = ['```md', '- [ ] #900', '```', '- [ ] #901'].join('\n');
+  assert.deepEqual(extractTaskListReferences(fenced), [
+    { target: 901, relationship: 'task-list', evidence: '- [ ] #901' },
+  ]);
+});
+
+test('graph traversal creates no phantom edges from code-quoted refs in a child body (#1204)', async () => {
+  // Reproduces the #1142/#1143 audit false-positive at the graph level: a
+  // completed child that documents the dependency parser quotes example
+  // Blocked by / Depends on refs in inline code and a fence. None of them may
+  // become traversal edges, or the roadmap looks incomplete forever.
+  const childBody = [
+    '## Background',
+    '',
+    'The parser turns `Blocked by #66, #200` into `[66, 200]`, and a',
+    'blockquote `> Depends on #98` is matched too.',
+    '',
+    '```md',
+    'Blocked by #100',
+    '```',
+  ].join('\n');
+  const issues = new Map([
+    [700, roadmapIssue(700, '- [ ] #701', 'phantom-roadmap')],
+    [701, executionIssue(701, childBody, 'closed')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(graph.edges, [
+    {
+      source: 700,
+      target: 701,
+      relationship: 'task-list',
+      evidence: '- [ ] #701',
+    },
+  ]);
+  assert.deepEqual(graph.executionCandidates, []);
+});
+
 test('enumerates a flat roadmap graph and separates execution candidates', async () => {
   const issues = new Map([
     [100, roadmapIssue(100, '- [ ] #101\n- [ ] #102', 'root-roadmap')],

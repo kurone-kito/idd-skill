@@ -1135,18 +1135,31 @@ export function classifyIssue(issue, markerPrefix = DEFAULT_MARKER_PREFIX) {
   };
 }
 export function extractTaskListReferences(body) {
-  return String(body ?? '')
-    .split(/\r?\n/u)
-    .flatMap((line) => {
-      const match = line.match(/^\s*-\s*\[(?: |x|X)\]\s+#(\d+)\b/u);
-      if (!match) {
-        return [];
-      }
-      const target = Number.parseInt(match[1], 10);
-      return Number.isInteger(target) && target > 0
-        ? [{ target, relationship: 'task-list', evidence: line.trim() }]
-        : [];
-    });
+  // Match against a code-masked copy so a checkbox merely quoted inside inline
+  // code or a fenced block is not walked as a real task-list edge — consistent
+  // with the #1121 boundary already applied to extractRoadmapMarkerId (#1204).
+  // stripMarkdownCodeRegions preserves the line count, so the masked and raw
+  // lines share an index and evidence stays the raw line for any surviving edge
+  // (e.g. one that shares a line with unrelated inline code).
+  const rawBody = String(body ?? '');
+  const rawLines = rawBody.split(/\r?\n/u);
+  const maskedLines = stripMarkdownCodeRegions(rawBody).split(/\r?\n/u);
+  return maskedLines.flatMap((maskedLine, index) => {
+    const match = maskedLine.match(/^\s*-\s*\[(?: |x|X)\]\s+#(\d+)\b/u);
+    if (!match) {
+      return [];
+    }
+    const target = Number.parseInt(match[1], 10);
+    return Number.isInteger(target) && target > 0
+      ? [
+          {
+            target,
+            relationship: 'task-list',
+            evidence: (rawLines[index] ?? maskedLine).trim(),
+          },
+        ]
+      : [];
+  });
 }
 export function extractKeywordReferences(body, options = {}) {
   const references = [];
@@ -1158,13 +1171,25 @@ export function extractKeywordReferences(body, options = {}) {
       ? options.currentRepoRef.split('/')[1]
       : options.repo,
   );
-  for (const line of String(body ?? '').split(/\r?\n/u)) {
-    const keywordMatches = [...line.matchAll(KEYWORD_REFERENCE_REGEX)];
+  // Run the keyword match AND the trailing-segment scan against a code-masked
+  // copy of the body so a reference merely quoted inside inline code or a fenced
+  // block is not walked as a real graph edge — consistent with the #1121
+  // boundary already applied to extractRoadmapMarkerId (#1204). Only `evidence`
+  // reads the raw line; stripMarkdownCodeRegions preserves the line count, so
+  // the masked and raw lines share an index and evidence stays byte-identical
+  // for any surviving edge that is not itself inside/adjacent to code.
+  const rawBody = String(body ?? '');
+  const rawLines = rawBody.split(/\r?\n/u);
+  const maskedLines = stripMarkdownCodeRegions(rawBody).split(/\r?\n/u);
+  for (let lineIndex = 0; lineIndex < maskedLines.length; lineIndex += 1) {
+    const maskedLine = maskedLines[lineIndex];
+    const rawLine = rawLines[lineIndex] ?? maskedLine;
+    const keywordMatches = [...maskedLine.matchAll(KEYWORD_REFERENCE_REGEX)];
     for (let index = 0; index < keywordMatches.length; index += 1) {
       const match = keywordMatches[index];
       const segmentStart = (match.index ?? 0) + match[0].length;
-      const segmentEnd = keywordMatches[index + 1]?.index ?? line.length;
-      const segment = line.slice(segmentStart, segmentEnd);
+      const segmentEnd = keywordMatches[index + 1]?.index ?? maskedLine.length;
+      const segment = maskedLine.slice(segmentStart, segmentEnd);
       for (const target of extractKeywordReferenceTargets(
         segment,
         currentRepoRef,
@@ -1175,7 +1200,7 @@ export function extractKeywordReferences(body, options = {}) {
         references.push({
           target,
           relationship: classifyKeywordRelationship(match[1]),
-          evidence: line.trim(),
+          evidence: rawLine.trim(),
         });
       }
     }
