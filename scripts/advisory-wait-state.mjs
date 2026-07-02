@@ -6,6 +6,8 @@
 // .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   readAdvisoryPrimaryBotLogin,
   readAdvisorySecondaryBotLogin,
@@ -18,98 +20,118 @@ import {
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mjs';
 
-const args = parseArgs(process.argv.slice(2));
-if (!args.prNumber) {
-  throw new Error('missing required --pr <number> argument');
+if (isCliExecution()) {
+  main();
 }
-const owner =
-  args.owner ||
-  ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
-const repo =
-  args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
-const repoRef = `${owner}/${repo}`;
-const viewerLogin = safeGhText(['api', 'user', '--jq', '.login']).toLowerCase();
-const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
-  resolveTrustedMarkerActors({
-    flagValue: args.trustedMarkerLogins,
-    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-    config: loadIddConfig(),
-  });
-const prHeadSha = ghText([
-  'pr',
-  'view',
-  String(args.prNumber),
-  '-R',
-  repoRef,
-  '--json',
-  'headRefOid',
-  '--jq',
-  '.headRefOid',
-]);
-const reviews = ghApiJson(
-  `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
-  true,
-);
-const requestedReviewers = ghApiJson(
-  `repos/${owner}/${repo}/pulls/${args.prNumber}/requested_reviewers`,
-  false,
-);
-const timelineEvents = ghApiJson(
-  `repos/${owner}/${repo}/issues/${args.prNumber}/timeline`,
-  true,
-  ['-H', 'Accept: application/vnd.github+json'],
-);
-const comments = ghApiJson(
-  `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
-  true,
-);
-const collaboratorTrustEnabled = isTruthy(
-  process.env.IDD_TRUST_COLLABORATOR_MARKERS,
-);
-const trustedMarkerLogins = normalizeTrustedMarkerLogins([
-  viewerLogin,
-  ...configuredTrustedActors,
-  ...(collaboratorTrustEnabled
-    ? resolveTrustedCollaboratorMarkerLogins(owner, repo, comments)
-    : []),
-]);
-const advisoryWaitPolicy = readAdvisoryWaitPolicy();
-const primaryBotLogin = readAdvisoryPrimaryBotLogin();
-const secondaryBotLogin = readAdvisorySecondaryBotLogin();
-const summary = buildAdvisoryWaitSummary(
-  {
-    prHeadSha,
-    reviews,
-    requestedReviewers: requestedReviewers.users ?? [],
-    timelineEvents,
-    comments: comments.map(normalizeComment),
-  },
-  {
-    now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
-    requestCap: advisoryWaitPolicy.requestCap,
-    pendingWindowMinutes: advisoryWaitPolicy.pendingWindowMinutes,
-    settledWindowMinutes: advisoryWaitPolicy.settledWindowMinutes,
-    pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
-    capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
-    primaryBotLogin,
-    secondaryBotLogin,
+// The CLI body. Guarded behind isCliExecution() so importing this module (for
+// unit tests) does not parse process.argv, fail, or make a `gh` call —
+// matching the sibling-helper convention (see isCliExecution() in
+// live-status-digest.mts).
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (!args.prNumber) {
+    throw new Error('missing required --pr <number> argument');
+  }
+  const owner =
+    args.owner ||
+    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+  const repo =
+    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+  const repoRef = `${owner}/${repo}`;
+  const viewerLogin = safeGhText([
+    'api',
+    'user',
+    '--jq',
+    '.login',
+  ]).toLowerCase();
+  const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
+    resolveTrustedMarkerActors({
+      flagValue: args.trustedMarkerLogins,
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+      config: loadIddConfig(),
+    });
+  const prHeadSha = ghText([
+    'pr',
+    'view',
+    String(args.prNumber),
+    '-R',
+    repoRef,
+    '--json',
+    'headRefOid',
+    '--jq',
+    '.headRefOid',
+  ]);
+  const reviews = ghApiJson(
+    `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
+    true,
+  );
+  const requestedReviewers = ghApiJson(
+    `repos/${owner}/${repo}/pulls/${args.prNumber}/requested_reviewers`,
+    false,
+  );
+  const timelineEvents = ghApiJson(
+    `repos/${owner}/${repo}/issues/${args.prNumber}/timeline`,
+    true,
+    ['-H', 'Accept: application/vnd.github+json'],
+  );
+  const comments = ghApiJson(
+    `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
+    true,
+  );
+  const collaboratorTrustEnabled = isTruthy(
+    process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+  );
+  const trustedMarkerLogins = normalizeTrustedMarkerLogins([
     viewerLogin,
-    configuredTrustedActors,
-    collaboratorTrustEnabled,
-    trustedMarkerLogins,
-  },
-);
-process.stdout.write(
-  `${JSON.stringify(
+    ...configuredTrustedActors,
+    ...(collaboratorTrustEnabled
+      ? resolveTrustedCollaboratorMarkerLogins(owner, repo, comments)
+      : []),
+  ]);
+  const advisoryWaitPolicy = readAdvisoryWaitPolicy();
+  const primaryBotLogin = readAdvisoryPrimaryBotLogin();
+  const secondaryBotLogin = readAdvisorySecondaryBotLogin();
+  const summary = buildAdvisoryWaitSummary(
     {
-      ...summary,
-      trustedMarkerActors: configuredTrustedActors,
-      trustedMarkerActorsSource,
+      prHeadSha,
+      reviews,
+      requestedReviewers: requestedReviewers.users ?? [],
+      timelineEvents,
+      comments: comments.map(normalizeComment),
     },
-    null,
-    2,
-  )}\n`,
-);
+    {
+      now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
+      requestCap: advisoryWaitPolicy.requestCap,
+      pendingWindowMinutes: advisoryWaitPolicy.pendingWindowMinutes,
+      settledWindowMinutes: advisoryWaitPolicy.settledWindowMinutes,
+      pollIntervalMinutes: advisoryWaitPolicy.pollIntervalMinutes,
+      capExhaustedRoute: advisoryWaitPolicy.capExhaustedRoute,
+      primaryBotLogin,
+      secondaryBotLogin,
+      viewerLogin,
+      configuredTrustedActors,
+      collaboratorTrustEnabled,
+      trustedMarkerLogins,
+    },
+  );
+  process.stdout.write(
+    `${JSON.stringify(
+      {
+        ...summary,
+        trustedMarkerActors: configuredTrustedActors,
+        trustedMarkerActorsSource,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+function isCliExecution() {
+  return (
+    Boolean(process.argv[1]) &&
+    fileURLToPath(import.meta.url) === resolve(process.argv[1])
+  );
+}
 function parseArgs(argv) {
   const parsed = {
     prNumber: null,

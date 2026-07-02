@@ -6,6 +6,8 @@
 // .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { computeReportSummary } from './audit-pr-cleanup-summary.mjs';
 import {
   isAuthorizedForcedHandoffActor,
@@ -32,80 +34,64 @@ const trustedMarkerAuthorCache = new Map();
 const collaboratorPermissionCache = new Map();
 let cachedConfiguredTrustedMarkerActorSources = null;
 let cachedCurrentViewerLogin = null;
-const args = parseArgs(process.argv.slice(2));
-if (args.help) {
-  printUsage();
-  process.exit(0);
+if (isCliExecution()) {
+  await main();
 }
-if (!args.pr) {
-  fail('missing required --pr <number>');
-}
-if (args.apply && args.dryRun) {
-  fail('choose only one of --dry-run or --apply');
-}
-if (!args.apply) {
-  args.dryRun = true;
-}
-if (args.apply && args.skipClaimCheck && (args.claimIssue || args.claimId)) {
-  fail(
-    '--skip-claim-check cannot be combined with --claim-issue or --claim-id',
-  );
-}
-if (args.apply && !args.skipClaimCheck && (!args.claimIssue || !args.claimId)) {
-  fail(
-    '--apply requires --claim-issue and --claim-id, or explicit --skip-claim-check',
-  );
-}
-const repository = args.repo ?? detectRepository();
-const [owner, repo] = parseRepository(repository);
-const prNumber = parsePositiveInteger(args.pr, '--pr');
-const claimContext = {
-  expectedLinkedPrs: buildExpectedLinkedPrReferences(owner, repo, prNumber),
-  // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
-  // a legitimate issue-only handoff that predates the PR is honored even
-  // against this PR-backed claim. Resolve it once for both claim asserts.
-  prFirstCommitAt: args.apply
-    ? fetchPrFirstCommitAt(owner, repo, prNumber)
-    : null,
-};
-if (args.claimIssue) {
-  args.claimIssue = String(
-    parsePositiveInteger(args.claimIssue, '--claim-issue'),
-  );
-}
-const report = await buildReport(owner, repo, prNumber);
-if (args.apply) {
-  report.mode = 'apply';
-  for (const candidate of report.candidates) {
-    if (!args.skipClaimCheck) {
-      try {
-        assertActiveClaim(
-          owner,
-          repo,
-          args.claimIssue,
-          args.agentId,
-          args.claimId,
-          claimContext,
-        );
-      } catch (error) {
-        report.failed.push({
-          ...candidate,
-          error: error.message,
-        });
-        break;
-      }
-    }
-    try {
-      const freshCandidate = await revalidateCandidate(
-        owner,
-        repo,
-        prNumber,
-        candidate,
-        report,
-      );
-      if (!freshCandidate) {
-        continue;
-      }
+// The CLI body. Guarded behind isCliExecution() so importing this module (for
+// unit tests) does not parse process.argv, fail, or make a `gh` call —
+// matching the sibling-helper convention (see isCliExecution() in
+// live-status-digest.mts). This one stays async because it retains a
+// pre-existing await (buildReport) from before the guard was added.
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    printUsage();
+    process.exit(0);
+  }
+  if (!args.pr) {
+    fail('missing required --pr <number>');
+  }
+  if (args.apply && args.dryRun) {
+    fail('choose only one of --dry-run or --apply');
+  }
+  if (!args.apply) {
+    args.dryRun = true;
+  }
+  if (args.apply && args.skipClaimCheck && (args.claimIssue || args.claimId)) {
+    fail(
+      '--skip-claim-check cannot be combined with --claim-issue or --claim-id',
+    );
+  }
+  if (
+    args.apply &&
+    !args.skipClaimCheck &&
+    (!args.claimIssue || !args.claimId)
+  ) {
+    fail(
+      '--apply requires --claim-issue and --claim-id, or explicit --skip-claim-check',
+    );
+  }
+  const repository = args.repo ?? detectRepository();
+  const [owner, repo] = parseRepository(repository);
+  const prNumber = parsePositiveInteger(args.pr, '--pr');
+  const claimContext = {
+    expectedLinkedPrs: buildExpectedLinkedPrReferences(owner, repo, prNumber),
+    // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
+    // a legitimate issue-only handoff that predates the PR is honored even
+    // against this PR-backed claim. Resolve it once for both claim asserts.
+    prFirstCommitAt: args.apply
+      ? fetchPrFirstCommitAt(owner, repo, prNumber)
+      : null,
+  };
+  if (args.claimIssue) {
+    args.claimIssue = String(
+      parsePositiveInteger(args.claimIssue, '--claim-issue'),
+    );
+  }
+  const report = await buildReport(owner, repo, prNumber);
+  if (args.apply) {
+    report.mode = 'apply';
+    for (const candidate of report.candidates) {
       if (!args.skipClaimCheck) {
         try {
           assertActiveClaim(
@@ -118,36 +104,72 @@ if (args.apply) {
           );
         } catch (error) {
           report.failed.push({
-            ...freshCandidate,
+            ...candidate,
             error: error.message,
           });
           break;
         }
       }
-      const minimized = minimizeComment(
-        freshCandidate.subjectId,
-        freshCandidate.classifier,
-      );
-      report.applied.push({
-        ...freshCandidate,
-        isMinimized: minimized.isMinimized,
-        minimizedReason: minimized.minimizedReason,
-      });
-    } catch (error) {
-      report.failed.push({
-        ...candidate,
-        error: error.message,
-      });
+      try {
+        const freshCandidate = await revalidateCandidate(
+          owner,
+          repo,
+          prNumber,
+          candidate,
+          report,
+        );
+        if (!freshCandidate) {
+          continue;
+        }
+        if (!args.skipClaimCheck) {
+          try {
+            assertActiveClaim(
+              owner,
+              repo,
+              args.claimIssue,
+              args.agentId,
+              args.claimId,
+              claimContext,
+            );
+          } catch (error) {
+            report.failed.push({
+              ...freshCandidate,
+              error: error.message,
+            });
+            break;
+          }
+        }
+        const minimized = minimizeComment(
+          freshCandidate.subjectId,
+          freshCandidate.classifier,
+        );
+        report.applied.push({
+          ...freshCandidate,
+          isMinimized: minimized.isMinimized,
+          minimizedReason: minimized.minimizedReason,
+        });
+      } catch (error) {
+        report.failed.push({
+          ...candidate,
+          error: error.message,
+        });
+      }
+    }
+    computeReportSummary(report);
+    if (report.failed.length > 0) {
+      writeReport(report, args.format);
+      process.exit(1);
     }
   }
   computeReportSummary(report);
-  if (report.failed.length > 0) {
-    writeReport(report, args.format);
-    process.exit(1);
-  }
+  writeReport(report, args.format);
 }
-computeReportSummary(report);
-writeReport(report, args.format);
+function isCliExecution() {
+  return (
+    Boolean(process.argv[1]) &&
+    fileURLToPath(import.meta.url) === resolve(process.argv[1])
+  );
+}
 // Build an IDD-scoped disposition-author predicate from the resolved
 // trusted-marker actors (the accounts the IDD agent posts dispositions under).
 // The non-gate `hasFreshDisposition` callers must use this so a human
