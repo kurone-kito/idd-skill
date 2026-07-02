@@ -39,6 +39,7 @@ scripts/idd-merge-execute.mjs linguist-generated=true
 scripts/idd-roadmap-audit-execute.mjs linguist-generated=true
 scripts/live-status-digest.mjs linguist-generated=true
 scripts/markdown-code.mjs linguist-generated=true
+scripts/marker-helpers.mjs linguist-generated=true
 scripts/marker-regex.mjs linguist-generated=true
 scripts/merged-pr-feedback-sweep.mjs linguist-generated=true
 scripts/minimize-superseded-markers.mjs linguist-generated=true

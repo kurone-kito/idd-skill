@@ -78,7 +78,11 @@ file drop:
 1. **Diff the shared core first.** The new helper usually imports a newer
    `protocol-helpers` shared-core API absent from your older snapshot, so the
    real work is a shared-core bump — budget that prerequisite before scoping the
-   leaf-helper slices.
+   leaf-helper slices. The shared core is no longer always a single file: a
+   façade split (e.g. `protocol-helpers.mts` re-exporting `marker-helpers.mts`)
+   can move an API to a focused module that the entry file only re-exports, so
+   vendor every file the shared-core entry point re-exports from, not just the
+   entry file itself.
 2. **Reconcile a hardened core additively.** If you hardened that core, treat
    the bump as additive named-divergence reconciliation gated on your protected
    tests: preserve the local hardening and append only the new exports rather
