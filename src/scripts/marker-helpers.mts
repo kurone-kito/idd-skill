@@ -131,7 +131,7 @@ const OPERATIONAL_MARKERS: OperationalMarker[] = [
   },
 ];
 
-export const IDD_AGENT_DERIVED_MARKERS = new Set([
+export const IDD_AGENT_DERIVED_MARKERS: ReadonlySet<string> = new Set([
   '<!-- claimed-by:',
   '<!-- unclaimed-by:',
   '<!-- review-watermark:',
