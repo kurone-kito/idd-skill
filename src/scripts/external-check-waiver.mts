@@ -11,6 +11,7 @@ import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
 import { resolveHelperActiveClaim } from './forced-handoff-marker.mts';
+import { ghText, safeGhText } from './gh-exec.mts';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
@@ -1077,18 +1078,6 @@ function readJsonFile(path: string): unknown {
     return JSON.parse(readFileSync(path, 'utf8'));
   } catch {
     return {};
-  }
-}
-
-function ghText(args: string[]): string {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
-}
-
-function safeGhText(args: string[]): string {
-  try {
-    return ghText(args);
-  } catch {
-    return '';
   }
 }
 

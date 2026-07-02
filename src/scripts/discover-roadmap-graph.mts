@@ -21,6 +21,7 @@ import {
   evaluateDiscoverReadiness,
 } from './discover-readiness-check.mts';
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
+import { ghText } from './gh-exec.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import { parseIsoDurationToMs } from './policy-helpers.mts';
 import {
@@ -2441,10 +2442,6 @@ function loadPolicy(policyPath: string): unknown {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`failed to load policy from ${targetPath}: ${detail}`);
   }
-}
-
-function ghText(args: string[]): string {
-  return runGh(args).trim();
 }
 
 /**

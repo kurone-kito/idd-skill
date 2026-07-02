@@ -8,7 +8,6 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
   buildAuthoringLabelWarning,
@@ -21,6 +20,7 @@ import {
   rankAndRouteBySuitability,
 } from './autopilot-suitability.mts';
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
+import { ghText, isCliExecution } from './gh-exec.mts';
 import { createMarkerRegex } from './marker-regex.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
@@ -117,7 +117,7 @@ interface ParsedArgs {
   autopilot: boolean;
 }
 
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 
@@ -675,10 +675,6 @@ function ghJson(args: string[]): unknown[] {
   return JSON.parse(runGh(args).trim() || '[]');
 }
 
-function ghText(args: string[]): string {
-  return runGh(args).trim();
-}
-
 function runGh(args: string[]): string {
   try {
     return execFileSync('gh', args, {
@@ -695,13 +691,6 @@ function runGh(args: string[]): string {
     }
     throw error;
   }
-}
-
-function isCliExecution(): boolean {
-  return Boolean(
-    process.argv[1] &&
-      fileURLToPath(import.meta.url) === resolve(process.argv[1]),
-  );
 }
 
 function normalizeMarkerPrefix(prefix: unknown): string {

@@ -6,7 +6,8 @@
 // never the generated .mjs. See docs/typescript-sources.md.
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+
+import { loadIddConfig } from './idd-config.mts';
 
 const ALLOWED_CLASSIFIERS = new Set(['OUTDATED', 'RESOLVED']);
 const ALLOWED_FORMATS = new Set(['json', 'table']);
@@ -438,14 +439,6 @@ function splitLoginCsv(value: unknown): string[] {
     .split(',')
     .map((login) => login.trim())
     .filter((login) => login.length > 0);
-}
-
-function loadIddConfig(): unknown {
-  try {
-    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8'));
-  } catch {
-    return null;
-  }
 }
 
 export function isTrustedAuthor(

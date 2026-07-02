@@ -18,6 +18,7 @@ import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
 } from './autopilot-suitability.mts';
+import { ghText } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import { escapeRegex } from './marker-regex.mts';
@@ -949,10 +950,6 @@ export function parseIssueNumberLines(raw: string): number[] {
       .filter((line) => /^\d+$/.test(line))
       .map((line) => Number.parseInt(line, 10)),
   );
-}
-
-function ghText(args: string[]): string {
-  return runGh(args).trim();
 }
 
 function loadPolicy(policyPath: string): unknown {

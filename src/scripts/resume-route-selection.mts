@@ -6,9 +6,8 @@
 // generated .mjs. See docs/typescript-sources.md.
 
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
+import { ghText, isCliExecution } from './gh-exec.mts';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
 
 /** Author reference embedded in GitHub REST payloads. */
@@ -129,7 +128,7 @@ const BRANCH_STATES = new Set([
   'unknown',
 ]);
 
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 
@@ -779,10 +778,6 @@ export function recoverJsonFromGhFailure(
   return { recovered: false, value: null };
 }
 
-function ghText(args: string[]): string {
-  return runGh(args).trim();
-}
-
 function runGh(args: string[]): string {
   try {
     return execFileSync('gh', args, {
@@ -843,11 +838,4 @@ function runGitAllowFailure(args: string[]) {
       stderr: String((error as { stderr?: unknown } | null)?.stderr ?? ''),
     };
   }
-}
-
-function isCliExecution(): boolean {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
 }

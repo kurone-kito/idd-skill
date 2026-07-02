@@ -19,6 +19,7 @@ import {
   evaluateDiscoverReadiness,
 } from './discover-readiness-check.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
+import { ghText } from './gh-exec.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import { parseIsoDurationToMs } from './policy-helpers.mjs';
 import {
@@ -1792,9 +1793,6 @@ function loadPolicy(policyPath) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`failed to load policy from ${targetPath}: ${detail}`);
   }
-}
-function ghText(args) {
-  return runGh(args).trim();
 }
 /**
  * Normalize a failed-`gh` error's exit status to a number.

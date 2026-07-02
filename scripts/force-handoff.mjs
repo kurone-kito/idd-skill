@@ -14,6 +14,7 @@ import {
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
 import { planHandoff } from './forced-handoff-marker.mjs';
+import { ghText, safeGhText } from './gh-exec.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 export const NON_TTY_ERROR =
   'operator interaction is required; run idd-force-handoff in an interactive TTY';
@@ -200,16 +201,6 @@ function parseOwnerRepo(value) {
     throw new Error(`invalid repo value: ${value} (expected owner/name)`);
   }
   return { owner: match[1], name: match[2] };
-}
-function ghText(args) {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
-}
-function safeGhText(args) {
-  try {
-    return ghText(args);
-  } catch {
-    return '';
-  }
 }
 function ghJson(args, slurp = false) {
   const finalArgs = [...args];

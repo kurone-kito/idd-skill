@@ -8,7 +8,8 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+
+import { ghText, isCliExecution } from './gh-exec.mts';
 
 const DEFAULT_QUIET_WINDOW_MS = 30 * 60 * 1000;
 
@@ -62,7 +63,7 @@ interface QuietArgs {
   help: boolean;
 }
 
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 
@@ -475,10 +476,6 @@ function ghJson(args: string[]): unknown {
   return JSON.parse(runGh(args).trim() || 'null') ?? [];
 }
 
-function ghText(args: string[]): string {
-  return runGh(args).trim();
-}
-
 function runGh(args: string[]): string {
   try {
     return execFileSync('gh', args, {
@@ -491,11 +488,4 @@ function runGh(args: string[]): string {
     if (stderr) throw new Error(`gh command failed: ${stderr}`);
     throw error;
   }
-}
-
-function isCliExecution(): boolean {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
 }

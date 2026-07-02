@@ -16,6 +16,7 @@ import {
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
 import { planHandoff } from './forced-handoff-marker.mts';
+import { ghText, safeGhText } from './gh-exec.mts';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
 
 /** Author reference embedded in GitHub REST payloads. */
@@ -290,18 +291,6 @@ function parseOwnerRepo(value: unknown): { owner: string; name: string } {
     throw new Error(`invalid repo value: ${value} (expected owner/name)`);
   }
   return { owner: match[1], name: match[2] };
-}
-
-function ghText(args: string[]): string {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
-}
-
-function safeGhText(args: string[]): string {
-  try {
-    return ghText(args);
-  } catch {
-    return '';
-  }
 }
 
 function ghJson(args: string[], slurp = false): unknown {

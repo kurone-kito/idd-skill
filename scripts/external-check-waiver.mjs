@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { resolveHelperActiveClaim } from './forced-handoff-marker.mjs';
+import { ghText, safeGhText } from './gh-exec.mjs';
 import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
@@ -736,16 +737,6 @@ function readJsonFile(path) {
     return JSON.parse(readFileSync(path, 'utf8'));
   } catch {
     return {};
-  }
-}
-function ghText(args) {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
-}
-function safeGhText(args) {
-  try {
-    return ghText(args);
-  } catch {
-    return '';
   }
 }
 function ghJson(args, slurp = false) {

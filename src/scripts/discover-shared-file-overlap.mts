@@ -16,9 +16,9 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { parseAutopilotSuitability } from './autopilot-suitability.mts';
+import { ghText, isCliExecution } from './gh-exec.mts';
 import { parseIsoDurationToMs } from './policy-helpers.mts';
 import {
   resolveActiveClaim,
@@ -36,7 +36,7 @@ const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 /** Upper bound on the best-effort open-PR scan (a `gh pr list --limit`). */
 const OPEN_PR_SCAN_LIMIT = 500;
 
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 
@@ -827,10 +827,6 @@ function ghJson(args: string[]): unknown[] {
   return Array.isArray(parsed) ? parsed : [];
 }
 
-function ghText(args: string[]): string {
-  return runGh(args).trim();
-}
-
 function runGh(args: string[]): string {
   try {
     return execFileSync('gh', args, {
@@ -847,11 +843,4 @@ function runGh(args: string[]): string {
     }
     throw error;
   }
-}
-
-function isCliExecution(): boolean {
-  return Boolean(
-    process.argv[1] &&
-      fileURLToPath(import.meta.url) === resolve(process.argv[1]),
-  );
 }

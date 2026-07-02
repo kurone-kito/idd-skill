@@ -16,6 +16,7 @@ import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
 } from './autopilot-suitability.mjs';
+import { ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import { escapeRegex } from './marker-regex.mjs';
@@ -753,9 +754,6 @@ export function parseIssueNumberLines(raw) {
       .filter((line) => /^\d+$/.test(line))
       .map((line) => Number.parseInt(line, 10)),
   );
-}
-function ghText(args) {
-  return runGh(args).trim();
 }
 function loadPolicy(policyPath) {
   const targetPath = policyPath

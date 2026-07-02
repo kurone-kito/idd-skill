@@ -20,6 +20,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
+import { ghText } from './gh-exec.mjs';
 import { resolveActiveClaimForWriteGate } from './protocol-helpers.mjs';
 /**
  * Find the review thread that owns the review comment whose REST database id is
@@ -155,9 +156,6 @@ thread in one invocation (E13). Dry-run by default; --apply mutates.
   --apply                        post the reply and resolve the thread (default: dry-run)
   -h, --help                     show this help
 `;
-function ghText(args) {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
-}
 function ghJson(args) {
   return JSON.parse(execFileSync('gh', args, { encoding: 'utf8' }));
 }

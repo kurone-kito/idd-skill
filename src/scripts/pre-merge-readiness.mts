@@ -19,7 +19,9 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
+import { ghText, safeGhText } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
+import { loadIddConfig } from './idd-config.mts';
 import {
   normalizePolicyConfig,
   resolveCollaboratorMarkerTrust,
@@ -955,18 +957,6 @@ function ghJson(args: string[], options: RunGhOptions = {}): unknown {
   return JSON.parse(runGh(args, options).trim() || '[]');
 }
 
-function ghText(args: string[]): string {
-  return runGh(args).trim();
-}
-
-function safeGhText(args: string[]): string {
-  try {
-    return ghText(args);
-  } catch {
-    return '';
-  }
-}
-
 function ghApiJson(
   path: string,
   paginate = false,
@@ -1132,19 +1122,5 @@ function readExternalCheckWaiverMaxValidity(): string {
     ).ciGate.externalCheckWaivers.maxValidity;
   } catch {
     return 'PT24H';
-  }
-}
-
-function loadIddConfig(): {
-  trustedMarkerActors?: unknown;
-  advisoryBotLogins?: unknown;
-} | null {
-  try {
-    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8')) as {
-      trustedMarkerActors?: unknown;
-      advisoryBotLogins?: unknown;
-    };
-  } catch {
-    return null;
   }
 }

@@ -5,8 +5,7 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { ghText, isCliExecution } from './gh-exec.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 
 const RUNNING_STATES = new Set([
@@ -37,7 +36,7 @@ const BRANCH_STATES = new Set([
   'computing',
   'unknown',
 ]);
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 export function selectResumeRoute(input) {
@@ -577,9 +576,6 @@ export function recoverJsonFromGhFailure(error, options = {}) {
   }
   return { recovered: false, value: null };
 }
-function ghText(args) {
-  return runGh(args).trim();
-}
 function runGh(args) {
   try {
     return execFileSync('gh', args, {
@@ -627,10 +623,4 @@ function runGitAllowFailure(args) {
       stderr: String(error?.stderr ?? ''),
     };
   }
-}
-function isCliExecution() {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
 }

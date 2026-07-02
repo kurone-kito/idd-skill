@@ -6,14 +6,13 @@
 // .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { computeReportSummary } from './audit-pr-cleanup-summary.mjs';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
+import { isCliExecution } from './gh-exec.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   classifyRegularBotComment,
@@ -34,14 +33,14 @@ const trustedMarkerAuthorCache = new Map();
 const collaboratorPermissionCache = new Map();
 let cachedConfiguredTrustedMarkerActorSources = null;
 let cachedCurrentViewerLogin = null;
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   await main();
 }
-// The CLI body. Guarded behind isCliExecution() so importing this module (for
-// unit tests) does not parse process.argv, fail, or make a `gh` call —
-// matching the sibling-helper convention (see isCliExecution() in
-// live-status-digest.mts). This one stays async because it retains a
-// pre-existing await (buildReport) from before the guard was added.
+// The CLI body. Guarded behind isCliExecution(import.meta.url) (shared,
+// see gh-exec.mts) so importing this module (for unit tests) does not
+// parse process.argv, fail, or make a `gh` call. This one stays async
+// because it retains a pre-existing await (buildReport) from before the
+// guard was added.
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -163,12 +162,6 @@ async function main() {
   }
   computeReportSummary(report);
   writeReport(report, args.format);
-}
-function isCliExecution() {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
 }
 // Build an IDD-scoped disposition-author predicate from the resolved
 // trusted-marker actors (the accounts the IDD agent posts dispositions under).

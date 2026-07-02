@@ -6,8 +6,7 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { ghText, isCliExecution } from './gh-exec.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 
 const APPROVAL_POLICIES = new Set([
@@ -15,7 +14,7 @@ const APPROVAL_POLICIES = new Set([
   'all-write-permission-actors',
 ]);
 const APPROVAL_POLICY_DEFAULT = 'owners-and-maintainers-only';
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 export function evaluateClaimApprovalGate(input, options = {}) {
@@ -749,9 +748,6 @@ function ghApiJsonWithStatus(path) {
 function ghJson(args) {
   return JSON.parse(runGh(args).trim() || '{}');
 }
-function ghText(args) {
-  return runGh(args).trim();
-}
 function runGh(args) {
   try {
     return execFileSync('gh', args, {
@@ -768,10 +764,4 @@ function runGh(args) {
     }
     throw error;
   }
-}
-function isCliExecution() {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
 }

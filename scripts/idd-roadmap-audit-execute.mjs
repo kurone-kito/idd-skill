@@ -27,6 +27,7 @@ import {
   isClaimStaleByAge,
   parseClaimStaleAgeMs,
 } from './discover-roadmap-graph.mjs';
+import { ghText, safeGhText } from './gh-exec.mjs';
 import {
   renderUnclaimedByMarker,
   resolveTrustedMarkerActors,
@@ -925,16 +926,6 @@ function loadPolicy(policyPath) {
 function normalizeMarkerPrefix(markerPrefix) {
   const normalized = String(markerPrefix ?? '').trim();
   return normalized || DEFAULT_MARKER_PREFIX;
-}
-function ghText(args) {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
-}
-function safeGhText(args) {
-  try {
-    return ghText(args);
-  } catch {
-    return '';
-  }
 }
 // ---------------------------------------------------------------------------
 // CLI

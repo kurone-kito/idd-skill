@@ -15,9 +15,9 @@
 // This is the recurring counterpart of the one-time audit in #910 and the
 // chosen recovery path from #909 (advisory-wait stays Copilot-only).
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { loadIddConfig } from './idd-config.mts';
 import {
   hasFreshDisposition,
   isDispositionComment,
@@ -548,20 +548,6 @@ function resolveSinceDate(args: SweepArgs): string | null {
   }
   return candidates.reduce((later, next) => (next.ms > later.ms ? next : later))
     .iso;
-}
-
-function loadIddConfig(): {
-  trustedMarkerActors?: unknown;
-  advisoryBotLogins?: unknown;
-} | null {
-  try {
-    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8')) as {
-      trustedMarkerActors?: unknown;
-      advisoryBotLogins?: unknown;
-    };
-  } catch {
-    return null;
-  }
 }
 
 function runGh(args: string[]): string {

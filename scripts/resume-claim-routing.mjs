@@ -7,8 +7,8 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
+import { ghText, isCliExecution } from './gh-exec.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   buildForcedHandoffEnableGate,
@@ -23,7 +23,7 @@ const LEGACY_CLAIM_PATTERN =
   /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 const LEGACY_RELEASE_PATTERN =
   /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 /**
@@ -840,9 +840,6 @@ function fetchOpenLinkedPrReferences(repository, issueNumber) {
 function ghJson(args) {
   return JSON.parse(runGh(args).trim() || '[]');
 }
-function ghText(args) {
-  return runGh(args).trim();
-}
 function runGh(args) {
   try {
     return execFileSync('gh', args, {
@@ -857,10 +854,4 @@ function runGh(args) {
     }
     throw error;
   }
-}
-function isCliExecution() {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
 }

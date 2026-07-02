@@ -13,8 +13,7 @@
 // pre-check (e) collision detection can recognize two sessions as working
 // the same issue. The written algorithm remains the canonical spec and
 // fallback; this helper only removes the hand-tracing error surface.
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isCliExecution } from './gh-exec.mjs';
 
 // The fixed stop-word set from pre-check (e). Whole-token matches only.
 const STOP_WORDS = new Set([
@@ -31,7 +30,7 @@ const STOP_WORDS = new Set([
 ]);
 const MAX_SLUG_LENGTH = 40;
 const FALLBACK_SLUG = 'task';
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 /**
@@ -139,10 +138,4 @@ Example:
   node scripts/branch-name.mjs --number 42 --title "Add the OAuth login flow"
   => issue/42-add-oauth-login-flow
 `);
-}
-function isCliExecution() {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
 }

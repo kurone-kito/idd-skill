@@ -7,8 +7,6 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { CleanupReport } from './audit-pr-cleanup-summary.mts';
 import { computeReportSummary } from './audit-pr-cleanup-summary.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
@@ -17,6 +15,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
+import { isCliExecution } from './gh-exec.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
 import type { ClaimValidationSummary } from './protocol-helpers.mts';
 import {
@@ -190,15 +189,15 @@ let cachedConfiguredTrustedMarkerActorSources: {
 } | null = null;
 let cachedCurrentViewerLogin: string | null = null;
 
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   await main();
 }
 
-// The CLI body. Guarded behind isCliExecution() so importing this module (for
-// unit tests) does not parse process.argv, fail, or make a `gh` call —
-// matching the sibling-helper convention (see isCliExecution() in
-// live-status-digest.mts). This one stays async because it retains a
-// pre-existing await (buildReport) from before the guard was added.
+// The CLI body. Guarded behind isCliExecution(import.meta.url) (shared,
+// see gh-exec.mts) so importing this module (for unit tests) does not
+// parse process.argv, fail, or make a `gh` call. This one stays async
+// because it retains a pre-existing await (buildReport) from before the
+// guard was added.
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
@@ -333,13 +332,6 @@ async function main(): Promise<void> {
 
   computeReportSummary(report);
   writeReport(report, args.format);
-}
-
-function isCliExecution(): boolean {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
 }
 
 // Build an IDD-scoped disposition-author predicate from the resolved

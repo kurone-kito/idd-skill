@@ -7,7 +7,6 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   buildAuthoringLabelWarning,
   resolveAuthoringGuardPolicy,
@@ -19,6 +18,7 @@ import {
   rankAndRouteBySuitability,
 } from './autopilot-suitability.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
+import { ghText, isCliExecution } from './gh-exec.mjs';
 import { createMarkerRegex } from './marker-regex.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
@@ -26,7 +26,7 @@ const BLOCKED_LABELS = new Set([
   'status:blocked-by-human',
   'status:needs-decision',
 ]);
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 export function extractBlockedByReferences(body) {
@@ -505,9 +505,6 @@ function fetchIssueLabelEvents(repoRef, issueNumber) {
 function ghJson(args) {
   return JSON.parse(runGh(args).trim() || '[]');
 }
-function ghText(args) {
-  return runGh(args).trim();
-}
 function runGh(args) {
   try {
     return execFileSync('gh', args, {
@@ -522,12 +519,6 @@ function runGh(args) {
     }
     throw error;
   }
-}
-function isCliExecution() {
-  return Boolean(
-    process.argv[1] &&
-      fileURLToPath(import.meta.url) === resolve(process.argv[1]),
-  );
 }
 function normalizeMarkerPrefix(prefix) {
   if (typeof prefix !== 'string' || prefix.length === 0) {

@@ -13,9 +13,9 @@
 // `gh pr merge` issued under `--apply` once every F3 gate holds and the
 // head + claim re-validate immediately before the merge.
 
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+import { ghText } from './gh-exec.mts';
 import { collectPreMergeReadiness } from './pre-merge-readiness.mts';
 import { computePreMergeReadinessBlockers } from './protocol-helpers.mts';
 
@@ -338,10 +338,6 @@ function printHelp(): void {
   validated head. Fails closed (exit 1, no merge) on head drift or lost
   claim. Never squash/rebase merges. The merge is the only mutation.
 `);
-}
-
-function ghText(args: string[]): string {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
 }
 
 // CLI: print the verdict as JSON and exit with the gate/merge status.

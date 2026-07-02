@@ -6,7 +6,7 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isCliExecution } from './gh-exec.mjs';
 import { loadJson, validate } from './validate-schemas.mjs';
 
 const DEFAULT_RUNNING_TIMEOUT = 'PT30M';
@@ -24,7 +24,7 @@ export const DEFAULT_CI_WAIT_POLICY = Object.freeze({
   generationTimeoutMs: 10 * 60 * 1000,
   rerunPolicy: DEFAULT_RERUN_POLICY,
 });
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 export function parseDurationToMs(value) {
@@ -179,10 +179,4 @@ function printHelp() {
 Resolves the shared ciWait policy defaults from .github/idd/config.json.
 Optionally emits the deterministic rerun decision for a current rerun count.
 `);
-}
-function isCliExecution() {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
 }

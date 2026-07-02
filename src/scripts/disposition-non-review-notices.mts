@@ -27,7 +27,6 @@
 // marker are dispositioned; real reviews and review threads are never touched.
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
@@ -35,6 +34,8 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
+import { ghText } from './gh-exec.mts';
+import { loadIddConfig } from './idd-config.mts';
 import {
   advisoryBotIdentityToken,
   compareIsoTimestamps,
@@ -465,10 +466,6 @@ function parseArgs(argv: string[]): CliArgs {
   return args;
 }
 
-function ghText(args: string[]): string {
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
-}
-
 function ghJson(args: string[]): unknown {
   return JSON.parse(execFileSync('gh', args, { encoding: 'utf8' }));
 }
@@ -520,16 +517,6 @@ per HEAD). Idempotent and fail-closed.
   --apply                        post the dispositions (default: dry-run)
   -h, --help                     show this help
 `;
-
-function loadIddConfig(): { advisoryBotLogins?: unknown } | null {
-  try {
-    return JSON.parse(readFileSync('.github/idd/config.json', 'utf8')) as {
-      advisoryBotLogins?: unknown;
-    };
-  } catch {
-    return null;
-  }
-}
 
 /** Forced-handoff revalidation inputs, resolved once per CLI invocation. */
 interface ForcedHandoffGateOptions {

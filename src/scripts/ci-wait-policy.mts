@@ -7,8 +7,8 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
+import { isCliExecution } from './gh-exec.mts';
 import { loadJson, validate } from './validate-schemas.mts';
 
 const DEFAULT_RUNNING_TIMEOUT = 'PT30M';
@@ -43,7 +43,7 @@ export const DEFAULT_CI_WAIT_POLICY = Object.freeze({
   rerunPolicy: DEFAULT_RERUN_POLICY,
 });
 
-if (isCliExecution()) {
+if (isCliExecution(import.meta.url)) {
   runCli();
 }
 
@@ -235,11 +235,4 @@ function printHelp(): void {
 Resolves the shared ciWait policy defaults from .github/idd/config.json.
 Optionally emits the deterministic rerun decision for a current rerun count.
 `);
-}
-
-function isCliExecution(): boolean {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(import.meta.url) === resolve(process.argv[1])
-  );
 }
