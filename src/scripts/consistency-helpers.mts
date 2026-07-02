@@ -551,21 +551,29 @@ export function stripGeneratedFromBanner(body: string): string {
 }
 
 /**
- * Extract the source path a generated-from banner names (the line after the
- * opener), or `null` when the body carries no well-formed banner in the
- * expected position: the very top, or immediately after a frontmatter block. A
- * banner-shaped comment anywhere else in the body is deliberately not matched,
- * so a misplaced banner is reported as missing rather than silently accepted.
+ * Return the exact generated-from banner block (opener line through the closing
+ * `-->`) at its recognized position — the very top, or immediately after a
+ * frontmatter block — or `null` when none is present there. A banner-shaped
+ * comment anywhere else in the body is deliberately not matched, so a misplaced
+ * banner is reported as missing rather than silently accepted.
  */
-export function parseGeneratedFromBannerSource(body: string): string | null {
+export function extractGeneratedFromBanner(body: string): string | null {
   const frontmatter = FRONTMATTER_PATTERN.exec(body);
   // After a frontmatter block the inject adds a single leading `\n`; at the top
   // there is none. Anchor with `^\n?` so only an in-position banner matches.
   const scope = frontmatter ? body.slice(frontmatter[1].length) : body;
-  const match = new RegExp(
-    `^\\n?${GENERATED_FROM_BANNER_OPEN}\\n([^\\n]+)\\n[\\s\\S]*?-->`,
-  ).exec(scope);
+  const match = new RegExp(`^\\n?(${GENERATED_FROM_BANNER_BODY})`).exec(scope);
   return match ? match[1] : null;
+}
+
+/**
+ * Extract the source path an in-position generated-from banner names (the line
+ * after the opener), or `null` when the body carries no well-formed banner in
+ * the recognized position.
+ */
+export function parseGeneratedFromBannerSource(body: string): string | null {
+  const banner = extractGeneratedFromBanner(body);
+  return banner ? (banner.split('\n')[1] ?? null) : null;
 }
 
 /**
@@ -599,20 +607,24 @@ export function collectGeneratedFromBannerViolations(
       continue;
     }
     const text = String(readFile(target) ?? '');
-    const declaredSource = parseGeneratedFromBannerSource(text);
-    if (declaredSource === null) {
+    // Extract the banner at its recognized position and compare that exact
+    // block, so a canonical banner copy-pasted elsewhere in the file cannot mask
+    // a missing or malformed in-position banner.
+    const banner = extractGeneratedFromBanner(text);
+    if (banner === null) {
       errors.push(
         `${id}: ${target} is missing a well-formed idd-generated-from banner; run \`node scripts/sync-docs.mjs --apply\``,
       );
       continue;
     }
+    const declaredSource = banner.split('\n')[1] ?? '';
     if (declaredSource !== source) {
       errors.push(
         `${id}: ${target} generated-from banner names ${declaredSource}, but its source is ${source}`,
       );
       continue;
     }
-    if (!text.includes(generatedFromBanner(source))) {
+    if (banner !== generatedFromBanner(source)) {
       errors.push(
         `${id}: ${target} generated-from banner is malformed; run \`node scripts/sync-docs.mjs --apply\` to restore the canonical block for ${source}`,
       );
