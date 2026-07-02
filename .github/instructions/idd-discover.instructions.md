@@ -100,9 +100,8 @@ Read the **issue-scope** value from the Project commands table in
   discards every A3.5-startable candidate, or A4 Step 1.5 eliminates the
   last one). Run A0-O **at most once** as this fallback per Discover pass;
   once spent, a later A4 exhaustion reports and stops per A4 Step 1 / Step
-  1.5 (not an abort) without re-entering A0-O (A0-O's own zero-orphan exit
-  still routes to the A3 decision tree). This reuses A0-O **only** as a
-  post-roadmap fallback;
+  1.5 (not an abort) without re-entering A0-O. This reuses A0-O **only** as
+  a post-roadmap fallback;
   the roadmap path stays primary (unlike `orphan-first`). If candidates
   reach A3.5 but it holds them all as approval-needed, do **not** fall
   back: the approval hold governs and a non-empty approval-needed bucket
@@ -165,8 +164,10 @@ next step depends on which path invoked A0-O:
   to **A1** and continue with the normal
   A1 → A1.5 → A2 → A3 → A3.5 → A4 sequence.
 - **`roadmap-first` fallback**: the roadmap path already ran, so do **not**
-  re-enter A1. Per the guard at the top of A0-O, this exit goes straight to
-  the **A3 decision tree**.
+  re-enter A1. A **trigger (a)** entry (zero-reach-A3.5) goes straight to
+  the **A3 decision tree** (per the guard atop A0-O). A **trigger (b)**
+  entry (A4 Step 1 / Step 1.5 exhaustion) instead **reports and stops (not
+  an abort)** via that invoking A4 terminal.
 
 The A3 decision tree (abort / ask operator in unattended mode) is
 reached when the active discovery path(s) produce zero results: for
@@ -466,12 +467,12 @@ If **no issue** survives the gate:
   that only approval-needed issues remain and stop without claim in
   unattended mode. In attended mode, ask the operator whether to obtain
   approval or opt out explicitly;
-- otherwise, under `roadmap-first` discovery, route to the **A0-O**
-  roadmap-first fallback (A0 trigger (b)) if it has not run this pass;
-  else (already spent, or `issue-scope` is not `roadmap-first` — e.g. the
-  A0-T explicit-target gate) report the discarded issues with the
-  criterion each failed, then **stop** — do not post `unclaimed-by`
-  because no claim was made. This is not an abort.
+- otherwise, in the **roadmap-traversal** candidate flow (A2→A3→A4 only;
+  the A0-T explicit-target gate never reaches here — a failed target stops
+  in A0-T with no fallback), route to the **A0-O** roadmap-first fallback
+  (A0 trigger (b)) if it has not run this pass; once spent, report the
+  discarded issues with the criterion each failed, then **stop** — do not
+  post `unclaimed-by` because no claim was made. This is not an abort.
 
 ### Step 1.5 — Active-claim pre-scan
 

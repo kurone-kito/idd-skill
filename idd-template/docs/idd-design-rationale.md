@@ -43,14 +43,20 @@ Three guards keep it safe:
 - **At most once per pass.** A0-O runs at most once as the
   roadmap-first fallback per Discover pass. Once spent (via trigger
   (a) or (b)), a later A4 Step 1 / Step 1.5 exhaustion reports and
-  stops (not an abort) without re-entering A0-O; A0-O's own
-  zero-orphan result separately routes to the A3 decision tree. This
-  prevents an A1 ↔ A0-O or A4 ↔ A0-O loop.
+  stops (not an abort) without re-entering A0-O. A **trigger (a)**
+  A0-O run that finds no orphan routes to the A3 decision tree (both
+  paths genuinely empty); a **trigger (b)** one reports and stops
+  instead, because roadmap candidates reached A4 — an exhaustion the
+  A3 tree's A2/A3-empty cases do not describe. This prevents an
+  A1 ↔ A0-O or A4 ↔ A0-O loop.
 
-When both the roadmap path (whether it returned zero A3.5-reaching
-candidates or exhausted at A4 viability / active-claim) and the orphan
-fallback yield nothing, discovery lands in the A3 decision tree,
-exactly as the zero-reach-A3.5 case did before.
+When **trigger (a)** (zero A3.5-reaching candidates) and the orphan
+fallback both yield nothing, discovery lands in the A3 decision tree,
+exactly as the zero-reach-A3.5 case did before. **Trigger (b)** instead
+reports and stops (not an abort): roadmap candidates reached A4, so the
+A3 tree's A2/A3-empty reports would misdescribe the exhaustion. The
+fallback is also scoped to roadmap traversal (A2→A3→A4) — the A0-T
+explicit-target gate keeps its own no-fallback stop.
 
 The `orphan-first` symmetric case — orphan candidates all failing A4,
 which would fall back to the roadmap path — is a separate concern and
