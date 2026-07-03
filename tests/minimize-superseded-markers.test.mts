@@ -210,7 +210,10 @@ process.exit(1);
           // stub, not a real gh binary, while keeping the rest of PATH
           // (matching the other CLI-stub tests in this repo) so the gh
           // stub's #!/usr/bin/env node shebang can still find `node`.
-          PATH: `${binDir}:${process.env.PATH ?? ''}`,
+          // Conditional concatenation avoids a trailing `:` (and the
+          // implicit current-directory PATH entry it creates on POSIX)
+          // when PATH is unset.
+          PATH: process.env.PATH ? `${binDir}:${process.env.PATH}` : binDir,
           IDD_TRUSTED_MARKER_ACTORS: '',
         },
         encoding: 'utf8',
