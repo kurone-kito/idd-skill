@@ -301,3 +301,62 @@ process.exit(1);
     rmSync(sandbox, { recursive: true, force: true });
   }
 });
+
+test('a zero / leading-zero --subject-ids value keeps the raw gh passthrough (not REST-shaped)', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-minimize-'));
+  try {
+    // "0" and "0001" are digit strings but not real REST id shapes (GitHub
+    // REST ids are always positive integers with no leading zero), so
+    // REST_SHAPED_SUBJECT_ID_PATTERN (/^[1-9]\d*$/) must reject them too.
+    const binDir = join(sandbox, 'bin');
+    mkdirSync(binDir);
+    writeFileSync(
+      join(binDir, 'gh'),
+      `#!/usr/bin/env node
+const value = (process.argv.find((a) => a.startsWith('id=')) ?? '').slice(3);
+const message = \`Could not resolve to a node with the global id of '\${value}'\`;
+process.stdout.write(JSON.stringify({ data: { node: null }, errors: [{ type: 'NOT_FOUND', message }] }));
+process.stderr.write(\`gh: \${message}\\n\`);
+process.exit(1);
+`,
+    );
+    chmodSync(join(binDir, 'gh'), 0o755);
+
+    const script = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      'scripts',
+      'minimize-superseded-markers.mjs',
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        script,
+        '--subject-ids',
+        '0,0001',
+        '--allow-untrusted',
+        '--format',
+        'json',
+      ],
+      {
+        cwd: sandbox,
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${dirname(process.execPath)}`,
+          IDD_TRUSTED_MARKER_ACTORS: '',
+        },
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 1, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.items.length, 2);
+    for (const item of report.items) {
+      assert.equal(item.status, 'failed');
+      assert.match(item.reason, /^gh-graphql-error:/);
+    }
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});

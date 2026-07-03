@@ -43,11 +43,13 @@ const MINIMIZABLE_TYPENAMES = new Set([
 // the two surfaces.
 const UNRESOLVABLE_NODE_ID_PATTERN = /could not resolve to a node/i;
 // REST numeric ids (issue comment / PR review / PR review comment) are
-// always bare positive integers; GraphQL global node ids never are. Gating
-// the enhanced guidance on this shape keeps it from misfiring on a
-// GraphQL-shaped id that legitimately failed to resolve (deleted or
-// inaccessible), where the raw gh error remains the accurate reason.
-const REST_SHAPED_SUBJECT_ID_PATTERN = /^\d+$/;
+// always bare positive integers with no leading zero; GraphQL global node
+// ids never are. Gating the enhanced guidance on this shape keeps it from
+// misfiring on a GraphQL-shaped id that legitimately failed to resolve
+// (deleted or inaccessible), where the raw gh error remains the accurate
+// reason. `[1-9]\d*` (rather than `\d+`) excludes "0" and leading-zero forms
+// like "0001", which no real REST id ever takes.
+const REST_SHAPED_SUBJECT_ID_PATTERN = /^[1-9]\d*$/;
 const NODE_ID_CONVERSION_COMMANDS = [
   "  issue comment:     gh api repos/{owner}/{repo}/issues/comments/{comment_id} -q '.node_id'",
   "  PR review:         gh api repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id} -q '.node_id'",
