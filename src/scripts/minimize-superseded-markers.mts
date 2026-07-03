@@ -32,6 +32,18 @@ const MINIMIZABLE_TYPENAMES = new Set([
   'PullRequestReviewComment',
 ]);
 
+// GitHub's GraphQL node(id:) query returns this message (independent of
+// subject type) when the id cannot be resolved — including the common case
+// of a REST numeric id passed where a GraphQL global node id is required.
+// Shared by probeSubject's error path and --help so the guidance never
+// drifts between the two surfaces.
+const UNRESOLVABLE_NODE_ID_PATTERN = /could not resolve to a node/i;
+const NODE_ID_CONVERSION_COMMANDS = [
+  "  issue comment:     gh api repos/{owner}/{repo}/issues/comments/{comment_id} -q '.node_id'",
+  "  PR review:         gh api repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id} -q '.node_id'",
+  "  PR review comment: gh api repos/{owner}/{repo}/pulls/comments/{comment_id} -q '.node_id'",
+].join('\n');
+
 interface ProbeNode {
   typename: unknown;
   url: unknown;
@@ -275,6 +287,24 @@ export function runMinimize({
   return report;
 }
 
+// cspell:ignore Wpaqs
+// probeSubject requires a GraphQL global node id (e.g.
+// IC_kwDOSWpaqs8AAAABIk9VAg) — REST responses instead surface a numeric id
+// (e.g. 4870591746). A bare integer is never auto-converted here: it could
+// belong to an issue comment, a PR review, or a PR review comment, each
+// served by a different REST endpoint, so guessing which one risks querying
+// the wrong resource. Point the caller at the exact conversion command
+// instead.
+function unresolvableNodeIdReason(subjectId: string): string {
+  return (
+    `unresolvable-node-id: "${subjectId}" is not a GraphQL node ID. ` +
+    "probeSubject queries GitHub's GraphQL node(id: $id) API, which " +
+    'requires a GraphQL global node ID (e.g. IC_kwDOSWpaqs8AAAABIk9VAg), ' +
+    'not a REST numeric ID (e.g. 4870591746). Convert the REST ID to its ' +
+    `node ID first, using the command for the subject type:\n${NODE_ID_CONVERSION_COMMANDS}`
+  );
+}
+
 export function probeSubject(subjectId: string): ProbeResult {
   const result = runGh([
     'api',
@@ -292,6 +322,9 @@ export function probeSubject(subjectId: string): ProbeResult {
     `id=${subjectId}`,
   ]);
   if (!result.ok) {
+    if (UNRESOLVABLE_NODE_ID_PATTERN.test(result.stderr)) {
+      return { ok: false, reason: unresolvableNodeIdReason(subjectId) };
+    }
     return {
       ok: false,
       reason: `gh-graphql-error: ${result.stderr.slice(0, 200)}`,
@@ -318,13 +351,16 @@ export function probeSubject(subjectId: string): ProbeResult {
     };
   }
   if (Array.isArray(parsed?.errors) && parsed.errors.length > 0) {
+    const joinedErrors = parsed.errors
+      .map((e) => String(e.message ?? ''))
+      .filter(Boolean)
+      .join('; ');
+    if (UNRESOLVABLE_NODE_ID_PATTERN.test(joinedErrors)) {
+      return { ok: false, reason: unresolvableNodeIdReason(subjectId) };
+    }
     return {
       ok: false,
-      reason: `gh-graphql-errors: ${parsed.errors
-        .map((e) => String(e.message ?? ''))
-        .filter(Boolean)
-        .join('; ')
-        .slice(0, 200)}`,
+      reason: `gh-graphql-errors: ${joinedErrors.slice(0, 200)}`,
     };
   }
   const node = parsed?.data?.node;
@@ -585,7 +621,13 @@ trustedMarkerActors list in .github/idd/config.json (flag > env >
 config precedence) so the helper rejects markers from untrusted GitHub
 actors. Use --allow-untrusted only when you intentionally want to
 minimize markers regardless of author, and the caller has already
-verified the subject IDs are operationally safe to hide.`,
+verified the subject IDs are operationally safe to hide.
+
+--subject-ids must be GraphQL global node IDs (e.g.
+IC_kwDOSWpaqs8AAAABIk9VAg), not REST numeric IDs (e.g. 4870591746).
+Convert a REST ID to its node ID first, using the command for the
+subject type:
+${NODE_ID_CONVERSION_COMMANDS}`,
   );
 }
 

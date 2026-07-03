@@ -158,3 +158,81 @@ test('config-only resolution passes the author gate end to end', () => {
     rmSync(sandbox, { recursive: true, force: true });
   }
 });
+
+// cspell:ignore Wpaqs
+test('a REST-shaped --subject-ids value gets a GraphQL-node-ID explanation, not a raw gh passthrough', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-minimize-'));
+  try {
+    // Stub gh to reproduce the exact stdout/stderr/exit-code shape observed
+    // from a live `gh api graphql -f id=<REST numeric id>` call: gh exits
+    // non-zero and writes "Could not resolve to a node with the global id
+    // of '<id>'" to stderr, mirroring the response body in stdout.
+    const binDir = join(sandbox, 'bin');
+    mkdirSync(binDir);
+    writeFileSync(
+      join(binDir, 'gh'),
+      `#!/usr/bin/env node
+const value = (process.argv.find((a) => a.startsWith('id=')) ?? '').slice(3);
+const message = \`Could not resolve to a node with the global id of '\${value}'\`;
+process.stdout.write(JSON.stringify({ data: { node: null }, errors: [{ type: 'NOT_FOUND', message }] }));
+process.stderr.write(\`gh: \${message}\\n\`);
+process.exit(1);
+`,
+    );
+    chmodSync(join(binDir, 'gh'), 0o755);
+
+    const script = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      'scripts',
+      'minimize-superseded-markers.mjs',
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        script,
+        '--subject-ids',
+        '4870591746',
+        '--allow-untrusted',
+        '--format',
+        'json',
+      ],
+      {
+        cwd: sandbox,
+        env: {
+          ...process.env,
+          // The gh stub's #!/usr/bin/env node shebang needs `node` on PATH
+          // too, alongside the stub directory (which must come first so the
+          // bare `gh` lookup resolves to the stub, not a real gh binary).
+          PATH: `${binDir}:${dirname(process.execPath)}`,
+          IDD_TRUSTED_MARKER_ACTORS: '',
+        },
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 1, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.items.length, 1);
+    const [item] = report.items;
+    assert.equal(item.subjectId, '4870591746');
+    assert.equal(item.status, 'failed');
+    assert.match(item.reason, /^unresolvable-node-id:/);
+    assert.match(item.reason, /GraphQL global node ID/);
+    assert.match(item.reason, /IC_kwDOSWpaqs8AAAABIk9VAg/);
+    assert.match(
+      item.reason,
+      /repos\/\{owner\}\/\{repo\}\/issues\/comments\/\{comment_id\} -q '\.node_id'/,
+    );
+    assert.match(
+      item.reason,
+      /repos\/\{owner\}\/\{repo\}\/pulls\/\{pull_number\}\/reviews\/\{review_id\} -q '\.node_id'/,
+    );
+    assert.match(
+      item.reason,
+      /repos\/\{owner\}\/\{repo\}\/pulls\/comments\/\{comment_id\} -q '\.node_id'/,
+    );
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
