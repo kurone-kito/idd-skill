@@ -398,7 +398,12 @@ placeholders with the target repository's commands:
 - `post-fix-validate`: auto-fix and fully verify after review fixes.
 - `install-deps`: prepare dependencies in a fresh worktree. Keep this
   command idempotent so retries, takeovers, and recreated worktrees can
-  rerun it safely without manual cleanup.
+  rerun it safely without manual cleanup. If a package manager has been
+  observed to under-install silently in this repository (exit success
+  with a dependency binary still missing), verify a key post-install
+  artifact and retry the install exactly once before failing loudly —
+  see `scripts/verify-install-deps.mjs` in `docs/idd-helper-scripts.md`
+  for one implementation.
 
 Use `true` only when a command is intentionally a no-op for the target
 repository. If validation is expensive, prefer an explicit lightweight

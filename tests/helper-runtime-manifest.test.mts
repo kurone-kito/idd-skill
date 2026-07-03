@@ -582,15 +582,30 @@ function readInstructionFiles(): { name: string; source: string }[] {
     }));
 }
 
-// The one dev tool the instructions legitimately `node`-invoke without it being
-// an adopter helper: the sync-docs generated-from banner tells maintainers to
-// run `node scripts/sync-docs.mjs --apply`, so it must be excluded explicitly.
+// Dev tools the instructions legitimately `node`-invoke with CONCRETE text
+// that only ever appears in this repo's own dogfood
+// `.github/instructions/` copies, never in what an idd-template adopter
+// receives -- so they cannot be "documented CLI adopter helpers" and must
+// be excluded explicitly:
+//   - scripts/sync-docs.mjs: the generated-from banner tells maintainers to
+//     run `node scripts/sync-docs.mjs --apply`. Adopters receive the
+//     banner-free idd-template/ source, so they never see this invocation.
+//   - scripts/verify-install-deps.mjs: the concreted Project commands
+//     table's install-deps row invokes it directly (see
+//     .github/idd/config.json / idd-overview-core.instructions.md).
+//     idd-template's own row stays the generic `{{INSTALL_DEPS_COMMAND}}`
+//     placeholder, so an idd-template adopter never sees this concrete
+//     invocation either unless they deliberately choose to replicate it.
 // Every other dev tool (build-ts, verify-workshop-integrity, …) is excluded by
 // ABSENCE — it is never `node`-invoked in the instructions — so it is NOT added
 // here on purpose: adding it would let a future accidental `node scripts/X.mjs`
-// mention slip past the guard silently. Adopters receive the banner-free
-// idd-template/ source, so they never see the sync-docs invocation either.
-const BANNER_INVOKED_DEV_TOOL = 'scripts/sync-docs.mjs';
+// mention slip past the guard silently. Only add a tool to this set when it is
+// genuinely `node`-invoked in the dogfood instructions AND provably invisible
+// to idd-template adopters, as justified above.
+const DOGFOOD_ONLY_CONCRETE_TOOLS = new Set([
+  'scripts/sync-docs.mjs',
+  'scripts/verify-install-deps.mjs',
+]);
 
 // Collect every helper the instruction files tell adopters to RUN as
 // `node scripts/<name>.mjs`. That runnable-invocation form is the scoped signal
@@ -607,7 +622,7 @@ function collectDocumentedCliAdopterHelpers(): Set<string> {
     for (const match of source.matchAll(
       /\bnode\s+(scripts\/[a-z0-9-]+\.mjs)\b/g,
     )) {
-      if (match[1] !== BANNER_INVOKED_DEV_TOOL) {
+      if (!DOGFOOD_ONLY_CONCRETE_TOOLS.has(match[1])) {
         referenced.add(match[1]);
       }
     }
@@ -698,13 +713,15 @@ test('the registration guard scopes out instruction-referenced libraries and dev
   // Dev/CI tooling and the maintainer-only post-merge sweep are likewise never
   // adopter-run commands, so they stay unregistered too. build-ts /
   // verify-workshop-integrity / merged-pr-feedback-sweep are excluded by
-  // absence (never `node`-invoked in the instructions); sync-docs is
-  // `node`-invoked by the generated-from banner but excluded via
-  // BANNER_INVOKED_DEV_TOOL, so the guard still scopes it out.
+  // absence (never `node`-invoked in the instructions); sync-docs and
+  // verify-install-deps are `node`-invoked in the dogfood instructions
+  // (banner / concreted install-deps row, respectively) but excluded via
+  // DOGFOOD_ONLY_CONCRETE_TOOLS, so the guard still scopes both out.
   for (const nonAdopterTool of [
     'scripts/build-ts.mjs',
     'scripts/sync-docs.mjs',
     'scripts/verify-workshop-integrity.mjs',
+    'scripts/verify-install-deps.mjs',
     'scripts/merged-pr-feedback-sweep.mjs',
   ]) {
     assert.equal(

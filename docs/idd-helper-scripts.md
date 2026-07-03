@@ -60,6 +60,14 @@ In the idd-skill source repository, the following optional helpers were adopted:
   synchronization state classification; used by D/E/F routing to decide
   whether `merge-main`, `hold-unknown`, or no action is needed without
   mutating the worktree or PR branch (added in 0.2.0)
+- `scripts/verify-install-deps.mjs` for B1 Step 3 `install-deps`: runs
+  the underlying install command, verifies a key post-install binary
+  exists, retries the install exactly once if it does not, and fails
+  loudly rather than continuing in a silently under-installed state
+  (referenced in
+  [kurone-kito/idd-skill#1237](https://github.com/kurone-kito/idd-skill/issues/1237)).
+  Source-repo internal helper; not distributed via the package-manager
+  / ephemeral-npx profiles.
 
 **Review & Merge Phase Helpers:**
 

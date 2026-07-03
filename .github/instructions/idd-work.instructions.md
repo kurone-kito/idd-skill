@@ -130,6 +130,14 @@ are installed:
 `install-deps` must remain safe to rerun during retries, takeovers, and
 recreated worktrees without manual cleanup.
 
+A fresh worktree can report `install-deps` success while a package
+manager silently under-installs (a real dependency binary missing
+despite a clean exit). If a repository has observed this, its
+`install-deps` command should verify a key post-install artifact
+(e.g. a package's CLI binary) and retry the install exactly once
+before failing loudly — see the `verify-install-deps` helper in
+`docs/idd-helper-scripts.md` for one implementation.
+
 ### B1 self-check
 
 Before continuing to B2, verify all of the following:
