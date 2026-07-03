@@ -474,13 +474,13 @@ bucket is non-empty:
 For each **startable** candidate from A3.5, evaluate **all three**
 criteria. Fail any one → discard the issue.
 
-- **Limited scope** — pass: changes confined to a few files or one
+- **Limited scope** — Pass: changes confined to a few files or one
   module. Fail: touches multiple subsystems; redesigns a public
   interface.
-- **Clear verification** — pass: outcome verified by lint / test / CI —
+- **Clear verification** — Pass: outcome verified by lint / test / CI —
   including adding or updating targeted automated tests as part of the
   work. Fail: success depends on UX or product judgment.
-- **Autonomous completion** — pass: no external coordination, human
+- **Autonomous completion** — Pass: no external coordination, human
   decision, unavailable system, or product judgment required to
   **complete** the work. Fail: requires operator to provide
   credentials; requires a product decision before the work can finish.
