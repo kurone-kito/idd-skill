@@ -525,6 +525,25 @@ test('parseArgs rejects a non-numeric / suffixed --from-pr', () => {
   );
 });
 
+// --- #1250: --expected-head-sha pins --from-pr to the Step 1 stored HEAD ---
+
+test('parseArgs reads --expected-head-sha as a structural flag, not a renderer field', () => {
+  const args = parseArgs([
+    '--type',
+    'watermark',
+    '--from-pr',
+    '1200',
+    '--expected-head-sha',
+    SHA,
+    '--agent-id',
+    'a',
+    '--claim-id',
+    'c',
+  ]);
+  assert.equal(args.expectedHeadSha, SHA);
+  assert.deepEqual(args.fields, { 'agent-id': 'a', 'claim-id': 'c' });
+});
+
 test('--from-pr CLI composes review-activity-snapshot and prints the derived watermark (dry-run)', () => {
   // Stub `gh` on PATH so the real subprocess composition runs offline: the
   // post-idd-marker.mjs CLI resolves its sibling review-activity-snapshot.mjs,
@@ -594,6 +613,147 @@ process.exit(1);
   });
 });
 
+/**
+ * Build the same offline `gh` stub as the "--from-pr CLI composes..." test
+ * above (PR HEAD = `headSha`, one CI pass, no threads, no reviews, one plain
+ * comment), so the --expected-head-sha match/mismatch tests below can reuse
+ * it without duplicating the stub script.
+ */
+function writeReviewActivitySnapshotGhStub(
+  tempRoot: string,
+  headSha: string,
+): void {
+  const ghPath = join(tempRoot, 'gh');
+  writeFileSync(
+    ghPath,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const out = (s) => { fs.writeSync(1, s); process.exit(0); };
+if (args[0] === 'pr' && args[1] === 'view') out('${headSha}\\n');
+if (args[0] === 'pr' && args[1] === 'checks') {
+  out(JSON.stringify([{ name: 'ci', state: 'SUCCESS', completedAt: '2026-06-25T11:00:00Z' }]));
+}
+if (args[0] === 'api' && args[1] === 'graphql') {
+  out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } } } }));
+}
+if (args[0] === 'api' && /\\/reviews$/.test(args[1])) out('[]');
+if (args[0] === 'api' && /\\/comments$/.test(args[1])) {
+  out(JSON.stringify([{ body: 'hi', created_at: '2026-06-25T10:00:00Z', updated_at: '2026-06-25T10:30:00Z', user: { login: 'someone' } }]));
+}
+fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
+process.exit(1);
+`,
+  );
+  chmodSync(ghPath, 0o755);
+}
+
+test('--expected-head-sha lets a matching (even differently-cased) --from-pr snapshot proceed', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-pinned-'));
+  writeReviewActivitySnapshotGhStub(tempRoot, SHA);
+
+  const runDryRun = (expectedHeadSha: string) =>
+    JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+          '--type',
+          'watermark',
+          '--from-pr',
+          '1200',
+          '--expected-head-sha',
+          expectedHeadSha,
+          '--owner',
+          'o',
+          '--repo',
+          'r',
+          '--agent-id',
+          'claude-02f8159e',
+          '--claim-id',
+          'claim-1134-02f8159e',
+        ],
+        {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            PATH: `${tempRoot}:${process.env.PATH ?? ''}`,
+          },
+        },
+      ),
+    );
+
+  const expected = {
+    mode: 'dry-run',
+    type: 'watermark',
+    target: 'pr',
+    number: 1200,
+    body: buildMarkerBody('watermark', {
+      'agent-id': 'claude-02f8159e',
+      'claim-id': 'claim-1134-02f8159e',
+      'head-sha': SHA,
+      'max-activity-at': '2026-06-25T10:30:00Z',
+      'total-item-count': '1',
+      'ci-completed-at': '2026-06-25T11:00:00Z',
+    }),
+  };
+
+  assert.deepEqual(runDryRun(SHA), expected);
+  // Case-insensitive: the Step 1 stored value and the live snapshot value
+  // must match regardless of hex-digit casing.
+  assert.deepEqual(runDryRun(SHA.toUpperCase()), expected);
+});
+
+test('--expected-head-sha fails closed (no post) when the live snapshot HEAD has moved', () => {
+  // The branch moved between E1 Step 1 (which stored `staleSha`) and this
+  // Step 2 call: the live snapshot now reports SHA. Even with --apply, the
+  // CLI must refuse to post rather than silently posting a watermark keyed to
+  // a HEAD newer than Step 1 actually snapshotted. If the guard regressed,
+  // this would fall through to the stub's POST-call fallback branch, whose
+  // "unexpected gh invocation" stderr would fail the message assertion below.
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-from-pr-drift-'));
+  writeReviewActivitySnapshotGhStub(tempRoot, SHA);
+  const staleSha = 'fedcba9876543210fedcba9876543210fedcba98';
+
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+        '--type',
+        'watermark',
+        '--from-pr',
+        '1200',
+        '--expected-head-sha',
+        staleSha,
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--agent-id',
+        'a',
+        '--claim-id',
+        'c',
+        '--apply',
+      ],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${tempRoot}:${process.env.PATH ?? ''}` },
+      },
+    );
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    assert.match(failure.stderr ?? '', /refusing to post watermark/);
+    assert.match(failure.stderr ?? '', new RegExp(staleSha));
+    assert.match(failure.stderr ?? '', new RegExp(SHA));
+    return;
+  }
+  throw new Error('expected the CLI to exit non-zero');
+});
+
 // Run the CLI expecting a non-zero exit; return its stderr. These guards fire
 // before any `gh` call, so no stub is needed (and `gh` is removed from PATH to
 // prove the rejection is argument-only, never a network side effect).
@@ -661,4 +821,35 @@ test('--from-pr fails closed on an explicit non-pr --target', () => {
     'c',
   ]);
   assert.match(stderr, /--from-pr always targets the PR/);
+});
+
+test('--expected-head-sha is rejected without --from-pr (before any gh call)', () => {
+  // In manual mode the caller already supplies --head-sha directly; there is
+  // nothing for --expected-head-sha to compare it against.
+  const stderr = runCliExpectingFailure([
+    join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+    '--type',
+    'watermark',
+    '--target',
+    'pr',
+    '1200',
+    '--expected-head-sha',
+    SHA,
+    '--agent-id',
+    'a',
+    '--claim-id',
+    'c',
+    '--head-sha',
+    SHA,
+    '--max-activity-at',
+    'none',
+    '--total-item-count',
+    '0',
+    '--ci-completed-at',
+    'none',
+  ]);
+  assert.match(
+    stderr,
+    /--expected-head-sha is only valid together with --from-pr/,
+  );
 });

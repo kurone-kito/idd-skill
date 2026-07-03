@@ -86,18 +86,28 @@ empty. Compute `{total-item-count}` as the total number of items in the
 snapshot (0 if empty). Persist all six values immediately by posting a
 PR comment with this format (when helper runtime is enabled, prefer the
 **one-command** profile-selected post-idd-marker watermark path —
-`--type watermark --from-pr <pr-number> --agent-id <id> --claim-id <id> --apply`
-— which derives `{head-SHA}` / `{max-activity-updatedAt}` /
-`{total-item-count}` / `{latest-ci-completed-at}` from a fresh
-`review-activity-snapshot` of the PR and POSTs the marker in one step, so a
-hand-typed head SHA cannot mis-route the F2 review-currency check (forward
-`--trusted-marker-logins` here too when you pass it to the snapshot). The
-manual six-field form — `--type watermark --target pr <pr-number>
-<watermark-fields> --apply`, passing the same six values shown below as
-`--agent-id` / `--claim-id` / `--head-sha` / `--max-activity-at` /
-`--total-item-count` / `--ci-completed-at` — stays the fallback, as do
-`emit-marker --type review-watermark` for emit-only rendering and the manual
-HTTP `POST` below; see `docs/idd-helper-scripts.md`):
+`--type watermark --from-pr <pr-number> --expected-head-sha {head-SHA}
+--agent-id <id> --claim-id <id> --apply`
+— which derives `{max-activity-updatedAt}` / `{total-item-count}` /
+`{latest-ci-completed-at}` (and, subject to the pin below, `{head-SHA}`) from
+a fresh `review-activity-snapshot` of the PR and POSTs the marker in one
+step, so a hand-typed head SHA cannot mis-route the F2 review-currency check
+(forward `--trusted-marker-logins` here too when you pass it to the
+snapshot). **Always pass `--expected-head-sha` with the exact `{head-SHA}`
+value stored at the start of Step 1.** The helper compares it against the
+fresh snapshot's live HEAD and fails closed — posting nothing — when they
+differ, instead of silently posting a watermark keyed to a HEAD newer than
+the one Step 1 actually snapshotted; this is what keeps the one-command path
+honoring the single-stored-value invariant from Step 1 above. On that
+failure, do not retry Step 2 as-is — return to Step 1 and re-snapshot the
+moved branch. The manual six-field form — `--type watermark --target pr
+<pr-number> <watermark-fields> --apply`, passing the same six values shown
+below as `--agent-id` / `--claim-id` / `--head-sha` / `--max-activity-at` /
+`--total-item-count` / `--ci-completed-at` — stays the fallback (it already
+posts the exact Step-1 stored `{head-SHA}` value since the agent supplies it
+directly), as do `emit-marker --type review-watermark` for emit-only
+rendering and the manual HTTP `POST` below; see
+`docs/idd-helper-scripts.md`):
 
 ```markdown
 <!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->
