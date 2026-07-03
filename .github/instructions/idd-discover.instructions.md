@@ -533,14 +533,14 @@ Among the surviving viable and unclaimed issues (after Step 1.5), pick the
 `autopilotSuitability.floor` (default `3`) as human-oriented; a missing or
 out-of-range score is treated as no score — ranked at the floor and never
 skipped, so the unscored backlog flows as before, subject to the
-scored-vs-unscored tie-break below when it ties against a
+scored-vs-unscored tie-breaker below when it ties against a
 genuinely-scored candidate at the same value. Advisory only: the pick
 still passes A4.5/A5 unchanged and the score never bypasses a gate. When
 `autopilotSuitability.enabled` is `false`, ignore the score entirely —
 neither skip below-floor candidates nor reorder by score — and select by
 **lowest issue number**.
 
-**Scored-vs-unscored floor tie-break.** When the highest-score tie band
+**Scored-vs-unscored floor tie-breaker.** When the highest-score tie band
 pairs an unscored candidate (missing or out-of-range score, defaulted to
 the floor as defined above) against a candidate genuinely scored exactly
 at the floor value, the genuinely-scored candidate wins the tie: an explicit
