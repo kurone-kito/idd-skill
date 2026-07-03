@@ -7,8 +7,9 @@ to merge execution or must stop and hand off.
 Before any mutating action in this phase, apply the claim revalidation
 gate. If an active claim exists, it must still use your current
 `{claim-id}`. If no active claim exists, continue only for the
-designated `separate_merge_agent` actor path (see Step 1); all other
-paths must stop and report.
+designated `separate_merge_agent` actor path or the
+`fully_autonomous_merge` policy path (see Step 1); all other paths must
+stop and report.
 
 ## F2.5 — Resolve merge policy route
 
@@ -17,7 +18,9 @@ paths must stop and report.
      `{claim-id}`. If it is held by a different `{claim-id}` (even under
      the same agent ID), the claim was lost — report this and stop.
    - If no active claim exists, continue only for the designated
-     `separate_merge_agent` actor path in step 5. Other paths must stop.
+     `separate_merge_agent` actor path in step 5, or the
+     `fully_autonomous_merge` policy path in step 6. Other paths must
+     stop.
 2. Read the repository's recorded merge policy from repository
    documentation that future IDD sessions read. If no policy is
    recorded, treat it as `fully_autonomous_merge` (distributed default).
