@@ -160,9 +160,10 @@ test('config-only resolution passes the author gate end to end', () => {
 });
 
 // cspell:ignore Wpaqs
-// Shared by the three "unresolvable node id" tests below (CodeRabbit review
-// on PR #1242: extract the repeated gh-stub + spawn boilerplate). Stubs gh to
-// reproduce the exact stdout/stderr/exit-code shape observed from a live
+// Shared by the three "unresolvable node id" tests below, so each test only
+// supplies its --subject-ids value and assertions instead of repeating the
+// sandbox/gh-stub/spawnSync setup. Stubs gh to reproduce the exact
+// stdout/stderr/exit-code shape observed from a live
 // `gh api graphql -f id=<value>` call when the id cannot be resolved: gh
 // exits non-zero and writes "Could not resolve to a node with the global id
 // of '<id>'" to stderr, mirroring the response body in stdout.
