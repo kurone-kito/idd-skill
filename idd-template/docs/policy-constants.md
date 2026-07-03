@@ -366,6 +366,34 @@ both**. Apply this to clearly append-mostly surfaces such as
 `audit/sync-manifest.json` helper / budget entries and any export / registry
 list; file a follow-up where a reorder is non-trivial.
 
+### Table-column alignment padding
+
+`dprint`'s markdown plugin **aligns table columns** by padding every cell in
+a column out to that column's widest cell, and exposes no config option to
+turn this off; `dprint check` (part of **pre-push-validate**) enforces the
+padded result. The per-file limits above measure the dprint-formatted
+bytes, so widening a single table cell in a near-ceiling instruction file
+can silently re-pad every other row in that column and add far more bytes
+than the edit itself appears to. `markdownlint`'s `table-column-style:
+false` permits a non-aligned table, but only `dprint` decides what actually
+gets written, so that setting alone does not prevent the padding.
+
+**Convention**: in a budget-guarded instruction file, keep table cells
+short. When a row would otherwise need long conditional or branching
+prose, move that prose out of the cell and into a paragraph placed after
+the table instead of widening the column.
+
+**Escape hatch**: wrap a table that genuinely needs wide cells in
+`<!-- dprint-ignore-start -->` / `<!-- dprint-ignore-end -->` to exempt it
+from alignment; `markdownlint`'s existing `table-column-style: false`
+already accepts the resulting non-aligned table.
+
+**Measure after formatting**: a byte count taken before running `dprint
+fmt` (or **fix-validate**) under-reports the size the budget check will
+actually see, because column padding is applied at format time. Re-run
+`dprint fmt` (or **fix-validate**) and re-measure before trusting a
+near-ceiling file's size against its budget.
+
 ## Changing A Default
 
 For now, this page records the defaults; it does not centralize them.
