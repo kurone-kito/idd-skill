@@ -1,3 +1,26 @@
+# Trust model: this workflow triggers on `pull_request_target`, which runs
+# with base-repository permissions and secrets even for pull requests from
+# forks. That is safe here only because all of the following hold, and any
+# future edit to this file must preserve them:
+#   - No PR-head content is ever checked out: the sole `actions/checkout`
+#     step below carries no `ref:` override, so it resolves to the
+#     `pull_request_target` default -- the PR's base branch at the time of
+#     the event -- never the PR head SHA or a merge commit.
+#   - No PR-head code, workflow, or action is ever executed: the only
+#     script that runs is this repository's own tracked
+#     `scripts/audit-pr-cleanup.mjs`, invoked with the PR number as inert
+#     numeric data (interpolated into a single-quoted shell variable, not
+#     evaluated).
+#   - The `cleanup` job only runs when
+#     `github.event.pull_request.merged == true`, or via an explicit,
+#     human-triggered `workflow_dispatch` -- never against an open or
+#     unmerged pull request.
+#   - `permissions:` stays least-privilege: `contents: read`,
+#     `issues: write`, `pull-requests: write` -- no `contents: write` and
+#     no elevated or secret-bearing scopes.
+# If a future change adds a `ref:` override on the checkout step, downloads
+# or executes PR-head content, widens `permissions:`, or removes the
+# merged-only guard, re-review this trust model before merging that change.
 name: Post-merge cleanup
 on:
   pull_request_target:
