@@ -359,7 +359,7 @@
         },
         {
           "from": "| **install-deps**        | `{{INSTALL_DEPS_COMMAND}}`       |",
-          "to": "| **install-deps**        | `pnpm install --frozen-lockfile`                                                                                                                                        |"
+          "to": "| **install-deps**        | `node scripts/verify-install-deps.mjs --key-binary node_modules/.bin/tsc --install-command \"pnpm install --frozen-lockfile\"`                                            |"
         },
         {
           "from": "| **issue-scope**         | `roadmap-first`                  |",
