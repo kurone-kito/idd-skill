@@ -75,13 +75,24 @@ function runCli() {
   }
 }
 function runInstallCommand(installCommand) {
-  // The command is a trusted, repo-configured string (Project commands
-  // table / .github/idd/config.json), not untrusted input; execFileSync
-  // with shell: true (rather than execSync) satisfies this repo's
-  // injection-safety lint rule while still supporting shell syntax
-  // (`&&`, quoting) in the configured command. shell: true lets Node
-  // pick the platform shell instead of hard-coding /bin/sh, which does
-  // not exist on Windows or some minimal containers.
+  // shell: true is required, not incidental: the configured install
+  // command (Project commands table / .github/idd/config.json) can
+  // contain shell syntax (`&&`, quoting) that only a shell can
+  // interpret, and it lets Node pick the platform shell instead of
+  // hard-coding /bin/sh, which does not exist on Windows or some
+  // minimal containers -- the real, separate problem the pre-#1244
+  // execFileSync('/bin/sh', ['-c', installCommand], ...) form had.
+  //
+  // execFileSync(installCommand, [], { shell: true }) has the SAME
+  // shell-injection surface execSync(installCommand) would: Node
+  // implements exec/execSync internally as execFile/execFileSync
+  // with shell forced on, so this construction only avoids importing
+  // the execSync symbol banned by this repo's noRestrictedImports
+  // lint rule -- it does not avoid execSync's injection-risk
+  // profile. The actual safety basis is that installCommand is a
+  // trusted, repo-configured string (never attacker- or
+  // user-supplied input), not the choice of execFileSync over
+  // execSync.
   //
   // A non-zero exit is intentionally swallowed here rather than left to
   // propagate: the binary-existence check right after this call is
