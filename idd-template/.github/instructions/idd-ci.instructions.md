@@ -89,7 +89,7 @@ interpreting `gh pr checks` output.
    true` state `idd-pre-merge.instructions.md` F2's CI gate already
    interprets. When `pre-merge-readiness` output is available, reuse
    its `ci.presentRunConclusion` value directly. Otherwise, derive the
-   equivalent from the current HEAD's actual runs: `all-passing`
+   equivalent from the current PR head SHA's actual runs: `all-passing`
    (every present run completed green) may proceed; `pending` → wait
    per the polling algorithm below, then re-check; `some-failing`, or
    `none` (no runs exist at all) → **hold**, do not treat an empty
