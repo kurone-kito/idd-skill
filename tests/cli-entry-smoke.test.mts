@@ -18,8 +18,9 @@ const SRC_SCRIPTS = fileURLToPath(new URL('../src/scripts/', import.meta.url));
 // ---------------------------------------------------------------------------
 // Module-eval-order guard
 //
-// A helper whose `if (isMainModule(import.meta.url)) { … }` CLI entry block runs
-// before a module-level `const`/`let`/`var` it (transitively) reads throws a TDZ
+// A helper whose `if (isMainModule(import.meta.url)) { … }` or
+// `if (isCliExecution(import.meta.url)) { … }` CLI entry block runs before a
+// module-level `const`/`let`/`var` it (transitively) reads throws a TDZ
 // `ReferenceError: Cannot access 'X' before initialization` on the CLI path
 // only — a top-level `await` inside the block parks module evaluation there, so
 // a later lexical binding is still in its temporal dead zone. Import-only tests
@@ -33,12 +34,14 @@ const SRC_SCRIPTS = fileURLToPath(new URL('../src/scripts/', import.meta.url));
 // ---------------------------------------------------------------------------
 
 /**
- * Matches a top-level CLI entry-guard opener at column 0. Anchored to the two
- * real signatures — an `isMainModule(` call or a `process.argv[1]` reference —
- * rather than any `import.meta.url` mention, so an unrelated top-level `if` that
- * merely references `import.meta.url` is not mistaken for the entry block.
+ * Matches a top-level CLI entry-guard opener at column 0. Anchored to the
+ * three real signatures — an `isMainModule(` call, an `isCliExecution(` call,
+ * or a `process.argv[1]` reference — rather than any `import.meta.url`
+ * mention, so an unrelated top-level `if` that merely references
+ * `import.meta.url` is not mistaken for the entry block.
  */
-const ENTRY_GUARD = /^if \(.*(?:isMainModule\(|process\.argv\[1\]).*\)\s*\{/;
+const ENTRY_GUARD =
+  /^if \(.*(?:isMainModule\(|isCliExecution\(|process\.argv\[1\]).*\)\s*\{/;
 
 /**
  * Matches a module-level (column 0) `const`/`let`/`var` binding opener,
@@ -95,6 +98,24 @@ test('module-eval-order guard flags an initialized const after the entry block',
       [
         "import { isMainModule } from './x.mts';",
         'if (isMainModule(import.meta.url)) {',
+        '  await run(LATE);',
+        '}',
+        'const LATE = new Set([1, 2, 3]);',
+        '',
+      ].join('\n'),
+    ),
+  ]);
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /sample\.mts:5:.*after the CLI entry block/);
+});
+
+test('module-eval-order guard flags an initialized const after an isCliExecution() entry block', () => {
+  const violations = findModuleEvalOrderViolations([
+    readModule(
+      'src/scripts/sample.mts',
+      [
+        "import { isCliExecution } from './gh-exec.mts';",
+        'if (isCliExecution(import.meta.url)) {',
         '  await run(LATE);',
         '}',
         'const LATE = new Set([1, 2, 3]);',
