@@ -18,6 +18,10 @@ permissions:
 jobs:
   idd-doctor:
     runs-on: ubuntu-slim
+    # Observed run duration is ~10-105s (gh api .../jobs started_at/
+    # completed_at); 10 min bounds pathological hangs with ~6x headroom
+    # over the slowest observed run.
+    timeout-minutes: 10
     steps:
       # Check out the exact commit (detached HEAD) so idd-doctor's
       # local-only primary-worktree-HEAD check never false-positives.
