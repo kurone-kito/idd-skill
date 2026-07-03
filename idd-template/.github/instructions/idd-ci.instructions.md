@@ -84,8 +84,18 @@ interpreting `gh pr checks` output.
    and branch-protection checks. Keep expected check source metadata
    (GitHub App/integration) when configured.
 
-5. If neither source yields a required-check set, stop and post a hold
-   comment (missing merge-gate policy evidence).
+5. If neither source yields a required-check set, this is **not**
+   automatically a hold — it is the same `noRequiredChecksConfigured:
+   true` state `idd-pre-merge.instructions.md` F2's CI gate already
+   interprets. When `pre-merge-readiness` output is available, reuse
+   its `ci.presentRunConclusion` value directly. Otherwise, derive the
+   equivalent from the current HEAD's actual runs: `all-passing`
+   (every present run completed green) may proceed; `pending` → wait
+   per the polling algorithm below, then re-check; `some-failing`, or
+   `none` (no runs exist at all) → **hold**, do not treat an empty
+   required-check set as a vacuous pass. See
+   [F2 — Pre-merge condition check](idd-pre-merge.instructions.md#f2--pre-merge-condition-check)
+   for the full routing table; do not duplicate it here.
 
 When caller phases already provide a trusted required-check set, reuse
 that set instead of re-deriving it.
