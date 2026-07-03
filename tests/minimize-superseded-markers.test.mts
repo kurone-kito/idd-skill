@@ -206,10 +206,11 @@ process.exit(1);
         cwd: sandbox,
         env: {
           ...process.env,
-          // The gh stub's #!/usr/bin/env node shebang needs `node` on PATH
-          // too, alongside the stub directory (which must come first so the
-          // bare `gh` lookup resolves to the stub, not a real gh binary).
-          PATH: `${binDir}:${dirname(process.execPath)}`,
+          // Prepend the stub dir so the bare `gh` lookup resolves to the
+          // stub, not a real gh binary, while keeping the rest of PATH
+          // (matching the other CLI-stub tests in this repo) so the gh
+          // stub's #!/usr/bin/env node shebang can still find `node`.
+          PATH: `${binDir}:${process.env.PATH ?? ''}`,
           IDD_TRUSTED_MARKER_ACTORS: '',
         },
         encoding: 'utf8',
