@@ -20,7 +20,7 @@ const SRC_SCRIPTS = fileURLToPath(new URL('../src/scripts/', import.meta.url));
 //
 // A helper whose `if (isMainModule(import.meta.url)) { … }` or
 // `if (isCliExecution(import.meta.url)) { … }` CLI entry block runs before a
-// module-level `const`/`let`/`var` it (transitively) reads throws a TDZ
+// module-level `const`/`let`/`var` that it (transitively) reads throws a TDZ
 // `ReferenceError: Cannot access 'X' before initialization` on the CLI path
 // only — a top-level `await` inside the block parks module evaluation there, so
 // a later lexical binding is still in its temporal dead zone. Import-only tests
