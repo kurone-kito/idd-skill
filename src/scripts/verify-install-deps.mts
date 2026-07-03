@@ -90,9 +90,11 @@ function runCli(): void {
 function runInstallCommand(installCommand: string): void {
   // The command is a trusted, repo-configured string (Project commands
   // table / .github/idd/config.json), not untrusted input; execFileSync
-  // via a shell (rather than execSync) satisfies this repo's
+  // with shell: true (rather than execSync) satisfies this repo's
   // injection-safety lint rule while still supporting shell syntax
-  // (`&&`, quoting) in the configured command.
+  // (`&&`, quoting) in the configured command. shell: true lets Node
+  // pick the platform shell instead of hard-coding /bin/sh, which does
+  // not exist on Windows or some minimal containers.
   //
   // A non-zero exit is intentionally swallowed here rather than left to
   // propagate: the binary-existence check right after this call is
@@ -101,7 +103,7 @@ function runInstallCommand(installCommand: string): void {
   // crashing with a raw stack trace. The real error output already
   // streamed to the terminal via stdio: 'inherit'.
   try {
-    execFileSync('/bin/sh', ['-c', installCommand], { stdio: 'inherit' });
+    execFileSync(installCommand, [], { shell: true, stdio: 'inherit' });
   } catch {
     // Swallowed intentionally -- see comment above.
   }
