@@ -108,8 +108,19 @@ head before merge.
 
 ## D3 — Create PR
 
+Before drafting the PR body, check whether the repository defines
+`.github/pull_request_template.md`. If it exists, shape the PR body to
+follow that template's section structure from the start, rather than
+drafting free-form text and reconciling it against the template
+afterward — repository review tooling (for example, CodeRabbit's
+default description check) can compare the PR description against
+that template when present, and a mismatched body can trigger an
+avoidable advisory finding. If no template file exists, use the
+structure below directly.
+
 Use GH CLI or GH MCP to create the pull request. The PR body must
-include:
+include the following content, mapped onto the template's sections
+when one exists:
 
 - A concise summary of the branch's changes
 - A closing keyword on its own line linking the claimed issue (see
