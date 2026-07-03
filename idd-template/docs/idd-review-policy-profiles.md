@@ -207,6 +207,9 @@ branch protection, and any human review rules configured outside IDD.
 - `.github/instructions/idd-advisory-wait.instructions.md`: mark the
   advisory wait helper unused by this profile, or remove local
   references to it from the customized phase flow.
+- `docs/idd-advisory-wait-shell-fallback.md`: mark the doc unused by
+  this profile, or remove local references to it, matching the
+  `idd-advisory-wait.instructions.md` disposition above.
 - `.github/instructions/idd-pre-merge.instructions.md`: gate on CI,
   branch protection, unresolved conversations, freshness, and claim
   evidence without requiring an advisory reviewer.
