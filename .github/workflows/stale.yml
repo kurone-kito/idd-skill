@@ -1,3 +1,6 @@
+concurrency:
+  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
 name: Mark stale issues
 on:
   schedule:
@@ -8,6 +11,10 @@ permissions:
 jobs:
   stale:
     runs-on: ubuntu-slim
+    # Observed run duration is ~9-25s (gh api .../jobs started_at/
+    # completed_at); 5 min bounds pathological hangs with generous
+    # headroom over the slowest observed run.
+    timeout-minutes: 5
     steps:
       - uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10.3.0
         with:

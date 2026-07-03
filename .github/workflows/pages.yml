@@ -24,6 +24,12 @@ jobs:
       id-token: write
       pages: write
     runs-on: ubuntu-latest
+    # Observed deploy-job duration is ~10-410s (gh api .../jobs started_at/
+    # completed_at; the 410s case is real GitHub Pages deployment latency,
+    # not queue wait). 15 min (not the 10 min starting suggestion) keeps
+    # ~2x headroom above that observed outlier while still bounding
+    # pathological hangs.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:

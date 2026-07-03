@@ -20,6 +20,10 @@ permissions:
 jobs:
   lint:
     runs-on: ubuntu-slim
+    # Observed run duration is ~35-135s (gh api .../jobs started_at/
+    # completed_at); 15 min bounds pathological hangs with ~7x headroom
+    # over the slowest observed run.
+    timeout-minutes: 15
     steps:
       # fetch-depth: 0 is required by audit-docs' changed-file diff bases.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
