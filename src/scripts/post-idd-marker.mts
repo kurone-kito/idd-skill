@@ -175,6 +175,13 @@ interface CliArgs {
   number: number | null;
   /** `--from-pr <n>`: derive the watermark snapshot fields from PR <n>. */
   fromPr: number | null;
+  /**
+   * `--expected-head-sha <sha>`: `--from-pr` only. The E1 Step 1 stored
+   * `{head-SHA}`. When set, fail closed (no post) if the fresh
+   * `--from-pr` snapshot's live HEAD no longer matches it — the branch
+   * moved between E1 Step 1 and this Step 2 call.
+   */
+  expectedHeadSha: string;
   apply: boolean;
   owner: string;
   repo: string;
@@ -205,6 +212,7 @@ export function parseArgs(argv: string[]): CliArgs {
     target: '',
     number: null,
     fromPr: null,
+    expectedHeadSha: '',
     apply: false,
     owner: '',
     repo: '',
@@ -245,6 +253,8 @@ export function parseArgs(argv: string[]): CliArgs {
       args.target = value;
     } else if (token === '--from-pr') {
       args.fromPr = parsePositiveIntToken(value, 'invalid --from-pr number');
+    } else if (token === '--expected-head-sha') {
+      args.expectedHeadSha = value;
     } else if (token === '--owner') {
       args.owner = value;
     } else if (token === '--repo') {
@@ -279,6 +289,10 @@ its claim-revalidation gate before --apply, as the manual POST path it replaces.
                        to PR <n>, so only --agent-id / --claim-id (and --apply)
                        are still needed (always targets the PR; an explicit
                        non-pr --target is rejected). Not network-free.
+  --expected-head-sha <sha>  --from-pr only: the E1 Step 1 stored {head-SHA}.
+                       Fails closed (posts nothing) if the fresh snapshot's live
+                       HEAD no longer matches it, i.e. the branch moved between
+                       E1 Step 1 and this Step 2 call.
   --apply              POST the marker (default: dry-run prints it in a JSON envelope)
   --owner <owner>      repo owner (default: gh repo view)
   --repo <repo>        repo name (default: gh repo view)
@@ -288,13 +302,15 @@ Per-type field flags:
   claim              --agent-id --claim-id --supersedes --timestamp --branch
   unclaim            --agent-id --claim-id --timestamp
   watermark          --agent-id --claim-id --head-sha --max-activity-at --total-item-count --ci-completed-at
-                     (or --agent-id --claim-id --from-pr <n>)
+                     (or --agent-id --claim-id --from-pr <n> [--expected-head-sha <sha>])
   baseline           --agent-id --claim-id --sha
   advisory           --agent-id --head-sha --timestamp
   advisory-recovery  --agent-id --head-sha --timestamp
 
 --from-pr forwards optional --trusted-marker-logins / --advisory-bot-logins to
 the snapshot child so its counts match the manual review-activity-snapshot path.
+--expected-head-sha pins --from-pr to the Step 1 stored HEAD and fails closed
+(no post) on drift instead of silently posting a newer HEAD than Step 1 saw.
 `;
 
 /**
@@ -403,6 +419,15 @@ if (isMainModule(import.meta.url)) {
     );
     process.exit(1);
   }
+  // --expected-head-sha only guards the --from-pr derivation below; in manual
+  // mode the caller already supplies --head-sha directly, so there is nothing
+  // to compare it against.
+  if (args.expectedHeadSha && args.fromPr === null) {
+    process.stderr.write(
+      '--expected-head-sha is only valid together with --from-pr\n',
+    );
+    process.exit(1);
+  }
 
   // `--from-pr <n>` snapshot-derivation mode (watermark only): default the post
   // target to PR <n>, reject the manual snapshot fields as ambiguous, then
@@ -471,6 +496,22 @@ if (isMainModule(import.meta.url)) {
     } catch (error) {
       process.stderr.write(
         `failed to derive watermark fields from PR ${args.fromPr}: ${(error as Error).message}\n`,
+      );
+      process.exit(1);
+    }
+    // Fail closed (this repository's fail-closed default) when the branch
+    // moved between E1 Step 1 (which stored {head-SHA} and must not re-read
+    // HEAD through Step 3) and this Step 2 call: posting a watermark keyed to
+    // a HEAD newer than the one E1 Step 1 actually snapshotted would silently
+    // violate that single-stored-value invariant. Refuse to post; the caller
+    // reruns E1 from Step 1 against the moved branch instead.
+    const liveHeadSha = args.fields['head-sha'];
+    if (
+      args.expectedHeadSha &&
+      liveHeadSha.toLowerCase() !== args.expectedHeadSha.toLowerCase()
+    ) {
+      process.stderr.write(
+        `refusing to post watermark: PR ${args.fromPr}'s live HEAD (${liveHeadSha}) no longer matches the Step 1 stored --expected-head-sha (${args.expectedHeadSha}); the branch moved between E1 Step 1 and Step 2. Re-run E1 from Step 1 against the new HEAD.\n`,
       );
       process.exit(1);
     }

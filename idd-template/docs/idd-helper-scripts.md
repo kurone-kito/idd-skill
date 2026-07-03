@@ -885,6 +885,16 @@ Interpretation rules:
   child so its counts match the manual path, and rejects the four manual
   snapshot fields as ambiguous. Unlike the manual dry-run it reads from GitHub
   (it spawns the snapshot), but still posts nothing without `--apply`.
+- `--from-pr` HEAD pin (`--expected-head-sha <sha>`): optional, `--from-pr`
+  only. Pass the E1 Step 1 stored `{head-SHA}` here to guard against the
+  branch moving between Step 1 and the Step 2 post: if the fresh snapshot's
+  live HEAD no longer matches (case-insensitive compare), the CLI fails
+  closed — it writes a `refusing to post watermark` message to stderr and
+  exits non-zero **before** any POST, rather than silently posting a
+  watermark keyed to a HEAD newer than Step 1 actually snapshotted. Rejected
+  (exits non-zero, no `gh` call) when passed without `--from-pr`, since manual
+  mode already supplies `--head-sha` directly with nothing to compare it
+  against.
 - **No claim/state gating** (the `emit-marker` philosophy): this is a
   single-marker render+POST primitive, so the calling phase must run its
   claim-revalidation gate before `--apply`, exactly as the manual POST path it
