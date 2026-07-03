@@ -454,11 +454,16 @@ bucket is non-empty:
 For each **startable** candidate from A3.5, evaluate **all three**
 criteria. Fail any one → discard the issue.
 
-| Criterion                 | Pass                                                                                                                | Fail examples                                                                                    |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| **Limited scope**         | Changes confined to a few files or one module                                                                       | Touches multiple subsystems; redesigns a public interface                                        |
-| **Clear verification**    | Outcome verified by lint / test / CI — including adding or updating targeted automated tests as part of the work    | Success depends on UX or product judgment                                                        |
-| **Autonomous completion** | No external coordination, human decision, unavailable system, or product judgment required to **complete** the work | Requires operator to provide credentials; requires a product decision before the work can finish |
+- **Limited scope** — pass: changes confined to a few files or one
+  module. Fail: touches multiple subsystems; redesigns a public
+  interface.
+- **Clear verification** — pass: outcome verified by lint / test / CI —
+  including adding or updating targeted automated tests as part of the
+  work. Fail: success depends on UX or product judgment.
+- **Autonomous completion** — pass: no external coordination, human
+  decision, unavailable system, or product judgment required to
+  **complete** the work. Fail: requires operator to provide
+  credentials; requires a product decision before the work can finish.
 
 If **no issue** survives the gate:
 
@@ -496,14 +501,17 @@ in ascending issue-number order:
 
 After scanning the current batch:
 
-| Batch outcome                                                                       | Action                                                                                               |
-| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| At least one eligible candidate in the batch                                        | Proceed to Step 2 to rank and select.                                                                |
-| All `N` in this batch are claimed but viable survivors remain                       | Continue with the next batch (`N+1`–`2N`, then `2N+1`–`3N`, …) until an eligible candidate is found. |
-| Entire viable candidate set exhausted (all surviving viable candidates are claimed) | Resolve the exit by scope (see the note below).                                                      |
+- **At least one eligible candidate in the batch**: proceed to Step 2
+  to rank and select.
+- **All `N` in this batch are claimed but viable survivors remain**:
+  continue with the next batch (`N+1`–`2N`, then `2N+1`–`3N`, …) until
+  an eligible candidate is found.
+- **Entire viable candidate set exhausted** (all surviving viable
+  candidates are claimed): resolve the exit by scope (see the note
+  below).
 
-When the entire viable candidate set is exhausted (the last row above),
-resolve the exit by scope: if the A3.5 approval-needed bucket is
+When the entire viable candidate set is exhausted (the last bullet
+above), resolve the exit by scope: if the A3.5 approval-needed bucket is
 non-empty, report both the claimed-survivor exhaustion and the
 approval-needed hold, then stop (the approval hold takes precedence — not
 a true zero); otherwise, under `roadmap-first` scope route to the A0-O
