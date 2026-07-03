@@ -91,9 +91,9 @@ of `claimable | already-claimed | stale-reclaimable` with the winning
   competing / same-second claim raced in: **return to Discover** using the same
   selection mode that produced this target (orphan-first: continue the A0-O
   capable path; roadmap mode: continue the A3-ready path). Do not post a claim.
-  For an explicit-target A0-T run, report the lost claim race and stop
-  instead of falling back to Discover, per `idd-discover.instructions.md`'s
-  A0-T stop-don't-fallback rule.
+  For an explicit-target A0-T run, report that the issue is already claimed
+  and stop without claiming instead of falling back to Discover, per
+  `idd-discover.instructions.md`'s A0-T stop-don't-fallback rule.
 
 GitHub issue comments have no compare-and-swap, so this **narrows** the
 claim→write TOCTOU window rather than closing it; the 24 h stale-takeover and
@@ -114,9 +114,9 @@ for these stale checks (distributed default: `24 h`).
   when the `agent-id` matches. Return to Discover using the same
   selection mode that produced this target (orphan-first: continue the
   A0-O capable path; roadmap mode: continue the A3-ready path). For an
-  explicit-target A0-T run, report the lost claim race and stop instead
-  of falling back to Discover, per `idd-discover.instructions.md`'s A0-T
-  stop-don't-fallback rule.
+  explicit-target A0-T run, report that the issue is already claimed and
+  stop without claiming instead of falling back to Discover, per
+  `idd-discover.instructions.md`'s A0-T stop-don't-fallback rule.
 - Any other active claim whose latest valid `claimed-by` comment has
   GitHub `created_at` ≥ 24 h → stale, proceed with takeover.
 
@@ -136,9 +136,10 @@ Otherwise, use the latest trusted legacy `claimed-by` comment as a
   by another live session, even when the `agent-id` matches. Return to
   Discover using the same selection mode that produced this target
   (orphan-first: continue the A0-O capable path; roadmap mode: continue
-  the A3-ready path). For an explicit-target A0-T run, report the lost
-  claim race and stop instead of falling back to Discover, per
-  `idd-discover.instructions.md`'s A0-T stop-don't-fallback rule.
+  the A3-ready path). For an explicit-target A0-T run, report that the
+  issue is already claimed and stop without claiming instead of falling
+  back to Discover, per `idd-discover.instructions.md`'s A0-T
+  stop-don't-fallback rule.
 - Latest trusted legacy claim has GitHub `created_at` ≥ 24 h → stale,
   proceed and replace it with a new-format claim.
 
@@ -257,9 +258,10 @@ catches parallel-session concurrency before a new claim comment is posted.
      A0-O capable path; roadmap mode: continue the A3-ready path), and
      select the **next eligible issue**. This is the scale-out path that
      allows multiple sessions to work on different issues when one issue
-     has concurrent claims. For an explicit-target A0-T run, report the
-     lost claim race and stop instead of falling back to Discover, per
-     `idd-discover.instructions.md`'s A0-T stop-don't-fallback rule.
+     has concurrent claims. For an explicit-target A0-T run, report that
+     the issue is already claimed and stop without claiming instead of
+     falling back to Discover, per `idd-discover.instructions.md`'s A0-T
+     stop-don't-fallback rule.
 
    - **If a match is found, does NOT correspond to an inheritable claim,
      AND no active claim references that branch**:
