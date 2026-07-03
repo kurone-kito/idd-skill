@@ -151,10 +151,13 @@ checks, confirm the detailed items below.
       file list is present in `.github/instructions/`.
 - [ ] `docs/getting-started.md`, `docs/concepts.md`,
       `docs/customization.md`, `docs/reference.md`,
-      `docs/idd-workflow.md`,
+      `docs/policy-constants.md`, `docs/idd-workflow.md`,
       `docs/idd-review-policy-profiles.md`,
       `docs/idd-helper-scripts.md`,
-      `docs/idd-comment-minimization.md`, and `docs/permissions.md`
+      `docs/idd-comment-minimization.md`,
+      `docs/idd-resume-detail.md`,
+      `docs/idd-advisory-wait-shell-fallback.md`,
+      `docs/idd-design-rationale.md`, and `docs/permissions.md`
       are present.
 - [ ] `profiles/README.md` and the non-default profile artifacts under
       `profiles/` are present.
