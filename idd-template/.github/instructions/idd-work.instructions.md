@@ -104,12 +104,14 @@ a WorkTrunk version.
 
 If WorkTrunk is not available, choose the correct case:
 
-| Case                                       | Command                                                                             |
-| ------------------------------------------ | ----------------------------------------------------------------------------------- |
-| Fresh claim                                | `git worktree add <path> -b <branch-name> origin/main`                              |
-| Takeover — local branch exists             | `git worktree add <path> <branch-name>`                                             |
-| Takeover — remote branch only              | `git fetch origin && git worktree add <path> -b <branch-name> origin/<branch-name>` |
-| Takeover — neither local nor remote (rare) | treat as fresh claim; preserve the inherited branch name                            |
+<!-- dprint-ignore-start -->
+| Case | Command |
+| --- | --- |
+| Fresh claim | `git worktree add <path> -b <branch-name> origin/main` |
+| Takeover — local branch exists | `git worktree add <path> <branch-name>` |
+| Takeover — remote branch only | `git fetch origin && git worktree add <path> -b <branch-name> origin/<branch-name>` |
+| Takeover — neither local nor remote (rare) | treat as fresh claim; preserve the inherited branch name |
+<!-- dprint-ignore-end -->
 
 **Step 3 — Install deps**: after worktree creation, ensure dependencies
 are installed:
