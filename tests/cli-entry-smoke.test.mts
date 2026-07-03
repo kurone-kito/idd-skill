@@ -109,7 +109,7 @@ test('module-eval-order guard flags an initialized const after the entry block',
   assert.match(violations[0], /sample\.mts:5:.*after the CLI entry block/);
 });
 
-test('module-eval-order guard flags an initialized const after an isCliExecution() entry block', () => {
+test('module-eval-order guard flags an initialized const after an isCliExecution(import.meta.url) entry block', () => {
   const violations = findModuleEvalOrderViolations([
     readModule(
       'src/scripts/sample.mts',
