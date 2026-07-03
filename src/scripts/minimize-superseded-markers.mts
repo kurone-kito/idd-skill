@@ -32,6 +32,30 @@ const MINIMIZABLE_TYPENAMES = new Set([
   'PullRequestReviewComment',
 ]);
 
+// GitHub's GraphQL node(id:) query returns this message (independent of
+// subject type) whenever an id cannot be resolved — including, but NOT
+// limited to, a REST numeric id passed where a GraphQL global node id is
+// required. The same text also covers a syntactically valid node id whose
+// object was deleted or is inaccessible, so this pattern alone cannot
+// distinguish "wrong id shape" from "right shape, gone object": pair it with
+// REST_SHAPED_SUBJECT_ID_PATTERN below before assuming the former. Shared by
+// probeSubject's error path and --help so the guidance never drifts between
+// the two surfaces.
+const UNRESOLVABLE_NODE_ID_PATTERN = /could not resolve to a node/i;
+// REST numeric ids (issue comment / PR review / PR review comment) are
+// always bare positive integers with no leading zero; GraphQL global node
+// ids never are. Gating the enhanced guidance on this shape keeps it from
+// misfiring on a GraphQL-shaped id that legitimately failed to resolve
+// (deleted or inaccessible), where the raw gh error remains the accurate
+// reason. `[1-9]\d*` (rather than `\d+`) excludes "0" and leading-zero forms
+// like "0001", which no real REST id ever takes.
+const REST_SHAPED_SUBJECT_ID_PATTERN = /^[1-9]\d*$/;
+const NODE_ID_CONVERSION_COMMANDS = [
+  "  issue comment:     gh api repos/{owner}/{repo}/issues/comments/{comment_id} -q '.node_id'",
+  "  PR review:         gh api repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id} -q '.node_id'",
+  "  PR review comment: gh api repos/{owner}/{repo}/pulls/comments/{comment_id} -q '.node_id'",
+].join('\n');
+
 interface ProbeNode {
   typename: unknown;
   url: unknown;
@@ -275,6 +299,38 @@ export function runMinimize({
   return report;
 }
 
+// cspell:ignore Wpaqs
+// probeSubject requires a GraphQL global node id (e.g.
+// IC_kwDOSWpaqs8AAAABIk9VAg) — REST responses instead surface a numeric id
+// (e.g. 4870591746). A bare integer is never auto-converted here: it could
+// belong to an issue comment, a PR review, or a PR review comment, each
+// served by a different REST endpoint, so guessing which one risks querying
+// the wrong resource. Point the caller at the exact conversion command
+// instead.
+function unresolvableNodeIdReason(subjectId: string): string {
+  return (
+    `unresolvable-node-id: "${subjectId}" is not a GraphQL node ID. ` +
+    "probeSubject queries GitHub's GraphQL node(id: $id) API, which " +
+    'requires a GraphQL global node ID (e.g. IC_kwDOSWpaqs8AAAABIk9VAg), ' +
+    'not a REST numeric ID (e.g. 4870591746). Convert the REST ID to its ' +
+    `node ID first, using the command for the subject type:\n${NODE_ID_CONVERSION_COMMANDS}`
+  );
+}
+
+// Both conditions must hold: the subject id must itself look REST-shaped
+// (see REST_SHAPED_SUBJECT_ID_PATTERN above), not just the error text —
+// otherwise a valid-but-deleted/inaccessible GraphQL node id would be
+// misreported as "not a GraphQL node ID".
+function isUnresolvableRestShapedId(
+  subjectId: string,
+  errorText: string,
+): boolean {
+  return (
+    REST_SHAPED_SUBJECT_ID_PATTERN.test(subjectId) &&
+    UNRESOLVABLE_NODE_ID_PATTERN.test(errorText)
+  );
+}
+
 export function probeSubject(subjectId: string): ProbeResult {
   const result = runGh([
     'api',
@@ -292,6 +348,9 @@ export function probeSubject(subjectId: string): ProbeResult {
     `id=${subjectId}`,
   ]);
   if (!result.ok) {
+    if (isUnresolvableRestShapedId(subjectId, result.stderr)) {
+      return { ok: false, reason: unresolvableNodeIdReason(subjectId) };
+    }
     return {
       ok: false,
       reason: `gh-graphql-error: ${result.stderr.slice(0, 200)}`,
@@ -318,13 +377,16 @@ export function probeSubject(subjectId: string): ProbeResult {
     };
   }
   if (Array.isArray(parsed?.errors) && parsed.errors.length > 0) {
+    const joinedErrors = parsed.errors
+      .map((e) => String(e.message ?? ''))
+      .filter(Boolean)
+      .join('; ');
+    if (isUnresolvableRestShapedId(subjectId, joinedErrors)) {
+      return { ok: false, reason: unresolvableNodeIdReason(subjectId) };
+    }
     return {
       ok: false,
-      reason: `gh-graphql-errors: ${parsed.errors
-        .map((e) => String(e.message ?? ''))
-        .filter(Boolean)
-        .join('; ')
-        .slice(0, 200)}`,
+      reason: `gh-graphql-errors: ${joinedErrors.slice(0, 200)}`,
     };
   }
   const node = parsed?.data?.node;
@@ -585,7 +647,13 @@ trustedMarkerActors list in .github/idd/config.json (flag > env >
 config precedence) so the helper rejects markers from untrusted GitHub
 actors. Use --allow-untrusted only when you intentionally want to
 minimize markers regardless of author, and the caller has already
-verified the subject IDs are operationally safe to hide.`,
+verified the subject IDs are operationally safe to hide.
+
+--subject-ids must be GraphQL global node IDs (e.g.
+IC_kwDOSWpaqs8AAAABIk9VAg), not REST numeric IDs (e.g. 4870591746).
+Convert a REST ID to its node ID first, using the command for the
+subject type:
+${NODE_ID_CONVERSION_COMMANDS}`,
   );
 }
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   mkdirSync,
@@ -156,5 +156,133 @@ test('config-only resolution passes the author gate end to end', () => {
     assert.deepEqual(report.trustedMarkerActors, ['kurone-kito']);
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+// cspell:ignore Wpaqs
+// Shared by the three "unresolvable node id" tests below, so each test only
+// supplies its --subject-ids value and assertions instead of repeating the
+// sandbox/gh-stub/spawnSync setup. Stubs gh to reproduce the exact
+// stdout/stderr/exit-code shape observed from a live
+// `gh api graphql -f id=<value>` call when the id cannot be resolved: gh
+// exits non-zero and writes "Could not resolve to a node with the global id
+// of '<id>'" to stderr, mirroring the response body in stdout.
+function runMinimizeAgainstUnresolvableId(
+  subjectIds: string,
+): SpawnSyncReturns<string> {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-minimize-'));
+  try {
+    const binDir = join(sandbox, 'bin');
+    mkdirSync(binDir);
+    writeFileSync(
+      join(binDir, 'gh'),
+      `#!/usr/bin/env node
+const value = (process.argv.find((a) => a.startsWith('id=')) ?? '').slice(3);
+const message = \`Could not resolve to a node with the global id of '\${value}'\`;
+process.stdout.write(JSON.stringify({ data: { node: null }, errors: [{ type: 'NOT_FOUND', message }] }));
+process.stderr.write(\`gh: \${message}\\n\`);
+process.exit(1);
+`,
+    );
+    chmodSync(join(binDir, 'gh'), 0o755);
+
+    const script = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      'scripts',
+      'minimize-superseded-markers.mjs',
+    );
+    return spawnSync(
+      process.execPath,
+      [
+        script,
+        '--subject-ids',
+        subjectIds,
+        '--allow-untrusted',
+        '--format',
+        'json',
+      ],
+      {
+        cwd: sandbox,
+        env: {
+          ...process.env,
+          // Prepend the stub dir so the bare `gh` lookup resolves to the
+          // stub, not a real gh binary, while keeping the rest of PATH
+          // (matching the other CLI-stub tests in this repo) so the gh
+          // stub's #!/usr/bin/env node shebang can still find `node`.
+          // Conditional concatenation avoids a trailing `:` (and the
+          // implicit current-directory PATH entry it creates on POSIX)
+          // when PATH is unset.
+          PATH: process.env.PATH ? `${binDir}:${process.env.PATH}` : binDir,
+          IDD_TRUSTED_MARKER_ACTORS: '',
+        },
+        encoding: 'utf8',
+      },
+    );
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+}
+
+test('a REST-shaped --subject-ids value gets a GraphQL-node-ID explanation, not a raw gh passthrough', () => {
+  const result = runMinimizeAgainstUnresolvableId('4870591746');
+
+  assert.equal(result.status, 1, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.items.length, 1);
+  const [item] = report.items;
+  assert.equal(item.subjectId, '4870591746');
+  assert.equal(item.status, 'failed');
+  assert.match(item.reason, /^unresolvable-node-id:/);
+  assert.match(item.reason, /GraphQL global node ID/);
+  assert.match(item.reason, /IC_kwDOSWpaqs8AAAABIk9VAg/);
+  assert.match(
+    item.reason,
+    /repos\/\{owner\}\/\{repo\}\/issues\/comments\/\{comment_id\} -q '\.node_id'/,
+  );
+  assert.match(
+    item.reason,
+    /repos\/\{owner\}\/\{repo\}\/pulls\/\{pull_number\}\/reviews\/\{review_id\} -q '\.node_id'/,
+  );
+  assert.match(
+    item.reason,
+    /repos\/\{owner\}\/\{repo\}\/pulls\/comments\/\{comment_id\} -q '\.node_id'/,
+  );
+});
+
+test('a GraphQL-shaped --subject-ids value that fails to resolve keeps the raw gh passthrough', () => {
+  // Same "could not resolve to a node" gh signature as the REST-shaped case
+  // above, but for a syntactically valid (deleted/inaccessible) GraphQL node
+  // id — the enhanced guidance must NOT fire here, since the id is not a
+  // REST id in disguise; the raw gh error is still accurate.
+  const result = runMinimizeAgainstUnresolvableId(
+    'IC_kwDOSWpaqs8AAAABDeadBeef',
+  );
+
+  assert.equal(result.status, 1, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.items.length, 1);
+  const [item] = report.items;
+  assert.equal(item.subjectId, 'IC_kwDOSWpaqs8AAAABDeadBeef');
+  assert.equal(item.status, 'failed');
+  assert.match(item.reason, /^gh-graphql-error:/);
+  assert.match(
+    item.reason,
+    /Could not resolve to a node with the global id of 'IC_kwDOSWpaqs8AAAABDeadBeef'/,
+  );
+});
+
+test('a zero / leading-zero --subject-ids value keeps the raw gh passthrough (not REST-shaped)', () => {
+  // "0" and "0001" are digit strings but not real REST id shapes (GitHub
+  // REST ids are always positive integers with no leading zero), so
+  // REST_SHAPED_SUBJECT_ID_PATTERN (/^[1-9]\d*$/) must reject them too.
+  const result = runMinimizeAgainstUnresolvableId('0,0001');
+
+  assert.equal(result.status, 1, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.items.length, 2);
+  for (const item of report.items) {
+    assert.equal(item.status, 'failed');
+    assert.match(item.reason, /^gh-graphql-error:/);
   }
 });
