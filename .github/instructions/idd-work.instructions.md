@@ -202,6 +202,12 @@ Implement the plan. Before each commit, run **fix-validate**.
 
 Keep commits atomic — one logical change per commit.
 
+**De-duplication refactors**: when consolidating a wrapper function used
+at multiple call sites into one shared function, check whether any call
+site's old delegate path added options or behavior (timeouts, stdio
+handling, error translation, etc.) that the new shared function does not
+replicate — not just whether the function bodies look equivalent.
+
 If B3 or C must stop for a hold, use the shared Hold / suspend rules in
 `idd-overview-appendix.instructions.md` and update the issue digest with the
 blocking condition before stopping. Do not use the digest as the only
