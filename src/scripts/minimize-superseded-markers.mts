@@ -33,11 +33,21 @@ const MINIMIZABLE_TYPENAMES = new Set([
 ]);
 
 // GitHub's GraphQL node(id:) query returns this message (independent of
-// subject type) when the id cannot be resolved — including the common case
-// of a REST numeric id passed where a GraphQL global node id is required.
-// Shared by probeSubject's error path and --help so the guidance never
-// drifts between the two surfaces.
+// subject type) whenever an id cannot be resolved — including, but NOT
+// limited to, a REST numeric id passed where a GraphQL global node id is
+// required. The same text also covers a syntactically valid node id whose
+// object was deleted or is inaccessible, so this pattern alone cannot
+// distinguish "wrong id shape" from "right shape, gone object": pair it with
+// REST_SHAPED_SUBJECT_ID_PATTERN below before assuming the former. Shared by
+// probeSubject's error path and --help so the guidance never drifts between
+// the two surfaces.
 const UNRESOLVABLE_NODE_ID_PATTERN = /could not resolve to a node/i;
+// REST numeric ids (issue comment / PR review / PR review comment) are
+// always bare positive integers; GraphQL global node ids never are. Gating
+// the enhanced guidance on this shape keeps it from misfiring on a
+// GraphQL-shaped id that legitimately failed to resolve (deleted or
+// inaccessible), where the raw gh error remains the accurate reason.
+const REST_SHAPED_SUBJECT_ID_PATTERN = /^\d+$/;
 const NODE_ID_CONVERSION_COMMANDS = [
   "  issue comment:     gh api repos/{owner}/{repo}/issues/comments/{comment_id} -q '.node_id'",
   "  PR review:         gh api repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id} -q '.node_id'",
@@ -305,6 +315,20 @@ function unresolvableNodeIdReason(subjectId: string): string {
   );
 }
 
+// Both conditions must hold: the subject id must itself look REST-shaped
+// (see REST_SHAPED_SUBJECT_ID_PATTERN above), not just the error text —
+// otherwise a valid-but-deleted/inaccessible GraphQL node id would be
+// misreported as "not a GraphQL node ID".
+function isUnresolvableRestShapedId(
+  subjectId: string,
+  errorText: string,
+): boolean {
+  return (
+    REST_SHAPED_SUBJECT_ID_PATTERN.test(subjectId) &&
+    UNRESOLVABLE_NODE_ID_PATTERN.test(errorText)
+  );
+}
+
 export function probeSubject(subjectId: string): ProbeResult {
   const result = runGh([
     'api',
@@ -322,7 +346,7 @@ export function probeSubject(subjectId: string): ProbeResult {
     `id=${subjectId}`,
   ]);
   if (!result.ok) {
-    if (UNRESOLVABLE_NODE_ID_PATTERN.test(result.stderr)) {
+    if (isUnresolvableRestShapedId(subjectId, result.stderr)) {
       return { ok: false, reason: unresolvableNodeIdReason(subjectId) };
     }
     return {
@@ -355,7 +379,7 @@ export function probeSubject(subjectId: string): ProbeResult {
       .map((e) => String(e.message ?? ''))
       .filter(Boolean)
       .join('; ');
-    if (UNRESOLVABLE_NODE_ID_PATTERN.test(joinedErrors)) {
+    if (isUnresolvableRestShapedId(subjectId, joinedErrors)) {
       return { ok: false, reason: unresolvableNodeIdReason(subjectId) };
     }
     return {

@@ -236,3 +236,68 @@ process.exit(1);
     rmSync(sandbox, { recursive: true, force: true });
   }
 });
+
+// cspell:ignore Wpaqs
+test('a GraphQL-shaped --subject-ids value that fails to resolve keeps the raw gh passthrough', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-minimize-'));
+  try {
+    // Same "could not resolve to a node" gh signature as the REST-shaped
+    // case above, but for a syntactically valid (deleted/inaccessible)
+    // GraphQL node id — the enhanced guidance must NOT fire here, since the
+    // id is not a REST id in disguise; the raw gh error is still accurate.
+    const binDir = join(sandbox, 'bin');
+    mkdirSync(binDir);
+    writeFileSync(
+      join(binDir, 'gh'),
+      `#!/usr/bin/env node
+const value = (process.argv.find((a) => a.startsWith('id=')) ?? '').slice(3);
+const message = \`Could not resolve to a node with the global id of '\${value}'\`;
+process.stdout.write(JSON.stringify({ data: { node: null }, errors: [{ type: 'NOT_FOUND', message }] }));
+process.stderr.write(\`gh: \${message}\\n\`);
+process.exit(1);
+`,
+    );
+    chmodSync(join(binDir, 'gh'), 0o755);
+
+    const script = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      'scripts',
+      'minimize-superseded-markers.mjs',
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        script,
+        '--subject-ids',
+        'IC_kwDOSWpaqs8AAAABDeadBeef',
+        '--allow-untrusted',
+        '--format',
+        'json',
+      ],
+      {
+        cwd: sandbox,
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${dirname(process.execPath)}`,
+          IDD_TRUSTED_MARKER_ACTORS: '',
+        },
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 1, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.items.length, 1);
+    const [item] = report.items;
+    assert.equal(item.subjectId, 'IC_kwDOSWpaqs8AAAABDeadBeef');
+    assert.equal(item.status, 'failed');
+    assert.match(item.reason, /^gh-graphql-error:/);
+    assert.match(
+      item.reason,
+      /Could not resolve to a node with the global id of 'IC_kwDOSWpaqs8AAAABDeadBeef'/,
+    );
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
