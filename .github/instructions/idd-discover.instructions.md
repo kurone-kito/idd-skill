@@ -542,8 +542,8 @@ neither skip below-floor candidates nor reorder by score — and select by
 
 **Scored-vs-unscored floor tie-break.** When the highest-score tie band
 pairs an unscored candidate (missing or out-of-range score, defaulted to
-the floor above) against a candidate genuinely scored exactly at the
-floor value, the genuinely-scored candidate wins the tie: an explicit
+the floor as defined above) against a candidate genuinely scored exactly
+at the floor value, the genuinely-scored candidate wins the tie: an explicit
 author judgment outranks a default fallback. Apply this rule first,
 before the concurrent-selection desync, effort-hint, and
 lowest-issue-number tie-breakers below, which still apply in unchanged
