@@ -1664,12 +1664,14 @@ export function classifyReleaseTagDrift(tag, commitsSinceTag, daysSinceTag) {
   };
 }
 // Warns (never fails) when the current HEAD has drifted far from the latest
-// release tag. Skips silently -- no warning, no crash -- when the
-// repository has no tags reachable from HEAD yet (including a fresh
-// adopter clone before its first release): `git describe` failure is the
-// single, safe signal for both "no tags at all" and "no tag reachable from
-// HEAD", and either case means there is no baseline to measure drift
-// against.
+// release tag. Skips silently -- no warning, no crash -- whenever there is
+// no usable tag baseline to measure drift against: `git describe` (or the
+// follow-up `rev-list` / `log` calls) failing is treated as one single,
+// safe "no baseline" signal, covering every cause the same way -- no tags
+// at all yet (a fresh adopter clone before its first release), no tag
+// reachable from HEAD, tag history hidden by a shallow fetch (see
+// idd-skill#1286), or `git` itself being unavailable. This function never
+// tries to distinguish those causes; any of them means skip silently.
 function checkReleaseTagDrift(root, report) {
   const describeResult = runCommand(
     'git',
