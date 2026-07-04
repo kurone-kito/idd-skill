@@ -169,6 +169,41 @@ test('filterOrphanIssues excludes blocked labels and open blockers', () => {
   assert.equal(result.filtered.blocked_label.length, 1);
 });
 
+test('filterOrphanIssues resolves configured blocked-label names (#1273)', () => {
+  const issues = [
+    {
+      number: 30,
+      title: 'custom human-gate label',
+      state: 'OPEN',
+      labels: [{ name: 'triage:human-gate' }],
+      body: '',
+      url: 'https://example.com/30',
+    },
+    {
+      number: 31,
+      title: 'stock status:blocked-by-human label no longer blocks',
+      state: 'OPEN',
+      labels: [{ name: 'status:blocked-by-human' }],
+      body: '',
+      url: 'https://example.com/31',
+    },
+  ];
+
+  const result = filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    blockedByHumanLabelName: 'triage:human-gate',
+  });
+
+  // The configured label name blocks #30...
+  assert.equal(result.filtered.blocked_label.length, 1);
+  assert.equal(result.filtered.blocked_label[0].number, 30);
+  // ...while the stock default no longer matches once overridden, so #31 is
+  // an orphan (the override replaces, not adds to, the default).
+  assert.equal(result.orphans.length, 1);
+  assert.equal(result.orphans[0].number, 31);
+});
+
 test('filterOrphanIssues excludes custom authoring label and warns when stale', () => {
   const issues = [
     {

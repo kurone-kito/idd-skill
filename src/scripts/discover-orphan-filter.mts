@@ -26,12 +26,9 @@ import {
   isCliExecution,
 } from './gh-exec.mts';
 import { createMarkerRegex } from './marker-regex.mts';
+import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
-const BLOCKED_LABELS = new Set([
-  'status:blocked-by-human',
-  'status:needs-decision',
-]);
 
 /** Reasons that keep an issue out of the orphan candidate list. */
 export type OrphanFilteredReason =
@@ -77,6 +74,8 @@ interface ClassifyIssueOptions {
   fetchIssueStateByNumber: (issueNumber: number) => string;
   markerPrefix?: unknown;
   authoringLabelName?: unknown;
+  blockedByHumanLabelName?: unknown;
+  needsDecisionLabelName?: unknown;
 }
 
 interface FilterOrphanIssuesOptions {
@@ -85,6 +84,8 @@ interface FilterOrphanIssuesOptions {
   fetchLabelEventsByIssueNumber?: (issueNumber: number) => unknown[];
   markerPrefix?: unknown;
   authoringLabelName?: unknown;
+  blockedByHumanLabelName?: unknown;
+  needsDecisionLabelName?: unknown;
   authoringStaleAgeMs?: number;
   autopilotSuitabilityFloor?: number;
   autopilotSuitabilityEnabled?: boolean;
@@ -173,6 +174,12 @@ export function classifyIssue(
   const authoringLabelName = normalizeAuthoringLabelName(
     options.authoringLabelName,
   );
+  const blockedByHumanLabelName = normalizeBlockedByHumanLabelName(
+    options.blockedByHumanLabelName,
+  );
+  const needsDecisionLabelName = normalizeNeedsDecisionLabelName(
+    options.needsDecisionLabelName,
+  );
   const roadmapMarkerRegex = createMarkerRegex(markerPrefix, 'roadmap-id');
   const blockedMarkerRegex = createMarkerRegex(markerPrefix, 'blocked-by');
 
@@ -184,7 +191,11 @@ export function classifyIssue(
     return { orphan: false, reason: 'blocked_by_marker' };
   }
 
-  const blockedLabel = [...labels].find((label) => BLOCKED_LABELS.has(label));
+  const blockedLabels = new Set([
+    blockedByHumanLabelName,
+    needsDecisionLabelName,
+  ]);
+  const blockedLabel = [...labels].find((label) => blockedLabels.has(label));
   if (blockedLabel) {
     return { orphan: false, reason: 'blocked_label', details: blockedLabel };
   }
@@ -264,6 +275,8 @@ export function filterOrphanIssues(
       fetchIssueStateByNumber,
       markerPrefix: options.markerPrefix,
       authoringLabelName: options.authoringLabelName,
+      blockedByHumanLabelName: options.blockedByHumanLabelName,
+      needsDecisionLabelName: options.needsDecisionLabelName,
     });
 
     if (result.reason === 'unresolvable_reference') {
@@ -412,6 +425,8 @@ function runCli() {
     markerPrefix: policy.markerPrefix,
     authoringLabelName: policy.authoringLabelName,
     authoringStaleAgeMs: policy.authoringStaleAgeMs,
+    blockedByHumanLabelName: policy.blockedByHumanLabelName,
+    needsDecisionLabelName: policy.needsDecisionLabelName,
     autopilotSuitabilityFloor: policy.autopilotSuitabilityFloor,
     autopilotSuitabilityEnabled: policy.autopilotSuitabilityEnabled,
     autopilot: args.autopilot,
@@ -537,6 +552,7 @@ function loadPolicy(policyPath: string) {
       markerPrefix?: unknown;
     };
     const authoringPolicy = resolveAuthoringGuardPolicy(config);
+    const labelsPolicy = normalizePolicyConfig(config).labels;
     return {
       source: targetPath,
       orphanFirstPolicy: getOrphanFirstPolicy(config),
@@ -544,11 +560,14 @@ function loadPolicy(policyPath: string) {
       authoringLabelName: authoringPolicy.labelName,
       authoringStaleAge: authoringPolicy.staleAge,
       authoringStaleAgeMs: authoringPolicy.staleAgeMs,
+      blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
+      needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
       autopilotSuitabilityFloor: resolveAutopilotSuitabilityFloor(config),
       autopilotSuitabilityEnabled: resolveAutopilotSuitabilityEnabled(config),
     };
   } catch {
     const authoringPolicy = resolveAuthoringGuardPolicy({});
+    const labelsPolicy = normalizePolicyConfig({}).labels;
     return {
       source: targetPath,
       orphanFirstPolicy: 'none',
@@ -556,6 +575,8 @@ function loadPolicy(policyPath: string) {
       authoringLabelName: authoringPolicy.labelName,
       authoringStaleAge: authoringPolicy.staleAge,
       authoringStaleAgeMs: authoringPolicy.staleAgeMs,
+      blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
+      needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
       autopilotSuitabilityFloor: DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
       autopilotSuitabilityEnabled: true,
     };
@@ -718,6 +739,20 @@ function normalizeAuthoringLabelName(labelName: unknown): string {
   return typeof labelName === 'string' && labelName.length > 0
     ? labelName
     : 'status:authoring';
+}
+
+/** Resolve the configured `labels.blockedByHumanLabelName` (#1273). */
+function normalizeBlockedByHumanLabelName(labelName: unknown): string {
+  return typeof labelName === 'string' && labelName.length > 0
+    ? labelName
+    : POLICY_DEFAULTS.labels.blockedByHumanLabelName;
+}
+
+/** Resolve the configured `labels.needsDecisionLabelName` (#1273). */
+function normalizeNeedsDecisionLabelName(labelName: unknown): string {
+  return typeof labelName === 'string' && labelName.length > 0
+    ? labelName
+    : POLICY_DEFAULTS.labels.needsDecisionLabelName;
 }
 
 function fetchOpenIssues(repoRef: string) {
