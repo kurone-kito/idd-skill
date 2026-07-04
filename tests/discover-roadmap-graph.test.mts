@@ -96,6 +96,17 @@ test('classifyIssue resolves a configured roadmap label name (#1273)', () => {
   );
 });
 
+test('classifyIssue falls back to the default roadmap label on an empty-string override (#1273 review fix)', () => {
+  // An empty string is a parameter-default-bypassing value (not
+  // `undefined`): it must still resolve to the POLICY_DEFAULTS fallback
+  // ('roadmap'), not silently disable the roadmap-label check.
+  assert.equal(
+    classifyIssue({ body: '', labels: [{ name: 'roadmap' }] }, 'idd-skill', '')
+      .kind,
+    'roadmap',
+  );
+});
+
 test('ignores roadmap-id markers quoted inside code regions (#1083)', () => {
   // The #1083 shape: an execution-leaf issue *about* the marker system that
   // quotes the marker inside inline code. It must not read as roadmap identity.

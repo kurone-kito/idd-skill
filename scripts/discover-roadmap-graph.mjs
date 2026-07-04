@@ -1165,9 +1165,14 @@ export function classifyIssue(
   markerPrefix = DEFAULT_MARKER_PREFIX,
   roadmapLabelName = POLICY_DEFAULTS.labels.roadmapLabelName,
 ) {
+  // Re-normalize even though the parameter already has a default: a caller
+  // (direct or test) that explicitly passes an empty string would otherwise
+  // bypass the default (parameter defaults only trigger on `undefined`) and
+  // silently disable the roadmap-label check.
+  const resolvedRoadmapLabelName = normalizeRoadmapLabelName(roadmapLabelName);
   const roadmapMarkerId = extractRoadmapMarkerId(issue.body, markerPrefix);
   const labels = normalizeLabels(issue.labels);
-  if (roadmapMarkerId || labels.has(roadmapLabelName)) {
+  if (roadmapMarkerId || labels.has(resolvedRoadmapLabelName)) {
     return {
       kind: 'roadmap',
       roadmapMarkerId,

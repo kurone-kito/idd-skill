@@ -112,13 +112,26 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     authoringLabelName = 'status:authoring',
     authoringStaleAgeMs = 4 * 60 * 60 * 1000,
     markerPrefix,
-    roadmapLabelName = POLICY_DEFAULTS.labels.roadmapLabelName,
-    blockedByHumanLabelName = POLICY_DEFAULTS.labels.blockedByHumanLabelName,
-    needsDecisionLabelName = POLICY_DEFAULTS.labels.needsDecisionLabelName,
+    roadmapLabelName: rawRoadmapLabelName,
+    blockedByHumanLabelName: rawBlockedByHumanLabelName,
+    needsDecisionLabelName: rawNeedsDecisionLabelName,
     autopilotSuitabilityFloor,
     autopilotSuitabilityEnabled,
     now = new Date(),
   } = options ?? {};
+  // Route the three label-name options through normalizePolicyConfig rather
+  // than a bare destructure default (which only applies on `undefined`), so
+  // an invalid or empty-string input also falls back to POLICY_DEFAULTS
+  // instead of silently disabling the blocked-label / roadmap-label checks
+  // below (consistent with the other five helpers in #1273).
+  const { roadmapLabelName, blockedByHumanLabelName, needsDecisionLabelName } =
+    normalizePolicyConfig({
+      labels: {
+        roadmapLabelName: rawRoadmapLabelName,
+        blockedByHumanLabelName: rawBlockedByHumanLabelName,
+        needsDecisionLabelName: rawNeedsDecisionLabelName,
+      },
+    }).labels;
   if (typeof loadIssue !== 'function') {
     throw new Error(
       'evaluateDiscoverReadiness requires loadIssue(issueNumber)',

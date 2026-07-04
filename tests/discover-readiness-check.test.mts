@@ -277,6 +277,28 @@ test('resolves configured blocked-label names (#1273)', async () => {
   );
 });
 
+test('an empty-string label-name option falls back to the default instead of disabling the check (#1273 review fix)', async () => {
+  const summary = await evaluateDiscoverReadiness([104], {
+    loadIssue: async () => ({
+      number: 104,
+      title: 'still blocked by the stock label',
+      state: 'OPEN',
+      body: '',
+      labels: [{ name: 'status:blocked-by-human' }],
+    }),
+    findRoadmapsByMarker: async () => [],
+    // An empty string is a destructure-default-bypassing value (not
+    // `undefined`): it must still resolve to the POLICY_DEFAULTS fallback,
+    // not silently disable the blocked-label filter.
+    blockedByHumanLabelName: '',
+  });
+
+  assert.equal(summary.ready.length, 0);
+  assert.deepEqual(summary.filteredOut[0].reasons, [
+    'label:status:blocked-by-human',
+  ]);
+});
+
 test('filters authoring-labeled issue and emits stale warning', async () => {
   const summary = await evaluateDiscoverReadiness([151], {
     now: '2026-05-15T12:00:00Z',
