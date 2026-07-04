@@ -30,6 +30,7 @@ import {
   type RoadmapGraphReport,
 } from './discover-roadmap-graph.mts';
 import { ghText, safeGhText } from './gh-exec.mts';
+import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import type { ClaimValidationSummary } from './protocol-helpers.mts';
 import {
   renderUnclaimedByMarker,
@@ -42,10 +43,6 @@ const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // only as the fallback when the policy declares no (or an invalid)
 // `claimTiming.staleAge`; mirrors discover-roadmap-graph's own default.
 const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
-const BLOCKED_LABELS = new Set([
-  'status:blocked-by-human',
-  'status:needs-decision',
-]);
 
 // Scope caveat (A1.5): this helper gates only the MECHANICAL completion
 // preconditions. It deliberately does NOT verify the roadmap's free-form
@@ -147,18 +144,32 @@ interface RoadmapAuditExecuteArgs {
  */
 export function evaluateRoadmapAuditGates(
   report: RoadmapGraphReport,
-  options: { openLinkedPrIssues?: Iterable<number> } = {},
+  options: {
+    openLinkedPrIssues?: Iterable<number>;
+    blockedByHumanLabelName?: unknown;
+    needsDecisionLabelName?: unknown;
+  } = {},
 ): RoadmapAuditBlocker[] {
   const blockers: RoadmapAuditBlocker[] = [];
   const rootNumber = report.root.number;
   const pathTo = buildProvenanceLookup(report);
   const openLinkedPrIssues = new Set(options.openLinkedPrIssues ?? []);
   const reachableExecutionLeafCount = buildReachableLeafCounter(report);
+  const blockedLabels = new Set([
+    normalizeConfiguredLabelName(
+      options.blockedByHumanLabelName,
+      POLICY_DEFAULTS.labels.blockedByHumanLabelName,
+    ),
+    normalizeConfiguredLabelName(
+      options.needsDecisionLabelName,
+      POLICY_DEFAULTS.labels.needsDecisionLabelName,
+    ),
+  ]);
 
   // Root carrying a human-gate label is never auto-closed.
   const rootNode = report.nodes.find((node) => node.number === rootNumber);
   const rootBlockedLabel = (rootNode?.labels ?? []).find((label) =>
-    BLOCKED_LABELS.has(label),
+    blockedLabels.has(label),
   );
   if (rootBlockedLabel) {
     blockers.push({
@@ -555,6 +566,10 @@ export interface RoadmapAuditExecuteDeps {
   ) => void;
   /** Resolution "now" (ISO8601); defaults to the wall clock. */
   now: () => string;
+  /** Configured `labels.blockedByHumanLabelName` (#1273). */
+  blockedByHumanLabelName?: string;
+  /** Configured `labels.needsDecisionLabelName` (#1273). */
+  needsDecisionLabelName?: string;
 }
 
 /**
@@ -583,6 +598,8 @@ export async function runRoadmapAuditExecute(
     openLinkedPrIssues: resolvedDeps.resolveOpenLinkedPrIssues(
       closedDescendantNumbers(report),
     ),
+    blockedByHumanLabelName: resolvedDeps.blockedByHumanLabelName,
+    needsDecisionLabelName: resolvedDeps.needsDecisionLabelName,
   });
   const ready = blockers.length === 0;
   const evidenceBody = ready ? buildRoadmapCompletionAuditBody(report) : '';
@@ -665,6 +682,8 @@ export async function runRoadmapAuditExecute(
     openLinkedPrIssues: resolvedDeps.resolveOpenLinkedPrIssues(
       closedDescendantNumbers(revalidated),
     ),
+    blockedByHumanLabelName: resolvedDeps.blockedByHumanLabelName,
+    needsDecisionLabelName: resolvedDeps.needsDecisionLabelName,
   });
   if (revalidatedBlockers.length > 0) {
     verdict.blockers = revalidatedBlockers;
@@ -791,6 +810,7 @@ function createProductionDeps(
       (rawConfig as { claimTiming?: { staleAge?: unknown } } | null)
         ?.claimTiming?.staleAge,
     ) ?? DEFAULT_CLAIM_STALE_AGE_MS;
+  const labelsPolicy = normalizePolicyConfig(rawConfig).labels;
   const loadIssue = buildIssueLoader(owner, repo);
   const loadSubIssues = buildSubIssueLoader(owner, repo);
 
@@ -798,6 +818,7 @@ function createProductionDeps(
     collect: (roadmapNumber) =>
       enumerateRoadmapGraph(roadmapNumber, {
         markerPrefix,
+        roadmapLabelName: labelsPolicy.roadmapLabelName,
         owner,
         repo,
         loadIssue,
@@ -805,6 +826,8 @@ function createProductionDeps(
       }),
     resolveOpenLinkedPrIssues: (issueNumbers) =>
       resolveOpenLinkedPrIssues(owner, repo, issueNumbers),
+    blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
+    needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
     revalidateClaim: ({
       issueNumber,
       roadmapNumber,
@@ -1219,6 +1242,20 @@ function loadPolicy(policyPath: string): unknown {
 function normalizeMarkerPrefix(markerPrefix: unknown): string {
   const normalized = String(markerPrefix ?? '').trim();
   return normalized || DEFAULT_MARKER_PREFIX;
+}
+
+/**
+ * Resolve one configured `labels.*` name (#1273), falling back to the given
+ * `policy-helpers.mts` `POLICY_DEFAULTS.labels` default for an absent or
+ * invalid value.
+ */
+function normalizeConfiguredLabelName(
+  labelName: unknown,
+  fallback: string,
+): string {
+  return typeof labelName === 'string' && labelName.length > 0
+    ? labelName
+    : fallback;
 }
 
 // ---------------------------------------------------------------------------

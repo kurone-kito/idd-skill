@@ -28,6 +28,7 @@ import {
   parseClaimStaleAgeMs,
 } from './discover-roadmap-graph.mjs';
 import { ghText, safeGhText } from './gh-exec.mjs';
+import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 import {
   renderUnclaimedByMarker,
   resolveTrustedMarkerActors,
@@ -39,10 +40,6 @@ const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // only as the fallback when the policy declares no (or an invalid)
 // `claimTiming.staleAge`; mirrors discover-roadmap-graph's own default.
 const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
-const BLOCKED_LABELS = new Set([
-  'status:blocked-by-human',
-  'status:needs-decision',
-]);
 // Scope caveat (A1.5): this helper gates only the MECHANICAL completion
 // preconditions. It deliberately does NOT verify the roadmap's free-form
 // success criteria or autonomy-gap items — that is agent judgment "where
@@ -74,10 +71,20 @@ export function evaluateRoadmapAuditGates(report, options = {}) {
   const pathTo = buildProvenanceLookup(report);
   const openLinkedPrIssues = new Set(options.openLinkedPrIssues ?? []);
   const reachableExecutionLeafCount = buildReachableLeafCounter(report);
+  const blockedLabels = new Set([
+    normalizeConfiguredLabelName(
+      options.blockedByHumanLabelName,
+      POLICY_DEFAULTS.labels.blockedByHumanLabelName,
+    ),
+    normalizeConfiguredLabelName(
+      options.needsDecisionLabelName,
+      POLICY_DEFAULTS.labels.needsDecisionLabelName,
+    ),
+  ]);
   // Root carrying a human-gate label is never auto-closed.
   const rootNode = report.nodes.find((node) => node.number === rootNumber);
   const rootBlockedLabel = (rootNode?.labels ?? []).find((label) =>
-    BLOCKED_LABELS.has(label),
+    blockedLabels.has(label),
   );
   if (rootBlockedLabel) {
     blockers.push({
@@ -421,6 +428,8 @@ export async function runRoadmapAuditExecute(argv, deps) {
     openLinkedPrIssues: resolvedDeps.resolveOpenLinkedPrIssues(
       closedDescendantNumbers(report),
     ),
+    blockedByHumanLabelName: resolvedDeps.blockedByHumanLabelName,
+    needsDecisionLabelName: resolvedDeps.needsDecisionLabelName,
   });
   const ready = blockers.length === 0;
   const evidenceBody = ready ? buildRoadmapCompletionAuditBody(report) : '';
@@ -495,6 +504,8 @@ export async function runRoadmapAuditExecute(argv, deps) {
     openLinkedPrIssues: resolvedDeps.resolveOpenLinkedPrIssues(
       closedDescendantNumbers(revalidated),
     ),
+    blockedByHumanLabelName: resolvedDeps.blockedByHumanLabelName,
+    needsDecisionLabelName: resolvedDeps.needsDecisionLabelName,
   });
   if (revalidatedBlockers.length > 0) {
     verdict.blockers = revalidatedBlockers;
@@ -605,12 +616,14 @@ function createProductionDeps(args) {
   const staleAgeMs =
     parseClaimStaleAgeMs(rawConfig?.claimTiming?.staleAge) ??
     DEFAULT_CLAIM_STALE_AGE_MS;
+  const labelsPolicy = normalizePolicyConfig(rawConfig).labels;
   const loadIssue = buildIssueLoader(owner, repo);
   const loadSubIssues = buildSubIssueLoader(owner, repo);
   return {
     collect: (roadmapNumber) =>
       enumerateRoadmapGraph(roadmapNumber, {
         markerPrefix,
+        roadmapLabelName: labelsPolicy.roadmapLabelName,
         owner,
         repo,
         loadIssue,
@@ -618,6 +631,8 @@ function createProductionDeps(args) {
       }),
     resolveOpenLinkedPrIssues: (issueNumbers) =>
       resolveOpenLinkedPrIssues(owner, repo, issueNumbers),
+    blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
+    needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
     revalidateClaim: ({
       issueNumber,
       roadmapNumber,
@@ -948,6 +963,16 @@ function loadPolicy(policyPath) {
 function normalizeMarkerPrefix(markerPrefix) {
   const normalized = String(markerPrefix ?? '').trim();
   return normalized || DEFAULT_MARKER_PREFIX;
+}
+/**
+ * Resolve one configured `labels.*` name (#1273), falling back to the given
+ * `policy-helpers.mts` `POLICY_DEFAULTS.labels` default for an absent or
+ * invalid value.
+ */
+function normalizeConfiguredLabelName(labelName, fallback) {
+  return typeof labelName === 'string' && labelName.length > 0
+    ? labelName
+    : fallback;
 }
 // ---------------------------------------------------------------------------
 // CLI
