@@ -688,6 +688,65 @@ test('resolveCoreTemplateFiles rejects an absolute manifest path', () => {
   assert.throws(() => resolveCoreTemplateFiles(root), /unsafe manifest path/u);
 });
 
+/** Write an arbitrary (possibly malformed) sync-manifest.json body. */
+function writeRawManifest(root: string, body: unknown): void {
+  mkdirSync(join(root, 'audit'), { recursive: true });
+  writeFileSync(
+    join(root, 'audit', 'sync-manifest.json'),
+    JSON.stringify(body),
+  );
+}
+
+test('resolveCoreTemplateFiles rejects a malformed generatedBlocks instead of throwing a raw TypeError', () => {
+  const root = makeFixtureDir();
+  writeRawManifest(root, { generatedBlocks: 'not-an-array' });
+  assert.throws(
+    () => resolveCoreTemplateFiles(root),
+    /malformed generatedBlocks/u,
+  );
+});
+
+test('resolveCoreTemplateFiles rejects a non-array paths field instead of throwing a raw TypeError', () => {
+  const root = makeFixtureDir();
+  writeRawManifest(root, {
+    generatedBlocks: [{ id: 'idd-template-core-files', paths: 'not-an-array' }],
+  });
+  assert.throws(
+    () => resolveCoreTemplateFiles(root),
+    /valid paths: string\[\]/u,
+  );
+});
+
+test('resolveCoreTemplateFiles rejects a paths array containing a non-string entry', () => {
+  const root = makeFixtureDir();
+  writeRawManifest(root, {
+    generatedBlocks: [
+      { id: 'idd-template-core-files', paths: ['idd-template/a.md', 42] },
+    ],
+  });
+  assert.throws(
+    () => resolveCoreTemplateFiles(root),
+    /valid paths: string\[\]/u,
+  );
+});
+
+test('resolveCoreTemplateFiles rejects a non-string stripPrefix', () => {
+  const root = makeFixtureDir();
+  writeRawManifest(root, {
+    generatedBlocks: [
+      {
+        id: 'idd-template-core-files',
+        paths: ['idd-template/a.md'],
+        stripPrefix: 42,
+      },
+    ],
+  });
+  assert.throws(
+    () => resolveCoreTemplateFiles(root),
+    /valid paths: string\[\]/u,
+  );
+});
+
 test('resolveImportFiles vends no extra files for a non-vendored-node profile', () => {
   const withoutProfile = resolveImportFiles(REPO_ROOT);
   const packageManagerProfile = resolveImportFiles(

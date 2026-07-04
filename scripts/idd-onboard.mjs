@@ -584,12 +584,27 @@ export function resolveCoreTemplateFiles(sourceRoot) {
       `--source is not a readable idd-skill tree (missing or invalid audit/sync-manifest.json): ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const block = (manifest.generatedBlocks ?? []).find(
-    (entry) => entry.id === CORE_TEMPLATE_BLOCK_ID,
-  );
-  if (!block?.paths) {
+  // `manifest` is only type-asserted, not runtime-validated, so a corrupted
+  // manifest can carry a `generatedBlocks` / `paths` / `stripPrefix` of the
+  // wrong shape. Validate every level before using it as an array/string —
+  // otherwise a malformed manifest throws a raw, unhelpful TypeError
+  // (`.find is not a function`, `.map is not a function`) instead of the
+  // actionable error this function otherwise gives for a missing block.
+  const rawBlocks = manifest.generatedBlocks;
+  if (!Array.isArray(rawBlocks)) {
     throw new Error(
-      `--source's audit/sync-manifest.json has no "${CORE_TEMPLATE_BLOCK_ID}" generated block with a paths list`,
+      "--source's audit/sync-manifest.json has a malformed generatedBlocks (expected an array)",
+    );
+  }
+  const block = rawBlocks.find((entry) => entry?.id === CORE_TEMPLATE_BLOCK_ID);
+  if (
+    !block ||
+    !Array.isArray(block.paths) ||
+    !block.paths.every((entry) => typeof entry === 'string') ||
+    (block.stripPrefix !== undefined && typeof block.stripPrefix !== 'string')
+  ) {
+    throw new Error(
+      `--source's audit/sync-manifest.json has no "${CORE_TEMPLATE_BLOCK_ID}" generated block with a valid paths: string[] (and stripPrefix?: string)`,
     );
   }
   const prefix = block.stripPrefix ?? '';
