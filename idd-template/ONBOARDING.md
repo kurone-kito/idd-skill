@@ -255,6 +255,11 @@ require explicit operator confirmation:
 11. helper runtime profile (`instructions-only` by default, or an
     evidence-based helper profile recommendation that still requires
     explicit operator confirmation`)
+12. IDD label names (`labels.roadmapLabelName`,
+    `labels.blockedByHumanLabelName`, and
+    `labels.needsDecisionLabelName` — distributed defaults `roadmap`,
+    `status:blocked-by-human`, and `status:needs-decision`, or an
+    existing local label taxonomy)
 
 Use
 [Onboarding Reference — Policy Decisions](docs/onboarding/policy-decisions.md)
