@@ -158,10 +158,15 @@ re-review:
 gh pr edit {pr-number} --add-reviewer {reviewer-login}
 ```
 
-For an **advisory bot**, pass the bot's reviewer **login** to this
-add-reviewer command (the reliable trigger). The REST `requested_reviewers`
-endpoint called with a bot's **display name** silently no-ops and wastes a
-full advisory-wait cycle, so do not use that path to request a re-review.
+For an **advisory bot**, try the add-reviewer command with the bot's
+reviewer **login** first. On some `gh` versions this GraphQL-based
+mutation fails a bot login outright (`Could not resolve user with login
+'{login}' (requestReviewsByLogin)`) instead of succeeding; on that
+failure, fall back to REST `requested_reviewers` with the bot's actual
+account login instead — REST also silently no-ops on a bot's **display
+name** and wastes a full advisory-wait cycle. See **Primary advisory
+bot** below for the exact fallback commands and the login each path
+needs.
 
 **Primary advisory bot** (default Copilot): after every push, regardless
 of any reviewer's state, request a re-review from the configured primary
@@ -176,6 +181,12 @@ login — the default is `copilot`, so the command resolves to `@copilot`.
 The advisory-wait helpers resolve the same identity from policy. The AW
 helper output fields keep their `COPILOT_PENDING` / `LAST_COPILOT_COMMIT`
 names regardless of the configured bot.
+
+The REST fallback needs a different identity,
+`{primary-advisory-bot-rest-login}`: for the default bot this is
+`copilot-pull-request-reviewer[bot]`; for a configured non-default bot it
+equals `{primary-advisory-bot}`, since a configured login is already the
+real account login.
 
 1. Fetch `PR_HEAD_SHA`:
 
@@ -208,13 +219,25 @@ names regardless of the configured bot.
      gh pr edit {pr-number} --remove-reviewer "@{primary-advisory-bot}"
      ```
 
+     On a GraphQL login-resolution failure (see above), retry via REST
+     instead:
+
+     ```sh
+     gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
+       -X DELETE -f "reviewers[]={primary-advisory-bot-rest-login}"
+     ```
+
      If removal fails because the bot is no longer pending, re-run
      AW1–AW3. If removal fails for any other reason, post the AW4
      pending-refresh-failed hold comment and stop. After removal
-     succeeds, request the primary advisory bot's review:
+     succeeds, request the primary advisory bot's review the same
+     gh-then-REST way:
 
      ```sh
      gh pr edit {pr-number} --add-reviewer "@{primary-advisory-bot}"
+     # on GraphQL login-resolution failure:
+     gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
+       -X POST -f "reviewers[]={primary-advisory-bot-rest-login}"
      ```
 
      ```text
@@ -231,10 +254,15 @@ names regardless of the configured bot.
    elapsed settle/pending window while the primary never reviewed the current
    HEAD), `advisoryWait.secondaryBotLogin` is configured, and that secondary
    has **not** already been `review_requested` after the current HEAD's
-   `committed` event — request the secondary bot **once** for the current HEAD:
+   `committed` event — request the secondary bot **once** for the current
+   HEAD, using the same gh-then-REST fallback as the primary:
 
    ```sh
    gh pr edit {pr-number} --add-reviewer "@{secondary-advisory-bot}"
+   # on GraphQL login-resolution failure (rare for a configured secondary,
+   # which is already a real account login):
+   gh api repos/{owner}/{repo}/pulls/{pr-number}/requested_reviewers \
+     -X POST -f "reviewers[]={secondary-advisory-bot}"
    ```
 
    Post **no** `advisory-wait:` marker for the secondary (it must never satisfy
