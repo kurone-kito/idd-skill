@@ -43,6 +43,11 @@ const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // only as the fallback when the policy declares no (or an invalid)
 // `claimTiming.staleAge`; mirrors discover-roadmap-graph's own default.
 const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
+// The canonical evidence comment's literal leading heading. Shared by the
+// body composer (`buildRoadmapCompletionAuditBody`) and the evidence
+// detector (`hasTrustedCompletionEvidenceComment`, #1299) so the two never
+// drift out of sync.
+const COMPLETION_AUDIT_HEADING = '**IDD roadmap completion audit**';
 
 // Scope caveat (A1.5): this helper gates only the MECHANICAL completion
 // preconditions. It deliberately does NOT verify the roadmap's free-form
@@ -393,7 +398,7 @@ export function buildRoadmapCompletionAuditBody(
     .join(', ');
 
   return [
-    '**IDD roadmap completion audit**',
+    COMPLETION_AUDIT_HEADING,
     '',
     `Roadmap #${rootNumber} "${report.root.title}" audited as complete: every referenced child and descendant issue is closed or otherwise complete.`,
     '',
@@ -549,9 +554,8 @@ export function hasTrustedCompletionEvidenceComment(
 ): boolean {
   return (comments ?? []).some(
     (comment) =>
-      String(comment.body ?? '').startsWith(
-        '**IDD roadmap completion audit**',
-      ) && isTrustedAuthor(String(comment.author?.login ?? '')),
+      String(comment.body ?? '').startsWith(COMPLETION_AUDIT_HEADING) &&
+      isTrustedAuthor(String(comment.author?.login ?? '')),
   );
 }
 
