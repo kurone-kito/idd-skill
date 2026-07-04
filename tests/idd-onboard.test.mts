@@ -55,6 +55,7 @@ const PLACEHOLDERS_DOC = join(
   'onboarding',
   'placeholders.md',
 );
+const ONBOARDING_DOC = join(REPO_ROOT, 'idd-template', 'ONBOARDING.md');
 
 function makeFixtureDir(): string {
   return mkdtempSync(join(tmpdir(), 'idd-onboard-'));
@@ -1847,4 +1848,92 @@ test('importing idd-onboard.mts has no import-time side effect', async () => {
   } finally {
     process.env.PATH = originalPath;
   }
+});
+
+// ---------------------------------------------------------------------------
+// #1294: ONBOARDING.md "CLI-assisted onboarding" section drift guard
+// ---------------------------------------------------------------------------
+//
+// The section documents idd-onboard as the automated alternative for Steps
+// 2, 4, and 6. Two mechanical properties must hold so the doc cannot drift
+// from the shipped CLI: every flag it mentions must actually exist in the
+// CLI's own --help surface, and its description of what --import copies
+// must anchor to the shared idd-template-core-files generated block
+// (Step 2's own file list) rather than hand-copying a second file list.
+
+const CLI_SECTION_HEADING = '## CLI-assisted onboarding';
+
+/** Slice out the named section: from its heading up to the next `## `. */
+function extractSection(doc: string, heading: string): string {
+  const start = doc.indexOf(heading);
+  assert.notEqual(start, -1, `ONBOARDING.md is missing heading: ${heading}`);
+  const nextHeading = doc.indexOf('\n## ', start + heading.length);
+  return nextHeading === -1 ? doc.slice(start) : doc.slice(start, nextHeading);
+}
+
+/** Every long-form `--flag` token in `text`, deduped, in first-seen order. */
+function extractFlagTokens(text: string): string[] {
+  return [...new Set(text.match(/--[a-z][a-z-]*/gu) ?? [])];
+}
+
+/**
+ * Assert every flag token in `section` appears in `helpText`. Shared by the
+ * real-section pass test and the seeded-mismatch fail test below so both
+ * exercise the identical guard logic.
+ */
+function assertFlagsDocumentedInHelp(section: string, helpText: string): void {
+  for (const flag of extractFlagTokens(section)) {
+    assert.ok(
+      helpText.includes(flag),
+      `ONBOARDING.md's CLI-assisted onboarding section documents ${flag}, which idd-onboard --help does not list`,
+    );
+  }
+}
+
+test('the ONBOARDING.md CLI-assisted onboarding section documents only flags idd-onboard --help actually lists', () => {
+  const doc = readFileSync(ONBOARDING_DOC, 'utf8');
+  const section = extractSection(doc, CLI_SECTION_HEADING);
+  const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  // Sanity check: the section documents a non-trivial number of real flags,
+  // so this guard is not vacuously satisfied by an empty or flag-free section.
+  assert.ok(
+    extractFlagTokens(section).length >= 10,
+    'expected the CLI-assisted onboarding section to document at least 10 distinct flags',
+  );
+  assertFlagsDocumentedInHelp(section, help);
+});
+
+test('a seeded unknown flag in the CLI-assisted onboarding section is caught by the drift guard', () => {
+  const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  const seededSection = `${CLI_SECTION_HEADING}\n\nRun \`idd-onboard --nonexistent-flag\`.\n`;
+  assert.throws(
+    () => assertFlagsDocumentedInHelp(seededSection, help),
+    /--nonexistent-flag/,
+    'a flag not in --help must fail the guard, proving it does not vacuously pass',
+  );
+});
+
+test('the ONBOARDING.md CLI-assisted onboarding section anchors its --import file set to the shared generated block, not a hand-copied list', () => {
+  const doc = readFileSync(ONBOARDING_DOC, 'utf8');
+  const section = extractSection(doc, CLI_SECTION_HEADING);
+  // The section must name the same generated block Step 2's file list
+  // renders from, rather than re-deriving or re-describing the file set on
+  // its own terms.
+  assert.match(section, /idd-template-core-files/u);
+  // The generated-block start marker must still appear exactly once in the
+  // whole document: sync-docs.mjs / audit-docs.mjs locate it with a single
+  // indexOf, so a second copy of the marker would silently go stale forever
+  // (never regenerated, never checked) instead of failing loudly.
+  const markerCount = (
+    doc.match(/<!-- audit:generated id=idd-template-core-files -->/gu) ?? []
+  ).length;
+  assert.equal(
+    markerCount,
+    1,
+    'the idd-template-core-files generated block must appear exactly once in ONBOARDING.md',
+  );
 });

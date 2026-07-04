@@ -290,7 +290,73 @@ notes, and `blocked-by` guidance, see
 
 ---
 
+## CLI-assisted onboarding
+
+If you have a local clone of `kurone-kito/idd-skill` (Step 2 Option B
+below), the `idd-onboard` CLI shipped in that clone
+(`scripts/idd-onboard.mjs`) can automate Steps 2, 4, and 6. **The manual
+steps remain canonical**; this CLI is a mechanical, optional shortcut for
+the same three steps, and it has no remote-fetch equivalent — every mode
+requires `--source <path-to-a-cloned-idd-skill-tree>`, so it does not
+apply to the Option A remote-fetch flow. Each mode prints a JSON verdict
+and exits `0` (converged), `1` (a blocking or residue finding — nothing is
+written), or `2` (a usage error), so an agent can gate on the exit code
+without parsing prose.
+
+- **Step 2 (fetch or copy) → `--import`**: copies the core template file
+  set from `--source` into `--target`. The file set it copies is the same
+  `idd-template-core-files` generated block Step 2's file list below
+  renders from, so this command and that list can never drift apart into
+  two independently hand-copied file sets. Add `--profile vendored-node`
+  to also copy the profile-conditional helper bundle (every other
+  `--profile` value copies no extra files); add `--force` to allow
+  overwriting an existing target file whose content differs (refused by
+  default); add `--dry-run` to print the plan without writing.
+
+  ```sh
+  node scripts/idd-onboard.mjs --import --source <idd-skill-clone> \
+    --target <target-repo> [--profile <name>] [--force] [--dry-run]
+  ```
+
+- **Step 4 (replace placeholders) → `--substitute`**: resolves the seven
+  placeholders using Step 1A's auto-derivation rules, or explicit
+  overrides (`--repo-name`, `--marker-prefix`, `--trusted-marker-actor`,
+  `--fix-validate-commands`, `--pre-push-validate-commands`,
+  `--post-fix-validate-commands`, `--install-deps-command`), then rewrites
+  the target tree in place. Add `--dry-run` to print the plan without
+  writing; apply mode refuses to write anything while any placeholder
+  would remain unresolved.
+
+  ```sh
+  node scripts/idd-onboard.mjs --substitute --target <target-repo> \
+    [--dry-run] [--repo-name <value> ...]
+  ```
+
+- **Step 6 (verification checklist) → `--verify`**: a mechanical pass/fail
+  check for a target tree after `--import` and `--substitute` have run,
+  replacing a manual walkthrough of the checklist below with three check
+  groups: manifest completeness (reusing `--import`'s own file-set
+  resolution), placeholder residue (reusing `--substitute`'s scanner), and
+  an informational stale-import signal. A missing manifest file or a
+  leftover onboarding placeholder is blocking; the stale-import signal
+  never is.
+
+  ```sh
+  node scripts/idd-onboard.mjs --verify --source <idd-skill-clone> \
+    --target <target-repo> [--profile <name>]
+  ```
+
+Run `node scripts/idd-onboard.mjs --help` for the full flag reference —
+this section documents only the flags relevant to Steps 2, 4, and 6, not
+every accepted argument.
+
+---
+
 ## Step 2 — Fetch or copy template files
+
+> **CLI shortcut**: `idd-onboard --import` automates this step from a
+> local idd-skill clone — see [CLI-assisted onboarding](#cli-assisted-onboarding)
+> above.
 
 You need the following core execution and profile artifact files in the
 target repository. Use whichever method applies to your situation.
@@ -728,6 +794,9 @@ that mention IDD workflow.
 
 ## Step 4 — Replace placeholders
 
+> **CLI shortcut**: `idd-onboard --substitute` automates this step — see
+> [CLI-assisted onboarding](#cli-assisted-onboarding) above.
+
 In the copied files, perform a global replacement for:
 `{{REPO_NAME}}`, `{{PROJECT_MARKER_PREFIX}}`,
 `{{TRUSTED_MARKER_ACTOR}}`, `{{FIX_VALIDATE_COMMANDS}}`,
@@ -793,6 +862,9 @@ Copilot guidance may still apply to reviews.
 ---
 
 ## Step 6 — Verification checklist
+
+> **CLI shortcut**: `idd-onboard --verify` automates this checklist — see
+> [CLI-assisted onboarding](#cli-assisted-onboarding) above.
 
 Use
 [Onboarding Reference — Agent Entry and Verification](docs/onboarding/agent-entry-and-verification.md)
