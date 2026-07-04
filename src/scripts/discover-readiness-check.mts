@@ -22,6 +22,7 @@ import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import { escapeRegex } from './marker-regex.mts';
+import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
 
@@ -118,6 +119,12 @@ interface EvaluateDiscoverReadinessOptions {
   authoringLabelName?: string;
   authoringStaleAgeMs?: number;
   markerPrefix?: string;
+  /** Configured `labels.roadmapLabelName` (#1273); defaults to `'roadmap'`. */
+  roadmapLabelName?: string;
+  /** Configured `labels.blockedByHumanLabelName` (#1273). */
+  blockedByHumanLabelName?: string;
+  /** Configured `labels.needsDecisionLabelName` (#1273). */
+  needsDecisionLabelName?: string;
   autopilotSuitabilityFloor?: number;
   autopilotSuitabilityEnabled?: boolean;
   now?: Date | string;
@@ -162,6 +169,7 @@ if (isMainModule(import.meta.url)) {
   const policyConfig = loadPolicy(args.policy);
   const authoringPolicy = resolveAuthoringGuardPolicy(policyConfig);
   const markerPrefix = resolveMarkerPrefix(policyConfig);
+  const labelsPolicy = normalizePolicyConfig(policyConfig).labels;
 
   // `--swarm-floor` sweeps every open issue (orphans included); otherwise
   // evaluate exactly the issues the caller named.
@@ -186,6 +194,9 @@ if (isMainModule(import.meta.url)) {
     authoringLabelName: authoringPolicy.labelName,
     authoringStaleAgeMs: authoringPolicy.staleAgeMs,
     markerPrefix,
+    roadmapLabelName: labelsPolicy.roadmapLabelName,
+    blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
+    needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
     autopilotSuitabilityFloor:
       args.swarmFloor ?? resolveSuitabilityFloor(policyConfig),
     autopilotSuitabilityEnabled: resolveSuitabilityEnabled(policyConfig),
@@ -215,6 +226,9 @@ export async function evaluateDiscoverReadiness(
     authoringLabelName = 'status:authoring',
     authoringStaleAgeMs = 4 * 60 * 60 * 1000,
     markerPrefix,
+    roadmapLabelName = POLICY_DEFAULTS.labels.roadmapLabelName,
+    blockedByHumanLabelName = POLICY_DEFAULTS.labels.blockedByHumanLabelName,
+    needsDecisionLabelName = POLICY_DEFAULTS.labels.needsDecisionLabelName,
     autopilotSuitabilityFloor,
     autopilotSuitabilityEnabled,
     now = new Date(),
@@ -300,11 +314,11 @@ export async function evaluateDiscoverReadiness(
 
     const reasons = new Set<string>();
     const labels = normalizeLabels(issue.labels);
-    if (labels.has('status:blocked-by-human')) {
-      reasons.add('label:status:blocked-by-human');
+    if (labels.has(blockedByHumanLabelName)) {
+      reasons.add(`label:${blockedByHumanLabelName}`);
     }
-    if (labels.has('status:needs-decision')) {
-      reasons.add('label:status:needs-decision');
+    if (labels.has(needsDecisionLabelName)) {
+      reasons.add(`label:${needsDecisionLabelName}`);
     }
     if (labels.has(authoringLabelName)) {
       reasons.add(`label:${authoringLabelName}`);
@@ -341,7 +355,7 @@ export async function evaluateDiscoverReadiness(
       }
       if (
         dependencyIssue.state === 'OPEN' &&
-        !isParentEpicIssue(dependencyIssue)
+        !isParentEpicIssue(dependencyIssue, roadmapLabelName)
       ) {
         reasons.add(`open_dependency_issue:#${dependencyNumber}`);
       }
@@ -728,11 +742,17 @@ function normalizeLabels(labelsInput: unknown): Set<string> {
   return new Set();
 }
 
-function isParentEpicIssue(issue: NormalizedIssue): boolean {
+function isParentEpicIssue(
+  issue: NormalizedIssue,
+  roadmapLabelName: string = POLICY_DEFAULTS.labels.roadmapLabelName,
+): boolean {
+  // Title heuristic is intentionally independent of the configured roadmap
+  // label (#1273): it is a naming-convention signal on free-form title text,
+  // not a label comparison, so it is not wired to `labels.roadmapLabelName`.
   if (issue.title.toLowerCase().startsWith('roadmap')) {
     return true;
   }
-  return issue.labels.has('roadmap');
+  return issue.labels.has(roadmapLabelName);
 }
 
 async function getIssue(

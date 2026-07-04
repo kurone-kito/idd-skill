@@ -244,6 +244,39 @@ test('filters issue with blocked labels', async () => {
   ]);
 });
 
+test('resolves configured blocked-label names (#1273)', async () => {
+  const summary = await evaluateDiscoverReadiness([102, 103], {
+    loadIssue: async (number) =>
+      number === 102
+        ? {
+            number: 102,
+            title: 'custom human-gate label',
+            state: 'OPEN',
+            body: '',
+            labels: [{ name: 'triage:human-gate' }],
+          }
+        : {
+            number: 103,
+            title: 'stock label no longer matches',
+            state: 'OPEN',
+            body: '',
+            labels: [{ name: 'status:blocked-by-human' }],
+          },
+    findRoadmapsByMarker: async () => [],
+    blockedByHumanLabelName: 'triage:human-gate',
+  });
+
+  const byNumber = new Map(
+    summary.filteredOut.map((entry) => [entry.number, entry]),
+  );
+  assert.deepEqual(byNumber.get(102)?.reasons, ['label:triage:human-gate']);
+  // The stock default no longer matches once overridden, so #103 is ready.
+  assert.deepEqual(
+    summary.ready.map((entry) => entry.number),
+    [103],
+  );
+});
+
 test('filters authoring-labeled issue and emits stale warning', async () => {
   const summary = await evaluateDiscoverReadiness([151], {
     now: '2026-05-15T12:00:00Z',
@@ -377,6 +410,45 @@ test('open roadmap dependencies are ignored as parent epics', async () => {
       belowFloor: false,
     },
   ]);
+});
+
+test('open dependency with a configured roadmap label name is ignored as a parent epic (#1273)', async () => {
+  const issues = new Map([
+    [
+      411,
+      {
+        number: 411,
+        title: 'candidate',
+        state: 'OPEN',
+        body: 'Depends on #412',
+        labels: [],
+      },
+    ],
+    [
+      // Title deliberately does NOT start with "roadmap" so this exercises
+      // only the configured-label path, not the independent title heuristic.
+      412,
+      {
+        number: 412,
+        title: 'parent epic',
+        state: 'OPEN',
+        body: '',
+        labels: [{ name: 'epic' }],
+      },
+    ],
+  ]);
+
+  const summary = await evaluateDiscoverReadiness([411], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+    roadmapLabelName: 'epic',
+  });
+
+  assert.deepEqual(summary.filteredOut, []);
+  assert.deepEqual(
+    summary.ready.map((entry) => entry.number),
+    [411],
+  );
 });
 
 test('returns empty unresolvable list when include-unresolvable is disabled', async () => {
