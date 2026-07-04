@@ -1735,8 +1735,9 @@ function checkPostMergeCleanupBacklog(
   );
 }
 
-// Default drift thresholds (idd-skill#1269): warn when `main` is more than
-// 100 commits OR more than 45 days past the latest reachable tag, whichever
+// Default drift thresholds (idd-skill#1269): warn when the checked-out HEAD
+// (typically `main` -- see the HEAD-vs-main note below) is more than 100
+// commits OR more than 45 days past the latest reachable tag, whichever
 // fires first (OR logic -- either alone is enough to warn). "Days past the
 // tag" is measured from the tagged **commit's** date (`%cI` on the
 // dereferenced commit), not an annotated tag object's own creation
@@ -1752,6 +1753,12 @@ function checkPostMergeCleanupBacklog(
 // to (correctly) also fire immediately for idd-skill itself. 45 days gives
 // roughly 1.5 release cycles of slack under a monthly-ish cadence before
 // warning.
+//
+// HEAD-vs-main: the check measures drift from whatever commit is currently
+// checked out, not specifically `main` -- `.github/workflows/idd-doctor.yml`
+// runs it on every pull request against the PR's own (detached) HEAD, not
+// `main`. The warning message below says "HEAD", not "main", so it stays
+// accurate under that CI topology and any other non-main invocation.
 export const RELEASE_TAG_DRIFT_COMMIT_THRESHOLD = 100;
 export const RELEASE_TAG_DRIFT_DAY_THRESHOLD = 45;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -1763,8 +1770,8 @@ export interface ReleaseTagDriftVerdict {
 }
 
 /**
- * Classify how far `main` (or the current HEAD) has drifted from the latest
- * release tag, given the already-computed commit and day distances. Pure and
+ * Classify how far the current HEAD has drifted from the latest release
+ * tag, given the already-computed commit and day distances. Pure and
  * exported so tests can cover every threshold combination without shelling
  * out to git, using the module-level `RELEASE_TAG_DRIFT_*` thresholds (no
  * CLI override -- the issue's acceptance criteria only calls for documented
@@ -1804,16 +1811,17 @@ export function classifyReleaseTagDrift(
   }
   return {
     warn: true,
-    message: `release-tag drift: main is ${parts.join(' and ')} past the latest tag ${tag}. Consider cutting a new release.`,
+    message: `release-tag drift: HEAD is ${parts.join(' and ')} past the latest tag ${tag}. Consider cutting a new release.`,
   };
 }
 
-// Warns (never fails) when `main` has drifted far from the latest release
-// tag. Skips silently -- no warning, no crash -- when the repository has no
-// tags reachable from HEAD yet (including a fresh adopter clone before its
-// first release): `git describe` failure is the single, safe signal for
-// both "no tags at all" and "no tag reachable from HEAD", and either case
-// means there is no baseline to measure drift against.
+// Warns (never fails) when the current HEAD has drifted far from the latest
+// release tag. Skips silently -- no warning, no crash -- when the
+// repository has no tags reachable from HEAD yet (including a fresh
+// adopter clone before its first release): `git describe` failure is the
+// single, safe signal for both "no tags at all" and "no tag reachable from
+// HEAD", and either case means there is no baseline to measure drift
+// against.
 function checkReleaseTagDrift(root: string, report: DoctorReport) {
   const describeResult = runCommand(
     'git',
