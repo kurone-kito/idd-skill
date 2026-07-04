@@ -522,6 +522,11 @@ test('policy normalization provides default-safe values and supports aliases', (
       authoringLabelName: 'status:authoring',
       authoringStaleAge: 'PT4H',
     },
+    labels: {
+      roadmapLabelName: 'roadmap',
+      blockedByHumanLabelName: 'status:blocked-by-human',
+      needsDecisionLabelName: 'status:needs-decision',
+    },
   });
 
   const defaultPolicy = normalizePolicyConfig(null);
@@ -597,6 +602,11 @@ test('policy normalization provides default-safe values and supports aliases', (
         authoringLabelName: 'status:drafting',
         authoringStaleAge: 'PT3H',
       },
+      labels: {
+        roadmapLabelName: 'epic',
+        blockedByHumanLabelName: 'blocked:human',
+        needsDecisionLabelName: 'needs:decision',
+      },
     }),
     {
       issueScope: 'orphan-first',
@@ -659,6 +669,11 @@ test('policy normalization provides default-safe values and supports aliases', (
         maxClarificationRounds: 4,
         authoringLabelName: 'status:drafting',
         authoringStaleAge: 'PT3H',
+      },
+      labels: {
+        roadmapLabelName: 'epic',
+        blockedByHumanLabelName: 'blocked:human',
+        needsDecisionLabelName: 'needs:decision',
       },
     },
   );

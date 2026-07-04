@@ -30,6 +30,20 @@ test('issueScope defaults to roadmap-first and accepts all values', () => {
   );
 });
 
+test('POLICY_DEFAULTS.labels exposes the three reserved label name defaults', () => {
+  // Additive only (#1272): POLICY_DEFAULTS carries the literal defaults,
+  // and normalizePolicyConfig normalizes this namespace too (for shape
+  // parity — see its labels branch), but no consuming helper outside
+  // policy-helpers.mts reads it yet. Wiring the discover/claim/
+  // roadmap-audit label lookups to it is deferred to the follow-up
+  // (#1273).
+  assert.deepEqual(POLICY_DEFAULTS.labels, {
+    roadmapLabelName: 'roadmap',
+    blockedByHumanLabelName: 'status:blocked-by-human',
+    needsDecisionLabelName: 'status:needs-decision',
+  });
+});
+
 test('parseIsoDurationToMs parses supported ISO durations', () => {
   assert.equal(parseIsoDurationToMs('PT5S'), 5000);
   assert.equal(parseIsoDurationToMs('PT2H'), 2 * 60 * 60 * 1000);

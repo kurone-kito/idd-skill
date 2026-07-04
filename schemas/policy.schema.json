@@ -475,6 +475,24 @@
           "description": "Branch globs the guard treats as implementation branches that must not live in the primary worktree (default [\"issue/*\", \"roadmap-audit/*\"] when absent)."
         }
       }
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "roadmapLabelName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "blockedByHumanLabelName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "needsDecisionLabelName": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
     }
   },
   "patternProperties": {

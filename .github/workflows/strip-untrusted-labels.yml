@@ -1,0 +1,62 @@
+# Trust model: this workflow triggers on `issues: labeled`, which fires once
+# per label application and carries both `label.name` and `sender.login` (the
+# actor who applied that specific label) in the event payload -- no extra API
+# call is needed to attribute the mutation to an actor.
+#   - The job runs only when BOTH hold for this one event:
+#     `github.event.sender.login` equals `coderabbitai[bot]` (the actor that
+#     applied *this* label, confirmed via the REST simple-user object's
+#     `login` + `type: Bot` fields directly on `sender` -- not the
+#     GraphQL-rendered login some `gh` read paths shorten), AND
+#     `github.event.label.name` is a reserved IDD
+#     operational label: the exact `roadmap` label, or any label whose name
+#     starts with `status:`.
+#   - This is fail-safe by construction against ever re-fighting a human: a
+#     human re-adding the same label afterward is a *separate* `labeled`
+#     event whose `sender.login` is the human, not `coderabbitai[bot]`, so
+#     the condition above does not match and the human's re-add is left
+#     untouched. The guard never diffs current label state against a human
+#     decision -- it only ever reacts to the one label-add event it already
+#     fail-closed-matched by actor and label name.
+#   - No repository content is checked out (this job never runs
+#     `actions/checkout`) and no code from the issue body, comments, or
+#     label metadata is executed. The job's only action is a single `gh`
+#     call that removes one already-known label from one already-known
+#     issue via the REST API; both values come from the trusted event
+#     payload and are passed through environment variables, never
+#     interpolated directly into a shell command string.
+#   - `permissions:` stays least-privilege: `issues: write` only -- no
+#     `contents`, `pull-requests`, or other elevated scopes.
+# If a future change widens the trigger, adds repository checkout, executes
+# issue-supplied content, or broadens `permissions:`, re-review this trust
+# model before merging that change.
+name: Strip untrusted reserved IDD labels
+on:
+  issues:
+    types:
+      - labeled
+permissions:
+  issues: write
+concurrency:
+  group: strip-untrusted-labels-${{ github.event.issue.number }}-${{ github.event.label.name }}
+  cancel-in-progress: true
+jobs:
+  strip-label:
+    # Reserved set: the exact `roadmap` label, or any operational `status:*`
+    # label (currently `status:authoring`, `status:needs-decision`,
+    # `status:blocked-by-human`; the prefix match also covers any future
+    # `status:*` label without needing to edit this condition).
+    if: |-
+      github.event.sender.login == 'coderabbitai[bot]' && (github.event.label.name == 'roadmap' || startsWith(github.event.label.name, 'status:'))
+    runs-on: ubuntu-slim
+    # A single `gh issue edit` REST call; observed comparable single-call
+    # jobs in this repository complete in well under a minute. 5 min bounds
+    # a pathological hang with generous headroom.
+    timeout-minutes: 5
+    steps:
+      - name: Remove reserved label applied by CodeRabbit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          LABEL_NAME: ${{ github.event.label.name }}
+        run: |
+          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL_NAME"

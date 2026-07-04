@@ -1508,6 +1508,124 @@ test('policy schema rejects issueAuthoring unexpected extra keys', () => {
   );
 });
 
+test('policy schema accepts labels with all three fields', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.labels = {
+    roadmapLabelName: 'roadmap',
+    blockedByHumanLabelName: 'status:blocked-by-human',
+    needsDecisionLabelName: 'status:needs-decision',
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema accepts missing labels object', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  delete instance.labels;
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema accepts labels without roadmapLabelName', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.labels = {
+    blockedByHumanLabelName: 'status:blocked-by-human',
+    needsDecisionLabelName: 'status:needs-decision',
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema accepts labels without blockedByHumanLabelName', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.labels = {
+    roadmapLabelName: 'roadmap',
+    needsDecisionLabelName: 'status:needs-decision',
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema accepts labels without needsDecisionLabelName', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.labels = {
+    roadmapLabelName: 'roadmap',
+    blockedByHumanLabelName: 'status:blocked-by-human',
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema rejects labels roadmapLabelName empty string', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.labels = { roadmapLabelName: '' };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((e) => e.includes('labels.roadmapLabelName')),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema rejects labels blockedByHumanLabelName empty string', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.labels = { blockedByHumanLabelName: '' };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((e) => e.includes('labels.blockedByHumanLabelName')),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema rejects labels needsDecisionLabelName empty string', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.labels = { needsDecisionLabelName: '' };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((e) => e.includes('labels.needsDecisionLabelName')),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema rejects labels unexpected extra keys', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.labels = {
+    roadmapLabelName: 'roadmap',
+    unexpectedKey: true,
+  };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((e) => e.includes('$.labels') && e.includes('"unexpectedKey"')),
+    errors.join('\n'),
+  );
+});
+
 test('policy schema accepts forcedHandoff.mode human-gated', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(
