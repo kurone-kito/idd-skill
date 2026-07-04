@@ -224,6 +224,11 @@ interface PolicyConfigFile {
   };
   autopilotSuitability?: { floor?: 1 | 2 | 3 | 4 | 5; enabled?: boolean };
   worktreeGuard?: { enabled?: boolean; branchPatterns?: readonly string[] };
+  labels?: {
+    roadmapLabelName?: string;
+    blockedByHumanLabelName?: string;
+    needsDecisionLabelName?: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -384,6 +389,7 @@ export const policyConfigKeys = [
   'issueAuthoring',
   'autopilotSuitability',
   'worktreeGuard',
+  'labels',
 ] as const satisfies readonly (keyof PolicyConfigFile)[];
 
 // PreMergeReadinessReport is index-signature typed (its summary builder
@@ -755,6 +761,11 @@ const policyConfigFixture = {
   worktreeGuard: {
     enabled: true,
     branchPatterns: ['issue/*', 'roadmap-audit/*'],
+  },
+  labels: {
+    roadmapLabelName: 'roadmap',
+    blockedByHumanLabelName: 'status:blocked-by-human',
+    needsDecisionLabelName: 'status:needs-decision',
   },
 } satisfies PolicyConfigFile;
 
