@@ -429,6 +429,27 @@ export function hasTrustedCompletionEvidenceComment(comments, isTrustedAuthor) {
   );
 }
 /**
+ * Run `check` and treat any thrown error as "no evidence" (`false`) rather
+ * than letting it propagate. The #1299 already-complete recognition is only
+ * ever meant to convert one already-provable claim-loss shape into a nicer
+ * idempotent success — it must never leave the helper worse off than the
+ * pre-existing fail-closed `claim not owned …; no mutation` exit it sits in
+ * front of. Production wires this around the live `gh` comment fetch, whose
+ * `ghText` throws on any non-zero exit (transient network blip, rate limit,
+ * auth hiccup): without this wrapper such a failure would crash the whole
+ * helper instead of falling through to that already-correct fail-closed
+ * message (flagged by Copilot review on PR #1303). Pure given a
+ * non-throwing `check`, so the catch behavior itself is unit-testable
+ * without live `gh`.
+ */
+export function safeHasTrustedCompletionEvidence(check) {
+  try {
+    return check();
+  } catch {
+    return false;
+  }
+}
+/**
  * Build the A1.5 verdict and, under `--apply`, execute the audit. The dry-run
  * path performs NO mutation. The apply path fails closed: if the roadmap is
  * not ready it exits without mutating; if it is ready it RE-VALIDATES the
@@ -698,9 +719,11 @@ function createProductionDeps(args) {
         staleAgeMs,
       }),
     hasTrustedCompletionEvidence: (roadmapNumber) =>
-      hasTrustedCompletionEvidenceComment(
-        loadIssueComments(owner, repo, roadmapNumber),
-        isTrustedAuthor,
+      safeHasTrustedCompletionEvidence(() =>
+        hasTrustedCompletionEvidenceComment(
+          loadIssueComments(owner, repo, roadmapNumber),
+          isTrustedAuthor,
+        ),
       ),
     postEvidenceComment: (issueNumber, body) =>
       postIssueComment(owner, repo, issueNumber, body),

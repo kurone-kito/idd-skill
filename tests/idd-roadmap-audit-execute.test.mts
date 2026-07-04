@@ -15,6 +15,7 @@ import {
   reconcileConnectedOpenPrs,
   resolveOpenLinkedPrIssues,
   runRoadmapAuditExecute,
+  safeHasTrustedCompletionEvidence,
 } from '../src/scripts/idd-roadmap-audit-execute.mts';
 import { renderClaimedByMarker } from '../src/scripts/protocol-helpers.mts';
 
@@ -1126,6 +1127,30 @@ test('a trusted comment without the canonical heading is not recognized', () => 
 test('an empty comment stream is not recognized', () => {
   assert.equal(
     hasTrustedCompletionEvidenceComment([], () => true),
+    false,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// safeHasTrustedCompletionEvidence (pure) — #1299 fail-closed-on-error wrapper
+// ---------------------------------------------------------------------------
+
+test('a non-throwing check returns its own boolean result unchanged', () => {
+  assert.equal(
+    safeHasTrustedCompletionEvidence(() => true),
+    true,
+  );
+  assert.equal(
+    safeHasTrustedCompletionEvidence(() => false),
+    false,
+  );
+});
+
+test('a throwing check (e.g. a live gh/network failure) is treated as no evidence', () => {
+  assert.equal(
+    safeHasTrustedCompletionEvidence(() => {
+      throw new Error('gh: command failed (transient network error)');
+    }),
     false,
   );
 });

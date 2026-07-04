@@ -560,6 +560,30 @@ export function hasTrustedCompletionEvidenceComment(
 }
 
 /**
+ * Run `check` and treat any thrown error as "no evidence" (`false`) rather
+ * than letting it propagate. The #1299 already-complete recognition is only
+ * ever meant to convert one already-provable claim-loss shape into a nicer
+ * idempotent success — it must never leave the helper worse off than the
+ * pre-existing fail-closed `claim not owned …; no mutation` exit it sits in
+ * front of. Production wires this around the live `gh` comment fetch, whose
+ * `ghText` throws on any non-zero exit (transient network blip, rate limit,
+ * auth hiccup): without this wrapper such a failure would crash the whole
+ * helper instead of falling through to that already-correct fail-closed
+ * message (flagged by Copilot review on PR #1303). Pure given a
+ * non-throwing `check`, so the catch behavior itself is unit-testable
+ * without live `gh`.
+ */
+export function safeHasTrustedCompletionEvidence(
+  check: () => boolean,
+): boolean {
+  try {
+    return check();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Injectable side-effecting dependencies. Tests substitute these to drive the
  * dry-run / apply / fail-closed paths without faking live GitHub state;
  * production uses the real roadmap-graph traversal, claim stream, and `gh`.
@@ -587,6 +611,11 @@ export interface RoadmapAuditExecuteDeps {
    * only when the early claim re-validation above is lost AND the live
    * roadmap is already CLOSED, to recognize an idempotent already-complete
    * retry (#1299) instead of reporting a misleading claim-loss error.
+   * MUST fail closed (return `false`, never throw) on any lookup error —
+   * this check only recognizes an already-provable success, so an error
+   * here must fall through to the pre-existing claim-not-owned exit rather
+   * than crash the helper. Production wires this through
+   * {@link safeHasTrustedCompletionEvidence}.
    */
   hasTrustedCompletionEvidence: (roadmapNumber: number) => boolean;
   /** POST the canonical `IDD roadmap completion audit` evidence comment. */
@@ -905,9 +934,11 @@ function createProductionDeps(
         staleAgeMs,
       }),
     hasTrustedCompletionEvidence: (roadmapNumber) =>
-      hasTrustedCompletionEvidenceComment(
-        loadIssueComments(owner, repo, roadmapNumber),
-        isTrustedAuthor,
+      safeHasTrustedCompletionEvidence(() =>
+        hasTrustedCompletionEvidenceComment(
+          loadIssueComments(owner, repo, roadmapNumber),
+          isTrustedAuthor,
+        ),
       ),
     postEvidenceComment: (issueNumber, body) =>
       postIssueComment(owner, repo, issueNumber, body),
