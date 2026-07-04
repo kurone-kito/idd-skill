@@ -654,6 +654,40 @@ test('resolveCoreTemplateFiles rejects a source tree without a readable manifest
   );
 });
 
+/** Write a minimal sync-manifest.json declaring exactly the given paths. */
+function writeCoreFilesManifest(
+  root: string,
+  paths: string[],
+  stripPrefix = 'idd-template/',
+): void {
+  mkdirSync(join(root, 'audit'), { recursive: true });
+  writeFileSync(
+    join(root, 'audit', 'sync-manifest.json'),
+    JSON.stringify({
+      generatedBlocks: [
+        {
+          id: 'idd-template-core-files',
+          file: 'idd-template/ONBOARDING.md',
+          stripPrefix,
+          paths,
+        },
+      ],
+    }),
+  );
+}
+
+test('resolveCoreTemplateFiles rejects a manifest path that parent-traverses out of the source root', () => {
+  const root = makeFixtureDir();
+  writeCoreFilesManifest(root, ['idd-template/../../../etc/passwd']);
+  assert.throws(() => resolveCoreTemplateFiles(root), /unsafe manifest path/u);
+});
+
+test('resolveCoreTemplateFiles rejects an absolute manifest path', () => {
+  const root = makeFixtureDir();
+  writeCoreFilesManifest(root, ['/etc/passwd'], '');
+  assert.throws(() => resolveCoreTemplateFiles(root), /unsafe manifest path/u);
+});
+
 test('resolveImportFiles vends no extra files for a non-vendored-node profile', () => {
   const withoutProfile = resolveImportFiles(REPO_ROOT);
   const packageManagerProfile = resolveImportFiles(

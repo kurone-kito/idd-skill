@@ -774,8 +774,55 @@ export function resolveCoreTemplateFiles(sourceRoot: string): ManifestFile[] {
         `${CORE_TEMPLATE_BLOCK_ID}: manifest path "${sourcePath}" does not start with its stripPrefix "${prefix}"`,
       );
     }
-    return { sourcePath, targetPath: sourcePath.slice(prefix.length) };
+    return assertSafeManifestFile(
+      { sourcePath, targetPath: sourcePath.slice(prefix.length) },
+      CORE_TEMPLATE_BLOCK_ID,
+    );
   });
+}
+
+/**
+ * Whether `relativePath` is safe to join onto a root directory: no
+ * absolute-path form, no parent-traversal (`..`) or empty segment, and no
+ * backslash (which `path.join` treats as a separator on Windows even
+ * though every path in this module is `/`-normalized). Defense-in-depth
+ * against a corrupted or hostile manifest / helper bundle escaping the
+ * intended `--source` / `--target` root through `join()`.
+ */
+function isSafeRelativePath(relativePath: string): boolean {
+  if (!relativePath || relativePath.includes('\\')) {
+    return false;
+  }
+  if (relativePath.startsWith('/') || /^[a-zA-Z]:/.test(relativePath)) {
+    return false;
+  }
+  return relativePath
+    .split('/')
+    .every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+}
+
+/**
+ * Validate both sides of a manifest file entry with `isSafeRelativePath`
+ * and return it unchanged, or throw a hard, fail-closed error naming
+ * `origin` (the manifest source this entry came from). A path-safety
+ * violation is manifest corruption, not an ordinary missing/blocked file,
+ * so it is reported the same way as the other manifest-integrity checks
+ * in this module (stripPrefix mismatch, duplicate target path): a thrown
+ * usage/config error, never a soft `missingSource` / blocking-plan entry.
+ */
+function assertSafeManifestFile(
+  file: ManifestFile,
+  origin: string,
+): ManifestFile {
+  if (
+    !isSafeRelativePath(file.sourcePath) ||
+    !isSafeRelativePath(file.targetPath)
+  ) {
+    throw new Error(
+      `${origin}: unsafe manifest path (absolute or parent-traversal segment): source="${file.sourcePath}" target="${file.targetPath}"`,
+    );
+  }
+  return file;
 }
 
 /** Result of resolving the import file set: files plus any unresolved paths. */
@@ -815,12 +862,9 @@ export function resolveImportFiles(
   if (profile !== 'vendored-node') {
     return { files: coreFiles, missingSource: [] };
   }
-  let helperFiles: ManifestFile[];
+  let vendoredFiles: { sourcePath: string; targetPath: string }[];
   try {
-    helperFiles = collectVendoredFiles(sourceRoot).map((file) => ({
-      sourcePath: file.sourcePath,
-      targetPath: file.targetPath,
-    }));
+    vendoredFiles = collectVendoredFiles(sourceRoot);
   } catch (error) {
     // collectVendoredFiles reads each helper entry's content to walk its
     // import graph, so a missing helper file under an incomplete or
@@ -834,6 +878,16 @@ export function resolveImportFiles(
       missingSource: [describeUnresolvedVendoredPath(sourceRoot, error)],
     };
   }
+  // Outside the try/catch above: a path-safety violation is manifest
+  // corruption, not a missing file, so it must hard-fail (propagate as a
+  // thrown usage/config error) rather than being absorbed as a
+  // missingSource finding the same way a genuinely absent file is.
+  const helperFiles = vendoredFiles.map((file) =>
+    assertSafeManifestFile(
+      { sourcePath: file.sourcePath, targetPath: file.targetPath },
+      'vendored-node helper bundle',
+    ),
+  );
   const merged = [...coreFiles, ...helperFiles];
   const seenTargets = new Set<string>();
   for (const file of merged) {
