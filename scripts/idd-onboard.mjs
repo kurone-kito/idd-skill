@@ -6,7 +6,8 @@
 // generated .mjs. See docs/typescript-sources.md.
 //
 // Onboarding automation CLI — wave 1: placeholder substitution (#1263,
-// roadmap #1262). Wave 2 (#1292) adds the --import fetch/copy stage.
+// roadmap #1262). Wave 2 (#1292) adds the --import fetch/copy stage. Wave 3
+// (#1293) adds the --verify post-import check stage.
 //
 // --substitute: given a target tree that already contains the imported
 // template files, resolve the seven onboarding placeholders (auto-derived
@@ -26,6 +27,16 @@
 // list — so the CLI and the manual doc can never carry two independently
 // hardcoded file lists. A drift test in tests/idd-onboard.test.mts fails on
 // mismatch.
+//
+// --verify: mechanical pass/fail for a target tree after --import and
+// --substitute have run, replacing a manual walkthrough of
+// `idd-template/ONBOARDING.md` Step 6 with three check groups: manifest
+// completeness (reuses --import's own manifest resolution — no second file
+// list), placeholder residue (reuses --substitute's scanner — no second
+// scan), and a stale-import signal (re-runs idd-doctor's content-based
+// drift detector against the target's imported files instead of forking its
+// logic, the #1208 shared-module convention `check-pnpm-boundary.mts`
+// already uses).
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
@@ -44,6 +55,7 @@ import {
   collectVendoredFiles,
   PROFILE_NAMES,
 } from './helper-runtime-manifest.mjs';
+import { findMissingWorktreeHardening } from './idd-doctor.mjs';
 
 function placeholder(name, kind, flag) {
   return { name, token: `{{${name}}}`, kind, flag };
@@ -844,6 +856,100 @@ export function applyImportPlan(sourceRoot, targetRoot, plan) {
   }
   return filesChanged;
 }
+/**
+ * Check that every file the manifest declares for `profile` exists on both
+ * sides, reusing wave 2's own `resolveImportFiles` resolution (the same
+ * source `--import` copies from) instead of a second hardcoded file list.
+ *
+ * `resolveImportFiles`'s own `missingSource` only ever reports a
+ * vendored-node bundle resolution failure (see `resolveImportFiles`'s doc
+ * comment) — it does not check the core/profile file set's declared
+ * `sourcePath` entries against `sourceRoot`, unlike `buildImportPlan`, which
+ * performs that `fileExists(sourceRoot, file.sourcePath)` check itself. This
+ * check mirrors that same existence check here so a corrupt or incomplete
+ * `--source` tree is caught, not just a target that failed to receive a
+ * file `--import` did manage to copy from a complete source.
+ */
+export function checkManifestCompleteness(sourceRoot, targetRoot, profile) {
+  const resolved = resolveImportFiles(sourceRoot, profile);
+  const missingSource = [
+    ...resolved.missingSource,
+    ...resolved.files
+      .filter((file) => !fileExists(sourceRoot, file.sourcePath))
+      .map((file) => file.sourcePath),
+  ];
+  const missingTarget = resolved.files
+    .filter((file) => !fileExists(targetRoot, file.targetPath))
+    .map((file) => file.targetPath);
+  return { missingSource, missingTarget };
+}
+/**
+ * Scan the target tree for leftover `{{...}}` tokens after onboarding.
+ * Reuses wave 1's `scanPlaceholderTokens` / `buildSubstitutionPlan` scanner
+ * rather than a new scan: verify mode has no resolved substitution values to
+ * consult (an empty resolution), so `buildSubstitutionPlan` puts every
+ * occurrence of one of the seven onboarding placeholder tokens into
+ * `residue` — the correct outcome here, since a converged onboarding run
+ * should have already replaced them. Other `{{...}}`-shaped tokens land in
+ * `unknownTokens`, informational just as they are for `--substitute`.
+ */
+export function checkPlaceholderResidue(targetRoot) {
+  const plan = buildSubstitutionPlan(scanPlaceholderTokens(targetRoot), {
+    values: {},
+    unresolved: [],
+  });
+  return { residue: plan.residue, unknownTokens: plan.unknownTokens };
+}
+/**
+ * Re-run idd-doctor's content-based stale-import detector
+ * (`findMissingWorktreeHardening`) against the target tree's imported
+ * files, instead of forking its logic — the same #1208 shared-module
+ * convention `check-pnpm-boundary.mts` already uses for
+ * `parseProjectCommandRows`. Matches `checkWorktreeHardeningPresence`'s own
+ * severity in idd-doctor: these are warning-level drift signals, not
+ * blocking findings, so a target that is merely behind on the latest
+ * hardening guidance does not fail verify on its own.
+ */
+export function checkStaleImportSignal(targetRoot) {
+  const missing = findMissingWorktreeHardening({
+    work: readTextIfPresent(
+      targetRoot,
+      '.github/instructions/idd-work.instructions.md',
+    ),
+    core: readTextIfPresent(
+      targetRoot,
+      '.github/instructions/idd-overview-core.instructions.md',
+    ),
+    doctor: readTextIfPresent(targetRoot, 'scripts/idd-doctor.mjs'),
+  });
+  return { missing };
+}
+/**
+ * Run all three wave-3 check groups against one target tree. The
+ * stale-import signal never contributes to `blocking` (see
+ * `checkStaleImportSignal`'s doc comment); only a manifest gap or
+ * placeholder residue can fail verify, matching the exit contract in
+ * `runVerifyCli`.
+ */
+export function runVerify(sourceRoot, targetRoot, profile) {
+  const manifestCompleteness = checkManifestCompleteness(
+    sourceRoot,
+    targetRoot,
+    profile,
+  );
+  const placeholderResidue = checkPlaceholderResidue(targetRoot);
+  const staleImportSignal = checkStaleImportSignal(targetRoot);
+  const blocking =
+    manifestCompleteness.missingSource.length > 0 ||
+    manifestCompleteness.missingTarget.length > 0 ||
+    placeholderResidue.residue.length > 0;
+  return {
+    manifestCompleteness,
+    placeholderResidue,
+    staleImportSignal,
+    blocking,
+  };
+}
 if (isCliExecution(import.meta.url)) {
   try {
     runCli();
@@ -860,6 +966,7 @@ function parseArgs(argv) {
   const parsed = {
     substitute: false,
     importMode: false,
+    verify: false,
     source: undefined,
     target: '.',
     dryRun: false,
@@ -886,6 +993,10 @@ function parseArgs(argv) {
     }
     if (token === '--import') {
       parsed.importMode = true;
+      continue;
+    }
+    if (token === '--verify') {
+      parsed.verify = true;
       continue;
     }
     if (token === '--source') {
@@ -945,14 +1056,35 @@ function substituteOnlyFlagsPresent(args) {
     (entry) => args.overrides[entry.name] !== undefined,
   ).map((entry) => entry.flag);
 }
+/**
+ * Flags --verify does not accept: every substitute-only override flag (verify
+ * never substitutes), plus `--force` and `--dry-run` (verify never writes, so
+ * "allow overwriting" and "print the plan without writing" are both
+ * meaningless for it).
+ */
+function verifyForeignFlagsPresent(args) {
+  const present = substituteOnlyFlagsPresent(args);
+  if (args.force) {
+    present.push('--force');
+  }
+  if (args.dryRun) {
+    present.push('--dry-run');
+  }
+  return present;
+}
 function runCli() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
     process.exit(0);
   }
-  if (args.substitute && args.importMode) {
-    throw new Error('--substitute and --import are mutually exclusive');
+  const modeCount = [args.substitute, args.importMode, args.verify].filter(
+    Boolean,
+  ).length;
+  if (modeCount > 1) {
+    throw new Error(
+      '--substitute, --import, and --verify are mutually exclusive',
+    );
   }
   if (args.importMode) {
     // parseArgs collects every known flag regardless of the active stage,
@@ -967,8 +1099,20 @@ function runCli() {
     runImportCli(args);
     return;
   }
+  if (args.verify) {
+    const foreign = verifyForeignFlagsPresent(args);
+    if (foreign.length > 0) {
+      throw new Error(
+        `--verify does not accept flag(s) it never uses: ${foreign.join(', ')}`,
+      );
+    }
+    runVerifyCli(args);
+    return;
+  }
   if (!args.substitute) {
-    throw new Error('pass --substitute or --import to select a stage');
+    throw new Error(
+      'pass --substitute, --import, or --verify to select a stage',
+    );
   }
   const foreign = importOnlyFlagsPresent(args);
   if (foreign.length > 0) {
@@ -1053,6 +1197,37 @@ function runImportCli(args) {
   // on the exit code without needing a separate --dry-run probe first.
   process.exit(blocking ? 1 : 0);
 }
+function runVerifyCli(args) {
+  if (!args.source) {
+    throw new Error('--verify requires --source <idd-skill-tree>');
+  }
+  const sourceDir = resolve(args.source);
+  if (!statSync(sourceDir).isDirectory()) {
+    throw new Error(`--source is not a directory: ${args.source}`);
+  }
+  const targetDir = resolve(args.target);
+  if (!statSync(targetDir).isDirectory()) {
+    throw new Error(`--target is not a directory: ${args.target}`);
+  }
+  const result = runVerify(sourceDir, targetDir, args.profile);
+  const verdict = {
+    protocolVersion: '1',
+    mode: 'verify',
+    source: sourceDir,
+    target: targetDir,
+    profile: args.profile ?? null,
+    manifestCompleteness: result.manifestCompleteness,
+    placeholderResidue: result.placeholderResidue,
+    staleImportSignal: result.staleImportSignal,
+    blocking: result.blocking,
+  };
+  process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+  // Blocking findings (manifest gap or placeholder residue) signal via exit
+  // 1, matching --substitute / --import's contract; the stale-import signal
+  // is informational only and never flips this exit code (see
+  // checkStaleImportSignal / runVerify).
+  process.exit(result.blocking ? 1 : 0);
+}
 function printHelp() {
   const flags = ONBOARDING_PLACEHOLDERS.map(
     (entry) =>
@@ -1060,6 +1235,7 @@ function printHelp() {
   ).join('\n');
   process.stdout.write(`usage: node scripts/idd-onboard.mjs --substitute [options]
        node scripts/idd-onboard.mjs --import --source <dir> --target <dir> [options]
+       node scripts/idd-onboard.mjs --verify --source <dir> --target <dir> [options]
 
 Onboarding automation.
 
@@ -1107,5 +1283,25 @@ nothing in that case); 2 usage or configuration error.
   --force                           allow overwriting a differing target file
   --dry-run                         print the plan without writing anything
   --help, -h                        show this help
+
+--verify (wave 3): mechanical pass/fail for a target tree after --import and
+--substitute have run, in place of a manual walkthrough of
+idd-template/ONBOARDING.md Step 6. Reports three check groups:
+manifestCompleteness (every file --import would copy for --source /
+--profile exists under --target, reusing that same manifest resolution —
+missing files are blocking), placeholderResidue (leftover {{...}} tokens via
+--substitute's own scanner — a remaining onboarding placeholder is blocking
+residue, any other {{...}}-shaped token stays informational), and
+staleImportSignal (idd-doctor's content-based stale-import detector re-run
+against the target's imported files — informational only, never blocking).
+
+Exit codes: 0 no blocking finding; 1 a blocking finding exists (manifest gap
+or placeholder residue); 2 usage or configuration error.
+
+  --verify                           run the verify stage
+  --source <dir>                     local idd-skill source tree the target was imported from
+  --target <dir>                     target repository to verify (default: current directory)
+  --profile <name>                   ${PROFILE_NAMES.join(' | ')}
+  --help, -h                         show this help
 `);
 }
