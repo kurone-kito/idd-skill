@@ -21,7 +21,11 @@ import {
 import { effortOrdinal, parseEffort } from './effort.mjs';
 import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
-import { parseIsoDurationToMs } from './policy-helpers.mjs';
+import {
+  normalizePolicyConfig,
+  POLICY_DEFAULTS,
+  parseIsoDurationToMs,
+} from './policy-helpers.mjs';
 import {
   isStaleAt,
   resolveActiveClaim,
@@ -157,6 +161,7 @@ if (isMainModule(import.meta.url)) {
   const report = args.allRoadmaps
     ? await enumerateAllRoadmapsGraph({
         markerPrefix: policy.markerPrefix,
+        roadmapLabelName: policy.labels?.roadmapLabelName,
         floor: policy.autopilotSuitability?.floor,
         owner,
         repo,
@@ -166,6 +171,8 @@ if (isMainModule(import.meta.url)) {
           owner,
           repo,
           policy.markerPrefix,
+          buildSearchIssuesRunner(),
+          policy.labels?.roadmapLabelName,
         ),
         claimState,
         readiness,
@@ -173,6 +180,7 @@ if (isMainModule(import.meta.url)) {
       })
     : await enumerateRoadmapGraph(args.issue, {
         markerPrefix: policy.markerPrefix,
+        roadmapLabelName: policy.labels?.roadmapLabelName,
         owner,
         repo,
         loadIssue: buildIssueLoader(owner, repo),
@@ -223,6 +231,7 @@ async function mapPool(items, limit, task) {
 }
 export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
+  const roadmapLabelName = normalizeRoadmapLabelName(options.roadmapLabelName);
   const loadIssueOption = options.loadIssue;
   const loadSubIssues =
     typeof options.loadSubIssues === 'function'
@@ -556,7 +565,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
   }
   function recordNode(issue, path) {
     const existing = nodeRecords.get(issue.number);
-    const classification = classifyIssue(issue, markerPrefix);
+    const classification = classifyIssue(issue, markerPrefix, roadmapLabelName);
     if (issue.number === rootIssue.number) {
       classification.kind = 'roadmap';
     }
@@ -651,6 +660,7 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
   for (const rootNumber of rootNumbers) {
     const graph = await enumerateRoadmapGraph(rootNumber, {
       markerPrefix,
+      roadmapLabelName: options.roadmapLabelName,
       owner: options.owner,
       repo: options.repo,
       loadIssue: options.loadIssue,
@@ -898,6 +908,9 @@ async function annotateReadiness(entries, readiness, loadIssue, markerPrefix) {
       findRoadmapsByMarker: readiness.findRoadmapsByMarker,
       authoringLabelName: readiness.authoringLabelName,
       authoringStaleAgeMs: readiness.authoringStaleAgeMs,
+      roadmapLabelName: readiness.roadmapLabelName,
+      blockedByHumanLabelName: readiness.blockedByHumanLabelName,
+      needsDecisionLabelName: readiness.needsDecisionLabelName,
       markerPrefix,
       now: readiness.nowIso,
     },
@@ -1054,10 +1067,14 @@ function buildClaimStateResolution(owner, repo, policy, currentClaimId) {
 function buildReadinessResolution(owner, repo, policy) {
   const authoringPolicy = resolveAuthoringGuardPolicy(policy);
   const markerPrefix = normalizeMarkerPrefix(policy.markerPrefix);
+  const labelsPolicy = normalizePolicyConfig(policy).labels;
   return {
     findRoadmapsByMarker: buildRoadmapMarkerResolver(owner, repo, markerPrefix),
     authoringLabelName: authoringPolicy.labelName,
     authoringStaleAgeMs: authoringPolicy.staleAgeMs,
+    roadmapLabelName: labelsPolicy.roadmapLabelName,
+    blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
+    needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
     nowIso: new Date().toISOString(),
   };
 }
@@ -1143,10 +1160,14 @@ export function extractRoadmapMarkerId(
   const match = regex.exec(stripMarkdownCodeRegions(String(body ?? '')));
   return match ? match[1] : '';
 }
-export function classifyIssue(issue, markerPrefix = DEFAULT_MARKER_PREFIX) {
+export function classifyIssue(
+  issue,
+  markerPrefix = DEFAULT_MARKER_PREFIX,
+  roadmapLabelName = POLICY_DEFAULTS.labels.roadmapLabelName,
+) {
   const roadmapMarkerId = extractRoadmapMarkerId(issue.body, markerPrefix);
   const labels = normalizeLabels(issue.labels);
-  if (roadmapMarkerId || labels.has('roadmap')) {
+  if (roadmapMarkerId || labels.has(roadmapLabelName)) {
     return {
       kind: 'roadmap',
       roadmapMarkerId,
@@ -1543,6 +1564,17 @@ function normalizeMarkerPrefix(markerPrefix) {
   const normalized = String(markerPrefix ?? '').trim();
   return normalized || DEFAULT_MARKER_PREFIX;
 }
+/**
+ * Resolve the configured `labels.roadmapLabelName` (#1273), falling back to
+ * the `policy-helpers.mts` default (`'roadmap'`) for an absent or invalid
+ * value. Routing an already-`unknown` field through `normalizePolicyConfig`
+ * (rather than hand-rolling the same non-empty-string check again) keeps the
+ * validation and the default in the single source of truth.
+ */
+function normalizeRoadmapLabelName(roadmapLabelName) {
+  return normalizePolicyConfig({ labels: { roadmapLabelName } }).labels
+    .roadmapLabelName;
+}
 async function getIssue(issueNumber, cache, loadIssue) {
   if (cache.has(issueNumber)) {
     return cache.get(issueNumber) ?? null;
@@ -1626,12 +1658,14 @@ export function buildSubIssueLoader(owner, repo) {
  * issue's `body` plus up to 100 labels just to detect a root) with two
  * cheap server-side searches whose union is the SAME open-root set:
  *
- *   1. Label roots — `gh search issues --label roadmap --state open` returns
- *      every open issue carrying the `roadmap` label. These are roots by
- *      label with NO body inspection needed; the old scan's
- *      `labels.has('roadmap')` branch is reproduced exactly (the GitHub
- *      search `--label` qualifier is a case-insensitive exact-name match, as
- *      is the `normalizeLabels`-backed `Set.has('roadmap')` it replaces).
+ *   1. Label roots — `gh search issues --label <roadmapLabelName> --state
+ *      open` (the configured `labels.roadmapLabelName`, #1273; defaults to
+ *      `roadmap`) returns every open issue carrying that label. These are
+ *      roots by label with NO body inspection needed; the old scan's
+ *      `labels.has(roadmapLabelName)` branch is reproduced exactly (the
+ *      GitHub search `--label` qualifier is a case-insensitive exact-name
+ *      match, as is the `normalizeLabels`-backed `Set.has(...)` it
+ *      replaces).
  *   2. Marker-only roots — `gh search issues --match body "<...>roadmap-id"
  *      --state open` narrows to open issues whose body text contains the
  *      `idd-skill-roadmap-id`-style marker token, then RE-CONFIRMS each
@@ -1671,15 +1705,17 @@ export function buildOpenRoadmapRootsLoader(
   repo,
   markerPrefix,
   searchIssues = buildSearchIssuesRunner(),
+  roadmapLabelName,
 ) {
   const prefix = normalizeMarkerPrefix(markerPrefix);
+  const label = normalizeRoadmapLabelName(roadmapLabelName);
   return async () => {
     const numbers = new Set();
     // 1. Label roots: roadmap-labeled open issues are roots by label.
     const labelResults = searchIssues({
       owner,
       repo,
-      label: 'roadmap',
+      label,
       fields: ['number'],
     });
     warnOnSearchResultCap(labelResults, 'label');

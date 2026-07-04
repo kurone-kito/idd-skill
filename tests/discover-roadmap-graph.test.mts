@@ -76,6 +76,26 @@ Resolve #107
   );
 });
 
+test('classifyIssue resolves a configured roadmap label name (#1273)', () => {
+  // A custom `labels.roadmapLabelName` (e.g. 'epic') classifies as roadmap...
+  assert.equal(
+    classifyIssue({ body: '', labels: [{ name: 'epic' }] }, 'idd-skill', 'epic')
+      .kind,
+    'roadmap',
+  );
+  // ...and the stock 'roadmap' label alone no longer matches once a custom
+  // label name is configured (the override replaces, not adds to, the
+  // default).
+  assert.equal(
+    classifyIssue(
+      { body: '', labels: [{ name: 'roadmap' }] },
+      'idd-skill',
+      'epic',
+    ).kind,
+    'execution',
+  );
+});
+
 test('ignores roadmap-id markers quoted inside code regions (#1083)', () => {
   // The #1083 shape: an execution-leaf issue *about* the marker system that
   // quotes the marker inside inline code. It must not read as roadmap identity.
@@ -1545,6 +1565,27 @@ test('open-roadmap-roots loader honors a custom marker prefix in the body search
   );
 });
 
+test('open-roadmap-roots loader honors a configured roadmap label name (#1273)', async () => {
+  const queries: SearchIssuesQuery[] = [];
+  const searchIssues = (query: SearchIssuesQuery) => {
+    queries.push(query);
+    return [];
+  };
+
+  await buildOpenRoadmapRootsLoader(
+    'kurone-kito',
+    'idd-skill',
+    'idd-skill',
+    searchIssues,
+    'epic',
+  )();
+
+  // The configured `labels.roadmapLabelName` ('epic') is used for the
+  // `--label` search qualifier instead of the default `'roadmap'`.
+  const labelQuery = queries.find((query) => query.label);
+  assert.equal(labelQuery?.label, 'epic');
+});
+
 test('open-roadmap-roots loader warns on the 1000-result search cap', () => {
   // Below the cap: no warning is emitted (the common case stays silent).
   const belowCap = captureStderr(() => {
@@ -1972,6 +2013,9 @@ function readinessResolution() {
     loadIssueLabelEvents: async () => [],
     authoringLabelName: 'status:authoring',
     authoringStaleAgeMs: 4 * 60 * 60 * 1000,
+    roadmapLabelName: 'roadmap',
+    blockedByHumanLabelName: 'status:blocked-by-human',
+    needsDecisionLabelName: 'status:needs-decision',
     nowIso: '2026-06-26T00:00:00Z',
   };
 }
