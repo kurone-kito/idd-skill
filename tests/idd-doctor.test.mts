@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import {
   backLinkPatternFor,
   checkClaimTimingConsistency,
+  checkDependencyVersionDrift,
   checkProjectCommands,
   classifyBacklog,
   classifyClaimTimingConsistency,
@@ -20,6 +21,7 @@ import {
   decodeGithubReadmeBase64,
   emitCleanupBacklogProgress,
   evaluateAutopilotSuitabilityConsistency,
+  evaluateDependencyVersionDrift,
   evaluateMarkerPrefixConsistency,
   extractMarkerPrefixes,
   findMissingWorkshopReferences,
@@ -30,6 +32,7 @@ import {
   hookWiresWorktreeGuard,
   isGithubBackLinkHost,
   parseIsoDurationToHours,
+  parseLockfileImporterVersion,
   parsePrimaryWorktreePath,
   parseProjectCommandRows,
   parseThresholdsProseHours,
@@ -1901,6 +1904,203 @@ test('checkClaimTimingConsistency pushes no warning when config and prose agree,
     checkClaimTimingConsistency(dir, missingConfigReport);
     assert.equal(missingConfigReport.warnings.length, 0);
     assert.equal(missingConfigReport.errors.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const MINIMAL_LOCKFILE_WITH_DEPS = `lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    devDependencies:
+      '@commitlint/cli':
+        specifier: ^21.0.2
+        version: 21.2.0(@types/node@26.1.0)(conventional-commits-parser@6.4.0)(typescript@6.0.3)
+      '@types/node':
+        specifier: 26.1.0
+        version: 26.1.0
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+
+packages:
+
+  typescript@6.0.3:
+    resolution: {integrity: sha512-fake==}
+    hasBin: true
+`;
+
+test('parseLockfileImporterVersion resolves a quoted scoped package under the root importer', () => {
+  assert.equal(
+    parseLockfileImporterVersion(MINIMAL_LOCKFILE_WITH_DEPS, '@types/node'),
+    '26.1.0',
+  );
+});
+
+test('parseLockfileImporterVersion resolves an unquoted package under the root importer', () => {
+  assert.equal(
+    parseLockfileImporterVersion(MINIMAL_LOCKFILE_WITH_DEPS, 'typescript'),
+    '6.0.3',
+  );
+});
+
+test('parseLockfileImporterVersion strips a trailing peer-dependency annotation', () => {
+  assert.equal(
+    parseLockfileImporterVersion(MINIMAL_LOCKFILE_WITH_DEPS, '@commitlint/cli'),
+    '21.2.0',
+  );
+});
+
+test('parseLockfileImporterVersion returns null for a package absent from the root importer', () => {
+  assert.equal(
+    parseLockfileImporterVersion(
+      MINIMAL_LOCKFILE_WITH_DEPS,
+      'not-a-real-package',
+    ),
+    null,
+  );
+});
+
+test('parseLockfileImporterVersion returns null when the lockfile has no importers section', () => {
+  assert.equal(
+    parseLockfileImporterVersion("lockfileVersion: '9.0'\n", 'typescript'),
+    null,
+  );
+});
+
+test('parseLockfileImporterVersion returns null when the root "." importer is absent (workspace-only lockfile)', () => {
+  const workspaceOnly = `lockfileVersion: '9.0'
+
+importers:
+
+  packages/foo:
+    devDependencies:
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+
+packages:
+`;
+  assert.equal(parseLockfileImporterVersion(workspaceOnly, 'typescript'), null);
+});
+
+test('parseLockfileImporterVersion returns null for empty or non-string input', () => {
+  assert.equal(parseLockfileImporterVersion('', 'typescript'), null);
+});
+
+test('evaluateDependencyVersionDrift warns when installed and resolved versions differ', () => {
+  const warnings = evaluateDependencyVersionDrift([
+    { name: 'typescript', installed: '5.9.0', resolved: '6.0.3' },
+  ]);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /node_modules\/typescript is installed at 5\.9\.0/);
+  assert.match(warnings[0], /pnpm-lock\.yaml resolves 6\.0\.3/);
+});
+
+test('evaluateDependencyVersionDrift is silent when versions match', () => {
+  assert.deepEqual(
+    evaluateDependencyVersionDrift([
+      { name: 'typescript', installed: '6.0.3', resolved: '6.0.3' },
+    ]),
+    [],
+  );
+});
+
+test('evaluateDependencyVersionDrift skips (no warning) when either side is unknown', () => {
+  assert.deepEqual(
+    evaluateDependencyVersionDrift([
+      { name: 'typescript', installed: null, resolved: '6.0.3' },
+      { name: '@types/node', installed: '26.1.0', resolved: null },
+    ]),
+    [],
+  );
+});
+
+test('evaluateDependencyVersionDrift reports only the mismatching entries out of several', () => {
+  const warnings = evaluateDependencyVersionDrift([
+    { name: 'typescript', installed: '6.0.3', resolved: '6.0.3' },
+    { name: '@types/node', installed: '22.19.21', resolved: '26.1.0' },
+  ]);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /@types\/node/);
+});
+
+function makeDependencyDriftFixture(options: {
+  withLockfile?: boolean;
+  installed?: Record<string, string>;
+}): string {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-doctor-dep-drift-'));
+  if (options.withLockfile !== false) {
+    writeFileSync(join(dir, 'pnpm-lock.yaml'), MINIMAL_LOCKFILE_WITH_DEPS);
+  }
+  for (const [name, version] of Object.entries(options.installed ?? {})) {
+    const pkgDir = join(dir, 'node_modules', name);
+    mkdirSync(pkgDir, { recursive: true });
+    writeFileSync(
+      join(pkgDir, 'package.json'),
+      JSON.stringify({ name, version }),
+    );
+  }
+  return dir;
+}
+
+test('checkDependencyVersionDrift warns on a genuine installed-vs-lockfile mismatch', () => {
+  const dir = makeDependencyDriftFixture({
+    installed: { typescript: '5.9.0', '@types/node': '26.1.0' },
+  });
+  try {
+    const report = emptyReport(dir);
+    checkDependencyVersionDrift(dir, report);
+    assert.equal(report.errors.length, 0);
+    assert.equal(report.warnings.length, 1);
+    assert.match(report.warnings[0], /typescript is installed at 5\.9\.0/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkDependencyVersionDrift is silent when installed versions match the lockfile', () => {
+  const dir = makeDependencyDriftFixture({
+    installed: { typescript: '6.0.3', '@types/node': '26.1.0' },
+  });
+  try {
+    const report = emptyReport(dir);
+    checkDependencyVersionDrift(dir, report);
+    assert.equal(report.errors.length, 0);
+    assert.equal(report.warnings.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkDependencyVersionDrift skips silently when pnpm-lock.yaml is absent', () => {
+  const dir = makeDependencyDriftFixture({
+    withLockfile: false,
+    installed: { typescript: '5.9.0', '@types/node': '22.19.21' },
+  });
+  try {
+    const report = emptyReport(dir);
+    checkDependencyVersionDrift(dir, report);
+    assert.equal(report.errors.length, 0);
+    assert.equal(report.warnings.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkDependencyVersionDrift skips silently when node_modules packages are absent', () => {
+  const dir = makeDependencyDriftFixture({ installed: {} });
+  try {
+    const report = emptyReport(dir);
+    checkDependencyVersionDrift(dir, report);
+    assert.equal(report.errors.length, 0);
+    assert.equal(report.warnings.length, 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
