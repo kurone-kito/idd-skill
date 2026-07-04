@@ -1507,6 +1507,37 @@ test('checkManifestCompleteness checks every file resolveImportFiles declares, n
   assert.ok(result.missingTarget.includes(sample.targetPath));
 });
 
+test('checkManifestCompleteness forwards --profile to resolveImportFiles, covering the larger vendored-node file set', () => {
+  const targetRoot = makeFixtureDir();
+  const importPlan = buildImportPlan(REPO_ROOT, targetRoot, {
+    profile: 'vendored-node',
+  });
+  applyImportPlan(REPO_ROOT, targetRoot, importPlan);
+  const resolution = resolvePlaceholderValues(targetRoot, ALL_OVERRIDES);
+  const subPlan = buildSubstitutionPlan(
+    scanPlaceholderTokens(targetRoot),
+    resolution,
+  );
+  applySubstitutionPlan(targetRoot, subPlan);
+
+  const defaultFileCount = resolveImportFiles(REPO_ROOT).files.length;
+  const vendoredFileCount = resolveImportFiles(REPO_ROOT, 'vendored-node').files
+    .length;
+  assert.ok(
+    vendoredFileCount > defaultFileCount,
+    'the vendored-node profile must declare more files than the default profile',
+  );
+
+  // Passing the same --profile the target was actually imported with must
+  // check the larger declared set, not silently fall back to the default.
+  const result = checkManifestCompleteness(
+    REPO_ROOT,
+    targetRoot,
+    'vendored-node',
+  );
+  assert.deepEqual(result.missingTarget, []);
+});
+
 test('checkPlaceholderResidue classifies a leftover onboarding placeholder as blocking residue', () => {
   const targetRoot = makeFixtureDir();
   importAndSubstitute(targetRoot);
@@ -1544,7 +1575,7 @@ test('checkStaleImportSignal reuses idd-doctor findMissingWorktreeHardening and 
   assert.deepEqual(result.missing, []);
 });
 
-test('checkStaleImportSignal reports a missing B1 self-check section without blocking manifest/residue', () => {
+test('checkStaleImportSignal reports a missing B1 self-check section', () => {
   const targetRoot = makeFixtureDir();
   importAndSubstitute(targetRoot);
   const workPath = join(
@@ -1698,7 +1729,34 @@ test('bin/idd-onboard.mjs --verify exits 2 when --source is missing', () => {
   }
 });
 
-test('bin/idd-onboard.mjs exits 2 when --verify is combined with --import or --substitute', () => {
+test('bin/idd-onboard.mjs --verify --profile vendored-node passes for a target imported with that profile', () => {
+  const targetRoot = makeFixtureDir();
+  const { status: importStatus } = runCliBin([
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--profile',
+    'vendored-node',
+  ]);
+  assert.equal(importStatus, 0);
+  runCliBin(['--substitute', '--target', targetRoot, ...CLI_OVERRIDE_FLAGS]);
+
+  const { status, verdict } = runCliBin([
+    '--verify',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--profile',
+    'vendored-node',
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.blocking, false);
+});
+
+test('bin/idd-onboard.mjs --verify exits 2 on an unknown --profile value', () => {
   const targetRoot = makeFixtureDir();
   try {
     execFileSync(
@@ -1706,11 +1764,12 @@ test('bin/idd-onboard.mjs exits 2 when --verify is combined with --import or --s
       [
         BIN_PATH,
         '--verify',
-        '--import',
         '--source',
         REPO_ROOT,
         '--target',
         targetRoot,
+        '--profile',
+        'not-a-real-profile',
       ],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
     );
@@ -1718,7 +1777,28 @@ test('bin/idd-onboard.mjs exits 2 when --verify is combined with --import or --s
   } catch (error) {
     const failed = error as { status?: number; stderr?: string };
     assert.equal(failed.status, 2);
-    assert.match(String(failed.stderr), /mutually exclusive/);
+    assert.match(String(failed.stderr), /unknown --profile/);
+  }
+});
+
+test('bin/idd-onboard.mjs exits 2 when --verify is combined with --import or --substitute', () => {
+  const targetRoot = makeFixtureDir();
+  const combos = [
+    ['--verify', '--import', '--source', REPO_ROOT, '--target', targetRoot],
+    ['--verify', '--substitute', '--target', targetRoot],
+  ];
+  for (const args of combos) {
+    try {
+      execFileSync(process.execPath, [BIN_PATH, ...args], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      assert.fail(`expected a non-zero exit for ${args.join(' ')}`);
+    } catch (error) {
+      const failed = error as { status?: number; stderr?: string };
+      assert.equal(failed.status, 2);
+      assert.match(String(failed.stderr), /mutually exclusive/);
+    }
   }
 });
 
