@@ -6,20 +6,43 @@
 // generated .mjs. See docs/typescript-sources.md.
 //
 // Onboarding automation CLI — wave 1: placeholder substitution (#1263,
-// roadmap #1262).
+// roadmap #1262). Wave 2 (#1292) adds the --import fetch/copy stage.
 //
-// Given a target tree that already contains the imported template files,
-// resolve the seven onboarding placeholders (auto-derived from repository
-// evidence where `idd-template/docs/onboarding/placeholders.md` defines a
-// derivation; explicit flags override) and rewrite the files. `--dry-run`
-// prints the per-file, per-placeholder plan without writing anything.
-// That reference document is the source of truth this CLI must match; a
-// drift test in tests/idd-onboard.test.mts fails on mismatch.
+// --substitute: given a target tree that already contains the imported
+// template files, resolve the seven onboarding placeholders (auto-derived
+// from repository evidence where
+// `idd-template/docs/onboarding/placeholders.md` defines a derivation;
+// explicit flags override) and rewrite the files. `--dry-run` prints the
+// per-file, per-placeholder plan without writing anything. That reference
+// document is the source of truth this CLI must match; a drift test in
+// tests/idd-onboard.test.mts fails on mismatch.
+//
+// --import: copy the distributed core template file set (and, with
+// `--profile vendored-node`, the profile-conditional helper bundle) from a
+// local idd-skill source tree into a target repository. The file set is
+// read from `audit/sync-manifest.json`'s `idd-template-core-files`
+// generated block — the same canonical source `sync-docs.mjs` /
+// `audit-docs.mjs` render into `idd-template/ONBOARDING.md`'s Step 2 file
+// list — so the CLI and the manual doc can never carry two independently
+// hardcoded file lists. A drift test in tests/idd-onboard.test.mts fails on
+// mismatch.
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import { isCliExecution } from './gh-exec.mjs';
-import { collectHelperRuntimeEvidence } from './helper-runtime-manifest.mjs';
+import {
+  collectHelperRuntimeEvidence,
+  collectVendoredFiles,
+  PROFILE_NAMES,
+} from './helper-runtime-manifest.mjs';
 
 function placeholder(name, kind, flag) {
   return { name, token: `{{${name}}}`, kind, flag };
@@ -503,6 +526,151 @@ export function applySubstitutionPlan(targetDir, plan) {
   }
   return byFile.size;
 }
+const CORE_TEMPLATE_BLOCK_ID = 'idd-template-core-files';
+/**
+ * Resolve the distributed core template file set from the same
+ * `audit/sync-manifest.json` canonical source that `sync-docs.mjs` /
+ * `audit-docs.mjs` render into `idd-template/ONBOARDING.md`'s Step 2
+ * `idd-template-core-files` block, so this CLI never carries a second,
+ * independently hardcoded file list. `sourcePath` is relative to
+ * `sourceRoot` (the manifest's recorded paths already carry the
+ * `idd-template/` prefix); `targetPath` has `stripPrefix` removed, landing
+ * at the same relative path the generated ONBOARDING.md list documents.
+ * Throws when `sourceRoot` has no readable manifest or no block with a
+ * `paths` list — that tree is not a usable idd-skill source root.
+ */
+export function resolveCoreTemplateFiles(sourceRoot) {
+  const manifestPath = join(sourceRoot, 'audit', 'sync-manifest.json');
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch (error) {
+    throw new Error(
+      `--source is not a readable idd-skill tree (missing or invalid audit/sync-manifest.json): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const block = (manifest.generatedBlocks ?? []).find(
+    (entry) => entry.id === CORE_TEMPLATE_BLOCK_ID,
+  );
+  if (!block?.paths) {
+    throw new Error(
+      `--source's audit/sync-manifest.json has no "${CORE_TEMPLATE_BLOCK_ID}" generated block with a paths list`,
+    );
+  }
+  const prefix = block.stripPrefix ?? '';
+  return block.paths.map((sourcePath) => {
+    if (prefix && !sourcePath.startsWith(prefix)) {
+      throw new Error(
+        `${CORE_TEMPLATE_BLOCK_ID}: manifest path "${sourcePath}" does not start with its stripPrefix "${prefix}"`,
+      );
+    }
+    return { sourcePath, targetPath: sourcePath.slice(prefix.length) };
+  });
+}
+/**
+ * Resolve the full import file set: the core template files, plus — only
+ * when `profile` is exactly `vendored-node` — the profile-conditional
+ * helper bundle from `helper-runtime-manifest.mts`'s `collectVendoredFiles`
+ * (mirroring ONBOARDING Step 2's profile guidance). Every other known
+ * profile name vends zero extra files, matching its own `managedFiles: []`
+ * catalog entry. `profile` is validated against the same `PROFILE_NAMES`
+ * the helper manifest CLI itself validates against — no second hardcoded
+ * profile-name list.
+ */
+export function resolveImportFiles(sourceRoot, profile) {
+  const coreFiles = resolveCoreTemplateFiles(sourceRoot);
+  if (!profile) {
+    return coreFiles;
+  }
+  if (!PROFILE_NAMES.includes(profile)) {
+    throw new Error(
+      `unknown --profile: ${profile} (expected one of ${PROFILE_NAMES.join(', ')})`,
+    );
+  }
+  if (profile !== 'vendored-node') {
+    return coreFiles;
+  }
+  const helperFiles = collectVendoredFiles(sourceRoot).map((file) => ({
+    sourcePath: file.sourcePath,
+    targetPath: file.targetPath,
+  }));
+  const merged = [...coreFiles, ...helperFiles];
+  const seenTargets = new Set();
+  for (const file of merged) {
+    if (seenTargets.has(file.targetPath)) {
+      throw new Error(
+        `manifest drift: duplicate target path "${file.targetPath}" across the core file set and the profile-conditional bundle`,
+      );
+    }
+    seenTargets.add(file.targetPath);
+  }
+  return merged;
+}
+/**
+ * Build the import plan: classify each manifest file as `new` (no target
+ * file yet), `unchanged` (target already matches byte-for-byte — a safe
+ * no-op), or `overwrite` (target exists and differs). An `overwrite` entry
+ * is also recorded in `blockedOverwrites` unless `force` is set — the
+ * fail-closed default refuses to clobber a differing target file. A
+ * missing declared source file is recorded in `missingSource` instead of
+ * a plan entry.
+ */
+export function buildImportPlan(
+  sourceRoot,
+  targetRoot,
+  { profile, force = false } = {},
+) {
+  const files = resolveImportFiles(sourceRoot, profile);
+  const entries = [];
+  const missingSource = [];
+  const blockedOverwrites = [];
+  for (const file of files) {
+    if (!fileExists(sourceRoot, file.sourcePath)) {
+      missingSource.push(file.sourcePath);
+      continue;
+    }
+    if (!fileExists(targetRoot, file.targetPath)) {
+      entries.push({ ...file, classification: 'new' });
+      continue;
+    }
+    const sourceBytes = readFileSync(join(sourceRoot, file.sourcePath));
+    const targetBytes = readFileSync(join(targetRoot, file.targetPath));
+    if (sourceBytes.equals(targetBytes)) {
+      entries.push({ ...file, classification: 'unchanged' });
+      continue;
+    }
+    entries.push({ ...file, classification: 'overwrite' });
+    if (!force) {
+      blockedOverwrites.push(file.targetPath);
+    }
+  }
+  return { entries, missingSource, blockedOverwrites };
+}
+/**
+ * Apply the plan: copy every `new` or `overwrite` entry (skipping
+ * `unchanged` entries, which already match), creating parent directories
+ * as needed. Preserves the source file's permission bits — a plain byte
+ * copy would otherwise silently drop the executable bit that
+ * `.githooks/pre-commit` / `.githooks/pre-push` require. Returns the count
+ * of files written. Callers must gate on `missingSource` /
+ * `blockedOverwrites` themselves; this function copies whatever the plan
+ * contains without re-checking blocking conditions.
+ */
+export function applyImportPlan(sourceRoot, targetRoot, plan) {
+  let filesChanged = 0;
+  for (const entry of plan.entries) {
+    if (entry.classification === 'unchanged') {
+      continue;
+    }
+    const sourceAbsolute = join(sourceRoot, entry.sourcePath);
+    const targetAbsolute = join(targetRoot, entry.targetPath);
+    mkdirSync(dirname(targetAbsolute), { recursive: true });
+    copyFileSync(sourceAbsolute, targetAbsolute);
+    chmodSync(targetAbsolute, statSync(sourceAbsolute).mode);
+    filesChanged += 1;
+  }
+  return filesChanged;
+}
 if (isCliExecution(import.meta.url)) {
   try {
     runCli();
@@ -518,8 +686,12 @@ if (isCliExecution(import.meta.url)) {
 function parseArgs(argv) {
   const parsed = {
     substitute: false,
+    importMode: false,
+    source: undefined,
     target: '.',
     dryRun: false,
+    force: false,
+    profile: undefined,
     overrides: {},
     help: false,
   };
@@ -539,6 +711,15 @@ function parseArgs(argv) {
       parsed.substitute = true;
       continue;
     }
+    if (token === '--import') {
+      parsed.importMode = true;
+      continue;
+    }
+    if (token === '--source') {
+      parsed.source = requireValue();
+      index += 1;
+      continue;
+    }
     if (token === '--target') {
       parsed.target = requireValue();
       index += 1;
@@ -546,6 +727,15 @@ function parseArgs(argv) {
     }
     if (token === '--dry-run') {
       parsed.dryRun = true;
+      continue;
+    }
+    if (token === '--force') {
+      parsed.force = true;
+      continue;
+    }
+    if (token === '--profile') {
+      parsed.profile = requireValue();
+      index += 1;
       continue;
     }
     if (token === '--help' || token === '-h') {
@@ -568,10 +758,15 @@ function runCli() {
     printHelp();
     process.exit(0);
   }
+  if (args.substitute && args.importMode) {
+    throw new Error('--substitute and --import are mutually exclusive');
+  }
+  if (args.importMode) {
+    runImportCli(args);
+    return;
+  }
   if (!args.substitute) {
-    throw new Error(
-      'wave 1 supports the substitution stage only: pass --substitute',
-    );
+    throw new Error('pass --substitute or --import to select a stage');
   }
   const targetDir = resolve(args.target);
   if (!statSync(targetDir).isDirectory()) {
@@ -604,16 +799,61 @@ function runCli() {
   // callers can gate on the exit code. Unknown tokens are informational.
   process.exit(plan.residue.length > 0 ? 1 : 0);
 }
+function runImportCli(args) {
+  if (!args.source) {
+    throw new Error('--import requires --source <idd-skill-tree>');
+  }
+  const sourceDir = resolve(args.source);
+  if (!statSync(sourceDir).isDirectory()) {
+    throw new Error(`--source is not a directory: ${args.source}`);
+  }
+  const targetDir = resolve(args.target);
+  if (!statSync(targetDir).isDirectory()) {
+    throw new Error(`--target is not a directory: ${args.target}`);
+  }
+  const plan = buildImportPlan(sourceDir, targetDir, {
+    profile: args.profile,
+    force: args.force,
+  });
+  // Fail closed: never write a partially-imported tree. Apply mode writes
+  // only when every declared source file exists and no existing target
+  // file would be silently clobbered without --force.
+  const blocking =
+    plan.missingSource.length > 0 || plan.blockedOverwrites.length > 0;
+  const canWrite = !args.dryRun && !blocking;
+  const filesChanged = canWrite
+    ? applyImportPlan(sourceDir, targetDir, plan)
+    : 0;
+  const verdict = {
+    protocolVersion: '1',
+    mode: args.dryRun ? 'dry-run' : 'apply',
+    source: sourceDir,
+    target: targetDir,
+    profile: args.profile ?? null,
+    plan: plan.entries,
+    missingSource: plan.missingSource,
+    blockedOverwrites: plan.blockedOverwrites,
+    filesChanged,
+    written: canWrite && filesChanged > 0,
+  };
+  process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+  // Blocking findings signal in dry-run and apply alike so callers can gate
+  // on the exit code without needing a separate --dry-run probe first.
+  process.exit(blocking ? 1 : 0);
+}
 function printHelp() {
   const flags = ONBOARDING_PLACEHOLDERS.map(
     (entry) =>
       `  ${entry.flag} <value>${entry.kind === 'command' ? ' (accepts the no-op "true")' : ''}`,
   ).join('\n');
   process.stdout.write(`usage: node scripts/idd-onboard.mjs --substitute [options]
+       node scripts/idd-onboard.mjs --import --source <dir> --target <dir> [options]
 
-Onboarding automation — wave 1: placeholder substitution. Resolves the
-seven template placeholders for a target tree that already contains the
-imported template files (auto-derived from repository evidence where
+Onboarding automation.
+
+--substitute (wave 1): resolves the seven template placeholders for a
+target tree that already contains the imported template files
+(auto-derived from repository evidence where
 idd-template/docs/onboarding/placeholders.md defines a derivation;
 explicit flags override; --trusted-marker-actor is always explicit) and
 rewrites the files. Prints a JSON verdict with the per-file,
@@ -623,12 +863,35 @@ placeholders), and informational unknown {{...}} tokens.
 Exit codes: 0 converged; 1 residue would remain (apply writes nothing
 in that case); 2 usage or configuration error.
 
-  --substitute         run the substitution stage (required)
+  --substitute         run the substitution stage
   --target <dir>       target tree to rewrite (default: current directory)
   --dry-run            print the plan without writing anything
   --help, -h           show this help
 
 Placeholder overrides:
 ${flags}
+
+--import (wave 2): copies the distributed core template file set from a
+local idd-skill source tree (--source) into --target, driven by
+audit/sync-manifest.json's idd-template-core-files generated block (the
+same canonical source idd-template/ONBOARDING.md's Step 2 file list
+renders from). With --profile vendored-node, also copies the
+profile-conditional helper bundle (helper-runtime-manifest.mts's
+managedFiles); every other profile value vends no extra files. Refuses to
+overwrite an existing target file whose content differs unless --force,
+and reports missing declared source files, as blocking findings. Prints a
+JSON verdict with the per-file plan (new / unchanged / overwrite
+classification) and the blocking findings.
+
+Exit codes: 0 converged; 1 a blocking finding exists (apply writes
+nothing in that case); 2 usage or configuration error.
+
+  --import                          run the import stage
+  --source <dir>                    local idd-skill source tree to copy from
+  --target <dir>                    target repository (default: current directory)
+  --profile <name>                  package-manager | vendored-node | ephemeral-npx | instructions-only
+  --force                           allow overwriting a differing target file
+  --dry-run                         print the plan without writing anything
+  --help, -h                        show this help
 `);
 }
