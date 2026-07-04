@@ -756,6 +756,30 @@ test('buildImportPlan reports missing declared source files and plans nothing fo
   assert.equal(plan.entries.length, 0);
 });
 
+test('buildImportPlan blocks a non-file target collision even with --force, and applyImportPlan never attempts it', () => {
+  const sourceRoot = makeImportSourceFixture({ 'a.md': 'alpha\n' });
+  const targetRoot = makeFixtureDir();
+  // A directory already occupies the declared target path.
+  mkdirSync(join(targetRoot, 'a.md'), { recursive: true });
+
+  const plan = buildImportPlan(sourceRoot, targetRoot);
+  assert.equal(plan.entries[0]?.classification, 'blocked-non-file');
+  assert.deepEqual(plan.nonFileTargetCollisions, ['a.md']);
+  assert.deepEqual(plan.blockedOverwrites, []);
+
+  // --force overrides a differing *file*, but must not paper over a
+  // fundamental type collision it cannot copyFileSync onto.
+  const forcedPlan = buildImportPlan(sourceRoot, targetRoot, { force: true });
+  assert.equal(forcedPlan.entries[0]?.classification, 'blocked-non-file');
+  assert.deepEqual(forcedPlan.nonFileTargetCollisions, ['a.md']);
+
+  // Even if a caller applied the plan without gating on the blocking
+  // finding, applyImportPlan itself must never attempt the impossible
+  // copy (which would throw EISDIR/ENOTDIR).
+  assert.equal(applyImportPlan(sourceRoot, targetRoot, forcedPlan), 0);
+  assert.ok(statSync(join(targetRoot, 'a.md')).isDirectory());
+});
+
 test('applyImportPlan copies new nested files byte-identically and preserves the source mode bit', () => {
   const sourceRoot = makeImportSourceFixture({
     'hooks/pre-commit': '#!/bin/sh\necho hook\n',
@@ -1030,6 +1054,35 @@ test('bin/idd-onboard.mjs --import --force overwrites a differing existing targe
       join(REPO_ROOT, 'idd-template', '.github', 'idd', 'config.json'),
       'utf8',
     ),
+  );
+});
+
+test('bin/idd-onboard.mjs --import blocks a non-file target collision even with --force', () => {
+  const targetRoot = makeFixtureDir();
+  // A directory occupies a declared core-file target path.
+  mkdirSync(join(targetRoot, '.github', 'idd', 'config.json'), {
+    recursive: true,
+  });
+  const before = snapshotTree(targetRoot);
+  const { status, verdict } = runCliBin([
+    '--import',
+    '--force',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 1);
+  assert.equal(verdict.written, false);
+  assert.ok(
+    (verdict.nonFileTargetCollisions as string[]).includes(
+      '.github/idd/config.json',
+    ),
+  );
+  assertTreeUnchanged(targetRoot, before);
+  // The directory itself must survive untouched (not replaced by a file).
+  assert.ok(
+    statSync(join(targetRoot, '.github', 'idd', 'config.json')).isDirectory(),
   );
 });
 

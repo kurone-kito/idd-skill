@@ -200,6 +200,16 @@ function fileExists(root: string, name: string): boolean {
   }
 }
 
+/** Whether any filesystem entry exists at `root`/`name`, of any type. */
+function pathExists(root: string, name: string): boolean {
+  try {
+    statSync(join(root, name));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function readTextIfPresent(root: string, name: string): string | null {
   try {
     return readFileSync(join(root, name), 'utf8');
@@ -784,7 +794,11 @@ export function resolveImportFiles(
 }
 
 /** How one planned import file relates to the current target tree. */
-export type ImportClassification = 'new' | 'unchanged' | 'overwrite';
+export type ImportClassification =
+  | 'new'
+  | 'unchanged'
+  | 'overwrite'
+  | 'blocked-non-file';
 
 /** One planned copy: a manifest file plus its target-tree classification. */
 export interface ImportPlanEntry extends ManifestFile {
@@ -801,16 +815,26 @@ export interface ImportPlan {
    * `--force`. Blocking.
    */
   blockedOverwrites: string[];
+  /**
+   * Target paths that already exist but are not a regular file (e.g. a
+   * directory). These can never be copied onto, so they are always
+   * blocking — `--force` does not override this, since it only means
+   * "allow overwriting a differing file", not "remove whatever is
+   * already there". Entries are classified `blocked-non-file`.
+   */
+  nonFileTargetCollisions: string[];
 }
 
 /**
  * Build the import plan: classify each manifest file as `new` (no target
- * file yet), `unchanged` (target already matches byte-for-byte — a safe
- * no-op), or `overwrite` (target exists and differs). An `overwrite` entry
- * is also recorded in `blockedOverwrites` unless `force` is set — the
- * fail-closed default refuses to clobber a differing target file. A
- * missing declared source file is recorded in `missingSource` instead of
- * a plan entry.
+ * path yet), `unchanged` (target already matches byte-for-byte — a safe
+ * no-op), `overwrite` (target exists as a file and differs), or
+ * `blocked-non-file` (target path exists but is not a regular file, e.g. a
+ * directory — always blocking, see `nonFileTargetCollisions`). An
+ * `overwrite` entry is also recorded in `blockedOverwrites` unless `force`
+ * is set — the fail-closed default refuses to clobber a differing target
+ * file. A missing declared source file is recorded in `missingSource`
+ * instead of a plan entry.
  */
 export function buildImportPlan(
   sourceRoot: string,
@@ -821,12 +845,22 @@ export function buildImportPlan(
   const entries: ImportPlanEntry[] = [];
   const missingSource: string[] = [];
   const blockedOverwrites: string[] = [];
+  const nonFileTargetCollisions: string[] = [];
   for (const file of files) {
     if (!fileExists(sourceRoot, file.sourcePath)) {
       missingSource.push(file.sourcePath);
       continue;
     }
     if (!fileExists(targetRoot, file.targetPath)) {
+      if (pathExists(targetRoot, file.targetPath)) {
+        // The target path exists but is not a regular file (e.g. a
+        // directory). Treating this as "new" would make applyImportPlan's
+        // copyFileSync throw EISDIR/ENOTDIR, possibly after already
+        // writing earlier entries — fail closed instead.
+        entries.push({ ...file, classification: 'blocked-non-file' });
+        nonFileTargetCollisions.push(file.targetPath);
+        continue;
+      }
       entries.push({ ...file, classification: 'new' });
       continue;
     }
@@ -841,18 +875,21 @@ export function buildImportPlan(
       blockedOverwrites.push(file.targetPath);
     }
   }
-  return { entries, missingSource, blockedOverwrites };
+  return { entries, missingSource, blockedOverwrites, nonFileTargetCollisions };
 }
 
 /**
  * Apply the plan: copy every `new` or `overwrite` entry (skipping
- * `unchanged` entries, which already match), creating parent directories
+ * `unchanged` entries, which already match, and `blocked-non-file`
+ * entries, which can never be copied onto), creating parent directories
  * as needed. Preserves the source file's permission bits — a plain byte
  * copy would otherwise silently drop the executable bit that
  * `.githooks/pre-commit` / `.githooks/pre-push` require. Returns the count
  * of files written. Callers must gate on `missingSource` /
- * `blockedOverwrites` themselves; this function copies whatever the plan
- * contains without re-checking blocking conditions.
+ * `blockedOverwrites` / `nonFileTargetCollisions` themselves; this
+ * function copies whatever the plan contains without re-checking blocking
+ * conditions (except that it never attempts the impossible
+ * `blocked-non-file` copy, regardless of caller gating).
  */
 export function applyImportPlan(
   sourceRoot: string,
@@ -861,7 +898,10 @@ export function applyImportPlan(
 ): number {
   let filesChanged = 0;
   for (const entry of plan.entries) {
-    if (entry.classification === 'unchanged') {
+    if (
+      entry.classification === 'unchanged' ||
+      entry.classification === 'blocked-non-file'
+    ) {
       continue;
     }
     const sourceAbsolute = join(sourceRoot, entry.sourcePath);
@@ -1034,10 +1074,13 @@ function runImportCli(args: ParsedArgs): void {
     force: args.force,
   });
   // Fail closed: never write a partially-imported tree. Apply mode writes
-  // only when every declared source file exists and no existing target
-  // file would be silently clobbered without --force.
+  // only when every declared source file exists, no existing target file
+  // would be silently clobbered without --force, and no target path is
+  // blocked by a non-file collision (which --force cannot override).
   const blocking =
-    plan.missingSource.length > 0 || plan.blockedOverwrites.length > 0;
+    plan.missingSource.length > 0 ||
+    plan.blockedOverwrites.length > 0 ||
+    plan.nonFileTargetCollisions.length > 0;
   const canWrite = !args.dryRun && !blocking;
   const filesChanged = canWrite
     ? applyImportPlan(sourceDir, targetDir, plan)
@@ -1051,6 +1094,7 @@ function runImportCli(args: ParsedArgs): void {
     plan: plan.entries,
     missingSource: plan.missingSource,
     blockedOverwrites: plan.blockedOverwrites,
+    nonFileTargetCollisions: plan.nonFileTargetCollisions,
     filesChanged,
     written: canWrite && filesChanged > 0,
   };
@@ -1096,11 +1140,13 @@ audit/sync-manifest.json's idd-template-core-files generated block (the
 same canonical source idd-template/ONBOARDING.md's Step 2 file list
 renders from). With --profile vendored-node, also copies the
 profile-conditional helper bundle (helper-runtime-manifest.mts's
-managedFiles); every other profile value vends no extra files. Refuses to
-overwrite an existing target file whose content differs unless --force,
-and reports missing declared source files, as blocking findings. Prints a
-JSON verdict with the per-file plan (new / unchanged / overwrite
-classification) and the blocking findings.
+collectVendoredFiles); every other profile value vends no extra files.
+Refuses to overwrite an existing target file whose content differs
+unless --force, and reports missing declared source files and non-file
+target collisions (e.g. an existing directory at a target path) as
+blocking findings. Prints a JSON verdict with the per-file plan
+(new / unchanged / overwrite / blocked-non-file classification) and the
+blocking findings.
 
 Exit codes: 0 converged; 1 a blocking finding exists (apply writes
 nothing in that case); 2 usage or configuration error.
