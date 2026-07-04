@@ -38,6 +38,7 @@ scripts/helper-runtime-manifest.mjs linguist-generated=true
 scripts/idd-config.mjs linguist-generated=true
 scripts/idd-doctor.mjs linguist-generated=true
 scripts/idd-merge-execute.mjs linguist-generated=true
+scripts/idd-onboard.mjs linguist-generated=true
 scripts/idd-roadmap-audit-execute.mjs linguist-generated=true
 scripts/live-status-digest.mjs linguist-generated=true
 scripts/markdown-code.mjs linguist-generated=true

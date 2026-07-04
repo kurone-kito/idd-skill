@@ -29,6 +29,7 @@
     "idd-merge-execute": "./bin/idd-merge-execute.mjs",
     "idd-merged-pr-feedback-sweep": "./bin/idd-merged-pr-feedback-sweep.mjs",
     "idd-minimize-superseded-markers": "./bin/idd-minimize-superseded-markers.mjs",
+    "idd-onboard": "./bin/idd-onboard.mjs",
     "idd-phase-id-resolver": "./bin/idd-phase-id-resolver.mjs",
     "idd-post-idd-marker": "./bin/idd-post-idd-marker.mjs",
     "idd-pre-merge-readiness": "./bin/idd-pre-merge-readiness.mjs",
