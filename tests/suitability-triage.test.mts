@@ -454,6 +454,41 @@ test('check helpers expose deterministic evidence', () => {
   );
 });
 
+test('checkAutonomy resolves configured blocked-label names (#1273)', () => {
+  // A custom configured label blocks...
+  assert.equal(
+    checkAutonomy({
+      issue: { ...BASE_ISSUE, labels: ['triage:human-gate'] },
+      blockedByHumanLabelName: 'triage:human-gate',
+    } as Context).pass,
+    false,
+  );
+
+  // ...and the stock default no longer matches once overridden (the
+  // override replaces, not adds to, the default).
+  assert.equal(
+    checkAutonomy({
+      issue: { ...BASE_ISSUE, labels: ['status:blocked-by-human'] },
+      blockedByHumanLabelName: 'triage:human-gate',
+    } as Context).pass,
+    true,
+  );
+});
+
+test('evaluateSuitability threads configured blocked-label options through to Autonomy', () => {
+  const result = evaluateSuitability(
+    { ...BASE_ISSUE, labels: ['triage:needs-call'] },
+    {
+      repository: { owner: 'kurone-kito', repo: 'idd-skill' },
+      duplicateCandidates: [{ number: 1, title: BASE_ISSUE.title }],
+      needsDecisionLabelName: 'triage:needs-call',
+    },
+  );
+  assert.equal(result.passed, false);
+  assert.equal(result.outcome, 'blocked-by-human');
+  assert.equal(result.failedCheck, 'autonomy');
+});
+
 test('trust safety flags a sudo-wrapped install pipeline directive', () => {
   const result = checkTrustSafety({
     issue: {

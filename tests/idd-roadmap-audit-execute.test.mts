@@ -725,6 +725,36 @@ test('a human-gate label on the roadmap root blocks the close', () => {
   );
 });
 
+test('resolves configured blocked-label names on the roadmap root (#1273)', () => {
+  const customLabeled = readyReport();
+  customLabeled.nodes = customLabeled.nodes.map((entry) =>
+    entry.number === ROADMAP
+      ? { ...entry, labels: ['roadmap', 'triage:human-gate'] }
+      : entry,
+  );
+  const blockers = evaluateRoadmapAuditGates(customLabeled, {
+    blockedByHumanLabelName: 'triage:human-gate',
+  });
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    ['roadmap-blocked'],
+  );
+
+  // The stock default no longer matches once overridden.
+  const stockLabeled = readyReport();
+  stockLabeled.nodes = stockLabeled.nodes.map((entry) =>
+    entry.number === ROADMAP
+      ? { ...entry, labels: ['roadmap', 'status:blocked-by-human'] }
+      : entry,
+  );
+  assert.deepEqual(
+    evaluateRoadmapAuditGates(stockLabeled, {
+      blockedByHumanLabelName: 'triage:human-gate',
+    }),
+    [],
+  );
+});
+
 // ---------------------------------------------------------------------------
 // buildRoadmapCompletionAuditBody (pure)
 // ---------------------------------------------------------------------------

@@ -106,9 +106,10 @@ export const POLICY_DEFAULTS = Object.freeze({
     authoringLabelName: 'status:authoring',
     authoringStaleAge: 'PT4H',
   }),
-  // Additive only (#1272): no consuming helper reads this namespace yet.
-  // Wiring the discover/claim/roadmap-audit label lookups to it is
-  // deferred to a follow-up issue (#1273).
+  // Added in #1272; the discover-roadmap-graph, discover-orphan-filter,
+  // discover-readiness-check, idd-roadmap-audit-execute,
+  // suitability-triage, and idd-doctor label lookups were wired to this
+  // namespace in #1273.
   labels: Object.freeze({
     roadmapLabelName: 'roadmap',
     blockedByHumanLabelName: 'status:blocked-by-human',
@@ -359,11 +360,10 @@ export function normalizePolicyConfig(config) {
         POLICY_DEFAULTS.issueAuthoring.authoringStaleAge,
       ),
     },
-    // Additive only (#1272): normalized here for shape parity with the
-    // clone(POLICY_DEFAULTS) early-return branch above (non-object
-    // input), but no consuming helper reads this namespace yet. Wiring
-    // the discover/claim/roadmap-audit label lookups to it is deferred
-    // to a follow-up issue (#1273).
+    // Added in #1272 for shape parity with the clone(POLICY_DEFAULTS)
+    // early-return branch above (non-object input); wired to the
+    // consuming helpers' label lookups in #1273 (see the POLICY_DEFAULTS
+    // comment above for the exact file list).
     labels: {
       roadmapLabelName: parseNonEmptyString(
         c?.labels?.roadmapLabelName,

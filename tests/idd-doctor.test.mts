@@ -93,6 +93,54 @@ test('autopilot-suitability consistency: score >= floor with blocked-by-human wa
   );
 });
 
+test('autopilot-suitability consistency: resolves a configured blocked-by-human label name (#1273)', () => {
+  // The configured label name is honored for both the "missing" and
+  // "carries" warning paths...
+  const missing = evaluateAutopilotSuitabilityConsistency(
+    [{ number: 20, body: `task\n${ap(1)}`, labels: [] }],
+    { floor: 3, blockedByHumanLabelName: 'triage:human-gate' },
+  );
+  assert.equal(missing.warnings.length, 1);
+  assert.match(
+    missing.warnings[0],
+    /issue #20 is scored 1 .* missing the triage:human-gate label/,
+  );
+
+  const carries = evaluateAutopilotSuitabilityConsistency(
+    [
+      {
+        number: 21,
+        body: `task\n${ap(4)}`,
+        labels: ['triage:human-gate'],
+      },
+    ],
+    { floor: 3, blockedByHumanLabelName: 'triage:human-gate' },
+  );
+  assert.equal(carries.warnings.length, 1);
+  assert.match(
+    carries.warnings[0],
+    /issue #21 is scored 4 \(>= floor 3\) but carries triage:human-gate/,
+  );
+
+  // ...and the stock default no longer matches once overridden, so a score
+  // of 1 with only the stock label still warns as "missing".
+  const stockNoLongerMatches = evaluateAutopilotSuitabilityConsistency(
+    [
+      {
+        number: 22,
+        body: `task\n${ap(1)}`,
+        labels: ['status:blocked-by-human'],
+      },
+    ],
+    { floor: 3, blockedByHumanLabelName: 'triage:human-gate' },
+  );
+  assert.equal(stockNoLongerMatches.warnings.length, 1);
+  assert.match(
+    stockNoLongerMatches.warnings[0],
+    /issue #22 is scored 1 .* missing the triage:human-gate label/,
+  );
+});
+
 test('autopilot-suitability consistency: malformed or conflicting markers warn', () => {
   const issues = [
     { number: 9, body: `task\n${ap(6)}`, labels: [] },

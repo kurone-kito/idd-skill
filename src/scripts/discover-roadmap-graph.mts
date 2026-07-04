@@ -23,7 +23,11 @@ import {
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
 import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
-import { parseIsoDurationToMs } from './policy-helpers.mts';
+import {
+  normalizePolicyConfig,
+  POLICY_DEFAULTS,
+  parseIsoDurationToMs,
+} from './policy-helpers.mts';
 import {
   isStaleAt,
   resolveActiveClaim,
@@ -448,6 +452,12 @@ interface ReadinessResolution {
   authoringLabelName: string;
   /** Configured authoring stale age in ms (`issueAuthoring.authoringStaleAge`). */
   authoringStaleAgeMs: number;
+  /** Configured roadmap label (`labels.roadmapLabelName`, #1273). */
+  roadmapLabelName: string;
+  /** Configured blocked-by-human label (`labels.blockedByHumanLabelName`, #1273). */
+  blockedByHumanLabelName: string;
+  /** Configured needs-decision label (`labels.needsDecisionLabelName`, #1273). */
+  needsDecisionLabelName: string;
   /** Resolution "now" (ISO8601); defaults to the wall clock in the CLI. */
   nowIso: string;
 }
@@ -460,6 +470,8 @@ interface EnumerateRoadmapGraphOptions
   extends ClaimStateOptions,
     ReadinessOptions {
   markerPrefix?: unknown;
+  /** Configured `labels.roadmapLabelName` (#1273); defaults to `'roadmap'`. */
+  roadmapLabelName?: unknown;
   owner?: string;
   repo?: string;
   loadIssue?: (issueNumber: number) => unknown;
@@ -541,6 +553,7 @@ if (isMainModule(import.meta.url)) {
     autopilotSuitability?: { floor?: unknown };
     claimTiming?: { staleAge?: unknown };
     trustedMarkerActors?: unknown;
+    labels?: { roadmapLabelName?: unknown };
   };
 
   // The claim-state annotation is strictly opt-in: only when --with-claim-state
@@ -563,6 +576,7 @@ if (isMainModule(import.meta.url)) {
   const report = args.allRoadmaps
     ? await enumerateAllRoadmapsGraph({
         markerPrefix: policy.markerPrefix,
+        roadmapLabelName: policy.labels?.roadmapLabelName,
         floor: policy.autopilotSuitability?.floor,
         owner,
         repo,
@@ -572,6 +586,8 @@ if (isMainModule(import.meta.url)) {
           owner,
           repo,
           policy.markerPrefix,
+          buildSearchIssuesRunner(),
+          policy.labels?.roadmapLabelName,
         ),
         claimState,
         readiness,
@@ -579,6 +595,7 @@ if (isMainModule(import.meta.url)) {
       })
     : await enumerateRoadmapGraph(args.issue, {
         markerPrefix: policy.markerPrefix,
+        roadmapLabelName: policy.labels?.roadmapLabelName,
         owner,
         repo,
         loadIssue: buildIssueLoader(owner, repo),
@@ -640,6 +657,7 @@ export async function enumerateRoadmapGraph(
   options: EnumerateRoadmapGraphOptions = {},
 ): Promise<RoadmapGraphReport> {
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
+  const roadmapLabelName = normalizeRoadmapLabelName(options.roadmapLabelName);
   const loadIssueOption = options.loadIssue;
   const loadSubIssues =
     typeof options.loadSubIssues === 'function'
@@ -1000,7 +1018,7 @@ export async function enumerateRoadmapGraph(
 
   function recordNode(issue: NormalizedIssue, path: number[]) {
     const existing = nodeRecords.get(issue.number);
-    const classification = classifyIssue(issue, markerPrefix);
+    const classification = classifyIssue(issue, markerPrefix, roadmapLabelName);
     if (issue.number === rootIssue.number) {
       classification.kind = 'roadmap';
     }
@@ -1110,6 +1128,7 @@ export async function enumerateAllRoadmapsGraph(
   for (const rootNumber of rootNumbers) {
     const graph = await enumerateRoadmapGraph(rootNumber, {
       markerPrefix,
+      roadmapLabelName: options.roadmapLabelName,
       owner: options.owner,
       repo: options.repo,
       loadIssue: options.loadIssue,
@@ -1397,6 +1416,9 @@ async function annotateReadiness(
       findRoadmapsByMarker: readiness.findRoadmapsByMarker,
       authoringLabelName: readiness.authoringLabelName,
       authoringStaleAgeMs: readiness.authoringStaleAgeMs,
+      roadmapLabelName: readiness.roadmapLabelName,
+      blockedByHumanLabelName: readiness.blockedByHumanLabelName,
+      needsDecisionLabelName: readiness.needsDecisionLabelName,
       markerPrefix,
       now: readiness.nowIso,
     },
@@ -1595,10 +1617,14 @@ function buildReadinessResolution(
 ): ReadinessResolution {
   const authoringPolicy = resolveAuthoringGuardPolicy(policy);
   const markerPrefix = normalizeMarkerPrefix(policy.markerPrefix);
+  const labelsPolicy = normalizePolicyConfig(policy).labels;
   return {
     findRoadmapsByMarker: buildRoadmapMarkerResolver(owner, repo, markerPrefix),
     authoringLabelName: authoringPolicy.labelName,
     authoringStaleAgeMs: authoringPolicy.staleAgeMs,
+    roadmapLabelName: labelsPolicy.roadmapLabelName,
+    blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
+    needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
     nowIso: new Date().toISOString(),
   };
 }
@@ -1694,10 +1720,25 @@ export function extractRoadmapMarkerId(
 export function classifyIssue(
   issue: { body?: unknown; labels?: unknown },
   markerPrefix: string = DEFAULT_MARKER_PREFIX,
+  roadmapLabelName: string = POLICY_DEFAULTS.labels.roadmapLabelName,
 ): RoadmapIssueClassification {
+  // Re-validate even though the parameter already has a default: a caller
+  // (direct or test) that explicitly passes an empty string would otherwise
+  // bypass the default (parameter defaults only trigger on `undefined`) and
+  // silently disable the roadmap-label check. Use a cheap non-empty-string
+  // check rather than the full normalizeRoadmapLabelName()/
+  // normalizePolicyConfig() — classifyIssue() runs once per node during
+  // graph enumeration, so rebuilding the whole policy-defaults object here
+  // would be avoidable per-node overhead; callers that need policy-level
+  // normalization already do it once via normalizeRoadmapLabelName() before
+  // reaching this function.
+  const resolvedRoadmapLabelName =
+    typeof roadmapLabelName === 'string' && roadmapLabelName.length > 0
+      ? roadmapLabelName
+      : POLICY_DEFAULTS.labels.roadmapLabelName;
   const roadmapMarkerId = extractRoadmapMarkerId(issue.body, markerPrefix);
   const labels = normalizeLabels(issue.labels);
-  if (roadmapMarkerId || labels.has('roadmap')) {
+  if (roadmapMarkerId || labels.has(resolvedRoadmapLabelName)) {
     return {
       kind: 'roadmap',
       roadmapMarkerId,
@@ -2137,6 +2178,18 @@ function normalizeMarkerPrefix(markerPrefix: unknown): string {
   return normalized || DEFAULT_MARKER_PREFIX;
 }
 
+/**
+ * Resolve the configured `labels.roadmapLabelName` (#1273), falling back to
+ * the `policy-helpers.mts` default (`'roadmap'`) for an absent or invalid
+ * value. Routing an already-`unknown` field through `normalizePolicyConfig`
+ * (rather than hand-rolling the same non-empty-string check again) keeps the
+ * validation and the default in the single source of truth.
+ */
+function normalizeRoadmapLabelName(roadmapLabelName: unknown): string {
+  return normalizePolicyConfig({ labels: { roadmapLabelName } }).labels
+    .roadmapLabelName;
+}
+
 async function getIssue(
   issueNumber: number,
   cache: Map<number, CachedIssue>,
@@ -2241,12 +2294,14 @@ export function buildSubIssueLoader(owner: string, repo: string) {
  * issue's `body` plus up to 100 labels just to detect a root) with two
  * cheap server-side searches whose union is the SAME open-root set:
  *
- *   1. Label roots — `gh search issues --label roadmap --state open` returns
- *      every open issue carrying the `roadmap` label. These are roots by
- *      label with NO body inspection needed; the old scan's
- *      `labels.has('roadmap')` branch is reproduced exactly (the GitHub
- *      search `--label` qualifier is a case-insensitive exact-name match, as
- *      is the `normalizeLabels`-backed `Set.has('roadmap')` it replaces).
+ *   1. Label roots — `gh search issues --label <roadmapLabelName> --state
+ *      open` (the configured `labels.roadmapLabelName`, #1273; defaults to
+ *      `roadmap`) returns every open issue carrying that label. These are
+ *      roots by label with NO body inspection needed; the old scan's
+ *      `labels.has(roadmapLabelName)` branch is reproduced exactly (the
+ *      GitHub search `--label` qualifier is a case-insensitive exact-name
+ *      match, as is the `normalizeLabels`-backed `Set.has(...)` it
+ *      replaces).
  *   2. Marker-only roots — `gh search issues --match body "<...>roadmap-id"
  *      --state open` narrows to open issues whose body text contains the
  *      `idd-skill-roadmap-id`-style marker token, then RE-CONFIRMS each
@@ -2286,8 +2341,10 @@ export function buildOpenRoadmapRootsLoader(
   repo: string,
   markerPrefix: unknown,
   searchIssues: SearchIssuesFn = buildSearchIssuesRunner(),
+  roadmapLabelName?: unknown,
 ) {
   const prefix = normalizeMarkerPrefix(markerPrefix);
+  const label = normalizeRoadmapLabelName(roadmapLabelName);
   return async () => {
     const numbers = new Set<number>();
 
@@ -2295,7 +2352,7 @@ export function buildOpenRoadmapRootsLoader(
     const labelResults = searchIssues({
       owner,
       repo,
-      label: 'roadmap',
+      label,
       fields: ['number'],
     });
     warnOnSearchResultCap(labelResults, 'label');
