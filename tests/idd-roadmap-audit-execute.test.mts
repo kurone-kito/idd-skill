@@ -676,6 +676,27 @@ test('an execution-source cycle in a non-OPEN/CLOSED state still blocks (#1278)'
   );
 });
 
+test('an unknown-source reference cycle still blocks (fail closed) (#1278)', () => {
+  // The exemption requires a source node present in `nodes` with execution
+  // classification; a `reference` cycle whose source is absent from the
+  // graph must keep blocking even though the relationship alone matches.
+  const report = readyReport();
+  report.diagnostics.cycles = [
+    {
+      source: 4444,
+      target: ROADMAP,
+      relationship: 'reference',
+      path: [ROADMAP, 4444, ROADMAP],
+    },
+  ];
+  const blockers = evaluateRoadmapAuditGates(report);
+
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    ['cycle'],
+  );
+});
+
 test('a childless roadmap (no edges) is reported, never closed', () => {
   const report = readyReport();
   report.nodes = [
