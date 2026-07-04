@@ -1722,11 +1722,20 @@ export function classifyIssue(
   markerPrefix: string = DEFAULT_MARKER_PREFIX,
   roadmapLabelName: string = POLICY_DEFAULTS.labels.roadmapLabelName,
 ): RoadmapIssueClassification {
-  // Re-normalize even though the parameter already has a default: a caller
+  // Re-validate even though the parameter already has a default: a caller
   // (direct or test) that explicitly passes an empty string would otherwise
   // bypass the default (parameter defaults only trigger on `undefined`) and
-  // silently disable the roadmap-label check.
-  const resolvedRoadmapLabelName = normalizeRoadmapLabelName(roadmapLabelName);
+  // silently disable the roadmap-label check. Use a cheap non-empty-string
+  // check rather than the full normalizeRoadmapLabelName()/
+  // normalizePolicyConfig() — classifyIssue() runs once per node during
+  // graph enumeration, so rebuilding the whole policy-defaults object here
+  // would be avoidable per-node overhead; callers that need policy-level
+  // normalization already do it once via normalizeRoadmapLabelName() before
+  // reaching this function.
+  const resolvedRoadmapLabelName =
+    typeof roadmapLabelName === 'string' && roadmapLabelName.length > 0
+      ? roadmapLabelName
+      : POLICY_DEFAULTS.labels.roadmapLabelName;
   const roadmapMarkerId = extractRoadmapMarkerId(issue.body, markerPrefix);
   const labels = normalizeLabels(issue.labels);
   if (roadmapMarkerId || labels.has(resolvedRoadmapLabelName)) {
