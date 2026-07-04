@@ -259,14 +259,16 @@ the recorded machine-readable policy. Absent values keep the gate
 enabled and default approval actors to
 `owners-and-maintainers-only`.
 
-| Name                    | Commands                         |
-| ----------------------- | -------------------------------- |
-| **fix-validate**        | `{{FIX_VALIDATE_COMMANDS}}`      |
-| **pre-push-validate**   | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
-| **post-fix-validate**   | `{{POST_FIX_VALIDATE_COMMANDS}}` |
-| **install-deps**        | `{{INSTALL_DEPS_COMMAND}}`       |
-| **issue-scope**         | `roadmap-first`                  |
-| **orphan-first-policy** | `none`                           |
+<!-- dprint-ignore-start -->
+| Name | Commands |
+| --- | --- |
+| **fix-validate** | `{{FIX_VALIDATE_COMMANDS}}` |
+| **pre-push-validate** | `{{PRE_PUSH_VALIDATE_COMMANDS}}` |
+| **post-fix-validate** | `{{POST_FIX_VALIDATE_COMMANDS}}` |
+| **install-deps** | `{{INSTALL_DEPS_COMMAND}}` |
+| **issue-scope** | `roadmap-first` |
+| **orphan-first-policy** | `none` |
+<!-- dprint-ignore-end -->
 
 Non-shell rows such as **issue-scope** and **orphan-first-policy** are
 workflow settings. Read them literally, not as commands.
