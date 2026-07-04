@@ -857,17 +857,31 @@ export function applyImportPlan(sourceRoot, targetRoot, plan) {
   return filesChanged;
 }
 /**
- * Check that every file the manifest declares for `profile` exists in the
- * target tree, reusing wave 2's own `resolveImportFiles` resolution (the
- * same source `--import` copies from) instead of a second hardcoded file
- * list.
+ * Check that every file the manifest declares for `profile` exists on both
+ * sides, reusing wave 2's own `resolveImportFiles` resolution (the same
+ * source `--import` copies from) instead of a second hardcoded file list.
+ *
+ * `resolveImportFiles`'s own `missingSource` only ever reports a
+ * vendored-node bundle resolution failure (see `resolveImportFiles`'s doc
+ * comment) — it does not check the core/profile file set's declared
+ * `sourcePath` entries against `sourceRoot`, unlike `buildImportPlan`, which
+ * performs that `fileExists(sourceRoot, file.sourcePath)` check itself. This
+ * check mirrors that same existence check here so a corrupt or incomplete
+ * `--source` tree is caught, not just a target that failed to receive a
+ * file `--import` did manage to copy from a complete source.
  */
 export function checkManifestCompleteness(sourceRoot, targetRoot, profile) {
   const resolved = resolveImportFiles(sourceRoot, profile);
+  const missingSource = [
+    ...resolved.missingSource,
+    ...resolved.files
+      .filter((file) => !fileExists(sourceRoot, file.sourcePath))
+      .map((file) => file.sourcePath),
+  ];
   const missingTarget = resolved.files
     .filter((file) => !fileExists(targetRoot, file.targetPath))
     .map((file) => file.targetPath);
-  return { missingSource: resolved.missingSource, missingTarget };
+  return { missingSource, missingTarget };
 }
 /**
  * Scan the target tree for leftover `{{...}}` tokens after onboarding.

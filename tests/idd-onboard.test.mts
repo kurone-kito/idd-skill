@@ -1463,6 +1463,35 @@ test('checkManifestCompleteness reports a deleted manifest file as missingTarget
   );
 });
 
+test('checkManifestCompleteness reports a manifest file missing from a corrupt --source tree', () => {
+  // A `--source` idd-skill tree that is itself incomplete: resolveImportFiles's
+  // own missingSource only ever surfaces a vendored-node bundle resolution
+  // failure, so this must check every declared sourcePath directly against
+  // sourceRoot (the same fileExists check buildImportPlan already performs)
+  // rather than trusting resolveImportFiles's missingSource alone. Build a
+  // minimal source tree (the manifest plus every declared file, not a full
+  // repo copy) so the test stays fast.
+  const corruptSourceRoot = makeFixtureDir();
+  mkdirSync(join(corruptSourceRoot, 'audit'), { recursive: true });
+  cpSync(
+    join(REPO_ROOT, 'audit', 'sync-manifest.json'),
+    join(corruptSourceRoot, 'audit', 'sync-manifest.json'),
+  );
+  const resolved = resolveImportFiles(REPO_ROOT);
+  for (const file of resolved.files) {
+    const dest = join(corruptSourceRoot, file.sourcePath);
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(join(REPO_ROOT, file.sourcePath), dest);
+  }
+  const missingFile = resolved.files[0];
+  assert.ok(missingFile, 'resolveImportFiles must declare at least one file');
+  rmSync(join(corruptSourceRoot, missingFile.sourcePath));
+
+  const targetRoot = makeFixtureDir();
+  const result = checkManifestCompleteness(corruptSourceRoot, targetRoot);
+  assert.ok(result.missingSource.includes(missingFile.sourcePath));
+});
+
 test('checkManifestCompleteness checks every file resolveImportFiles declares, not a forked subset', () => {
   const targetRoot = makeFixtureDir();
   importAndSubstitute(targetRoot);
