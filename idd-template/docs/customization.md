@@ -66,7 +66,9 @@ distributed IDD workflow a repository imported.
   `iddVersion` bump also requires a matching `CHANGELOG.md` entry in the
   same pull request, and an annotated `v<iddVersion>` git tag pushed to
   the source repository after the bump PR merges, so adopters can diff
-  against a concrete release ref instead of a raw commit SHA.
+  against a concrete release ref instead of a raw commit SHA. The
+  release cadence is milestone-based: cut a release after each merged
+  roadmap.
 - **Adopters** can compare their `iddVersion` against the source release
   to see whether a re-sync is worthwhile. Because the value only moves
   when maintainers bump it, it is a coarse signal — so `idd-doctor` also
