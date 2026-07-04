@@ -1,22 +1,34 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-
+import {
+  collectVendoredFiles,
+  PROFILE_NAMES,
+} from '../src/scripts/helper-runtime-manifest.mts';
 // Importing the CLI module directly is only possible because its top-level
 // statements are guarded behind isCliExecution() (#1210 pattern); an
 // import-time CLI run would parse process.argv and abort this test process.
 import {
+  applyImportPlan,
   applySubstitutionPlan,
+  buildImportPlan,
   buildSubstitutionPlan,
   deriveInstallDepsCommand,
   deriveMarkerPrefix,
@@ -25,6 +37,8 @@ import {
   MARKER_PREFIX_PATTERN,
   ONBOARDING_PLACEHOLDERS,
   parseRemoteRepoRef,
+  resolveCoreTemplateFiles,
+  resolveImportFiles,
   resolvePlaceholderValues,
   scanPlaceholderTokens,
 } from '../src/scripts/idd-onboard.mts';
@@ -607,6 +621,462 @@ test('binary files and excluded directories are not scanned', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Wave 2: --import (manifest-driven fetch/copy)
+// ---------------------------------------------------------------------------
+
+const CORE_FILES_BLOCK_MARKER =
+  '<!-- audit:generated id=idd-template-core-files -->';
+
+test('resolveCoreTemplateFiles matches the ONBOARDING.md idd-template-core-files generated block', () => {
+  const onboardingPath = join(REPO_ROOT, 'idd-template', 'ONBOARDING.md');
+  const text = readFileSync(onboardingPath, 'utf8');
+  const markerIndex = text.indexOf(CORE_FILES_BLOCK_MARKER);
+  assert.ok(markerIndex !== -1, 'core-files generated block marker not found');
+  const fenceStart = text.indexOf('```text\n', markerIndex);
+  assert.ok(fenceStart !== -1, 'core-files code fence not found');
+  const contentStart = fenceStart + '```text\n'.length;
+  const fenceEnd = text.indexOf('\n```', contentStart);
+  assert.ok(fenceEnd !== -1, 'core-files code fence not closed');
+  const documented = text
+    .slice(contentStart, fenceEnd)
+    .split('\n')
+    .filter((line) => line.length > 0);
+
+  const resolved = resolveCoreTemplateFiles(REPO_ROOT).map(
+    (file) => file.targetPath,
+  );
+  assert.deepEqual(
+    resolved,
+    documented,
+    "audit/sync-manifest.json's idd-template-core-files paths must match the rendered ONBOARDING.md block exactly",
+  );
+});
+
+test('resolveCoreTemplateFiles rejects a source tree without a readable manifest', () => {
+  assert.throws(
+    () => resolveCoreTemplateFiles(makeFixtureDir()),
+    /audit\/sync-manifest\.json/u,
+  );
+});
+
+/** Write a minimal sync-manifest.json declaring exactly the given paths. */
+function writeCoreFilesManifest(
+  root: string,
+  paths: string[],
+  stripPrefix = 'idd-template/',
+): void {
+  mkdirSync(join(root, 'audit'), { recursive: true });
+  writeFileSync(
+    join(root, 'audit', 'sync-manifest.json'),
+    JSON.stringify({
+      generatedBlocks: [
+        {
+          id: 'idd-template-core-files',
+          file: 'idd-template/ONBOARDING.md',
+          stripPrefix,
+          paths,
+        },
+      ],
+    }),
+  );
+}
+
+test('resolveCoreTemplateFiles rejects a manifest path that parent-traverses out of the source root', () => {
+  const root = makeFixtureDir();
+  writeCoreFilesManifest(root, ['idd-template/../../../etc/passwd']);
+  assert.throws(() => resolveCoreTemplateFiles(root), /unsafe manifest path/u);
+});
+
+test('resolveCoreTemplateFiles rejects an absolute manifest path', () => {
+  const root = makeFixtureDir();
+  writeCoreFilesManifest(root, ['/etc/passwd'], '');
+  assert.throws(() => resolveCoreTemplateFiles(root), /unsafe manifest path/u);
+});
+
+/** Write an arbitrary (possibly malformed) sync-manifest.json body. */
+function writeRawManifest(root: string, body: unknown): void {
+  mkdirSync(join(root, 'audit'), { recursive: true });
+  writeFileSync(
+    join(root, 'audit', 'sync-manifest.json'),
+    JSON.stringify(body),
+  );
+}
+
+test('resolveCoreTemplateFiles rejects a malformed generatedBlocks instead of throwing a raw TypeError', () => {
+  const root = makeFixtureDir();
+  writeRawManifest(root, { generatedBlocks: 'not-an-array' });
+  assert.throws(
+    () => resolveCoreTemplateFiles(root),
+    /malformed generatedBlocks/u,
+  );
+});
+
+test('resolveCoreTemplateFiles rejects a non-array paths field instead of throwing a raw TypeError', () => {
+  const root = makeFixtureDir();
+  writeRawManifest(root, {
+    generatedBlocks: [{ id: 'idd-template-core-files', paths: 'not-an-array' }],
+  });
+  assert.throws(
+    () => resolveCoreTemplateFiles(root),
+    /valid paths: string\[\]/u,
+  );
+});
+
+test('resolveCoreTemplateFiles rejects a paths array containing a non-string entry', () => {
+  const root = makeFixtureDir();
+  writeRawManifest(root, {
+    generatedBlocks: [
+      { id: 'idd-template-core-files', paths: ['idd-template/a.md', 42] },
+    ],
+  });
+  assert.throws(
+    () => resolveCoreTemplateFiles(root),
+    /valid paths: string\[\]/u,
+  );
+});
+
+test('resolveCoreTemplateFiles rejects a non-string stripPrefix', () => {
+  const root = makeFixtureDir();
+  writeRawManifest(root, {
+    generatedBlocks: [
+      {
+        id: 'idd-template-core-files',
+        paths: ['idd-template/a.md'],
+        stripPrefix: 42,
+      },
+    ],
+  });
+  assert.throws(
+    () => resolveCoreTemplateFiles(root),
+    /valid paths: string\[\]/u,
+  );
+});
+
+test('resolveImportFiles vends no extra files for a non-vendored-node profile', () => {
+  const withoutProfile = resolveImportFiles(REPO_ROOT);
+  const packageManagerProfile = resolveImportFiles(
+    REPO_ROOT,
+    'package-manager',
+  );
+  const coreTargets = resolveCoreTemplateFiles(REPO_ROOT).map(
+    (f) => f.targetPath,
+  );
+  assert.deepEqual(
+    withoutProfile.files.map((f) => f.targetPath),
+    coreTargets,
+  );
+  assert.deepEqual(withoutProfile.missingSource, []);
+  assert.deepEqual(
+    packageManagerProfile.files.map((f) => f.targetPath),
+    coreTargets,
+  );
+  assert.deepEqual(packageManagerProfile.missingSource, []);
+});
+
+test('resolveImportFiles includes the helper bundle only for the vendored-node profile', () => {
+  const resolved = resolveImportFiles(REPO_ROOT, 'vendored-node');
+  assert.deepEqual(resolved.missingSource, []);
+  const coreTargets = new Set(
+    resolveCoreTemplateFiles(REPO_ROOT).map((f) => f.targetPath),
+  );
+  const helperTargets = new Set(
+    collectVendoredFiles(REPO_ROOT).map((f) => f.targetPath),
+  );
+  const resultTargets = new Set(resolved.files.map((f) => f.targetPath));
+  assert.equal(resultTargets.size, coreTargets.size + helperTargets.size);
+  for (const target of coreTargets) {
+    assert.ok(resultTargets.has(target), `missing core file: ${target}`);
+  }
+  for (const target of helperTargets) {
+    assert.ok(resultTargets.has(target), `missing helper file: ${target}`);
+  }
+});
+
+test('resolveImportFiles rejects an unknown --profile value', () => {
+  assert.throws(
+    () => resolveImportFiles(REPO_ROOT, 'bogus-profile'),
+    /unknown --profile/u,
+  );
+});
+
+/**
+ * A real idd-skill tree copy with one vendored helper entry deleted, so
+ * collectVendoredFiles's import-graph walk hits that missing file.
+ * Excludes node_modules and other heavy/irrelevant directories to keep
+ * the copy cheap.
+ */
+function makeIncompleteVendoredSourceFixture(
+  missingRelativePath: string,
+): string {
+  const root = makeFixtureDir();
+  for (const dir of [
+    'idd-template',
+    'audit',
+    'scripts',
+    'schemas',
+    'fixtures',
+  ]) {
+    const source = join(REPO_ROOT, dir);
+    if (existsSync(source)) {
+      cpSync(source, join(root, dir), { recursive: true });
+    }
+  }
+  rmSync(join(root, missingRelativePath), { force: true });
+  return root;
+}
+
+test('resolveImportFiles reports a missing vendored helper file via missingSource instead of crashing', () => {
+  const sourceRoot = makeIncompleteVendoredSourceFixture(
+    'scripts/branch-name.mjs',
+  );
+  const resolved = resolveImportFiles(sourceRoot, 'vendored-node');
+  assert.deepEqual(resolved.missingSource, ['scripts/branch-name.mjs']);
+  // The core file set still resolves even though the vendored bundle
+  // walk was interrupted by the missing helper file.
+  assert.ok(resolved.files.length > 0);
+  assert.ok(
+    resolved.files.every(
+      (file) => file.targetPath !== 'scripts/branch-name.mjs',
+    ),
+  );
+});
+
+test('buildImportPlan blocks a non-directory ancestor collision, not just a leaf collision', () => {
+  const sourceRoot = makeImportSourceFixture({ 'nested/a.md': 'alpha\n' });
+  const targetRoot = makeFixtureDir();
+  // A plain file occupies "nested", the ancestor directory the manifest
+  // path "nested/a.md" needs to be created under.
+  writeFileSync(join(targetRoot, 'nested'), 'not a directory\n');
+
+  const plan = buildImportPlan(sourceRoot, targetRoot);
+  assert.equal(plan.entries[0]?.classification, 'blocked-non-file');
+  assert.deepEqual(plan.nonFileTargetCollisions, ['nested/a.md']);
+
+  // applyImportPlan must never attempt the impossible mkdirSync/copy, even
+  // if a caller applied the plan without checking the blocking arrays.
+  assert.equal(applyImportPlan(sourceRoot, targetRoot, plan), 0);
+  assert.ok(statSync(join(targetRoot, 'nested')).isFile());
+});
+
+test('buildImportPlan blocks a symlink at the leaf target path instead of following it', () => {
+  const sourceRoot = makeImportSourceFixture({ 'a.md': 'alpha\n' });
+  const targetRoot = makeFixtureDir();
+  const linkTarget = join(targetRoot, 'real.md');
+  writeFileSync(linkTarget, 'alpha\n');
+  symlinkSync(linkTarget, join(targetRoot, 'a.md'));
+
+  const plan = buildImportPlan(sourceRoot, targetRoot);
+  const entry = plan.entries.find((e) => e.targetPath === 'a.md');
+  assert.equal(entry?.classification, 'blocked-non-file');
+  assert.deepEqual(plan.nonFileTargetCollisions, ['a.md']);
+
+  // Even with --force, applyImportPlan must never write through the
+  // symlink (force overrides a differing *file*, not a type collision).
+  const forcedPlan = buildImportPlan(sourceRoot, targetRoot, { force: true });
+  assert.equal(applyImportPlan(sourceRoot, targetRoot, forcedPlan), 0);
+  assert.ok(lstatSync(join(targetRoot, 'a.md')).isSymbolicLink());
+});
+
+test('buildImportPlan blocks a symlinked ancestor directory in the target tree', () => {
+  const sourceRoot = makeImportSourceFixture({ 'nested/a.md': 'alpha\n' });
+  const targetRoot = makeFixtureDir();
+  const realDir = join(targetRoot, 'real-dir');
+  mkdirSync(realDir, { recursive: true });
+  symlinkSync(realDir, join(targetRoot, 'nested'));
+
+  const plan = buildImportPlan(sourceRoot, targetRoot);
+  assert.equal(plan.entries[0]?.classification, 'blocked-non-file');
+  assert.deepEqual(plan.nonFileTargetCollisions, ['nested/a.md']);
+  assert.equal(applyImportPlan(sourceRoot, targetRoot, plan), 0);
+  // The symlink itself must survive untouched — no write escaped through
+  // it into realDir.
+  assert.ok(lstatSync(join(targetRoot, 'nested')).isSymbolicLink());
+  assert.deepEqual(readdirSync(realDir), []);
+});
+
+test('buildImportPlan blocks a symlinked ancestor even when the leaf already exists under it', () => {
+  // The more dangerous variant of the previous test: fileExists() on the
+  // joined target path would report "exists" here (the leaf resolves,
+  // through the symlinked ancestor, to a real file), so the ancestor
+  // check must run unconditionally rather than only when the leaf is
+  // absent -- otherwise this case would fall through to unchanged /
+  // overwrite and applyImportPlan would read or write straight through
+  // the symlinked ancestor.
+  const sourceRoot = makeImportSourceFixture({ 'nested/a.md': 'alpha\n' });
+  const targetRoot = makeFixtureDir();
+  const realDir = join(targetRoot, 'real-dir');
+  mkdirSync(realDir, { recursive: true });
+  writeFileSync(join(realDir, 'a.md'), 'alpha\n'); // byte-identical to source
+  symlinkSync(realDir, join(targetRoot, 'nested'));
+
+  const plan = buildImportPlan(sourceRoot, targetRoot);
+  assert.equal(plan.entries[0]?.classification, 'blocked-non-file');
+  assert.deepEqual(plan.nonFileTargetCollisions, ['nested/a.md']);
+
+  // Even with --force (which only overrides a differing *file*), the
+  // symlinked ancestor must still block.
+  const forcedPlan = buildImportPlan(sourceRoot, targetRoot, { force: true });
+  assert.equal(forcedPlan.entries[0]?.classification, 'blocked-non-file');
+  assert.equal(applyImportPlan(sourceRoot, targetRoot, forcedPlan), 0);
+  assert.ok(lstatSync(join(targetRoot, 'nested')).isSymbolicLink());
+});
+
+test('buildImportPlan reports a symlinked source file as missing rather than reading through it', () => {
+  const sourceRoot = makeFixtureDir();
+  writeCoreFilesManifest(sourceRoot, ['idd-template/a.md']);
+  mkdirSync(join(sourceRoot, 'idd-template'), { recursive: true });
+  const realFile = join(sourceRoot, 'real.md');
+  writeFileSync(realFile, 'alpha\n');
+  symlinkSync(realFile, join(sourceRoot, 'idd-template', 'a.md'));
+
+  const plan = buildImportPlan(sourceRoot, makeFixtureDir());
+  assert.deepEqual(plan.missingSource, ['idd-template/a.md']);
+  assert.equal(plan.entries.length, 0);
+});
+
+/** A minimal idd-skill-shaped source tree: just enough for resolveImportFiles. */
+function makeImportSourceFixture(files: Record<string, string>): string {
+  const root = makeFixtureDir();
+  const paths = Object.keys(files).map((rel) => `idd-template/${rel}`);
+  mkdirSync(join(root, 'audit'), { recursive: true });
+  writeFileSync(
+    join(root, 'audit', 'sync-manifest.json'),
+    JSON.stringify(
+      {
+        generatedBlocks: [
+          {
+            id: 'idd-template-core-files',
+            file: 'idd-template/ONBOARDING.md',
+            stripPrefix: 'idd-template/',
+            paths,
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  for (const [rel, content] of Object.entries(files)) {
+    const absolute = join(root, 'idd-template', rel);
+    mkdirSync(dirname(absolute), { recursive: true });
+    writeFileSync(absolute, content);
+  }
+  return root;
+}
+
+test('buildImportPlan classifies new, unchanged, and blocked-overwrite target files', () => {
+  const sourceRoot = makeImportSourceFixture({
+    'a.md': 'alpha\n',
+    'b.md': 'bravo\n',
+    'c.md': 'charlie\n',
+  });
+  const targetRoot = makeFixtureDir();
+  writeFileSync(join(targetRoot, 'a.md'), 'alpha\n'); // byte-identical
+  writeFileSync(join(targetRoot, 'b.md'), 'DIFFERENT\n'); // differs
+  // c.md is absent from the target -> new
+
+  const plan = buildImportPlan(sourceRoot, targetRoot);
+  const byTarget = new Map(plan.entries.map((e) => [e.targetPath, e]));
+  assert.equal(byTarget.get('a.md')?.classification, 'unchanged');
+  assert.equal(byTarget.get('b.md')?.classification, 'overwrite');
+  assert.equal(byTarget.get('c.md')?.classification, 'new');
+  assert.deepEqual(plan.blockedOverwrites, ['b.md']);
+  assert.deepEqual(plan.missingSource, []);
+});
+
+test('buildImportPlan reports missing declared source files and plans nothing for them', () => {
+  const sourceRoot = makeImportSourceFixture({ 'a.md': 'alpha\n' });
+  // Simulate a stale/shallow --source checkout missing a declared file.
+  rmSync(join(sourceRoot, 'idd-template', 'a.md'));
+  const plan = buildImportPlan(sourceRoot, makeFixtureDir());
+  assert.deepEqual(plan.missingSource, ['idd-template/a.md']);
+  assert.equal(plan.entries.length, 0);
+});
+
+test('buildImportPlan blocks a non-file target collision even with --force, and applyImportPlan never attempts it', () => {
+  const sourceRoot = makeImportSourceFixture({ 'a.md': 'alpha\n' });
+  const targetRoot = makeFixtureDir();
+  // A directory already occupies the declared target path.
+  mkdirSync(join(targetRoot, 'a.md'), { recursive: true });
+
+  const plan = buildImportPlan(sourceRoot, targetRoot);
+  assert.equal(plan.entries[0]?.classification, 'blocked-non-file');
+  assert.deepEqual(plan.nonFileTargetCollisions, ['a.md']);
+  assert.deepEqual(plan.blockedOverwrites, []);
+
+  // --force overrides a differing *file*, but must not paper over a
+  // fundamental type collision it cannot copyFileSync onto.
+  const forcedPlan = buildImportPlan(sourceRoot, targetRoot, { force: true });
+  assert.equal(forcedPlan.entries[0]?.classification, 'blocked-non-file');
+  assert.deepEqual(forcedPlan.nonFileTargetCollisions, ['a.md']);
+
+  // Even if a caller applied the plan without gating on the blocking
+  // finding, applyImportPlan itself must never attempt the impossible
+  // copy (which would throw EISDIR/ENOTDIR).
+  assert.equal(applyImportPlan(sourceRoot, targetRoot, forcedPlan), 0);
+  assert.ok(statSync(join(targetRoot, 'a.md')).isDirectory());
+});
+
+test('applyImportPlan copies new nested files byte-identically and preserves the source mode bit', () => {
+  const sourceRoot = makeImportSourceFixture({
+    'hooks/pre-commit': '#!/bin/sh\necho hook\n',
+  });
+  chmodSync(join(sourceRoot, 'idd-template', 'hooks', 'pre-commit'), 0o755);
+  const targetRoot = makeFixtureDir();
+  const plan = buildImportPlan(sourceRoot, targetRoot);
+  assert.equal(plan.entries[0]?.classification, 'new');
+  const filesChanged = applyImportPlan(sourceRoot, targetRoot, plan);
+  assert.equal(filesChanged, 1);
+  const targetHook = join(targetRoot, 'hooks', 'pre-commit');
+  assert.equal(readFileSync(targetHook, 'utf8'), '#!/bin/sh\necho hook\n');
+  assert.equal(statSync(targetHook).mode & 0o777, 0o755);
+});
+
+test('applyImportPlan skips unchanged files without rewriting them', () => {
+  const sourceRoot = makeImportSourceFixture({ 'a.md': 'same\n' });
+  const targetRoot = makeFixtureDir();
+  writeFileSync(join(targetRoot, 'a.md'), 'same\n');
+  const plan = buildImportPlan(sourceRoot, targetRoot);
+  assert.equal(plan.entries[0]?.classification, 'unchanged');
+  assert.equal(applyImportPlan(sourceRoot, targetRoot, plan), 0);
+});
+
+test('applyImportPlan only overwrites a differing target when the plan was built with force', () => {
+  const sourceRoot = makeImportSourceFixture({ 'a.md': 'new content\n' });
+  const targetRoot = makeFixtureDir();
+  writeFileSync(join(targetRoot, 'a.md'), 'old content\n');
+
+  const forcedPlan = buildImportPlan(sourceRoot, targetRoot, { force: true });
+  assert.deepEqual(forcedPlan.blockedOverwrites, []);
+  assert.equal(forcedPlan.entries[0]?.classification, 'overwrite');
+  assert.equal(applyImportPlan(sourceRoot, targetRoot, forcedPlan), 1);
+  assert.equal(readFileSync(join(targetRoot, 'a.md'), 'utf8'), 'new content\n');
+});
+
+test('a real idd-skill source tree imports the full core file set byte-identically into an empty target', () => {
+  const targetRoot = makeFixtureDir();
+  const plan = buildImportPlan(REPO_ROOT, targetRoot);
+  assert.deepEqual(plan.missingSource, []);
+  assert.deepEqual(plan.blockedOverwrites, []);
+  assert.ok(plan.entries.length > 0);
+  assert.ok(plan.entries.every((entry) => entry.classification === 'new'));
+
+  const filesChanged = applyImportPlan(REPO_ROOT, targetRoot, plan);
+  assert.equal(filesChanged, plan.entries.length);
+  for (const entry of plan.entries) {
+    const sourceBytes = readFileSync(join(REPO_ROOT, entry.sourcePath));
+    const targetBytes = readFileSync(join(targetRoot, entry.targetPath));
+    assert.ok(
+      sourceBytes.equals(targetBytes),
+      `byte mismatch: ${entry.targetPath}`,
+    );
+  }
+  // The pre-commit hook's executable bit must survive the copy.
+  const hookMode = statSync(join(targetRoot, '.githooks', 'pre-commit')).mode;
+  assert.equal(hookMode & 0o111, 0o111);
+});
+
+// ---------------------------------------------------------------------------
 // CLI (acceptance criteria) through the committed bin artifact
 // ---------------------------------------------------------------------------
 
@@ -730,6 +1200,218 @@ test('bin/idd-onboard.mjs exits 2 on usage errors, distinct from residue', () =>
     const failed = error as { status?: number; stderr?: string };
     assert.equal(failed.status, 2);
     assert.match(String(failed.stderr), /unknown argument/);
+  }
+});
+
+test('bin/idd-onboard.mjs --import --dry-run prints the plan and writes nothing', () => {
+  const targetRoot = makeFixtureDir();
+  const before = snapshotTree(targetRoot);
+  const { status, verdict } = runCliBin([
+    '--import',
+    '--dry-run',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.mode, 'dry-run');
+  assert.equal(verdict.written, false);
+  assert.ok(Array.isArray(verdict.plan) && verdict.plan.length > 0);
+  assert.deepEqual(verdict.missingSource, []);
+  assert.deepEqual(verdict.blockedOverwrites, []);
+  assertTreeUnchanged(targetRoot, before);
+});
+
+test('bin/idd-onboard.mjs --import without --dry-run copies exactly the planned set', () => {
+  const targetRoot = makeFixtureDir();
+  const { status, verdict } = runCliBin([
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.mode, 'apply');
+  assert.equal(verdict.written, true);
+  const plan = verdict.plan as { targetPath: string }[];
+  assert.equal(verdict.filesChanged, plan.length);
+  for (const entry of plan) {
+    assert.ok(
+      existsSync(join(targetRoot, entry.targetPath)),
+      `not copied: ${entry.targetPath}`,
+    );
+  }
+});
+
+test('bin/idd-onboard.mjs --import blocks on a differing existing target file without --force', () => {
+  const targetRoot = makeFixtureDir();
+  mkdirSync(join(targetRoot, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(targetRoot, '.github', 'idd', 'config.json'),
+    '{"stale": true}\n',
+  );
+  const before = snapshotTree(targetRoot);
+  const { status, verdict } = runCliBin([
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 1);
+  assert.equal(verdict.written, false);
+  assert.ok(
+    (verdict.blockedOverwrites as string[]).includes('.github/idd/config.json'),
+  );
+  assertTreeUnchanged(targetRoot, before);
+});
+
+test('bin/idd-onboard.mjs --import --force overwrites a differing existing target file', () => {
+  const targetRoot = makeFixtureDir();
+  mkdirSync(join(targetRoot, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(targetRoot, '.github', 'idd', 'config.json'),
+    '{"stale": true}\n',
+  );
+  const { status, verdict } = runCliBin([
+    '--import',
+    '--force',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.written, true);
+  assert.equal(
+    readFileSync(join(targetRoot, '.github', 'idd', 'config.json'), 'utf8'),
+    readFileSync(
+      join(REPO_ROOT, 'idd-template', '.github', 'idd', 'config.json'),
+      'utf8',
+    ),
+  );
+});
+
+test('bin/idd-onboard.mjs --import blocks a non-file target collision even with --force', () => {
+  const targetRoot = makeFixtureDir();
+  // A directory occupies a declared core-file target path.
+  mkdirSync(join(targetRoot, '.github', 'idd', 'config.json'), {
+    recursive: true,
+  });
+  const before = snapshotTree(targetRoot);
+  const { status, verdict } = runCliBin([
+    '--import',
+    '--force',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 1);
+  assert.equal(verdict.written, false);
+  assert.ok(
+    (verdict.nonFileTargetCollisions as string[]).includes(
+      '.github/idd/config.json',
+    ),
+  );
+  assertTreeUnchanged(targetRoot, before);
+  // The directory itself must survive untouched (not replaced by a file).
+  assert.ok(
+    statSync(join(targetRoot, '.github', 'idd', 'config.json')).isDirectory(),
+  );
+});
+
+test('bin/idd-onboard.mjs --import exits 2 when --source is missing', () => {
+  const targetRoot = makeFixtureDir();
+  try {
+    execFileSync(
+      process.execPath,
+      [BIN_PATH, '--import', '--target', targetRoot],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(String(failed.stderr), /--source/);
+  }
+});
+
+test('bin/idd-onboard.mjs exits 2 when both --substitute and --import are passed', () => {
+  const targetRoot = makeFixtureDir();
+  try {
+    execFileSync(
+      process.execPath,
+      [BIN_PATH, '--substitute', '--import', '--target', targetRoot],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(String(failed.stderr), /mutually exclusive/);
+  }
+});
+
+test('bin/idd-onboard.mjs --help lists --profile values sourced from PROFILE_NAMES, not a second hardcoded list', () => {
+  const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  for (const profile of PROFILE_NAMES) {
+    assert.ok(help.includes(profile), `--help is missing profile: ${profile}`);
+  }
+});
+
+test('bin/idd-onboard.mjs exits 2 when --import is combined with a substitute-only placeholder override', () => {
+  const targetRoot = makeFixtureDir();
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--import',
+        '--source',
+        REPO_ROOT,
+        '--target',
+        targetRoot,
+        '--repo-name',
+        'my-app',
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(String(failed.stderr), /substitute-only flag/);
+    assert.match(String(failed.stderr), /--repo-name/);
+  }
+});
+
+test('bin/idd-onboard.mjs exits 2 when --substitute is combined with an import-only flag', () => {
+  const targetRoot = makeFixtureDir();
+  writeTemplateFixture(targetRoot);
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--substitute',
+        '--target',
+        targetRoot,
+        '--force',
+        ...CLI_OVERRIDE_FLAGS,
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(String(failed.stderr), /import-only flag/);
+    assert.match(String(failed.stderr), /--force/);
   }
 });
 

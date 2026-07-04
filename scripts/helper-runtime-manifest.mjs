@@ -31,7 +31,10 @@ function resolveRepoRoot(fromUrl) {
 }
 const PACKAGE_ROOT = resolveRepoRoot(import.meta.url);
 const PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn'];
-const PROFILE_NAMES = [
+// Exported so other onboarding-stage CLIs (e.g. idd-onboard.mts's --import
+// mode) can validate a --profile flag against the same canonical set
+// instead of hand-maintaining a second copy of these four names.
+export const PROFILE_NAMES = [
   'package-manager',
   'vendored-node',
   'ephemeral-npx',
