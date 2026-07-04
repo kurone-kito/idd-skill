@@ -864,6 +864,21 @@ export async function enumerateRoadmapGraph(
       }
 
       if (path.includes(edge.target)) {
+        // #1278: a plain `Refs` back-reference from a CLOSED non-roadmap leaf
+        // to an ancestor is the provenance breadcrumb the A1.5 follow-up rule
+        // requires in follow-up issue bodies, not closure-order ambiguity.
+        // Keep the edge itself as informational provenance and record no
+        // cycle diagnostic. Back-edges from OPEN nodes, from roadmap nodes,
+        // and via any stronger relationship (task-list, dependency,
+        // closing-keyword, sub-issue) still record a cycle (fail closed).
+        const sourceRecord = nodeRecords.get(edge.source);
+        if (
+          edge.relationship === 'reference' &&
+          sourceRecord?.classification === 'execution' &&
+          sourceRecord.state === 'CLOSED'
+        ) {
+          continue;
+        }
         const cyclePath = [...path, edge.target];
         const cycleKey = cyclePath.join('>');
         if (!cycleKeys.has(cycleKey)) {

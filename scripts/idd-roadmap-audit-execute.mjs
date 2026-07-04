@@ -61,7 +61,11 @@ function roadmapAuditBranchPattern(roadmapNumber) {
  * roadmap descendant, every traversal cycle, a blocked roadmap root, and a
  * childless/malformed roadmap is collected as a blocker; `ready` is true only
  * when no blocker is collected. The rules mirror the written A1.5 completion
- * criteria exactly — this helper adds no stricter sub-condition. Pure and
+ * criteria exactly — this helper adds no stricter sub-condition. One shape is
+ * interpreted as safe rather than ambiguous (#1278): a `reference` back-edge
+ * from a non-roadmap execution leaf is the provenance breadcrumb the A1.5
+ * follow-up rule itself requires, so it never blocks as a cycle (an open
+ * leaf still blocks as `open-child`). Pure and
  * network-free so it is unit-testable apart from live GitHub.
  */
 export function evaluateRoadmapAuditGates(report, options = {}) {
@@ -171,8 +175,26 @@ export function evaluateRoadmapAuditGates(report, options = {}) {
       detail: `reference #${diagnostic.source} → #${diagnostic.target} (${diagnostic.relationship}) is inaccessible: ${diagnostic.reason}`,
     });
   }
-  // Cycles / ambiguous graph: do not guess a closure order.
+  // Cycles / ambiguous graph: do not guess a closure order. A `reference`
+  // back-edge whose source is a non-roadmap execution leaf is exempt (#1278):
+  // a closed leaf's `Refs #<roadmap>` breadcrumb is the provenance the A1.5
+  // follow-up rule requires, and an open leaf is already blocked above as
+  // `open-child`, so the audit still fails closed while reporting the true
+  // cause. Roadmap-source cycles, unknown-source cycles, stronger
+  // relationships (task-list / dependency / closing-keyword / sub-issue),
+  // and execution sources in any other state keep blocking.
+  const openExecutionLeaves = new Set(report.executionCandidates);
   for (const cycle of report.diagnostics.cycles) {
+    const sourceNode = report.nodes.find(
+      (entry) => entry.number === cycle.source,
+    );
+    if (
+      cycle.relationship === 'reference' &&
+      sourceNode?.classification === 'execution' &&
+      (sourceNode.state === 'CLOSED' || openExecutionLeaves.has(cycle.source))
+    ) {
+      continue;
+    }
     blockers.push({
       kind: 'cycle',
       target: cycle.target,
