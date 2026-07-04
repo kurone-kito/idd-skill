@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -663,24 +664,27 @@ test('resolveImportFiles vends no extra files for a non-vendored-node profile', 
     (f) => f.targetPath,
   );
   assert.deepEqual(
-    withoutProfile.map((f) => f.targetPath),
+    withoutProfile.files.map((f) => f.targetPath),
     coreTargets,
   );
+  assert.deepEqual(withoutProfile.missingSource, []);
   assert.deepEqual(
-    packageManagerProfile.map((f) => f.targetPath),
+    packageManagerProfile.files.map((f) => f.targetPath),
     coreTargets,
   );
+  assert.deepEqual(packageManagerProfile.missingSource, []);
 });
 
 test('resolveImportFiles includes the helper bundle only for the vendored-node profile', () => {
-  const files = resolveImportFiles(REPO_ROOT, 'vendored-node');
+  const resolved = resolveImportFiles(REPO_ROOT, 'vendored-node');
+  assert.deepEqual(resolved.missingSource, []);
   const coreTargets = new Set(
     resolveCoreTemplateFiles(REPO_ROOT).map((f) => f.targetPath),
   );
   const helperTargets = new Set(
     collectVendoredFiles(REPO_ROOT).map((f) => f.targetPath),
   );
-  const resultTargets = new Set(files.map((f) => f.targetPath));
+  const resultTargets = new Set(resolved.files.map((f) => f.targetPath));
   assert.equal(resultTargets.size, coreTargets.size + helperTargets.size);
   for (const target of coreTargets) {
     assert.ok(resultTargets.has(target), `missing core file: ${target}`);
@@ -695,6 +699,65 @@ test('resolveImportFiles rejects an unknown --profile value', () => {
     () => resolveImportFiles(REPO_ROOT, 'bogus-profile'),
     /unknown --profile/u,
   );
+});
+
+/**
+ * A real idd-skill tree copy with one vendored helper entry deleted, so
+ * collectVendoredFiles's import-graph walk hits that missing file.
+ * Excludes node_modules and other heavy/irrelevant directories to keep
+ * the copy cheap.
+ */
+function makeIncompleteVendoredSourceFixture(
+  missingRelativePath: string,
+): string {
+  const root = makeFixtureDir();
+  for (const dir of [
+    'idd-template',
+    'audit',
+    'scripts',
+    'schemas',
+    'fixtures',
+  ]) {
+    const source = join(REPO_ROOT, dir);
+    if (existsSync(source)) {
+      cpSync(source, join(root, dir), { recursive: true });
+    }
+  }
+  rmSync(join(root, missingRelativePath), { force: true });
+  return root;
+}
+
+test('resolveImportFiles reports a missing vendored helper file via missingSource instead of crashing', () => {
+  const sourceRoot = makeIncompleteVendoredSourceFixture(
+    'scripts/branch-name.mjs',
+  );
+  const resolved = resolveImportFiles(sourceRoot, 'vendored-node');
+  assert.deepEqual(resolved.missingSource, ['scripts/branch-name.mjs']);
+  // The core file set still resolves even though the vendored bundle
+  // walk was interrupted by the missing helper file.
+  assert.ok(resolved.files.length > 0);
+  assert.ok(
+    resolved.files.every(
+      (file) => file.targetPath !== 'scripts/branch-name.mjs',
+    ),
+  );
+});
+
+test('buildImportPlan blocks a non-directory ancestor collision, not just a leaf collision', () => {
+  const sourceRoot = makeImportSourceFixture({ 'nested/a.md': 'alpha\n' });
+  const targetRoot = makeFixtureDir();
+  // A plain file occupies "nested", the ancestor directory the manifest
+  // path "nested/a.md" needs to be created under.
+  writeFileSync(join(targetRoot, 'nested'), 'not a directory\n');
+
+  const plan = buildImportPlan(sourceRoot, targetRoot);
+  assert.equal(plan.entries[0]?.classification, 'blocked-non-file');
+  assert.deepEqual(plan.nonFileTargetCollisions, ['nested/a.md']);
+
+  // applyImportPlan must never attempt the impossible mkdirSync/copy, even
+  // if a caller applied the plan without checking the blocking arrays.
+  assert.equal(applyImportPlan(sourceRoot, targetRoot, plan), 0);
+  assert.ok(statSync(join(targetRoot, 'nested')).isFile());
 });
 
 /** A minimal idd-skill-shaped source tree: just enough for resolveImportFiles. */

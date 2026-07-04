@@ -166,6 +166,32 @@ function pathExists(root, name) {
     return false;
   }
 }
+/**
+ * Whether any ancestor directory segment of `root`/`relativePath` already
+ * exists as a non-directory entry (e.g. a plain file at `.github` when
+ * planning `.github/idd/config.json`). `mkdirSync`'s recursive mode cannot
+ * create a directory through such an obstruction, so this must be checked
+ * separately from the leaf path itself (see `pathExists`). `relativePath`
+ * uses `/` separators, matching every `ManifestFile.targetPath` in this
+ * module. A missing (rather than non-directory) ancestor is fine —
+ * `mkdirSync`'s recursive mode creates it — so this returns `false` as
+ * soon as an ancestor segment does not exist yet.
+ */
+function hasNonDirectoryAncestor(root, relativePath) {
+  const segments = relativePath.split('/').slice(0, -1);
+  let current = root;
+  for (const segment of segments) {
+    current = join(current, segment);
+    try {
+      if (!statSync(current).isDirectory()) {
+        return true;
+      }
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
 function readTextIfPresent(root, name) {
   try {
     return readFileSync(join(root, name), 'utf8');
@@ -589,7 +615,7 @@ export function resolveCoreTemplateFiles(sourceRoot) {
 export function resolveImportFiles(sourceRoot, profile) {
   const coreFiles = resolveCoreTemplateFiles(sourceRoot);
   if (!profile) {
-    return coreFiles;
+    return { files: coreFiles, missingSource: [] };
   }
   if (!PROFILE_NAMES.includes(profile)) {
     throw new Error(
@@ -597,12 +623,27 @@ export function resolveImportFiles(sourceRoot, profile) {
     );
   }
   if (profile !== 'vendored-node') {
-    return coreFiles;
+    return { files: coreFiles, missingSource: [] };
   }
-  const helperFiles = collectVendoredFiles(sourceRoot).map((file) => ({
-    sourcePath: file.sourcePath,
-    targetPath: file.targetPath,
-  }));
+  let helperFiles;
+  try {
+    helperFiles = collectVendoredFiles(sourceRoot).map((file) => ({
+      sourcePath: file.sourcePath,
+      targetPath: file.targetPath,
+    }));
+  } catch (error) {
+    // collectVendoredFiles reads each helper entry's content to walk its
+    // import graph, so a missing helper file under an incomplete or
+    // version-skewed --source tree throws a raw fs error (ENOENT) instead
+    // of the missingSource reporting the core file set uses. Degrade to
+    // the core file set alone and surface the specific unreadable path
+    // (when the error exposes one) as a blocking finding, rather than
+    // letting the raw exception crash the CLI with a bare exit 2.
+    return {
+      files: coreFiles,
+      missingSource: [describeUnresolvedVendoredPath(sourceRoot, error)],
+    };
+  }
   const merged = [...coreFiles, ...helperFiles];
   const seenTargets = new Set();
   for (const file of merged) {
@@ -613,7 +654,20 @@ export function resolveImportFiles(sourceRoot, profile) {
     }
     seenTargets.add(file.targetPath);
   }
-  return merged;
+  return { files: merged, missingSource: [] };
+}
+/**
+ * Best-effort description of the source path that broke the vendored-node
+ * bundle walk, derived from the failing fs error's `path` property. Falls
+ * back to a generic label when the error does not expose one so a caller
+ * always has a non-empty `missingSource` entry to report.
+ */
+function describeUnresolvedVendoredPath(sourceRoot, error) {
+  const path = error?.path;
+  if (typeof path === 'string') {
+    return relative(sourceRoot, path).replaceAll('\\', '/');
+  }
+  return 'vendored-node helper bundle (unresolvable: unreadable helper source)';
 }
 /**
  * Build the import plan: classify each manifest file as `new` (no target
@@ -631,22 +685,28 @@ export function buildImportPlan(
   targetRoot,
   { profile, force = false } = {},
 ) {
-  const files = resolveImportFiles(sourceRoot, profile);
+  const resolved = resolveImportFiles(sourceRoot, profile);
   const entries = [];
-  const missingSource = [];
+  const missingSource = [...resolved.missingSource];
   const blockedOverwrites = [];
   const nonFileTargetCollisions = [];
-  for (const file of files) {
+  for (const file of resolved.files) {
     if (!fileExists(sourceRoot, file.sourcePath)) {
       missingSource.push(file.sourcePath);
       continue;
     }
     if (!fileExists(targetRoot, file.targetPath)) {
-      if (pathExists(targetRoot, file.targetPath)) {
-        // The target path exists but is not a regular file (e.g. a
-        // directory). Treating this as "new" would make applyImportPlan's
-        // copyFileSync throw EISDIR/ENOTDIR, possibly after already
-        // writing earlier entries — fail closed instead.
+      if (
+        pathExists(targetRoot, file.targetPath) ||
+        hasNonDirectoryAncestor(targetRoot, file.targetPath)
+      ) {
+        // Either the target path itself exists but is not a regular file
+        // (e.g. a directory), or an ancestor path segment is not a
+        // directory (e.g. a plain file at `.github` when planning
+        // `.github/idd/config.json`). Treating either case as "new" would
+        // make applyImportPlan's mkdirSync/copyFileSync throw
+        // EISDIR/ENOTDIR, possibly after already writing earlier entries
+        // — fail closed instead.
         entries.push({ ...file, classification: 'blocked-non-file' });
         nonFileTargetCollisions.push(file.targetPath);
         continue;
