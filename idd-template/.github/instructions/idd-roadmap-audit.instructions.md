@@ -31,17 +31,21 @@ results only to link existing gap work or avoid creating a duplicate,
 not to widen A2 candidates.
 
 When the selected roadmap graph includes descendant issues that are
-themselves roadmap nodes, such as descendants carrying the `roadmap`
-label or a `{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker, treat those
+themselves roadmap nodes, such as descendants carrying the configured
+roadmap label from `labels.roadmapLabelName` (default: `roadmap`) or a
+`{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker, treat those
 descendants as **nested roadmaps** rather than as normal execution
 leaves. A nested roadmap is a coordination/audit node in the recursive
 hierarchy: it may remain open while its own leaf descendants are still
 executing, and its presence does not by itself widen A2 candidates
 outside the selected roadmap graph.
 
-- If the roadmap itself has `status:blocked-by-human` or
-  `status:needs-decision`, report the blocker and stop before A2. Do
-  not continue selecting child issues under a blocked roadmap.
+- If the roadmap itself carries the configured blocked-by-human label
+  from `labels.blockedByHumanLabelName` (default:
+  `status:blocked-by-human`) or configured needs-decision label from
+  `labels.needsDecisionLabelName` (default: `status:needs-decision`),
+  report the blocker and stop before A2. Do not continue selecting
+  child issues under a blocked roadmap.
 - If any referenced child or descendant issue is open, inaccessible, or
   unresolved, report the provenance path and reason, then continue to
   A2, unless the open descendant is a nested roadmap with at least one
@@ -52,12 +56,11 @@ outside the selected roadmap graph.
 - If any referenced child or descendant has an open linked or closing
   PR that is not merged or otherwise obsolete, treat that child work as
   unresolved, report the PR, and continue to A2.
-- If any open or unresolved child or descendant has
-  `status:blocked-by-human` or `status:needs-decision`, report the
-  blocker and continue to A2 or stop according to the normal
-  ready-to-start rules. Do not treat stale blocker labels on closed
-  children as audit blockers when their referenced descendants are
-  resolved.
+- If any open or unresolved child or descendant has the configured
+  blocked-by-human or needs-decision label, report the blocker and
+  continue to A2 or stop according to the normal ready-to-start
+  rules. Do not treat stale blocker labels on closed children as
+  audit blockers when their referenced descendants are resolved.
 - If an open leaf issue sits under an open nested roadmap, treat the
   nested roadmap and every ancestor roadmap on that provenance path as
   unresolved. Report the deepest blocking path and continue to A2.
@@ -160,8 +163,8 @@ Apply one outcome:
   issue link so the next audit can link it before considering
   duplicates.
 - **Non-autonomous gaps found**: comment with the decision or human
-  blocker, apply `status:needs-decision` or `status:blocked-by-human`
-  when those labels exist, and do not close the roadmap. Stop before A2
-  after reporting a non-autonomous gap, even if the repository does not
-  have the blocker labels, so the same unattended run cannot select
-  child work under a roadmap that needs human input.
+  blocker, apply the configured needs-decision or blocked-by-human
+  label when those labels exist, and do not close the roadmap. Stop
+  before A2 after reporting a non-autonomous gap, even if the
+  repository does not have the blocker labels, so the same unattended
+  run cannot select child work under a roadmap that needs human input.

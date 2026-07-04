@@ -197,9 +197,11 @@ For each Rejected PATH A item whose source is reviewer feedback:
     (distributed default: `PT24H`) of no response: escalate to a
     maintainer via issue or PR comment.
   - After `reviewEscalation.changesRequestedSecondEscalation`
-    (distributed default: `PT48H`) of no escalation response: consider adding a
-    `status:needs-decision` label and releasing the claim. The label may
-    be removed and the issue re-claimed once the blocker is resolved.
+    (distributed default: `PT48H`) of no escalation response: consider
+    adding the configured needs-decision label from
+    `labels.needsDecisionLabelName` (default: `status:needs-decision`)
+    and releasing the claim. The label may be removed and the issue
+    re-claimed once the blocker is resolved.
   - If a maintainer or admin (other than the original reviewer) agrees
     with your rejection: that agreement is **not sufficient on its own**
     to clear F2's `CHANGES_REQUESTED` gate. Ask them to either obtain
