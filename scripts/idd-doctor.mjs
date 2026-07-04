@@ -55,6 +55,7 @@ export function runDoctor({
   checkPolicySignals(root, report);
   checkHelperRuntimeConfig(root, report);
   checkClaimTimingConsistency(root, report);
+  checkDependencyVersionDrift(root, report);
   checkAgentEntryFiles(root, report);
   checkTemplateVersionSignal(root, report);
   const worktreeGuardEnforced =
@@ -924,6 +925,123 @@ export function checkClaimTimingConsistency(root, report) {
   const finding = classifyClaimTimingConsistency(claimTiming, overviewCoreText);
   if (finding) {
     report.warnings.push(finding.message);
+  }
+}
+// The two packages implicated in the #1164 incident: a stale node_modules
+// install silently masked a real `pnpm run typecheck` break on fresh
+// installs, because the break only surfaced once `@types/node` was
+// actually installed at its lockfile-resolved version. Kept as a single
+// array literal so extending coverage to another package is a one-line
+// change, not a redesign.
+const DEPENDENCY_VERSION_DRIFT_PACKAGES = ['typescript', '@types/node'];
+/**
+ * Extract the resolved `version:` pinned for `packageName` under the root
+ * `.` importer's `dependencies`/`devDependencies` maps in a `pnpm-lock.yaml`
+ * text (lockfileVersion 9's nested `specifier:`/`version:` shape). Pure (no
+ * I/O) so it can be unit-tested directly. Returns `null` when the
+ * `importers:` section, the root `.` importer, or the named package's own
+ * entry cannot be found — a miss here is a staleness signal, not a
+ * required-file check, so the caller must skip silently rather than treat
+ * `null` as an error. A version resolved with a trailing peer-dependency
+ * annotation (e.g. `21.2.0(@types/node@26.1.0)`) is stripped down to the
+ * bare version so it compares cleanly against an installed package's plain
+ * `package.json` `version` field.
+ */
+export function parseLockfileImporterVersion(lockfileText, packageName) {
+  if (typeof lockfileText !== 'string' || lockfileText.length === 0) {
+    return null;
+  }
+  const normalized = lockfileText.replace(/\r\n/g, '\n');
+  const importersIndex = normalized.indexOf('\nimporters:');
+  if (importersIndex === -1) {
+    return null;
+  }
+  const rootMarker = '\n  .:\n';
+  const rootIndex = normalized.indexOf(rootMarker, importersIndex);
+  if (rootIndex === -1) {
+    return null;
+  }
+  const blockStart = rootIndex + rootMarker.length;
+  // The root importer's own block ends at the next line indented 2
+  // columns or fewer: either a sibling importer entry (workspace repos)
+  // or a top-level key such as `packages:`.
+  const boundaryMatch = /\n {0,2}\S/.exec(normalized.slice(blockStart));
+  const blockEnd = boundaryMatch
+    ? blockStart + (boundaryMatch.index ?? 0)
+    : normalized.length;
+  const block = normalized.slice(blockStart, blockEnd);
+  const escaped = packageName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const entryPattern = new RegExp(
+    `\\n {6}'?${escaped}'?:\\n(?:.*\\n)*? {8}version: *([^\\n]+)`,
+  );
+  const match = entryPattern.exec(block);
+  if (!match) {
+    return null;
+  }
+  const bare = match[1]
+    .trim()
+    .replace(/^['"]|['"]$/g, '')
+    .split('(')[0]
+    .trim();
+  return bare.length > 0 ? bare : null;
+}
+/**
+ * Compare each package's installed `node_modules` version against what
+ * `pnpm-lock.yaml` resolves for it, and produce one warning string for
+ * every entry where both sides are known and differ. Pure (no I/O) so it
+ * can be unit-tested directly. An entry with either side unknown (package
+ * not installed, or not found in the lockfile) is a staleness signal only
+ * — skipped without a warning, per this check's acceptance criteria.
+ */
+export function evaluateDependencyVersionDrift(entries) {
+  const warnings = [];
+  for (const { name, installed, resolved } of entries) {
+    if (!installed || !resolved || installed === resolved) {
+      continue;
+    }
+    warnings.push(
+      `dependency version drift: node_modules/${name} is installed at ${installed}, but pnpm-lock.yaml resolves ${resolved}. Run pnpm install to sync node_modules with the lockfile.`,
+    );
+  }
+  return warnings;
+}
+function readInstalledPackageVersion(root, name) {
+  const packageJsonPath = join(root, 'node_modules', name, 'package.json');
+  if (!exists(packageJsonPath)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+    return typeof parsed.version === 'string' ? parsed.version : null;
+  } catch {
+    return null;
+  }
+}
+/**
+ * Warn (never fail) when the installed `node_modules/typescript` or
+ * `node_modules/@types/node` version drifts from what `pnpm-lock.yaml`
+ * resolves for this project's own root dependency. This is the local
+ * diagnostic half of the #1198 fix: it surfaces a stale local install
+ * *before* an agent chases a phantom typecheck failure caused by it — see
+ * the #1164 incident, where a stale `@types/node` install masked a real
+ * break for fresh installs. Skips silently (no warning, no error) when
+ * `pnpm-lock.yaml`, `node_modules`, or a package's matching lockfile entry
+ * is absent; this is a staleness signal, not a required-file check.
+ */
+export function checkDependencyVersionDrift(root, report) {
+  let lockfileText;
+  try {
+    lockfileText = readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8');
+  } catch {
+    return;
+  }
+  const entries = DEPENDENCY_VERSION_DRIFT_PACKAGES.map((name) => ({
+    name,
+    installed: readInstalledPackageVersion(root, name),
+    resolved: parseLockfileImporterVersion(lockfileText, name),
+  }));
+  for (const warning of evaluateDependencyVersionDrift(entries)) {
+    report.warnings.push(warning);
   }
 }
 function checkAgentEntryFiles(root, report) {
