@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import {
+  extractSection,
+  extractTopLevelSection,
+  readText,
+} from './test-utils.mts';
 
 const FILES = ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md'] as const;
 type EntryFile = (typeof FILES)[number];
@@ -152,39 +156,3 @@ test('canonical-reference tool naming stays per-tool and does not cross-contamin
     }
   }
 });
-
-function readText(relativePath: string): string {
-  return readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8');
-}
-
-function extractTopLevelSection(
-  text: string,
-  fileLabel: string,
-  startMarker: string,
-): string {
-  const nextSectionMarker = '\n## ';
-  const start = text.indexOf(startMarker);
-  assert.notEqual(
-    start,
-    -1,
-    `${fileLabel} is missing section marker: ${startMarker}`,
-  );
-  const nextSectionStart = text.indexOf(
-    nextSectionMarker,
-    start + startMarker.length,
-  );
-  const end = nextSectionStart === -1 ? text.length : nextSectionStart;
-  return text.slice(start, end).trim();
-}
-
-function extractSection(
-  text: string,
-  startMarker: string,
-  endMarker: string,
-): string {
-  const start = text.indexOf(startMarker);
-  assert.notEqual(start, -1, `Missing section marker: ${startMarker}`);
-  const end = text.indexOf(endMarker, start);
-  assert.notEqual(end, -1, `Missing section marker: ${endMarker}`);
-  return text.slice(start, end);
-}
