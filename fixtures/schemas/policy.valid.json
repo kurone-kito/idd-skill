@@ -88,5 +88,10 @@
   "worktreeGuard": {
     "enabled": true,
     "branchPatterns": ["issue/*", "roadmap-audit/*"]
+  },
+  "labels": {
+    "roadmapLabelName": "roadmap",
+    "blockedByHumanLabelName": "status:blocked-by-human",
+    "needsDecisionLabelName": "status:needs-decision"
   }
 }

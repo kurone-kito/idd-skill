@@ -106,6 +106,14 @@ export const POLICY_DEFAULTS = Object.freeze({
     authoringLabelName: 'status:authoring',
     authoringStaleAge: 'PT4H',
   }),
+  // Additive only (#1272): no consuming helper reads this namespace yet.
+  // Wiring the discover/claim/roadmap-audit label lookups to it is
+  // deferred to a follow-up issue (#1273).
+  labels: Object.freeze({
+    roadmapLabelName: 'roadmap',
+    blockedByHumanLabelName: 'status:blocked-by-human',
+    needsDecisionLabelName: 'status:needs-decision',
+  }),
 });
 export function parseProjectCommandRows(text) {
   const commands = new Map();
@@ -349,6 +357,25 @@ export function normalizePolicyConfig(config) {
       authoringStaleAge: parseDuration(
         c?.issueAuthoring?.authoringStaleAge,
         POLICY_DEFAULTS.issueAuthoring.authoringStaleAge,
+      ),
+    },
+    // Additive only (#1272): normalized here for shape parity with the
+    // clone(POLICY_DEFAULTS) early-return branch above (non-object
+    // input), but no consuming helper reads this namespace yet. Wiring
+    // the discover/claim/roadmap-audit label lookups to it is deferred
+    // to a follow-up issue (#1273).
+    labels: {
+      roadmapLabelName: parseNonEmptyString(
+        c?.labels?.roadmapLabelName,
+        POLICY_DEFAULTS.labels.roadmapLabelName,
+      ),
+      blockedByHumanLabelName: parseNonEmptyString(
+        c?.labels?.blockedByHumanLabelName,
+        POLICY_DEFAULTS.labels.blockedByHumanLabelName,
+      ),
+      needsDecisionLabelName: parseNonEmptyString(
+        c?.labels?.needsDecisionLabelName,
+        POLICY_DEFAULTS.labels.needsDecisionLabelName,
       ),
     },
   };
