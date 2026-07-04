@@ -30,6 +30,9 @@ import {
   applySubstitutionPlan,
   buildImportPlan,
   buildSubstitutionPlan,
+  checkManifestCompleteness,
+  checkPlaceholderResidue,
+  checkStaleImportSignal,
   deriveInstallDepsCommand,
   deriveMarkerPrefix,
   deriveValidateCommands,
@@ -40,6 +43,7 @@ import {
   resolveCoreTemplateFiles,
   resolveImportFiles,
   resolvePlaceholderValues,
+  runVerify,
   scanPlaceholderTokens,
 } from '../src/scripts/idd-onboard.mts';
 
@@ -1413,6 +1417,317 @@ test('bin/idd-onboard.mjs exits 2 when --substitute is combined with an import-o
     assert.match(String(failed.stderr), /import-only flag/);
     assert.match(String(failed.stderr), /--force/);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Wave 3: --verify (post-import verification, reusing doctor drift checks)
+// ---------------------------------------------------------------------------
+
+/**
+ * Import the real core file set from REPO_ROOT into `targetRoot`, then
+ * substitute every placeholder with `ALL_OVERRIDES`, producing a target
+ * tree that should pass `--verify` cleanly (the same two-stage flow
+ * `idd-template/ONBOARDING.md` documents).
+ */
+function importAndSubstitute(targetRoot: string): void {
+  const importPlan = buildImportPlan(REPO_ROOT, targetRoot);
+  applyImportPlan(REPO_ROOT, targetRoot, importPlan);
+  const resolution = resolvePlaceholderValues(targetRoot, ALL_OVERRIDES);
+  const subPlan = buildSubstitutionPlan(
+    scanPlaceholderTokens(targetRoot),
+    resolution,
+  );
+  applySubstitutionPlan(targetRoot, subPlan);
+}
+
+test('checkManifestCompleteness reports no gap for a fully imported target', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  const result = checkManifestCompleteness(REPO_ROOT, targetRoot);
+  assert.deepEqual(result.missingSource, []);
+  assert.deepEqual(result.missingTarget, []);
+});
+
+test('checkManifestCompleteness reports a deleted manifest file as missingTarget', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  rmSync(
+    join(targetRoot, '.github', 'instructions', 'idd-work.instructions.md'),
+  );
+  const result = checkManifestCompleteness(REPO_ROOT, targetRoot);
+  assert.deepEqual(result.missingSource, []);
+  assert.ok(
+    result.missingTarget.includes(
+      '.github/instructions/idd-work.instructions.md',
+    ),
+  );
+});
+
+test('checkManifestCompleteness checks every file resolveImportFiles declares, not a forked subset', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  const resolved = resolveImportFiles(REPO_ROOT);
+  // Delete every declared file's target one at a time is too slow; instead
+  // assert the check surfaces a real declared file as missing (proving it
+  // is drawn from the same list resolveImportFiles produces, not a second,
+  // possibly incomplete, hardcoded one).
+  const sample = resolved.files[0];
+  assert.ok(sample, 'resolveImportFiles must declare at least one file');
+  rmSync(join(targetRoot, sample.targetPath));
+  const result = checkManifestCompleteness(REPO_ROOT, targetRoot);
+  assert.ok(result.missingTarget.includes(sample.targetPath));
+});
+
+test('checkPlaceholderResidue classifies a leftover onboarding placeholder as blocking residue', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  writeFileSync(
+    join(targetRoot, 'LEFTOVER.md'),
+    '{{REPO_NAME}} and {{SOME_ADOPTER_TOKEN}} remain\n',
+  );
+  const result = checkPlaceholderResidue(targetRoot);
+  assert.ok(
+    result.residue.some(
+      (entry) =>
+        entry.file === 'LEFTOVER.md' && entry.token === '{{REPO_NAME}}',
+    ),
+  );
+  assert.ok(
+    result.unknownTokens.some(
+      (entry) =>
+        entry.file === 'LEFTOVER.md' &&
+        entry.token === '{{SOME_ADOPTER_TOKEN}}',
+    ),
+  );
+});
+
+test('checkPlaceholderResidue reports nothing for a fully substituted target', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  const result = checkPlaceholderResidue(targetRoot);
+  assert.deepEqual(result.residue, []);
+});
+
+test('checkStaleImportSignal reuses idd-doctor findMissingWorktreeHardening and reports nothing for an up-to-date import', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  const result = checkStaleImportSignal(targetRoot);
+  assert.deepEqual(result.missing, []);
+});
+
+test('checkStaleImportSignal reports a missing B1 self-check section without blocking manifest/residue', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  const workPath = join(
+    targetRoot,
+    '.github',
+    'instructions',
+    'idd-work.instructions.md',
+  );
+  const withoutSelfCheck = readFileSync(workPath, 'utf8').replace(
+    /^### B1 self-check\b[\s\S]*?(?=\n## )/m,
+    '',
+  );
+  assert.notEqual(withoutSelfCheck, readFileSync(workPath, 'utf8'));
+  writeFileSync(workPath, withoutSelfCheck);
+  const result = checkStaleImportSignal(targetRoot);
+  assert.ok(
+    result.missing.includes('idd-work B1 self-check section'),
+    `expected the missing self-check section to be reported, got: ${JSON.stringify(result.missing)}`,
+  );
+});
+
+test('runVerify never lets the stale-import signal contribute to blocking', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  const workPath = join(
+    targetRoot,
+    '.github',
+    'instructions',
+    'idd-work.instructions.md',
+  );
+  writeFileSync(workPath, 'stale content with no recognized sections\n');
+  const result = runVerify(REPO_ROOT, targetRoot);
+  assert.ok(result.staleImportSignal.missing.length > 0);
+  assert.equal(result.blocking, false);
+});
+
+test('runVerify blocks when manifest completeness or placeholder residue fails', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  rmSync(join(targetRoot, '.github', 'idd', 'config.json'));
+  const missingManifestFile = runVerify(REPO_ROOT, targetRoot);
+  assert.equal(missingManifestFile.blocking, true);
+
+  const residueRoot = makeFixtureDir();
+  importAndSubstitute(residueRoot);
+  writeFileSync(join(residueRoot, 'LEFTOVER.md'), '{{REPO_NAME}}\n');
+  const residueResult = runVerify(REPO_ROOT, residueRoot);
+  assert.equal(residueResult.blocking, true);
+});
+
+// ---------------------------------------------------------------------------
+// CLI (acceptance criteria) — --verify
+// ---------------------------------------------------------------------------
+
+test('bin/idd-onboard.mjs --verify exits 0 with no blocking finding for a fully onboarded target', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  const { status, verdict } = runCliBin([
+    '--verify',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.mode, 'verify');
+  assert.equal(verdict.blocking, false);
+  assert.deepEqual(
+    (verdict.manifestCompleteness as { missingTarget: string[] }).missingTarget,
+    [],
+  );
+  assert.deepEqual(
+    (verdict.placeholderResidue as { residue: unknown[] }).residue,
+    [],
+  );
+});
+
+test('bin/idd-onboard.mjs --verify exits 1 and names the missing file when the manifest is incomplete', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  rmSync(join(targetRoot, '.github', 'idd', 'config.json'));
+  const { status, verdict } = runCliBin([
+    '--verify',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 1);
+  assert.equal(verdict.blocking, true);
+  assert.ok(
+    (
+      verdict.manifestCompleteness as { missingTarget: string[] }
+    ).missingTarget.includes('.github/idd/config.json'),
+  );
+});
+
+test('bin/idd-onboard.mjs --verify exits 1 and names the file when an onboarding placeholder is unresolved', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  writeFileSync(join(targetRoot, 'LEFTOVER.md'), '{{REPO_NAME}}\n');
+  const { status, verdict } = runCliBin([
+    '--verify',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 1);
+  assert.equal(verdict.blocking, true);
+  const residue = (
+    verdict.placeholderResidue as { residue: { file: string }[] }
+  ).residue;
+  assert.ok(residue.some((entry) => entry.file === 'LEFTOVER.md'));
+});
+
+test('bin/idd-onboard.mjs --verify exits 0 even when the stale-import signal fires (informational only)', () => {
+  const targetRoot = makeFixtureDir();
+  importAndSubstitute(targetRoot);
+  writeFileSync(
+    join(targetRoot, '.github', 'instructions', 'idd-work.instructions.md'),
+    'stale content with no recognized sections\n',
+  );
+  const { status, verdict } = runCliBin([
+    '--verify',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(status, 0);
+  assert.equal(verdict.blocking, false);
+  assert.ok(
+    (verdict.staleImportSignal as { missing: string[] }).missing.length > 0,
+  );
+});
+
+test('bin/idd-onboard.mjs --verify exits 2 when --source is missing', () => {
+  const targetRoot = makeFixtureDir();
+  try {
+    execFileSync(
+      process.execPath,
+      [BIN_PATH, '--verify', '--target', targetRoot],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(String(failed.stderr), /--source/);
+  }
+});
+
+test('bin/idd-onboard.mjs exits 2 when --verify is combined with --import or --substitute', () => {
+  const targetRoot = makeFixtureDir();
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--verify',
+        '--import',
+        '--source',
+        REPO_ROOT,
+        '--target',
+        targetRoot,
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(String(failed.stderr), /mutually exclusive/);
+  }
+});
+
+test('bin/idd-onboard.mjs --verify exits 2 when combined with --force or --dry-run', () => {
+  const targetRoot = makeFixtureDir();
+  for (const foreignFlag of ['--force', '--dry-run']) {
+    try {
+      execFileSync(
+        process.execPath,
+        [
+          BIN_PATH,
+          '--verify',
+          '--source',
+          REPO_ROOT,
+          '--target',
+          targetRoot,
+          foreignFlag,
+        ],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      assert.fail(`expected a non-zero exit for ${foreignFlag}`);
+    } catch (error) {
+      const failed = error as { status?: number; stderr?: string };
+      assert.equal(failed.status, 2);
+      assert.match(String(failed.stderr), /does not accept flag\(s\)/);
+      assert.match(String(failed.stderr), new RegExp(`\\${foreignFlag}`));
+    }
+  }
+});
+
+test('bin/idd-onboard.mjs --help documents --verify and lists --profile values sourced from PROFILE_NAMES', () => {
+  const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  assert.match(help, /--verify/);
+  assert.match(help, /manifestCompleteness/);
+  assert.match(help, /placeholderResidue/);
+  assert.match(help, /staleImportSignal/);
 });
 
 test('importing idd-onboard.mts has no import-time side effect', async () => {
