@@ -18,7 +18,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { collectVendoredFiles } from '../src/scripts/helper-runtime-manifest.mts';
+import {
+  collectVendoredFiles,
+  PROFILE_NAMES,
+} from '../src/scripts/helper-runtime-manifest.mts';
 // Importing the CLI module directly is only possible because its top-level
 // statements are guarded behind isCliExecution() (#1210 pattern); an
 // import-time CLI run would parse process.argv and abort this test process.
@@ -1322,6 +1325,15 @@ test('bin/idd-onboard.mjs exits 2 when both --substitute and --import are passed
     const failed = error as { status?: number; stderr?: string };
     assert.equal(failed.status, 2);
     assert.match(String(failed.stderr), /mutually exclusive/);
+  }
+});
+
+test('bin/idd-onboard.mjs --help lists --profile values sourced from PROFILE_NAMES, not a second hardcoded list', () => {
+  const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  for (const profile of PROFILE_NAMES) {
+    assert.ok(help.includes(profile), `--help is missing profile: ${profile}`);
   }
 });
 

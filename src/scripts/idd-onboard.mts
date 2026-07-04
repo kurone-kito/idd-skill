@@ -1353,7 +1353,7 @@ nothing in that case); 2 usage or configuration error.
   --import                          run the import stage
   --source <dir>                    local idd-skill source tree to copy from
   --target <dir>                    target repository (default: current directory)
-  --profile <name>                  package-manager | vendored-node | ephemeral-npx | instructions-only
+  --profile <name>                  ${PROFILE_NAMES.join(' | ')}
   --force                           allow overwriting a differing target file
   --dry-run                         print the plan without writing anything
   --help, -h                        show this help
