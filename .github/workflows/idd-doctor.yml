@@ -30,6 +30,11 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.sha }}
+          # Fetch full history and tags: the default fetch-depth: 1
+          # shallow checkout hides tag refs, so checkReleaseTagDrift's
+          # `git describe --tags` (and the follow-up `rev-list` / `log`
+          # calls) silently skip every run (#1286).
+          fetch-depth: 0
           # Read-only health check: no need to persist the token in git config.
           persist-credentials: false
       - name: Run idd-doctor repository-health check
