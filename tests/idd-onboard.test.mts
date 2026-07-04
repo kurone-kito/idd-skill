@@ -894,6 +894,33 @@ test('buildImportPlan blocks a symlinked ancestor directory in the target tree',
   assert.deepEqual(readdirSync(realDir), []);
 });
 
+test('buildImportPlan blocks a symlinked ancestor even when the leaf already exists under it', () => {
+  // The more dangerous variant of the previous test: fileExists() on the
+  // joined target path would report "exists" here (the leaf resolves,
+  // through the symlinked ancestor, to a real file), so the ancestor
+  // check must run unconditionally rather than only when the leaf is
+  // absent -- otherwise this case would fall through to unchanged /
+  // overwrite and applyImportPlan would read or write straight through
+  // the symlinked ancestor.
+  const sourceRoot = makeImportSourceFixture({ 'nested/a.md': 'alpha\n' });
+  const targetRoot = makeFixtureDir();
+  const realDir = join(targetRoot, 'real-dir');
+  mkdirSync(realDir, { recursive: true });
+  writeFileSync(join(realDir, 'a.md'), 'alpha\n'); // byte-identical to source
+  symlinkSync(realDir, join(targetRoot, 'nested'));
+
+  const plan = buildImportPlan(sourceRoot, targetRoot);
+  assert.equal(plan.entries[0]?.classification, 'blocked-non-file');
+  assert.deepEqual(plan.nonFileTargetCollisions, ['nested/a.md']);
+
+  // Even with --force (which only overrides a differing *file*), the
+  // symlinked ancestor must still block.
+  const forcedPlan = buildImportPlan(sourceRoot, targetRoot, { force: true });
+  assert.equal(forcedPlan.entries[0]?.classification, 'blocked-non-file');
+  assert.equal(applyImportPlan(sourceRoot, targetRoot, forcedPlan), 0);
+  assert.ok(lstatSync(join(targetRoot, 'nested')).isSymbolicLink());
+});
+
 test('buildImportPlan reports a symlinked source file as missing rather than reading through it', () => {
   const sourceRoot = makeFixtureDir();
   writeCoreFilesManifest(sourceRoot, ['idd-template/a.md']);

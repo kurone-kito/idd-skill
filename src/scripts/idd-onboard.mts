@@ -1007,18 +1007,25 @@ export function buildImportPlan(
       missingSource.push(file.sourcePath);
       continue;
     }
+    // Check the ancestor chain unconditionally, before the leaf-existence
+    // check below. A symlinked ancestor directory can resolve straight to
+    // a real, already-existing leaf file (fileExists on the joined path
+    // follows every ancestor segment, symlinked or not, the same way a
+    // plain stat/lstat would) — checking hasNonDirectoryAncestor only
+    // inside the "leaf does not exist" branch would then never run,
+    // letting applyImportPlan read/write straight through the symlinked
+    // ancestor and escape --target.
+    if (hasNonDirectoryAncestor(targetRoot, file.targetPath)) {
+      entries.push({ ...file, classification: 'blocked-non-file' });
+      nonFileTargetCollisions.push(file.targetPath);
+      continue;
+    }
     if (!fileExists(targetRoot, file.targetPath)) {
-      if (
-        pathExists(targetRoot, file.targetPath) ||
-        hasNonDirectoryAncestor(targetRoot, file.targetPath)
-      ) {
-        // Either the target path itself exists but is not a regular file
-        // (e.g. a directory), or an ancestor path segment is not a
-        // directory (e.g. a plain file at `.github` when planning
-        // `.github/idd/config.json`). Treating either case as "new" would
-        // make applyImportPlan's mkdirSync/copyFileSync throw
-        // EISDIR/ENOTDIR, possibly after already writing earlier entries
-        // — fail closed instead.
+      if (pathExists(targetRoot, file.targetPath)) {
+        // The target path itself exists but is not a regular file (e.g. a
+        // directory or a symlink). Treating this as "new" would make
+        // applyImportPlan's copyFileSync throw EISDIR/ENOTDIR, possibly
+        // after already writing earlier entries — fail closed instead.
         entries.push({ ...file, classification: 'blocked-non-file' });
         nonFileTargetCollisions.push(file.targetPath);
         continue;
