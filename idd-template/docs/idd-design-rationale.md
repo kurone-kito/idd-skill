@@ -110,6 +110,16 @@ on. The desync never crosses score bands and never bypasses the A4.5/A5
 gates; the in-band offset function is replaceable without affecting these
 invariants.
 
+### A4 — Scored-vs-unscored floor tie-breaker: what still ties afterward
+
+Moved from the Discover phase file to keep the capped instruction
+surface lean. After the scored-vs-unscored floor tie-breaker resolves
+the mixed case, the remaining tie-breakers (concurrent-selection
+desync, effort hint, lowest issue number) still apply in unchanged
+relative order — for example, between two genuinely-scored candidates,
+or between two unscored candidates when no genuinely-scored one is
+present at that value.
+
 ## Claim resolution
 
 ### Forced-handoff strictness: strict resume vs. lenient relay-merge

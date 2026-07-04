@@ -567,9 +567,7 @@ at the floor value, the genuinely-scored candidate wins the tie: an explicit
 author judgment outranks a default fallback. Apply this rule first,
 before the concurrent-selection desync, effort-hint, and
 lowest-issue-number tie-breakers below, which still apply in unchanged
-relative order to any tie that remains afterward (for example, between
-two genuinely-scored candidates, or between two unscored candidates when
-no genuinely-scored one is present at that value).
+relative order to any tie that remains afterward.
 
 **Concurrent-selection desync (opt-in, off by default).** When
 `.github/idd/config.json` `discover.selectionDesync` is `session-offset`
