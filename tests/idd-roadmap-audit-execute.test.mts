@@ -1042,8 +1042,18 @@ test('(a) --apply reports already-complete: closed roadmap + trusted evidence + 
 });
 
 test('(b) --apply keeps claim-not-owned when the roadmap is still open, even with trusted evidence', async () => {
+  // Track calls locally: overriding `hasTrustedCompletionEvidence` (like any
+  // makeDeps override) replaces its counting default, so `calls
+  // .completionEvidenceChecks` would stay 0 regardless of whether this test's
+  // own override actually ran. A local counter inside the override itself
+  // (the same pattern the claim-re-validation-order test below uses for
+  // `claimChecks`) is the only way this assertion is not vacuous (#1299).
+  let completionEvidenceChecks = 0;
   const openReport = readyReport(); // root.state defaults to 'OPEN'
-  const { deps, calls } = lostClaimDeps(openReport, () => true);
+  const { deps, calls } = lostClaimDeps(openReport, () => {
+    completionEvidenceChecks += 1;
+    return true;
+  });
   const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
 
   assert.equal(verdict.closed, false);
@@ -1051,7 +1061,7 @@ test('(b) --apply keeps claim-not-owned when the roadmap is still open, even wit
   assert.equal(exitCode, 1);
   assert.deepEqual(calls.closed, []);
   // The OPEN-state short-circuit means the evidence check is never consulted.
-  assert.equal(calls.completionEvidenceChecks, 0);
+  assert.equal(completionEvidenceChecks, 0);
 });
 
 test('(c) --apply keeps claim-not-owned when the roadmap is closed but lacks trusted evidence', async () => {
