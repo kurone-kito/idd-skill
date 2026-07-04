@@ -184,9 +184,9 @@ when it returns zero.
 ## A1 — Find the roadmap
 
 Use GH CLI or GH MCP to find the roadmap among open issues. Identify it
-by the configured roadmap label from `labels.roadmapLabelName`
-(default: `roadmap`, project field) or by recognizing it as an
-umbrella issue. If no roadmap issue exists, report and abort.
+by the configured roadmap label (project field) from
+`labels.roadmapLabelName` (default: `roadmap`) or by recognizing it as
+an umbrella issue. If no roadmap issue exists, report and abort.
 
 **Autopilot cross-roadmap mode (optional, additive).** When several
 roadmaps run in parallel and the active autopilot-suitable work may live
