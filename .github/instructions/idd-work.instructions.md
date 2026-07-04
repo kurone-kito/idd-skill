@@ -216,6 +216,13 @@ site's old delegate path added options or behavior (timeouts, stdio
 handling, error translation, etc.) that the new shared function does not
 replicate — not just whether the function bodies look equivalent.
 
+**Unexpected validation failures**: a `typecheck`/`lint` failure in a
+file this diff did not touch is a signal to suspect dependency drift or
+a broken `main` baseline, not necessarily the current change — verify
+with a fresh-vs-stale `node_modules` comparison, or by rerunning
+**install-deps** in a clean worktree, before assuming the failure traces
+to this diff.
+
 If B3 or C must stop for a hold, use the shared Hold / suspend rules in
 `idd-overview-appendix.instructions.md` and update the issue digest with the
 blocking condition before stopping. Do not use the digest as the only
