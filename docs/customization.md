@@ -69,7 +69,10 @@ distributed IDD workflow a repository imported.
   the source repository after the bump PR merges, so adopters can diff
   against a concrete release ref instead of a raw commit SHA. The
   release cadence is milestone-based: cut a release after each merged
-  roadmap.
+  roadmap. This trigger fires for a merged top-level roadmap only; a
+  merged nested roadmap does not independently trigger a release, and
+  its changes ship with the parent roadmap's release (or the next
+  top-level trigger).
 - **Adopters** can compare their `iddVersion` against the source release
   to see whether a re-sync is worthwhile. Because the value only moves
   when maintainers bump it, it is a coarse signal — so `idd-doctor` also
