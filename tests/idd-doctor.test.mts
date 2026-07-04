@@ -983,14 +983,9 @@ test('classifyReleaseTagDrift warns when past the day threshold only', () => {
 });
 
 test('classifyReleaseTagDrift warns on both thresholds and names both in the message', () => {
-  const verdict = classifyReleaseTagDrift('v1.0.0', 636, 22);
-  // The 22-day figure alone is under the 45-day threshold; only the
-  // commit count crosses here -- covered separately above. Use values
-  // that exceed both to exercise the "and" join.
-  const bothOver = classifyReleaseTagDrift('v1.0.0', 636, 60);
+  const verdict = classifyReleaseTagDrift('v1.0.0', 636, 60);
   assert.equal(verdict.warn, true);
-  assert.equal(bothOver.warn, true);
-  assert.match(bothOver.message ?? '', /commit\(s\).*and.*day\(s\)/);
+  assert.match(verdict.message ?? '', /commit\(s\).*and.*day\(s\)/);
 });
 
 test('classifyReleaseTagDrift treats the threshold boundary as non-warning ("more than", not "at least")', () => {
