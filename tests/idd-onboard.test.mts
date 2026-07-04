@@ -4,12 +4,14 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -851,6 +853,55 @@ test('buildImportPlan blocks a non-directory ancestor collision, not just a leaf
   // if a caller applied the plan without checking the blocking arrays.
   assert.equal(applyImportPlan(sourceRoot, targetRoot, plan), 0);
   assert.ok(statSync(join(targetRoot, 'nested')).isFile());
+});
+
+test('buildImportPlan blocks a symlink at the leaf target path instead of following it', () => {
+  const sourceRoot = makeImportSourceFixture({ 'a.md': 'alpha\n' });
+  const targetRoot = makeFixtureDir();
+  const linkTarget = join(targetRoot, 'real.md');
+  writeFileSync(linkTarget, 'alpha\n');
+  symlinkSync(linkTarget, join(targetRoot, 'a.md'));
+
+  const plan = buildImportPlan(sourceRoot, targetRoot);
+  const entry = plan.entries.find((e) => e.targetPath === 'a.md');
+  assert.equal(entry?.classification, 'blocked-non-file');
+  assert.deepEqual(plan.nonFileTargetCollisions, ['a.md']);
+
+  // Even with --force, applyImportPlan must never write through the
+  // symlink (force overrides a differing *file*, not a type collision).
+  const forcedPlan = buildImportPlan(sourceRoot, targetRoot, { force: true });
+  assert.equal(applyImportPlan(sourceRoot, targetRoot, forcedPlan), 0);
+  assert.ok(lstatSync(join(targetRoot, 'a.md')).isSymbolicLink());
+});
+
+test('buildImportPlan blocks a symlinked ancestor directory in the target tree', () => {
+  const sourceRoot = makeImportSourceFixture({ 'nested/a.md': 'alpha\n' });
+  const targetRoot = makeFixtureDir();
+  const realDir = join(targetRoot, 'real-dir');
+  mkdirSync(realDir, { recursive: true });
+  symlinkSync(realDir, join(targetRoot, 'nested'));
+
+  const plan = buildImportPlan(sourceRoot, targetRoot);
+  assert.equal(plan.entries[0]?.classification, 'blocked-non-file');
+  assert.deepEqual(plan.nonFileTargetCollisions, ['nested/a.md']);
+  assert.equal(applyImportPlan(sourceRoot, targetRoot, plan), 0);
+  // The symlink itself must survive untouched — no write escaped through
+  // it into realDir.
+  assert.ok(lstatSync(join(targetRoot, 'nested')).isSymbolicLink());
+  assert.deepEqual(readdirSync(realDir), []);
+});
+
+test('buildImportPlan reports a symlinked source file as missing rather than reading through it', () => {
+  const sourceRoot = makeFixtureDir();
+  writeCoreFilesManifest(sourceRoot, ['idd-template/a.md']);
+  mkdirSync(join(sourceRoot, 'idd-template'), { recursive: true });
+  const realFile = join(sourceRoot, 'real.md');
+  writeFileSync(realFile, 'alpha\n');
+  symlinkSync(realFile, join(sourceRoot, 'idd-template', 'a.md'));
+
+  const plan = buildImportPlan(sourceRoot, makeFixtureDir());
+  assert.deepEqual(plan.missingSource, ['idd-template/a.md']);
+  assert.equal(plan.entries.length, 0);
 });
 
 /** A minimal idd-skill-shaped source tree: just enough for resolveImportFiles. */

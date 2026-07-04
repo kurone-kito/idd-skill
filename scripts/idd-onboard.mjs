@@ -30,6 +30,7 @@ import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
   copyFileSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -150,9 +151,20 @@ const PYPROJECT_TOOL_COMMANDS = [
   { pattern: /^\s*\[tool\.hatch[.\]]/mu, command: 'hatch env create' },
   { pattern: /^\s*\[tool\.uv[.\]]/mu, command: 'uv sync' },
 ];
+// lstatSync, not statSync: every existence/type check below feeds a
+// decision about whether it is safe to read from or write to a path (the
+// --import planner's fileExists / pathExists / hasNonDirectoryAncestor,
+// plus the placeholder-derivation checks below that also call
+// fileExists). statSync follows symlinks, so a symlink leaf or ancestor
+// would be silently treated as whatever it points to; a symlink inside
+// --source or --target could then let a copy read from or write outside
+// the intended root. lstatSync reports the entry itself, so any symlink
+// is classified as "not a plain file/directory" and — for the --import
+// planner — falls through to the existing blocked-non-file handling
+// instead of being followed.
 function fileExists(root, name) {
   try {
-    return statSync(join(root, name)).isFile();
+    return lstatSync(join(root, name)).isFile();
   } catch {
     return false;
   }
@@ -160,7 +172,7 @@ function fileExists(root, name) {
 /** Whether any filesystem entry exists at `root`/`name`, of any type. */
 function pathExists(root, name) {
   try {
-    statSync(join(root, name));
+    lstatSync(join(root, name));
     return true;
   } catch {
     return false;
@@ -168,14 +180,17 @@ function pathExists(root, name) {
 }
 /**
  * Whether any ancestor directory segment of `root`/`relativePath` already
- * exists as a non-directory entry (e.g. a plain file at `.github` when
- * planning `.github/idd/config.json`). `mkdirSync`'s recursive mode cannot
- * create a directory through such an obstruction, so this must be checked
- * separately from the leaf path itself (see `pathExists`). `relativePath`
- * uses `/` separators, matching every `ManifestFile.targetPath` in this
- * module. A missing (rather than non-directory) ancestor is fine —
- * `mkdirSync`'s recursive mode creates it — so this returns `false` as
- * soon as an ancestor segment does not exist yet.
+ * exists as a non-directory entry (e.g. a plain file — or a symlink,
+ * including one that points at a real directory — at `.github` when
+ * planning `.github/idd/config.json`). `mkdirSync`'s recursive mode
+ * cannot create a directory through such an obstruction (and would
+ * otherwise silently traverse a symlinked ancestor), so this must be
+ * checked separately from the leaf path itself (see `pathExists`).
+ * `relativePath` uses `/` separators, matching every
+ * `ManifestFile.targetPath` in this module. A missing (rather than
+ * non-directory) ancestor is fine — `mkdirSync`'s recursive mode creates
+ * it — so this returns `false` as soon as an ancestor segment does not
+ * exist yet.
  */
 function hasNonDirectoryAncestor(root, relativePath) {
   const segments = relativePath.split('/').slice(0, -1);
@@ -183,7 +198,7 @@ function hasNonDirectoryAncestor(root, relativePath) {
   for (const segment of segments) {
     current = join(current, segment);
     try {
-      if (!statSync(current).isDirectory()) {
+      if (!lstatSync(current).isDirectory()) {
         return true;
       }
     } catch {
