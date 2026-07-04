@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import type { RoadmapGraphReport } from '../src/scripts/discover-roadmap-graph.mts';
+import {
+  enumerateRoadmapGraph,
+  type RoadmapGraphReport,
+} from '../src/scripts/discover-roadmap-graph.mts';
 import {
   buildRoadmapCompletionAuditBody,
   type ConnectedPrEvent,
@@ -528,12 +531,15 @@ test('unresolved, inaccessible, and cycle diagnostics each surface a blocker', (
       reason: 'issue_inaccessible',
     },
   ];
+  // The cycle source is deliberately absent from `nodes`: an unknown-source
+  // cycle must keep blocking (fail closed), unlike the execution-leaf
+  // provenance back-edges exempted below (#1278).
   report.diagnostics.cycles = [
     {
-      source: 1047,
+      source: 4444,
       target: ROADMAP,
       relationship: 'dependency',
-      path: [ROADMAP, 1047, ROADMAP],
+      path: [ROADMAP, 4444, ROADMAP],
     },
   ];
   const kinds = evaluateRoadmapAuditGates(report)
@@ -544,6 +550,130 @@ test('unresolved, inaccessible, and cycle diagnostics each surface a blocker', (
     'inaccessible-reference',
     'unresolved-reference',
   ]);
+});
+
+// ---------------------------------------------------------------------------
+// #1278 — Refs provenance breadcrumbs from non-roadmap leaves are not cycles
+// ---------------------------------------------------------------------------
+
+/** Raw roadmap issue as the enumeration's `loadIssue` returns it. */
+function rawRoadmapIssue(number: number, body: string, state = 'open') {
+  return {
+    number,
+    title: `roadmap ${number}`,
+    state,
+    body: `<!-- idd-skill-roadmap-id: roadmap-${number} -->\n${body}`,
+    labels: [{ name: 'roadmap' }],
+  };
+}
+
+/** Raw execution-leaf issue as the enumeration's `loadIssue` returns it. */
+function rawExecutionIssue(number: number, body: string, state = 'open') {
+  return { number, title: `issue ${number}`, state, body, labels: [] };
+}
+
+/**
+ * Build the graph through the real traversal so the fixtures match exactly
+ * what discover-roadmap-graph emits for the A1.5 follow-up breadcrumb shape:
+ * the roadmap task-lists the leaf and the leaf's body carries the required
+ * `Refs #<roadmap>` back-reference (or a stronger relationship on demand).
+ */
+function breadcrumbGraph(
+  leafState: 'open' | 'closed',
+  backReference = `Refs #${ROADMAP}`,
+) {
+  const issues = new Map<number, unknown>([
+    [ROADMAP, rawRoadmapIssue(ROADMAP, '- [x] #1047')],
+    [
+      1047,
+      rawExecutionIssue(1047, `Follow-up work.\n\n${backReference}`, leafState),
+    ],
+  ]);
+  return enumerateRoadmapGraph(ROADMAP, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+}
+
+test('a Refs breadcrumb from a CLOSED leaf does not block: dry-run is ready (#1278)', async () => {
+  const graph = await breadcrumbGraph('closed');
+  const { deps, calls } = makeDeps(graph);
+  const { verdict, exitCode } = await runRoadmapAuditExecute(
+    ['--roadmap', String(ROADMAP)],
+    deps,
+  );
+
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.blockers, []);
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls.closed, []);
+});
+
+test('an OPEN leaf with a Refs breadcrumb blocks as open-child, not as a cycle (#1278)', async () => {
+  const graph = await breadcrumbGraph('open');
+  const blockers = evaluateRoadmapAuditGates(graph);
+
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    ['open-child'],
+  );
+  assert.equal(blockers[0]?.target, 1047);
+});
+
+test('mutually-referencing roadmap nodes still surface a blocking cycle (#1278)', async () => {
+  const issues = new Map<number, unknown>([
+    [ROADMAP, rawRoadmapIssue(ROADMAP, '- [x] #1100')],
+    [1100, rawRoadmapIssue(1100, `- [x] #1101\n\nRefs #${ROADMAP}`, 'closed')],
+    [1101, rawExecutionIssue(1101, 'done', 'closed')],
+  ]);
+  const graph = await enumerateRoadmapGraph(ROADMAP, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+  const blockers = evaluateRoadmapAuditGates(graph);
+
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    ['cycle'],
+  );
+  assert.equal(blockers[0]?.target, ROADMAP);
+});
+
+test('a stronger back-edge (Blocked by) from a CLOSED leaf still blocks as a cycle (#1278)', async () => {
+  // A closed leaf that declares itself `Blocked by` its still-open ancestor
+  // is a genuine closure-order anomaly, not a provenance breadcrumb — only
+  // the `reference` relationship is exempt.
+  const graph = await breadcrumbGraph('closed', `Blocked by #${ROADMAP}`);
+  const blockers = evaluateRoadmapAuditGates(graph);
+
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    ['cycle'],
+  );
+  assert.match(blockers[0]?.detail ?? '', /dependency/);
+});
+
+test('an execution-source cycle in a non-OPEN/CLOSED state still blocks (#1278)', () => {
+  // Fail-closed parity with the traversal: the builder records a cycle for
+  // an execution source whose state is neither OPEN nor CLOSED, and such a
+  // node is absent from executionCandidates, so no open-child blocker
+  // compensates — the evaluator must keep the cycle blocking.
+  const report = readyReport();
+  report.nodes = report.nodes.map((entry) =>
+    entry.number === 1047 ? { ...entry, state: '' } : entry,
+  );
+  report.diagnostics.cycles = [
+    {
+      source: 1047,
+      target: ROADMAP,
+      relationship: 'reference',
+      path: [ROADMAP, 1047, ROADMAP],
+    },
+  ];
+  const blockers = evaluateRoadmapAuditGates(report);
+
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    ['cycle'],
+  );
 });
 
 test('a childless roadmap (no edges) is reported, never closed', () => {
