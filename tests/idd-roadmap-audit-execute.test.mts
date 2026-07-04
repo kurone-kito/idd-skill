@@ -10,6 +10,7 @@ import {
   type ConnectedPrEvent,
   evaluateRoadmapAuditGates,
   evaluateRoadmapClaim,
+  hasTrustedCompletionEvidenceComment,
   type RoadmapAuditExecuteDeps,
   reconcileConnectedOpenPrs,
   resolveOpenLinkedPrIssues,
@@ -124,6 +125,7 @@ function makeDeps(
   calls: {
     collects: number;
     claimChecks: number;
+    completionEvidenceChecks: number;
     comments: { issue: number; body: string }[];
     closed: number[];
     released: {
@@ -137,6 +139,7 @@ function makeDeps(
   const calls = {
     collects: 0,
     claimChecks: 0,
+    completionEvidenceChecks: 0,
     comments: [] as { issue: number; body: string }[],
     closed: [] as number[],
     released: [] as {
@@ -166,6 +169,10 @@ function makeDeps(
           createdAt: '2026-06-26T00:00:00Z',
         },
       };
+    },
+    hasTrustedCompletionEvidence: () => {
+      calls.completionEvidenceChecks += 1;
+      return false;
     },
     postEvidenceComment: (issue, body) => calls.comments.push({ issue, body }),
     closeRoadmap: (issue) => calls.closed.push(issue),
@@ -992,6 +999,125 @@ test('--apply fails closed (no close) when the claim is lost / not owned', async
   assert.equal(exitCode, 1);
   assert.deepEqual(calls.closed, []);
   assert.deepEqual(calls.comments, []);
+});
+
+// ---------------------------------------------------------------------------
+// #1299 — already-complete recognition on the early claim-loss path
+// ---------------------------------------------------------------------------
+
+function lostClaimDeps(
+  report: RoadmapGraphReport,
+  hasTrustedCompletionEvidence: () => boolean,
+) {
+  return makeDeps(report, {
+    revalidateClaim: () => ({
+      owned: false,
+      reason: 'missing-active-claim',
+      stale: false,
+      activeClaim: {
+        agentId: '',
+        claimId: '',
+        supersedes: '',
+        branch: '',
+        createdAt: '',
+      },
+    }),
+    hasTrustedCompletionEvidence,
+  });
+}
+
+test('(a) --apply reports already-complete: closed roadmap + trusted evidence + no owned claim', async () => {
+  const closedReport = readyReport();
+  closedReport.root = { ...closedReport.root, state: 'CLOSED' };
+  const { deps, calls } = lostClaimDeps(closedReport, () => true);
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(verdict.closed, true);
+  assert.match(verdict.result, /already-complete/);
+  assert.equal(exitCode, 0);
+  // Idempotent no-op: none of the mutating deps ran.
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.comments, []);
+  assert.deepEqual(calls.released, []);
+});
+
+test('(b) --apply keeps claim-not-owned when the roadmap is still open, even with trusted evidence', async () => {
+  const openReport = readyReport(); // root.state defaults to 'OPEN'
+  const { deps, calls } = lostClaimDeps(openReport, () => true);
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(verdict.closed, false);
+  assert.match(verdict.result, /claim not owned on re-validation/);
+  assert.equal(exitCode, 1);
+  assert.deepEqual(calls.closed, []);
+  // The OPEN-state short-circuit means the evidence check is never consulted.
+  assert.equal(calls.completionEvidenceChecks, 0);
+});
+
+test('(c) --apply keeps claim-not-owned when the roadmap is closed but lacks trusted evidence', async () => {
+  const closedReport = readyReport();
+  closedReport.root = { ...closedReport.root, state: 'CLOSED' };
+  const { deps, calls } = lostClaimDeps(closedReport, () => false);
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(verdict.closed, false);
+  assert.match(verdict.result, /claim not owned on re-validation/);
+  assert.equal(exitCode, 1);
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.comments, []);
+});
+
+// ---------------------------------------------------------------------------
+// hasTrustedCompletionEvidenceComment (pure)
+// ---------------------------------------------------------------------------
+
+test('a trusted canonical evidence comment is detected', () => {
+  const comments = [
+    {
+      body: '**IDD roadmap completion audit**\n\nRoadmap #995 audited as complete.',
+      createdAt: '2026-06-26T00:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+  ];
+  assert.equal(
+    hasTrustedCompletionEvidenceComment(comments, () => true),
+    true,
+  );
+});
+
+test('an untrusted author is not recognized even with the canonical body', () => {
+  const comments = [
+    {
+      body: '**IDD roadmap completion audit**\n\nRoadmap #995 audited as complete.',
+      createdAt: '2026-06-26T00:00:00Z',
+      author: { login: 'random-actor' },
+    },
+  ];
+  assert.equal(
+    hasTrustedCompletionEvidenceComment(comments, () => false),
+    false,
+  );
+});
+
+test('a trusted comment without the canonical heading is not recognized', () => {
+  const comments = [
+    {
+      body: 'Looks good to me!',
+      createdAt: '2026-06-26T00:00:00Z',
+      author: { login: 'kurone-kito' },
+    },
+  ];
+  assert.equal(
+    hasTrustedCompletionEvidenceComment(comments, () => true),
+    false,
+  );
+});
+
+test('an empty comment stream is not recognized', () => {
+  assert.equal(
+    hasTrustedCompletionEvidenceComment([], () => true),
+    false,
+  );
 });
 
 test('--apply fails closed when re-validation finds a new blocker before close', async () => {

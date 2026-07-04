@@ -534,6 +534,28 @@ export function evaluateRoadmapClaim(
 }
 
 /**
+ * Detect the helper's own canonical `IDD roadmap completion audit` evidence
+ * comment (the exact heading `buildRoadmapCompletionAuditBody` emits) among
+ * `comments`, posted by an author for which `isTrustedAuthor` is true. Used
+ * only to recognize the idempotent "already complete" retry case (#1299)
+ * when the `--apply` early claim re-validation finds no owned claim but the
+ * live roadmap is already CLOSED — never to gate the primary close itself,
+ * which always requires a freshly re-validated claim. Pure and network-free
+ * so it is unit-testable apart from live GitHub.
+ */
+export function hasTrustedCompletionEvidenceComment(
+  comments: Parameters<typeof summarizeClaimValidation>[0],
+  isTrustedAuthor: (login: string) => boolean,
+): boolean {
+  return (comments ?? []).some(
+    (comment) =>
+      String(comment.body ?? '').startsWith(
+        '**IDD roadmap completion audit**',
+      ) && isTrustedAuthor(String(comment.author?.login ?? '')),
+  );
+}
+
+/**
  * Injectable side-effecting dependencies. Tests substitute these to drive the
  * dry-run / apply / fail-closed paths without faking live GitHub state;
  * production uses the real roadmap-graph traversal, claim stream, and `gh`.
@@ -555,6 +577,14 @@ export interface RoadmapAuditExecuteDeps {
     expectedAgentId: string;
     nowIso: string;
   }) => RoadmapClaimVerdict;
+  /**
+   * Detect the helper's own canonical completion-audit evidence comment,
+   * posted by a trusted marker actor, on the live roadmap issue. Consulted
+   * only when the early claim re-validation above is lost AND the live
+   * roadmap is already CLOSED, to recognize an idempotent already-complete
+   * retry (#1299) instead of reporting a misleading claim-loss error.
+   */
+  hasTrustedCompletionEvidence: (roadmapNumber: number) => boolean;
   /** POST the canonical `IDD roadmap completion audit` evidence comment. */
   postEvidenceComment: (issueNumber: number, body: string) => void;
   /** Close the roadmap issue as completed. */
@@ -581,6 +611,16 @@ export interface RoadmapAuditExecuteDeps {
  * owned claim or any newly-discovered blocker. Only after both re-validations
  * pass does it post the evidence comment, close the roadmap, and release the
  * claim — in that order.
+ *
+ * One claim-loss shape at the EARLY re-validation is recognized as a distinct
+ * idempotent no-op instead of a bare failure (#1299): a retry after a prior
+ * `--apply` already fully completed (e.g. its stdout was lost) finds no owned
+ * claim because that prior run already released it. When the live roadmap is
+ * already CLOSED and carries this helper's own canonical evidence comment
+ * from a trusted marker actor, report `already-complete` (exit 0) rather than
+ * the generic claim-not-owned error. Every other claim-loss shape — roadmap
+ * still open, closed without trusted evidence — keeps the unchanged
+ * fail-closed behavior.
  */
 export async function runRoadmapAuditExecute(
   argv: string[],
@@ -669,6 +709,23 @@ export async function runRoadmapAuditExecute(
     nowIso,
   });
   if (!earlyClaim.owned) {
+    // #1299: a lost/missing claim here is indistinguishable from a race or
+    // hijack UNLESS the live roadmap independently proves the audit already
+    // completed — already CLOSED, carrying this helper's own canonical
+    // evidence comment from a trusted marker actor (`report` is the graph
+    // already fetched at the top of this invocation, so this reuses that
+    // read rather than a fresh one). Recognize that one positively-provable
+    // state as an idempotent no-op success instead of the fail-closed
+    // claim-not-owned error; every other claim-loss shape (roadmap still
+    // open, closed without trusted evidence) is unchanged.
+    if (
+      report.root.state === 'CLOSED' &&
+      resolvedDeps.hasTrustedCompletionEvidence(roadmapNumber)
+    ) {
+      verdict.closed = true;
+      verdict.result = `already-complete: roadmap #${roadmapNumber} is already closed with a trusted IDD roadmap completion audit evidence comment (claim reason="${earlyClaim.reason}"); idempotent no-op, no mutation performed`;
+      return { verdict, exitCode: 0 };
+    }
     verdict.result = `claim not owned on re-validation (reason="${earlyClaim.reason}"); no mutation`;
     return { verdict, exitCode: 1 };
   }
@@ -843,6 +900,11 @@ function createProductionDeps(
         nowIso,
         staleAgeMs,
       }),
+    hasTrustedCompletionEvidence: (roadmapNumber) =>
+      hasTrustedCompletionEvidenceComment(
+        loadIssueComments(owner, repo, roadmapNumber),
+        isTrustedAuthor,
+      ),
     postEvidenceComment: (issueNumber, body) =>
       postIssueComment(owner, repo, issueNumber, body),
     closeRoadmap: (issueNumber) =>
