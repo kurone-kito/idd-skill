@@ -296,12 +296,14 @@ If you have a local clone of `kurone-kito/idd-skill` (Step 2 Option B
 below), the `idd-onboard` CLI shipped in that clone
 (`scripts/idd-onboard.mjs`) can automate Steps 2, 4, and 6. **The manual
 steps remain canonical**; this CLI is a mechanical, optional shortcut for
-the same three steps, and it has no remote-fetch equivalent — every mode
-requires `--source <path-to-a-cloned-idd-skill-tree>`, so it does not
-apply to the Option A remote-fetch flow. Each mode prints a JSON verdict
-and exits `0` (converged), `1` (a blocking or residue finding — nothing is
-written), or `2` (a usage error), so an agent can gate on the exit code
-without parsing prose.
+the same three steps. `--import` and `--verify` both require
+`--source <path-to-a-cloned-idd-skill-tree>` and therefore only replace
+the Option B local-clone flow, never Option A's remote fetch;
+`--substitute` takes no `--source` at all (it only rewrites an already-
+imported `--target` tree) and works the same regardless of how that tree
+was populated. Each mode prints a JSON verdict and exits `0` (converged),
+`1` (a blocking or residue finding — nothing is written), or `2` (a usage
+error), so an agent can gate on the exit code without parsing prose.
 
 - **Step 2 (fetch or copy) → `--import`**: copies the core template file
   set from `--source` into `--target`. The file set it copies is the same
@@ -354,9 +356,9 @@ every accepted argument.
 
 ## Step 2 — Fetch or copy template files
 
-> **CLI shortcut**: `idd-onboard --import` automates this step from a
-> local idd-skill clone — see [CLI-assisted onboarding](#cli-assisted-onboarding)
-> above.
+> **CLI shortcut**: `node scripts/idd-onboard.mjs --import` automates this
+> step from a local idd-skill clone — see
+> [CLI-assisted onboarding](#cli-assisted-onboarding) above.
 
 You need the following core execution and profile artifact files in the
 target repository. Use whichever method applies to your situation.
@@ -794,8 +796,9 @@ that mention IDD workflow.
 
 ## Step 4 — Replace placeholders
 
-> **CLI shortcut**: `idd-onboard --substitute` automates this step — see
-> [CLI-assisted onboarding](#cli-assisted-onboarding) above.
+> **CLI shortcut**: `node scripts/idd-onboard.mjs --substitute` automates
+> this step — see [CLI-assisted onboarding](#cli-assisted-onboarding)
+> above.
 
 In the copied files, perform a global replacement for:
 `{{REPO_NAME}}`, `{{PROJECT_MARKER_PREFIX}}`,
@@ -863,8 +866,9 @@ Copilot guidance may still apply to reviews.
 
 ## Step 6 — Verification checklist
 
-> **CLI shortcut**: `idd-onboard --verify` automates this checklist — see
-> [CLI-assisted onboarding](#cli-assisted-onboarding) above.
+> **CLI shortcut**: `node scripts/idd-onboard.mjs --verify` automates this
+> checklist — see [CLI-assisted onboarding](#cli-assisted-onboarding)
+> above.
 
 Use
 [Onboarding Reference — Agent Entry and Verification](docs/onboarding/agent-entry-and-verification.md)

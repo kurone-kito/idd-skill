@@ -1890,18 +1890,40 @@ function assertFlagsDocumentedInHelp(section: string, helpText: string): void {
   }
 }
 
+/**
+ * The stage-selector and shared-argument flags every mode of the section
+ * discusses. Used as the "guard is not vacuous" sanity check below: rather
+ * than an arbitrary flag-count threshold (which would make the guard fragile
+ * to a legitimate future simplification of the section's prose), assert the
+ * section still names the specific flags the guard exists to keep honest.
+ */
+const CLI_SECTION_CORE_FLAGS = [
+  '--import',
+  '--substitute',
+  '--verify',
+  '--source',
+  '--target',
+  '--profile',
+  '--dry-run',
+  '--force',
+];
+
 test('the ONBOARDING.md CLI-assisted onboarding section documents only flags idd-onboard --help actually lists', () => {
   const doc = readFileSync(ONBOARDING_DOC, 'utf8');
   const section = extractSection(doc, CLI_SECTION_HEADING);
   const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
     encoding: 'utf8',
   });
-  // Sanity check: the section documents a non-trivial number of real flags,
-  // so this guard is not vacuously satisfied by an empty or flag-free section.
-  assert.ok(
-    extractFlagTokens(section).length >= 10,
-    'expected the CLI-assisted onboarding section to document at least 10 distinct flags',
-  );
+  // Sanity check: the section still names the core stage/argument flags it
+  // exists to document, so this guard is not vacuously satisfied by an
+  // empty or flag-free section.
+  const documented = extractFlagTokens(section);
+  for (const flag of CLI_SECTION_CORE_FLAGS) {
+    assert.ok(
+      documented.includes(flag),
+      `expected the CLI-assisted onboarding section to document ${flag}`,
+    );
+  }
   assertFlagsDocumentedInHelp(section, help);
 });
 
