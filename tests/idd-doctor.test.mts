@@ -1002,6 +1002,15 @@ test('classifyReleaseTagDrift coerces non-numeric commit/day values to 0', () =>
   assert.equal(verdict.warn, false);
 });
 
+test('classifyReleaseTagDrift rounds the printed day count up, never down to the threshold', () => {
+  // A floor here would print "45 day(s) (> 45)", which reads as
+  // self-contradictory since 45 is not greater than 45.
+  const verdict = classifyReleaseTagDrift('v1.0.0', 50, 45.1);
+  assert.equal(verdict.warn, true);
+  assert.match(verdict.message ?? '', /46 day\(s\) \(> 45\)/);
+  assert.doesNotMatch(verdict.message ?? '', /45 day\(s\)/);
+});
+
 test('containsWorkshopReference accepts canonical, dotted, and absolute link targets', () => {
   assert.equal(
     containsWorkshopReference('see [workshop](docs/workshop/README.md)'),

@@ -1532,7 +1532,13 @@ export function classifyReleaseTagDrift(tag, commitsSinceTag, daysSinceTag) {
     parts.push(`${safeCommits} commit(s) (> ${commitThreshold})`);
   }
   if (overDays) {
-    parts.push(`${Math.floor(safeDays)} day(s) (> ${dayThreshold})`);
+    // Round up, not down: flooring a value just over the threshold (e.g.
+    // 45.1 with a 45-day threshold) would print "45 day(s) (> 45)", which
+    // reads as self-contradictory. Ceiling guarantees the printed integer
+    // is always strictly greater than dayThreshold whenever overDays is
+    // true (safeDays > dayThreshold implies ceil(safeDays) > dayThreshold
+    // for any integer dayThreshold).
+    parts.push(`${Math.ceil(safeDays)} day(s) (> ${dayThreshold})`);
   }
   return {
     warn: true,
