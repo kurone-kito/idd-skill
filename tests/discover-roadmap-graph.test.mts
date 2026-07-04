@@ -457,6 +457,69 @@ test('records duplicate references and cycles without recursing forever', async 
   ]);
 });
 
+test('downgrades a Refs back-edge from a CLOSED leaf to provenance, not a cycle', async () => {
+  // #1278: the A1.5 follow-up rule requires `Refs #<roadmap>` provenance
+  // breadcrumbs in follow-up issue bodies; once the leaf is closed, the
+  // back-edge must not surface as a blocking cycle diagnostic.
+  const issues = new Map([
+    [310, roadmapIssue(310, '- [x] #311', 'breadcrumb-roadmap')],
+    [311, executionIssue(311, 'Refs #310', 'closed')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(310, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(graph.diagnostics.cycles, []);
+  assert.equal(graph.summary.cycleCount, 0);
+  // The back-edge itself is kept as informational provenance.
+  assert.ok(
+    graph.edges.some((edge) => edge.source === 311 && edge.target === 310),
+  );
+});
+
+test('keeps a stronger back-edge (Blocked by) from a CLOSED leaf as a cycle', async () => {
+  // Only the plain `Refs` provenance relationship is exempt; a closed leaf
+  // declaring itself `Blocked by` its ancestor is a closure-order anomaly.
+  const issues = new Map([
+    [312, roadmapIssue(312, '- [x] #313', 'anomaly-roadmap')],
+    [313, executionIssue(313, 'Blocked by #312', 'closed')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(312, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(graph.diagnostics.cycles, [
+    {
+      source: 313,
+      target: 312,
+      relationship: 'dependency',
+      path: [312, 313, 312],
+    },
+  ]);
+});
+
+test('keeps a back-edge from a closed ROADMAP node as a blocking cycle', async () => {
+  const issues = new Map([
+    [315, roadmapIssue(315, '- [x] #316', 'outer-roadmap')],
+    [316, roadmapIssue(316, 'Refs #315', 'inner-roadmap', 'closed')],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(315, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(graph.diagnostics.cycles, [
+    {
+      source: 316,
+      target: 315,
+      relationship: 'reference',
+      path: [315, 316, 315],
+    },
+  ]);
+});
+
 test('counts exact duplicate references from the same issue body', async () => {
   const issues = new Map([
     [320, roadmapIssue(320, '- [ ] #321\n- [ ] #321', 'root-roadmap')],
