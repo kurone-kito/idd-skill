@@ -6,12 +6,15 @@
 // the generated .mjs. See docs/typescript-sources.md.
 
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
   isCliExecution,
 } from './gh-exec.mts';
+import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 
 interface NormalizedIssue {
   number: number;
@@ -39,6 +42,10 @@ interface Context {
   repository: Repository | null;
   duplicateCandidates: DuplicateCandidate[];
   trustSafetyAmbiguous: boolean;
+  /** Configured `labels.blockedByHumanLabelName` (#1273). */
+  blockedByHumanLabelName?: string;
+  /** Configured `labels.needsDecisionLabelName` (#1273). */
+  needsDecisionLabelName?: string;
 }
 
 interface CheckOutcome {
@@ -64,12 +71,9 @@ interface SuitabilityOptions {
   repository?: unknown;
   duplicateCandidates?: unknown;
   trustSafetyAmbiguous?: unknown;
+  blockedByHumanLabelName?: unknown;
+  needsDecisionLabelName?: unknown;
 }
-
-const BLOCKED_LABELS = new Set([
-  'status:blocked-by-human',
-  'status:needs-decision',
-]);
 
 const CHECKS: {
   id: string;
@@ -204,6 +208,14 @@ export function evaluateSuitability(
       options.duplicateCandidates,
     ),
     trustSafetyAmbiguous: Boolean(options.trustSafetyAmbiguous),
+    blockedByHumanLabelName: normalizeConfiguredLabelName(
+      options.blockedByHumanLabelName,
+      POLICY_DEFAULTS.labels.blockedByHumanLabelName,
+    ),
+    needsDecisionLabelName: normalizeConfiguredLabelName(
+      options.needsDecisionLabelName,
+      POLICY_DEFAULTS.labels.needsDecisionLabelName,
+    ),
   };
 
   const checks: CheckResult[] = [];
@@ -520,8 +532,18 @@ export function checkAutonomy(context: Context): CheckOutcome {
   const { issue } = context;
   const labels = new Set(issue.labels);
   const body = issue.body;
+  const blockedLabels = new Set([
+    normalizeConfiguredLabelName(
+      context.blockedByHumanLabelName,
+      POLICY_DEFAULTS.labels.blockedByHumanLabelName,
+    ),
+    normalizeConfiguredLabelName(
+      context.needsDecisionLabelName,
+      POLICY_DEFAULTS.labels.needsDecisionLabelName,
+    ),
+  ]);
 
-  for (const label of BLOCKED_LABELS) {
+  for (const label of blockedLabels) {
     if (labels.has(label)) {
       return {
         pass: false,
@@ -689,9 +711,12 @@ function runCli(): void {
 
   const issue = fetchIssue(repoRef, args.issue);
   const duplicateCandidates = fetchDuplicateCandidates(repoRef, issue);
+  const labelsPolicy = normalizePolicyConfig(loadPolicy(args.policy)).labels;
   const result = evaluateSuitability(issue, {
     repository: { owner, repo },
     duplicateCandidates,
+    blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
+    needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
   });
 
   const output = {
@@ -722,6 +747,7 @@ function parseArgs(argv: string[]): {
   token: string;
   owner: string;
   repo: string;
+  policy: string;
   verbose: boolean;
   help: boolean;
 } {
@@ -730,6 +756,7 @@ function parseArgs(argv: string[]): {
     token: string;
     owner: string;
     repo: string;
+    policy: string;
     verbose: boolean;
     help: boolean;
   } = {
@@ -737,6 +764,7 @@ function parseArgs(argv: string[]): {
     token: '',
     owner: '',
     repo: '',
+    policy: '',
     verbose: false,
     help: false,
   };
@@ -764,6 +792,11 @@ function parseArgs(argv: string[]): {
       index += 1;
       continue;
     }
+    if (token === '--policy') {
+      parsed.policy = value ?? '';
+      index += 1;
+      continue;
+    }
     if (token === '--verbose') {
       parsed.verbose = true;
       continue;
@@ -778,9 +811,32 @@ function parseArgs(argv: string[]): {
   return parsed;
 }
 
+/**
+ * Load and parse `.github/idd/config.json` (or `--policy <path>` when given),
+ * falling back to `{}` on a missing/invalid default path so the CLI stays
+ * usable without any policy file (#1273; mirrors the sibling helpers'
+ * `loadPolicy` pattern, e.g. `discover-orphan-filter.mts`). An explicit
+ * `--policy <path>` that fails to read/parse throws, matching the sibling
+ * helpers' fail-loud behavior for an operator-specified path.
+ */
+function loadPolicy(policyPath: string): unknown {
+  const targetPath = policyPath
+    ? resolve(process.cwd(), policyPath)
+    : resolve(process.cwd(), '.github/idd/config.json');
+  try {
+    return JSON.parse(readFileSync(targetPath, 'utf8'));
+  } catch (error) {
+    if (!policyPath) {
+      return {};
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`failed to load policy from ${targetPath}: ${detail}`);
+  }
+}
+
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/suitability-triage.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--verbose]
+  node scripts/suitability-triage.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--verbose]
 
 Output schema:
 {
@@ -812,6 +868,20 @@ function normalizeIssue(issue: unknown): NormalizedIssue {
     labels: normalizeLabels(i.labels),
     url: String(i.url ?? i.html_url ?? ''),
   };
+}
+
+/**
+ * Resolve one configured `labels.*` name (#1273), falling back to the given
+ * `policy-helpers.mts` `POLICY_DEFAULTS.labels` default for an absent or
+ * invalid value.
+ */
+function normalizeConfiguredLabelName(
+  labelName: unknown,
+  fallback: string,
+): string {
+  return typeof labelName === 'string' && labelName.length > 0
+    ? labelName
+    : fallback;
 }
 
 function normalizeRepository(repository: unknown): Repository | null {
