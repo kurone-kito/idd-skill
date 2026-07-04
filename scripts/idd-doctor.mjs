@@ -14,6 +14,7 @@ import {
 } from './autopilot-suitability.mjs';
 import {
   inspectHelperRuntimeConfig,
+  POLICY_DEFAULTS,
   parseProjectCommandRows,
 } from './policy-helpers.mjs';
 
@@ -99,6 +100,11 @@ export function evaluateAutopilotSuitabilityConsistency(issues, options = {}) {
     typeof options.markerPrefix === 'string' && options.markerPrefix.length > 0
       ? options.markerPrefix
       : 'idd-skill';
+  const blockedByHumanLabelName =
+    typeof options.blockedByHumanLabelName === 'string' &&
+    options.blockedByHumanLabelName.length > 0
+      ? options.blockedByHumanLabelName
+      : POLICY_DEFAULTS.labels.blockedByHumanLabelName;
   const warnings = [];
   for (const issue of Array.isArray(issues) ? issues : []) {
     const labelNames = new Set(
@@ -106,7 +112,7 @@ export function evaluateAutopilotSuitabilityConsistency(issues, options = {}) {
         typeof label === 'string' ? label : (label?.name ?? ''),
       ),
     );
-    const blockedByHuman = labelNames.has('status:blocked-by-human');
+    const blockedByHuman = labelNames.has(blockedByHumanLabelName);
     const marker = parseAutopilotSuitabilityMarker(issue?.body, prefix);
     if (!marker.present) {
       continue;
@@ -120,7 +126,7 @@ export function evaluateAutopilotSuitabilityConsistency(issues, options = {}) {
     }
     if (marker.value === 1 && !blockedByHuman) {
       warnings.push(
-        `autopilot-suitability: issue #${number} is scored 1 (human-only) but is missing the status:blocked-by-human label`,
+        `autopilot-suitability: issue #${number} is scored 1 (human-only) but is missing the ${blockedByHumanLabelName} label`,
       );
     } else if (
       marker.value !== null &&
@@ -129,7 +135,7 @@ export function evaluateAutopilotSuitabilityConsistency(issues, options = {}) {
       blockedByHuman
     ) {
       warnings.push(
-        `autopilot-suitability: issue #${number} is scored ${marker.value} (>= floor ${floor}) but carries status:blocked-by-human; the score and label disagree`,
+        `autopilot-suitability: issue #${number} is scored ${marker.value} (>= floor ${floor}) but carries ${blockedByHumanLabelName}; the score and label disagree`,
       );
     }
   }
@@ -171,17 +177,21 @@ function checkAutopilotSuitabilityConsistency(root, options, report) {
     return;
   }
   let floor;
+  let blockedByHumanLabelName;
   try {
     const config = JSON.parse(
       readFileSync(join(root, '.github/idd/config.json'), 'utf8'),
     );
     floor = config?.autopilotSuitability?.floor;
+    blockedByHumanLabelName = config?.labels?.blockedByHumanLabelName;
   } catch {
     floor = undefined;
+    blockedByHumanLabelName = undefined;
   }
   const { warnings } = evaluateAutopilotSuitabilityConsistency(issues, {
     floor,
     markerPrefix: options.markerPrefix,
+    blockedByHumanLabelName,
   });
   for (const warning of warnings) {
     report.warnings.push(warning);
