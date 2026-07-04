@@ -459,7 +459,7 @@ test('an explicit marker prefix must satisfy the documented pattern', () => {
   );
 });
 
-test('the trusted-marker-actor value is JSON-escaped string content', () => {
+test('values stay raw at resolution; JSON sites are escaped in the plan', () => {
   assert.equal(escapeJsonStringContent('trusted-user-a'), 'trusted-user-a');
   assert.equal(escapeJsonStringContent('a"b\\c'), 'a\\"b\\\\c');
   const root = makeFixtureDir();
@@ -468,7 +468,37 @@ test('the trusted-marker-actor value is JSON-escaped string content', () => {
     { TRUSTED_MARKER_ACTOR: 'a"b' },
     { readRemoteUrl: () => null },
   );
-  assert.equal(resolution.values.TRUSTED_MARKER_ACTOR?.value, 'a\\"b');
+  // Escaping is a property of the substitution site, applied per file in
+  // buildSubstitutionPlan — the resolved value itself stays raw.
+  assert.equal(resolution.values.TRUSTED_MARKER_ACTOR?.value, 'a"b');
+});
+
+test('command values containing quotes stay valid JSON and land raw in markdown', () => {
+  const root = makeFixtureDir();
+  writeTemplateFixture(root);
+  // A markdown command-table site next to the config.json site.
+  writeFileSync(
+    join(root, 'INSTALL.md'),
+    '| **install-deps** | `{{INSTALL_DEPS_COMMAND}}` |\n',
+  );
+  const quotedCommand = 'npx cspell lint "**" --no-progress';
+  const resolution = resolvePlaceholderValues(
+    root,
+    { ...ALL_OVERRIDES, INSTALL_DEPS_COMMAND: quotedCommand },
+    { readRemoteUrl: () => null },
+  );
+  const plan = buildSubstitutionPlan(scanPlaceholderTokens(root), resolution);
+  applySubstitutionPlan(root, plan);
+  // The JSON site parses and round-trips the raw command...
+  const config = JSON.parse(
+    readFileSync(join(root, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as { commands: Record<string, string> };
+  assert.equal(config.commands['install-deps'], quotedCommand);
+  // ...while the markdown site receives it unescaped.
+  assert.equal(
+    readFileSync(join(root, 'INSTALL.md'), 'utf8'),
+    `| **install-deps** | \`${quotedCommand}\` |\n`,
+  );
 });
 
 // ---------------------------------------------------------------------------

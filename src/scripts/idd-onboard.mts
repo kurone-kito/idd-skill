@@ -135,9 +135,13 @@ export function deriveMarkerPrefix(repoName: unknown): string | null {
 }
 
 /**
- * JSON-escape a login for the quoted `trustedMarkerActors` array entry in
- * `config.json`: the template already provides the surrounding quotes, so
- * the substitution value is the escaped string *content* only.
+ * JSON-escape a substitution value for a placeholder site inside a JSON
+ * string field (the template provides the surrounding quotes, so this is
+ * the escaped string *content* only). Escaping is a property of the
+ * substitution site, not the value: the same command row lands raw in
+ * the markdown command tables and escaped inside `config.json`, and the
+ * onboarding reference requires the JSON command strings to stay
+ * JSON-escaped rather than raw shell.
  */
 export function escapeJsonStringContent(value: string): string {
   return JSON.stringify(value).slice(1, -1);
@@ -444,14 +448,9 @@ export function resolvePlaceholderValues(
     } else if (derived[entry.name] !== null) {
       resolved = { value: derived[entry.name] as string, source: 'derived' };
     }
-    // The template's trustedMarkerActors entry is already quoted, so the
-    // substitution value is JSON-escaped string content.
-    if (resolved && entry.name === 'TRUSTED_MARKER_ACTOR') {
-      resolved = {
-        ...resolved,
-        value: escapeJsonStringContent(resolved.value),
-      };
-    }
+    // Values stay raw here; JSON escaping is applied per substitution
+    // site by buildSubstitutionPlan (the same value lands raw in the
+    // markdown tables and escaped inside config.json string fields).
     values[entry.name] = resolved;
     if (!resolved) {
       unresolved.push(entry.name);
@@ -605,12 +604,19 @@ export function buildSubstitutionPlan(
         residue.push({ file: scan.file, token, occurrences });
         continue;
       }
+      // Site-aware escaping: a placeholder inside a JSON file sits in a
+      // string field the template already quotes, so the value must be
+      // JSON-escaped there (a command row containing quotes would
+      // otherwise break config.json); every other site takes it raw.
+      const isJsonSite = scan.file.endsWith('.json');
       entries.push({
         file: scan.file,
         placeholder: known.name,
         occurrences,
         from: token,
-        to: resolved.value,
+        to: isJsonSite
+          ? escapeJsonStringContent(resolved.value)
+          : resolved.value,
       });
     }
   }
