@@ -4,9 +4,10 @@
 # call is needed to attribute the mutation to an actor.
 #   - The job runs only when BOTH hold for this one event:
 #     `github.event.sender.login` equals `coderabbitai[bot]` (the actor that
-#     applied *this* label, confirmed via the REST API `user.login` /
-#     `type: Bot` shape -- not the GraphQL-rendered login some `gh` read
-#     paths shorten), AND `github.event.label.name` is a reserved IDD
+#     applied *this* label, confirmed via the REST simple-user object's
+#     `login` + `type: Bot` fields directly on `sender` -- not the
+#     GraphQL-rendered login some `gh` read paths shorten), AND
+#     `github.event.label.name` is a reserved IDD
 #     operational label: the exact `roadmap` label, or any label whose name
 #     starts with `status:`.
 #   - This is fail-safe by construction against ever re-fighting a human: a
