@@ -1118,6 +1118,57 @@ test('bin/idd-onboard.mjs exits 2 when both --substitute and --import are passed
   }
 });
 
+test('bin/idd-onboard.mjs exits 2 when --import is combined with a substitute-only placeholder override', () => {
+  const targetRoot = makeFixtureDir();
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--import',
+        '--source',
+        REPO_ROOT,
+        '--target',
+        targetRoot,
+        '--repo-name',
+        'my-app',
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(String(failed.stderr), /substitute-only flag/);
+    assert.match(String(failed.stderr), /--repo-name/);
+  }
+});
+
+test('bin/idd-onboard.mjs exits 2 when --substitute is combined with an import-only flag', () => {
+  const targetRoot = makeFixtureDir();
+  writeTemplateFixture(targetRoot);
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--substitute',
+        '--target',
+        targetRoot,
+        '--force',
+        ...CLI_OVERRIDE_FLAGS,
+      ],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    assert.fail('expected a non-zero exit');
+  } catch (error) {
+    const failed = error as { status?: number; stderr?: string };
+    assert.equal(failed.status, 2);
+    assert.match(String(failed.stderr), /import-only flag/);
+    assert.match(String(failed.stderr), /--force/);
+  }
+});
+
 test('importing idd-onboard.mts has no import-time side effect', async () => {
   const originalPath = process.env.PATH;
   process.env.PATH = '';

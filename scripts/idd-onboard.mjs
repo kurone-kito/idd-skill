@@ -779,6 +779,26 @@ function parseArgs(argv) {
   }
   return parsed;
 }
+/** Import-only flags the user explicitly passed (present regardless of mode). */
+function importOnlyFlagsPresent(args) {
+  const present = [];
+  if (args.source !== undefined) {
+    present.push('--source');
+  }
+  if (args.force) {
+    present.push('--force');
+  }
+  if (args.profile !== undefined) {
+    present.push('--profile');
+  }
+  return present;
+}
+/** Substitute-only placeholder-override flags the user explicitly passed. */
+function substituteOnlyFlagsPresent(args) {
+  return ONBOARDING_PLACEHOLDERS.filter(
+    (entry) => args.overrides[entry.name] !== undefined,
+  ).map((entry) => entry.flag);
+}
 function runCli() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -789,11 +809,26 @@ function runCli() {
     throw new Error('--substitute and --import are mutually exclusive');
   }
   if (args.importMode) {
+    // parseArgs collects every known flag regardless of the active stage,
+    // so a stage-foreign flag (e.g. a placeholder override alongside
+    // --import) would otherwise be silently ignored instead of reported.
+    const foreign = substituteOnlyFlagsPresent(args);
+    if (foreign.length > 0) {
+      throw new Error(
+        `--import does not accept substitute-only flag(s): ${foreign.join(', ')}`,
+      );
+    }
     runImportCli(args);
     return;
   }
   if (!args.substitute) {
     throw new Error('pass --substitute or --import to select a stage');
+  }
+  const foreign = importOnlyFlagsPresent(args);
+  if (foreign.length > 0) {
+    throw new Error(
+      `--substitute does not accept import-only flag(s): ${foreign.join(', ')}`,
+    );
   }
   const targetDir = resolve(args.target);
   if (!statSync(targetDir).isDirectory()) {
