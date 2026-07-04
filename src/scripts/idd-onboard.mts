@@ -30,7 +30,7 @@ export type OnboardingPlaceholderKind = 'identity' | 'command';
 export interface OnboardingPlaceholder {
   /** Bare name as it appears between the braces, e.g. `REPO_NAME`. */
   name: string;
-  /** Literal token to replace, e.g. `{{REPO_NAME}}`. */
+  /** Literal doubled-brace token to replace in scanned files. */
   token: string;
   kind: OnboardingPlaceholderKind;
   /** CLI override flag, e.g. `--repo-name`. */
@@ -68,7 +68,7 @@ export const ONBOARDING_PLACEHOLDERS: readonly OnboardingPlaceholder[] = [
   placeholder('INSTALL_DEPS_COMMAND', 'command', '--install-deps-command'),
 ];
 
-/** Validation pattern for `{{PROJECT_MARKER_PREFIX}}` from the reference. */
+/** Validation pattern for the PROJECT_MARKER_PREFIX value (reference). */
 export const MARKER_PREFIX_PATTERN = /^[a-z][a-z0-9-]{1,31}$/;
 
 /** Owner/repo pair parsed from a git remote URL. */
@@ -117,7 +117,7 @@ export function parseRemoteRepoRef(url: unknown): RemoteRepoRef | null {
 }
 
 /**
- * Normalize a repository short name into a `{{PROJECT_MARKER_PREFIX}}`
+ * Normalize a repository short name into a PROJECT_MARKER_PREFIX
  * candidate: lowercase, non-`[a-z0-9-]` runs collapsed to `-`, leading
  * non-letter characters stripped (the prefix must start with a letter),
  * cut to 32 characters, trailing `-` stripped. Returns `null` when the
@@ -197,7 +197,7 @@ function hasAnyRecognizedTooling(targetDir: string): boolean {
 }
 
 /**
- * Derive `{{INSTALL_DEPS_COMMAND}}` from the target tree per the
+ * Derive the INSTALL_DEPS_COMMAND row from the target tree per the
  * reference table. Returns `null` when the evidence is ambiguous or
  * insufficient (bare `package.json` without package-manager signals,
  * `pyproject.toml` + `requirements.txt` together, an unrecognized Python
@@ -460,7 +460,10 @@ export function resolvePlaceholderValues(
   return { values, unresolved };
 }
 
-/** Placeholder-shaped tokens: `{{NAME}}` with an upper-snake name. */
+// Placeholder-shaped tokens: doubled braces around an upper-snake name.
+// Comments in this module spell token names WITHOUT the doubled braces:
+// idd-doctor's unresolved-placeholder scan reads the generated artifact,
+// and a braced example would register as leftover template residue.
 const PLACEHOLDER_TOKEN_PATTERN = /\{\{[A-Z][A-Z0-9_]*\}\}/g;
 
 /** Directories never scanned for placeholder tokens. */
@@ -470,7 +473,7 @@ const SCAN_EXCLUDED_DIRS = new Set(['.git', 'node_modules']);
 export interface PlaceholderFileScan {
   /** Path relative to the scan root, `/`-separated. */
   file: string;
-  /** Token literal → occurrence count, e.g. `{{REPO_NAME}}` → 3. */
+  /** Token literal → occurrence count within the file. */
   tokens: Map<string, number>;
 }
 
