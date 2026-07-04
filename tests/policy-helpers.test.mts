@@ -32,8 +32,11 @@ test('issueScope defaults to roadmap-first and accepts all values', () => {
 
 test('POLICY_DEFAULTS.labels exposes the three reserved label name defaults', () => {
   // Additive only (#1272): POLICY_DEFAULTS carries the literal defaults,
-  // but normalizePolicyConfig does not parse this namespace yet — no
-  // consuming helper reads it until the follow-up (#1273) wires it up.
+  // and normalizePolicyConfig normalizes this namespace too (for shape
+  // parity — see its labels branch), but no consuming helper outside
+  // policy-helpers.mts reads it yet. Wiring the discover/claim/
+  // roadmap-audit label lookups to it is deferred to the follow-up
+  // (#1273).
   assert.deepEqual(POLICY_DEFAULTS.labels, {
     roadmapLabelName: 'roadmap',
     blockedByHumanLabelName: 'status:blocked-by-human',
