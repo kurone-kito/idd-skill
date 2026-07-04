@@ -80,7 +80,10 @@ trust or safety risk?
 
 Is this work a duplicate of an existing open issue, closed issue,
 merged PR, or draft PR? Is it superseded by paused work marked with
-`status:blocked-by-human` or `status:needs-decision`?
+the configured blocked-by-human label from
+`labels.blockedByHumanLabelName` (default: `status:blocked-by-human`)
+or configured needs-decision label from `labels.needsDecisionLabelName`
+(default: `status:needs-decision`)?
 
 - **Pass**: No duplicate or superseded work detected; this issue
   represents novel work

@@ -57,7 +57,10 @@ that issue only:
    `Issue #N is currently being authored`, run the stale-authoring
    warning check above, and stop without claiming.
 3. Apply the same readiness intent as A3 to the target:
-   - no `status:blocked-by-human` or `status:needs-decision` label;
+   - no configured blocked-by-human label from
+     `labels.blockedByHumanLabelName` (default: `status:blocked-by-human`)
+     or configured needs-decision label from
+     `labels.needsDecisionLabelName` (default: `status:needs-decision`);
    - no open dependent issues, except parent epics or aggregate issues
      that are acceptable under A3;
    - visible `Blocked by #NNN` references resolve to closed or otherwise
@@ -138,7 +141,7 @@ body satisfies **all** of the following:
   is not itself a roadmap).
 - Does NOT contain any
   `<!-- {{PROJECT_MARKER_PREFIX}}-blocked-by: … -->` marker.
-- Does NOT have a `status:blocked-by-human` or `status:needs-decision`
+- Does NOT have the configured blocked-by-human or needs-decision
   label.
 - Does NOT have the configured authoring label.
 - Does NOT contain visible `Blocked by #NNN` lines where the referenced
@@ -181,7 +184,8 @@ when it returns zero.
 ## A1 — Find the roadmap
 
 Use GH CLI or GH MCP to find the roadmap among open issues. Identify it
-by the `roadmap` label (project field) or by recognizing it as an
+by the configured roadmap label from `labels.roadmapLabelName`
+(default: `roadmap`, project field) or by recognizing it as an
 umbrella issue. If no roadmap issue exists, report and abort.
 
 **Autopilot cross-roadmap mode (optional, additive).** When several
@@ -243,8 +247,8 @@ referenced issues. Collect only **open** issues.
 
 Traverse referenced issues regardless of their open/closed state.
 
-**Roadmap node classification**: any issue carrying the `roadmap` label
-or containing an
+**Roadmap node classification**: any issue carrying the configured
+roadmap label or containing an
 `<!-- {{PROJECT_MARKER_PREFIX}}-roadmap-id: ... -->` marker is a
 **roadmap node**, not an execution leaf. Roadmap nodes are
 traversal-only coordination nodes:
@@ -346,7 +350,7 @@ is cheap — run it first per candidate.
 
 From A2, keep only issues that satisfy **all** of the following:
 
-- No `status:blocked-by-human` or `status:needs-decision` label
+- No configured blocked-by-human or needs-decision label
 - No configured authoring label
 - No open dependent issues (parent epics / aggregate issues that are
   still open are acceptable)
@@ -620,8 +624,8 @@ discover phase:
 
 - **Roadmap identity** (`{{PROJECT_MARKER_PREFIX}}-roadmap-id`): placed
   in the roadmap issue body. A3 uses this marker to resolve `blocked-by`
-  dependency lookups. A1 identifies the roadmap by its `roadmap` label
-  or umbrella structure — not by this marker.
+  dependency lookups. A1 identifies the roadmap by its configured
+  roadmap label or umbrella structure — not by this marker.
 - **Sequential dependency** (`{{PROJECT_MARKER_PREFIX}}-blocked-by`):
   placed in an issue body to express a hard dependency — this issue
   **cannot start until** the roadmap with the matching `roadmap-id` is

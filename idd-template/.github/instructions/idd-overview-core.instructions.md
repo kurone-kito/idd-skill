@@ -241,8 +241,11 @@ Roadmap-audit claims are coordination locks for roadmap-side mutations
 only. They must not be treated as global execution locks: child issue
 discovery and A5 checks remain issue-local and are gated by each child's
 own claim state, blockers, and dependencies. This does not relax
-roadmap-level blocker gates such as `status:blocked-by-human` or
-`status:needs-decision`, which still stop child selection in Discover.
+roadmap-level blocker gates such as the configured blocked-by-human
+label from `labels.blockedByHumanLabelName` (default:
+`status:blocked-by-human`) or configured needs-decision label from
+`labels.needsDecisionLabelName` (default: `status:needs-decision`),
+which still stop child selection in Discover.
 
 ## Project commands
 
