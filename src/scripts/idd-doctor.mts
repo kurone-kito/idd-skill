@@ -144,6 +144,7 @@ export function runDoctor({
     },
     report,
   );
+  checkReleaseTagDrift(root, report);
   checkWorkshopCrossReferences(
     root,
     { allowMissing: workshopCrossRefAllowMissing ?? [] },
@@ -1732,6 +1733,125 @@ function checkPostMergeCleanupBacklog(
   report.warnings.push(
     `post-merge cleanup backlog: ${verdict.count} merged PRs in the last ${windowDays} days lack F4 cleanup evidence (warn threshold: ${warnThreshold}). Examples: ${examplesText}. Remediation: see docs/idd-comment-minimization.md or run \`node scripts/audit-pr-cleanup.mjs --pr <N> --apply --skip-claim-check\`.`,
   );
+}
+
+// Default drift thresholds (idd-skill#1269): warn when `main` is more than
+// 100 commits OR more than 45 days past the latest reachable tag, whichever
+// fires first (OR logic -- either alone is enough to warn). "Days past the
+// tag" is measured from the tagged **commit's** date (`%cI` on the
+// dereferenced commit), not an annotated tag object's own creation
+// timestamp -- lightweight tags have no separate tagger date to read, and
+// using the commit date keeps both tag forms measured the same way.
+// Calibrated against this repository's own history rather than picked
+// arbitrarily: as of 2026-07-03, `main` was 636 commits / ~22 days past
+// `v0.3.0` under this repository's own atypically heavy dogfooding
+// velocity (~29 commits/day) -- not a representative adopter cadence, and
+// the `v0.2.0` -> `v0.3.0` gap (~10.5 hours) was too short to use as a
+// cadence sample either. 100 commits sizes the default for a *typical*
+// adopter's velocity, not idd-skill's own extreme rate -- it is expected
+// to (correctly) also fire immediately for idd-skill itself. 45 days gives
+// roughly 1.5 release cycles of slack under a monthly-ish cadence before
+// warning.
+export const RELEASE_TAG_DRIFT_COMMIT_THRESHOLD = 100;
+export const RELEASE_TAG_DRIFT_DAY_THRESHOLD = 45;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** Verdict for one release-tag-drift classification. */
+export interface ReleaseTagDriftVerdict {
+  warn: boolean;
+  message?: string;
+}
+
+/**
+ * Classify how far `main` (or the current HEAD) has drifted from the latest
+ * release tag, given the already-computed commit and day distances. Pure and
+ * exported so tests can cover every threshold combination without shelling
+ * out to git, using the module-level `RELEASE_TAG_DRIFT_*` thresholds (no
+ * CLI override -- the issue's acceptance criteria only calls for documented
+ * defaults). `tag === null` means no tag is reachable from HEAD yet (a
+ * fresh adopter clone before its first release) -- always non-warning. The
+ * only caller, `checkReleaseTagDrift`, already returns before ever invoking
+ * this with `tag: null` (its own `git describe` failure is the earlier exit
+ * point); the branch is kept here, mirroring
+ * `classifyWorktreeGuardActivation`'s `headDetached` handling, purely so
+ * this no-tag case is directly unit-testable without shelling out to git.
+ */
+export function classifyReleaseTagDrift(
+  tag: string | null,
+  commitsSinceTag: unknown,
+  daysSinceTag: unknown,
+): ReleaseTagDriftVerdict {
+  if (!tag) {
+    return { warn: false };
+  }
+  const commitThreshold = RELEASE_TAG_DRIFT_COMMIT_THRESHOLD;
+  const dayThreshold = RELEASE_TAG_DRIFT_DAY_THRESHOLD;
+  const commits = Number(commitsSinceTag);
+  const days = Number(daysSinceTag);
+  const safeCommits = Number.isFinite(commits) ? commits : 0;
+  const safeDays = Number.isFinite(days) ? days : 0;
+  const overCommits = safeCommits > commitThreshold;
+  const overDays = safeDays > dayThreshold;
+  if (!overCommits && !overDays) {
+    return { warn: false };
+  }
+  const parts: string[] = [];
+  if (overCommits) {
+    parts.push(`${safeCommits} commit(s) (> ${commitThreshold})`);
+  }
+  if (overDays) {
+    parts.push(`${Math.floor(safeDays)} day(s) (> ${dayThreshold})`);
+  }
+  return {
+    warn: true,
+    message: `release-tag drift: main is ${parts.join(' and ')} past the latest tag ${tag}. Consider cutting a new release.`,
+  };
+}
+
+// Warns (never fails) when `main` has drifted far from the latest release
+// tag. Skips silently -- no warning, no crash -- when the repository has no
+// tags reachable from HEAD yet (including a fresh adopter clone before its
+// first release): `git describe` failure is the single, safe signal for
+// both "no tags at all" and "no tag reachable from HEAD", and either case
+// means there is no baseline to measure drift against.
+function checkReleaseTagDrift(root: string, report: DoctorReport) {
+  const describeResult = runCommand(
+    'git',
+    ['describe', '--tags', '--abbrev=0'],
+    root,
+  );
+  if (!describeResult.ok) {
+    return;
+  }
+  const tag = describeResult.stdout.trim();
+  if (!tag) {
+    return;
+  }
+  const countResult = runCommand(
+    'git',
+    ['rev-list', '--count', `${tag}..HEAD`],
+    root,
+  );
+  // `^{commit}` dereferences an annotated tag to the commit it points at, so
+  // the drift measurement uses the tagged commit's date in both tag forms.
+  const dateResult = runCommand(
+    'git',
+    ['log', '-1', '--format=%cI', `${tag}^{commit}`],
+    root,
+  );
+  if (!countResult.ok || !dateResult.ok) {
+    return;
+  }
+  const commitsSinceTag = Number(countResult.stdout.trim());
+  const tagDate = new Date(dateResult.stdout.trim());
+  if (!Number.isFinite(commitsSinceTag) || Number.isNaN(tagDate.getTime())) {
+    return;
+  }
+  const daysSinceTag = (Date.now() - tagDate.getTime()) / MS_PER_DAY;
+  const verdict = classifyReleaseTagDrift(tag, commitsSinceTag, daysSinceTag);
+  if (verdict.warn && verdict.message) {
+    report.warnings.push(verdict.message);
+  }
 }
 
 export function findMissingWorkshopReferences(

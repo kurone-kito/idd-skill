@@ -11,6 +11,7 @@ import {
   classifyBacklog,
   classifyClaimTimingConsistency,
   classifyPrimaryHead,
+  classifyReleaseTagDrift,
   classifyWorktreeGuardActivation,
   classifyWorktreeHeadFinding,
   computeWindowStartIso,
@@ -947,6 +948,58 @@ test('computeWindowStartIso returns null for windows that overflow Date range', 
   // would historically throw RangeError before this guard landed.
   assert.equal(computeWindowStartIso(now, 1e9), null);
   assert.equal(computeWindowStartIso(now, Number.MAX_SAFE_INTEGER), null);
+});
+
+test('classifyReleaseTagDrift skips silently when no tag is reachable from HEAD', () => {
+  // A fresh adopter clone before its first release (or a repo with no
+  // tags at all) must never warn or crash.
+  const verdict = classifyReleaseTagDrift(null, 500, 200);
+  assert.equal(verdict.warn, false);
+  assert.equal(verdict.message, undefined);
+});
+
+test('classifyReleaseTagDrift does not warn when a tag is within both thresholds', () => {
+  const verdict = classifyReleaseTagDrift('v1.0.0', 50, 10);
+  assert.equal(verdict.warn, false);
+  assert.equal(verdict.message, undefined);
+});
+
+test('classifyReleaseTagDrift warns when past the commit threshold only', () => {
+  const verdict = classifyReleaseTagDrift('v1.0.0', 150, 10);
+  assert.equal(verdict.warn, true);
+  assert.match(verdict.message ?? '', /150 commit\(s\) \(> 100\)/);
+  assert.doesNotMatch(verdict.message ?? '', /day\(s\)/);
+  assert.match(verdict.message ?? '', /v1\.0\.0/);
+});
+
+test('classifyReleaseTagDrift warns when past the day threshold only', () => {
+  const verdict = classifyReleaseTagDrift('v1.0.0', 50, 60);
+  assert.equal(verdict.warn, true);
+  assert.match(verdict.message ?? '', /60 day\(s\) \(> 45\)/);
+  assert.doesNotMatch(verdict.message ?? '', /commit\(s\)/);
+});
+
+test('classifyReleaseTagDrift warns on both thresholds and names both in the message', () => {
+  const verdict = classifyReleaseTagDrift('v1.0.0', 636, 22);
+  // The 22-day figure alone is under the 45-day threshold; only the
+  // commit count crosses here -- covered separately above. Use values
+  // that exceed both to exercise the "and" join.
+  const bothOver = classifyReleaseTagDrift('v1.0.0', 636, 60);
+  assert.equal(verdict.warn, true);
+  assert.equal(bothOver.warn, true);
+  assert.match(bothOver.message ?? '', /commit\(s\).*and.*day\(s\)/);
+});
+
+test('classifyReleaseTagDrift treats the threshold boundary as non-warning ("more than", not "at least")', () => {
+  const atCommitThreshold = classifyReleaseTagDrift('v1.0.0', 100, 10);
+  const atDayThreshold = classifyReleaseTagDrift('v1.0.0', 50, 45);
+  assert.equal(atCommitThreshold.warn, false);
+  assert.equal(atDayThreshold.warn, false);
+});
+
+test('classifyReleaseTagDrift coerces non-numeric commit/day values to 0', () => {
+  const verdict = classifyReleaseTagDrift('v1.0.0', 'not a number', NaN);
+  assert.equal(verdict.warn, false);
 });
 
 test('containsWorkshopReference accepts canonical, dotted, and absolute link targets', () => {
