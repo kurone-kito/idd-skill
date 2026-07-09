@@ -2369,6 +2369,15 @@ test('isAdvisoryNonReviewNotice matches only machine-generated non-review notice
     ),
     true,
   );
+  // #1312: current Codex wording interposes "have been" between "usage
+  // limits" and "reached" — must still classify as a non-review notice.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'Codex usage limits have been reached for code reviews. Please check ' +
+        'with the admins of this repo to increase the limits by adding credits.',
+    ),
+    true,
+  );
   assert.equal(
     isAdvisoryNonReviewNotice(
       '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> ## Review limit reached',
@@ -2386,6 +2395,15 @@ test('isAdvisoryNonReviewNotice matches only machine-generated non-review notice
   assert.equal(
     isAdvisoryNonReviewNotice(
       'This rate limit handling looks off — please cap the retries.',
+    ),
+    false,
+  );
+  // #1312: a genuine Codex review comment that merely mentions the phrase
+  // "Codex usage limits" — with no nearby reach/exceed/hit verb — must not
+  // be misclassified as a non-review notice.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'This PR modifies the Codex usage limits configuration file; overall LGTM.',
     ),
     false,
   );
