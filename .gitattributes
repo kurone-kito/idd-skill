@@ -19,6 +19,7 @@ scripts/branch-name.mjs linguist-generated=true
 scripts/build-ts.mjs linguist-generated=true
 scripts/check-pnpm-boundary.mjs linguist-generated=true
 scripts/ci-wait-policy.mjs linguist-generated=true
+scripts/ci-wait-state.mjs linguist-generated=true
 scripts/claim-approval-gate.mjs linguist-generated=true
 scripts/collaborator-permission.mjs linguist-generated=true
 scripts/consistency-helpers.mjs linguist-generated=true

@@ -1,0 +1,226 @@
+import { strict as assert } from 'node:assert';
+import { test } from 'node:test';
+
+import { buildCiWaitStateSummary } from '../src/scripts/ci-wait-state.mts';
+
+const HEAD_SHA = 'a'.repeat(40);
+
+function checkRun(overrides: Record<string, unknown> = {}) {
+  return {
+    __typename: 'CheckRun',
+    name: 'lint',
+    status: 'COMPLETED',
+    conclusion: 'SUCCESS',
+    workflowName: 'push',
+    detailsUrl: 'https://example/run',
+    startedAt: '2026-07-09T00:00:00Z',
+    completedAt: '2026-07-09T00:05:00Z',
+    ...overrides,
+  };
+}
+
+test('keys duplicate-name checks by (checkName, workflowName) instead of collapsing them', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          workflowName: 'push as feature branch',
+          status: 'COMPLETED',
+          conclusion: 'SUCCESS',
+        }),
+        checkRun({
+          workflowName: 'merge as main branch',
+          status: 'IN_PROGRESS',
+          conclusion: '',
+        }),
+      ],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+
+  assert.equal(summary.checks.length, 2);
+  const byWorkflow = new Map(
+    summary.checks.map((check) => [check.workflowName, check]),
+  );
+  assert.equal(byWorkflow.get('push as feature branch')?.status, 'success');
+  assert.equal(byWorkflow.get('merge as main branch')?.status, 'pending');
+  // Both entries share the display name; disambiguation must not merge them.
+  assert.equal(
+    summary.checks.every((check) => check.checkName === 'lint'),
+    true,
+  );
+});
+
+test('required-checks rollup: mixed pending/passing reports anyRequiredPending, not passing', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', workflowName: 'ci', conclusion: 'SUCCESS' }),
+        checkRun({
+          name: 'test',
+          workflowName: 'ci',
+          status: 'IN_PROGRESS',
+          conclusion: '',
+        }),
+      ],
+    },
+    { requiredCheckNames: ['lint', 'test'] },
+  );
+
+  assert.equal(summary.requiredChecks.allRequiredPresent, true);
+  assert.equal(summary.requiredChecks.allRequiredPassing, false);
+  assert.equal(summary.requiredChecks.anyRequiredPending, true);
+  assert.equal(summary.requiredChecks.anyRequiredFailing, false);
+  assert.equal(summary.requiredChecks.status, 'pending');
+});
+
+test('required-checks rollup: a failing required check reports anyRequiredFailing and status failing', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', workflowName: 'ci', conclusion: 'SUCCESS' }),
+        checkRun({ name: 'test', workflowName: 'ci', conclusion: 'FAILURE' }),
+      ],
+    },
+    { requiredCheckNames: ['lint', 'test'] },
+  );
+
+  assert.equal(summary.requiredChecks.anyRequiredFailing, true);
+  assert.equal(summary.requiredChecks.allRequiredPassing, false);
+  assert.equal(summary.requiredChecks.status, 'failing');
+});
+
+test('required-checks rollup: a not-yet-generated required check reports missing, not vacuously passing', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', workflowName: 'ci', conclusion: 'SUCCESS' }),
+      ],
+    },
+    { requiredCheckNames: ['lint', 'test'] },
+  );
+
+  assert.deepEqual(summary.requiredChecks.missingNames, ['test']);
+  assert.equal(summary.requiredChecks.allRequiredPresent, false);
+  assert.equal(summary.requiredChecks.allRequiredPassing, false);
+  assert.equal(summary.requiredChecks.status, 'missing');
+});
+
+test('required-checks rollup: no required checks configured is reported distinctly, not as passing', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'build' })],
+    },
+    { requiredCheckNames: [] },
+  );
+
+  assert.equal(summary.requiredChecks.status, 'no-required-checks');
+  assert.equal(summary.requiredChecks.allRequiredPassing, false);
+  assert.equal(summary.requiredChecks.names.length, 0);
+});
+
+test('all required checks passing reports allRequiredPassing and status success', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', workflowName: 'ci', conclusion: 'SUCCESS' }),
+        checkRun({ name: 'test', workflowName: 'ci', conclusion: 'SKIPPED' }),
+      ],
+    },
+    { requiredCheckNames: ['lint', 'test'] },
+  );
+
+  assert.equal(summary.requiredChecks.allRequiredPassing, true);
+  assert.equal(summary.requiredChecks.status, 'success');
+});
+
+test('a StatusContext entry is normalized alongside CheckRun entries', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'StatusContext',
+          context: 'CodeRabbit',
+          state: 'SUCCESS',
+          targetUrl: '',
+          startedAt: '2026-07-09T00:00:00Z',
+        },
+      ],
+    },
+    { requiredCheckNames: [] },
+  );
+
+  assert.equal(summary.checks.length, 1);
+  assert.equal(summary.checks[0]?.type, 'status-context');
+  assert.equal(summary.checks[0]?.checkName, 'CodeRabbit');
+  assert.equal(summary.checks[0]?.workflowName, '');
+  assert.equal(summary.checks[0]?.status, 'success');
+});
+
+test('reports the live headRefOid unchanged, for caller-side HEAD-drift detection', () => {
+  const summary = buildCiWaitStateSummary(
+    { headRefOid: HEAD_SHA, statusCheckRollup: [] },
+    { requiredCheckNames: [] },
+  );
+  assert.equal(summary.headRefOid, HEAD_SHA);
+});
+
+test('a failure-family state (cancelled/timed_out/action_required/stale) buckets as failure, not unknown', () => {
+  for (const conclusion of [
+    'CANCELLED',
+    'TIMED_OUT',
+    'ACTION_REQUIRED',
+    'STARTUP_FAILURE',
+    'STALE',
+  ]) {
+    const summary = buildCiWaitStateSummary(
+      {
+        headRefOid: HEAD_SHA,
+        statusCheckRollup: [checkRun({ name: 'lint', conclusion })],
+      },
+      { requiredCheckNames: [] },
+    );
+    assert.equal(
+      summary.checks[0]?.status,
+      'failure',
+      `expected ${conclusion} to bucket as failure`,
+    );
+  }
+});
+
+test('a genuinely unrecognized state buckets as unknown and marks the rollup unknown, not passing', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', status: 'COMPLETED', conclusion: 'WEIRD' }),
+      ],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(summary.checks[0]?.status, 'unknown');
+  assert.equal(summary.requiredChecks.anyRequiredUnknown, true);
+  assert.equal(summary.requiredChecks.allRequiredPassing, false);
+  assert.equal(summary.requiredChecks.status, 'pending');
+});
+
+// Importing the CLI module directly is only possible now that its top-level
+// statements are guarded behind isCliExecution() (#1210); previously the
+// import parsed process.argv and called a `gh` command, aborting the test
+// process when no --pr argument or gh binary was available.
+test('importing ci-wait-state.mts has no import-time side effect', async () => {
+  const originalPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    await assert.doesNotReject(import('../src/scripts/ci-wait-state.mts'));
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});

@@ -77,6 +77,9 @@ In the idd-skill source repository, the following optional helpers were adopted:
   collection and AW outcome reporting
 - `scripts/ci-wait-policy.mjs` for read-only CI wait policy resolution
   and rerun-budget decisions
+- `scripts/ci-wait-state.mjs` for a read-only, single-shot D-phase CI
+  snapshot: per-check status keyed by `(checkName, workflowName)`, the
+  live `headRefOid`, and a required-checks rollup
 - `scripts/pre-merge-readiness.mjs` for read-only F2/F3 readiness
   evidence collection
 - `scripts/idd-merge-execute.mjs` for the F3 merge gate: a dry-run
@@ -949,6 +952,32 @@ Interpretation rules:
   `rerunDecision.reason`
 - it remains read-only; the command does not poll CI, rerun workflows,
   or post any GitHub comment
+
+### CI wait state snapshot
+
+- Source repo / vendored-node command:
+  `node scripts/ci-wait-state.mjs --pr <pr-number>`
+- Package-manager / ephemeral-npx command: use the
+  profile-selected `idd:ci-wait-state` command from the helper runtime
+  manifest wiring above
+- Single-shot, read-only: fetches `gh pr view`'s
+  `headRefOid`/`statusCheckRollup` plus the base branch's active rules and
+  classic branch protection, then reuses the same
+  `summarizeBranchReviewRequirements` required-check-name resolution
+  `pre-merge-readiness` already relies on — no forked required-check
+  discovery.
+- Stable fields consumed by D-phase polling: top-level `headRefOid` (for
+  caller-side HEAD-drift detection between polls); `checks[]`, each keyed
+  by both `checkName` and `workflowName` so two check runs sharing a
+  display name across different triggering workflows are never collapsed
+  into one entry, plus a normalized `status`
+  (`success|pending|failure|unknown`) and `required` flag; and
+  `requiredChecks` (`names`, `missingNames`, `allRequiredPresent`,
+  `allRequiredPassing`, `anyRequiredPending`, `anyRequiredFailing`,
+  `anyRequiredUnknown`, and a top-level `status` of
+  `success|pending|failing|missing|no-required-checks`)
+- it remains read-only; the command performs no reruns and posts no
+  GitHub comment
 
 ### Merge-gate evidence
 

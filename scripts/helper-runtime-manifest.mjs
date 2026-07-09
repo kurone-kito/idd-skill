@@ -138,6 +138,15 @@ const HELPER_COMMANDS = [
     contractPaths: ['schemas/policy.schema.json'],
   },
   {
+    id: 'ci-wait-state',
+    scriptName: 'idd:ci-wait-state',
+    binName: 'idd-ci-wait-state',
+    entryPath: 'scripts/ci-wait-state.mjs',
+    vendoredCommand: 'node scripts/ci-wait-state.mjs',
+    description:
+      'Collect a read-only D-phase CI snapshot: per-check status keyed by (checkName, workflowName), the live headRefOid, and a required-checks rollup.',
+  },
+  {
     id: 'claim-approval-gate',
     scriptName: 'idd:claim-approval-gate',
     binName: 'idd-claim-approval-gate',
