@@ -26,6 +26,28 @@ interface OperationalMarker {
   label: string;
   pattern: RegExp;
   startPattern?: RegExp;
+  /**
+   * Anchored at the same `^` position as `pattern`, with the same field
+   * validation, but without the trailing `OPTIONAL_IDD_VISIBLE_NOTE_PATTERN`
+   * group and `$` end anchor: matches whenever the body's first bytes are a
+   * structurally valid marker token (see #1316), regardless of what -- if
+   * anything -- follows. `detectMalformedOperationalMarker` uses the gap
+   * between this and `pattern` to tell three cases apart:
+   *   - `pattern` matches -> well-formed marker (token + optional single
+   *     note, nothing more).
+   *   - `pattern` fails but this matches -> marker-shaped prefix with
+   *     content appended after the note (the malformed case this issue
+   *     surfaces).
+   *   - Neither matches -> not marker-shaped at all, including a marker
+   *     merely quoted or embedded mid-prose (anti-spoofing: both patterns
+   *     require the token to be the literal first bytes of the body, so a
+   *     preamble before it defeats both).
+   * Only defined for the note-bearing markers (`claimed-by`, `unclaimed-by`,
+   * `review-watermark`, `review-baseline`); `advisory-wait`,
+   * `forced-handoff`, and `idd-external-check-waiver` do not use the shared
+   * note-optional grammar this field targets.
+   */
+  malformedPrefixPattern?: RegExp;
 }
 
 /** Parsed `<!-- claimed-by: ... -->` claim marker. */
@@ -88,21 +110,28 @@ const OPERATIONAL_MARKERS: OperationalMarker[] = [
     label: '<!-- claimed-by:',
     pattern:
       /^<!--\s*claimed-by:\s+\S+\s+\S+\s+supersedes:\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s+branch:\s+[^\s>]+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    malformedPrefixPattern:
+      /^<!--\s*claimed-by:\s+\S+\s+\S+\s+supersedes:\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s+branch:\s+[^\s>]+\s*-->/i,
   },
   {
     label: '<!-- unclaimed-by:',
     pattern:
       /^<!--\s*unclaimed-by:\s+\S+\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    malformedPrefixPattern:
+      /^<!--\s*unclaimed-by:\s+\S+\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->/i,
   },
   {
     label: '<!-- review-watermark:',
     pattern:
       /^<!--\s*review-watermark:\s+\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+\S+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    malformedPrefixPattern:
+      /^<!--\s*review-watermark:\s+\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+\S+\s*-->/i,
   },
   {
     label: '<!-- review-baseline:',
     pattern:
       /^<!--\s*review-baseline:\s+\S+\s+\S+\s+\S+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    malformedPrefixPattern: /^<!--\s*review-baseline:\s+\S+\s+\S+\s+\S+\s*-->/i,
   },
   {
     label: 'advisory-wait:',
@@ -750,6 +779,41 @@ export function operationalMarkerPrefixByStart(body: string): string | null {
     return null;
   }
   return marker.label;
+}
+
+/**
+ * Detects a `claimed-by` / `unclaimed-by` / `review-watermark` /
+ * `review-baseline` comment whose body starts with a structurally valid
+ * marker token (and, when present, a well-formed note) but carries content
+ * appended after that -- for example a well-intentioned human rationale
+ * tacked onto an otherwise-canonical claim comment. Such a body already
+ * fails `operationalMarkerPrefix`'s whole-body anchor and is therefore
+ * never treated as a live marker for state resolution (`parseClaimComment`,
+ * `resolveActiveClaim`, and friends keep returning `null` / ignoring it,
+ * unchanged by this function's existence); this gives a caller that wants
+ * one a **distinct** "malformed marker" signal instead of the comment
+ * silently reading as ordinary, unremarkable content (#1316).
+ *
+ * Returns the matching marker's `label` (e.g. `'<!-- claimed-by:'`) when the
+ * body is malformed in that specific way, or `null` when the body is either
+ * a well-formed marker (not malformed) or not marker-shaped at all.
+ *
+ * Anti-spoofing is preserved: like `pattern`, `malformedPrefixPattern`
+ * anchors `^` at byte 0 with no leading-whitespace tolerance, so a marker
+ * merely quoted or embedded mid-prose -- i.e. not literally the first bytes
+ * of the body -- matches neither pattern and is never flagged here.
+ */
+export function detectMalformedOperationalMarker(body: string): string | null {
+  if (operationalMarkerPrefix(body) !== null) {
+    // Already a well-formed marker (or otherwise-recognized marker type) --
+    // not malformed. Checking this first avoids double-classifying the
+    // happy path that `parseClaimComment` and friends already handle.
+    return null;
+  }
+  const marker = OPERATIONAL_MARKERS.find((candidate) =>
+    candidate.malformedPrefixPattern?.test(body),
+  );
+  return marker ? marker.label : null;
 }
 
 function normalizeNonWhitespaceToken(value: unknown): string {

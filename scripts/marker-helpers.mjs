@@ -27,21 +27,28 @@ const OPERATIONAL_MARKERS = [
     label: '<!-- claimed-by:',
     pattern:
       /^<!--\s*claimed-by:\s+\S+\s+\S+\s+supersedes:\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s+branch:\s+[^\s>]+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    malformedPrefixPattern:
+      /^<!--\s*claimed-by:\s+\S+\s+\S+\s+supersedes:\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s+branch:\s+[^\s>]+\s*-->/i,
   },
   {
     label: '<!-- unclaimed-by:',
     pattern:
       /^<!--\s*unclaimed-by:\s+\S+\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    malformedPrefixPattern:
+      /^<!--\s*unclaimed-by:\s+\S+\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->/i,
   },
   {
     label: '<!-- review-watermark:',
     pattern:
       /^<!--\s*review-watermark:\s+\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+\S+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    malformedPrefixPattern:
+      /^<!--\s*review-watermark:\s+\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+\S+\s*-->/i,
   },
   {
     label: '<!-- review-baseline:',
     pattern:
       /^<!--\s*review-baseline:\s+\S+\s+\S+\s+\S+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    malformedPrefixPattern: /^<!--\s*review-baseline:\s+\S+\s+\S+\s+\S+\s*-->/i,
   },
   {
     label: 'advisory-wait:',
@@ -575,6 +582,40 @@ export function operationalMarkerPrefixByStart(body) {
     return null;
   }
   return marker.label;
+}
+/**
+ * Detects a `claimed-by` / `unclaimed-by` / `review-watermark` /
+ * `review-baseline` comment whose body starts with a structurally valid
+ * marker token (and, when present, a well-formed note) but carries content
+ * appended after that -- for example a well-intentioned human rationale
+ * tacked onto an otherwise-canonical claim comment. Such a body already
+ * fails `operationalMarkerPrefix`'s whole-body anchor and is therefore
+ * never treated as a live marker for state resolution (`parseClaimComment`,
+ * `resolveActiveClaim`, and friends keep returning `null` / ignoring it,
+ * unchanged by this function's existence); this gives a caller that wants
+ * one a **distinct** "malformed marker" signal instead of the comment
+ * silently reading as ordinary, unremarkable content (#1316).
+ *
+ * Returns the matching marker's `label` (e.g. `'<!-- claimed-by:'`) when the
+ * body is malformed in that specific way, or `null` when the body is either
+ * a well-formed marker (not malformed) or not marker-shaped at all.
+ *
+ * Anti-spoofing is preserved: like `pattern`, `malformedPrefixPattern`
+ * anchors `^` at byte 0 with no leading-whitespace tolerance, so a marker
+ * merely quoted or embedded mid-prose -- i.e. not literally the first bytes
+ * of the body -- matches neither pattern and is never flagged here.
+ */
+export function detectMalformedOperationalMarker(body) {
+  if (operationalMarkerPrefix(body) !== null) {
+    // Already a well-formed marker (or otherwise-recognized marker type) --
+    // not malformed. Checking this first avoids double-classifying the
+    // happy path that `parseClaimComment` and friends already handle.
+    return null;
+  }
+  const marker = OPERATIONAL_MARKERS.find((candidate) =>
+    candidate.malformedPrefixPattern?.test(body),
+  );
+  return marker ? marker.label : null;
 }
 function normalizeNonWhitespaceToken(value) {
   if (typeof value !== 'string') {
