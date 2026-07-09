@@ -380,7 +380,7 @@ claim's own agent-id, not the successor's: Claim-state parsing rule 6 ignores
 a `claimed-by` whose `{claim-id}` matches the active claim but whose
 `{agent-id}` differs, so an invented native agent-id silently fails every
 later heartbeat or F2/F3 check as `agent-id-mismatch` / `claimLost`, with no
-explaining error. Cite the trusted forced-handoff evidence in the issue
+error explaining why. Cite the trusted forced-handoff evidence in the issue
 digest or resume report's `Authoritative by` field. Do not invent ad hoc
 `claimed-by` fields, and do not reuse the displaced old `{claim-id}` as your
 own — always use the marker's assigned `new-claim-id` (`{agent-id}` may
