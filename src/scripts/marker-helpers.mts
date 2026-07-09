@@ -31,13 +31,17 @@ interface OperationalMarker {
    * validation, but without the trailing `OPTIONAL_IDD_VISIBLE_NOTE_PATTERN`
    * group and `$` end anchor: matches whenever the body's first bytes are a
    * structurally valid marker token (see #1316), regardless of what -- if
-   * anything -- follows. `detectMalformedOperationalMarker` uses the gap
+   * anything -- follows it. `detectMalformedOperationalMarker` uses the gap
    * between this and `pattern` to tell three cases apart:
-   *   - `pattern` matches -> well-formed marker (token + optional single
-   *     note, nothing more).
-   *   - `pattern` fails but this matches -> marker-shaped prefix with
-   *     content appended after the note (the malformed case this issue
-   *     surfaces).
+   *   - `pattern` matches -> well-formed marker: token, then either nothing
+   *     more or exactly one well-formed single-line note, and nothing else.
+   *   - `pattern` fails but this matches -> marker-shaped prefix whose
+   *     token is valid but whose body does not match `pattern` to the end
+   *     for any reason -- content appended after an otherwise-valid note,
+   *     a note that does not satisfy the required note grammar (e.g.
+   *     missing the required `IDD` word), or more than one note. This is
+   *     the malformed case this issue surfaces; it is deliberately broader
+   *     than "appended content after a valid note" alone.
    *   - Neither matches -> not marker-shaped at all, including a marker
    *     merely quoted or embedded mid-prose (anti-spoofing: both patterns
    *     require the token to be the literal first bytes of the body, so a
@@ -784,15 +788,17 @@ export function operationalMarkerPrefixByStart(body: string): string | null {
 /**
  * Detects a `claimed-by` / `unclaimed-by` / `review-watermark` /
  * `review-baseline` comment whose body starts with a structurally valid
- * marker token (and, when present, a well-formed note) but carries content
- * appended after that -- for example a well-intentioned human rationale
- * tacked onto an otherwise-canonical claim comment. Such a body already
- * fails `operationalMarkerPrefix`'s whole-body anchor and is therefore
- * never treated as a live marker for state resolution (`parseClaimComment`,
- * `resolveActiveClaim`, and friends keep returning `null` / ignoring it,
- * unchanged by this function's existence); this gives a caller that wants
- * one a **distinct** "malformed marker" signal instead of the comment
- * silently reading as ordinary, unremarkable content (#1316).
+ * marker token but whose whole body does not match the canonical, strict
+ * `pattern` -- for example (the motivating case) a well-intentioned human
+ * rationale appended after an otherwise-canonical token + note, but also a
+ * note that does not satisfy the required note grammar (e.g. missing the
+ * required `IDD` word) or is otherwise missing/malformed. Such a body
+ * already fails `operationalMarkerPrefix`'s whole-body anchor and is
+ * therefore never treated as a live marker for state resolution
+ * (`parseClaimComment`, `resolveActiveClaim`, and friends keep returning
+ * `null` / ignoring it, unchanged by this function's existence); this gives
+ * a caller that wants one a **distinct** "malformed marker" signal instead
+ * of the comment silently reading as ordinary, unremarkable content (#1316).
  *
  * Returns the matching marker's `label` (e.g. `'<!-- claimed-by:'`) when the
  * body is malformed in that specific way, or `null` when the body is either
