@@ -51,6 +51,13 @@ test('extractBlockedByIssueNumbers captures every same-line ref and tolerates li
   // List-bullet and blockquote prefixes are matched.
   assert.deepEqual(extractBlockedByIssueNumbers('- Blocked by #55'), [55]);
   assert.deepEqual(extractBlockedByIssueNumbers('> Blocked by #66'), [66]);
+  // #1311: an optional colon between the keyword and the ref is tolerated,
+  // aligned with the already colon-tolerant graph edge extractor.
+  assert.deepEqual(
+    extractBlockedByIssueNumbers('- Blocked by: #123 (context) — more text'),
+    [123],
+  );
+  assert.deepEqual(extractBlockedByIssueNumbers('Blocked by: #99'), [99]);
   // Mid-sentence prose is not a dependency declaration.
   assert.deepEqual(
     extractBlockedByIssueNumbers('this is not blocked by #5'),
@@ -85,6 +92,9 @@ test('extractDependencyIssueNumbers captures every same-line Depends on ref and 
   );
   assert.deepEqual(extractDependencyIssueNumbers('- Depends on #55'), [55]);
   assert.deepEqual(extractDependencyIssueNumbers('> Depends on #66'), [66]);
+  // #1311: the colon tolerance is a property of the shared
+  // `extractKeywordLineRefs` primitive, not a "Blocked by"-only special case.
+  assert.deepEqual(extractDependencyIssueNumbers('Depends on: #55'), [55]);
   assert.deepEqual(
     extractDependencyIssueNumbers('this does not depend on #5'),
     [],
