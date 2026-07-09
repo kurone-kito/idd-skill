@@ -361,18 +361,22 @@ export function parseSwarmFloorArg(value) {
  *
  * A line is a dependency declaration when, after the shared
  * `DEPENDENCY_LINE_PREFIX` (indentation, blockquote, and/or a list bullet), it
- * begins with `keyword` followed by horizontal whitespace and at least one
- * `#N`. From there `consumeDependencyRefList` collects the contiguous
- * dependency-ref list, so `Blocked by #A, #B, #C` (comma- or space-separated)
- * yields `[A, B, C]`. The keyword-to-ref gap is `[ \t]+` (not `\s+`) so it
- * cannot span a newline and swallow a bare `#N` on the following line, and the
- * `.*$` capture plus the `m` flag (no `s` flag) keeps the match on the single
- * keyword line. Callers pass a code-region-stripped body, so a quoted example
- * line is already masked (see `DEPENDENCY_LINE_PREFIX`).
+ * begins with `keyword`, an optional `:` (#1311 — a natural bulleted phrasing
+ * such as `- Blocked by: #123` is tolerated the same as `- Blocked by #123`,
+ * aligned with the colon-tolerant `extractKeywordReferenceTargets` edge
+ * extractor in `discover-roadmap-graph.mts`), then horizontal whitespace and
+ * at least one `#N`. From there `consumeDependencyRefList` collects the
+ * contiguous dependency-ref list, so `Blocked by #A, #B, #C` (comma- or
+ * space-separated) yields `[A, B, C]`. The keyword-to-ref gap is `[ \t]+`
+ * (not `\s+`) so it cannot span a newline and swallow a bare `#N` on the
+ * following line, and the `.*$` capture plus the `m` flag (no `s` flag)
+ * keeps the match on the single keyword line. Callers pass a
+ * code-region-stripped body, so a quoted example line is already masked (see
+ * `DEPENDENCY_LINE_PREFIX`).
  */
 function extractKeywordLineRefs(body, keyword) {
   const linePattern = new RegExp(
-    `${DEPENDENCY_LINE_PREFIX}${escapeRegex(keyword)}[ \\t]+(#\\d+.*)$`,
+    `${DEPENDENCY_LINE_PREFIX}${escapeRegex(keyword)}:?[ \\t]+(#\\d+.*)$`,
     'gim',
   );
   const numbers = [];
