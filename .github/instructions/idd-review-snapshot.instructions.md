@@ -121,6 +121,18 @@ write the visible note in that language (default to English if
 ambiguous). Example Japanese note:
 `_{agent-id}: レビュートリアージのスナップショット — IDD 自動化マーカー。編集しないでください。_`
 
+**Nothing appended after the note.** As with the `claimed-by` /
+`unclaimed-by` markers in `idd-claim.instructions.md`, a `review-watermark`
+(and `review-baseline`, below) comment body must be exactly the HTML
+comment token plus the single italic note, with nothing appended —
+appending anything else after the note fails the parser's whole-body
+anchor and the comment is not recognized as a live watermark. That
+specific shape (valid token + note plus appended content) is a detectable
+malformed marker (`detectMalformedOperationalMarker` in
+`marker-helpers.mts`); see `idd-claim.instructions.md` for the full rule,
+including the related disposition-marker (`**Accepted**` / `**Rejected**`)
+no-code-fence note.
+
 - **`{head-SHA}`**: the value read at the very start of Step 1, before
   any fetching. F2 uses this to detect pushes that occurred between E1's
   snapshot and the watermark comment post.
@@ -272,6 +284,8 @@ watermark). Example Japanese note:
 Post using the GitHub REST API directly (the body begins with an HTML
 comment token; use the HTTP `POST` path for reliability) — or the
 post-idd-marker `--apply` helper above, which performs that JSON `POST`.
+The same "nothing appended after the note" rule stated above for
+`review-watermark` applies here too.
 
 ## E3 — Empty list check
 
