@@ -40,10 +40,16 @@ active, stop and wait rather than inventing a local superseding claim.
 Once GitHub state reflects the handoff outcome, continue via
 `idd-claim.instructions.md` on the branch named in the forced-handoff evidence.
 The verified `forced-handoff` marker has already set the active claim to its
-pre-recorded `new-claim-id` (rule 7), so the successor **adopts that
-`new-claim-id`** as its own `{claim-id}` for the rest of the run — including the
-`--claim-id` passed to `pre-merge-readiness` at F2/F3 — rather than minting a
-fresh one. No separate `claimed-by` post is required for the transfer itself.
+pre-recorded `new-agent-id` / `new-claim-id` pair (rule 7), so the successor
+**adopts both verbatim** as its own `{agent-id}` / `{claim-id}` for the rest
+of the run — including `--agent-id` and `--claim-id` at F2/F3's
+`pre-merge-readiness` — rather than minting a claim-id or keeping its own
+agent-id (an invented agent-id silently fails later checks as
+`agent-id-mismatch`; see `idd-claim.instructions.md`'s Claim verification
+section). No separate `claimed-by` post is required for the transfer itself.
+This adopted claim is **sticky** (re-derived on every resolution pass); see
+the same section for the adopt-verbatim vs. release-then-fresh reconciliation
+paths if a fresh claim appears not to take effect.
 
 **Displaced-session guard** — If the forced-handoff evidence names a
 `{claim-id}` that this current session had already verified before this
@@ -52,8 +58,9 @@ Do not push, comment, reply, resolve threads, request reviewers, or merge
 until a maintainer reassigns ownership.
 
 The successor must cite the forced-handoff evidence in its resume report or
-digest `Authoritative by`. It must not reuse the displaced old `{claim-id}`,
-which is distinct from the adopted `new-claim-id`.
+digest `Authoritative by`. It must not reuse the displaced old `{agent-id}` /
+`{claim-id}`, which are distinct from the adopted `new-agent-id` /
+`new-claim-id`.
 
 ## §W1 — PR exists (1 match), no worktree
 

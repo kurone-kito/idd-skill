@@ -298,8 +298,9 @@ Determine `{branch-name}`:
   normalization algorithm from pre-check (e).
 
 Generate a fresh `{claim-id}` — **except in forced-handoff recovery**, where
-the successor adopts the marker's pre-recorded `new-claim-id` instead of
-minting one (see _Claim verification_ below). Determine `{prior-claim-id}`:
+the successor adopts the marker's pre-recorded `new-agent-id` / `new-claim-id`
+pair instead of minting a claim-id or keeping its own agent-id (see _Claim
+verification_ below). Determine `{prior-claim-id}`:
 
 - **Takeover of an active claim** (stale claim recovery) → the current
   active claim's `{claim-id}`
@@ -374,13 +375,31 @@ the rest of the workflow.
 
 When the new claim came from forced-handoff recovery, the verified
 `forced-handoff` marker has already set the active claim to its pre-recorded
-`new-claim-id` (Claim-state parsing rule 7). Adopt that `new-claim-id` as your
-own `{claim-id}` for the rest of the run — including the `--claim-id` passed to
-`pre-merge-readiness` at F2/F3 — instead of minting a fresh one; no separate
-`claimed-by supersedes: none` post is required for the transfer itself. Cite
-the trusted forced-handoff evidence in the issue digest or resume report's
-`Authoritative by` field. Do not invent ad hoc `claimed-by` fields, and do not
-reuse the displaced old `{claim-id}`.
+`new-agent-id` / `new-claim-id` pair (Claim-state parsing rule 7). Adopt
+**both fields verbatim** as your own `{agent-id}` / `{claim-id}` for the rest
+of the run — including `--agent-id` and `--claim-id` at F2/F3's
+`pre-merge-readiness` — instead of minting a fresh claim-id or keeping your
+own native agent-id; no separate `claimed-by supersedes: none` post is
+required for the transfer itself. `new-agent-id` defaults to the _displaced_
+claim's own agent-id, not the successor's: Claim-state parsing rule 6 ignores
+a `claimed-by` whose `{claim-id}` matches the active claim but whose
+`{agent-id}` differs, so an invented native agent-id silently fails every
+later heartbeat or F2/F3 check as `agent-id-mismatch` / `claimLost`, with no
+explaining error. Cite the trusted forced-handoff evidence in the issue
+digest or resume report's `Authoritative by` field. Do not invent ad hoc
+`claimed-by` fields, and do not reuse the displaced old `{agent-id}` /
+`{claim-id}`.
+
+**The successor claim is sticky**, not a one-shot unlock: forced-handoff
+re-derives the adopted pair as the active claim on every resolution pass, so
+a later `claimed-by supersedes: none` does not activate (Claim-state parsing
+rule 4 requires no active claim for `supersedes: none` to take effect) and
+instead reads as contested. Reconcile via one of two short sequences:
+**adopt-verbatim** — keep using the recorded `new-agent-id` / `new-claim-id`
+pair, as above; or **release-then-fresh** — post `unclaimed-by` for the
+sticky pair (and, to be safe, the displaced original pair too) using each
+pair's exact recorded `{agent-id}` / `{claim-id}`, then post a fresh
+`claimed-by supersedes: none` with a self-chosen pair.
 
 ### Hide displaced claim chain on takeover
 
