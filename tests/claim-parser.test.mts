@@ -5,6 +5,7 @@ import {
   applyClaimEvent,
   detectMalformedOperationalMarker,
   isStaleAt,
+  operationalMarkerPrefix,
   parseClaimComment,
   parseReleaseComment,
   parseReviewWatermarkComment,
@@ -219,6 +220,25 @@ test('review-watermark with appended prose stays null in parseReviewWatermarkCom
     detectMalformedOperationalMarker(body),
     '<!-- review-watermark:',
   );
+});
+
+test('review-baseline with appended prose is flagged malformed', () => {
+  const sha = 'b'.repeat(40);
+  const body =
+    `<!-- review-baseline: copilot claim-A ${sha} -->\n\n` +
+    '_copilot: critique baseline — IDD automation marker. Do not edit._\n\n' +
+    'This baseline covers the E2 pass that started after the last rebase.';
+  assert.equal(operationalMarkerPrefix(body), null);
+  assert.equal(detectMalformedOperationalMarker(body), '<!-- review-baseline:');
+});
+
+test('a well-formed review-baseline marker is not flagged malformed (no regression to the happy path)', () => {
+  const sha = 'b'.repeat(40);
+  const body =
+    `<!-- review-baseline: copilot claim-A ${sha} -->\n\n` +
+    '_copilot: critique baseline — IDD automation marker. Do not edit._';
+  assert.equal(operationalMarkerPrefix(body), '<!-- review-baseline:');
+  assert.equal(detectMalformedOperationalMarker(body), null);
 });
 
 test('a well-formed claimed-by marker is not flagged malformed (no regression to the happy path)', () => {
