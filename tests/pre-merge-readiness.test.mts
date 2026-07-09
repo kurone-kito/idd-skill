@@ -2407,6 +2407,16 @@ test('isAdvisoryNonReviewNotice matches only machine-generated non-review notice
     ),
     false,
   );
+  // #1312 (review-fix): a genuine review comment with a reach/exceed/hit
+  // verb near "Codex usage limits" but no "for code reviews" nearby must
+  // not match either — this is the concrete false-positive scenario a
+  // verb-only anchor would have caught (flagged in PR #1319 review).
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'This code exceeds the Codex usage limits configured for the repo.',
+    ),
+    false,
+  );
   assert.equal(isAdvisoryNonReviewNotice(''), false);
   assert.equal(isAdvisoryNonReviewNotice(null), false);
 });

@@ -928,13 +928,16 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS = [
   // the `summarize by coderabbit.ai` review marker) and its warning heading.
   /<!--\s*This is an auto-generated comment:\s*rate limited by coderabbit\.ai\s*-->/i,
   /^[>\s]*#{1,6}\s*Review limit reached\b/im,
-  // Codex usage / quota exhaustion for code reviews. Token-anchored on
-  // "Codex usage limit(s)" plus a reach/exceed/hit-family verb within a
-  // bounded window, tolerant of interposed wording drift and matching
-  // either verb-before or verb-after phrasing (#1312: the two prior
-  // exact-phrase regexes broke when Codex's wording interposed "have been"
-  // between "usage limits" and "reached").
-  /\bCodex usage limits?\b[\s\S]{0,40}?\b(?:reach|exceed|hit)|\b(?:reach|exceed|hit)\w*[\s\S]{0,40}?\bCodex usage limits?\b/i,
+  // Codex usage / quota exhaustion for code reviews. Token-anchored on all
+  // three of "Codex usage limit(s)", a reach/exceed/hit-family verb, and
+  // "for code reviews", each tolerant of interposed wording drift, in the
+  // two known real orderings (#1312: the two prior exact-phrase regexes
+  // broke when Codex's wording interposed "have been" between "usage
+  // limits" and "reached"). Requiring "for code reviews" too (not just the
+  // verb) keeps the match narrow, per the fail-closed under-match-over
+  // false-positive intent documented above: a bare "Codex usage limits
+  // exceeded" mention with no "for code reviews" nearby must not match.
+  /\b(?:reach|exceed|hit)\w*[\s\S]{0,40}?\bCodex usage limits?\b[\s\S]{0,40}?\bfor code reviews\b|\bCodex usage limits?\b[\s\S]{0,40}?\b(?:reach|exceed|hit)\w*[\s\S]{0,40}?\bfor code reviews\b/i,
 ];
 export function isAdvisoryNonReviewNotice(body) {
   const text = String(body ?? '');
