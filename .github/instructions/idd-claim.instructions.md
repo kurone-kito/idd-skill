@@ -387,8 +387,10 @@ a `claimed-by` whose `{claim-id}` matches the active claim but whose
 later heartbeat or F2/F3 check as `agent-id-mismatch` / `claimLost`, with no
 explaining error. Cite the trusted forced-handoff evidence in the issue
 digest or resume report's `Authoritative by` field. Do not invent ad hoc
-`claimed-by` fields, and do not reuse the displaced old `{agent-id}` /
-`{claim-id}`.
+`claimed-by` fields, and do not reuse the displaced old `{claim-id}` as your
+own — always use the marker's assigned `new-claim-id` (`{agent-id}` may
+legitimately equal the displaced claim's agent-id; only `{claim-id}` must
+always be the fresh marker-assigned value).
 
 **The successor claim is sticky**, not a one-shot unlock: forced-handoff
 re-derives the adopted pair as the active claim on every resolution pass, so

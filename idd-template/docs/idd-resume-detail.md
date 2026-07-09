@@ -58,9 +58,10 @@ Do not push, comment, reply, resolve threads, request reviewers, or merge
 until a maintainer reassigns ownership.
 
 The successor must cite the forced-handoff evidence in its resume report or
-digest `Authoritative by`. It must not reuse the displaced old `{agent-id}` /
-`{claim-id}`, which are distinct from the adopted `new-agent-id` /
-`new-claim-id`.
+digest `Authoritative by`. It must not reuse the displaced old `{claim-id}` as
+its own — always use the marker's assigned `new-claim-id`. (`{agent-id}` may
+legitimately equal the displaced claim's agent-id; only `{claim-id}` must
+always be the fresh marker-assigned value.)
 
 ## §W1 — PR exists (1 match), no worktree
 
