@@ -15,6 +15,7 @@ import {
   computePreMergeReadinessBlockers,
   deriveIddAgentLogins,
   findLastCopilotReviewCommit,
+  hasFreshDisposition,
   indexLatestGatingReviewsByAuthor,
   isAdvisoryNonReviewNotice,
   isNonReviewNoticeDisposition,
@@ -1963,6 +1964,140 @@ test('disposition evidence does not flag a resolved thread with substantive post
   assert.equal(summary.route, 'return-to-e1');
   assert.equal(summary.missingThreads[0].ackOnlyPostDisposition, false);
   assert.equal(summary.soleCauseAckOnlyPostDisposition, false);
+});
+
+test('hasFreshDisposition stays fresh when an advisory bot edits its own thread finding in place after disposition (#1313)', () => {
+  const thread = {
+    id: 'thread-bot-edit',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'coderabbitai[bot]' },
+          createdAt: '2026-05-12T00:00:00Z',
+          // In-place edit: updatedAt bumped past the disposition below by a
+          // cosmetic self-edit (e.g. an "addressed" badge), createdAt unchanged.
+          updatedAt: '2026-05-12T02:00:00Z',
+          body: '**Potential issue**: this needs a null check.',
+        },
+        {
+          author: { login: 'idd-bot' },
+          createdAt: '2026-05-12T00:30:00Z',
+          body: '**Rejected** — verified: not applicable here',
+        },
+      ],
+    },
+  };
+
+  const fresh = hasFreshDisposition(thread, {
+    isDispositionAuthor: (login) => login === 'idd-bot',
+    isAdvisoryBot: (login) => login === 'coderabbitai[bot]',
+  });
+
+  assert.equal(fresh, true);
+});
+
+test('hasFreshDisposition still requires a fresh disposition after a genuinely new bot comment (#1313)', () => {
+  const thread = {
+    id: 'thread-bot-new',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'coderabbitai[bot]' },
+          createdAt: '2026-05-12T00:00:00Z',
+          body: '**Potential issue**: this needs a null check.',
+        },
+        {
+          author: { login: 'idd-bot' },
+          createdAt: '2026-05-12T00:30:00Z',
+          body: '**Rejected** — verified: not applicable here',
+        },
+        {
+          // A genuinely new reply (its own fresh createdAt, not an edit of
+          // the original finding) must still require a fresh disposition.
+          author: { login: 'coderabbitai[bot]' },
+          createdAt: '2026-05-12T02:00:00Z',
+          body: 'Actually, see also this related spot.',
+        },
+      ],
+    },
+  };
+
+  const fresh = hasFreshDisposition(thread, {
+    isDispositionAuthor: (login) => login === 'idd-bot',
+    isAdvisoryBot: (login) => login === 'coderabbitai[bot]',
+  });
+
+  assert.equal(fresh, false);
+});
+
+test('hasFreshDisposition still dates a non-advisory-bot in-place edit by updatedAt (#1313)', () => {
+  const thread = {
+    id: 'thread-human-edit',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          // A human reviewer's in-place edit is unaffected: it keeps dating
+          // by updatedAt (current/pre-#1313 behavior), so it still blocks.
+          author: { login: 'reviewer-a' },
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+          body: 'please reconsider this',
+        },
+        {
+          author: { login: 'idd-bot' },
+          createdAt: '2026-05-12T00:30:00Z',
+          body: '**Rejected** — verified: not applicable here',
+        },
+      ],
+    },
+  };
+
+  const fresh = hasFreshDisposition(thread, {
+    isDispositionAuthor: (login) => login === 'idd-bot',
+    isAdvisoryBot: (login) => login === 'coderabbitai[bot]',
+  });
+
+  assert.equal(fresh, false);
+});
+
+test('disposition evidence stays fresh end-to-end when a bot thread finding is edited in place after disposition (#1313)', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-edit',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'coderabbitai[bot]' },
+                createdAt: '2026-05-12T00:00:00Z',
+                updatedAt: '2026-05-12T02:00:00Z',
+                body: '**Potential issue**: this needs a null check.',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:30:00Z',
+                body: '**Rejected** — verified: not applicable here',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    { iddAgentLogins: ['idd-bot'], advisoryBotLogins: ['coderabbitai[bot]'] },
+  );
+
+  assert.equal(summary.route, 'proceed');
+  assert.equal(summary.missingThreadCount, 0);
 });
 
 test('disposition evidence reports sole-cause false when a regular comment also blocks (#978)', () => {
@@ -4349,3 +4484,51 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
     assert.equal(result, null);
   });
 }
+
+// #1313: classifyRegularBotComment -> hasCompletedBotThreadDispositions ->
+// hasFreshDisposition must also recognize a CodeRabbit thread finding that
+// was edited in place after its disposition (updatedAt bumped past
+// createdAt), not just a freshly re-posted one, when it decides whether
+// every bot thread is completely dispositioned. hasCompletedBotThreadDispositions
+// does not override hasFreshDisposition's isAdvisoryBot (its own loginPredicate
+// is scoped to one bot for its "which threads count as bot threads" filter,
+// narrower than hasFreshDisposition's isKnownReviewBot default), so this
+// exercises the shared default end to end.
+test('#1313: a CodeRabbit summary sticky resolves when its own thread finding was edited in place after disposition', () => {
+  const summarySticky = {
+    id: 1,
+    createdAt: '2026-07-01T00:00:00Z',
+    body: `${CODERABBIT_SUMMARY_MARKER}\n\nSummary of changes.`,
+    author: { login: 'coderabbitai[bot]' },
+  };
+
+  const result = classifyRegularBotComment(
+    summarySticky,
+    [summarySticky],
+    [
+      {
+        id: 'thread-1',
+        isResolved: true,
+        comments: {
+          pageInfo: { hasNextPage: false },
+          nodes: [
+            {
+              author: { login: 'coderabbitai[bot]' },
+              createdAt: '2026-07-01T00:00:00Z',
+              updatedAt: '2026-07-01T02:00:00Z',
+              body: '**Potential issue**: this needs a null check.',
+            },
+            {
+              author: { login: 'kurone-kito' },
+              createdAt: '2026-07-01T00:30:00Z',
+              body: '**Rejected** — verified: not applicable here',
+            },
+          ],
+        },
+      },
+    ],
+    { isDispositionAuthor: (login: string) => login === 'kurone-kito' },
+  );
+
+  assert.equal(result?.classifier, 'RESOLVED');
+});

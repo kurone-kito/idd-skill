@@ -1423,7 +1423,10 @@ function inferReviewerReopenedAt(thread: ThreadLike): string {
 
 export function hasFreshDisposition(
   thread: ThreadLike,
-  options: { isDispositionAuthor?: (login: string) => boolean } = {},
+  options: {
+    isDispositionAuthor?: (login: string) => boolean;
+    isAdvisoryBot?: (login: string) => boolean;
+  } = {},
 ): boolean {
   // IMPORTANT: The default disposition-author predicate rejects known bots but accepts any human.
   // For F2/F3 merge-gate contexts (E7 disposition evidence), callers MUST pass
@@ -1435,6 +1438,17 @@ export function hasFreshDisposition(
     typeof options.isDispositionAuthor === 'function'
       ? options.isDispositionAuthor
       : (login: string) => !isKnownReviewBot(login);
+  // A cosmetic in-place edit of a bot's own thread comment (e.g. an
+  // "addressed" badge appended after a disposition) must not read as fresh
+  // non-disposition activity -- see effectiveThreadCommentActivityAt.
+  // Defaults to the same isKnownReviewBot notion of "bot" used above;
+  // callers with a configured advisory-bot set (e.g.
+  // summarizeDispositionEvidenceForGate) pass their own predicate so a
+  // custom-configured bot login is recognized too.
+  const isAdvisoryBot =
+    typeof options.isAdvisoryBot === 'function'
+      ? options.isAdvisoryBot
+      : isKnownReviewBot;
   const comments = thread.comments?.nodes ?? [];
   // A resolved thread may be terminally dispositioned with the documented
   // `**Rejection confirmed by maintainer**` marker instead of a fresh
@@ -1454,7 +1468,9 @@ export function hasFreshDisposition(
           isDisposition(comment) && dispositionAuthorPredicate(authorLogin)
         );
       })
-      .map((comment) => effectiveThreadCommentActivityAt(comment))
+      .map((comment) =>
+        effectiveThreadCommentActivityAt(comment, { isAdvisoryBot }),
+      )
       .filter(isValidIsoTimestamp),
   );
 
@@ -1465,7 +1481,9 @@ export function hasFreshDisposition(
     if (!(isDisposition(comment) && dispositionAuthorPredicate(authorLogin))) {
       return false;
     }
-    const dispositionActivityAt = effectiveThreadCommentActivityAt(comment);
+    const dispositionActivityAt = effectiveThreadCommentActivityAt(comment, {
+      isAdvisoryBot,
+    });
     if (!isValidIsoTimestamp(dispositionActivityAt)) {
       return false;
     }
@@ -3233,6 +3251,8 @@ export function summarizeDispositionEvidenceForGate(
                 .trim()
                 .toLowerCase(),
             ),
+          isAdvisoryBot: (login) =>
+            isConfiguredAdvisoryBotLogin(login, advisoryBotLogins),
         })
       ) {
         return null;
@@ -5726,15 +5746,45 @@ function threadActivityAt(thread: ThreadLike): string | null | undefined {
 
 function effectiveThreadCommentActivityAt(
   comment:
-    | { updatedAt?: string | null; createdAt?: string | null }
+    | {
+        updatedAt?: string | null;
+        createdAt?: string | null;
+        author?: { login?: string | null } | null;
+      }
     | null
     | undefined,
+  options: { isAdvisoryBot?: (login: string) => boolean } = {},
 ): string {
   const updatedAt = String(comment?.updatedAt ?? '');
+  const createdAt = String(comment?.createdAt ?? '');
   if (isValidIsoTimestamp(updatedAt)) {
+    // A known/configured advisory bot that edits its own thread comment in
+    // place (e.g. appending an "addressed" badge after a disposition) must
+    // not read as fresh non-disposition activity -- date it by createdAt
+    // instead, mirroring effectiveRegularCommentActivityAt's createdAt-based
+    // approach (#1186) for the analogous regular-comment path. Only a
+    // genuine in-place edit (updatedAt strictly after createdAt) is
+    // affected; a fresh comment's updatedAt equals its createdAt and falls
+    // through unchanged. Opt-in via options.isAdvisoryBot: callers that do
+    // not pass it (most call sites of this shared helper) keep the exact
+    // unconditional updatedAt-preferring behavior this function has always
+    // had -- some of those callers rely on today's behavior to recognize
+    // post-disposition bot activity for their own (unrelated) ack-only
+    // reclassification, so this must never become a global default.
+    if (
+      typeof options.isAdvisoryBot === 'function' &&
+      isValidIsoTimestamp(createdAt) &&
+      compareIsoTimestamps(updatedAt, createdAt) > 0 &&
+      options.isAdvisoryBot(
+        String(comment?.author?.login ?? '')
+          .trim()
+          .toLowerCase(),
+      )
+    ) {
+      return createdAt;
+    }
     return updatedAt;
   }
-  const createdAt = String(comment?.createdAt ?? '');
   if (isValidIsoTimestamp(createdAt)) {
     return createdAt;
   }
@@ -5761,6 +5811,14 @@ function hasCompletedBotThreadDispositions(
       return (
         thread.isResolved &&
         !thread.comments?.pageInfo?.hasNextPage &&
+        // Deliberately does NOT pass isAdvisoryBot: loginPredicate here.
+        // loginPredicate (e.g. isCodeRabbitLogin) only scopes which threads
+        // count as "bot threads" above; a thread can carry non-disposition
+        // findings from other known bots too (e.g. Codex), and those must
+        // also get the in-place-edit dating fix. hasFreshDisposition's own
+        // isKnownReviewBot default is a strict superset of any single-bot
+        // loginPredicate this function is called with, so the default
+        // already covers this call site correctly and more broadly.
         hasFreshDisposition(thread, {
           isDispositionAuthor: options.isDispositionAuthor,
         })
