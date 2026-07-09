@@ -3288,6 +3288,7 @@ export function resolveActiveClaimForWriteGate(events, options) {
         ? options.isAuthorizedForcedHandoff
         : () => false,
     requireAuthorMatchesForcedBy: options.requireAuthorMatchesForcedBy ?? true,
+    isStale: resolveStalePredicate(options.staleAgeMs),
   });
 }
 export function summarizeClaimValidation(claimEvents = [], options = {}) {
@@ -3350,6 +3351,7 @@ export function summarizeClaimValidation(claimEvents = [], options = {}) {
                 .toLowerCase(),
             );
           },
+    isStale: resolveStalePredicate(options.staleAgeMs),
   });
   let reason = 'match';
   if (!activeClaim) {
@@ -3758,12 +3760,61 @@ function firstLine(value) {
 function sameDigestBody(currentBody, nextBody) {
   return currentBody.trimEnd() === nextBody.trimEnd();
 }
+/**
+ * The distributed default claim-staleness window (`claimTiming.staleAge`
+ * `PT24H`), in milliseconds. Exported so config-aware callers can compare
+ * a parsed `claimTiming.staleAge` against "no override configured" and so
+ * {@link isStaleByAge} can fast-path to {@link isStaleAt} when the two
+ * agree.
+ */
+export const DEFAULT_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 export function isStaleAt(activeCreatedAt, nextCreatedAt) {
-  const staleMs = 24 * 60 * 60 * 1000;
   return (
     new Date(nextCreatedAt).getTime() - new Date(activeCreatedAt).getTime() >=
-    staleMs
+    DEFAULT_STALE_AGE_MS
   );
+}
+/**
+ * Config-aware claim-staleness primitive: true when `nextCreatedAt` is at
+ * least `staleAgeMs` after `activeCreatedAt`. This is the single shared
+ * primitive promoted out of the staleness-window comparison that was
+ * independently duplicated across the resume and discover paths (each of
+ * which already reads `claimTiming.staleAge` from policy correctly) so a
+ * write-gate caller can reuse the exact same algorithm instead of adding
+ * yet another copy. Delegates to {@link isStaleAt} when `staleAgeMs` equals
+ * {@link DEFAULT_STALE_AGE_MS}, so behavior stays byte-identical for
+ * repositories on the default. Fails closed to `false` (not stale) when
+ * either timestamp is unparseable.
+ */
+export function isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs) {
+  if (staleAgeMs === DEFAULT_STALE_AGE_MS) {
+    return isStaleAt(activeCreatedAt, nextCreatedAt);
+  }
+  const start = Date.parse(activeCreatedAt ?? '');
+  const end = Date.parse(nextCreatedAt ?? '');
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return false;
+  }
+  return end - start >= staleAgeMs;
+}
+/**
+ * Resolve the `isStale` predicate for the write-gate resolvers below from an
+ * optional caller-supplied `staleAgeMs` (a parsed `claimTiming.staleAge` in
+ * milliseconds). A valid positive finite value routes through the
+ * config-aware {@link isStaleByAge}; an omitted, non-numeric, non-finite, or
+ * non-positive value falls back to {@link isStaleAt} unchanged, so callers
+ * that do not pass `staleAgeMs` keep today's exact 24h behavior.
+ */
+function resolveStalePredicate(staleAgeMs) {
+  if (
+    typeof staleAgeMs !== 'number' ||
+    !Number.isFinite(staleAgeMs) ||
+    staleAgeMs <= 0
+  ) {
+    return isStaleAt;
+  }
+  return (activeCreatedAt, nextCreatedAt) =>
+    isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs);
 }
 function compareClaimIds(left, right) {
   if (left === right) {

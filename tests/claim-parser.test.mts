@@ -3,7 +3,9 @@ import { test } from 'node:test';
 
 import {
   applyClaimEvent,
+  DEFAULT_STALE_AGE_MS,
   isStaleAt,
+  isStaleByAge,
   parseClaimComment,
   parseReleaseComment,
 } from '../src/scripts/protocol-helpers.mts';
@@ -58,6 +60,69 @@ test('parses the release comment and stale threshold', () => {
   assert.equal(isStaleAt('2026-05-09T10:00:00Z', '2026-05-10T11:00:00Z'), true);
   assert.equal(
     isStaleAt('2026-05-09T10:00:00Z', '2026-05-09T23:59:59Z'),
+    false,
+  );
+});
+
+test('isStaleByAge honors a configured staleAge in the 18-24h gap', () => {
+  // ~20h gap: not stale under the old hardcoded 24h constant, but stale
+  // under a configured 18h staleAge (the write-gate bug in #1310).
+  const activeCreatedAt = '2026-05-09T10:00:00Z';
+  const nextCreatedAt = '2026-05-10T06:00:00Z';
+  const eighteenHoursMs = 18 * 60 * 60 * 1000;
+
+  assert.equal(
+    isStaleByAge(activeCreatedAt, nextCreatedAt, DEFAULT_STALE_AGE_MS),
+    false,
+  );
+  assert.equal(
+    isStaleByAge(activeCreatedAt, nextCreatedAt, eighteenHoursMs),
+    true,
+  );
+});
+
+test('isStaleByAge at the configured boundary is inclusive, matching isStaleAt', () => {
+  const eighteenHoursMs = 18 * 60 * 60 * 1000;
+  assert.equal(
+    isStaleByAge(
+      '2026-05-09T10:00:00Z',
+      '2026-05-10T04:00:00Z',
+      eighteenHoursMs,
+    ),
+    true, // exactly 18h
+  );
+  assert.equal(
+    isStaleByAge(
+      '2026-05-09T10:00:00Z',
+      '2026-05-10T03:59:59Z',
+      eighteenHoursMs,
+    ),
+    false, // 1s under 18h
+  );
+});
+
+test('isStaleByAge delegates to isStaleAt at the default 24h window', () => {
+  // Same fast path resume-claim-routing.mts relied on: staleAgeMs equal to
+  // the default must produce byte-identical results to isStaleAt.
+  const cases: [string, string][] = [
+    ['2026-05-09T10:00:00Z', '2026-05-10T11:00:00Z'],
+    ['2026-05-09T10:00:00Z', '2026-05-09T23:59:59Z'],
+  ];
+  for (const [activeCreatedAt, nextCreatedAt] of cases) {
+    assert.equal(
+      isStaleByAge(activeCreatedAt, nextCreatedAt, DEFAULT_STALE_AGE_MS),
+      isStaleAt(activeCreatedAt, nextCreatedAt),
+    );
+  }
+});
+
+test('isStaleByAge fails closed on unparseable timestamps', () => {
+  assert.equal(
+    isStaleByAge('not-a-date', '2026-05-10T06:00:00Z', 18 * 60 * 60 * 1000),
+    false,
+  );
+  assert.equal(
+    isStaleByAge('2026-05-09T10:00:00Z', 'not-a-date', 18 * 60 * 60 * 1000),
     false,
   );
 });
