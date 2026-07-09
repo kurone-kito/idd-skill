@@ -501,6 +501,7 @@ test('policy normalization provides default-safe values and supports aliases', (
     discover: {
       activeClaimPreScanBatchSize: 10,
       selectionDesync: 'off',
+      legacyRoots: [],
     },
     claim: {
       verifySettleDelay: 'PT5S',
@@ -581,6 +582,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       discover: {
         activeClaimPreScanBatchSize: 11,
         selectionDesync: 'session-offset',
+        legacyRoots: [42, 7],
       },
       claim: {
         verifySettleDelay: 'PT7S',
@@ -649,6 +651,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       discover: {
         activeClaimPreScanBatchSize: 11,
         selectionDesync: 'session-offset',
+        legacyRoots: [42, 7],
       },
       claim: {
         verifySettleDelay: 'PT7S',

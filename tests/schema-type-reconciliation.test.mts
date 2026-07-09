@@ -203,6 +203,7 @@ interface PolicyConfigFile {
   discover?: {
     activeClaimPreScanBatchSize?: number;
     selectionDesync?: 'off' | 'session-offset';
+    legacyRoots?: readonly number[];
   };
   claim?: { verifySettleDelay?: string };
   critiqueLoop?: {
@@ -741,7 +742,11 @@ const policyConfigFixture = {
       maxValidity: 'PT24H',
     },
   },
-  discover: { activeClaimPreScanBatchSize: 10, selectionDesync: 'off' },
+  discover: {
+    activeClaimPreScanBatchSize: 10,
+    selectionDesync: 'off',
+    legacyRoots: [1234],
+  },
   claim: { verifySettleDelay: 'PT5S' },
   critiqueLoop: { cPhaseLowSeveritySkipAfter: 3, e10NoProgressHoldAfter: 3 },
   reviewEscalation: {

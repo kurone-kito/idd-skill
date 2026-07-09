@@ -494,6 +494,57 @@ test('policy schema rejects unknown keys inside autopilotSuitability', () => {
   );
 });
 
+test('policy schema accepts a discover.legacyRoots array of issue numbers', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.discover.legacyRoots = [12, 345, 6789];
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema rejects an empty discover.legacyRoots array', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.discover.legacyRoots = [];
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes('$.discover.legacyRoots')),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema rejects a discover.legacyRoots entry below the minimum', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const badEntry of [0, -1]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.discover.legacyRoots = [badEntry];
+    const errors = validate(instance, schema);
+    assert.ok(
+      errors.some((error) => error.includes('$.discover.legacyRoots[0]')),
+      `entry ${badEntry} should be rejected: ${errors.join('\n')}`,
+    );
+  }
+});
+
+test('policy schema rejects a non-integer discover.legacyRoots entry', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.discover.legacyRoots = [1.5];
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes('$.discover.legacyRoots[0]')),
+    errors.join('\n'),
+  );
+});
+
 test('policy schema accepts x-* extension keys', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

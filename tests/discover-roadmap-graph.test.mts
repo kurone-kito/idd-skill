@@ -1597,6 +1597,55 @@ test('open-roadmap-roots loader honors a configured roadmap label name (#1273)',
   assert.equal(labelQuery?.label, 'epic');
 });
 
+test('open-roadmap-roots loader unions configured legacyRoots and dedupes against label/marker roots (#1315)', async () => {
+  const searchIssues = (query: SearchIssuesQuery) => {
+    if (query.label === 'roadmap') {
+      return [{ number: 701 }];
+    }
+    if (query.matchBody) {
+      return [
+        { number: 703, body: '<!-- idd-skill-roadmap-id: marker-only -->' },
+      ];
+    }
+    return [];
+  };
+
+  // 701 overlaps the label root (dedupe), 900 is a genuinely new legacy
+  // root with neither label nor marker.
+  const roots = await buildOpenRoadmapRootsLoader(
+    'kurone-kito',
+    'idd-skill',
+    'idd-skill',
+    searchIssues,
+    undefined,
+    [900, 701],
+  )();
+
+  assert.deepEqual(roots, [701, 703, 900]);
+});
+
+test('open-roadmap-roots loader falls back to no extra roots for an invalid legacyRoots value', async () => {
+  const searchIssues = (query: SearchIssuesQuery) => {
+    if (query.label === 'roadmap') {
+      return [{ number: 701 }];
+    }
+    return [];
+  };
+
+  const roots = await buildOpenRoadmapRootsLoader(
+    'kurone-kito',
+    'idd-skill',
+    'idd-skill',
+    searchIssues,
+    undefined,
+    ['not-a-number'],
+  )();
+
+  // The malformed legacyRoots value fails safe to no extra roots; the
+  // label/marker search results are unaffected.
+  assert.deepEqual(roots, [701]);
+});
+
 test('open-roadmap-roots loader warns on the 1000-result search cap', () => {
   // Below the cap: no warning is emitted (the common case stays silent).
   const belowCap = captureStderr(() => {

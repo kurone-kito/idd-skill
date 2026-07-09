@@ -57,6 +57,7 @@ interface RawConfig {
   discover?: {
     activeClaimPreScanBatchSize?: unknown;
     selectionDesync?: unknown;
+    legacyRoots?: unknown;
   };
   claim?: { verifySettleDelay?: unknown };
   critiqueLoop?: {
@@ -163,6 +164,7 @@ export const POLICY_DEFAULTS = Object.freeze({
   discover: Object.freeze({
     activeClaimPreScanBatchSize: 10,
     selectionDesync: 'off',
+    legacyRoots: Object.freeze([]),
   }),
   claim: Object.freeze({
     verifySettleDelay: 'PT5S',
@@ -397,6 +399,10 @@ export function normalizePolicyConfig(config: unknown) {
         c?.discover?.selectionDesync,
         SELECTION_DESYNC_MODES,
         POLICY_DEFAULTS.discover.selectionDesync,
+      ),
+      legacyRoots: parsePositiveIntegerArray(
+        c?.discover?.legacyRoots,
+        POLICY_DEFAULTS.discover.legacyRoots,
       ),
     },
     claim: {
@@ -657,6 +663,31 @@ function parsePositiveInteger(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1
     ? value
     : fallback;
+}
+
+/**
+ * Parse a config array of positive integers (e.g. issue numbers), such as
+ * `discover.legacyRoots`. Mirrors `parseCheckSelectors`'s fail-closed shape:
+ * a non-array, empty array, or any entry that is not a positive integer
+ * falls back to `fallback` as a whole rather than dropping just the bad
+ * entries, so a typo'd issue number cannot silently vanish from the set.
+ */
+function parsePositiveIntegerArray(
+  value: unknown,
+  fallback: readonly number[],
+): number[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    return clone(fallback) as number[];
+  }
+
+  const normalized: number[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'number' || !Number.isInteger(entry) || entry < 1) {
+      return clone(fallback) as number[];
+    }
+    normalized.push(entry);
+  }
+  return normalized;
 }
 
 function parseNonEmptyString(value: unknown, fallback: string): string {

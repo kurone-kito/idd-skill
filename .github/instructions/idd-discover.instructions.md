@@ -198,6 +198,12 @@ parent roadmap's task list, and per A2 do **not** carry an
 nodes — so orphan-first, which targets issues with no roadmap linkage,
 does not exclude them).
 
+**Legacy roots**: `--all-roadmaps` finds roots only by label or
+`idd-skill-roadmap-id` marker. Retro-label a legacy umbrella, or
+configure **`discover.legacyRoots`** (issue numbers, deduped against
+label/marker roots; invalid fails safe to none). See
+`docs/idd-helper-scripts.md`.
+
 **Note**: Repo-wide or label-based issue queries are permitted only in
 **A0-T** (the scoped `idd-skill-roadmap-id` lookup needed to resolve the
 explicit target's `idd-skill-blocked-by` markers),
