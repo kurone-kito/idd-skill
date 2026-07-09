@@ -18,6 +18,11 @@ blocked by #56
   assert.deepEqual(extractBlockedByReferences(body), [12, 34, 56]);
 });
 
+test('extractBlockedByReferences tolerates a colon between the keyword and the ref (#1311)', () => {
+  const body = '- Blocked by: #123 (context) — more text';
+  assert.deepEqual(extractBlockedByReferences(body), [123]);
+});
+
 test('getOrphanFirstPolicy reads commands row and falls back to none', () => {
   assert.equal(
     getOrphanFirstPolicy({
