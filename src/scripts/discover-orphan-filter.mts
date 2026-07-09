@@ -19,6 +19,7 @@ import {
   parseAutopilotSuitability,
   rankAndRouteBySuitability,
 } from './autopilot-suitability.mts';
+import { extractBlockedByIssueNumbers } from './discover-readiness-check.mts';
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
 import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
@@ -126,18 +127,16 @@ if (isCliExecution(import.meta.url)) {
   runCli();
 }
 
+/**
+ * Collect the visible `Blocked by #N` references in `body`. Delegates to the
+ * readiness composer's `extractBlockedByIssueNumbers` (#1311) instead of a
+ * second inline "Blocked by" regex, so this filter and the readiness gate
+ * share one dependency-line primitive — including its colon tolerance
+ * (`Blocked by: #123`), blockquote/list-bullet prefix tolerance, and
+ * code-region stripping.
+ */
 export function extractBlockedByReferences(body: unknown): number[] {
-  const references: number[] = [];
-  const regex = /^\s*Blocked by #(\d+)\b.*$/gim;
-  let match = regex.exec(String(body ?? ''));
-  while (match) {
-    const number = Number.parseInt(match[1], 10);
-    if (Number.isInteger(number) && number > 0) {
-      references.push(number);
-    }
-    match = regex.exec(String(body ?? ''));
-  }
-  return references;
+  return extractBlockedByIssueNumbers(String(body ?? ''));
 }
 
 export function getOrphanFirstPolicy(config: unknown): string {
