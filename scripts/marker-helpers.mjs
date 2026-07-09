@@ -587,16 +587,18 @@ export function operationalMarkerPrefixByStart(body) {
  * Detects a `claimed-by` / `unclaimed-by` / `review-watermark` /
  * `review-baseline` comment whose body starts with a structurally valid
  * marker token but whose whole body does not match the canonical, strict
- * `pattern` -- for example (the motivating case) a well-intentioned human
- * rationale appended after an otherwise-canonical token + note, but also a
- * note that does not satisfy the required note grammar (e.g. missing the
- * required `IDD` word) or is otherwise missing/malformed. Such a body
- * already fails `operationalMarkerPrefix`'s whole-body anchor and is
- * therefore never treated as a live marker for state resolution
- * (`parseClaimComment`, `resolveActiveClaim`, and friends keep returning
- * `null` / ignoring it, unchanged by this function's existence); this gives
- * a caller that wants one a **distinct** "malformed marker" signal instead
- * of the comment silently reading as ordinary, unremarkable content (#1316).
+ * `pattern` -- for **any** reason: content appended directly after the
+ * token with no note, a well-intentioned human rationale appended after an
+ * otherwise-canonical token + note (the motivating case), a note that does
+ * not satisfy the required note grammar (e.g. missing the required `IDD`
+ * word), or any other departure from the canonical token-then-optional-
+ * single-note shape. Such a body already fails `operationalMarkerPrefix`'s
+ * whole-body anchor and is therefore never treated as a live marker for
+ * state resolution (`parseClaimComment`, `resolveActiveClaim`, and friends
+ * keep returning `null` / ignoring it, unchanged by this function's
+ * existence); this gives a caller that wants one a **distinct** "malformed
+ * marker" signal instead of the comment silently reading as ordinary,
+ * unremarkable content (#1316).
  *
  * Returns the matching marker's `label` (e.g. `'<!-- claimed-by:'`) when the
  * body is malformed in that specific way, or `null` when the body is either
