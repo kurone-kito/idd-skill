@@ -108,6 +108,20 @@ that set instead of re-deriving it.
    gh pr checks {pr-number} --json name,state,bucket,startedAt,completedAt,link
    ```
 
+   **Duplicate-name-safe, HEAD-pinned reads**: `gh pr checks` can collapse
+   same-named checks across workflows. When helper support is installed,
+   read the profile-selected `ci-wait-state` snapshot instead (keyed by
+   `(checkName, workflowName)`, live `headRefOid`); see
+   `docs/idd-helper-scripts.md`.
+
+   ```sh
+   # source repo / vendored-node profile
+   node scripts/ci-wait-state.mjs --pr {pr-number}
+
+   # package-manager / ephemeral-npx profile
+   <profile-selected-ci-wait-state-command> --pr {pr-number}
+   ```
+
 2. Normalize check states:
    - treat `skipped`, `neutral`, and `not_applicable` as pass-equivalent
    - treat `pending`, `requested`, `waiting`, `queued`,
@@ -160,12 +174,30 @@ for the same run before posting a hold.
 | Required checks are not generated after `ciWait.generationTimeout` | Treat as running. Default: 10 min. If the corresponding workflow run does not exist at all when that window elapses, post a hold comment and escalate to a maintainer, then stop. |
 <!-- dprint-ignore-end -->
 
+## Hold-and-report failure shapes
+
+Recognize this shape in one pass; hold-and-report instead of the
+infra-vs-code triage above:
+
+- **Account-level Actions billing / spend-limit block**: every job in
+  every workflow fails near-instantly with an identical platform banner
+  (the run never starts, unlike a normal step failure). Non-transient — a
+  rerun reproduces it, no code change fixes it. Skip `ciWait.rerunPolicy`;
+  post a hold comment naming the block and stop for a maintainer.
+
 ## Wake-up discipline
 
 The polling mechanics above are unchanged. This advisory, tool-agnostic note
 keeps the **wait itself cheap**: the dominant cost of a wait is each
 re-invocation's context re-read (worse once it crosses the prompt-cache TTL,
 as CI/e2e waits routinely do), not the idle time.
+
+**Portability**: prefer a synchronous / blocking wait in the worker's own
+turn under supervisor/worker or multi-agent topologies — a background
+wait's completion notification often reaches only the supervisor, so the
+worker's turn ends and stalls until re-prompted (the background-wait
+resumption caveat). Background the watch (below) only when the topology
+is known to route completion back to the same turn.
 
 - **No interim polling turns** — background the watch, or schedule one wake at
   the **expected** completion interval; do not insert "is it done yet?" turns
