@@ -831,17 +831,6 @@ export function hasFreshDisposition(thread, options = {}) {
     typeof options.isDispositionAuthor === 'function'
       ? options.isDispositionAuthor
       : (login) => !isKnownReviewBot(login);
-  // A cosmetic in-place edit of a bot's own thread comment (e.g. an
-  // "addressed" badge appended after a disposition) must not read as fresh
-  // non-disposition activity -- see effectiveThreadCommentActivityAt.
-  // Defaults to the same isKnownReviewBot notion of "bot" used above;
-  // callers with a configured advisory-bot set (e.g.
-  // summarizeDispositionEvidenceForGate) pass their own predicate so a
-  // custom-configured bot login is recognized too.
-  const isAdvisoryBot =
-    typeof options.isAdvisoryBot === 'function'
-      ? options.isAdvisoryBot
-      : isKnownReviewBot;
   const comments = thread.comments?.nodes ?? [];
   // A resolved thread may be terminally dispositioned with the documented
   // `**Rejection confirmed by maintainer**` marker instead of a fresh
@@ -861,9 +850,7 @@ export function hasFreshDisposition(thread, options = {}) {
           isDisposition(comment) && dispositionAuthorPredicate(authorLogin)
         );
       })
-      .map((comment) =>
-        effectiveThreadCommentActivityAt(comment, { isAdvisoryBot }),
-      )
+      .map((comment) => effectiveThreadCommentActivityAt(comment))
       .filter(isValidIsoTimestamp),
   );
   return comments.some((comment) => {
@@ -873,9 +860,7 @@ export function hasFreshDisposition(thread, options = {}) {
     if (!(isDisposition(comment) && dispositionAuthorPredicate(authorLogin))) {
       return false;
     }
-    const dispositionActivityAt = effectiveThreadCommentActivityAt(comment, {
-      isAdvisoryBot,
-    });
+    const dispositionActivityAt = effectiveThreadCommentActivityAt(comment);
     if (!isValidIsoTimestamp(dispositionActivityAt)) {
       return false;
     }
@@ -2350,9 +2335,26 @@ export function summarizeDispositionEvidenceForGate(
   // post-disposition ack). Fails closed (false) without a snapshot boundary,
   // without a thread-local disposition, or for unresolved threads, and never
   // changes the gate route.
-  const isThreadAckOnlyPostDisposition = (thread) => {
+  //
+  // #1313: also computes the narrower `inPlaceEditOnly` sibling signal in the
+  // same pass (it needs the identical `threadDispositionAt` /
+  // `postDispositionBlockingFeedback` groundwork, so folding it into one
+  // function avoids recomputing that twice). `inPlaceEditOnly` additionally
+  // requires every qualifying comment to be an in-place edit of content that
+  // already existed at-or-before the disposition (its own `createdAt` is not
+  // newer than the disposition, and its `updatedAt` is strictly newer than
+  // its own `createdAt`) rather than a brand-new post-disposition comment --
+  // the #1313 report's exact scenario (a bot editing its own
+  // already-dispositioned finding in place, e.g. to append a cosmetic
+  // "addressed" badge). Deliberately advisory-only, like its sibling:
+  // GitHub's API exposes no revision diff for an edited comment, so this
+  // helper cannot tell a cosmetic append from a substantive change to the
+  // finding -- an agent that wants to act on this signal must still read the
+  // comment's current body before treating the block as safe to override.
+  const classifyThreadAckOnlyPostDisposition = (thread) => {
+    const none = { ackOnlyPostDisposition: false, inPlaceEditOnly: false };
     if (!thread.isResolved || !snapshotBoundaryAt) {
-      return false;
+      return none;
     }
     const nodes = thread.comments?.nodes ?? [];
     // Recognize the same dispositions `hasFreshDisposition` accepts on a
@@ -2379,7 +2381,7 @@ export function summarizeDispositionEvidenceForGate(
         .filter(isValidIsoTimestamp),
     );
     if (!threadDispositionAt) {
-      return false;
+      return none;
     }
     // The blocking activity is external feedback newer than BOTH the snapshot
     // boundary (so it actually re-blocks the gate) AND the thread disposition
@@ -2405,12 +2407,12 @@ export function summarizeDispositionEvidenceForGate(
       );
     });
     if (postDispositionBlockingFeedback.length === 0) {
-      return false;
+      return none;
     }
     // Each remaining item must be a pure advisory-bot courtesy ack: an
     // advisory-bot author whose body is neither a `**Accepted**`/`**Rejected**`
     // marker nor the terminal `**Rejection confirmed by maintainer**` marker.
-    return postDispositionBlockingFeedback.every(
+    const ackOnlyPostDisposition = postDispositionBlockingFeedback.every(
       (comment) =>
         isConfiguredAdvisoryBotLogin(
           comment.author?.login,
@@ -2419,6 +2421,20 @@ export function summarizeDispositionEvidenceForGate(
         !isDispositionComment({ body: String(comment.body ?? '') }) &&
         !isRejectionConfirmedDisposition({ body: String(comment.body ?? '') }),
     );
+    if (!ackOnlyPostDisposition) {
+      return none;
+    }
+    const inPlaceEditOnly = postDispositionBlockingFeedback.every((comment) => {
+      const createdAt = String(comment.createdAt ?? '');
+      const updatedAt = String(comment.updatedAt ?? '');
+      return (
+        isValidIsoTimestamp(createdAt) &&
+        compareIsoTimestamps(createdAt, threadDispositionAt) <= 0 &&
+        isValidIsoTimestamp(updatedAt) &&
+        compareIsoTimestamps(updatedAt, createdAt) > 0
+      );
+    });
+    return { ackOnlyPostDisposition, inPlaceEditOnly };
   };
   const missingThreads = (threads ?? [])
     .map((thread, index) => {
@@ -2442,6 +2458,7 @@ export function summarizeDispositionEvidenceForGate(
           isResolved: Boolean(thread.isResolved),
           reason: 'incomplete-thread-comments',
           ackOnlyPostDisposition: false,
+          inPlaceEditOnly: false,
         };
       }
       if (
@@ -2452,8 +2469,6 @@ export function summarizeDispositionEvidenceForGate(
                 .trim()
                 .toLowerCase(),
             ),
-          isAdvisoryBot: (login) =>
-            isConfiguredAdvisoryBotLogin(login, advisoryBotLogins),
         })
       ) {
         return null;
@@ -2487,13 +2502,15 @@ export function summarizeDispositionEvidenceForGate(
           return null;
         }
       }
+      const classification = classifyThreadAckOnlyPostDisposition(thread);
       return {
         id: String(thread.id ?? '') || `thread-${index + 1}`,
         isResolved: Boolean(thread.isResolved),
         reason: thread.isResolved
           ? 'missing-fresh-disposition'
           : 'unresolved-without-fresh-disposition',
-        ackOnlyPostDisposition: isThreadAckOnlyPostDisposition(thread),
+        ackOnlyPostDisposition: classification.ackOnlyPostDisposition,
+        inPlaceEditOnly: classification.inPlaceEditOnly,
       };
     })
     .filter(Boolean);
@@ -2507,6 +2524,13 @@ export function summarizeDispositionEvidenceForGate(
     blockingCount > 0 &&
     missingRegularComments.length === 0 &&
     missingThreads.every((entry) => entry.ackOnlyPostDisposition === true);
+  // #1313: narrower sibling -- true only when every blocking item is ALSO an
+  // in-place edit of pre-existing content (see `inPlaceEditOnly` above). A
+  // strict subset of `soleCauseAckOnlyPostDisposition`.
+  const soleCauseInPlaceEditOnly =
+    blockingCount > 0 &&
+    missingRegularComments.length === 0 &&
+    missingThreads.every((entry) => entry.inPlaceEditOnly === true);
   return {
     route: blockingCount > 0 ? 'return-to-e1' : 'proceed',
     reason: blockingCount > 0 ? 'missing-disposition-evidence' : 'complete',
@@ -2514,6 +2538,7 @@ export function summarizeDispositionEvidenceForGate(
     missingRegularCommentCount: missingRegularComments.length,
     missingThreadCount: missingThreads.length,
     soleCauseAckOnlyPostDisposition,
+    soleCauseInPlaceEditOnly,
     missingRegularComments,
     missingThreads,
   };
@@ -4558,37 +4583,12 @@ function threadActivityAt(thread) {
     .filter(isValidIsoTimestamp);
   return maxIsoTimestamp(commentTimes);
 }
-function effectiveThreadCommentActivityAt(comment, options = {}) {
+function effectiveThreadCommentActivityAt(comment) {
   const updatedAt = String(comment?.updatedAt ?? '');
-  const createdAt = String(comment?.createdAt ?? '');
   if (isValidIsoTimestamp(updatedAt)) {
-    // A known/configured advisory bot that edits its own thread comment in
-    // place (e.g. appending an "addressed" badge after a disposition) must
-    // not read as fresh non-disposition activity -- date it by createdAt
-    // instead, mirroring effectiveRegularCommentActivityAt's createdAt-based
-    // approach (#1186) for the analogous regular-comment path. Only a
-    // genuine in-place edit (updatedAt strictly after createdAt) is
-    // affected; a fresh comment's updatedAt equals its createdAt and falls
-    // through unchanged. Opt-in via options.isAdvisoryBot: callers that do
-    // not pass it (most call sites of this shared helper) keep the exact
-    // unconditional updatedAt-preferring behavior this function has always
-    // had -- some of those callers rely on today's behavior to recognize
-    // post-disposition bot activity for their own (unrelated) ack-only
-    // reclassification, so this must never become a global default.
-    if (
-      typeof options.isAdvisoryBot === 'function' &&
-      isValidIsoTimestamp(createdAt) &&
-      compareIsoTimestamps(updatedAt, createdAt) > 0 &&
-      options.isAdvisoryBot(
-        String(comment?.author?.login ?? '')
-          .trim()
-          .toLowerCase(),
-      )
-    ) {
-      return createdAt;
-    }
     return updatedAt;
   }
+  const createdAt = String(comment?.createdAt ?? '');
   if (isValidIsoTimestamp(createdAt)) {
     return createdAt;
   }
@@ -4613,14 +4613,6 @@ function hasCompletedBotThreadDispositions(
       return (
         thread.isResolved &&
         !thread.comments?.pageInfo?.hasNextPage &&
-        // Deliberately does NOT pass isAdvisoryBot: loginPredicate here.
-        // loginPredicate (e.g. isCodeRabbitLogin) only scopes which threads
-        // count as "bot threads" above; a thread can carry non-disposition
-        // findings from other known bots too (e.g. Codex), and those must
-        // also get the in-place-edit dating fix. hasFreshDisposition's own
-        // isKnownReviewBot default is a strict superset of any single-bot
-        // loginPredicate this function is called with, so the default
-        // already covers this call site correctly and more broadly.
         hasFreshDisposition(thread, {
           isDispositionAuthor: options.isDispositionAuthor,
         })
