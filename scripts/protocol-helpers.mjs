@@ -958,8 +958,8 @@ const CODEX_USAGE_LIMIT_TOKEN_PATTERN =
 //
 // 1. Whole-comment length ≤ CODEX_NOTICE_MAX_LENGTH — defends against a long
 //    structured review whose *last* sentence happens to coincidentally
-//    match (the longest known real wording, current wording + trailer, is
-//    138 characters).
+//    match (the longest known real wording — current wording plus its
+//    two-sentence trailer, see below — is 199 characters).
 // 2. Text before the matched span ≤ CODEX_NOTICE_MAX_PREFIX_LENGTH once
 //    trimmed — defends against a narrative lead-in preceding an otherwise
 //    bare match (known real prefixes are 0 and 9 characters).
@@ -980,10 +980,30 @@ const CODEX_USAGE_LIMIT_TOKEN_PATTERN =
 // extra content after the trailer hide behind a recognized prefix. A short
 // `[\s\S]{0,20}?` span is allowed before the core trailer tokens (the real
 // wording has ". Please " between the matched span and "check with the
-// admins"), and only trailing punctuation/whitespace is allowed after
-// "adding credits".
-const CODEX_NOTICE_TRAILER_CONTINUATION_PATTERN =
-  /^[\s\S]{0,20}?\bcheck with the admins\b[\s\S]{0,60}?\bincrease the limits\b[\s\S]{0,60}?\badding credits\b[.!,;:\s]*$/i;
+// admins"), and only trailing punctuation/whitespace is allowed after the
+// closing sentence(s).
+//
+// The live wording observed on this very PR's own Codex review (#1326)
+// appends a SECOND administrative sentence after the one #1312 quoted
+// ("Credits must be used to enable repository wide code reviews."), so the
+// accepted closing shape is two sentences, each independently
+// token-anchored and gap-tolerant (not exact-phrase — the same #1312
+// wording-drift tolerance applies within each sentence), with the second
+// sentence optional so the shorter single-sentence wording still matches.
+// SENTENCE_2 anchors the distinctive multi-word phrases "credits must be
+// used" and "enable" (not the single generic words "credits" / "repository"
+// / "reviews" alone) — matching the same specificity SENTENCE_1 already
+// uses, so a comment that merely reuses those individual words near
+// SENTENCE_1's exact bot phrasing cannot piggyback a false accept (a gap
+// found and closed during this PR's own review-fix rounds).
+const CODEX_NOTICE_TRAILER_SENTENCE_1 =
+  '\\bcheck with the admins\\b[\\s\\S]{0,60}?\\bincrease the limits\\b[\\s\\S]{0,60}?\\badding credits\\b';
+const CODEX_NOTICE_TRAILER_SENTENCE_2 =
+  '\\bcredits must be used\\b[\\s\\S]{0,40}?\\benable\\b[\\s\\S]{0,40}?\\brepository\\b[\\s\\S]{0,40}?\\b(?:code )?reviews?\\b';
+const CODEX_NOTICE_TRAILER_CONTINUATION_PATTERN = new RegExp(
+  `^[\\s\\S]{0,20}?${CODEX_NOTICE_TRAILER_SENTENCE_1}(?:[.!,;:\\s]{0,5}${CODEX_NOTICE_TRAILER_SENTENCE_2})?[.!,;:\\s]*$`,
+  'i',
+);
 const CODEX_NOTICE_MAX_LENGTH = 220;
 const CODEX_NOTICE_MAX_PREFIX_LENGTH = 20;
 // Anchored to the *entire* trimmed remainder (not a starts-with check), so

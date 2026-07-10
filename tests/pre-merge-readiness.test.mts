@@ -2569,6 +2569,18 @@ test('isAdvisoryNonReviewNotice matches only machine-generated non-review notice
     ),
     true,
   );
+  // #1326: the live current wording observed on this PR's own Codex review
+  // appends a second administrative sentence beyond the one #1312 quoted —
+  // must still classify as a non-review notice (verified against the exact
+  // text Codex posted on PR #1329 while this fix was under review).
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'Codex usage limits have been reached for code reviews. Please check ' +
+        'with the admins of this repo to increase the limits by adding ' +
+        'credits.\nCredits must be used to enable repository wide code reviews.',
+    ),
+    true,
+  );
   assert.equal(
     isAdvisoryNonReviewNotice(
       '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> ## Review limit reached',
@@ -2649,6 +2661,54 @@ test('isAdvisoryNonReviewNotice matches only machine-generated non-review notice
       'Codex usage limits have been reached for code reviews. Please check ' +
         'with the admins of this repo to increase the limits by adding ' +
         'credits. And by the way, I also noticed a bug in the retry logic.',
+    ),
+    false,
+  );
+  // #1326: the two-sentence live trailer followed by further unrelated
+  // prose must still not match — extending the accepted closing shape to a
+  // second sentence must not reopen the same substring-anchoring gap for
+  // content past that second sentence either.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'Codex usage limits have been reached for code reviews. Please check ' +
+        'with the admins of this repo to increase the limits by adding ' +
+        'credits.\nCredits must be used to enable repository wide code ' +
+        'reviews. By the way I also noticed a bug in the retry logic.',
+    ),
+    false,
+  );
+  // #1326: a human sentence that deliberately reuses the second trailer
+  // sentence's own vocabulary ("repository", "credits", "reviews") must
+  // still not match — the trailer pattern's fixed token order and gap
+  // bounds are shape-specific, not a bag-of-words check.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'This code hits the Codex usage limits for code reviews. The ' +
+        'repository credits check has a bug in the retry logic for reviews.',
+    ),
+    false,
+  );
+  // #1326 (review-fix round 3): even when the full SENTENCE_1 bot phrasing
+  // is present (an unlikely but possible coincidence), loosely-worded
+  // content that merely reuses SENTENCE_2's individual words ("credits",
+  // "repository", "review") without its distinctive "credits must be used
+  // ... enable" phrase must not match — closes a gap a critique pass found
+  // in an earlier version of this same fix that anchored SENTENCE_2 on
+  // single generic words instead of a distinctive multi-word phrase.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'Codex usage limits have been reached for code reviews. Please check ' +
+        'with the admins of this repo to increase the limits by adding ' +
+        'credits. Credits are precious, track per repository, avoid ' +
+        'wasting review!',
+    ),
+    false,
+  );
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'Codex usage limits have been reached for code reviews. Please check ' +
+        'with the admins of this repo to increase the limits by adding ' +
+        'credits. credits repository reviews',
     ),
     false,
   );
