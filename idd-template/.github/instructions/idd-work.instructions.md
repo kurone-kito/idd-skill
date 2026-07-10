@@ -228,15 +228,6 @@ or commits.
 
 ## C — Self-Review Loop
 
-**Skip condition C2**: if the critique pass finds zero issues, skip to
-`idd-pr-submit.instructions.md`.
-
-**Skip condition C4**: if Accept count is zero, or if the loop has run
-more than `critiqueLoop.cPhaseLowSeveritySkipAfter` times (distributed
-default: `3`) and all remaining Accepts are severity Low (minor
-improvements unrelated to PR intent), skip to
-`idd-pr-submit.instructions.md`.
-
 ### C1 — Critique pass
 
 Run a critique pass on this branch's diff. Ask it to check whether the
