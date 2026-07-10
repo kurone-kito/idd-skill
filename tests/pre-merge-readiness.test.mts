@@ -2712,6 +2712,20 @@ test('isAdvisoryNonReviewNotice matches only machine-generated non-review notice
     ),
     false,
   );
+  // #1326 (review-fix round 4): narrative content between the base match
+  // and the trailer's core tokens must not match, even though it fits
+  // within a short character budget — the lead-in before "check with the
+  // admins" must be punctuation/whitespace plus the one known lead-in word
+  // ("Please"), not an arbitrary-content character count (flagged by
+  // Copilot on this PR's own merge-sync-triggered re-review).
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'This code exceeds the Codex usage limits for code reviews. We ' +
+        'should check with the admins of this repo to increase the ' +
+        'limits by adding credits.',
+    ),
+    false,
+  );
   // #1326: trailing whitespace after a real notice must not defeat the
   // empty-suffix check (no regression from the added structural gate).
   assert.equal(

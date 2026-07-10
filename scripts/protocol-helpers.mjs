@@ -977,11 +977,20 @@ const CODEX_USAGE_LIMIT_TOKEN_PATTERN =
 // Anchored to the *entire* trimmed remainder (start `^` through end `$`,
 // not a bare substring `.test()`), so "known trailer, then more unrelated
 // prose" is still correctly rejected — a substring-only match would let
-// extra content after the trailer hide behind a recognized prefix. A short
-// `[\s\S]{0,20}?` span is allowed before the core trailer tokens (the real
-// wording has ". Please " between the matched span and "check with the
-// admins"), and only trailing punctuation/whitespace is allowed after the
-// closing sentence(s).
+// extra content after the trailer hide behind a recognized prefix.
+//
+// Every connector in this pattern (lead-in, inter-sentence, and trailing)
+// is bounded to punctuation/whitespace plus, where needed, one specific
+// known word — never an arbitrary-content character budget. An earlier
+// version of this fix allowed an arbitrary `[\s\S]{0,20}?` lead-in before
+// the core trailer tokens (reasoning that the real wording's ". Please "
+// connector needed *some* tolerance), but a bounded *character count* still
+// admits arbitrary *words* within that budget — a critique pass on this PR
+// found that narrative content like "We should " fits the same budget and
+// would still reach the trailer tokens. `CODEX_NOTICE_TRAILER_LEAD_IN`
+// closes that class by allowing only punctuation/whitespace and the
+// literal word "Please" (the only lead-in word in any known real wording),
+// so no other word can occupy that position regardless of length.
 //
 // The live wording observed on this very PR's own Codex review (#1326)
 // appends a SECOND administrative sentence after the one #1312 quoted
@@ -996,12 +1005,14 @@ const CODEX_USAGE_LIMIT_TOKEN_PATTERN =
 // uses, so a comment that merely reuses those individual words near
 // SENTENCE_1's exact bot phrasing cannot piggyback a false accept (a gap
 // found and closed during this PR's own review-fix rounds).
+const CODEX_NOTICE_TRAILER_LEAD_IN =
+  '[.!,;:\\s]{0,3}(?:\\bPlease\\b[.!,;:\\s]{0,3})?';
 const CODEX_NOTICE_TRAILER_SENTENCE_1 =
   '\\bcheck with the admins\\b[\\s\\S]{0,60}?\\bincrease the limits\\b[\\s\\S]{0,60}?\\badding credits\\b';
 const CODEX_NOTICE_TRAILER_SENTENCE_2 =
   '\\bcredits must be used\\b[\\s\\S]{0,40}?\\benable\\b[\\s\\S]{0,40}?\\brepository\\b[\\s\\S]{0,40}?\\b(?:code )?reviews?\\b';
 const CODEX_NOTICE_TRAILER_CONTINUATION_PATTERN = new RegExp(
-  `^[\\s\\S]{0,20}?${CODEX_NOTICE_TRAILER_SENTENCE_1}(?:[.!,;:\\s]{0,5}${CODEX_NOTICE_TRAILER_SENTENCE_2})?[.!,;:\\s]*$`,
+  `^${CODEX_NOTICE_TRAILER_LEAD_IN}${CODEX_NOTICE_TRAILER_SENTENCE_1}(?:[.!,;:\\s]{0,5}${CODEX_NOTICE_TRAILER_SENTENCE_2})?[.!,;:\\s]*$`,
   'i',
 );
 const CODEX_NOTICE_MAX_LENGTH = 220;
