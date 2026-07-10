@@ -98,6 +98,18 @@ normal claim, freshness, CI, advisory, review, and unresolved-thread
 gates pass. Repositories without a recorded `fully_autonomous_merge`
 policy still stop at the F3 handoff gate.
 
+## Local discover policy
+
+This source repository also records a local IDD dogfooding policy:
+`discover.selectionDesync: session-offset`. The setting applies only
+to `kurone-kito/idd-skill` and does not change the exported template
+default for adopter repositories.
+
+Concurrent-session A4 Step 2 candidate selection spreads across a
+same-score tie band by a per-session offset instead of every session
+converging on the same lowest-numbered issue, cutting claim races
+under this repository's heavy concurrent-session load.
+
 ## Commit rules
 
 This project follows
