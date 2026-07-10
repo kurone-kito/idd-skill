@@ -1128,17 +1128,34 @@ export async function enumerateAllRoadmapsGraph(
   const unresolvedReferences = new Map<string, RoadmapReferenceDiagnostic>();
 
   for (const rootNumber of rootNumbers) {
-    const graph = await enumerateRoadmapGraph(rootNumber, {
-      markerPrefix,
-      roadmapLabelName: options.roadmapLabelName,
-      owner: options.owner,
-      repo: options.repo,
-      loadIssue: options.loadIssue,
-      loadSubIssues: options.loadSubIssues,
-      // #1136: each per-root enumeration prefetches its own subtree
-      // concurrently; thread the same bound through.
-      concurrency: options.concurrency,
-    });
+    let graph: RoadmapGraphReport;
+    try {
+      graph = await enumerateRoadmapGraph(rootNumber, {
+        markerPrefix,
+        roadmapLabelName: options.roadmapLabelName,
+        owner: options.owner,
+        repo: options.repo,
+        loadIssue: options.loadIssue,
+        loadSubIssues: options.loadSubIssues,
+        // #1136: each per-root enumeration prefetches its own subtree
+        // concurrently; thread the same bound through.
+        concurrency: options.concurrency,
+      });
+    } catch (error) {
+      // #1315: a configured `discover.legacyRoots` entry is static,
+      // human-entered config that can go stale (typo, deleted or
+      // transferred issue) far more easily than a label/marker root, which
+      // a live search just confirmed exists moments earlier. Skip the
+      // unusable root with a NON-FATAL warning (mirrors
+      // warnOnSearchResultCap's degraded-but-not-fatal precedent) instead
+      // of aborting the whole union — one bad configured number must not
+      // break cross-roadmap discovery for every other root.
+      const reason = error instanceof Error ? error.message : String(error);
+      process.stderr.write(
+        `discover-roadmap-graph: --all-roadmaps root #${rootNumber} could not be enumerated (${reason}); skipping — root discovery may be incomplete.\n`,
+      );
+      continue;
+    }
 
     roots.push({
       number: graph.root.number,

@@ -1407,6 +1407,50 @@ test('all-roadmaps requires the open-roadmap-roots loader', async () => {
   );
 });
 
+test('all-roadmaps skips an unresolvable root with a warning instead of aborting the union (#1315)', async () => {
+  // A configured `discover.legacyRoots` entry is static, human-entered
+  // config that can go stale (typo, deleted/transferred issue) far more
+  // easily than a label/marker root, which a live search just confirmed
+  // exists. Root 999 is unresolvable (loadIssue returns null for it, so
+  // enumerateRoadmapGraph throws "root issue #999 was not found"); the
+  // union must skip it with a stderr warning and still return the other
+  // root's leaves rather than aborting the whole --all-roadmaps run.
+  const issues = new Map([
+    [101, roadmapIssue(101, '- [ ] #102', 'legacy-root-101')],
+    [102, executionIssue(102, 'task 102')],
+  ]);
+
+  let stderrOutput = '';
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: unknown) => {
+    stderrOutput += String(chunk);
+    return true;
+  }) as typeof process.stderr.write;
+
+  let report: Awaited<ReturnType<typeof enumerateAllRoadmapsGraph>>;
+  try {
+    report = await enumerateAllRoadmapsGraph({
+      loadOpenRoadmapRoots: async () => [101, 999],
+      loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    });
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+
+  assert.deepEqual(
+    report.roots.map((root) => root.number),
+    [101],
+  );
+  assert.deepEqual(
+    report.leaves.map((leaf) => leaf.number),
+    [102],
+  );
+  assert.match(
+    stderrOutput,
+    /--all-roadmaps root #999 could not be enumerated \(root issue #999 was not found\); skipping/,
+  );
+});
+
 test('CLI rejects combining --issue with --all-roadmaps', () => {
   const tempRoot = mkdtempSync(
     join(tmpdir(), 'idd-discover-roadmap-graph-mutex-'),
