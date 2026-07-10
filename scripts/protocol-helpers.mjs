@@ -928,24 +928,87 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS = [
   // the `summarize by coderabbit.ai` review marker) and its warning heading.
   /<!--\s*This is an auto-generated comment:\s*rate limited by coderabbit\.ai\s*-->/i,
   /^[>\s]*#{1,6}\s*Review limit reached\b/im,
-  // Codex usage / quota exhaustion for code reviews. Token-anchored on all
-  // three of "Codex usage limit(s)", a reach/exceed/hit-family verb, and
-  // "for code reviews", each tolerant of interposed wording drift, in the
-  // two known real orderings (#1312: the two prior exact-phrase regexes
-  // broke when Codex's wording interposed "have been" between "usage
-  // limits" and "reached"). Requiring "for code reviews" too (not just the
-  // verb) keeps the match narrow, per the fail-closed under-match-over
-  // false-positive intent documented above: a bare "Codex usage limits
-  // exceeded" mention with no "for code reviews" nearby must not match.
-  /\b(?:reach|exceed|hit)\w*[\s\S]{0,40}?\bCodex usage limits?\b[\s\S]{0,40}?\bfor code reviews\b|\bCodex usage limits?\b[\s\S]{0,40}?\b(?:reach|exceed|hit)\w*[\s\S]{0,40}?\bfor code reviews\b/i,
 ];
+// Codex usage / quota exhaustion for code reviews. Token-anchored on all
+// three of "Codex usage limit(s)", a reach/exceed/hit-family verb, and "for
+// code reviews", each tolerant of interposed wording drift, in the two known
+// real orderings (#1312: the two prior exact-phrase regexes broke when
+// Codex's wording interposed "have been" between "usage limits" and
+// "reached"). Requiring "for code reviews" too (not just the verb) keeps the
+// match narrow: a bare "Codex usage limits exceeded" mention with no "for
+// code reviews" nearby must not match.
+const CODEX_USAGE_LIMIT_TOKEN_PATTERN =
+  /\b(?:reach|exceed|hit)\w*[\s\S]{0,40}?\bCodex usage limits?\b[\s\S]{0,40}?\bfor code reviews\b|\bCodex usage limits?\b[\s\S]{0,40}?\b(?:reach|exceed|hit)\w*[\s\S]{0,40}?\bfor code reviews\b/i;
+// #1326: the token pattern above, by itself, is a structural false positive —
+// a genuine review comment that discusses "Codex", a reach/exceed/hit verb,
+// and "for code reviews" in ordinary prose (a live risk specifically on PRs
+// that touch this detector, as #1319's own review demonstrated) matches it
+// too. Tightening the interposed-word gap cannot separate the two cases: the
+// words sit just as close together in a real sentence as in the generated
+// notice, and no gap bound keeps both known real wordings matching while
+// rejecting the false positive (verified empirically while fixing #1326).
+//
+// Instead, gate the token match on the notice's known SHAPE: a genuine
+// Codex/CodeRabbit quota notice is short and is effectively the *entire*
+// comment — nothing of substance precedes or follows it (the current wording
+// adds one recognizable generated trailer sentence). A genuine review embeds
+// the phrase mid-document, with a narrative lead-in, trailing prose, or both.
+// Three structural checks apply together, only once the token pattern above
+// already matched:
+//
+// 1. Whole-comment length ≤ CODEX_NOTICE_MAX_LENGTH — defends against a long
+//    structured review whose *last* sentence happens to coincidentally
+//    match (the longest known real wording, current wording + trailer, is
+//    138 characters).
+// 2. Text before the matched span ≤ CODEX_NOTICE_MAX_PREFIX_LENGTH once
+//    trimmed — defends against a narrative lead-in preceding an otherwise
+//    bare match (known real prefixes are 0 and 9 characters).
+// 3. Text after the matched span is empty/punctuation-only, or matches the
+//    tolerant (bounded-gap, token-anchored — not exact-phrase, so a future
+//    trailer reword does not reintroduce the #1312 brittleness) generated
+//    trailer-continuation pattern below.
+//
+// This does not achieve perfect semantic disambiguation (a sufficiently
+// short human sentence with a trivial lead-in and nothing trailing is
+// inherently indistinguishable from the real notice without exact-phrase
+// matching, which the #1312 fix deliberately avoids), but it substantially
+// narrows the matching surface in the safe direction the block comment above
+// already documents: under-match is safe, over-match risks a false merge.
+const CODEX_NOTICE_TRAILER_CONTINUATION_PATTERN =
+  /\bcheck with the admins\b[\s\S]{0,60}?\bincrease the limits\b[\s\S]{0,60}?\badding credits\b/i;
+const CODEX_NOTICE_MAX_LENGTH = 220;
+const CODEX_NOTICE_MAX_PREFIX_LENGTH = 20;
+// Anchored to the *entire* trimmed remainder (not a starts-with check), so
+// trailing prose that happens to begin with a comma or period is still
+// correctly rejected.
+const CODEX_NOTICE_SUFFIX_PUNCTUATION_ONLY_RE = /^[.!,;:]*$/;
+function isCodexUsageLimitNotice(text) {
+  if (!text.trim() || text.trim().length > CODEX_NOTICE_MAX_LENGTH) {
+    return false;
+  }
+  const match = CODEX_USAGE_LIMIT_TOKEN_PATTERN.exec(text);
+  if (!match) {
+    return false;
+  }
+  const prefix = text.slice(0, match.index).trim();
+  if (prefix.length > CODEX_NOTICE_MAX_PREFIX_LENGTH) {
+    return false;
+  }
+  const remainder = text.slice(match.index + match[0].length).trim();
+  return (
+    remainder === '' ||
+    CODEX_NOTICE_SUFFIX_PUNCTUATION_ONLY_RE.test(remainder) ||
+    CODEX_NOTICE_TRAILER_CONTINUATION_PATTERN.test(remainder)
+  );
+}
 export function isAdvisoryNonReviewNotice(body) {
   const text = String(body ?? '');
   if (!text) {
     return false;
   }
-  return ADVISORY_NON_REVIEW_NOTICE_PATTERNS.some((pattern) =>
-    pattern.test(text),
+  return (
+    ADVISORY_NON_REVIEW_NOTICE_PATTERNS.some((pattern) => pattern.test(text)) ||
+    isCodexUsageLimitNotice(text)
   );
 }
 // A trusted IDD disposition of a non-review notice: the canonical

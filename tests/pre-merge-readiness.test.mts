@@ -2608,6 +2608,44 @@ test('isAdvisoryNonReviewNotice matches only machine-generated non-review notice
     ),
     false,
   );
+  // #1326: a genuine review comment that combines all three tokens
+  // (verb + "Codex usage limits" + "for code reviews") close together in
+  // ordinary prose must not match, even though the token-anchored pattern
+  // alone finds a candidate span — this is the concrete false positive
+  // flagged in PR #1319's own review of the #1312 fix.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'This code hits the Codex usage limits for code reviews configured for the repo.',
+    ),
+    false,
+  );
+  // #1326: a narrative lead-in before an otherwise-bare match (empty
+  // suffix) must also not match — the suffix alone is not a sufficient
+  // signal; the prefix must be checked too.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'This is what happens when you hit the Codex usage limits for code reviews.',
+    ),
+    false,
+  );
+  // #1326: a real notice immediately followed by unrelated prose (not the
+  // known generated trailer) must not match — a false positive could hide
+  // inside a longer bot comment that happens to lead with the notice text.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'You have reached your Codex usage limits for code reviews. We should ' +
+        'review our approach for code reviews going forward.',
+    ),
+    false,
+  );
+  // #1326: trailing whitespace after a real notice must not defeat the
+  // empty-suffix check (no regression from the added structural gate).
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'You have reached your Codex usage limits for code reviews.\n\n',
+    ),
+    true,
+  );
   assert.equal(isAdvisoryNonReviewNotice(''), false);
   assert.equal(isAdvisoryNonReviewNotice(null), false);
 });
