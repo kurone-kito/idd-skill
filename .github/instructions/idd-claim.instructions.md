@@ -330,12 +330,14 @@ _{agent-id}: issue claim — IDD automation marker. Do not edit._
 
 **Nothing appended after the note.** A `claimed-by` / `unclaimed-by` marker
 comment body must be exactly the HTML comment token followed by, at most,
-the single italic note shown above — never more. Appending anything else
-(a rationale, a follow-up sentence, extra formatting) after the note fails
-the parser's whole-body anchor: the comment is not recognized as a live
-claim event, matching every other malformed body. Unlike an ordinary
-unrecognized comment, though, this specific shape — a structurally valid
-token plus note with content appended — is a **detectable** malformed
+the single italic note shown above — never more. Any deviation from that
+exact shape — content appended after the note, content appended directly
+after the token with no note, a note that does not satisfy the required
+note grammar, or any other departure — fails the parser's whole-body
+anchor: the comment is not recognized as a live claim event, matching
+every other malformed body. Unlike an ordinary unrecognized comment,
+though, a body that starts with a structurally valid token but deviates
+from the exact shape in any of those ways is a **detectable** malformed
 marker (`detectMalformedOperationalMarker` in `marker-helpers.mts`), so
 tooling can flag it instead of the claim silently reading as unremarkable
 "other" content. Detection is diagnostic only: never salvage a malformed

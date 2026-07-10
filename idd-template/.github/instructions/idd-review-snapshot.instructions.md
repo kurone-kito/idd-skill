@@ -119,14 +119,16 @@ ambiguous). Example Japanese note:
 **Nothing appended after the note.** As with the `claimed-by` /
 `unclaimed-by` markers in `idd-claim.instructions.md`, a `review-watermark`
 (and `review-baseline`, below) comment body must be exactly the HTML
-comment token plus the single italic note, with nothing appended —
-appending anything else after the note fails the parser's whole-body
-anchor and the comment is not recognized as a live watermark. That
-specific shape (valid token + note plus appended content) is a detectable
-malformed marker (`detectMalformedOperationalMarker` in
-`marker-helpers.mts`); see `idd-claim.instructions.md` for the full rule,
-including the related disposition-marker (`**Accepted**` / `**Rejected**`)
-no-code-fence note.
+comment token plus the single italic note, with nothing appended — any
+deviation (content appended after the note, content appended directly
+after the token with no note, a note that does not satisfy the required
+note grammar, or any other departure) fails the parser's whole-body anchor
+and the comment is not recognized as a live watermark. A body that starts
+with a structurally valid token but deviates from the exact shape in any
+of those ways is a detectable malformed marker
+(`detectMalformedOperationalMarker` in `marker-helpers.mts`); see
+`idd-claim.instructions.md` for the full rule, including the related
+disposition-marker (`**Accepted**` / `**Rejected**`) no-code-fence note.
 
 - **`{head-SHA}`**: the value read at the very start of Step 1, before
   any fetching. F2 uses this to detect pushes that occurred between E1's
