@@ -147,7 +147,7 @@ here, so those bundle values cannot drift in the docs:
 | Budget type                    | Maintained value |
 | ------------------------------ | ---------------- |
 | Always-loaded instruction file | 20,000 bytes     |
-| Phase instruction file         | 32,200 bytes     |
+| Phase instruction file         | 35,500 bytes     |
 
 See [Policy constants: Runtime Instruction Size and Bundle
 Budgets](docs/policy-constants.md#runtime-instruction-size-and-bundle-budgets)

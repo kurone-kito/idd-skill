@@ -69,7 +69,11 @@ that issue only:
      `<!-- {{PROJECT_MARKER_PREFIX}}-blocked-by: {roadmap-id} -->`
      markers resolve through the same scoped body-content lookup used by
      A3, and the matching roadmap work is closed or otherwise complete;
-   - no external human coordination is required to start.
+   - no external human coordination is required to start;
+   - no active, non-stale claim from a trusted marker actor exists on
+     the target, other than a claim this session itself already
+     recorded and verified — per the same parse rules as A4 Step 1.5
+     (the early "already claimed" outcome A5 would otherwise reach).
 4. Run the normal A4 viability gate against the target only.
 5. Apply the **A3.5** issue-author approval gate against the target.
    If A3.5 classifies it as not startable, report that the gate
