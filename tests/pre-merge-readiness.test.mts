@@ -2638,6 +2638,20 @@ test('isAdvisoryNonReviewNotice matches only machine-generated non-review notice
     ),
     false,
   );
+  // #1326 (review-fix): the known generated trailer itself followed by
+  // MORE unrelated prose must still not match — the trailer-continuation
+  // pattern must anchor the entire remainder, not just find the trailer as
+  // a substring somewhere within it (flagged in this PR's own Copilot
+  // review: a substring-only check would let extra content hide behind a
+  // recognized trailer prefix).
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'Codex usage limits have been reached for code reviews. Please check ' +
+        'with the admins of this repo to increase the limits by adding ' +
+        'credits. And by the way, I also noticed a bug in the retry logic.',
+    ),
+    false,
+  );
   // #1326: trailing whitespace after a real notice must not defeat the
   // empty-suffix check (no regression from the added structural gate).
   assert.equal(

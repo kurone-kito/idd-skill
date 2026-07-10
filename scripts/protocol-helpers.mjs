@@ -974,8 +974,16 @@ const CODEX_USAGE_LIMIT_TOKEN_PATTERN =
 // matching, which the #1312 fix deliberately avoids), but it substantially
 // narrows the matching surface in the safe direction the block comment above
 // already documents: under-match is safe, over-match risks a false merge.
+// Anchored to the *entire* trimmed remainder (start `^` through end `$`,
+// not a bare substring `.test()`), so "known trailer, then more unrelated
+// prose" is still correctly rejected — a substring-only match would let
+// extra content after the trailer hide behind a recognized prefix. A short
+// `[\s\S]{0,20}?` span is allowed before the core trailer tokens (the real
+// wording has ". Please " between the matched span and "check with the
+// admins"), and only trailing punctuation/whitespace is allowed after
+// "adding credits".
 const CODEX_NOTICE_TRAILER_CONTINUATION_PATTERN =
-  /\bcheck with the admins\b[\s\S]{0,60}?\bincrease the limits\b[\s\S]{0,60}?\badding credits\b/i;
+  /^[\s\S]{0,20}?\bcheck with the admins\b[\s\S]{0,60}?\bincrease the limits\b[\s\S]{0,60}?\badding credits\b[.!,;:\s]*$/i;
 const CODEX_NOTICE_MAX_LENGTH = 220;
 const CODEX_NOTICE_MAX_PREFIX_LENGTH = 20;
 // Anchored to the *entire* trimmed remainder (not a starts-with check), so
