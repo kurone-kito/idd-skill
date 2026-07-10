@@ -220,8 +220,9 @@ For each Rejected PATH A item whose source is reviewer feedback:
   referenced PR is recorded as an unresolved reference by
   `discover-roadmap-graph`, and only the `Refs` relationship is
   cycle-exempt for a closed leaf, so a different keyword (e.g.
-  `Closes`) or a PR target can permanently block a later A1.5
-  closure. Mirrors the A1.5 rule in `idd-roadmap-audit.instructions.md`.
+  `Closes`) or a PR target leaves the reference unresolved until
+  the issue body is corrected. Mention the originating PR in prose
+  if useful. Mirrors the A1.5 rule in `idd-roadmap-audit.instructions.md`.
 
 Use these prefixes so that disposition is always unambiguous:
 
