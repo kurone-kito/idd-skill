@@ -15,6 +15,25 @@ IDD Skill は、リポジトリへ移植できる Issue-Driven Development
 選択したマージポリシーに従ってマージと後片づけまで進めます。ループ全体は、
 リポジトリ内の Markdown で書かれた指示ファイルとして管理されます。
 
+## ループエンジニアリングとしての IDD
+
+この開発ループは、**loop engineering**（エージェントの trigger・topology・
+verifier・stop rules を仕組みとして設計する考え方）の具体例です。
+Anthropic は同じ考え方を **agentic loops** と呼んでいます。IDD は、
+専用ランタイムではなく issue コメントの永続状態のうえに構築された、
+移植可能で GitHub ネイティブな実装です:
+
+| ループの要素 | IDD での実装                                                                             |
+| ------------ | ---------------------------------------------------------------------------------------- |
+| Trigger      | Discover が着手できる issue を選びます。                                                 |
+| Topology     | フェーズパイプライン、ロードマップの子 issue 分解、worktree で分離した並列エージェント。 |
+| Verifier     | CI ゲートと advisory bot（Copilot / CodeRabbit / Codex）、レビュー triage。              |
+| Stop rules   | Merge ゲート（claim・鮮度・CI・advisory・レビュー）。issue のクローズが終了条件です。    |
+
+強力な verifier と stop-gate が重要な理由は
+[Core concepts](docs/concepts.md#idd-as-loop-engineering)
+を参照してください。
+
 ## 実例で学ぶ
 
 [VRChat Event Calendar ワークショップ](docs/workshop/README.md) を読むと、

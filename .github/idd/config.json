@@ -30,6 +30,9 @@
   },
   "issueScope": "roadmap-first",
   "orphanFirstPolicy": "none",
+  "discover": {
+    "selectionDesync": "session-offset"
+  },
   "forcedHandoff": {
     "mode": "human-gated",
     "authorityPolicy": "owners-and-maintainers-only"
