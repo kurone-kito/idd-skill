@@ -22,7 +22,8 @@ import type {
 } from './protocol-helpers.mts';
 import {
   buildForcedHandoffEnableGate,
-  isStaleAt,
+  DEFAULT_STALE_AGE_MS,
+  isStaleByAge,
   normalizeLinkedPrReference,
   parseClaimComment,
   resolveActiveClaim,
@@ -107,7 +108,6 @@ interface ResumeClaimRoutingArgs {
   help: boolean;
 }
 
-const DEFAULT_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 const LEGACY_CLAIM_PATTERN =
   /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 const LEGACY_RELEASE_PATTERN =
@@ -954,22 +954,6 @@ function normalizeStaleAgeMs(value: unknown): number {
     return DEFAULT_STALE_AGE_MS;
   }
   return Math.floor(value);
-}
-
-function isStaleByAge(
-  activeCreatedAt: string,
-  nextCreatedAt: string,
-  staleAgeMs: number,
-): boolean {
-  if (staleAgeMs === DEFAULT_STALE_AGE_MS) {
-    return isStaleAt(activeCreatedAt, nextCreatedAt);
-  }
-  const start = Date.parse(activeCreatedAt ?? '');
-  const end = Date.parse(nextCreatedAt ?? '');
-  if (!Number.isFinite(start) || !Number.isFinite(end)) {
-    return false;
-  }
-  return end - start >= staleAgeMs;
 }
 
 function normalizeIso(value: unknown): string | null {

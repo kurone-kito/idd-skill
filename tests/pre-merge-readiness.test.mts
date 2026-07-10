@@ -3940,6 +3940,125 @@ test('Part B: summarizeClaimValidation rejects an issue-only handoff after the P
   assert.equal(summary.activeClaim.claimId, 'claim-20260512T090000Z-337-old');
 });
 
+// ---------------------------------------------------------------------------
+// #1310: the write-gate resolvers must honor a configured claimTiming.staleAge
+// instead of being locked to the hardcoded 24h default. WG_OLD_CLAIM is
+// created at 2026-05-12T09:00:00Z; the takeover claim below lands 20h later
+// (2026-05-13T05:00:00Z) — squarely in the 18-24h gap the issue describes:
+// stale under an 18h configured age, not stale under the old hardcoded 24h.
+// ---------------------------------------------------------------------------
+
+const WG_TAKEOVER_CLAIM_ID = 'claim-20260513T050000Z-337-new';
+const EIGHTEEN_HOURS_MS = 18 * 60 * 60 * 1000;
+
+function wgTakeoverEvent() {
+  const body = `<!-- claimed-by: cli-new ${WG_TAKEOVER_CLAIM_ID} supersedes: claim-20260512T090000Z-337-old 2026-05-13T05:00:00Z branch: issue/337-feat -->`;
+  return {
+    body: [body, '', '_cli-new: issue claim — IDD automation marker._'].join(
+      '\n',
+    ),
+    createdAt: '2026-05-13T05:00:00Z',
+    author: { login: 'cli-new' },
+  };
+}
+
+test('resolveActiveClaimForWriteGate recognizes a takeover claim inside a configured 18h staleAge', () => {
+  const active = resolveActiveClaimForWriteGate(
+    [wgClaimEvent(), wgTakeoverEvent()],
+    {
+      isTrustedAuthor: wgTrusted,
+      staleAgeMs: EIGHTEEN_HOURS_MS,
+    },
+  );
+  assert.equal(active?.claimId, WG_TAKEOVER_CLAIM_ID);
+  assert.equal(active?.agentId, 'cli-new');
+});
+
+test('resolveActiveClaimForWriteGate keeps the old claim active for the same 20h gap without staleAgeMs (old hardcoded 24h)', () => {
+  const active = resolveActiveClaimForWriteGate(
+    [wgClaimEvent(), wgTakeoverEvent()],
+    {
+      isTrustedAuthor: wgTrusted,
+    },
+  );
+  assert.equal(active?.claimId, 'claim-20260512T090000Z-337-old');
+  assert.equal(active?.agentId, 'cli-old');
+});
+
+test('summarizeClaimValidation reports no claimLost for a takeover inside a configured 18h staleAge', () => {
+  const summary = summarizeClaimValidation(
+    [wgClaimEvent(), wgTakeoverEvent()],
+    {
+      trustedMarkerLogins: ['cli-old', 'cli-new'],
+      expectedClaimId: WG_TAKEOVER_CLAIM_ID,
+      expectedAgentId: 'cli-new',
+      staleAgeMs: EIGHTEEN_HOURS_MS,
+    },
+  );
+  assert.equal(summary.claimLost, false);
+  assert.equal(summary.reason, 'match');
+  assert.equal(summary.activeClaim.claimId, WG_TAKEOVER_CLAIM_ID);
+});
+
+test('summarizeClaimValidation falsely reports claimLost for the same takeover without staleAgeMs (the #1310 bug, pinned)', () => {
+  // Documents the exact production symptom from the issue: the legitimate
+  // successor's session recorded WG_TAKEOVER_CLAIM_ID as its expected claim,
+  // but the write gate — with no staleAgeMs override — still resolves the
+  // hardcoded-stale old claim as active, so a live successor reads as
+  // claimLost. Fixed by passing staleAgeMs from the resolved policy.
+  const summary = summarizeClaimValidation(
+    [wgClaimEvent(), wgTakeoverEvent()],
+    {
+      trustedMarkerLogins: ['cli-old', 'cli-new'],
+      expectedClaimId: WG_TAKEOVER_CLAIM_ID,
+      expectedAgentId: 'cli-new',
+    },
+  );
+  assert.equal(summary.claimLost, true);
+  assert.equal(summary.reason, 'claim-id-mismatch');
+  assert.equal(summary.activeClaim.claimId, 'claim-20260512T090000Z-337-old');
+});
+
+test('buildPreMergeReadinessSummary threads staleAgeMs to the F2/F3 claim gate (#1310)', () => {
+  // End-to-end proof that the merge-gate aggregator itself (not just the
+  // underlying write-gate resolvers) honors a configured claimTiming.staleAge:
+  // the same 20h-gap takeover from the tests above, driven through the full
+  // buildPreMergeReadinessSummary entry point pre-merge-readiness.mts calls.
+  const prHeadSha = '1111111111111111111111111111111111111111';
+  const now = '2026-05-14T00:00:00Z';
+  const claimEvents = [wgClaimEvent(), wgTakeoverEvent()];
+
+  const withConfiguredStaleAge = buildPreMergeReadinessSummary(
+    { prHeadSha, claimEvents },
+    {
+      now,
+      trustedMarkerLogins: ['cli-old', 'cli-new'],
+      staleAgeMs: EIGHTEEN_HOURS_MS,
+    },
+  );
+  const claimWithConfiguredStaleAge = withConfiguredStaleAge.claim as Record<
+    string,
+    Record<string, unknown>
+  >;
+  assert.equal(
+    claimWithConfiguredStaleAge.activeClaim.claimId,
+    WG_TAKEOVER_CLAIM_ID,
+  );
+
+  const withoutStaleAgeOverride = buildPreMergeReadinessSummary(
+    { prHeadSha, claimEvents },
+    { now, trustedMarkerLogins: ['cli-old', 'cli-new'] },
+  );
+  const claimWithoutStaleAgeOverride = withoutStaleAgeOverride.claim as Record<
+    string,
+    Record<string, unknown>
+  >;
+  assert.equal(
+    claimWithoutStaleAgeOverride.activeClaim.claimId,
+    'claim-20260512T090000Z-337-old',
+  );
+});
+
 // Shape of a real execFileSync('gh', ...) failure: exit code 1 with the true
 // HTTP status carried in stderr (mirrors gh-http-status.test.mts). gh writes a
 // 404 response body to stdout, so fetchBranchRulesets must discriminate on the

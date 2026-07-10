@@ -468,6 +468,9 @@ test('policy normalization provides default-safe values and supports aliases', (
     stallRecovery: {
       quietWindow: 'PT30M',
     },
+    claimTiming: {
+      staleAge: 'PT24H',
+    },
     forcedHandoff: {
       mode: 'disabled',
       authorityPolicy: 'owners-and-maintainers-only',
@@ -552,6 +555,9 @@ test('policy normalization provides default-safe values and supports aliases', (
       stallRecovery: {
         quietWindow: 'PT45M',
       },
+      claimTiming: {
+        staleAge: 'PT18H',
+      },
       forcedHandoffMode: 'human-gated',
       'forced-handoff-authority': 'all-write-permission-actors',
       markerTrustAllowCollaboratorMarkers: true,
@@ -615,6 +621,9 @@ test('policy normalization provides default-safe values and supports aliases', (
       maintainerApprovalActorPolicy: 'all-write-permission-actors',
       stallRecovery: {
         quietWindow: 'PT45M',
+      },
+      claimTiming: {
+        staleAge: 'PT18H',
       },
       forcedHandoff: {
         mode: 'human-gated',
