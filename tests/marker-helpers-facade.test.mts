@@ -29,6 +29,7 @@ const SAMPLE_NAMES = [
   'parseReviewWatermarkComment',
   'operationalMarkerPrefix',
   'operationalMarkerPrefixByStart',
+  'detectMalformedOperationalMarker',
   'IDD_AGENT_DERIVED_MARKERS',
   'isValidIsoTimestamp',
 ] as const;
