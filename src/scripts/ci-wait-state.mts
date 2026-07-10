@@ -26,7 +26,10 @@ import { execFileSync } from 'node:child_process';
 
 import { ghText, isCliExecution } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
-import { summarizeBranchReviewRequirements } from './protocol-helpers.mts';
+import {
+  parsePaginatedGhNdjson,
+  summarizeBranchReviewRequirements,
+} from './protocol-helpers.mts';
 
 /** Required-check entry from a branch ruleset rule or classic protection. */
 type RawRequiredCheckPayload =
@@ -456,27 +459,23 @@ function parseArgs(argv: string[]): CiWaitStateArgs {
  * treating an auth/network failure as "no required checks configured".
  */
 function ghApiJsonOr404Empty(path: string, paginate: boolean): unknown {
+  // `--jq '.[]'` (NDJSON, one array element per line) is the repo-standard
+  // paginate form — see gh-exec.mts and protocol-helpers.mts's
+  // parsePaginatedGhNdjson, reused here rather than hand-rolling a second
+  // parser. Unlike `--jq '.'`, it does not depend on gh's jq implementation
+  // staying compact-per-page; `--slurp` (a single JSON array) landed in gh
+  // v2.48.0, but Ubuntu 24.04 LTS ships gh v2.45.0 via apt, so NDJSON stays
+  // the compatible default.
   const args = paginate
-    ? ['api', path, '--paginate', '--jq', '.']
+    ? ['api', path, '--paginate', '--jq', '.[]']
     : ['api', path];
   try {
-    const raw = execFileSync('gh', args, { encoding: 'utf8' }).trim();
-    if (!raw) {
-      return paginate ? [] : {};
-    }
+    const raw = execFileSync('gh', args, { encoding: 'utf8' });
     if (!paginate) {
-      return JSON.parse(raw);
+      const trimmed = raw.trim();
+      return trimmed ? JSON.parse(trimmed) : {};
     }
-    // `gh api --paginate --jq '.'` on an array-shaped endpoint emits one
-    // JSON array per page; flatten instead of assuming a single page.
-    return raw
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .flatMap((line) => {
-        const parsed = JSON.parse(line) as unknown;
-        return Array.isArray(parsed) ? parsed : [parsed];
-      });
+    return parsePaginatedGhNdjson(raw);
   } catch (error) {
     if (deriveGhHttpStatus(error) === 404) {
       return paginate ? [] : {};
