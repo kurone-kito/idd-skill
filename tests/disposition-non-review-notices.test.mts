@@ -19,6 +19,11 @@ const CODEX = 'chatgpt-codex-connector[bot]';
 const CODERABBIT = 'coderabbitai[bot]';
 const CODEX_NOTICE =
   'You have reached your Codex usage limits for code reviews.';
+// #1312: current Codex wording interposes "have been" between "usage
+// limits" and "reached" — the two prior exact-phrase regexes missed this.
+const CODEX_NOTICE_CURRENT_WORDING =
+  'Codex usage limits have been reached for code reviews. Please check ' +
+  'with the admins of this repo to increase the limits by adding credits.';
 const CODERABBIT_NOTICE =
   '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> ## Review limit reached';
 const CODERABBIT_SUMMARY =
@@ -87,6 +92,22 @@ test('buildDispositionPlan plans one disposition per undispositioned notice', ()
     assert.ok(entry.body.startsWith('**Rejected**'));
     assert.match(entry.body, /did not review HEAD abc1234/);
   }
+});
+
+test('buildDispositionPlan plans a rejection for the current Codex usage-limit wording', () => {
+  // #1312 regression: Codex's current wording ("...have been reached...")
+  // must still be recognized as a non-review notice and dispositioned.
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [notice(1, CODEX, CODEX_NOTICE_CURRENT_WORDING)],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 1);
+  assert.equal(plan.planned[0]?.botLogin, CODEX);
+  assert.ok(plan.planned[0]?.body.startsWith('**Rejected**'));
+  assert.match(plan.planned[0]?.body ?? '', /did not review HEAD abc1234/);
 });
 
 test('buildDispositionPlan is idempotent: a notice already dispositioned for its bot is skipped', () => {
