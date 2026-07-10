@@ -186,9 +186,10 @@ infra-vs-code triage above:
 
 - **Account-level Actions billing / spend-limit block**: every job in
   every workflow fails near-instantly with an identical platform banner
-  (the run never starts, unlike a normal step failure). Non-transient — a
-  rerun reproduces it, no code change fixes it. Skip `ciWait.rerunPolicy`;
-  post a hold comment naming the block and stop for a maintainer.
+  (the run starts but no steps execute, unlike a normal step failure).
+  Non-transient — a rerun reproduces it, no code change fixes it. Skip
+  `ciWait.rerunPolicy`; post a hold comment naming the block and stop for
+  a maintainer.
 
 ## Wake-up discipline
 
