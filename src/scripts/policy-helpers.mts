@@ -25,6 +25,7 @@ interface RawConfig {
   skipIssueAuthorApprovalGate?: unknown;
   maintainerApprovalActorPolicy?: unknown;
   stallRecovery?: { quietWindow?: unknown };
+  claimTiming?: { staleAge?: unknown };
   forcedHandoff?: RawForcedHandoff;
   'forced-handoff'?: RawForcedHandoff;
   forcedHandoffAuthority?: unknown;
@@ -130,6 +131,13 @@ export const POLICY_DEFAULTS = Object.freeze({
   maintainerApprovalActorPolicy: 'owners-and-maintainers-only',
   stallRecovery: Object.freeze({
     quietWindow: 'PT30M',
+  }),
+  // The write-gate claim-staleness window (#1310). isStaleAt's hardcoded 24h
+  // literal remains the fallback baked into protocol-helpers.mts; this is the
+  // one canonical config parse point every write-gate caller should read
+  // instead of hand-rolling `config?.claimTiming?.staleAge` access.
+  claimTiming: Object.freeze({
+    staleAge: 'PT24H',
   }),
   forcedHandoff: Object.freeze({
     mode: 'disabled',
@@ -306,6 +314,12 @@ export function normalizePolicyConfig(config: unknown) {
       quietWindow: parseDuration(
         c?.stallRecovery?.quietWindow,
         POLICY_DEFAULTS.stallRecovery.quietWindow,
+      ),
+    },
+    claimTiming: {
+      staleAge: parsePositiveDuration(
+        c?.claimTiming?.staleAge,
+        POLICY_DEFAULTS.claimTiming.staleAge,
       ),
     },
     forcedHandoff: {

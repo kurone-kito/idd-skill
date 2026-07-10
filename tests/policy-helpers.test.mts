@@ -44,6 +44,30 @@ test('POLICY_DEFAULTS.labels exposes the three reserved label name defaults', ()
   });
 });
 
+test('claimTiming.staleAge defaults to PT24H and accepts a configured override', () => {
+  // #1310: the canonical single parse point for claimTiming.staleAge, so
+  // write-gate callers read it here instead of hand-rolling
+  // `config?.claimTiming?.staleAge` access.
+  assert.equal(POLICY_DEFAULTS.claimTiming.staleAge, 'PT24H');
+  assert.equal(normalizePolicyConfig({}).claimTiming.staleAge, 'PT24H');
+  assert.equal(
+    normalizePolicyConfig({ claimTiming: { staleAge: 'PT18H' } }).claimTiming
+      .staleAge,
+    'PT18H',
+  );
+  // Malformed or non-positive values fall back to the 24h default.
+  assert.equal(
+    normalizePolicyConfig({ claimTiming: { staleAge: 'not-a-duration' } })
+      .claimTiming.staleAge,
+    'PT24H',
+  );
+  assert.equal(
+    normalizePolicyConfig({ claimTiming: { staleAge: 'PT0S' } }).claimTiming
+      .staleAge,
+    'PT24H',
+  );
+});
+
 test('parseIsoDurationToMs parses supported ISO durations', () => {
   assert.equal(parseIsoDurationToMs('PT5S'), 5000);
   assert.equal(parseIsoDurationToMs('PT2H'), 2 * 60 * 60 * 1000);

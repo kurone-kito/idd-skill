@@ -21,10 +21,12 @@ import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   normalizePolicyConfig,
+  parseIsoDurationToMs,
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mjs';
 import {
   buildPreMergeReadinessSummary,
+  DEFAULT_STALE_AGE_MS,
   deriveIddAgentLogins,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
@@ -212,6 +214,7 @@ export function collectPreMergeReadiness(argv) {
   const forcedHandoffPermissionCache = new Map();
   const waivableCheckSelectors = readWaivableCheckSelectors();
   const externalCheckWaiverMaxValidity = readExternalCheckWaiverMaxValidity();
+  const staleAgeMs = readClaimStaleAgeMs();
   const summary = buildPreMergeReadinessSummary(
     {
       prHeadSha,
@@ -248,6 +251,7 @@ export function collectPreMergeReadiness(argv) {
       primaryBotLogin,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity,
+      staleAgeMs,
       forcedHandoffEnabled,
       expectedLinkedPrs: [String(args.prNumber), prUrl].filter(Boolean),
       prFirstCommitAt,
@@ -862,4 +866,19 @@ function readExternalCheckWaiverMaxValidity() {
   } catch {
     return 'PT24H';
   }
+}
+// Configured claim-staleness window (`claimTiming.staleAge`, #1310), parsed
+// to milliseconds so the write-gate claim resolver honors it instead of the
+// hardcoded 24h `isStaleAt` default. Reuses the shared `loadIddConfig`
+// loader (already imported by this file) instead of a per-helper
+// `readFileSync + JSON.parse` copy; `loadIddConfig` already fails safe to
+// `null` and `normalizePolicyConfig(null)` already defaults to `PT24H`, so
+// no separate try/catch is needed here. An absent, unreadable, or
+// unparseable config falls back to the shared `DEFAULT_STALE_AGE_MS`
+// (protocol-helpers.mts) rather than a second local 24h literal, so
+// behavior is unchanged for repos on the default and there is exactly one
+// hardcoded-24h source of truth.
+function readClaimStaleAgeMs() {
+  const staleAge = normalizePolicyConfig(loadIddConfig()).claimTiming.staleAge;
+  return parseIsoDurationToMs(staleAge) ?? DEFAULT_STALE_AGE_MS;
 }
