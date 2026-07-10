@@ -196,7 +196,10 @@ if (isCliExecution(import.meta.url)) {
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
   if (!args.prNumber) {
-    throw new Error('missing required --pr <number> argument');
+    // parseArgs normalizes both an absent --pr and an invalid one (e.g.
+    // `--pr 0` or `--pr foo`) to null, so "missing" alone would misreport an
+    // invalid value as absent.
+    throw new Error('missing or invalid --pr <number> argument');
   }
 
   const owner =
