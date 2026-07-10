@@ -70,7 +70,8 @@ that issue only:
      the matching roadmap work is closed or otherwise complete;
    - no external human coordination is required to start;
    - no active, non-stale claim from a trusted marker actor exists on
-     the target (A4 Step 1.5 rules); a hit reports "already claimed",
+     the target, other than a claim this session already recorded and
+     verified (A4 Step 1.5 rules); a hit reports "already claimed",
      same as A5.
 4. Run the normal A4 viability gate against the target only.
 5. Apply the **A3.5** issue-author approval gate against the target.
