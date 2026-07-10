@@ -145,7 +145,7 @@ IDD は instruction の増加を機械的に上限管理します。下表に記
 | 予算タイプ                      | 維持される値 |
 | ------------------------------- | ------------ |
 | 常時ロード instruction ファイル | 20,000 bytes |
-| フェーズ instruction ファイル   | 32,200 bytes |
+| フェーズ instruction ファイル   | 35,500 bytes |
 
 正規の値と所有箇所は
 [Policy constants: Runtime Instruction Size and Bundle Budgets](docs/policy-constants.md#runtime-instruction-size-and-bundle-budgets)

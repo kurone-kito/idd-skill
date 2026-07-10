@@ -281,7 +281,7 @@ files, or express it without the `bytes` suffix.
 | Limit type    | Value        | Applies to                                                                 | Rationale                                                                                                                                                                                               |
 | ------------- | ------------ | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Always-loaded | 20,000 bytes | Files with `applyTo: "**"` in `.github/instructions/idd-*.instructions.md` | These files load on every phase regardless of which is active, so this is the strictest ceiling — it bounds the fixed floor cost every session pays before any phase-specific content is even selected. |
-| Phase         | 32,200 bytes | Other files in `.github/instructions/idd-*.instructions.md`                | Only the one file matching the active phase loads at a time, so this ceiling can run larger than the always-loaded one without raising a session's floor cost.                                          |
+| Phase         | 35,500 bytes | Other files in `.github/instructions/idd-*.instructions.md`                | Only the one file matching the active phase loads at a time, so this ceiling can run larger than the always-loaded one without raising a session's floor cost.                                          |
 
 ### Bundle limits
 
