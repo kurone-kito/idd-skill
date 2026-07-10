@@ -15,6 +15,7 @@ import {
   computePreMergeReadinessBlockers,
   deriveIddAgentLogins,
   findLastCopilotReviewCommit,
+  hasFreshDisposition,
   indexLatestGatingReviewsByAuthor,
   isAdvisoryNonReviewNotice,
   isNonReviewNoticeDisposition,
@@ -1963,6 +1964,196 @@ test('disposition evidence does not flag a resolved thread with substantive post
   assert.equal(summary.route, 'return-to-e1');
   assert.equal(summary.missingThreads[0].ackOnlyPostDisposition, false);
   assert.equal(summary.soleCauseAckOnlyPostDisposition, false);
+});
+
+// #1313 background: an advisory bot editing its own already-dispositioned
+// thread finding in place (e.g. appending a cosmetic "addressed" badge)
+// used to spuriously re-block `missing-fresh-disposition`. A first attempt
+// taught `hasFreshDisposition` to date such edits by `createdAt`, but a
+// maintainer-reviewed finding showed that mechanism cannot distinguish a
+// cosmetic edit from the bot silently changing the substance of the
+// finding (GitHub's API exposes no revision diff), which would let a
+// genuinely new finding bypass the merge gate. The maintainer decision was
+// to revert `hasFreshDisposition`/`effectiveThreadCommentActivityAt` to
+// their original fail-closed, `updatedAt`-preferring behavior (any bot
+// edit -- cosmetic or substantive -- still re-blocks mechanically), and
+// instead surface "in-place-edit-only, no distinguishable new content" as
+// a NARROWER advisory-only diagnostic alongside the existing #978
+// `ackOnlyPostDisposition` / `soleCauseAckOnlyPostDisposition` signal, so
+// an agent can verify the current comment body and deterministically
+// override per-instance rather than the mechanism silently trusting it.
+
+test('hasFreshDisposition still re-blocks when a bot edits its own thread finding in place after disposition (#1313)', () => {
+  const thread = {
+    id: 'thread-bot-edit',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'coderabbitai[bot]' },
+          createdAt: '2026-05-12T00:00:00Z',
+          // In-place edit: updatedAt bumped past the disposition below by a
+          // cosmetic self-edit (e.g. an "addressed" badge), createdAt unchanged.
+          updatedAt: '2026-05-12T02:00:00Z',
+          body: '**Potential issue**: this needs a null check.',
+        },
+        {
+          author: { login: 'idd-bot' },
+          createdAt: '2026-05-12T00:30:00Z',
+          body: '**Rejected** — verified: not applicable here',
+        },
+      ],
+    },
+  };
+
+  // No isAdvisoryBot option exists anymore: hasFreshDisposition always dates
+  // by updatedAt (the original, fail-closed behavior), so this still blocks.
+  const fresh = hasFreshDisposition(thread, {
+    isDispositionAuthor: (login) => login === 'idd-bot',
+  });
+
+  assert.equal(fresh, false);
+});
+
+test('disposition evidence still blocks but flags in-place-edit-only when a bot thread finding is edited after disposition (#1313)', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-edit',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'coderabbitai[bot]' },
+                createdAt: '2026-05-12T00:00:00Z',
+                updatedAt: '2026-05-12T02:00:00Z',
+                body: '**Potential issue**: this needs a null check.',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:30:00Z',
+                body: '**Rejected** — verified: not applicable here',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+    },
+  );
+
+  // The mechanical gate still blocks -- no silent override.
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.blockingCount, 1);
+  assert.equal(summary.missingThreads[0].reason, 'missing-fresh-disposition');
+  // The advisory-only diagnostics recognize the specific pattern: a pure
+  // advisory-bot ack (#978) that is ALSO an edit of pre-existing content.
+  assert.equal(summary.missingThreads[0].ackOnlyPostDisposition, true);
+  assert.equal(summary.missingThreads[0].inPlaceEditOnly, true);
+  assert.equal(summary.soleCauseAckOnlyPostDisposition, true);
+  assert.equal(summary.soleCauseInPlaceEditOnly, true);
+});
+
+test('disposition evidence does not flag in-place-edit-only for a genuinely new bot comment (#1313)', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-bot-new',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                author: { login: 'coderabbitai[bot]' },
+                createdAt: '2026-05-12T00:00:00Z',
+                body: '**Potential issue**: this needs a null check.',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:30:00Z',
+                body: '**Rejected** — verified: not applicable here',
+              },
+              {
+                // A genuinely new reply (its own fresh createdAt, not an
+                // edit of the original finding) is still recognized as a
+                // broad #978 ack-only courtesy comment, but must NOT be
+                // classified as an in-place edit of pre-existing content.
+                author: { login: 'coderabbitai[bot]' },
+                createdAt: '2026-05-12T02:00:00Z',
+                body: 'Actually, see also this related spot.',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreads[0].ackOnlyPostDisposition, true);
+  assert.equal(summary.missingThreads[0].inPlaceEditOnly, false);
+  assert.equal(summary.soleCauseAckOnlyPostDisposition, true);
+  assert.equal(summary.soleCauseInPlaceEditOnly, false);
+});
+
+test('disposition evidence does not flag ack-only or in-place-edit-only for a non-advisory-bot edit (#1313)', () => {
+  const summary = summarizeDispositionEvidenceForGate(
+    {
+      comments: [],
+      threads: [
+        {
+          id: 'thread-human-edit',
+          isResolved: true,
+          comments: {
+            pageInfo: { hasNextPage: false },
+            nodes: [
+              {
+                // A human reviewer's in-place edit is unaffected: still
+                // dated by updatedAt (unchanged behavior), and never
+                // eligible for either advisory-only diagnostic since the
+                // author is not a configured advisory bot.
+                author: { login: 'reviewer-a' },
+                createdAt: '2026-05-12T00:00:00Z',
+                updatedAt: '2026-05-12T02:00:00Z',
+                body: 'please reconsider this',
+              },
+              {
+                author: { login: 'idd-bot' },
+                createdAt: '2026-05-12T00:30:00Z',
+                body: '**Rejected** — verified: not applicable here',
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+    },
+  );
+
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreads[0].ackOnlyPostDisposition, false);
+  assert.equal(summary.missingThreads[0].inPlaceEditOnly, false);
+  assert.equal(summary.soleCauseAckOnlyPostDisposition, false);
+  assert.equal(summary.soleCauseInPlaceEditOnly, false);
 });
 
 test('disposition evidence reports sole-cause false when a regular comment also blocks (#978)', () => {
@@ -4496,3 +4687,51 @@ test('a trusted machine-disposition clears the notice/summary in both merge gate
     assert.equal(result, null);
   });
 }
+
+// #1313: classifyRegularBotComment -> hasCompletedBotThreadDispositions ->
+// hasFreshDisposition still requires a fresh disposition for a CodeRabbit
+// thread finding that was edited in place after its disposition (updatedAt
+// bumped past createdAt) -- the mechanical gate stays fail-closed (see the
+// #1313 background comment above): it cannot tell a cosmetic edit from a
+// substantive one, so it must not silently resolve the summary sticky. The
+// advisory-only in-place-edit diagnostic (summarizeDispositionEvidenceForGate)
+// is the intended place for an agent to recognize and verify this pattern,
+// not this mechanical completion check.
+test('#1313: a CodeRabbit summary sticky stays unresolved when its own thread finding was edited in place after disposition', () => {
+  const summarySticky = {
+    id: 1,
+    createdAt: '2026-07-01T00:00:00Z',
+    body: `${CODERABBIT_SUMMARY_MARKER}\n\nSummary of changes.`,
+    author: { login: 'coderabbitai[bot]' },
+  };
+
+  const result = classifyRegularBotComment(
+    summarySticky,
+    [summarySticky],
+    [
+      {
+        id: 'thread-1',
+        isResolved: true,
+        comments: {
+          pageInfo: { hasNextPage: false },
+          nodes: [
+            {
+              author: { login: 'coderabbitai[bot]' },
+              createdAt: '2026-07-01T00:00:00Z',
+              updatedAt: '2026-07-01T02:00:00Z',
+              body: '**Potential issue**: this needs a null check.',
+            },
+            {
+              author: { login: 'kurone-kito' },
+              createdAt: '2026-07-01T00:30:00Z',
+              body: '**Rejected** — verified: not applicable here',
+            },
+          ],
+        },
+      },
+    ],
+    { isDispositionAuthor: (login: string) => login === 'kurone-kito' },
+  );
+
+  assert.equal(result, null);
+});

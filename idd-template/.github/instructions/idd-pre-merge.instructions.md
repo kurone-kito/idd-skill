@@ -291,6 +291,20 @@ returns the workflow to E1 instead of merging over it.
   any thread whose `ackOnlyPostDisposition` is `false`) keeps the backstop
   and routes to E1/E4 unchanged.
 
+  `dispositionEvidence.soleCauseInPlaceEditOnly` (and the per-thread
+  `inPlaceEditOnly`) is **informational-only**, not a second deterministic
+  override (#1313): it is a narrower sibling of `ackOnlyPostDisposition`
+  that additionally confirms the blocking comment is an edit of content
+  that already existed at-or-before its thread's disposition, rather than
+  a brand-new post-disposition comment. GitHub's API exposes no revision
+  diff for an edited comment, so neither this field nor the helper that
+  computes it can verify whether the edit only added cosmetic content
+  (e.g. an "addressed" badge) or changed the substance of the finding. An
+  agent may use it as a stronger hint when deciding whether to invoke the
+  `soleCauseAckOnlyPostDisposition` override above, but must still read
+  the comment's current body before doing so — this field alone never
+  authorizes proceeding.
+
 When any F2 condition routes to a hold/stop or back to E1/E14, update
 the PR live status digest after the blocking evidence is recorded and
 before stopping or returning. Set `Phase` to the failing F2 check,

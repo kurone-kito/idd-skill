@@ -2342,9 +2342,26 @@ export function summarizeDispositionEvidenceForGate(
   // post-disposition ack). Fails closed (false) without a snapshot boundary,
   // without a thread-local disposition, or for unresolved threads, and never
   // changes the gate route.
-  const isThreadAckOnlyPostDisposition = (thread) => {
+  //
+  // #1313: also computes the narrower `inPlaceEditOnly` sibling signal in the
+  // same pass (it needs the identical `threadDispositionAt` /
+  // `postDispositionBlockingFeedback` groundwork, so folding it into one
+  // function avoids recomputing that twice). `inPlaceEditOnly` additionally
+  // requires every qualifying comment to be an in-place edit of content that
+  // already existed at-or-before the disposition (its own `createdAt` is not
+  // newer than the disposition, and its `updatedAt` is strictly newer than
+  // its own `createdAt`) rather than a brand-new post-disposition comment --
+  // the #1313 report's exact scenario (a bot editing its own
+  // already-dispositioned finding in place, e.g. to append a cosmetic
+  // "addressed" badge). Deliberately advisory-only, like its sibling:
+  // GitHub's API exposes no revision diff for an edited comment, so this
+  // helper cannot tell a cosmetic append from a substantive change to the
+  // finding -- an agent that wants to act on this signal must still read the
+  // comment's current body before treating the block as safe to override.
+  const classifyThreadAckOnlyPostDisposition = (thread) => {
+    const none = { ackOnlyPostDisposition: false, inPlaceEditOnly: false };
     if (!thread.isResolved || !snapshotBoundaryAt) {
-      return false;
+      return none;
     }
     const nodes = thread.comments?.nodes ?? [];
     // Recognize the same dispositions `hasFreshDisposition` accepts on a
@@ -2371,7 +2388,7 @@ export function summarizeDispositionEvidenceForGate(
         .filter(isValidIsoTimestamp),
     );
     if (!threadDispositionAt) {
-      return false;
+      return none;
     }
     // The blocking activity is external feedback newer than BOTH the snapshot
     // boundary (so it actually re-blocks the gate) AND the thread disposition
@@ -2397,12 +2414,12 @@ export function summarizeDispositionEvidenceForGate(
       );
     });
     if (postDispositionBlockingFeedback.length === 0) {
-      return false;
+      return none;
     }
     // Each remaining item must be a pure advisory-bot courtesy ack: an
     // advisory-bot author whose body is neither a `**Accepted**`/`**Rejected**`
     // marker nor the terminal `**Rejection confirmed by maintainer**` marker.
-    return postDispositionBlockingFeedback.every(
+    const ackOnlyPostDisposition = postDispositionBlockingFeedback.every(
       (comment) =>
         isConfiguredAdvisoryBotLogin(
           comment.author?.login,
@@ -2411,6 +2428,20 @@ export function summarizeDispositionEvidenceForGate(
         !isDispositionComment({ body: String(comment.body ?? '') }) &&
         !isRejectionConfirmedDisposition({ body: String(comment.body ?? '') }),
     );
+    if (!ackOnlyPostDisposition) {
+      return none;
+    }
+    const inPlaceEditOnly = postDispositionBlockingFeedback.every((comment) => {
+      const createdAt = String(comment.createdAt ?? '');
+      const updatedAt = String(comment.updatedAt ?? '');
+      return (
+        isValidIsoTimestamp(createdAt) &&
+        compareIsoTimestamps(createdAt, threadDispositionAt) <= 0 &&
+        isValidIsoTimestamp(updatedAt) &&
+        compareIsoTimestamps(updatedAt, createdAt) > 0
+      );
+    });
+    return { ackOnlyPostDisposition, inPlaceEditOnly };
   };
   const missingThreads = (threads ?? [])
     .map((thread, index) => {
@@ -2434,6 +2465,7 @@ export function summarizeDispositionEvidenceForGate(
           isResolved: Boolean(thread.isResolved),
           reason: 'incomplete-thread-comments',
           ackOnlyPostDisposition: false,
+          inPlaceEditOnly: false,
         };
       }
       if (
@@ -2477,13 +2509,15 @@ export function summarizeDispositionEvidenceForGate(
           return null;
         }
       }
+      const classification = classifyThreadAckOnlyPostDisposition(thread);
       return {
         id: String(thread.id ?? '') || `thread-${index + 1}`,
         isResolved: Boolean(thread.isResolved),
         reason: thread.isResolved
           ? 'missing-fresh-disposition'
           : 'unresolved-without-fresh-disposition',
-        ackOnlyPostDisposition: isThreadAckOnlyPostDisposition(thread),
+        ackOnlyPostDisposition: classification.ackOnlyPostDisposition,
+        inPlaceEditOnly: classification.inPlaceEditOnly,
       };
     })
     .filter(Boolean);
@@ -2497,6 +2531,13 @@ export function summarizeDispositionEvidenceForGate(
     blockingCount > 0 &&
     missingRegularComments.length === 0 &&
     missingThreads.every((entry) => entry.ackOnlyPostDisposition === true);
+  // #1313: narrower sibling -- true only when every blocking item is ALSO an
+  // in-place edit of pre-existing content (see `inPlaceEditOnly` above). A
+  // strict subset of `soleCauseAckOnlyPostDisposition`.
+  const soleCauseInPlaceEditOnly =
+    blockingCount > 0 &&
+    missingRegularComments.length === 0 &&
+    missingThreads.every((entry) => entry.inPlaceEditOnly === true);
   return {
     route: blockingCount > 0 ? 'return-to-e1' : 'proceed',
     reason: blockingCount > 0 ? 'missing-disposition-evidence' : 'complete',
@@ -2504,6 +2545,7 @@ export function summarizeDispositionEvidenceForGate(
     missingRegularCommentCount: missingRegularComments.length,
     missingThreadCount: missingThreads.length,
     soleCauseAckOnlyPostDisposition,
+    soleCauseInPlaceEditOnly,
     missingRegularComments,
     missingThreads,
   };

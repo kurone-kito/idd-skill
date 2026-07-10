@@ -853,6 +853,7 @@
         "missingRegularCommentCount",
         "missingThreadCount",
         "soleCauseAckOnlyPostDisposition",
+        "soleCauseInPlaceEditOnly",
         "missingRegularComments",
         "missingThreads"
       ],
@@ -885,6 +886,9 @@
           "minimum": 0
         },
         "soleCauseAckOnlyPostDisposition": {
+          "type": "boolean"
+        },
+        "soleCauseInPlaceEditOnly": {
           "type": "boolean"
         },
         "missingRegularComments": {
@@ -926,7 +930,8 @@
               "id",
               "isResolved",
               "reason",
-              "ackOnlyPostDisposition"
+              "ackOnlyPostDisposition",
+              "inPlaceEditOnly"
             ],
             "additionalProperties": false,
             "properties": {
@@ -946,6 +951,9 @@
                 ]
               },
               "ackOnlyPostDisposition": {
+                "type": "boolean"
+              },
+              "inPlaceEditOnly": {
                 "type": "boolean"
               }
             }
