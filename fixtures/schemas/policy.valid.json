@@ -59,7 +59,8 @@
     }
   },
   "discover": {
-    "activeClaimPreScanBatchSize": 10
+    "activeClaimPreScanBatchSize": 10,
+    "legacyRoots": [1234]
   },
   "claim": {
     "verifySettleDelay": "PT5S"

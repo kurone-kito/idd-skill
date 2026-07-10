@@ -367,6 +367,15 @@
           "type": "string",
           "enum": ["off", "session-offset"],
           "description": "A4 Step 2 concurrent-selection desync within a same-score tie band. `off` (default) keeps the deterministic lowest-issue-number tie-break; `session-offset` spreads concurrent autopilot sessions across the tie band by a per-session offset to cut claim races. Never reorders across score bands or affects branch naming."
+        },
+        "legacyRoots": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "Issue numbers of legacy roadmap roots that predate the `roadmap` label and `<prefix>-roadmap-id` marker (e.g. an ad-hoc umbrella convention adopted before IDD). Unioned into `--all-roadmaps` root discovery and deduped against label/marker roots; a missing or invalid value fails safe to no extra roots."
         }
       }
     },

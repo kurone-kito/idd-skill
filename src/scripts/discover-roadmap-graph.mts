@@ -554,6 +554,7 @@ if (isMainModule(import.meta.url)) {
     claimTiming?: { staleAge?: unknown };
     trustedMarkerActors?: unknown;
     labels?: { roadmapLabelName?: unknown };
+    discover?: { legacyRoots?: unknown };
   };
 
   // The claim-state annotation is strictly opt-in: only when --with-claim-state
@@ -588,6 +589,7 @@ if (isMainModule(import.meta.url)) {
           policy.markerPrefix,
           buildSearchIssuesRunner(),
           policy.labels?.roadmapLabelName,
+          policy.discover?.legacyRoots,
         ),
         claimState,
         readiness,
@@ -1071,6 +1073,35 @@ export async function enumerateRoadmapGraph(
 }
 
 /**
+ * True when `error` is one of the three "this root number is not a usable
+ * roadmap root" failures {@link enumerateRoadmapGraph} throws for
+ * `rootNumber` itself (not found / inaccessible / is a pull request) — the
+ * only cases a configured `discover.legacyRoots` entry (#1315) or a
+ * race-closed label/marker root can legitimately hit. Matched by exact
+ * message text against this specific root number so an unrelated error
+ * that happens to share wording never matches by accident.
+ *
+ * Deliberately narrow (Copilot review, #1327): any other error — including
+ * the "was not recorded" internal-invariant guard, or an auth/rate-limit/
+ * network failure from `loadIssue`/`loadSubIssues` — is NOT expected here
+ * and must propagate, so a genuine systemic failure still fails the run
+ * instead of being silently downgraded to a per-root skip.
+ */
+function isExpectedRootEnumerationFailure(
+  error: unknown,
+  rootNumber: number,
+): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    error.message === `root issue #${rootNumber} was not found` ||
+    error.message === `root issue #${rootNumber} is inaccessible` ||
+    error.message === `root issue #${rootNumber} is a pull request`
+  );
+}
+
+/**
  * Cross-roadmap autopilot discovery (additive `--all-roadmaps` mode).
  *
  * Discovers every OPEN roadmap root (an open issue carrying the
@@ -1126,17 +1157,45 @@ export async function enumerateAllRoadmapsGraph(
   const unresolvedReferences = new Map<string, RoadmapReferenceDiagnostic>();
 
   for (const rootNumber of rootNumbers) {
-    const graph = await enumerateRoadmapGraph(rootNumber, {
-      markerPrefix,
-      roadmapLabelName: options.roadmapLabelName,
-      owner: options.owner,
-      repo: options.repo,
-      loadIssue: options.loadIssue,
-      loadSubIssues: options.loadSubIssues,
-      // #1136: each per-root enumeration prefetches its own subtree
-      // concurrently; thread the same bound through.
-      concurrency: options.concurrency,
-    });
+    let graph: RoadmapGraphReport;
+    try {
+      graph = await enumerateRoadmapGraph(rootNumber, {
+        markerPrefix,
+        roadmapLabelName: options.roadmapLabelName,
+        owner: options.owner,
+        repo: options.repo,
+        loadIssue: options.loadIssue,
+        loadSubIssues: options.loadSubIssues,
+        // #1136: each per-root enumeration prefetches its own subtree
+        // concurrently; thread the same bound through.
+        concurrency: options.concurrency,
+      });
+    } catch (error) {
+      // #1315: a configured `discover.legacyRoots` entry is static,
+      // human-entered config that can go stale (typo, deleted or
+      // transferred issue) far more easily than a label/marker root, which
+      // a live search just confirmed exists moments earlier. Skip the
+      // unusable root with a NON-FATAL warning (mirrors
+      // warnOnSearchResultCap's degraded-but-not-fatal precedent) instead
+      // of aborting the whole union — one bad configured number must not
+      // break cross-roadmap discovery for every other root.
+      //
+      // Narrow on purpose (Copilot review, #1327): only the three "this
+      // root number is not a usable root" failures qualify. Anything else
+      // — an auth/rate-limit/network error from loadIssue/loadSubIssues, a
+      // GraphQL failure, or the "was not recorded" internal-invariant
+      // guard — must rethrow, or a genuine systemic failure would be
+      // silently masked as a per-root skip and produce an incomplete
+      // report that still exits successfully.
+      if (!isExpectedRootEnumerationFailure(error, rootNumber)) {
+        throw error;
+      }
+      const reason = error instanceof Error ? error.message : String(error);
+      process.stderr.write(
+        `discover-roadmap-graph: --all-roadmaps root #${rootNumber} could not be enumerated (${reason}); skipping — root discovery may be incomplete.\n`,
+      );
+      continue;
+    }
 
     roots.push({
       number: graph.root.number,
@@ -2190,6 +2249,19 @@ function normalizeRoadmapLabelName(roadmapLabelName: unknown): string {
     .roadmapLabelName;
 }
 
+/**
+ * Resolve the configured `discover.legacyRoots` (issue numbers of legacy
+ * roadmap roots that predate the `roadmap` label / `roadmap-id` marker),
+ * falling back to the `policy-helpers.mts` default (`[]`) for an absent or
+ * invalid value. Same routing-through-`normalizePolicyConfig` shape as
+ * {@link normalizeRoadmapLabelName}, so the fail-safe parsing stays in the
+ * single source of truth.
+ */
+function normalizeLegacyRoots(legacyRoots: unknown): readonly number[] {
+  return normalizePolicyConfig({ discover: { legacyRoots } }).discover
+    .legacyRoots;
+}
+
 async function getIssue(
   issueNumber: number,
   cache: Map<number, CachedIssue>,
@@ -2309,8 +2381,15 @@ export function buildSubIssueLoader(owner: string, repo: string) {
  *      the old scan used (the search already returns the body, so no extra
  *      per-issue fetch is made). Only confirmed markers are kept, so a
  *      non-marker text hit on the token never inflates the root set.
+ *   3. Configured legacy roots (#1315) — the `discover.legacyRoots` policy
+ *      array (issue numbers), for roots that predate both signals above
+ *      (e.g. an ad-hoc umbrella convention adopted before IDD). No extra
+ *      search or fetch: the numbers are unioned in directly, and each still
+ *      goes through the normal per-root {@link enumerateRoadmapGraph} fetch
+ *      downstream, so a stale or now-closed configured root is handled the
+ *      same way a race-closed label/marker root already is.
  *
- * The two candidate sets are unioned and deduped by number, then sorted
+ * The candidate sets are unioned and deduped by number, then sorted
  * ascending. The output is the identical `number[]` (deduped, ascending) the
  * previous scan returned, so the downstream union/provenance/ranking is
  * byte-stable.
@@ -2342,11 +2421,16 @@ export function buildOpenRoadmapRootsLoader(
   markerPrefix: unknown,
   searchIssues: SearchIssuesFn = buildSearchIssuesRunner(),
   roadmapLabelName?: unknown,
+  legacyRoots?: unknown,
 ) {
   const prefix = normalizeMarkerPrefix(markerPrefix);
   const label = normalizeRoadmapLabelName(roadmapLabelName);
+  const configuredLegacyRoots = normalizeLegacyRoots(legacyRoots);
   return async () => {
-    const numbers = new Set<number>();
+    // 3. Configured legacy roots: seeded directly into the Set ahead of the
+    //    two searches below so they dedupe against label/marker roots for
+    //    free; see the loader's doc comment for why no extra fetch is made.
+    const numbers = new Set<number>(configuredLegacyRoots);
 
     // 1. Label roots: roadmap-labeled open issues are roots by label.
     const labelResults = searchIssues({

@@ -202,6 +202,19 @@ themselves — a marker would make them roadmap nodes — so orphan-first
 filtering, which targets issues with no roadmap linkage at all, does not
 apply to them).
 
+**Legacy roots without a label or marker.** `--all-roadmaps` root
+discovery (see `docs/idd-helper-scripts.md`) finds roots only by the
+configured roadmap label and the
+`{{PROJECT_MARKER_PREFIX}}-roadmap-id` marker, so a legacy umbrella
+issue predating both (e.g. from an ad-hoc convention adopted before
+IDD) is never discovered as a root. Two mitigations, usable together or
+separately: **retro-label** the umbrella with the configured roadmap
+label (the label search is exact and complete, so this alone makes it
+discoverable); or configure **`discover.legacyRoots`** — an array of
+issue numbers unioned into root discovery and deduped against
+label/marker roots, for when retro-labeling is undesirable. A missing
+or invalid `legacyRoots` value fails safe to no extra roots.
+
 **Note**: Repo-wide or label-based issue queries are permitted only in
 **A0-T** (the scoped `{{PROJECT_MARKER_PREFIX}}-roadmap-id` lookup
 needed to resolve the explicit target's

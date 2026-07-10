@@ -37,6 +37,32 @@ function captureStderr(body: () => void): string {
   return chunks.join('');
 }
 
+/**
+ * Async-capable sibling of {@link captureStderr} (Copilot review, #1327):
+ * same capture/restore logic, but awaits `body` and returns its resolved
+ * value alongside the captured output, so a test exercising an async
+ * function (e.g. `enumerateAllRoadmapsGraph`) does not need to re-implement
+ * the monkey-patch inline (and risk the two copies drifting) or fight
+ * TypeScript's definite-assignment analysis over a `let` assigned from
+ * inside the callback.
+ */
+async function captureStderrAsync<T>(
+  body: () => Promise<T>,
+): Promise<{ result: T; stderr: string }> {
+  const original = process.stderr.write.bind(process.stderr);
+  const chunks: string[] = [];
+  process.stderr.write = ((chunk: unknown) => {
+    chunks.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    const result = await body();
+    return { result, stderr: chunks.join('') };
+  } finally {
+    process.stderr.write = original;
+  }
+}
+
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 test('extractors classify roadmap markers and outbound references', () => {
@@ -1407,6 +1433,69 @@ test('all-roadmaps requires the open-roadmap-roots loader', async () => {
   );
 });
 
+test('all-roadmaps skips an unresolvable root with a warning instead of aborting the union (#1315)', async () => {
+  // A configured `discover.legacyRoots` entry is static, human-entered
+  // config that can go stale (typo, deleted/transferred issue) far more
+  // easily than a label/marker root, which a live search just confirmed
+  // exists. Root 999 is unresolvable (loadIssue returns null for it, so
+  // enumerateRoadmapGraph throws "root issue #999 was not found"); the
+  // union must skip it with a stderr warning and still return the other
+  // root's leaves rather than aborting the whole --all-roadmaps run.
+  const issues = new Map([
+    [101, roadmapIssue(101, '- [ ] #102', 'legacy-root-101')],
+    [102, executionIssue(102, 'task 102')],
+  ]);
+
+  const { result: report, stderr: stderrOutput } = await captureStderrAsync(
+    () =>
+      enumerateAllRoadmapsGraph({
+        loadOpenRoadmapRoots: async () => [101, 999],
+        loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+      }),
+  );
+
+  assert.deepEqual(
+    report.roots.map((root) => root.number),
+    [101],
+  );
+  assert.deepEqual(
+    report.leaves.map((leaf) => leaf.number),
+    [102],
+  );
+  assert.match(
+    stderrOutput,
+    /--all-roadmaps root #999 could not be enumerated \(root issue #999 was not found\); skipping/,
+  );
+});
+
+test('all-roadmaps rethrows an unexpected per-root error instead of swallowing it (Copilot review, #1327)', async () => {
+  // The tolerant catch above is deliberately narrow: it must only skip the
+  // three "this root number is not usable" failures (not found /
+  // inaccessible / is a pull request). Any other error -- an auth/
+  // rate-limit/network failure from loadIssue, for example -- must still
+  // abort the whole union so a genuine systemic failure is never silently
+  // downgraded to a per-root skip that leaves the report incomplete while
+  // still exiting successfully.
+  const issues = new Map([
+    [101, roadmapIssue(101, '- [ ] #102', 'legacy-root-101')],
+    [102, executionIssue(102, 'task 102')],
+  ]);
+
+  await assert.rejects(
+    () =>
+      enumerateAllRoadmapsGraph({
+        loadOpenRoadmapRoots: async () => [101, 999],
+        loadIssue: async (issueNumber) => {
+          if (issueNumber === 999) {
+            throw new Error('gh api: rate limit exceeded');
+          }
+          return issues.get(issueNumber) ?? null;
+        },
+      }),
+    /rate limit exceeded/,
+  );
+});
+
 test('CLI rejects combining --issue with --all-roadmaps', () => {
   const tempRoot = mkdtempSync(
     join(tmpdir(), 'idd-discover-roadmap-graph-mutex-'),
@@ -1595,6 +1684,55 @@ test('open-roadmap-roots loader honors a configured roadmap label name (#1273)',
   // `--label` search qualifier instead of the default `'roadmap'`.
   const labelQuery = queries.find((query) => query.label);
   assert.equal(labelQuery?.label, 'epic');
+});
+
+test('open-roadmap-roots loader unions configured legacyRoots and dedupes against label/marker roots (#1315)', async () => {
+  const searchIssues = (query: SearchIssuesQuery) => {
+    if (query.label === 'roadmap') {
+      return [{ number: 701 }];
+    }
+    if (query.matchBody) {
+      return [
+        { number: 703, body: '<!-- idd-skill-roadmap-id: marker-only -->' },
+      ];
+    }
+    return [];
+  };
+
+  // 701 overlaps the label root (dedupe), 900 is a genuinely new legacy
+  // root with neither label nor marker.
+  const roots = await buildOpenRoadmapRootsLoader(
+    'kurone-kito',
+    'idd-skill',
+    'idd-skill',
+    searchIssues,
+    undefined,
+    [900, 701],
+  )();
+
+  assert.deepEqual(roots, [701, 703, 900]);
+});
+
+test('open-roadmap-roots loader falls back to no extra roots for an invalid legacyRoots value', async () => {
+  const searchIssues = (query: SearchIssuesQuery) => {
+    if (query.label === 'roadmap') {
+      return [{ number: 701 }];
+    }
+    return [];
+  };
+
+  const roots = await buildOpenRoadmapRootsLoader(
+    'kurone-kito',
+    'idd-skill',
+    'idd-skill',
+    searchIssues,
+    undefined,
+    ['not-a-number'],
+  )();
+
+  // The malformed legacyRoots value fails safe to no extra roots; the
+  // label/marker search results are unaffected.
+  assert.deepEqual(roots, [701]);
 });
 
 test('open-roadmap-roots loader warns on the 1000-result search cap', () => {

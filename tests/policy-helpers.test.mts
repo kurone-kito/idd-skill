@@ -129,6 +129,48 @@ test('discover.selectionDesync defaults to off and accepts session-offset', () =
   );
 });
 
+test('discover.legacyRoots defaults to [] and accepts a valid issue-number array', () => {
+  assert.deepEqual(POLICY_DEFAULTS.discover.legacyRoots, []);
+  assert.deepEqual(normalizePolicyConfig({}).discover.legacyRoots, []);
+  assert.deepEqual(
+    normalizePolicyConfig({ discover: { legacyRoots: [12, 7, 99] } }).discover
+      .legacyRoots,
+    [12, 7, 99],
+  );
+});
+
+test('discover.legacyRoots fails safe to [] on invalid input', () => {
+  // Non-array, empty array, and an out-of-range/non-integer entry all fall
+  // back to the default `[]` — the whole array is rejected rather than
+  // silently dropping just the bad entry, so a typo'd issue number cannot
+  // vanish unnoticed.
+  assert.deepEqual(
+    normalizePolicyConfig({ discover: { legacyRoots: 'not-an-array' } })
+      .discover.legacyRoots,
+    [],
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({ discover: { legacyRoots: [] } }).discover
+      .legacyRoots,
+    [],
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({ discover: { legacyRoots: [1, 0] } }).discover
+      .legacyRoots,
+    [],
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({ discover: { legacyRoots: [1, 1.5] } }).discover
+      .legacyRoots,
+    [],
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({ discover: { legacyRoots: [1, '2'] } }).discover
+      .legacyRoots,
+    [],
+  );
+});
+
 test('selectDesyncedIndex returns 0 for empty, singleton, or invalid bands', () => {
   assert.equal(selectDesyncedIndex('any-token', 0), 0);
   assert.equal(selectDesyncedIndex('any-token', 1), 0);
