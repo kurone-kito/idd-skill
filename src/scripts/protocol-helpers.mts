@@ -1565,9 +1565,16 @@ const ADVISORY_NON_REVIEW_NOTICE_PATTERNS: RegExp[] = [
   // the `summarize by coderabbit.ai` review marker) and its warning heading.
   /<!--\s*This is an auto-generated comment:\s*rate limited by coderabbit\.ai\s*-->/i,
   /^[>\s]*#{1,6}\s*Review limit reached\b/im,
-  // Codex usage / quota exhaustion for code reviews.
-  /\bCodex usage limits for code reviews\b/i,
-  /\breached your Codex usage limits\b/i,
+  // Codex usage / quota exhaustion for code reviews. Token-anchored on all
+  // three of "Codex usage limit(s)", a reach/exceed/hit-family verb, and
+  // "for code reviews", each tolerant of interposed wording drift, in the
+  // two known real orderings (#1312: the two prior exact-phrase regexes
+  // broke when Codex's wording interposed "have been" between "usage
+  // limits" and "reached"). Requiring "for code reviews" too (not just the
+  // verb) keeps the match narrow, per the fail-closed under-match-over
+  // false-positive intent documented above: a bare "Codex usage limits
+  // exceeded" mention with no "for code reviews" nearby must not match.
+  /\b(?:reach|exceed|hit)\w*[\s\S]{0,40}?\bCodex usage limits?\b[\s\S]{0,40}?\bfor code reviews\b|\bCodex usage limits?\b[\s\S]{0,40}?\b(?:reach|exceed|hit)\w*[\s\S]{0,40}?\bfor code reviews\b/i,
 ];
 
 export function isAdvisoryNonReviewNotice(body: unknown): boolean {
@@ -4228,6 +4235,11 @@ export function buildForcedHandoffEnableGate(options: {
  *   that forget to wire it fail closed.
  * - `requireAuthorMatchesForcedBy` defaults to `true` (the strict
  *   self-signed-hijack block used by Resume routing).
+ * - `staleAgeMs` (#1310) is an optional config-aware claim-staleness window,
+ *   in milliseconds (a parsed `claimTiming.staleAge`). When omitted, invalid
+ *   (non-numeric/non-finite), or non-positive, staleness falls back to the
+ *   hardcoded 24h `isStaleAt` default unchanged — so callers that do not
+ *   pass it keep today's exact behavior. See `isStaleByAge`.
  */
 export function resolveActiveClaimForWriteGate(
   events: CommentLike[],
@@ -4242,6 +4254,7 @@ export function resolveActiveClaimForWriteGate(
       event: CommentLike,
     ) => boolean;
     requireAuthorMatchesForcedBy?: boolean;
+    staleAgeMs?: number;
   },
 ): ParsedClaimMarker | null {
   const expectedLinkedPrReferences = new Set(
@@ -4262,6 +4275,7 @@ export function resolveActiveClaimForWriteGate(
         ? options.isAuthorizedForcedHandoff
         : () => false,
     requireAuthorMatchesForcedBy: options.requireAuthorMatchesForcedBy ?? true,
+    isStale: resolveStalePredicate(options.staleAgeMs),
   });
 }
 
@@ -4285,6 +4299,7 @@ export function summarizeClaimValidation(
       forcedHandoff: ParsedForcedHandoffMarker,
       event: CommentLike,
     ) => boolean;
+    staleAgeMs?: number;
   } = {},
 ): ClaimValidationSummary {
   const trustedMarkerLogins = new Set(
@@ -4347,6 +4362,7 @@ export function summarizeClaimValidation(
                 .toLowerCase(),
             );
           },
+    isStale: resolveStalePredicate(options.staleAgeMs),
   });
 
   let reason = 'match';
@@ -4599,6 +4615,12 @@ export function buildPreMergeReadinessSummary(
     // (window check off); `collectPreMergeReadiness` always sources the policy
     // value (default `PT24H`).
     externalCheckWaiverMaxValidity?: string;
+    // Configured `claimTiming.staleAge` (#1310), parsed to milliseconds and
+    // threaded to the write-gate claim resolver below so the F2/F3 merge gate
+    // honors it instead of the hardcoded 24h `isStaleAt` default. Omitted by
+    // unit callers (default 24h behavior preserved).
+    // `collectPreMergeReadiness` always sources the policy value.
+    staleAgeMs?: number;
   } = {},
 ) {
   const now = String(options.now ?? '');
@@ -4717,6 +4739,7 @@ export function buildPreMergeReadinessSummary(
     isForcedHandoffEnabled: options.isForcedHandoffEnabled,
     expectedClaimId: options.expectedClaimId,
     expectedAgentId: options.expectedAgentId,
+    staleAgeMs: options.staleAgeMs,
   });
   const waivableCheckSelectors = options.waivableCheckSelectors ?? null;
   const waiverEvidence = summarizeExternalCheckWaivers(comments, {
@@ -4873,15 +4896,73 @@ function sameDigestBody(currentBody: string, nextBody: string): boolean {
   return currentBody.trimEnd() === nextBody.trimEnd();
 }
 
+/**
+ * The distributed default claim-staleness window (`claimTiming.staleAge`
+ * `PT24H`), in milliseconds. Exported so config-aware callers can compare
+ * a parsed `claimTiming.staleAge` against "no override configured" and so
+ * {@link isStaleByAge} can fast-path to {@link isStaleAt} when the two
+ * agree.
+ */
+export const DEFAULT_STALE_AGE_MS = 24 * 60 * 60 * 1000;
+
 export function isStaleAt(
   activeCreatedAt: string,
   nextCreatedAt: string,
 ): boolean {
-  const staleMs = 24 * 60 * 60 * 1000;
   return (
     new Date(nextCreatedAt).getTime() - new Date(activeCreatedAt).getTime() >=
-    staleMs
+    DEFAULT_STALE_AGE_MS
   );
+}
+
+/**
+ * Config-aware claim-staleness primitive: true when `nextCreatedAt` is at
+ * least `staleAgeMs` after `activeCreatedAt`. This is the single shared
+ * primitive promoted out of the staleness-window comparison that was
+ * independently duplicated across the resume and discover paths (each of
+ * which already reads `claimTiming.staleAge` from policy correctly) so a
+ * write-gate caller can reuse the exact same algorithm instead of adding
+ * yet another copy. Delegates to {@link isStaleAt} when `staleAgeMs` equals
+ * {@link DEFAULT_STALE_AGE_MS}, so behavior stays byte-identical for
+ * repositories on the default. Fails closed to `false` (not stale) when
+ * either timestamp is unparseable.
+ */
+export function isStaleByAge(
+  activeCreatedAt: string,
+  nextCreatedAt: string,
+  staleAgeMs: number,
+): boolean {
+  if (staleAgeMs === DEFAULT_STALE_AGE_MS) {
+    return isStaleAt(activeCreatedAt, nextCreatedAt);
+  }
+  const start = Date.parse(activeCreatedAt ?? '');
+  const end = Date.parse(nextCreatedAt ?? '');
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return false;
+  }
+  return end - start >= staleAgeMs;
+}
+
+/**
+ * Resolve the `isStale` predicate for the write-gate resolvers below from an
+ * optional caller-supplied `staleAgeMs` (a parsed `claimTiming.staleAge` in
+ * milliseconds). A valid positive finite value routes through the
+ * config-aware {@link isStaleByAge}; an omitted, non-numeric, non-finite, or
+ * non-positive value falls back to {@link isStaleAt} unchanged, so callers
+ * that do not pass `staleAgeMs` keep today's exact 24h behavior.
+ */
+function resolveStalePredicate(
+  staleAgeMs: number | undefined,
+): (activeCreatedAt: string, nextCreatedAt: string) => boolean {
+  if (
+    typeof staleAgeMs !== 'number' ||
+    !Number.isFinite(staleAgeMs) ||
+    staleAgeMs <= 0
+  ) {
+    return isStaleAt;
+  }
+  return (activeCreatedAt: string, nextCreatedAt: string) =>
+    isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs);
 }
 
 function compareClaimIds(left: string, right: string): number {
