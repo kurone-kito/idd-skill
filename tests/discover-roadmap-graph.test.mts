@@ -37,6 +37,32 @@ function captureStderr(body: () => void): string {
   return chunks.join('');
 }
 
+/**
+ * Async-capable sibling of {@link captureStderr} (Copilot review, #1327):
+ * same capture/restore logic, but awaits `body` and returns its resolved
+ * value alongside the captured output, so a test exercising an async
+ * function (e.g. `enumerateAllRoadmapsGraph`) does not need to re-implement
+ * the monkey-patch inline (and risk the two copies drifting) or fight
+ * TypeScript's definite-assignment analysis over a `let` assigned from
+ * inside the callback.
+ */
+async function captureStderrAsync<T>(
+  body: () => Promise<T>,
+): Promise<{ result: T; stderr: string }> {
+  const original = process.stderr.write.bind(process.stderr);
+  const chunks: string[] = [];
+  process.stderr.write = ((chunk: unknown) => {
+    chunks.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    const result = await body();
+    return { result, stderr: chunks.join('') };
+  } finally {
+    process.stderr.write = original;
+  }
+}
+
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 test('extractors classify roadmap markers and outbound references', () => {
@@ -1420,22 +1446,13 @@ test('all-roadmaps skips an unresolvable root with a warning instead of aborting
     [102, executionIssue(102, 'task 102')],
   ]);
 
-  let stderrOutput = '';
-  const originalWrite = process.stderr.write.bind(process.stderr);
-  process.stderr.write = ((chunk: unknown) => {
-    stderrOutput += String(chunk);
-    return true;
-  }) as typeof process.stderr.write;
-
-  let report: Awaited<ReturnType<typeof enumerateAllRoadmapsGraph>>;
-  try {
-    report = await enumerateAllRoadmapsGraph({
-      loadOpenRoadmapRoots: async () => [101, 999],
-      loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
-    });
-  } finally {
-    process.stderr.write = originalWrite;
-  }
+  const { result: report, stderr: stderrOutput } = await captureStderrAsync(
+    () =>
+      enumerateAllRoadmapsGraph({
+        loadOpenRoadmapRoots: async () => [101, 999],
+        loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+      }),
+  );
 
   assert.deepEqual(
     report.roots.map((root) => root.number),
@@ -1448,6 +1465,34 @@ test('all-roadmaps skips an unresolvable root with a warning instead of aborting
   assert.match(
     stderrOutput,
     /--all-roadmaps root #999 could not be enumerated \(root issue #999 was not found\); skipping/,
+  );
+});
+
+test('all-roadmaps rethrows an unexpected per-root error instead of swallowing it (Copilot review, #1327)', async () => {
+  // The tolerant catch above is deliberately narrow: it must only skip the
+  // three "this root number is not usable" failures (not found /
+  // inaccessible / is a pull request). Any other error -- an auth/
+  // rate-limit/network failure from loadIssue, for example -- must still
+  // abort the whole union so a genuine systemic failure is never silently
+  // downgraded to a per-root skip that leaves the report incomplete while
+  // still exiting successfully.
+  const issues = new Map([
+    [101, roadmapIssue(101, '- [ ] #102', 'legacy-root-101')],
+    [102, executionIssue(102, 'task 102')],
+  ]);
+
+  await assert.rejects(
+    () =>
+      enumerateAllRoadmapsGraph({
+        loadOpenRoadmapRoots: async () => [101, 999],
+        loadIssue: async (issueNumber) => {
+          if (issueNumber === 999) {
+            throw new Error('gh api: rate limit exceeded');
+          }
+          return issues.get(issueNumber) ?? null;
+        },
+      }),
+    /rate limit exceeded/,
   );
 });
 

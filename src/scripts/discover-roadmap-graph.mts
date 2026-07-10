@@ -1073,6 +1073,35 @@ export async function enumerateRoadmapGraph(
 }
 
 /**
+ * True when `error` is one of the three "this root number is not a usable
+ * roadmap root" failures {@link enumerateRoadmapGraph} throws for
+ * `rootNumber` itself (not found / inaccessible / is a pull request) — the
+ * only cases a configured `discover.legacyRoots` entry (#1315) or a
+ * race-closed label/marker root can legitimately hit. Matched by exact
+ * message text against this specific root number so an unrelated error
+ * that happens to share wording never matches by accident.
+ *
+ * Deliberately narrow (Copilot review, #1327): any other error — including
+ * the "was not recorded" internal-invariant guard, or an auth/rate-limit/
+ * network failure from `loadIssue`/`loadSubIssues` — is NOT expected here
+ * and must propagate, so a genuine systemic failure still fails the run
+ * instead of being silently downgraded to a per-root skip.
+ */
+function isExpectedRootEnumerationFailure(
+  error: unknown,
+  rootNumber: number,
+): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    error.message === `root issue #${rootNumber} was not found` ||
+    error.message === `root issue #${rootNumber} is inaccessible` ||
+    error.message === `root issue #${rootNumber} is a pull request`
+  );
+}
+
+/**
  * Cross-roadmap autopilot discovery (additive `--all-roadmaps` mode).
  *
  * Discovers every OPEN roadmap root (an open issue carrying the
@@ -1150,6 +1179,17 @@ export async function enumerateAllRoadmapsGraph(
       // warnOnSearchResultCap's degraded-but-not-fatal precedent) instead
       // of aborting the whole union — one bad configured number must not
       // break cross-roadmap discovery for every other root.
+      //
+      // Narrow on purpose (Copilot review, #1327): only the three "this
+      // root number is not a usable root" failures qualify. Anything else
+      // — an auth/rate-limit/network error from loadIssue/loadSubIssues, a
+      // GraphQL failure, or the "was not recorded" internal-invariant
+      // guard — must rethrow, or a genuine systemic failure would be
+      // silently masked as a per-root skip and produce an incomplete
+      // report that still exits successfully.
+      if (!isExpectedRootEnumerationFailure(error, rootNumber)) {
+        throw error;
+      }
       const reason = error instanceof Error ? error.message : String(error);
       process.stderr.write(
         `discover-roadmap-graph: --all-roadmaps root #${rootNumber} could not be enumerated (${reason}); skipping — root discovery may be incomplete.\n`,
