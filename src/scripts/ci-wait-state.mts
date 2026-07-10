@@ -154,9 +154,11 @@ interface CiWaitStateArgs {
   repo: string;
 }
 
-// Interpretation table this bucketing mirrors exactly:
-// idd-ci.instructions.md's "Interpretation" section. Keep these three sets in
-// sync with that table's normalized states.
+// Interpretation table this bucketing is based on: idd-ci.instructions.md's
+// "Interpretation" section. Keep these three sets in sync with that table's
+// normalized states, with one deliberate addition: FAILURE_STATES also
+// includes StatusContext-only `ERROR` (see below), which that table does not
+// list because it predates this StatusContext-specific case.
 const SUCCESS_STATES = new Set([
   'SUCCESS',
   'NEUTRAL',
