@@ -1143,18 +1143,16 @@ function readExternalCheckWaiverMaxValidity(): string {
 
 // Configured claim-staleness window (`claimTiming.staleAge`, #1310), parsed
 // to milliseconds so the write-gate claim resolver honors it instead of the
-// hardcoded 24h `isStaleAt` default. `normalizePolicyConfig` already defaults
-// this to `PT24H`; an absent, unreadable, or unparseable config falls back to
-// the shared `DEFAULT_STALE_AGE_MS` (protocol-helpers.mts) rather than a
-// second local 24h literal, so behavior is unchanged for repos on the
-// default and there is exactly one hardcoded-24h source of truth.
+// hardcoded 24h `isStaleAt` default. Reuses the shared `loadIddConfig`
+// loader (already imported by this file) instead of a per-helper
+// `readFileSync + JSON.parse` copy; `loadIddConfig` already fails safe to
+// `null` and `normalizePolicyConfig(null)` already defaults to `PT24H`, so
+// no separate try/catch is needed here. An absent, unreadable, or
+// unparseable config falls back to the shared `DEFAULT_STALE_AGE_MS`
+// (protocol-helpers.mts) rather than a second local 24h literal, so
+// behavior is unchanged for repos on the default and there is exactly one
+// hardcoded-24h source of truth.
 function readClaimStaleAgeMs(): number {
-  try {
-    const staleAge = normalizePolicyConfig(
-      JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
-    ).claimTiming.staleAge;
-    return parseIsoDurationToMs(staleAge) ?? DEFAULT_STALE_AGE_MS;
-  } catch {
-    return DEFAULT_STALE_AGE_MS;
-  }
+  const staleAge = normalizePolicyConfig(loadIddConfig()).claimTiming.staleAge;
+  return parseIsoDurationToMs(staleAge) ?? DEFAULT_STALE_AGE_MS;
 }
