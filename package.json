@@ -12,6 +12,7 @@
     "idd-branch-conflict-state": "./bin/idd-branch-conflict-state.mjs",
     "idd-branch-name": "./bin/idd-branch-name.mjs",
     "idd-ci-wait-policy": "./bin/idd-ci-wait-policy.mjs",
+    "idd-ci-wait-state": "./bin/idd-ci-wait-state.mjs",
     "idd-claim-approval-gate": "./bin/idd-claim-approval-gate.mjs",
     "idd-discover-orphan-filter": "./bin/idd-discover-orphan-filter.mjs",
     "idd-discover-readiness-check": "./bin/idd-discover-readiness-check.mjs",
