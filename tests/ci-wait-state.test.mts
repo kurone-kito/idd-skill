@@ -140,6 +140,26 @@ test('a source-pinned required check (empty names) reports source-pinned, never 
   assert.equal(summary.requiredChecks.allRequiredPassing, false);
 });
 
+test('mixed source-pinned case: named required checks all pass, but never reports success while an unnamed source-pinned requirement is unverified', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', workflowName: 'ci', conclusion: 'SUCCESS' }),
+      ],
+    },
+    { requiredCheckNames: ['lint'], requiredCheckSourcePinned: true },
+  );
+
+  assert.equal(summary.requiredChecks.allRequiredPresent, true);
+  assert.equal(summary.requiredChecks.anyRequiredFailing, false);
+  assert.equal(summary.requiredChecks.anyRequiredPending, false);
+  // The critical assertion: never a vacuous success/allRequiredPassing while
+  // requiredCheckSourcePinned is true, even though the one named check passed.
+  assert.equal(summary.requiredChecks.status, 'source-pinned');
+  assert.equal(summary.requiredChecks.allRequiredPassing, false);
+});
+
 test('all required checks passing reports allRequiredPassing and status success', () => {
   const summary = buildCiWaitStateSummary(
     {

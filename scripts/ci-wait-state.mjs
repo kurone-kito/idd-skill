@@ -228,7 +228,7 @@ function buildRequiredChecksRollup(
   const anyRequiredUnknown = requiredEntries.some(
     (check) => check.status === 'unknown',
   );
-  const allRequiredPassing =
+  const namedChecksPassing =
     allRequiredPresent &&
     requiredEntries.every((check) => check.status === 'success');
   let status;
@@ -238,9 +238,19 @@ function buildRequiredChecksRollup(
     status = 'failing';
   } else if (anyRequiredPending || anyRequiredUnknown) {
     status = 'pending';
+  } else if (requiredCheckSourcePinned) {
+    // Mixed case: enumerable required checks all pass, but a ruleset
+    // `workflows` rule or an app-pinned classic check is ALSO in force and
+    // not name-enumerable, so it is not covered by requiredEntries at all.
+    // Mirrors summarizeRequiredChecks in protocol-helpers.mts, which
+    // downgrades an otherwise-"success" classification to unresolved under
+    // the same condition — never report a vacuous success while an
+    // unverified source-pinned requirement could still be gating the branch.
+    status = 'source-pinned';
   } else {
     status = 'success';
   }
+  const allRequiredPassing = namedChecksPassing && status === 'success';
   return {
     names,
     missingNames,
