@@ -18,12 +18,12 @@ or multi-agent orchestration), its **verifier**, and its **stop
 rules**. Anthropic frames the same idea as **agentic loops**; IDD is a
 concrete, GitHub-native implementation of it.
 
-| Loop element | IDD's implementation                                                                                                  |
-| ------------ | --------------------------------------------------------------------------------------------------------------------- |
-| Trigger      | Discover picks a ready roadmap or orphan issue without silently widening scope.                                       |
-| Topology     | The phase pipeline, roadmap decomposition into sub-issues, and worktree-isolated parallel agents.                     |
-| Verifier     | CI gates plus advisory bots (Copilot / CodeRabbit / Codex), review triage, and disposition / unresolved-thread gates. |
-| Stop rules   | Merge gates recheck claim, freshness, CI, advisory, and review state; the issue closing is the terminal condition.    |
+| Loop element | IDD's implementation                                                                                                    |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| Trigger      | Discover picks a ready roadmap or orphan issue without silently widening scope.                                         |
+| Topology     | The phase pipeline, roadmap decomposition into sub-issues, and worktree-isolated parallel agents.                       |
+| Verifier     | CI gates plus advisory bots (Copilot / CodeRabbit / Codex), review triage, and disposition / unresolved-thread gates.   |
+| Stop rules   | Merge gates recheck claim, freshness, CI, advisory, and review state; the issue being closed is the terminal condition. |
 
 Looping harder is not automatically looping better: assuming enough
 iterations will eventually converge on a correct result ("loopmaxxing")
