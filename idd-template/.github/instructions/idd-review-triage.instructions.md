@@ -214,6 +214,10 @@ For each Rejected PATH A item whose source is reviewer feedback:
     and proceed through the fix flow.
   - If the reviewer responds: restart from E1.
 - If you decide "Reject now but should do eventually": open a new issue.
+  The new issue's body must include a structural cross-reference (for
+  example `Refs #NNN` on its own line, not narrative prose) back to the
+  PR and/or the issue it originated from, mirroring the A1.5 rule in
+  `idd-roadmap-audit.instructions.md`.
 
 Use these prefixes so that disposition is always unambiguous:
 
