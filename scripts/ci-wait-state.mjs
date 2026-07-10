@@ -50,6 +50,10 @@ const FAILURE_STATES = new Set([
   'ACTION_REQUIRED',
   'STARTUP_FAILURE',
   'STALE',
+  // Commit-status contexts (StatusContext) report `error` as a state
+  // distinct from `failure`; bucket it as failure too, or a clearly
+  // failing required check would misleadingly read as "unknown".
+  'ERROR',
 ]);
 if (isCliExecution(import.meta.url)) {
   main();
@@ -88,16 +92,20 @@ function main() {
     `repos/${owner}/${repo}/branches/${encodedBaseRefName}/protection`,
     false,
   );
-  const requiredCheckNames = summarizeBranchReviewRequirements(
+  const branchReviewRequirements = summarizeBranchReviewRequirements(
     branchRules,
     branchProtection,
-  ).requiredCheckNames;
+  );
   const summary = buildCiWaitStateSummary(
     {
       headRefOid: pr.headRefOid ?? '',
       statusCheckRollup: pr.statusCheckRollup ?? [],
     },
-    { requiredCheckNames },
+    {
+      requiredCheckNames: branchReviewRequirements.requiredCheckNames,
+      requiredCheckSourcePinned:
+        branchReviewRequirements.requiredCheckSourcePinned,
+    },
   );
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 }
@@ -119,6 +127,7 @@ export function buildCiWaitStateSummary(input, options = {}) {
   const requiredChecks = buildRequiredChecksRollup(
     checks,
     requiredCheckNameSet,
+    options.requiredCheckSourcePinned === true,
   );
   return {
     headRefOid: String(input.headRefOid ?? ''),
@@ -155,7 +164,11 @@ function normalizeCheckEntry(entry, requiredCheckNameSet) {
     status === 'COMPLETED' ? conclusion || 'UNKNOWN' : status || 'UNKNOWN';
   return {
     checkName,
-    workflowName: String(entry?.workflowName ?? ''),
+    // Trimmed like checkName: workflowName is part of the
+    // (checkName, workflowName) disambiguation key, so untrimmed
+    // whitespace-only differences could otherwise produce unstable keys
+    // or spuriously "distinct" workflow entries.
+    workflowName: String(entry?.workflowName ?? '').trim(),
     type: 'check-run',
     state,
     status: bucketState(state),
@@ -171,18 +184,30 @@ function bucketState(state) {
   if (SUCCESS_STATES.has(state)) return 'success';
   return 'unknown';
 }
-function buildRequiredChecksRollup(checks, requiredCheckNameSet) {
+function buildRequiredChecksRollup(
+  checks,
+  requiredCheckNameSet,
+  requiredCheckSourcePinned,
+) {
   const names = [...requiredCheckNameSet].sort();
   if (names.length === 0) {
     return {
       names,
       missingNames: [],
-      allRequiredPresent: true,
+      // A source-pinned required check (ruleset `workflows` rule, or an
+      // app/integration-pinned classic check with no enumerable context)
+      // is still gating the branch even though it cannot be resolved by
+      // name here — fail closed (`allRequiredPresent: false`) instead of
+      // reporting the vacuous "no required checks" pass.
+      allRequiredPresent: !requiredCheckSourcePinned,
       allRequiredPassing: false,
       anyRequiredPending: false,
       anyRequiredFailing: false,
       anyRequiredUnknown: false,
-      status: 'no-required-checks',
+      requiredCheckSourcePinned,
+      status: requiredCheckSourcePinned
+        ? 'source-pinned'
+        : 'no-required-checks',
     };
   }
   const requiredEntries = checks.filter((check) => check.required);
@@ -219,6 +244,7 @@ function buildRequiredChecksRollup(checks, requiredCheckNameSet) {
     anyRequiredPending,
     anyRequiredFailing,
     anyRequiredUnknown,
+    requiredCheckSourcePinned,
     status,
   };
 }

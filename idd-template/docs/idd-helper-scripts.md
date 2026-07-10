@@ -968,14 +968,21 @@ Interpretation rules:
   discovery.
 - Stable fields consumed by D-phase polling: top-level `headRefOid` (for
   caller-side HEAD-drift detection between polls); `checks[]`, each keyed
-  by both `checkName` and `workflowName` so two check runs sharing a
-  display name across different triggering workflows are never collapsed
-  into one entry, plus a normalized `status`
-  (`success|pending|failure|unknown`) and `required` flag; and
+  by both `checkName` and (trimmed) `workflowName` so two check runs
+  sharing a display name across different triggering workflows are never
+  collapsed into one entry, plus a normalized `status`
+  (`success|pending|failure|unknown` — a commit-status `error` state
+  buckets as `failure`, same as `failure`) and `required` flag; and
   `requiredChecks` (`names`, `missingNames`, `allRequiredPresent`,
   `allRequiredPassing`, `anyRequiredPending`, `anyRequiredFailing`,
-  `anyRequiredUnknown`, and a top-level `status` of
-  `success|pending|failing|missing|no-required-checks`)
+  `anyRequiredUnknown`, `requiredCheckSourcePinned`, and a top-level
+  `status` of
+  `success|pending|failing|missing|no-required-checks|source-pinned`)
+- **Source-pinned required checks**: when a ruleset `workflows` rule or an
+  app/integration-pinned classic required check is in force but cannot be
+  enumerated by name, `requiredCheckSourcePinned` is `true` and `status` is
+  `source-pinned` — never `no-required-checks` — so a caller cannot
+  mistake an unresolvable required-check source for a vacuous pass.
 - it remains read-only; the command performs no reruns and posts no
   GitHub comment
 

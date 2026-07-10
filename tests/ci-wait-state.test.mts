@@ -122,6 +122,22 @@ test('required-checks rollup: no required checks configured is reported distinct
   assert.equal(summary.requiredChecks.status, 'no-required-checks');
   assert.equal(summary.requiredChecks.allRequiredPassing, false);
   assert.equal(summary.requiredChecks.names.length, 0);
+  assert.equal(summary.requiredChecks.requiredCheckSourcePinned, false);
+});
+
+test('a source-pinned required check (empty names) reports source-pinned, never the vacuous no-required-checks pass', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ name: 'build', conclusion: 'SUCCESS' })],
+    },
+    { requiredCheckNames: [], requiredCheckSourcePinned: true },
+  );
+
+  assert.equal(summary.requiredChecks.status, 'source-pinned');
+  assert.equal(summary.requiredChecks.requiredCheckSourcePinned, true);
+  assert.equal(summary.requiredChecks.allRequiredPresent, false);
+  assert.equal(summary.requiredChecks.allRequiredPassing, false);
 });
 
 test('all required checks passing reports allRequiredPassing and status success', () => {
@@ -209,6 +225,43 @@ test('a genuinely unrecognized state buckets as unknown and marks the rollup unk
   assert.equal(summary.requiredChecks.anyRequiredUnknown, true);
   assert.equal(summary.requiredChecks.allRequiredPassing, false);
   assert.equal(summary.requiredChecks.status, 'pending');
+});
+
+test('a StatusContext ERROR state buckets as failure, distinct from FAILURE but equally blocking', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'StatusContext',
+          context: 'external-check',
+          state: 'ERROR',
+          targetUrl: '',
+        },
+      ],
+    },
+    { requiredCheckNames: ['external-check'] },
+  );
+  assert.equal(summary.checks[0]?.status, 'failure');
+  assert.equal(summary.requiredChecks.anyRequiredFailing, true);
+  assert.equal(summary.requiredChecks.status, 'failing');
+});
+
+test('workflowName is trimmed so whitespace-only differences do not produce spurious distinct entries', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'lint',
+          workflowName: '  ci  ',
+          conclusion: 'SUCCESS',
+        }),
+      ],
+    },
+    { requiredCheckNames: [] },
+  );
+  assert.equal(summary.checks[0]?.workflowName, 'ci');
 });
 
 // Importing the CLI module directly is only possible now that its top-level

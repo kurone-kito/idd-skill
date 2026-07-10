@@ -118,7 +118,23 @@ export interface CiWaitRequiredChecksRollup {
   anyRequiredPending: boolean;
   anyRequiredFailing: boolean;
   anyRequiredUnknown: boolean;
-  status: 'success' | 'pending' | 'failing' | 'missing' | 'no-required-checks';
+  /**
+   * True when a ruleset `workflows` rule or an app/integration-pinned
+   * classic required check is in force but cannot be enumerated by name
+   * (mirrors `summarizeBranchReviewRequirements`'s
+   * `requiredCheckSourcePinned`). When this is true and `names` is empty,
+   * `status` is `source-pinned`, not `no-required-checks` — required
+   * checks are still gating the branch; this helper just cannot resolve
+   * them by name, so callers must not treat it as a vacuous pass.
+   */
+  requiredCheckSourcePinned: boolean;
+  status:
+    | 'success'
+    | 'pending'
+    | 'failing'
+    | 'missing'
+    | 'no-required-checks'
+    | 'source-pinned';
 }
 
 /** Full snapshot document returned by {@link buildCiWaitStateSummary}. */
@@ -159,6 +175,10 @@ const FAILURE_STATES = new Set([
   'ACTION_REQUIRED',
   'STARTUP_FAILURE',
   'STALE',
+  // Commit-status contexts (StatusContext) report `error` as a state
+  // distinct from `failure`; bucket it as failure too, or a clearly
+  // failing required check would misleadingly read as "unknown".
+  'ERROR',
 ]);
 
 if (isCliExecution(import.meta.url)) {
@@ -203,17 +223,21 @@ function main(): void {
     false,
   ) as BranchProtectionPayload;
 
-  const requiredCheckNames = summarizeBranchReviewRequirements(
+  const branchReviewRequirements = summarizeBranchReviewRequirements(
     branchRules,
     branchProtection,
-  ).requiredCheckNames;
+  );
 
   const summary = buildCiWaitStateSummary(
     {
       headRefOid: pr.headRefOid ?? '',
       statusCheckRollup: pr.statusCheckRollup ?? [],
     },
-    { requiredCheckNames },
+    {
+      requiredCheckNames: branchReviewRequirements.requiredCheckNames,
+      requiredCheckSourcePinned:
+        branchReviewRequirements.requiredCheckSourcePinned,
+    },
   );
 
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
@@ -230,7 +254,10 @@ export function buildCiWaitStateSummary(
     headRefOid?: string | null;
     statusCheckRollup?: StatusCheckRollupEntry[] | null;
   },
-  options: { requiredCheckNames?: string[] | null } = {},
+  options: {
+    requiredCheckNames?: string[] | null;
+    requiredCheckSourcePinned?: boolean;
+  } = {},
 ): CiWaitStateSummary {
   const requiredCheckNameSet = new Set(
     (options.requiredCheckNames ?? [])
@@ -245,6 +272,7 @@ export function buildCiWaitStateSummary(
   const requiredChecks = buildRequiredChecksRollup(
     checks,
     requiredCheckNameSet,
+    options.requiredCheckSourcePinned === true,
   );
 
   return {
@@ -287,7 +315,11 @@ function normalizeCheckEntry(
     status === 'COMPLETED' ? conclusion || 'UNKNOWN' : status || 'UNKNOWN';
   return {
     checkName,
-    workflowName: String(entry?.workflowName ?? ''),
+    // Trimmed like checkName: workflowName is part of the
+    // (checkName, workflowName) disambiguation key, so untrimmed
+    // whitespace-only differences could otherwise produce unstable keys
+    // or spuriously "distinct" workflow entries.
+    workflowName: String(entry?.workflowName ?? '').trim(),
     type: 'check-run',
     state,
     status: bucketState(state),
@@ -308,18 +340,27 @@ function bucketState(state: string): CiWaitCheckEntry['status'] {
 function buildRequiredChecksRollup(
   checks: CiWaitCheckEntry[],
   requiredCheckNameSet: Set<string>,
+  requiredCheckSourcePinned: boolean,
 ): CiWaitRequiredChecksRollup {
   const names = [...requiredCheckNameSet].sort();
   if (names.length === 0) {
     return {
       names,
       missingNames: [],
-      allRequiredPresent: true,
+      // A source-pinned required check (ruleset `workflows` rule, or an
+      // app/integration-pinned classic check with no enumerable context)
+      // is still gating the branch even though it cannot be resolved by
+      // name here — fail closed (`allRequiredPresent: false`) instead of
+      // reporting the vacuous "no required checks" pass.
+      allRequiredPresent: !requiredCheckSourcePinned,
       allRequiredPassing: false,
       anyRequiredPending: false,
       anyRequiredFailing: false,
       anyRequiredUnknown: false,
-      status: 'no-required-checks',
+      requiredCheckSourcePinned,
+      status: requiredCheckSourcePinned
+        ? 'source-pinned'
+        : 'no-required-checks',
     };
   }
 
@@ -360,6 +401,7 @@ function buildRequiredChecksRollup(
     anyRequiredPending,
     anyRequiredFailing,
     anyRequiredUnknown,
+    requiredCheckSourcePinned,
     status,
   };
 }
