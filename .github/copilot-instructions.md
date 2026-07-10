@@ -100,10 +100,10 @@ policy still stop at the F3 handoff gate.
 
 ## Local discover policy
 
-This source repository also records `discover.selectionDesync:
-session-offset` as a local IDD dogfooding policy. The setting applies
-only to `kurone-kito/idd-skill` and does not change the exported
-template default for adopter repositories.
+This source repository also records a local IDD dogfooding policy:
+`discover.selectionDesync: session-offset`. The setting applies only
+to `kurone-kito/idd-skill` and does not change the exported template
+default for adopter repositories.
 
 Concurrent-session A4 Step 2 candidate selection spreads across a
 same-score tie band by a per-session offset instead of every session
