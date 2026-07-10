@@ -329,6 +329,30 @@ HTTP `POST` with a JSON body when the helper runtime is unavailable:
 _{agent-id}: issue claim — IDD automation marker. Do not edit._
 ```
 
+**Nothing appended after the note.** A `claimed-by` / `unclaimed-by` marker
+comment body must be exactly the HTML comment token followed by, at most,
+the single italic note shown above — never more. Any deviation from that
+exact shape — content appended after the note, content appended directly
+after the token with no note, a note that does not satisfy the required
+note grammar, or any other departure — fails the parser's whole-body
+anchor: the comment is not recognized as a live claim event, matching
+every other malformed body. Unlike an ordinary unrecognized comment,
+though, a body that starts with a structurally valid token but deviates
+from the exact shape in any of those ways is a **detectable** malformed
+marker (`detectMalformedOperationalMarker` in `marker-helpers.mts`), so
+tooling can flag it instead of the claim silently reading as unremarkable
+"other" content. Detection is diagnostic only: never salvage a malformed
+post as if it were valid, always re-post a clean marker with nothing
+appended. A marker merely quoted or embedded mid-prose (not the literal
+first bytes of the body) is still never treated as live or flagged —
+anti-spoofing is unaffected.
+
+Related: a disposition marker (`**Accepted**` / `**Rejected**`, posted
+during review triage — see `idd-review-triage.instructions.md`) is governed
+by the same no-wrapping principle: it must not be wrapped in a code fence
+or other block-level markdown either, or the disposition-evidence gate
+will not recognize it.
+
 ## Heartbeat posting
 
 When posting a heartbeat (i.e., when the issue is already claimed by this current
