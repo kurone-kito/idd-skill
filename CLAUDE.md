@@ -66,6 +66,13 @@ terms literally.
   continue through F3 merge execution only after normal claim,
   freshness, CI, advisory, review, and unresolved-thread gates
   pass.
+- **Discover concurrency**: This source repository also records
+  `discover.selectionDesync: session-offset` as a local IDD
+  dogfooding policy (applies only to `kurone-kito/idd-skill`),
+  spreading concurrent-session A4 Step 2 candidate selection across
+  a same-score tie band instead of every session converging on the
+  same lowest-numbered issue, to cut claim races under this
+  repository's heavy concurrent-session load.
 
 ## For IDD work
 
