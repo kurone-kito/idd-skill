@@ -236,8 +236,12 @@ marker is a separate PATH A thread signal, not part of this predicate or
 count pairing):
 
 - The marker must be the **first bytes of the comment body** — no heading,
-  block quote, or preamble before it, or the gate counts zero dispositions for
-  that comment.
+  block quote, code fence, or preamble before it, or the gate counts zero
+  dispositions for that comment. A code-fenced marker (e.g. wrapping
+  `**Accepted** — {reason}` in a fenced block for emphasis) already fails
+  this rule on its own — the fence delimiters, not the marker, would be the
+  first bytes — call it out explicitly rather than leaving it merely
+  implied.
 - Post **one disposition reply per advisory item**. Do **not** combine several
   markers into one comment: the 1:1 count pairing clears only one item per
   comment, so a combined reply leaves the rest flagged

@@ -3,9 +3,12 @@ import { test } from 'node:test';
 
 import {
   applyClaimEvent,
+  detectMalformedOperationalMarker,
   isStaleAt,
+  operationalMarkerPrefix,
   parseClaimComment,
   parseReleaseComment,
+  parseReviewWatermarkComment,
 } from '../src/scripts/protocol-helpers.mts';
 import { readText } from './test-utils.mts';
 
@@ -181,4 +184,83 @@ test('matching heartbeat does not invoke the onAnomalousHeartbeat callback', () 
     },
   );
   assert.equal(seen.length, 0);
+});
+
+// #1316: a marker comment whose body starts with a correct token + note but
+// has extra content appended after the note must not be silently dropped as
+// indistinguishable "other" content -- it should be surfaced as a distinct
+// malformed-marker signal, while the security-critical parse functions
+// keep failing closed (still `null`, exactly as before this issue).
+test('claimed-by with appended prose stays null in parseClaimComment but is flagged malformed', () => {
+  const body =
+    '<!-- claimed-by: copilot claim-A supersedes: none 2026-05-23T10:00:00Z branch: issue/100-task -->\n\n' +
+    '_copilot: issue claim — IDD automation marker. Do not edit._\n\n' +
+    'Note: superseding the prior claim because the original session stalled.';
+  assert.equal(parseClaimComment(body, '2026-05-23T10:00:00Z'), null);
+  assert.equal(detectMalformedOperationalMarker(body), '<!-- claimed-by:');
+});
+
+test('unclaimed-by with appended prose stays null in parseReleaseComment but is flagged malformed', () => {
+  const body =
+    '<!-- unclaimed-by: copilot claim-A 2026-05-23T10:00:00Z -->\n\n' +
+    '_copilot: issue claim released — IDD automation marker. Do not edit._\n\n' +
+    'Releasing early: blocked on a decision from the maintainer.';
+  assert.equal(parseReleaseComment(body), null);
+  assert.equal(detectMalformedOperationalMarker(body), '<!-- unclaimed-by:');
+});
+
+test('review-watermark with appended prose stays null in parseReviewWatermarkComment but is flagged malformed', () => {
+  const sha = 'a'.repeat(40);
+  const body =
+    `<!-- review-watermark: copilot claim-A ${sha} none 0 none -->\n\n` +
+    '_copilot: review triage snapshot — IDD automation marker. Do not edit._\n\n' +
+    'No CI has run yet, so both freshness fields are none for now.';
+  assert.equal(parseReviewWatermarkComment(body, '2026-05-23T10:00:00Z'), null);
+  assert.equal(
+    detectMalformedOperationalMarker(body),
+    '<!-- review-watermark:',
+  );
+});
+
+test('review-baseline with appended prose is flagged malformed', () => {
+  const sha = 'b'.repeat(40);
+  const body =
+    `<!-- review-baseline: copilot claim-A ${sha} -->\n\n` +
+    '_copilot: critique baseline — IDD automation marker. Do not edit._\n\n' +
+    'This baseline covers the E2 pass that started after the last rebase.';
+  assert.equal(operationalMarkerPrefix(body), null);
+  assert.equal(detectMalformedOperationalMarker(body), '<!-- review-baseline:');
+});
+
+test('a well-formed review-baseline marker is not flagged malformed (no regression to the happy path)', () => {
+  const sha = 'b'.repeat(40);
+  const body =
+    `<!-- review-baseline: copilot claim-A ${sha} -->\n\n` +
+    '_copilot: critique baseline — IDD automation marker. Do not edit._';
+  assert.equal(operationalMarkerPrefix(body), '<!-- review-baseline:');
+  assert.equal(detectMalformedOperationalMarker(body), null);
+});
+
+test('a well-formed claimed-by marker is not flagged malformed (no regression to the happy path)', () => {
+  const body =
+    '<!-- claimed-by: copilot claim-A supersedes: none 2026-05-23T10:00:00Z branch: issue/100-task -->\n\n' +
+    '_copilot: issue claim — IDD automation marker. Do not edit._';
+  assert.notEqual(parseClaimComment(body, '2026-05-23T10:00:00Z'), null);
+  assert.equal(detectMalformedOperationalMarker(body), null);
+});
+
+test('a marker quoted mid-prose is neither a live marker nor flagged malformed (anti-spoofing)', () => {
+  const body =
+    'For reference, a claim comment looks like this:\n' +
+    '<!-- claimed-by: copilot claim-A supersedes: none 2026-05-23T10:00:00Z branch: issue/100-task -->\n\n' +
+    '_copilot: issue claim — IDD automation marker. Do not edit._';
+  assert.equal(parseClaimComment(body, '2026-05-23T10:00:00Z'), null);
+  assert.equal(detectMalformedOperationalMarker(body), null);
+});
+
+test('a code-fenced marker is neither a live marker nor flagged malformed (anti-spoofing)', () => {
+  const body =
+    '```\n<!-- claimed-by: copilot claim-A supersedes: none 2026-05-23T10:00:00Z branch: issue/100-task -->\n```';
+  assert.equal(parseClaimComment(body, '2026-05-23T10:00:00Z'), null);
+  assert.equal(detectMalformedOperationalMarker(body), null);
 });
