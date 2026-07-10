@@ -4545,7 +4545,7 @@ export function buildPreMergeReadinessSummary(
     // Configured `claimTiming.staleAge` (#1310), parsed to milliseconds and
     // threaded to the write-gate claim resolver below so the F2/F3 merge gate
     // honors it instead of the hardcoded 24h `isStaleAt` default. Omitted by
-    // unit callers (default 24h behavior preserved);
+    // unit callers (default 24h behavior preserved).
     // `collectPreMergeReadiness` always sources the policy value.
     staleAgeMs?: number;
   } = {},
