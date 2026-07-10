@@ -15,6 +15,25 @@ branch, open a PR, handle review feedback, wait for CI, merge, and clean
 up according to the repository's selected merge policy. The whole loop
 lives in your repo as Markdown instruction files.
 
+## IDD as Loop Engineering
+
+This delivery loop is a concrete instance of **loop engineering** —
+designing an agent's trigger, topology, verifier, and stop rules as a
+system, instead of hand-prompting each step. Anthropic frames the same
+idea as **agentic loops**; IDD is a portable, GitHub-native
+implementation of it, built on durable issue-comment state rather than
+a custom runtime:
+
+| Loop element | IDD's implementation                                                                                   |
+| ------------ | ------------------------------------------------------------------------------------------------------ |
+| Trigger      | Discover picks a ready issue.                                                                          |
+| Topology     | Phase pipeline, roadmap decomposition, worktree-isolated parallel agents.                              |
+| Verifier     | CI gates plus advisory bots (Copilot / CodeRabbit / Codex) and review triage.                          |
+| Stop rules   | Merge gates (claim / freshness / CI / advisory / review); the issue closing is the terminal condition. |
+
+See [Core concepts](docs/concepts.md#idd-as-loop-engineering) for why
+strong verifiers and stop-gates matter.
+
 ## Learn by Example
 
 Follow the [VRChat Event Calendar workshop](docs/workshop/README.md) to
