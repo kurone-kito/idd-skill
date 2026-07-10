@@ -264,16 +264,12 @@ test('workflowName is trimmed so whitespace-only differences do not produce spur
   assert.equal(summary.checks[0]?.workflowName, 'ci');
 });
 
-// Importing the CLI module directly is only possible now that its top-level
-// statements are guarded behind isCliExecution() (#1210); previously the
-// import parsed process.argv and called a `gh` command, aborting the test
-// process when no --pr argument or gh binary was available.
-test('importing ci-wait-state.mts has no import-time side effect', async () => {
-  const originalPath = process.env.PATH;
-  process.env.PATH = '';
-  try {
-    await assert.doesNotReject(import('../src/scripts/ci-wait-state.mts'));
-  } finally {
-    process.env.PATH = originalPath;
-  }
-});
+// No separate "importing ci-wait-state.mts has no import-time side effect"
+// dynamic-import test here: this file already statically imports
+// buildCiWaitStateSummary from ci-wait-state.mts above, so a later dynamic
+// `import('../src/scripts/ci-wait-state.mts')` would just return the
+// already-cached module and re-run no top-level code, making that assertion
+// vacuous — it would pass even if the isCliExecution(import.meta.url) guard
+// were removed. ci-wait-policy.test.mts (a fellow builder+CLI single-file
+// helper whose test file statically imports its builder functions too)
+// follows the same precedent and omits this test for the same reason.
