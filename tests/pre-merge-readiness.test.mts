@@ -2569,6 +2569,18 @@ test('isAdvisoryNonReviewNotice matches only machine-generated non-review notice
     ),
     true,
   );
+  // #1326: the live current wording observed on this PR's own Codex review
+  // appends a second administrative sentence beyond the one #1312 quoted —
+  // must still classify as a non-review notice (verified against the exact
+  // text Codex posted on PR #1329 while this fix was under review).
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'Codex usage limits have been reached for code reviews. Please check ' +
+        'with the admins of this repo to increase the limits by adding ' +
+        'credits.\nCredits must be used to enable repository wide code reviews.',
+    ),
+    true,
+  );
   assert.equal(
     isAdvisoryNonReviewNotice(
       '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n\n> ## Review limit reached',
@@ -2607,6 +2619,120 @@ test('isAdvisoryNonReviewNotice matches only machine-generated non-review notice
       'This code exceeds the Codex usage limits configured for the repo.',
     ),
     false,
+  );
+  // #1326: a genuine review comment that combines all three tokens
+  // (verb + "Codex usage limits" + "for code reviews") close together in
+  // ordinary prose must not match, even though the token-anchored pattern
+  // alone finds a candidate span — this is the concrete false positive
+  // flagged in PR #1319's own review of the #1312 fix.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'This code hits the Codex usage limits for code reviews configured for the repo.',
+    ),
+    false,
+  );
+  // #1326: a narrative lead-in before an otherwise-bare match (empty
+  // suffix) must also not match — the suffix alone is not a sufficient
+  // signal; the prefix must be checked too.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'This is what happens when you hit the Codex usage limits for code reviews.',
+    ),
+    false,
+  );
+  // #1326: a real notice immediately followed by unrelated prose (not the
+  // known generated trailer) must not match — a false positive could hide
+  // inside a longer bot comment that happens to lead with the notice text.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'You have reached your Codex usage limits for code reviews. We should ' +
+        'review our approach for code reviews going forward.',
+    ),
+    false,
+  );
+  // #1326 (review-fix): the known generated trailer itself followed by
+  // MORE unrelated prose must still not match — the trailer-continuation
+  // pattern must anchor the entire remainder, not just find the trailer as
+  // a substring somewhere within it (flagged in this PR's own Copilot
+  // review: a substring-only check would let extra content hide behind a
+  // recognized trailer prefix).
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'Codex usage limits have been reached for code reviews. Please check ' +
+        'with the admins of this repo to increase the limits by adding ' +
+        'credits. And by the way, I also noticed a bug in the retry logic.',
+    ),
+    false,
+  );
+  // #1326: the two-sentence live trailer followed by further unrelated
+  // prose must still not match — extending the accepted closing shape to a
+  // second sentence must not reopen the same substring-anchoring gap for
+  // content past that second sentence either.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'Codex usage limits have been reached for code reviews. Please check ' +
+        'with the admins of this repo to increase the limits by adding ' +
+        'credits.\nCredits must be used to enable repository wide code ' +
+        'reviews. By the way I also noticed a bug in the retry logic.',
+    ),
+    false,
+  );
+  // #1326: a human sentence that deliberately reuses the second trailer
+  // sentence's own vocabulary ("repository", "credits", "reviews") must
+  // still not match — the trailer pattern's fixed token order and gap
+  // bounds are shape-specific, not a bag-of-words check.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'This code hits the Codex usage limits for code reviews. The ' +
+        'repository credits check has a bug in the retry logic for reviews.',
+    ),
+    false,
+  );
+  // #1326 (review-fix round 3): even when the full SENTENCE_1 bot phrasing
+  // is present (an unlikely but possible coincidence), loosely-worded
+  // content that merely reuses SENTENCE_2's individual words ("credits",
+  // "repository", "review") without its distinctive "credits must be used
+  // ... enable" phrase must not match — closes a gap a critique pass found
+  // in an earlier version of this same fix that anchored SENTENCE_2 on
+  // single generic words instead of a distinctive multi-word phrase.
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'Codex usage limits have been reached for code reviews. Please check ' +
+        'with the admins of this repo to increase the limits by adding ' +
+        'credits. Credits are precious, track per repository, avoid ' +
+        'wasting review!',
+    ),
+    false,
+  );
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'Codex usage limits have been reached for code reviews. Please check ' +
+        'with the admins of this repo to increase the limits by adding ' +
+        'credits. credits repository reviews',
+    ),
+    false,
+  );
+  // #1326 (review-fix round 4): narrative content between the base match
+  // and the trailer's core tokens must not match, even though it fits
+  // within a short character budget — the lead-in before "check with the
+  // admins" must be punctuation/whitespace plus the one known lead-in word
+  // ("Please"), not an arbitrary-content character count (flagged by
+  // Copilot on this PR's own merge-sync-triggered re-review).
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'This code exceeds the Codex usage limits for code reviews. We ' +
+        'should check with the admins of this repo to increase the ' +
+        'limits by adding credits.',
+    ),
+    false,
+  );
+  // #1326: trailing whitespace after a real notice must not defeat the
+  // empty-suffix check (no regression from the added structural gate).
+  assert.equal(
+    isAdvisoryNonReviewNotice(
+      'You have reached your Codex usage limits for code reviews.\n\n',
+    ),
+    true,
   );
   assert.equal(isAdvisoryNonReviewNotice(''), false);
   assert.equal(isAdvisoryNonReviewNotice(null), false);

@@ -110,6 +110,28 @@ test('buildDispositionPlan plans a rejection for the current Codex usage-limit w
   assert.match(plan.planned[0]?.body ?? '', /did not review HEAD abc1234/);
 });
 
+test('buildDispositionPlan does not disposition the #1326 false-positive review comment', () => {
+  // #1326: a genuine Codex review comment that combines "Codex", a
+  // reach/exceed/hit verb, and "for code reviews" in ordinary prose (the
+  // concrete example flagged in PR #1319's own review of the #1312 fix)
+  // must not be misclassified as a non-review notice and dispositioned.
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(
+          1,
+          CODEX,
+          'This code hits the Codex usage limits for code reviews configured for the repo.',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 0);
+  assert.equal(plan.skipped.length, 0);
+});
+
 test('buildDispositionPlan is idempotent: a notice already dispositioned for its bot is skipped', () => {
   const plan = buildDispositionPlan(
     {
