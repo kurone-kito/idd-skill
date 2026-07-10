@@ -3268,6 +3268,11 @@ export function buildForcedHandoffEnableGate(options) {
  *   that forget to wire it fail closed.
  * - `requireAuthorMatchesForcedBy` defaults to `true` (the strict
  *   self-signed-hijack block used by Resume routing).
+ * - `staleAgeMs` (#1310) is an optional config-aware claim-staleness window,
+ *   in milliseconds (a parsed `claimTiming.staleAge`). When omitted, invalid
+ *   (non-numeric/non-finite), or non-positive, staleness falls back to the
+ *   hardcoded 24h `isStaleAt` default unchanged — so callers that do not
+ *   pass it keep today's exact behavior. See `isStaleByAge`.
  */
 export function resolveActiveClaimForWriteGate(events, options) {
   const expectedLinkedPrReferences = new Set(
@@ -3620,6 +3625,7 @@ export function buildPreMergeReadinessSummary(
     isForcedHandoffEnabled: options.isForcedHandoffEnabled,
     expectedClaimId: options.expectedClaimId,
     expectedAgentId: options.expectedAgentId,
+    staleAgeMs: options.staleAgeMs,
   });
   const waivableCheckSelectors = options.waivableCheckSelectors ?? null;
   const waiverEvidence = summarizeExternalCheckWaivers(comments, {

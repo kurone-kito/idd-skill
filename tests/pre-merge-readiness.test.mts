@@ -3991,6 +3991,46 @@ test('summarizeClaimValidation falsely reports claimLost for the same takeover w
   assert.equal(summary.activeClaim.claimId, 'claim-20260512T090000Z-337-old');
 });
 
+test('buildPreMergeReadinessSummary threads staleAgeMs to the F2/F3 claim gate (#1310)', () => {
+  // End-to-end proof that the merge-gate aggregator itself (not just the
+  // underlying write-gate resolvers) honors a configured claimTiming.staleAge:
+  // the same 20h-gap takeover from the tests above, driven through the full
+  // buildPreMergeReadinessSummary entry point pre-merge-readiness.mts calls.
+  const prHeadSha = '1111111111111111111111111111111111111111';
+  const now = '2026-05-14T00:00:00Z';
+  const claimEvents = [wgClaimEvent(), wgTakeoverEvent()];
+
+  const withConfiguredStaleAge = buildPreMergeReadinessSummary(
+    { prHeadSha, claimEvents },
+    {
+      now,
+      trustedMarkerLogins: ['cli-old', 'cli-new'],
+      staleAgeMs: EIGHTEEN_HOURS_MS,
+    },
+  );
+  const claimWithConfiguredStaleAge = withConfiguredStaleAge.claim as Record<
+    string,
+    Record<string, unknown>
+  >;
+  assert.equal(
+    claimWithConfiguredStaleAge.activeClaim.claimId,
+    WG_TAKEOVER_CLAIM_ID,
+  );
+
+  const withoutStaleAgeOverride = buildPreMergeReadinessSummary(
+    { prHeadSha, claimEvents },
+    { now, trustedMarkerLogins: ['cli-old', 'cli-new'] },
+  );
+  const claimWithoutStaleAgeOverride = withoutStaleAgeOverride.claim as Record<
+    string,
+    Record<string, unknown>
+  >;
+  assert.equal(
+    claimWithoutStaleAgeOverride.activeClaim.claimId,
+    'claim-20260512T090000Z-337-old',
+  );
+});
+
 // Shape of a real execFileSync('gh', ...) failure: exit code 1 with the true
 // HTTP status carried in stderr (mirrors gh-http-status.test.mts). gh writes a
 // 404 response body to stdout, so fetchBranchRulesets must discriminate on the

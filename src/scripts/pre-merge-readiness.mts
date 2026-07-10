@@ -24,6 +24,7 @@ import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
   normalizePolicyConfig,
+  parseIsoDurationToMs,
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mts';
 import type { TrustedMarkerActorResolution } from './protocol-helpers.mts';
@@ -39,6 +40,13 @@ import {
   resolveTrustedMarkerActors,
   selectCodeownersText,
 } from './protocol-helpers.mts';
+
+// Fallback claim-staleness window (#1310) used by readClaimStaleAgeMs when
+// `.github/idd/config.json` is absent, unreadable, or does not parse to a
+// valid claimTiming.staleAge. Declared above the CLI entry block (module-
+// level bindings must stay above it — see cli-entry-smoke.test.mts) even
+// though it is only read from inside a function.
+const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 
 /** Author reference embedded in GitHub REST/GraphQL payloads. */
 interface GhAuthorPayload {
@@ -391,6 +399,7 @@ export function collectPreMergeReadiness(
   const forcedHandoffPermissionCache: CollaboratorPermissionCache = new Map();
   const waivableCheckSelectors = readWaivableCheckSelectors();
   const externalCheckWaiverMaxValidity = readExternalCheckWaiverMaxValidity();
+  const staleAgeMs = readClaimStaleAgeMs();
 
   const summary = buildPreMergeReadinessSummary(
     {
@@ -428,6 +437,7 @@ export function collectPreMergeReadiness(
       primaryBotLogin,
       waivableCheckSelectors,
       externalCheckWaiverMaxValidity,
+      staleAgeMs,
       forcedHandoffEnabled,
       expectedLinkedPrs: [String(args.prNumber), prUrl].filter(Boolean),
       prFirstCommitAt,
@@ -1134,5 +1144,22 @@ function readExternalCheckWaiverMaxValidity(): string {
     ).ciGate.externalCheckWaivers.maxValidity;
   } catch {
     return 'PT24H';
+  }
+}
+
+// Configured claim-staleness window (`claimTiming.staleAge`, #1310), parsed
+// to milliseconds so the write-gate claim resolver honors it instead of the
+// hardcoded 24h `isStaleAt` default. `normalizePolicyConfig` already defaults
+// this to `PT24H`; an absent, unreadable, or unparseable config falls back to
+// the same 24h value in milliseconds so behavior is unchanged for repos on
+// the default.
+function readClaimStaleAgeMs(): number {
+  try {
+    const staleAge = normalizePolicyConfig(
+      JSON.parse(readFileSync('.github/idd/config.json', 'utf8')),
+    ).claimTiming.staleAge;
+    return parseIsoDurationToMs(staleAge) ?? DEFAULT_CLAIM_STALE_AGE_MS;
+  } catch {
+    return DEFAULT_CLAIM_STALE_AGE_MS;
   }
 }

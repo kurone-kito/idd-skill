@@ -4162,6 +4162,11 @@ export function buildForcedHandoffEnableGate(options: {
  *   that forget to wire it fail closed.
  * - `requireAuthorMatchesForcedBy` defaults to `true` (the strict
  *   self-signed-hijack block used by Resume routing).
+ * - `staleAgeMs` (#1310) is an optional config-aware claim-staleness window,
+ *   in milliseconds (a parsed `claimTiming.staleAge`). When omitted, invalid
+ *   (non-numeric/non-finite), or non-positive, staleness falls back to the
+ *   hardcoded 24h `isStaleAt` default unchanged — so callers that do not
+ *   pass it keep today's exact behavior. See `isStaleByAge`.
  */
 export function resolveActiveClaimForWriteGate(
   events: CommentLike[],
@@ -4537,6 +4542,12 @@ export function buildPreMergeReadinessSummary(
     // (window check off); `collectPreMergeReadiness` always sources the policy
     // value (default `PT24H`).
     externalCheckWaiverMaxValidity?: string;
+    // Configured `claimTiming.staleAge` (#1310), parsed to milliseconds and
+    // threaded to the write-gate claim resolver below so the F2/F3 merge gate
+    // honors it instead of the hardcoded 24h `isStaleAt` default. Omitted by
+    // unit callers (default 24h behavior preserved);
+    // `collectPreMergeReadiness` always sources the policy value.
+    staleAgeMs?: number;
   } = {},
 ) {
   const now = String(options.now ?? '');
@@ -4655,6 +4666,7 @@ export function buildPreMergeReadinessSummary(
     isForcedHandoffEnabled: options.isForcedHandoffEnabled,
     expectedClaimId: options.expectedClaimId,
     expectedAgentId: options.expectedAgentId,
+    staleAgeMs: options.staleAgeMs,
   });
   const waivableCheckSelectors = options.waivableCheckSelectors ?? null;
   const waiverEvidence = summarizeExternalCheckWaivers(comments, {
