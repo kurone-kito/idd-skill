@@ -31,6 +31,7 @@
 // comment data and prints a verdict.
 
 import {
+  DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   readAdvisoryConvergenceDeadlineMinutes,
   readAdvisoryPrimaryBotLogin,
@@ -330,7 +331,7 @@ export function computeAdvisoryConvergenceVerdict(
   // --- timestamp (not an IDD marker -- see module header for why) -------
   const deadlineMinutes = Number.isFinite(options.deadlineMinutes)
     ? Number(options.deadlineMinutes)
-    : 1440;
+    : DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES;
   const headCommittedAt = String(options.headCommittedAt ?? '');
   const elapsedMinutes = isValidIsoTimestamp(headCommittedAt)
     ? minutesBetween(headCommittedAt, now)
@@ -386,7 +387,9 @@ export function computeAdvisoryConvergenceVerdict(
   const waived = validWaiverCount > 0;
   if (!converged && deadlinePassed && !waived) {
     reasons.push(
-      `deadline (${deadlineMinutes}m) passed with no valid maintainer external-check waiver for selector "${waiverCheckSelector}" on current HEAD`,
+      waiverMode === 'maintainer-authorized'
+        ? `deadline (${deadlineMinutes}m) passed with no valid maintainer external-check waiver for selector "${waiverCheckSelector}" on current HEAD`
+        : `deadline (${deadlineMinutes}m) passed and no waiver is available (ciGate.externalCheckWaivers.mode is "${waiverMode}", not "maintainer-authorized")`,
     );
   }
 
@@ -411,34 +414,35 @@ export function computeAdvisoryConvergenceVerdict(
   };
 }
 
-/** Evaluate Clause 1 (the latest-review clause) against every Copilot
- * review that targets the current HEAD, and evaluate Clause 1 against
- * *that* review only. Re-requesting a review without a new push is a real,
- * supported flow in this repo's own advisory-wait protocol (AW3
- * `REQUEST_NEEDED`), so two reviews can legitimately share one `commitId`
- * with the later one superseding the earlier one (e.g. addressed via
- * thread replies, then re-reviewed) -- requiring every on-HEAD review to
- * be clean would wrongly keep a genuinely-converged PR blocked forever
- * (see PR #1343 review). The latest on-HEAD review is simply the last
- * on-HEAD entry in fetch order: GitHub's GraphQL `reviews` connection
- * returns reviews in submission order (the same assumption
- * `findLastCopilotReviewCommit` already relies on elsewhere in this
- * codebase), so this deliberately does NOT re-sort by `submittedAt` --
- * which can be missing/invalid on a real payload (the field is nullable)
- * and would otherwise let an earlier, differently-ordered review win by
- * comparator accident, hiding a genuinely later dirty review. */
+/** Evaluate Clause 1 against the single, absolute-latest Copilot review --
+ * per the issue's literal wording ("the latest Copilot review's commit_id
+ * equals current HEAD"), not "the latest review among those that happen to
+ * target current HEAD". Those two differ when Copilot's most recent
+ * activity targets a commit other than the current HEAD (e.g. an unusual
+ * force-push/revert ordering, see PR #1343 review): only looking within
+ * on-HEAD reviews could report `matchesHead: true` off a stale earlier
+ * review while ignoring what Copilot's true latest signal actually says.
+ * This simpler form still correctly handles a legitimate re-request
+ * without a new push (this repo's own AW3 `REQUEST_NEEDED` flow, where a
+ * later review supersedes an earlier dirty one on the *same* commit): the
+ * absolute latest naturally IS that later, superseding review when both
+ * target the current HEAD. "Latest" is fetch order, not `submittedAt`:
+ * GitHub's GraphQL `reviews` connection returns reviews in submission
+ * order (the same assumption `findLastCopilotReviewCommit` already relies
+ * on elsewhere in this codebase), so this deliberately does not re-sort by
+ * `submittedAt` -- which can be missing/invalid on a real payload (the
+ * field is nullable) and would otherwise let an earlier, differently-
+ * ordered review win by comparator accident. */
 function resolveLatestCopilotReviewClause(
   reviews: ReviewPayload[],
   prHeadSha: string,
   primaryBotLogin: string,
 ): AdvisoryConvergenceReviewClause {
-  const copilotReviews = reviews.filter((review) =>
-    isCopilotReviewerLogin(review.author?.login ?? '', primaryBotLogin),
-  );
-  const onHead = copilotReviews.filter(
-    (review) => String(review.commitId ?? '').toLowerCase() === prHeadSha,
-  );
-  const latest = onHead.length > 0 ? onHead.at(-1) : copilotReviews.at(-1);
+  const latest = reviews
+    .filter((review) =>
+      isCopilotReviewerLogin(review.author?.login ?? '', primaryBotLogin),
+    )
+    .at(-1);
   if (!latest) {
     return {
       found: false,
@@ -449,7 +453,8 @@ function resolveLatestCopilotReviewClause(
       satisfied: false,
     };
   }
-  const matchesHead = onHead.length > 0;
+  const commitId = String(latest.commitId ?? '').toLowerCase();
+  const matchesHead = commitId === prHeadSha;
   const itemCount = matchesHead
     ? Number.isFinite(latest.itemCount)
       ? Number(latest.itemCount)
@@ -457,7 +462,7 @@ function resolveLatestCopilotReviewClause(
     : null;
   return {
     found: true,
-    commitId: String(latest.commitId ?? '').toLowerCase(),
+    commitId,
     matchesHead,
     itemCount,
     submittedAt: String(latest.submittedAt ?? ''),

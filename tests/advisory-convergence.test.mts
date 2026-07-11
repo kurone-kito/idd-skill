@@ -205,6 +205,31 @@ test('regression: a re-request without a new push supersedes an earlier dirty on
   assert.equal(verdict.ready, true);
 });
 
+test('regression: matchesHead reflects the absolute-latest review, not merely any on-HEAD review', () => {
+  // Copilot reviewed the current HEAD first (clean), then its most recent
+  // activity overall is a review of a DIFFERENT commit (an unusual
+  // force-push/revert-style ordering). The absolute-latest review is the
+  // one that must be evaluated, so this must NOT report matchesHead: true
+  // off the earlier, now-stale on-HEAD review.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ submittedAt: OLD, commitId: HEAD, itemCount: 0 }),
+        copilotReview({
+          submittedAt: RECENT,
+          commitId: OTHER_SHA,
+          itemCount: 0,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.matchesHead, false);
+  assert.equal(verdict.pending, true);
+  assert.equal(verdict.converged, false);
+});
+
 test('regression: a dirty on-HEAD review is never silently ignored just because its own submittedAt is missing', () => {
   // Both reviews target the current HEAD. The earlier one is clean and has a
   // valid timestamp; the later one carries actionable items but its
@@ -437,6 +462,27 @@ test('deadline not yet passed: no waiver path is consulted even in maintainer-au
   assert.equal(verdict.deadline.passed, false);
   assert.equal(verdict.waiver.validCount, 0);
   assert.equal(verdict.ready, false);
+});
+
+test('regression: the deadline-passed reason names the waiver mode instead of implying a waiver would work when waivers are disabled', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [], claimEvents: [claimComment()] }),
+    baseOptions({ headCommittedAt: OLD, waiverMode: 'disabled' }),
+  );
+  assert.equal(verdict.ready, false);
+  assert.match(verdict.reasons.join('\n'), /no waiver is available/);
+  assert.doesNotMatch(
+    verdict.reasons.join('\n'),
+    /no valid maintainer external-check waiver/,
+  );
+});
+
+test('regression: the default deadline minutes come from the shared advisory-wait-policy constant', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview()] }),
+    baseOptions({ deadlineMinutes: undefined }),
+  );
+  assert.equal(verdict.deadline.minutes, 1440);
 });
 
 // --- classifyCopilotAuthoredThreadIds (pure helper) -------------------------
