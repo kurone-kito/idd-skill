@@ -769,8 +769,6 @@ on:
     types: [opened, reopened, synchronize]
   pull_request_review:
     types: [submitted]
-  pull_request_review_thread:
-    types: [resolved, unresolved]
 permissions:
   contents: read
   issues: read
@@ -781,10 +779,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # pull_request_review / pull_request_review_thread are not
-          # pull_request-family events, so a plain checkout resolves to
-          # the base branch on those two triggers unless the PR head is
-          # pinned explicitly.
+          # pull_request_review is not a pull_request-family event, so
+          # a plain checkout resolves to the base branch on that
+          # trigger unless the PR head is pinned explicitly.
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - env:
@@ -800,11 +797,18 @@ the PR's own conversation comments via the issue-comments REST
 endpoint, which GitHub gates under the Issues permission category even
 when the issue number is a pull request.
 
-Three trigger types are required because convergence can change
-without a new push: on Copilot's review submission
-(`pull_request_review`) and on a thread being resolved or unresolved
-(`pull_request_review_thread`), in addition to the normal push case
-(`pull_request`).
+Two trigger types cover the cases where convergence can change without
+a new push: `pull_request` for the normal push case, and
+`pull_request_review` for Copilot's review submission. A thread being
+resolved or unresolved (`pull_request_review_thread`) is a real GitHub
+webhook event, but it is **not** one of the events GitHub Actions
+supports as a workflow `on:` trigger — including it makes the whole
+workflow file fail GitHub's schema validation (confirmed both against
+GitHub's own trigger-events reference and empirically). Residual gap:
+if a Copilot-authored thread is resolved with no accompanying push or
+fresh Copilot review, this check keeps reporting its last computed
+verdict until the next push or review submission; a maintainer can
+force a re-run manually from the Actions UI in that case.
 
 **Register it as a required status check.** Hosting the workflow alone
 does not block merge — a maintainer must separately register
