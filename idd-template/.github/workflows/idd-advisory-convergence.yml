@@ -46,6 +46,15 @@ jobs:
           # in the dispatch UI).
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      # ubuntu-latest's preinstalled Node is not guaranteed to satisfy
+      # this repo's engines.node floor (package.json), unlike this
+      # source repository's own ubuntu-slim copy, whose preinstalled
+      # Node is already known to satisfy it (see idd-doctor.yml /
+      # lint.yml, neither of which sets up Node explicitly). Pin an
+      # explicit version so the mirrored template stays portable.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
       - env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/advisory-convergence.mjs --pr ${{ github.event.pull_request.number || inputs.pr_number }} --assert
