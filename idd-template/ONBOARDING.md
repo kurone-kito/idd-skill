@@ -753,6 +753,85 @@ runs on IDD branches. Use `pull_request` triggers (which fire on the PR
 regardless of branch name), or a push filter that matches the slash namespace
 (`'**'` or `'issue/**'`), for any check that must gate IDD pull requests.
 
+### Optional — host idd-advisory-convergence as a required-check CI workflow
+
+For repositories that vendor the IDD helper scripts, hosting the
+`advisory-convergence` helper (`docs/idd-helper-scripts.md`) as a CI
+workflow turns "Copilot's review converged on the current PR HEAD" from
+an instruction the execution model must choose to honor into a
+status check GitHub itself can enforce. It is opt-in — add a workflow
+such as:
+
+```yaml
+name: IDD advisory-convergence gate
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_thread:
+    types: [resolved, unresolved]
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+jobs:
+  idd-advisory-convergence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # pull_request_review / pull_request_review_thread are not
+          # pull_request-family events, so a plain checkout resolves to
+          # the base branch on those two triggers unless the PR head is
+          # pinned explicitly.
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/advisory-convergence.mjs --pr ${{ github.event.pull_request.number }} --assert
+```
+
+Adjust the command to your helper-runtime profile. This workflow is
+read-only: it never mutates GitHub state, only queries the GitHub API
+for reviews, review threads, and waiver markers. `issues: read` is
+required in addition to `pull-requests: read` because the helper reads
+the PR's own conversation comments via the issue-comments REST
+endpoint, which GitHub gates under the Issues permission category even
+when the issue number is a pull request.
+
+Three trigger types are required because convergence can change
+without a new push: on Copilot's review submission
+(`pull_request_review`) and on a thread being resolved or unresolved
+(`pull_request_review_thread`), in addition to the normal push case
+(`pull_request`).
+
+**Register it as a required status check.** Hosting the workflow alone
+does not block merge — a maintainer must separately register
+`idd-advisory-convergence` (the job id, which is also the
+`ciGate.externalCheckWaivers` selector for this check — see
+[policy constants](docs/policy-constants.md#advisory-review-defaults))
+as a **required** status check in the repository's branch-protection
+Ruleset, the same way other CI jobs are registered there. This is a
+maintainer GitHub-settings action taken outside of IDD automation, not
+something an agent applies on its own.
+
+**Waiver-after-deadline escape path.** While the primary advisory bot
+has not yet reviewed the current PR HEAD, the check reports pending
+(not failing permanently). After `advisoryWait.convergenceDeadline`
+(default 24h) elapses from the HEAD commit's own timestamp, the only
+way to turn the check green without a fresh review is a valid
+maintainer external-check waiver for that HEAD under the selector
+`idd-advisory-convergence` — see
+[External-Check Waiver Defaults](docs/policy-constants.md#external-check-waiver-defaults)
+and the waiver policy surface in
+[Customizing IDD](docs/customization.md#external-check-waiver-defaults).
+That path only exists once `ciGate.externalCheckWaivers.mode` is
+`maintainer-authorized` **and** `idd-advisory-convergence` is itself
+registered under `ciGate.externalChecks.waivable`; enabling waiver mode
+for some other external check never silently makes this one waivable
+too.
+
 ### Optional — mark the vendored helper bundle `linguist-vendored`
 
 This step applies **only to the `vendored-node` profile** (the only

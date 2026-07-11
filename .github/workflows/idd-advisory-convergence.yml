@@ -1,0 +1,89 @@
+concurrency:
+  cancel-in-progress: true
+  # Grouped by PR number, not github.ref: pull_request_review and
+  # pull_request_review_thread are not pull_request-family events, so
+  # github.ref is not guaranteed to resolve the same way across all
+  # three trigger types the way it does for a pull_request-only
+  # workflow (see idd-doctor.yml / lint.yml).
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+name: IDD advisory-convergence gate
+# Required-check gate (#1341): asserts that the primary advisory bot's
+# ("Copilot's") review has converged on the current PR HEAD, using the
+# read-only advisory-convergence helper (#1340, scripts/advisory-convergence.mjs)
+# with --assert. This turns the F2 advisory/disposition sub-gate from a
+# judgment the execution model must choose to honor into a
+# non-bypassable required status check -- see roadmap #1342.
+#
+# Read-only: contents: read + issues: read + pull-requests: read. The
+# helper only queries the GitHub API (via `gh`) for reviews, review
+# threads, PR conversation comments, and waiver markers; it never
+# mutates GitHub state. `issues: read` is required (not just
+# pull-requests: read) because the helper reads the PR's own
+# conversation comments via the issue-comments REST endpoint, which
+# GitHub gates under the Issues permission category even when the
+# issue number is a pull request -- see post-merge-cleanup.yml, which
+# needs the same permission for the identical endpoint shape.
+#
+# Fork-PR trust model: this workflow triggers on `pull_request` (not
+# `pull_request_target`), so it never runs with elevated base-repo
+# permissions or secrets for fork PRs, and it never executes PR content
+# as a build/test step. It does check out and run the PR's own copy of
+# scripts/advisory-convergence.mjs (checkout pins the PR HEAD SHA below),
+# so -- exactly as already true of idd-doctor.yml and lint.yml today --
+# the real backstop against a PR tampering with its own check is
+# .github/CODEOWNERS (`* @kurone-kito`) plus the repository ruleset's
+# require_code_owner_review, not the absence of secrets alone.
+#
+# CI topology: unlike lint.yml/idd-doctor.yml's pull_request-only
+# trigger, convergence can also change WITHOUT a new push -- when
+# Copilot submits its review (pull_request_review) or a thread is
+# resolved/unresolved (pull_request_review_thread) -- so all three
+# trigger types are required to keep the check's verdict current.
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+  pull_request_review:
+    types:
+      - submitted
+  pull_request_review_thread:
+    types:
+      - resolved
+      - unresolved
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+jobs:
+  # The job id is also this check's required-status-check context name
+  # (see lint / idd-doctor / pnpm-boundary in the repository ruleset,
+  # confirmed via `gh api repos/kurone-kito/idd-skill/rulesets/<id>`)
+  # and the `ciGate.externalCheckWaivers` selector documented in
+  # docs/policy-constants.md (ADVISORY_CONVERGENCE_CHECK_SELECTOR in
+  # advisory-convergence.mts) -- keep all three in sync if this id ever
+  # changes.
+  idd-advisory-convergence:
+    runs-on: ubuntu-slim
+    # No observed run history yet (new workflow). Bounds pathological
+    # hangs with the same headroom as idd-doctor.yml's own estimate
+    # until real durations are available to tighten this.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # pull_request_review and pull_request_review_thread are not
+          # pull_request-family events, so actions/checkout's default
+          # ref (github.ref) resolves to the base branch on those two
+          # triggers, not the PR head. Pin the head SHA explicitly so
+          # all three trigger types check out the same PR HEAD the
+          # helper evaluates.
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          # Read-only check: no need to persist the token in git config.
+          persist-credentials: false
+      - name: Run advisory-convergence verdict (--assert)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/advisory-convergence.mjs --pr ${{ github.event.pull_request.number }} --assert
