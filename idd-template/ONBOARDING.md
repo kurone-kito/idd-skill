@@ -825,7 +825,7 @@ maintainer external-check waiver for that HEAD under the selector
 `idd-advisory-convergence` — see
 [External-Check Waiver Defaults](docs/policy-constants.md#external-check-waiver-defaults)
 and the waiver policy surface in
-[Customizing IDD](docs/customization.md#external-check-waiver-defaults).
+[Customizing IDD](docs/customization.md#policy-constants).
 That path only exists once `ciGate.externalCheckWaivers.mode` is
 `maintainer-authorized` **and** `idd-advisory-convergence` is itself
 registered under `ciGate.externalChecks.waivable`; enabling waiver mode
