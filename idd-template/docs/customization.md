@@ -329,12 +329,13 @@ once `ciGate.externalCheckWaivers.mode` is `maintainer-authorized`
 **and** `idd-advisory-convergence` is itself listed under
 `ciGate.externalChecks.waivable` — enabling waiver mode for some other
 external check never silently makes this one waivable too. **Posting a
-waiver comment does not by itself turn the check green**: the workflow
-only re-runs on a new `pull_request` push, a `pull_request_review`
-submission, or a manual `workflow_dispatch` run, so after posting a
-waiver a maintainer must also trigger one of those (the Actions UI
-"Re-run jobs" button, or `workflow_dispatch`) for the required check to
-actually reflect it.
+waiver comment does not by itself turn the check green**: a waiver is a
+regular PR comment, which is not one of the workflow's triggers
+(`pull_request` push, `pull_request_review` submission, or
+`pull_request_review_comment` created/edited/deleted on a review
+thread), so after posting a waiver a maintainer must also trigger a new
+run explicitly — the Actions UI "Re-run jobs" button, or
+`workflow_dispatch` — for the required check to actually reflect it.
 
 ## Phase ID Compatibility Contract
 

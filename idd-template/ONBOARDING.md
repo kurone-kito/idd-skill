@@ -797,9 +797,10 @@ GitHub's schema validation (confirmed both against GitHub's own
 trigger-events reference and empirically). Residual gap: if a
 Copilot-authored thread is resolved or reopened with no accompanying
 comment, push, or fresh Copilot review, this check keeps reporting its
-last computed verdict until one of the three triggers above fires or a
-maintainer runs a manual re-check; `workflow_dispatch` (above) gives
-maintainers an explicit "Run workflow" affordance for that case, taking
+last computed verdict until one of the three triggers named in the
+workflow file fires or a maintainer runs a manual re-check; the
+mirrored workflow's `workflow_dispatch` trigger gives maintainers an
+explicit "Run workflow" affordance for that case, taking
 a `pr_number` input since a manually dispatched run has no PR context
 of its own.
 
