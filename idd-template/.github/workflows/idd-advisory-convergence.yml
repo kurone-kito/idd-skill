@@ -1,0 +1,51 @@
+name: IDD advisory-convergence gate
+# Optional, opt-in required-check workflow (see ONBOARDING.md "Optional
+# — host idd-advisory-convergence as a required-check CI workflow" for
+# the full rationale, the required-check Ruleset registration step, and
+# the waiver-after-deadline escape path). Copy this file into your
+# repository's .github/workflows/ to enable it -- it is not wired in
+# automatically by importing the rest of idd-template/, since a new
+# required-status-check-able workflow is a deliberate adopter decision,
+# not a default.
+#
+# Adjust `runs-on`, the pinned `actions/checkout` SHA (or use the
+# floating `@v4` tag as shipped here), and the `node scripts/...`
+# command to your own runner labels and helper-runtime profile. This
+# file intentionally uses the portable `ubuntu-latest` + `@v4` forms
+# rather than a repository-specific pinned SHA or custom runner label,
+# unlike this source repository's own dogfooded copy at
+# .github/workflows/idd-advisory-convergence.yml.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to re-check (e.g. after posting a maintainer waiver)
+        required: true
+        type: number
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+jobs:
+  idd-advisory-convergence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # pull_request_review / pull_request_review_comment are not
+          # pull_request-family events, so a plain checkout resolves to
+          # the base branch on those triggers unless the PR head is
+          # pinned explicitly. workflow_dispatch has no pull_request
+          # context at all, so fall back to github.sha (the ref picked
+          # in the dispatch UI).
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/advisory-convergence.mjs --pr ${{ github.event.pull_request.number || inputs.pr_number }} --assert

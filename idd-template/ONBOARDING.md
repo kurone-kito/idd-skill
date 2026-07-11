@@ -759,54 +759,28 @@ For repositories that vendor the IDD helper scripts, hosting the
 `advisory-convergence` helper (`docs/idd-helper-scripts.md`) as a CI
 workflow turns "Copilot's review converged on the current PR HEAD" from
 an instruction the execution model must choose to honor into a
-status check GitHub itself can enforce. It is opt-in — add a workflow
-such as:
+status check GitHub itself can enforce. It is opt-in — the template
+already mirrors the workflow at
+[`idd-template/.github/workflows/idd-advisory-convergence.yml`](.github/workflows/idd-advisory-convergence.yml);
+copy that one file into your repository's `.github/workflows/` to
+enable it. It is not wired in automatically by importing the rest of
+`idd-template/`, since adding a new required-status-check-able workflow
+is a deliberate adopter decision, not a default.
 
-```yaml
-name: IDD advisory-convergence gate
-on:
-  pull_request:
-    types: [opened, reopened, synchronize]
-  pull_request_review:
-    types: [submitted]
-  pull_request_review_comment:
-    types: [created, edited, deleted]
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: PR number to re-check (e.g. after posting a maintainer waiver)
-        required: true
-        type: number
-permissions:
-  contents: read
-  issues: read
-  pull-requests: read
-jobs:
-  idd-advisory-convergence:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # pull_request_review / pull_request_review_comment are not
-          # pull_request-family events, so a plain checkout resolves to
-          # the base branch on those triggers unless the PR head is
-          # pinned explicitly. workflow_dispatch has no pull_request
-          # context at all, so fall back to github.sha (the ref picked
-          # in the dispatch UI).
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-      - env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/advisory-convergence.mjs --pr ${{ github.event.pull_request.number || inputs.pr_number }} --assert
-```
-
-Adjust the command to your helper-runtime profile. This workflow is
-read-only: it never mutates GitHub state, only queries the GitHub API
-for reviews, review threads, and waiver markers. `issues: read` is
-required in addition to `pull-requests: read` because the helper reads
-the PR's own conversation comments via the issue-comments REST
-endpoint, which GitHub gates under the Issues permission category even
-when the issue number is a pull request.
+Adjust the command to your helper-runtime profile, and `runs-on` / the
+`actions/checkout` version to your own runner labels — the mirrored
+file intentionally uses the portable `ubuntu-latest` + `@v4` forms.
+This source repository's own copy at
+`.github/workflows/idd-advisory-convergence.yml` instead pins a
+specific `actions/checkout` SHA and a custom runner label, which is
+appropriate for its own hardened, dogfooded CI but not a requirement
+for adopters. This workflow is read-only: it never mutates GitHub
+state, only queries the GitHub API for reviews, review threads, and
+waiver markers. `issues: read` is required in addition to
+`pull-requests: read` because the helper reads the PR's own
+conversation comments via the issue-comments REST endpoint, which
+GitHub gates under the Issues permission category even when the issue
+number is a pull request.
 
 Three automatic trigger types cover the cases where convergence can
 change without a new push: `pull_request` for the normal push case,
