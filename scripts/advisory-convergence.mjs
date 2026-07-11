@@ -254,11 +254,14 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
  * absolute latest naturally IS that later, superseding review when both
  * target the current HEAD. "Latest" is fetch order, not `submittedAt`:
  * GitHub's GraphQL `reviews` connection returns reviews in submission
- * order (the same assumption `findLastCopilotReviewCommit` already relies
- * on elsewhere in this codebase), so this deliberately does not re-sort by
- * `submittedAt` -- which can be missing/invalid on a real payload (the
- * field is nullable) and would otherwise let an earlier, differently-
- * ordered review win by comparator accident. */
+ * order, the same assumption this file's own `fetchThreadCommentPages` /
+ * `fetchReviewThreads` already rely on (they append paginated results
+ * without ever re-sorting). This deliberately does NOT sort by
+ * `submittedAt` the way `findLastCopilotReviewCommit` does elsewhere in
+ * this codebase (protocol-helpers.mts) -- that timestamp-sort approach is
+ * exactly the footgun being avoided here: `submittedAt` can be missing or
+ * invalid on a real payload (the field is nullable) and would otherwise
+ * let an earlier, differently-ordered review win by comparator accident. */
 function resolveLatestCopilotReviewClause(reviews, prHeadSha, primaryBotLogin) {
   const latest = reviews
     .filter((review) =>
@@ -324,8 +327,18 @@ export function classifyCopilotAuthoredThreadIds(threads, primaryBotLogin) {
   });
   return ids;
 }
+/** Whole minutes elapsed from `start` to `end`, clamped to 0 and floored --
+ * matching `minutesBetweenIso` (protocol-helpers.mts) exactly, so a clock-
+ * skew or malformed-timestamp edge case can never make `deadline.elapsed-
+ * Minutes` negative or fractional. Not reused directly since that helper is
+ * not exported. */
 function minutesBetween(start, end) {
-  return (new Date(end).getTime() - new Date(start).getTime()) / 60000;
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+    return 0;
+  }
+  return Math.floor((endMs - startMs) / 60000);
 }
 export function parseArgs(argv) {
   const parsed = {

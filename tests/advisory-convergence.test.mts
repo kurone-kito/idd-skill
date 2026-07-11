@@ -485,6 +485,25 @@ test('regression: the default deadline minutes come from the shared advisory-wai
   assert.equal(verdict.deadline.minutes, 1440);
 });
 
+test('regression: elapsedMinutes is floored to a non-negative whole number', () => {
+  // headCommittedAt 90 seconds before `now` -- a fractional 1.5 minutes
+  // must floor to 1, not report a fractional value.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview()] }),
+    baseOptions({ headCommittedAt: '2026-07-11T11:58:30Z' }),
+  );
+  assert.equal(verdict.deadline.elapsedMinutes, 1);
+  assert.equal(Number.isInteger(verdict.deadline.elapsedMinutes), true);
+});
+
+test('regression: elapsedMinutes clamps to 0 instead of going negative when headCommittedAt is after now', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview()] }),
+    baseOptions({ headCommittedAt: '2026-07-11T13:00:00Z' }), // after NOW
+  );
+  assert.equal(verdict.deadline.elapsedMinutes, 0);
+});
+
 // --- classifyCopilotAuthoredThreadIds (pure helper) -------------------------
 
 test('classifyCopilotAuthoredThreadIds: a thread counts only when its ORIGINATING comment is bot-authored', () => {
