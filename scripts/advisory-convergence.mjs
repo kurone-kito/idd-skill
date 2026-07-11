@@ -531,6 +531,32 @@ function collectFromGitHub(args) {
   };
 }
 /**
+ * Fetch one issue's comments and normalize them to the `author.login` /
+ * `createdAt` shape `resolveActiveClaim`/`applyClaimEvent`
+ * (`protocol-helpers.mts`) require. Unlike `summarizeDispositionEvidence-
+ * ForGate` / `summarizeExternalCheckWaivers`, the claim resolver has NO
+ * `user.login` / `created_at` REST fallback (`event.author?.login ?? ''`,
+ * `event.createdAt ?? ''`, verbatim) -- passing raw `gh api` REST comments
+ * through unnormalized silently resolves `activeClaimPresent: false` for
+ * every real claim, breaking the entire waiver escape hatch without any
+ * error. `pre-merge-readiness.mts`'s own `normalizeClaimComment` does the
+ * same normalization for the identical reason; mirrored here rather than
+ * imported since it is not exported.
+ */
+function fetchClaimComments(owner, repo, issueNumber) {
+  const raw = ghApiJson(
+    `repos/${owner}/${repo}/issues/${issueNumber}/comments`,
+    {
+      paginate: true,
+    },
+  );
+  return raw.map((comment) => ({
+    body: comment.body ?? '',
+    createdAt: comment.createdAt ?? comment.created_at ?? '',
+    author: { login: comment.author?.login ?? comment.user?.login ?? '' },
+  }));
+}
+/**
  * Resolve the linked (claim) issue's comment stream for waiver-claim
  * binding. When `explicitIssueNumber` (`--claim-issue`) is given, use it
  * directly -- no ambiguity to resolve. Otherwise a PR can close more than
@@ -550,10 +576,7 @@ function resolveClaimEvents(
   trustedMarkerLogins,
 ) {
   if (explicitIssueNumber) {
-    return ghApiJson(
-      `repos/${owner}/${repo}/issues/${explicitIssueNumber}/comments`,
-      { paginate: true },
-    );
+    return fetchClaimComments(owner, repo, explicitIssueNumber);
   }
   const candidateNumbers = [
     ...new Set(
@@ -562,10 +585,7 @@ function resolveClaimEvents(
   ];
   const resolving = candidateNumbers
     .map((issueNumber) => {
-      const comments = ghApiJson(
-        `repos/${owner}/${repo}/issues/${issueNumber}/comments`,
-        { paginate: true },
-      );
+      const comments = fetchClaimComments(owner, repo, issueNumber);
       return {
         comments,
         hasActiveClaim: Boolean(
