@@ -753,6 +753,103 @@ runs on IDD branches. Use `pull_request` triggers (which fire on the PR
 regardless of branch name), or a push filter that matches the slash namespace
 (`'**'` or `'issue/**'`), for any check that must gate IDD pull requests.
 
+### Optional — host idd-advisory-convergence as a required-check CI workflow
+
+For repositories that vendor the IDD helper scripts, hosting the
+`advisory-convergence` helper (`docs/idd-helper-scripts.md`) as a CI
+workflow turns "Copilot's review converged on the current PR HEAD" from
+an instruction the execution model must choose to honor into a
+status check GitHub itself can enforce. It is opt-in — the template
+already mirrors the workflow at
+[`idd-template/.github/workflows/idd-advisory-convergence.yml`](.github/workflows/idd-advisory-convergence.yml);
+copy that one file into your repository's `.github/workflows/` to
+enable it. It is not wired in automatically by importing the rest of
+`idd-template/`, since adding a new required-status-check-able workflow
+is a deliberate adopter decision, not a default.
+
+Adjust the command to your helper-runtime profile, and `runs-on` / the
+`actions/checkout` version to your own runner labels — the mirrored
+file intentionally uses the portable `ubuntu-latest` + `@v4` forms.
+This source repository's own copy at
+`.github/workflows/idd-advisory-convergence.yml` instead pins a
+specific `actions/checkout` SHA and a custom runner label, which is
+appropriate for its own hardened, dogfooded CI but not a requirement
+for adopters. This workflow is read-only: it never mutates GitHub
+state, only queries the GitHub API for reviews, review threads, and
+waiver markers. `issues: read` is required in addition to
+`pull-requests: read` because the helper reads the PR's own
+conversation comments via the issue-comments REST endpoint, which
+GitHub gates under the Issues permission category even when the issue
+number is a pull request.
+
+**Trusted-code checkout.** The checkout step pins `ref: main` (adjust
+if your default branch differs) rather than the PR's own head, for
+every trigger type including `workflow_dispatch`. The enforcement
+script (`scripts/advisory-convergence.mjs`) and its config
+(`.github/idd/config.json`) must run from the trusted branch, not a
+PR's own copy — otherwise a PR could edit the verdict logic itself to
+force `ready: true` and defeat the whole required-check gate. The
+verdict still correctly evaluates the intended PR: `--pr <number>`
+drives every live GitHub API call the script makes (reviews, threads,
+comments), independent of what is checked out locally, so pinning the
+checkout to the trusted branch costs nothing functionally.
+
+Three automatic trigger types keep the verdict current: `pull_request`
+for the normal push case, plus two triggers for the ways convergence
+can change **without** a new push — `pull_request_review` for
+Copilot's review submission, and `pull_request_review_comment` for a
+reply posted, edited, or deleted on a review thread, including the
+disposition markers (`**Accepted**` / `**Rejected**`) triage posts,
+since those are exactly what flips a thread from blocking to
+dispositioned. A thread being resolved or
+unresolved via the "Resolve conversation" button
+(`pull_request_review_thread`) is a real GitHub webhook event, but it
+is **not** one of the events GitHub Actions supports as a workflow
+`on:` trigger — including it makes the whole workflow file fail
+GitHub's schema validation (confirmed both against GitHub's own
+trigger-events reference and empirically). Residual gap: if a
+Copilot-authored thread is resolved or reopened with no accompanying
+comment, push, or fresh Copilot review, this check keeps reporting its
+last computed verdict until one of the three automatic triggers fires
+or a maintainer runs the workflow's fourth trigger,
+`workflow_dispatch`, manually — an explicit "Run workflow" affordance
+for that case, taking a `pr_number` input since a manually dispatched
+run has no PR context of its own.
+
+**Register it as a required status check.** Hosting the workflow alone
+does not block merge — a maintainer must separately register
+`idd-advisory-convergence` (the job id, which is also the
+`ciGate.externalCheckWaivers` selector for this check — see
+[policy constants](docs/policy-constants.md#advisory-review-defaults))
+as a **required** status check in the repository's branch-protection
+Ruleset, the same way other CI jobs are registered there. This is a
+maintainer GitHub-settings action taken outside of IDD automation, not
+something an agent applies on its own.
+
+**Waiver-after-deadline escape path.** `--assert` exits non-zero for
+any not-ready verdict, including the ordinary case where the primary
+advisory bot has not yet reviewed the current PR HEAD — GitHub Actions
+has no separate non-failing "pending" check state, so the check simply
+**shows as failing** until it converges (by design: it must stay red
+until Copilot reviews the HEAD). After `advisoryWait.convergenceDeadline`
+(default 24h) elapses from the HEAD commit's own timestamp, the only
+way to turn the check green without a fresh review is a valid
+maintainer external-check waiver for that HEAD under the selector
+`idd-advisory-convergence` — see
+[External-Check Waiver Defaults](docs/policy-constants.md#external-check-waiver-defaults)
+and the waiver policy surface in
+[Customizing IDD](docs/customization.md#policy-constants).
+That path only exists once `ciGate.externalCheckWaivers.mode` is
+`maintainer-authorized` **and** `idd-advisory-convergence` is itself
+registered under `ciGate.externalChecks.waivable`; enabling waiver mode
+for some other external check never silently makes this one waivable
+too. **Posting the waiver comment does not by itself turn the check
+green**: a PR comment is not one of this workflow's trigger events and
+a completed run's conclusion never changes on its own, so after
+posting the waiver a maintainer must also trigger a new run — push,
+a fresh review, the Actions UI "Re-run jobs" button, or
+`workflow_dispatch` — for the required check to actually reflect it.
+
 ### Optional — mark the vendored helper bundle `linguist-vendored`
 
 This step applies **only to the `vendored-node` profile** (the only

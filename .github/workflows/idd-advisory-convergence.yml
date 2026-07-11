@@ -1,0 +1,175 @@
+concurrency:
+  cancel-in-progress: true
+  # Grouped by PR number, not github.ref: pull_request_review and
+  # pull_request_review_comment are not pull_request-family events, so
+  # github.ref is not guaranteed to resolve the same way for them as it
+  # does for a pull_request-only workflow (see idd-doctor.yml / lint.yml).
+  # workflow_dispatch has no pull_request context either, so it falls
+  # back to its own inputs.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}
+name: IDD advisory-convergence gate
+# Required-check gate (#1341): asserts that the primary advisory bot's
+# ("Copilot's") review has converged on the current PR HEAD, using the
+# read-only advisory-convergence helper (#1340, scripts/advisory-convergence.mjs)
+# with --assert. This turns the F2 advisory/disposition sub-gate from a
+# judgment the execution model must choose to honor into a
+# non-bypassable required status check -- see roadmap #1342.
+#
+# Read-only: contents: read + issues: read + pull-requests: read. The
+# helper only queries the GitHub API (via `gh`) for reviews, review
+# threads, PR conversation comments, and waiver markers; it never
+# mutates GitHub state. `issues: read` is required (not just
+# pull-requests: read) because the helper reads the PR's own
+# conversation comments via the issue-comments REST endpoint, which
+# GitHub gates under the Issues permission category even when the
+# issue number is a pull request -- see post-merge-cleanup.yml, which
+# needs the same permission for the identical endpoint shape.
+#
+# Trusted-code checkout (CodeRabbit review finding on PR #1345, and
+# consistent with the issue's own "no execution of PR-authored code"
+# framing): the checkout below is pinned to the repository's DEFAULT
+# branch, never the PR head. If the PR's own (possibly edited) copy of
+# scripts/advisory-convergence.mjs or .github/idd/config.json ran
+# instead, a PR could trivially edit the verdict logic itself to force
+# `ready: true` and defeat the whole required-check gate -- exactly the
+# execution-model-controlled fail-open failure mode roadmap #1342 exists
+# to close. The verdict still correctly evaluates the intended PR: `--pr
+# <number>` below drives every live GitHub API call the script makes
+# (reviews, threads, comments) independent of what is checked out
+# locally, so pinning the checkout to the trusted branch costs nothing
+# functionally while closing the tamper path. This also makes
+# workflow_dispatch inherently deterministic without any extra ref
+# resolution: the checkout is the same default-branch content
+# regardless of which ref a maintainer happens to pick in the dispatch
+# UI.
+#
+# This is a deliberately stricter posture than idd-doctor.yml/lint.yml,
+# which do check out the PR's own content (mitigated there only by
+# CODEOWNERS review): those checks are repository-health/lint gates
+# where a bypass is low-stakes, whereas this check's entire purpose is
+# to be robust against a weak or careless execution model tampering
+# with its own gate -- the one scenario CODEOWNERS-review-as-backstop
+# does not adequately cover, since the tampering agent is the same
+# session that would also need to get past review.
+#
+# CI topology: unlike lint.yml/idd-doctor.yml's pull_request-only
+# trigger, convergence can also change WITHOUT a new push -- when
+# Copilot submits its review (pull_request_review), or when a
+# disposition marker (or any other reply/edit/delete) is posted on a
+# review thread (pull_request_review_comment) -- so both are added
+# alongside pull_request. The latter matters because Clause 2 of the
+# verdict (every Copilot-authored thread resolved-or-dispositioned)
+# changes exactly when an E6 disposition reply is posted; without this
+# trigger the check would only refresh on the next push, review
+# submission, or manual workflow_dispatch run, leaving it stuck on a
+# stale failing verdict after triage already resolved every thread.
+#
+# Known gap vs. the issue's original three-trigger proposal:
+# `pull_request_review_thread` (thread resolved/unresolved) is a real
+# GitHub webhook event but is NOT one of the events GitHub Actions
+# supports as an `on:` workflow trigger -- confirmed both by GitHub's
+# own "events that trigger workflows" reference (which lists
+# pull_request / pull_request_review / pull_request_review_comment,
+# but never pull_request_review_thread) and empirically: including it
+# here made this entire workflow file fail GitHub's schema validation
+# (zero jobs scheduled, "workflow file issue") on first push. Residual
+# gap: if a Copilot-authored thread is resolved (or reopened) via the
+# "Resolve conversation" button with no accompanying comment, push, or
+# fresh Copilot review, this check will not automatically re-run and
+# keeps reporting its last computed verdict until one of those other
+# triggers fires or a maintainer runs workflow_dispatch.
+#
+# workflow_dispatch (manual re-run) exists for a second reason beyond
+# the thread-resolve gap above: `--assert` exits non-zero for ANY
+# not-ready verdict, including the ordinary "Copilot has not reviewed
+# this HEAD yet" pending case -- GitHub Actions has no distinct
+# non-failing "pending" check state, so the check simply shows red
+# until it converges (by design; see roadmap #1342's stated deadlock
+# policy). That also means posting a maintainer waiver comment does
+# NOT by itself turn a previously-failed check green, because a PR
+# comment is not one of this workflow's trigger events and a completed
+# run's conclusion never changes on its own -- a new run has to
+# execute. workflow_dispatch gives that a one-click affordance instead
+# of relying solely on the Actions UI's generic "re-run failed jobs".
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+  pull_request_review:
+    types:
+      - submitted
+  pull_request_review_comment:
+    types:
+      - created
+      - edited
+      - deleted
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to re-check (e.g. after posting a maintainer waiver)
+        required: true
+        type: number
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+jobs:
+  # The job id is also this check's required-status-check context name
+  # (see lint / idd-doctor / pnpm-boundary in the repository ruleset,
+  # confirmed via `gh api repos/kurone-kito/idd-skill/rulesets/<id>`)
+  # and the `ciGate.externalCheckWaivers` selector documented in
+  # docs/policy-constants.md (ADVISORY_CONVERGENCE_CHECK_SELECTOR in
+  # advisory-convergence.mts) -- keep all three in sync if this id ever
+  # changes.
+  idd-advisory-convergence:
+    runs-on: ubuntu-slim
+    # No observed run history yet (new workflow). Bounds pathological
+    # hangs with the same headroom as idd-doctor.yml's own estimate
+    # until real durations are available to tighten this.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Trusted default-branch checkout -- see the module-header
+          # comment above. Deliberately NOT the PR head for any trigger
+          # type, including workflow_dispatch. Hardcoded rather than
+          # derived from github.event.repository.default_branch: this
+          # source repository's default branch is main, confirmed
+          # directly (git remote, branch protection target) rather than
+          # relied on as an unverified event-payload field across all
+          # four trigger types.
+          ref: main
+          fetch-depth: 1
+          # Read-only check: no need to persist the token in git config.
+          persist-credentials: false
+      - name: Assert Node.js floor
+        run: |
+          # This required-check workflow relies on the runner's
+          # preinstalled Node (unlike the idd-template/ mirror, which
+          # pins one via actions/setup-node -- ubuntu-slim's Node is
+          # already known-good for idd-doctor.yml/lint.yml, but assert
+          # it explicitly here too, matching lint.yml's own Node-floor
+          # guard, so a future stale runner image fails loudly instead
+          # of producing a confusing helper crash. Exact match to
+          # package.json's engines.node (^22.22.2 || >=24), including
+          # the patch digit, so the error message's claimed range is
+          # actually what the check enforces.
+          node -e '
+            const [major, minor, patch] = process.versions.node.split(".").map(Number);
+            const ok =
+              (major === 22 && (minor > 22 || (minor === 22 && patch >= 2))) ||
+              major >= 24;
+            if (!ok) {
+              console.error(
+                "Node " + process.version + " does not satisfy this " +
+                "repository'"'"'s engines.node range (^22.22.2 || >=24).",
+              );
+              process.exit(1);
+            }
+          '
+      - name: Run advisory-convergence verdict (--assert)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/advisory-convergence.mjs --pr ${{ github.event.pull_request.number || inputs.pr_number }} --assert
