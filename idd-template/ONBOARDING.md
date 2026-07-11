@@ -769,6 +769,12 @@ on:
     types: [opened, reopened, synchronize]
   pull_request_review:
     types: [submitted]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to re-check (e.g. after posting a maintainer waiver)
+        required: true
+        type: number
 permissions:
   contents: read
   issues: read
@@ -782,11 +788,13 @@ jobs:
           # pull_request_review is not a pull_request-family event, so
           # a plain checkout resolves to the base branch on that
           # trigger unless the PR head is pinned explicitly.
-          ref: ${{ github.event.pull_request.head.sha }}
+          # workflow_dispatch has no pull_request context at all, so
+          # fall back to github.sha (the ref picked in the dispatch UI).
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/advisory-convergence.mjs --pr ${{ github.event.pull_request.number }} --assert
+        run: node scripts/advisory-convergence.mjs --pr ${{ github.event.pull_request.number || inputs.pr_number }} --assert
 ```
 
 Adjust the command to your helper-runtime profile. This workflow is
@@ -797,18 +805,20 @@ the PR's own conversation comments via the issue-comments REST
 endpoint, which GitHub gates under the Issues permission category even
 when the issue number is a pull request.
 
-Two trigger types cover the cases where convergence can change without
-a new push: `pull_request` for the normal push case, and
-`pull_request_review` for Copilot's review submission. A thread being
-resolved or unresolved (`pull_request_review_thread`) is a real GitHub
-webhook event, but it is **not** one of the events GitHub Actions
-supports as a workflow `on:` trigger — including it makes the whole
-workflow file fail GitHub's schema validation (confirmed both against
-GitHub's own trigger-events reference and empirically). Residual gap:
-if a Copilot-authored thread is resolved with no accompanying push or
-fresh Copilot review, this check keeps reporting its last computed
-verdict until the next push or review submission; a maintainer can
-force a re-run manually from the Actions UI in that case.
+Two automatic trigger types cover the cases where convergence can
+change without a new push: `pull_request` for the normal push case,
+and `pull_request_review` for Copilot's review submission. A thread
+being resolved or unresolved (`pull_request_review_thread`) is a real
+GitHub webhook event, but it is **not** one of the events GitHub
+Actions supports as a workflow `on:` trigger — including it makes the
+whole workflow file fail GitHub's schema validation (confirmed both
+against GitHub's own trigger-events reference and empirically).
+Residual gap: if a Copilot-authored thread is resolved with no
+accompanying push or fresh Copilot review, this check keeps reporting
+its last computed verdict until the next push, review submission, or
+manual re-run; `workflow_dispatch` (above) gives maintainers an
+explicit "Run workflow" affordance for that case, taking a `pr_number`
+input since a manually dispatched run has no PR context of its own.
 
 **Register it as a required status check.** Hosting the workflow alone
 does not block merge — a maintainer must separately register
@@ -820,9 +830,12 @@ Ruleset, the same way other CI jobs are registered there. This is a
 maintainer GitHub-settings action taken outside of IDD automation, not
 something an agent applies on its own.
 
-**Waiver-after-deadline escape path.** While the primary advisory bot
-has not yet reviewed the current PR HEAD, the check reports pending
-(not failing permanently). After `advisoryWait.convergenceDeadline`
+**Waiver-after-deadline escape path.** `--assert` exits non-zero for
+any not-ready verdict, including the ordinary case where the primary
+advisory bot has not yet reviewed the current PR HEAD — GitHub Actions
+has no separate non-failing "pending" check state, so the check simply
+**shows as failing** until it converges (by design: it must stay red
+until Copilot reviews the HEAD). After `advisoryWait.convergenceDeadline`
 (default 24h) elapses from the HEAD commit's own timestamp, the only
 way to turn the check green without a fresh review is a valid
 maintainer external-check waiver for that HEAD under the selector
@@ -834,7 +847,12 @@ That path only exists once `ciGate.externalCheckWaivers.mode` is
 `maintainer-authorized` **and** `idd-advisory-convergence` is itself
 registered under `ciGate.externalChecks.waivable`; enabling waiver mode
 for some other external check never silently makes this one waivable
-too.
+too. **Posting the waiver comment does not by itself turn the check
+green**: a PR comment is not one of this workflow's trigger events and
+a completed run's conclusion never changes on its own, so after
+posting the waiver a maintainer must also trigger a new run — push,
+a fresh review, the Actions UI "Re-run jobs" button, or
+`workflow_dispatch` — for the required check to actually reflect it.
 
 ### Optional — mark the vendored helper bundle `linguist-vendored`
 

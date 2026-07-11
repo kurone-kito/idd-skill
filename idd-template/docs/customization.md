@@ -29,7 +29,7 @@ behavior change too.
 | Issue authoring guard               | Discover skips issues carrying the configured authoring label and warns when that label appears stale                                                                                    | Configure `issueAuthoring.authoringLabelName` and `issueAuthoring.authoringStaleAge` in `.github/idd/config.json` when local label naming or timing differs from the distributed defaults. Keep the label available in the target repository and keep `authoringStaleAge` less than `claimTiming.staleAge`; see [IDD policy constants](policy-constants.md#issue-authoring-defaults).                                                                                                                                                                                                                                                                          |
 | Workshop example repo               | `idd-doctor` checks that the example repository's README back-links to this repo's `docs/workshop/`                                                                                      | Set `workshop.exampleRepository` in `.github/idd/config.json` to `"<owner>/<repo>"` when this repository publishes a workshop and an external example repository should back-link to it. Leave the field empty / unset to skip the check (default for adopter repos that have not published a workshop).                                                                                                                                                                                                                                                                                                                                                       |
 | Worktree guard                      | Advisory only by default — `idd-doctor` warns on a primary-worktree implementation-branch HEAD but nothing blocks the commit, push, or merge                                             | This release adds the opt-in config surface only; the enforcing components (`idd-doctor --strict`, its CI step, and the `core.hooksPath` hook) arrive in follow-up roadmap work, so enabling the flag alone has no effect yet. Opt in by setting `worktreeGuard.enabled: true` in `.github/idd/config.json`; once those components are present, an enabled guard makes them fail or reject a primary-worktree `issue/*` / `roadmap-audit/*` HEAD. Override `worktreeGuard.branchPatterns` to change which branch globs count as implementation branches (default `issue/*`, `roadmap-audit/*`). Absent or `false` keeps the historical advisory-only behavior. |
-| Advisory-convergence required check | The `idd-advisory-convergence` workflow ships and reports on every PR, but is **not** registered as a required status check by default                                                   | Register `idd-advisory-convergence` as a required status check in the repository's branch-protection Ruleset to make Copilot-advisory convergence non-bypassable; see [IDD template onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow) and [policy constants](policy-constants.md#advisory-review-defaults). Until registered, the workflow still runs and reports but never blocks a merge.                                                                                                                                                   |
+| Advisory-convergence required check | Hosting the `idd-advisory-convergence` workflow is itself opt-in (see ONBOARDING); once hosted, it reports on every PR but is **not** registered as a required status check by default   | Add the workflow per [IDD template onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow), then register `idd-advisory-convergence` as a required status check in the repository's branch-protection Ruleset to make Copilot-advisory convergence non-bypassable; see [policy constants](policy-constants.md#advisory-review-defaults). Until registered, the hosted workflow still runs and reports but never blocks a merge.                                                                                                                     |
 
 ## Non-Configurable Safety Invariants
 
@@ -307,17 +307,20 @@ When enabling this policy surface:
 - in solo-maintainer repositories, use the helper-generated waiver
   comment instead of PR self-approval as the authorization surface
 
-**Advisory-convergence required check.** The `idd-advisory-convergence`
-workflow (see [IDD template onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow))
-hosts the `advisory-convergence` helper's `--assert` verdict as a CI
-check. Shipping the workflow alone does not gate merges — a maintainer
-must separately register `idd-advisory-convergence` as a **required**
-status check in the repository's branch-protection Ruleset; this is a
-GitHub-settings action taken outside of IDD automation, not something
-an agent applies on its own. Once registered, the check follows the
-same deadline/waiver escape path as any other external check: while
-the primary advisory bot has not yet reviewed the current PR HEAD, the
-check reports pending rather than failing permanently; once
+**Advisory-convergence required check.** Hosting the
+`idd-advisory-convergence` workflow (opt-in; see [IDD template onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow))
+lets it assert the `advisory-convergence` helper's `--assert` verdict
+as a CI check on every PR. Hosting the workflow alone does not gate
+merges — a maintainer must separately register `idd-advisory-convergence`
+as a **required** status check in the repository's branch-protection
+Ruleset; this is a GitHub-settings action taken outside of IDD
+automation, not something an agent applies on its own. Once
+registered, the check follows the same deadline/waiver escape path as
+any other external check: while the primary advisory bot has not yet
+reviewed the current PR HEAD, `--assert` exits non-zero and the check
+**shows as failing** (GitHub Actions has no separate non-failing
+"pending" check state) — by design, since the check must stay red
+until Copilot reviews the current HEAD; once
 `advisoryWait.convergenceDeadline` (default 24h) elapses from the HEAD
 commit's own timestamp, the only way to turn it green without a fresh
 review is a valid maintainer external-check waiver for that HEAD under
@@ -325,7 +328,13 @@ the selector `idd-advisory-convergence`. That waiver path only exists
 once `ciGate.externalCheckWaivers.mode` is `maintainer-authorized`
 **and** `idd-advisory-convergence` is itself listed under
 `ciGate.externalChecks.waivable` — enabling waiver mode for some other
-external check never silently makes this one waivable too.
+external check never silently makes this one waivable too. **Posting a
+waiver comment does not by itself turn the check green**: the workflow
+only re-runs on a new `pull_request` push, a `pull_request_review`
+submission, or a manual `workflow_dispatch` run, so after posting a
+waiver a maintainer must also trigger one of those (the Actions UI
+"Re-run jobs" button, or `workflow_dispatch`) for the required check to
+actually reflect it.
 
 ## Phase ID Compatibility Contract
 

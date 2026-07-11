@@ -3,8 +3,9 @@ concurrency:
   # Grouped by PR number, not github.ref: pull_request_review is not a
   # pull_request-family event, so github.ref is not guaranteed to
   # resolve the same way for it as it does for a pull_request-only
-  # workflow (see idd-doctor.yml / lint.yml).
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  # workflow (see idd-doctor.yml / lint.yml). workflow_dispatch has no
+  # pull_request context either, so it falls back to its own inputs.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}
 name: IDD advisory-convergence gate
 # Required-check gate (#1341): asserts that the primary advisory bot's
 # ("Copilot's") review has converged on the current PR HEAD, using the
@@ -50,8 +51,20 @@ name: IDD advisory-convergence gate
 # gap: if a Copilot-authored thread is resolved with no accompanying
 # push or fresh Copilot review, this check will not automatically
 # re-run and keeps reporting its last computed verdict until the next
-# push or review-submission. No native Actions trigger closes this gap
-# today; a maintainer can force a re-run manually from the Actions UI.
+# push, review-submission, or manual workflow_dispatch run.
+#
+# workflow_dispatch (manual re-run) exists for a second reason beyond
+# the thread-resolve gap above: `--assert` exits non-zero for ANY
+# not-ready verdict, including the ordinary "Copilot has not reviewed
+# this HEAD yet" pending case -- GitHub Actions has no distinct
+# non-failing "pending" check state, so the check simply shows red
+# until it converges (by design; see roadmap #1342's stated deadlock
+# policy). That also means posting a maintainer waiver comment does
+# NOT by itself turn a previously-failed check green, because a PR
+# comment is not one of this workflow's trigger events and a completed
+# run's conclusion never changes on its own -- a new run has to
+# execute. workflow_dispatch gives that a one-click affordance instead
+# of relying solely on the Actions UI's generic "re-run failed jobs".
 on:
   pull_request:
     types:
@@ -61,6 +74,12 @@ on:
   pull_request_review:
     types:
       - submitted
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to re-check (e.g. after posting a maintainer waiver)
+        required: true
+        type: number
 permissions:
   contents: read
   issues: read
@@ -84,14 +103,16 @@ jobs:
         with:
           # pull_request_review is not a pull_request-family event, so
           # actions/checkout's default ref (github.ref) resolves to the
-          # base branch on that trigger, not the PR head. Pin the head
-          # SHA explicitly so both trigger types check out the same PR
-          # HEAD the helper evaluates.
-          ref: ${{ github.event.pull_request.head.sha }}
+          # base branch on that trigger, not the PR head -- pin the
+          # head SHA explicitly. workflow_dispatch has no
+          # pull_request.head.sha at all; falling back to github.sha
+          # there resolves to whatever ref the maintainer picked when
+          # dispatching (they must pick the PR's own branch).
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 1
           # Read-only check: no need to persist the token in git config.
           persist-credentials: false
       - name: Run advisory-convergence verdict (--assert)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/advisory-convergence.mjs --pr ${{ github.event.pull_request.number }} --assert
+        run: node scripts/advisory-convergence.mjs --pr ${{ github.event.pull_request.number || inputs.pr_number }} --assert
