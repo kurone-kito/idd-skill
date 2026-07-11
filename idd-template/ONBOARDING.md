@@ -794,13 +794,14 @@ drives every live GitHub API call the script makes (reviews, threads,
 comments), independent of what is checked out locally, so pinning the
 checkout to the trusted branch costs nothing functionally.
 
-Three automatic trigger types cover the cases where convergence can
-change without a new push: `pull_request` for the normal push case,
-`pull_request_review` for Copilot's review submission, and
-`pull_request_review_comment` for a reply posted, edited, or deleted on
-a review thread — including the disposition markers (`**Accepted**` /
-`**Rejected**`) triage posts, since those are exactly what flips a
-thread from blocking to dispositioned. A thread being resolved or
+Three automatic trigger types keep the verdict current: `pull_request`
+for the normal push case, plus two triggers for the ways convergence
+can change **without** a new push — `pull_request_review` for
+Copilot's review submission, and `pull_request_review_comment` for a
+reply posted, edited, or deleted on a review thread, including the
+disposition markers (`**Accepted**` / `**Rejected**`) triage posts,
+since those are exactly what flips a thread from blocking to
+dispositioned. A thread being resolved or
 unresolved via the "Resolve conversation" button
 (`pull_request_review_thread`) is a real GitHub webhook event, but it
 is **not** one of the events GitHub Actions supports as a workflow
