@@ -769,6 +769,8 @@ on:
     types: [opened, reopened, synchronize]
   pull_request_review:
     types: [submitted]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -785,11 +787,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # pull_request_review is not a pull_request-family event, so
-          # a plain checkout resolves to the base branch on that
-          # trigger unless the PR head is pinned explicitly.
-          # workflow_dispatch has no pull_request context at all, so
-          # fall back to github.sha (the ref picked in the dispatch UI).
+          # pull_request_review / pull_request_review_comment are not
+          # pull_request-family events, so a plain checkout resolves to
+          # the base branch on those triggers unless the PR head is
+          # pinned explicitly. workflow_dispatch has no pull_request
+          # context at all, so fall back to github.sha (the ref picked
+          # in the dispatch UI).
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - env:
@@ -805,20 +808,26 @@ the PR's own conversation comments via the issue-comments REST
 endpoint, which GitHub gates under the Issues permission category even
 when the issue number is a pull request.
 
-Two automatic trigger types cover the cases where convergence can
+Three automatic trigger types cover the cases where convergence can
 change without a new push: `pull_request` for the normal push case,
-and `pull_request_review` for Copilot's review submission. A thread
-being resolved or unresolved (`pull_request_review_thread`) is a real
-GitHub webhook event, but it is **not** one of the events GitHub
-Actions supports as a workflow `on:` trigger — including it makes the
-whole workflow file fail GitHub's schema validation (confirmed both
-against GitHub's own trigger-events reference and empirically).
-Residual gap: if a Copilot-authored thread is resolved with no
-accompanying push or fresh Copilot review, this check keeps reporting
-its last computed verdict until the next push, review submission, or
-manual re-run; `workflow_dispatch` (above) gives maintainers an
-explicit "Run workflow" affordance for that case, taking a `pr_number`
-input since a manually dispatched run has no PR context of its own.
+`pull_request_review` for Copilot's review submission, and
+`pull_request_review_comment` for a reply posted, edited, or deleted on
+a review thread — including the disposition markers (`**Accepted**` /
+`**Rejected**`) triage posts, since those are exactly what flips a
+thread from blocking to dispositioned. A thread being resolved or
+unresolved via the "Resolve conversation" button
+(`pull_request_review_thread`) is a real GitHub webhook event, but it
+is **not** one of the events GitHub Actions supports as a workflow
+`on:` trigger — including it makes the whole workflow file fail
+GitHub's schema validation (confirmed both against GitHub's own
+trigger-events reference and empirically). Residual gap: if a
+Copilot-authored thread is resolved or reopened with no accompanying
+comment, push, or fresh Copilot review, this check keeps reporting its
+last computed verdict until one of the three triggers above fires or a
+maintainer runs a manual re-check; `workflow_dispatch` (above) gives
+maintainers an explicit "Run workflow" affordance for that case, taking
+a `pr_number` input since a manually dispatched run has no PR context
+of its own.
 
 **Register it as a required status check.** Hosting the workflow alone
 does not block merge — a maintainer must separately register

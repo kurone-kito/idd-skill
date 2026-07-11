@@ -1,10 +1,11 @@
 concurrency:
   cancel-in-progress: true
-  # Grouped by PR number, not github.ref: pull_request_review is not a
-  # pull_request-family event, so github.ref is not guaranteed to
-  # resolve the same way for it as it does for a pull_request-only
-  # workflow (see idd-doctor.yml / lint.yml). workflow_dispatch has no
-  # pull_request context either, so it falls back to its own inputs.
+  # Grouped by PR number, not github.ref: pull_request_review and
+  # pull_request_review_comment are not pull_request-family events, so
+  # github.ref is not guaranteed to resolve the same way for them as it
+  # does for a pull_request-only workflow (see idd-doctor.yml / lint.yml).
+  # workflow_dispatch has no pull_request context either, so it falls
+  # back to its own inputs.
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}
 name: IDD advisory-convergence gate
 # Required-check gate (#1341): asserts that the primary advisory bot's
@@ -36,8 +37,15 @@ name: IDD advisory-convergence gate
 #
 # CI topology: unlike lint.yml/idd-doctor.yml's pull_request-only
 # trigger, convergence can also change WITHOUT a new push -- when
-# Copilot submits its review -- so pull_request_review is added
-# alongside pull_request.
+# Copilot submits its review (pull_request_review), or when a
+# disposition marker (or any other reply/edit/delete) is posted on a
+# review thread (pull_request_review_comment) -- so both are added
+# alongside pull_request. The latter matters because Clause 2 of the
+# verdict (every Copilot-authored thread resolved-or-dispositioned)
+# changes exactly when an E6 disposition reply is posted; without this
+# trigger the check would only refresh on the next push, review
+# submission, or manual workflow_dispatch run, leaving it stuck on a
+# stale failing verdict after triage already resolved every thread.
 #
 # Known gap vs. the issue's original three-trigger proposal:
 # `pull_request_review_thread` (thread resolved/unresolved) is a real
@@ -48,10 +56,11 @@ name: IDD advisory-convergence gate
 # but never pull_request_review_thread) and empirically: including it
 # here made this entire workflow file fail GitHub's schema validation
 # (zero jobs scheduled, "workflow file issue") on first push. Residual
-# gap: if a Copilot-authored thread is resolved with no accompanying
-# push or fresh Copilot review, this check will not automatically
-# re-run and keeps reporting its last computed verdict until the next
-# push, review-submission, or manual workflow_dispatch run.
+# gap: if a Copilot-authored thread is resolved (or reopened) via the
+# "Resolve conversation" button with no accompanying comment, push, or
+# fresh Copilot review, this check will not automatically re-run and
+# keeps reporting its last computed verdict until one of those other
+# triggers fires or a maintainer runs workflow_dispatch.
 #
 # workflow_dispatch (manual re-run) exists for a second reason beyond
 # the thread-resolve gap above: `--assert` exits non-zero for ANY
@@ -74,6 +83,11 @@ on:
   pull_request_review:
     types:
       - submitted
+  pull_request_review_comment:
+    types:
+      - created
+      - edited
+      - deleted
   workflow_dispatch:
     inputs:
       pr_number:
@@ -101,13 +115,14 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # pull_request_review is not a pull_request-family event, so
-          # actions/checkout's default ref (github.ref) resolves to the
-          # base branch on that trigger, not the PR head -- pin the
-          # head SHA explicitly. workflow_dispatch has no
-          # pull_request.head.sha at all; falling back to github.sha
-          # there resolves to whatever ref the maintainer picked when
-          # dispatching (they must pick the PR's own branch).
+          # pull_request_review and pull_request_review_comment are not
+          # pull_request-family events, so actions/checkout's default
+          # ref (github.ref) resolves to the base branch on those
+          # triggers, not the PR head -- pin the head SHA explicitly.
+          # workflow_dispatch has no pull_request.head.sha at all;
+          # falling back to github.sha there resolves to whatever ref
+          # the maintainer picked when dispatching (they must pick the
+          # PR's own branch).
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 1
           # Read-only check: no need to persist the token in git config.
