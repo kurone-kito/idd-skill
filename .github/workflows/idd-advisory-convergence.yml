@@ -152,13 +152,15 @@ jobs:
           # already known-good for idd-doctor.yml/lint.yml, but assert
           # it explicitly here too, matching lint.yml's own Node-floor
           # guard, so a future stale runner image fails loudly instead
-          # of producing a confusing helper crash. Approximates
-          # package.json's engines.node (^22.22.2 || >=24) at
-          # major.minor precision, same precision lint.yml already uses
-          # for its own floor check.
+          # of producing a confusing helper crash. Exact match to
+          # package.json's engines.node (^22.22.2 || >=24), including
+          # the patch digit, so the error message's claimed range is
+          # actually what the check enforces.
           node -e '
-            const [major, minor] = process.versions.node.split(".").map(Number);
-            const ok = (major === 22 && minor >= 22) || major >= 24;
+            const [major, minor, patch] = process.versions.node.split(".").map(Number);
+            const ok =
+              (major === 22 && (minor > 22 || (minor === 22 && patch >= 2))) ||
+              major >= 24;
             if (!ok) {
               console.error(
                 "Node " + process.version + " does not satisfy this " +
