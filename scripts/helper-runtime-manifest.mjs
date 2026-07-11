@@ -91,6 +91,16 @@ const EXTRA_RUNTIME_FILES = new Map([
 ]);
 const HELPER_COMMANDS = [
   {
+    id: 'advisory-convergence',
+    scriptName: 'idd:advisory-convergence',
+    binName: 'idd-advisory-convergence',
+    entryPath: 'scripts/advisory-convergence.mjs',
+    vendoredCommand: 'node scripts/advisory-convergence.mjs',
+    description:
+      'Assert whether the primary advisory bot has converged on the current PR HEAD, with an exit-code contract via --assert.',
+    contractPaths: ['schemas/advisory-convergence.schema.json'],
+  },
+  {
     id: 'advisory-wait-state',
     scriptName: 'idd:advisory-wait-state',
     binName: 'idd-advisory-wait-state',

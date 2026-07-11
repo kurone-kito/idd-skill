@@ -1,0 +1,38 @@
+{
+  "protocolVersion": "1",
+  "decisionAuthority": "instructions",
+  "prNumber": 1340,
+  "prHeadSha": "",
+  "now": "2026-07-11T12:00:00Z",
+  "primaryBotLogin": "copilot",
+  "review": {
+    "found": false,
+    "commitId": "",
+    "matchesHead": false,
+    "itemCount": null,
+    "submittedAt": "",
+    "satisfied": false
+  },
+  "threads": {
+    "copilotThreadCount": 0,
+    "blockingIds": [],
+    "blockingCount": 0,
+    "satisfied": true
+  },
+  "pending": true,
+  "deadline": {
+    "minutes": 1440,
+    "headCommittedAt": "",
+    "elapsedMinutes": null,
+    "passed": false
+  },
+  "waiver": {
+    "mode": "disabled",
+    "checkSelector": "idd-advisory-convergence",
+    "activeClaimId": "",
+    "validCount": 0
+  },
+  "converged": false,
+  "waived": false,
+  "ready": true
+}

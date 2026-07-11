@@ -266,6 +266,10 @@
         "secondaryBotLogin": {
           "type": "string",
           "minLength": 1
+        },
+        "convergenceDeadline": {
+          "type": "string",
+          "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$"
         }
       }
     },

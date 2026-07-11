@@ -13,6 +13,9 @@ export const DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES = 30;
 export const DEFAULT_ADVISORY_SETTLED_WINDOW_MINUTES = 10;
 export const DEFAULT_ADVISORY_POLL_INTERVAL_MINUTES = 2;
 export const DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN = 'copilot';
+// 24h, matching the `claim-stale-age` and external-check-waiver
+// `maxValidity` defaults so this gate uses a familiar timescale.
+export const DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES = 1440;
 export const ADVISORY_CAP_EXHAUSTED_ROUTE_DEFAULT = 'phase-specific';
 export const ADVISORY_CAP_EXHAUSTED_ROUTES = new Set([
   'phase-specific',
@@ -149,6 +152,45 @@ export function readAdvisorySecondaryBotLogin(
     return resolveAdvisorySecondaryBotLogin(config);
   } catch {
     return '';
+  }
+}
+
+/**
+ * Resolve the configured advisory-convergence deadline (in minutes) from a
+ * parsed policy object. Once a PR HEAD has gone this long without a
+ * zero-item Copilot review, `advisory-convergence.mts`'s only pass path is a
+ * valid maintainer external-check waiver for that HEAD. Kept separate from
+ * {@link resolveAdvisoryWaitPolicy} for the same reason the bot-login
+ * resolvers are separate: it is not part of the five-key active-wait timing
+ * shape, and defaults to Copilot-advisory-preserving behavior when absent.
+ */
+export function resolveAdvisoryConvergenceDeadlineMinutes(
+  config: unknown = {},
+): number {
+  const advisoryWait = ((config as { advisoryWait?: unknown } | null)
+    ?.advisoryWait ?? {}) as Record<string, unknown>;
+  return normalizeConfiguredDurationMinutes(
+    advisoryWait.convergenceDeadline,
+    DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
+  );
+}
+
+/**
+ * Read the configured advisory-convergence deadline from a policy file,
+ * failing closed to the 24h default when the file is missing, unreadable, or
+ * schema-invalid.
+ */
+export function readAdvisoryConvergenceDeadlineMinutes(
+  path: string = '.github/idd/config.json',
+): number {
+  try {
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    if (validate(config, POLICY_SCHEMA).length > 0) {
+      return DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES;
+    }
+    return resolveAdvisoryConvergenceDeadlineMinutes(config);
+  } catch {
+    return DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES;
   }
 }
 
