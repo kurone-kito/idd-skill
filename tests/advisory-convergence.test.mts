@@ -8,6 +8,7 @@ import {
   classifyCopilotAuthoredThreadIds,
   computeAdvisoryConvergenceVerdict,
   parseArgs,
+  pickResolvingClaimEvents,
   runAdvisoryConvergence,
 } from '../src/scripts/advisory-convergence.mts';
 import { renderExternalCheckWaiverComment } from '../src/scripts/marker-helpers.mts';
@@ -840,6 +841,7 @@ test('staleAgeMs: a configured shorter stale window allows a takeover the hardco
       // staleAgeMs omitted -- hardcoded 24h default; the 2h gap is not stale.
     }),
   );
+  assertValidVerdict(underDefault);
   assert.equal(underDefault.waiver.activeClaimId, CLAIM_ID);
 
   const underConfiguredWindow = computeAdvisoryConvergenceVerdict(
@@ -853,6 +855,87 @@ test('staleAgeMs: a configured shorter stale window allows a takeover the hardco
   );
   assertValidVerdict(underConfiguredWindow);
   assert.equal(underConfiguredWindow.waiver.activeClaimId, SUCCESSOR_CLAIM_ID);
+});
+
+// --- pickResolvingClaimEvents (pure helper; #1347 regression) ---------------
+// --- #1347: the collaborator-marker-trust fix in #1344 threaded
+// --- `trustedMarkerLogins` into claim-issue disambiguation using a set
+// --- resolved from ONLY the already-picked candidate's comments -- circular,
+// --- since a lone candidate whose claim-establishing marker is authored by a
+// --- collaborator-only-trusted login would never register as "active" for
+// --- the presence check to pick it in the first place. This section proves
+// --- the fix: `collectFromGitHub` now resolves `trustedMarkerLogins` from
+// --- ALL candidates' comments before calling this function, so the
+// --- disambiguation itself sees the fully-resolved set.
+
+test('pickResolvingClaimEvents: a lone candidate trusted only via collaborator-marker trust resolves correctly (the #1347 regression)', () => {
+  const COLLABORATOR = 'collab-write-user';
+  const collaboratorClaim = [
+    {
+      author: { login: COLLABORATOR },
+      body: `<!-- claimed-by: ${AGENT_ID} ${CLAIM_ID} supersedes: none ${OLD} branch: issue/1234-test -->\n\n_${AGENT_ID}: issue claim — IDD automation marker. Do not edit._`,
+      createdAt: OLD,
+    },
+  ];
+
+  // Without COLLABORATOR in trustedMarkerLogins: the claim-establishing
+  // marker's author fails idd-claim rule 2 (untrusted author), so
+  // activeClaimPresent is false and the sole candidate is discarded.
+  assert.deepEqual(
+    pickResolvingClaimEvents([collaboratorClaim], [TRUSTED], false),
+    [],
+  );
+
+  // With COLLABORATOR folded in (what collectFromGitHub's fixed ordering
+  // now guarantees -- resolved from ALL candidates' comments before this
+  // call, not just the one this call ends up picking): the same candidate
+  // now resolves correctly.
+  assert.deepEqual(
+    pickResolvingClaimEvents(
+      [collaboratorClaim],
+      [TRUSTED, COLLABORATOR],
+      false,
+    ),
+    collaboratorClaim,
+  );
+});
+
+test('pickResolvingClaimEvents: an explicit candidate (--claim-issue) is returned unconditionally, bypassing disambiguation', () => {
+  const untrustedOnlyClaim = [
+    {
+      author: { login: 'nobody-trusted' },
+      body: `<!-- claimed-by: ${AGENT_ID} ${CLAIM_ID} supersedes: none ${OLD} branch: issue/1234-test -->\n\n_${AGENT_ID}: issue claim — IDD automation marker. Do not edit._`,
+      createdAt: OLD,
+    },
+  ];
+  // isExplicit: true skips the presence check entirely -- matches the
+  // pre-#1344 behavior of the original resolveClaimEvents's `if
+  // (explicitIssueNumber) { return fetchClaimComments(...); }` early return.
+  assert.deepEqual(
+    pickResolvingClaimEvents([untrustedOnlyClaim], [TRUSTED], true),
+    untrustedOnlyClaim,
+  );
+});
+
+test('pickResolvingClaimEvents: zero or multiple resolving candidates still fail closed to [] (unchanged from pre-#1344/#1347 behavior)', () => {
+  const claimA = [claimComment('claim-a')];
+  const claimB = [claimComment('claim-b')];
+  const noClaim = [
+    { author: { login: TRUSTED }, body: 'just a comment', createdAt: OLD },
+  ];
+
+  // Zero resolving candidates.
+  assert.deepEqual(pickResolvingClaimEvents([noClaim], [TRUSTED], false), []);
+  // Multiple resolving candidates -- ambiguous, fails closed.
+  assert.deepEqual(
+    pickResolvingClaimEvents([claimA, claimB], [TRUSTED], false),
+    [],
+  );
+  // Exactly one resolving candidate among several -- picks it.
+  assert.deepEqual(
+    pickResolvingClaimEvents([noClaim, claimA], [TRUSTED], false),
+    claimA,
+  );
 });
 
 // --- classifyCopilotAuthoredThreadIds (pure helper) -------------------------

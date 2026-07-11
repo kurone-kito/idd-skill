@@ -533,36 +533,27 @@ function collectFromGitHub(args) {
     rawConfig,
     process.env.IDD_TRUST_COLLABORATOR_MARKERS,
   );
-  // Base set (no collaborator fold yet). Sufficient for `resolveClaimEvents`'s
-  // own internal disambiguation below, which only needs to know whether SOME
-  // active claim exists on a candidate linked issue -- a presence check, not
-  // an identity resolution. A forced-handoff transition can only ever
-  // TRANSFORM an already-active claim (rule 7 requires `oldAgentId`/
-  // `oldClaimId`/`branch` to match the currently active claim), and
-  // `resolveActiveClaim`'s stale/non-superseded fallthrough always returns
-  // the pre-transform claim unchanged (protocol-helpers.mts's
-  // `applyClaimEvent`, the `return activeClaim;` fallthrough after the
-  // `isStale` check) -- so that pre-transform claim is always still
-  // "present" here whether or not this narrower set (or forced-handoff
-  // awareness generally) recognizes the transition itself. The
-  // collaborator-augmented FINAL set below (after `claimEvents` resolves)
-  // is what the real verdict computation uses.
-  const baseTrustedMarkerLogins = normalizeTrustedMarkerLogins([
-    viewerLogin,
-    ...configuredTrustedActors,
-  ]);
   const { reviews, headCommittedAt } = fetchReviewsAndHeadCommit(
     owner,
     repo,
     Number(args.prNumber),
   );
   const threads = fetchReviewThreads(owner, repo, Number(args.prNumber));
-  const claimEvents = resolveClaimEvents(
+  // #1347: fetch every claim-issue candidate's raw comments (pure I/O)
+  // BEFORE computing `trustedMarkerLogins`, so collaborator-marker trust
+  // can be resolved from ALL candidates' comments -- not just whichever
+  // one the presence-check below eventually picks. Folding trust only
+  // from the already-picked candidate is circular: a lone candidate's
+  // claim-establishing marker, authored by a login trusted only via
+  // collaborator-marker trust, would never register as "active" for the
+  // presence check to pick it in the first place, discarding the real
+  // claim data before that trust is ever computed. See
+  // `pickResolvingClaimEvents`'s doc comment for the full history.
+  const claimCandidates = fetchClaimEventCandidates(
     owner,
     repo,
     args.claimIssueNumber,
     pr.closingIssuesReferences,
-    baseTrustedMarkerLogins,
   );
   // Deliberately NOT unioned with `advisoryBotLogins` here (unlike some
   // other locally-collected sets in this file that scope broader trust for
@@ -574,24 +565,33 @@ function collectFromGitHub(args) {
   // would let that bot's own comment count as a "maintainer-authorized"
   // waiver author.
   //
-  // #1344: folds collaborator-marker trust over the UNION of PR comments
-  // and the resolved claim issue's own comments, matching
-  // `pre-merge-readiness.mts`'s `[...comments, ...claimComments]` union
-  // exactly. Scanning `comments` alone would make `collaboratorTrustEnabled`
-  // a no-op for claim and forced-handoff markers: those are always posted to
-  // the claim ISSUE, never the PR (see `forced-handoff-marker.mts`), and
-  // `applyClaimEvent`'s `isTrustedAuthor` gate runs before any forced-handoff
-  // parsing -- an untrusted-author's marker never even reaches the
-  // authorization check.
+  // #1344/#1347: folds collaborator-marker trust over the UNION of PR
+  // comments and EVERY claim-issue candidate's comments, matching
+  // `pre-merge-readiness.mts`'s `[...comments, ...claimComments]` union in
+  // spirit (extended here to all candidates, since this gate -- unlike
+  // pre-merge-readiness.mts -- auto-discovers among several linked issues
+  // rather than requiring a single explicit one). Scanning `comments`
+  // alone would make `collaboratorTrustEnabled` a no-op for claim and
+  // forced-handoff markers: those are always posted to the claim ISSUE,
+  // never the PR (see `forced-handoff-marker.mts`), and
+  // `applyClaimEvent`'s `isTrustedAuthor` gate runs before any
+  // claim/forced-handoff parsing -- an untrusted-author's marker never
+  // even reaches the authorization check.
   const trustedMarkerLogins = normalizeTrustedMarkerLogins([
-    ...baseTrustedMarkerLogins,
+    viewerLogin,
+    ...configuredTrustedActors,
     ...(collaboratorTrustEnabled
       ? resolveTrustedCollaboratorMarkerLogins(owner, repo, [
           ...comments,
-          ...claimEvents,
+          ...claimCandidates.flat(),
         ])
       : []),
   ]);
+  const claimEvents = pickResolvingClaimEvents(
+    claimCandidates,
+    trustedMarkerLogins,
+    Boolean(args.claimIssueNumber),
+  );
   const primaryBotLogin = readAdvisoryPrimaryBotLogin();
   const deadlineMinutes = readAdvisoryConvergenceDeadlineMinutes();
   // No manual cast: `normalizePolicyConfig`'s inferred return type already
@@ -697,45 +697,67 @@ function fetchClaimComments(owner, repo, issueNumber) {
   }));
 }
 /**
- * Resolve the linked (claim) issue's comment stream for waiver-claim
- * binding. When `explicitIssueNumber` (`--claim-issue`) is given, use it
- * directly -- no ambiguity to resolve. Otherwise a PR can close more than
- * one issue (`pr.closingIssuesReferences`), so fetch every candidate's
- * comments and keep only the one whose *active claim* actually resolves
- * (`summarizeClaimValidation`), mirroring how `external-check-waiver.mts`'s
- * own `selectLinkedIssueCandidate` disambiguates multiple linked issues by
- * active-claim presence rather than requiring a single closing reference.
- * Zero or multiple resolving candidates fail closed to `[]` (no waiver
- * claim can bind unambiguously), same as before.
+ * Fetch the claim-issue candidate(s)' raw comment streams -- pure I/O, no
+ * trust judgment. When `explicitIssueNumber` (`--claim-issue`) is given,
+ * fetch it alone -- no ambiguity to resolve. Otherwise a PR can close more
+ * than one issue (`pr.closingIssuesReferences`), so fetch every candidate's
+ * comments; {@link pickResolvingClaimEvents} disambiguates them afterward.
+ *
+ * Split out from a single `resolveClaimEvents` (#1344) so the
+ * `trustedMarkerLogins` used for disambiguation can be computed from ALL
+ * candidates' comments first (see the `collectFromGitHub` call site) --
+ * #1347 found that resolving trust from only the eventually-picked
+ * candidate is circular: a lone candidate's claim-establishing marker,
+ * authored by a login trusted only via collaborator-marker trust, would
+ * never be recognized as "active" long enough to be picked in the first
+ * place, discarding the real claim data before that trust is ever folded
+ * in.
  */
-function resolveClaimEvents(
-  owner,
-  repo,
-  explicitIssueNumber,
-  refs,
-  trustedMarkerLogins,
-) {
+function fetchClaimEventCandidates(owner, repo, explicitIssueNumber, refs) {
   if (explicitIssueNumber) {
-    return fetchClaimComments(owner, repo, explicitIssueNumber);
+    return [fetchClaimComments(owner, repo, explicitIssueNumber)];
   }
   const candidateNumbers = [
     ...new Set(
       (refs ?? []).map((ref) => ref?.number).filter((n) => Number.isInteger(n)),
     ),
   ];
-  const resolving = candidateNumbers
-    .map((issueNumber) => {
-      const comments = fetchClaimComments(owner, repo, issueNumber);
-      return {
-        comments,
-        hasActiveClaim: Boolean(
-          summarizeClaimValidation(comments, { trustedMarkerLogins })
-            .activeClaimPresent,
-        ),
-      };
-    })
-    .filter((candidate) => candidate.hasActiveClaim);
-  return resolving.length === 1 ? resolving[0].comments : [];
+  return candidateNumbers.map((issueNumber) =>
+    fetchClaimComments(owner, repo, issueNumber),
+  );
+}
+/**
+ * Resolve the linked (claim) issue's comment stream for waiver-claim
+ * binding, given already-fetched candidate comment streams
+ * ({@link fetchClaimEventCandidates}) and a `trustedMarkerLogins` already
+ * fully resolved (including any collaborator-marker-trust fold) over ALL
+ * candidates' comments. Pure -- no I/O -- so it is directly unit-testable.
+ *
+ * `isExplicit` mirrors `fetchClaimEventCandidates`'s own
+ * `explicitIssueNumber` check: an explicit `--claim-issue` candidate is
+ * returned unconditionally, no ambiguity to resolve. Otherwise, keep only
+ * the candidate whose *active claim* actually resolves
+ * (`summarizeClaimValidation`), mirroring how `external-check-waiver.mts`'s
+ * own `selectLinkedIssueCandidate` disambiguates multiple linked issues by
+ * active-claim presence rather than requiring a single closing reference.
+ * Zero or multiple resolving candidates fail closed to `[]` (no waiver
+ * claim can bind unambiguously), same as before #1344/#1347.
+ */
+export function pickResolvingClaimEvents(
+  candidates,
+  trustedMarkerLogins,
+  isExplicit,
+) {
+  if (isExplicit) {
+    return candidates[0] ?? [];
+  }
+  const resolving = candidates.filter((comments) =>
+    Boolean(
+      summarizeClaimValidation(comments, { trustedMarkerLogins })
+        .activeClaimPresent,
+    ),
+  );
+  return resolving.length === 1 ? resolving[0] : [];
 }
 /**
  * Candidate collaborator-marker-trust logins: comment authors whose comment
