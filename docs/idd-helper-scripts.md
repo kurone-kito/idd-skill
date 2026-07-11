@@ -1161,6 +1161,17 @@ Interpretation rules:
   `summarizeClaimValidation`, and `summarizeExternalCheckWaivers` — rather
   than duplicating review- or waiver-parsing logic; only the
   Copilot-thread-authorship filter and the review-item-count read are new.
+- Claim resolution for the waiver escape hatch is forced-handoff-aware and
+  collaborator-marker-trust-aware (#1344), matching `pre-merge-readiness.mjs`
+  exactly: with `forcedHandoff.mode: "human-gated"` enabled, a verified
+  handoff on the linked claim issue transfers `activeClaimId` to the
+  successor (including the Part B (#1058) allowance for an `issue-only`
+  handoff that predates the PR); with `markerTrust.allowCollaboratorMarkers`
+  (or `IDD_TRUST_COLLABORATOR_MARKERS`) enabled, a Write/Maintain/Admin
+  collaborator's marker-shaped PR comment adds them to the trusted-marker
+  set the same way it already does for `pre-merge-readiness.mjs` /
+  `advisory-wait-state.mjs`. Both stay no-ops when the repository leaves
+  them at their (disabled) defaults.
 - Fail closed: if helper execution fails, output is invalid JSON, or
   required fields are missing, discard helper output and apply the
   written F2 advisory/disposition sub-gate check manually.

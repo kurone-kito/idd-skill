@@ -26,6 +26,13 @@
 //     PR's linked issue exactly as `external-check-waiver.mts`'s own
 //     `--apply` path already does, so no claim flag is required to call
 //     this helper (`--pr <n> --assert` is sufficient -- see docs).
+//   - `resolveCollaboratorMarkerTrust`, `isAuthorizedForcedHandoffActor`,
+//     `operationalMarkerPrefix` -- reused, matching `pre-merge-readiness.mts`
+//     exactly (#1344), to thread forced-handoff-aware claim resolution and
+//     collaborator-marker trust into the same `summarizeClaimValidation`
+//     call above, so this gate does not disagree with the sibling F2/F3
+//     helpers when a repository opts into either (both stay no-ops
+//     otherwise).
 //
 // This helper never mutates GitHub state: it only reads PR/review/thread/
 // comment data and prints a verdict.
@@ -36,13 +43,27 @@ import {
   readAdvisoryConvergenceDeadlineMinutes,
   readAdvisoryPrimaryBotLogin,
 } from './advisory-wait-policy.mts';
-import { ghApiJson, ghText, isCliExecution, safeGhText } from './gh-exec.mts';
+import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
+import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mts';
+import {
+  GH_TEXT_LOOP_OPTIONS,
+  ghApiJson,
+  ghText,
+  isCliExecution,
+  safeGhText,
+} from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
 import { isValidIsoTimestamp } from './marker-helpers.mts';
-import { normalizePolicyConfig } from './policy-helpers.mts';
 import {
+  normalizePolicyConfig,
+  parseIsoDurationToMs,
+  resolveCollaboratorMarkerTrust,
+} from './policy-helpers.mts';
+import {
+  DEFAULT_STALE_AGE_MS,
   isCopilotReviewerLogin,
   normalizeTrustedMarkerLogins,
+  operationalMarkerPrefix,
   resolveAdvisoryBotLogins,
   resolveTrustedMarkerActors,
   summarizeClaimValidation,
@@ -117,6 +138,16 @@ interface ReviewThreadsConnectionPayload {
 /** `gh pr view --json closingIssuesReferences` entry. */
 interface ClosingIssueRefPayload {
   number?: number | null;
+}
+
+/** Commit payload fields consumed by the Part B (#1058) first-commit-time
+ * resolver -- mirrors `pre-merge-readiness.mts`'s `PrCommitPayload`
+ * verbatim. */
+interface PrCommitPayload {
+  commit?: {
+    author?: { date?: string | null } | null;
+    committer?: { date?: string | null } | null;
+  } | null;
 }
 
 /** Latest-review clause evidence (Clause 1 of the `converged` definition). */
@@ -212,6 +243,42 @@ export interface AdvisoryConvergenceOptions {
   waivableSelectors?:
     | readonly { selector: string; matchMode?: string }[]
     | null;
+  // --- Forced-handoff / collaborator-marker-trust claim-resolution
+  // parity (#1344) -- threaded straight into the `summarizeClaimValidation`
+  // call below, matching `pre-merge-readiness.mts`'s own options exactly.
+  // The first four gate an opt-in, off-by-default repository feature: each
+  // is a no-op (today's exact behavior) when the caller omits it.
+  /** `forcedHandoff.mode === "human-gated"` (default `disabled`, i.e.
+   * `false`). Off by default; when on, a trusted forced-handoff marker on
+   * the claim issue can transfer `activeClaim` to its successor. */
+  forcedHandoffEnabled?: boolean;
+  /** Authorizes a forced-handoff marker's `forced-by` actor -- mirrors
+   * `pre-merge-readiness.mts`'s `isAuthorizedForcedHandoffActor`-backed
+   * callback. Omitted/absent means every handoff is treated as
+   * unauthorized (fail closed), same as `summarizeClaimValidation`'s own
+   * default. */
+  isAuthorizedForcedHandoff?: (forcedBy: string) => boolean;
+  /** The current PR's own reference forms (`["1234", prUrl]`, typically),
+   * so an `issue-plus-pr`-scoped handoff marker must name *this* PR to
+   * transfer the claim. An empty/omitted list accepts any linked-PR
+   * reference. */
+  expectedLinkedPrs?: unknown[] | null;
+  /** ISO timestamp of the PR's earliest commit -- the Part B (#1058)
+   * allowance that still honors an `issue-only`-scoped handoff (no
+   * `linked-pr` field) predating the PR, matching
+   * `pre-merge-readiness.mts` exactly. `null`/omitted rejects every
+   * `issue-only` handoff once `expectedLinkedPrs` is non-empty (fail
+   * closed), same as `buildForcedHandoffEnableGate`'s own default. */
+  prFirstCommitAt?: string | null;
+  /** Configured `claimTiming.staleAge` (#1310), pre-parsed to milliseconds.
+   * Unlike the four fields above, this is not gated behind an opt-in
+   * feature flag -- it is an unconditional parity fix for an already-live,
+   * orthogonal config value `pre-merge-readiness.mts` already applies.
+   * Omitted keeps `summarizeClaimValidation`'s hardcoded 24h default,
+   * which is also what a repository on the (also 24h) configured default
+   * observes -- so this is only a behavior change for a repository that
+   * has configured a non-default `claimTiming.staleAge`. */
+  staleAgeMs?: number;
 }
 
 /**
@@ -354,7 +421,17 @@ export function computeAdvisoryConvergenceVerdict(
   const waiverCheckSelector =
     String(options.waiverCheckSelector ?? '').trim() ||
     ADVISORY_CONVERGENCE_CHECK_SELECTOR;
-  const claim = summarizeClaimValidation(claimEvents, { trustedMarkerLogins });
+  const claim = summarizeClaimValidation(claimEvents, {
+    trustedMarkerLogins,
+    // #1344: parity with `pre-merge-readiness.mts`'s own
+    // `summarizeClaimValidation` call -- see `AdvisoryConvergenceOptions`
+    // for why each field is a no-op when the caller omits it.
+    forcedHandoffEnabled: options.forcedHandoffEnabled === true,
+    isAuthorizedForcedHandoff: options.isAuthorizedForcedHandoff,
+    expectedLinkedPrs: options.expectedLinkedPrs ?? [],
+    prFirstCommitAt: options.prFirstCommitAt ?? null,
+    staleAgeMs: options.staleAgeMs,
+  });
   const activeClaimId = claim.activeClaim?.claimId ?? '';
   let validWaiverCount = 0;
   if (!converged && deadlinePassed && waiverMode === 'maintainer-authorized') {
@@ -695,6 +772,79 @@ function collectFromGitHub(args: AdvisoryConvergenceArgs): {
     envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
     config: rawConfig,
   });
+  const pr = JSON.parse(
+    ghText([
+      'pr',
+      'view',
+      String(args.prNumber),
+      '-R',
+      repoRef,
+      '--json',
+      'headRefOid,closingIssuesReferences,author,url',
+    ]),
+  ) as {
+    headRefOid?: unknown;
+    closingIssuesReferences?: ClosingIssueRefPayload[] | null;
+    author?: GhAuthorPayload | null;
+    url?: unknown;
+  };
+  const prHeadSha = String(pr.headRefOid ?? '').toLowerCase();
+  const prAuthorLogin = String(pr.author?.login ?? '').toLowerCase();
+  const prUrl = String(pr.url ?? '');
+
+  // Fetched here (ahead of `trustedMarkerLogins` below) so a collaborator's
+  // marker-shaped PR comment can be detected before that set is used to
+  // resolve `claimEvents` -- see `resolveTrustedCollaboratorMarkerLogins`.
+  const comments = ghApiJson(
+    `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
+    {
+      paginate: true,
+    },
+  ) as IssueCommentPayload[];
+
+  // #1344: collaborator-marker trust, matching `pre-merge-readiness.mts`'s
+  // `readCollaboratorTrustEnabled` exactly, except reusing the already-
+  // loaded `rawConfig` instead of a second `.github/idd/config.json` read
+  // (`resolveCollaboratorMarkerTrust` and `loadIddConfig` are both already
+  // null-safe, so no extra try/catch is needed for that simplification).
+  const collaboratorTrustEnabled = resolveCollaboratorMarkerTrust(
+    rawConfig,
+    process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+  );
+  // Base set (no collaborator fold yet). Sufficient for `resolveClaimEvents`'s
+  // own internal disambiguation below, which only needs to know whether SOME
+  // active claim exists on a candidate linked issue -- a presence check, not
+  // an identity resolution. A forced-handoff transition can only ever
+  // TRANSFORM an already-active claim (rule 7 requires `oldAgentId`/
+  // `oldClaimId`/`branch` to match the currently active claim), and
+  // `resolveActiveClaim`'s stale/non-superseded fallthrough always returns
+  // the pre-transform claim unchanged (protocol-helpers.mts's
+  // `applyClaimEvent`, the `return activeClaim;` fallthrough after the
+  // `isStale` check) -- so that pre-transform claim is always still
+  // "present" here whether or not this narrower set (or forced-handoff
+  // awareness generally) recognizes the transition itself. The
+  // collaborator-augmented FINAL set below (after `claimEvents` resolves)
+  // is what the real verdict computation uses.
+  const baseTrustedMarkerLogins = normalizeTrustedMarkerLogins([
+    viewerLogin,
+    ...configuredTrustedActors,
+  ]);
+
+  const { reviews, headCommittedAt } = fetchReviewsAndHeadCommit(
+    owner,
+    repo,
+    Number(args.prNumber),
+  );
+  const threads = fetchReviewThreads(owner, repo, Number(args.prNumber));
+
+  const claimEvents = resolveClaimEvents(
+    owner,
+    repo,
+    args.claimIssueNumber,
+    pr.closingIssuesReferences,
+    baseTrustedMarkerLogins,
+  );
+
   // Deliberately NOT unioned with `advisoryBotLogins` here (unlike some
   // other locally-collected sets in this file that scope broader trust for
   // marker *parsing*): every sibling helper (advisory-wait-state.mts,
@@ -704,49 +854,25 @@ function collectFromGitHub(args: AdvisoryConvergenceArgs): {
   // Waivers`, below) -- folding a configured advisory bot login in here
   // would let that bot's own comment count as a "maintainer-authorized"
   // waiver author.
+  //
+  // #1344: folds collaborator-marker trust over the UNION of PR comments
+  // and the resolved claim issue's own comments, matching
+  // `pre-merge-readiness.mts`'s `[...comments, ...claimComments]` union
+  // exactly. Scanning `comments` alone would make `collaboratorTrustEnabled`
+  // a no-op for claim and forced-handoff markers: those are always posted to
+  // the claim ISSUE, never the PR (see `forced-handoff-marker.mts`), and
+  // `applyClaimEvent`'s `isTrustedAuthor` gate runs before any forced-handoff
+  // parsing -- an untrusted-author's marker never even reaches the
+  // authorization check.
   const trustedMarkerLogins = normalizeTrustedMarkerLogins([
-    viewerLogin,
-    ...configuredTrustedActors,
+    ...baseTrustedMarkerLogins,
+    ...(collaboratorTrustEnabled
+      ? resolveTrustedCollaboratorMarkerLogins(owner, repo, [
+          ...comments,
+          ...claimEvents,
+        ])
+      : []),
   ]);
-
-  const pr = JSON.parse(
-    ghText([
-      'pr',
-      'view',
-      String(args.prNumber),
-      '-R',
-      repoRef,
-      '--json',
-      'headRefOid,closingIssuesReferences,author',
-    ]),
-  ) as {
-    headRefOid?: unknown;
-    closingIssuesReferences?: ClosingIssueRefPayload[] | null;
-    author?: GhAuthorPayload | null;
-  };
-  const prHeadSha = String(pr.headRefOid ?? '').toLowerCase();
-  const prAuthorLogin = String(pr.author?.login ?? '').toLowerCase();
-
-  const { reviews, headCommittedAt } = fetchReviewsAndHeadCommit(
-    owner,
-    repo,
-    Number(args.prNumber),
-  );
-  const threads = fetchReviewThreads(owner, repo, Number(args.prNumber));
-  const comments = ghApiJson(
-    `repos/${owner}/${repo}/issues/${args.prNumber}/comments`,
-    {
-      paginate: true,
-    },
-  ) as IssueCommentPayload[];
-
-  const claimEvents = resolveClaimEvents(
-    owner,
-    repo,
-    args.claimIssueNumber,
-    pr.closingIssuesReferences,
-    trustedMarkerLogins,
-  );
 
   const primaryBotLogin = readAdvisoryPrimaryBotLogin();
   const deadlineMinutes = readAdvisoryConvergenceDeadlineMinutes();
@@ -756,6 +882,37 @@ function collectFromGitHub(args: AdvisoryConvergenceArgs): {
   // pattern) -- re-declaring the shape here would silently stop tracking
   // that source of truth on drift.
   const policy = normalizePolicyConfig(rawConfig);
+
+  // #1344: forced-handoff-aware claim resolution, matching
+  // `pre-merge-readiness.mts` exactly, except reading `forcedHandoff.mode`/
+  // `authorityPolicy` off the already-loaded/normalized `policy` above
+  // instead of `readForcedHandoffMode()`/`readForcedHandoffAuthorityPolicy()`
+  // (each of which independently re-reads and re-parses
+  // `.github/idd/config.json`) -- `readForcedHandoffPolicy`
+  // (collaborator-permission.mts) computes those two fields via the exact
+  // same `normalizePolicyConfig` call, so `policy.forcedHandoff.*` is
+  // identical, not an approximation.
+  const forcedHandoffAuthorityPolicy = policy.forcedHandoff.authorityPolicy;
+  const forcedHandoffEnabled = policy.forcedHandoff.mode === 'human-gated';
+  const forcedHandoffPermissionCache: CollaboratorPermissionCache = new Map();
+  // Part B (#1058): an issue-only handoff that predates the PR is honored
+  // even against a PR-backed claim. Resolved only when forced handoffs are
+  // enabled, and fails closed to `null` (reject) on any lookup/parse error
+  // so a transient commits-API failure never widens what this gate accepts.
+  let prFirstCommitAt: string | null = null;
+  if (forcedHandoffEnabled) {
+    try {
+      const prCommits = ghApiJson(
+        `repos/${owner}/${repo}/pulls/${args.prNumber}/commits`,
+        { paginate: true },
+      ) as PrCommitPayload[];
+      prFirstCommitAt = resolvePrFirstCommitAt(prCommits);
+    } catch {
+      prFirstCommitAt = null;
+    }
+  }
+  const staleAgeMs =
+    parseIsoDurationToMs(policy.claimTiming.staleAge) ?? DEFAULT_STALE_AGE_MS;
 
   return {
     inputs: {
@@ -782,6 +939,18 @@ function collectFromGitHub(args: AdvisoryConvergenceArgs): {
       ),
       waiverCheckSelector: ADVISORY_CONVERGENCE_CHECK_SELECTOR,
       waivableSelectors: policy?.ciGate?.externalChecks?.waivable ?? [],
+      forcedHandoffEnabled,
+      isAuthorizedForcedHandoff: (forcedBy: string) =>
+        isAuthorizedForcedHandoffActor(
+          owner,
+          repo,
+          forcedBy,
+          forcedHandoffAuthorityPolicy,
+          forcedHandoffPermissionCache,
+        ),
+      expectedLinkedPrs: [String(args.prNumber), prUrl].filter(Boolean),
+      prFirstCommitAt,
+      staleAgeMs,
     },
   };
 }
@@ -859,6 +1028,85 @@ function resolveClaimEvents(
     })
     .filter((candidate) => candidate.hasActiveClaim);
   return resolving.length === 1 ? resolving[0].comments : [];
+}
+
+/**
+ * Candidate collaborator-marker-trust logins: comment authors whose comment
+ * matches a recognized operational-marker prefix (claim, waiver,
+ * forced-handoff, etc. -- `operationalMarkerPrefix`), permission-checked
+ * and kept only when Write/Maintain/Admin. Mirrors
+ * `pre-merge-readiness.mts`'s function of the same name exactly. The
+ * `collectFromGitHub` call site passes the UNION of PR comments and the
+ * resolved claim issue's own comments (matching `pre-merge-readiness.mts`'s
+ * `[...comments, ...claimComments]` union) -- PR comments alone are not
+ * enough, since forced-handoff and claim markers are always posted to the
+ * claim issue, never the PR (see `forced-handoff-marker.mts`). Only called
+ * when `markerTrust.allowCollaboratorMarkers` / `IDD_TRUST_COLLABORATOR_MARKERS`
+ * is enabled -- a no-op repository never pays for these lookups.
+ */
+function resolveTrustedCollaboratorMarkerLogins(
+  owner: string,
+  repo: string,
+  commentLikeEvents: IssueCommentPayload[],
+): string[] {
+  const markerAuthors = [
+    ...new Set(
+      commentLikeEvents
+        .filter(
+          (comment) => operationalMarkerPrefix(comment.body ?? '') !== null,
+        )
+        .map((comment) => comment.author?.login ?? comment.user?.login ?? '')
+        .filter(Boolean),
+    ),
+  ];
+
+  return markerAuthors.filter((login) => {
+    const permission = safeGhText(
+      [
+        'api',
+        `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
+        '--jq',
+        '.permission',
+      ],
+      GH_TEXT_LOOP_OPTIONS,
+    ).toLowerCase();
+
+    return (
+      permission === 'admin' ||
+      permission === 'maintain' ||
+      permission === 'write'
+    );
+  });
+}
+
+/**
+ * Resolve the PR's first-commit time as an ISO string -- mirrors
+ * `pre-merge-readiness.mts`'s `resolvePrFirstCommitAt` verbatim (the
+ * minimum across all commits of each commit's committer date, falling
+ * back to author date). Returns `null` when no commit carries a
+ * parseable date, which fails the Part B (#1058) allowance closed
+ * (an `issue-only` handoff against a PR-backed claim stays rejected).
+ */
+function resolvePrFirstCommitAt(commits: PrCommitPayload[]): string | null {
+  let earliestMs: number | null = null;
+  let earliestIso: string | null = null;
+  for (const commit of commits) {
+    const date =
+      String(commit?.commit?.committer?.date ?? '').trim() ||
+      String(commit?.commit?.author?.date ?? '').trim();
+    if (!date) {
+      continue;
+    }
+    const ms = Date.parse(date);
+    if (!Number.isFinite(ms)) {
+      continue;
+    }
+    if (earliestMs === null || ms < earliestMs) {
+      earliestMs = ms;
+      earliestIso = date;
+    }
+  }
+  return earliestIso;
 }
 
 function ghGraphql(
