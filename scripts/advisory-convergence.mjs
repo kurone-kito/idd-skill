@@ -417,13 +417,13 @@ export function parseArgs(argv) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/advisory-convergence.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--claim-issue <number>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--now <ISO8601>] [--assert]
+  node scripts/advisory-convergence.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--claim-issue <number>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--now <ISO8601>] [--assert] [--help]
 
 Read-only: asserts whether the primary advisory bot's review has converged
-on the current PR HEAD. Always prints the JSON verdict. Without --assert,
-always exits 0 (report-only). With --assert, exits non-zero unless the
-verdict is "ready" (converged, or validly waived past the configured
-deadline).
+on the current PR HEAD. Every invocation other than --help/-h prints the
+JSON verdict to stdout. Without --assert, always exits 0 (report-only).
+With --assert, exits non-zero unless the verdict is "ready" (converged, or
+validly waived past the configured deadline).
 `);
 }
 const defaultDeps = { collect: collectFromGitHub };

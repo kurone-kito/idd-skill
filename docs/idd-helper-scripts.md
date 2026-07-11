@@ -1137,9 +1137,10 @@ Interpretation rules:
   verdict (the intended shape for #1341's workflow).
 - Stable contract:
   [`advisory-convergence.schema.json`][advisory-convergence-schema]
-- Always prints the JSON verdict. Without `--assert` it always exits `0`
-  (report-only). With `--assert` it exits non-zero unless `ready` is
-  `true` (`ready = converged || (deadline passed && validly waived)`).
+- Every invocation other than `--help`/`-h` prints the JSON verdict.
+  Without `--assert` it always exits `0` (report-only). With `--assert` it
+  exits non-zero unless `ready` is `true` (`ready = converged || (deadline
+  passed && validly waived)`).
 - **Deadlock / deadline policy**: while the primary bot has not reviewed
   the current HEAD, `pending` is `true` and the gate is not ready. After
   `advisoryWait.convergenceDeadline` (default 24h; see
