@@ -504,6 +504,357 @@ test('regression: elapsedMinutes clamps to 0 instead of going negative when head
   assert.equal(verdict.deadline.elapsedMinutes, 0);
 });
 
+// --- 8. forced-handoff / collaborator-marker-trust claim-resolution parity
+// --- (#1344) -- both are opt-in, off-by-default repository features;
+// --- `pre-merge-readiness.mts` already threads them into its own
+// --- `summarizeClaimValidation` call, this section proves
+// --- `advisory-convergence.mts` now agrees with it instead of silently
+// --- rejecting a waiver the sibling gate would accept.
+
+const SUCCESSOR_AGENT_ID = 'claude-test-2';
+const SUCCESSOR_CLAIM_ID = 'claim-successor';
+const HANDOFF_AT = '2026-06-05T00:00:00Z'; // after OLD, before PR_FIRST_COMMIT_AT
+const PR_FIRST_COMMIT_AT = '2026-06-10T00:00:00Z';
+
+function forcedHandoffComment({
+  newAgentId = SUCCESSOR_AGENT_ID,
+  newClaimId = SUCCESSOR_CLAIM_ID,
+  contextScope = 'issue-plus-pr',
+  linkedPr = '1234',
+  createdAt = RECENT,
+  author = TRUSTED,
+} = {}) {
+  const payload = {
+    'old-agent-id': AGENT_ID,
+    'old-claim-id': CLAIM_ID,
+    'new-agent-id': newAgentId,
+    'new-claim-id': newClaimId,
+    branch: 'issue/1234-test',
+    'forced-by': TRUSTED,
+    reason: 'operator-approved-recovery',
+    timestamp: createdAt,
+    'context-scope': contextScope,
+    ...(linkedPr ? { 'linked-pr': linkedPr } : {}),
+  };
+  return {
+    author: { login: author },
+    // `forced-by` stays TRUSTED regardless of `author` -- a non-default
+    // `author` models a collaborator RELAYING a separately-authorized
+    // maintainer's approval (`requireAuthorMatchesForcedBy` defaults to
+    // `false` for this gate's lenient merge-side resolution, matching
+    // `pre-merge-readiness.mts`; see `summarizeClaimValidation`'s own
+    // doc comment in protocol-helpers.mts). The comment AUTHOR still must
+    // independently pass the trusted-marker-actor gate (idd-claim rule 2)
+    // for this marker to be considered at all.
+    body: `<!-- forced-handoff: ${JSON.stringify(payload)} -->\n\nForced handoff approved by ${TRUSTED}.`,
+    createdAt,
+  };
+}
+
+/** Defaults to a maintainer-authorized waiver bound to the SUCCESSOR claim
+ * (`SUCCESSOR_AGENT_ID`/`SUCCESSOR_CLAIM_ID`), posted by `TRUSTED`. Pass
+ * `agentId`/`claimId: AGENT_ID/CLAIM_ID` to bind to the original claim
+ * instead (the collaborator-marker-trust tests below, which exercise
+ * waiver-author trust in isolation from any forced-handoff transition). */
+function waiverComment({
+  agentId = SUCCESSOR_AGENT_ID,
+  claimId = SUCCESSOR_CLAIM_ID,
+  reason = 'maintainer approved after forced-handoff takeover',
+  actor = TRUSTED,
+}: {
+  agentId?: string;
+  claimId?: string;
+  reason?: string;
+  actor?: string;
+} = {}) {
+  return {
+    author: { login: actor },
+    body: renderExternalCheckWaiverComment({
+      agentId,
+      claimId,
+      headSha: HEAD,
+      checkSelector: 'idd-advisory-convergence',
+      reason,
+      expiresAt: '2026-07-12T00:00:00Z',
+      actor,
+    }),
+    createdAt: RECENT,
+  };
+}
+
+test('forced-handoff takeover (issue-plus-pr): a waiver bound to the successor claim-id validates', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment(), forcedHandoffComment()],
+      comments: [waiverComment()],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      forcedHandoffEnabled: true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === TRUSTED,
+      expectedLinkedPrs: ['1234'],
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.deadline.passed, true);
+  assert.equal(verdict.waiver.activeClaimId, SUCCESSOR_CLAIM_ID);
+  assert.equal(verdict.waiver.validCount, 1);
+  assert.equal(verdict.waived, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('forced-handoff takeover (issue-only, predates the PR): honored via prFirstCommitAt, matching pre-merge-readiness.mts Part B (#1058)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [
+        claimComment(),
+        forcedHandoffComment({
+          contextScope: 'issue-only',
+          linkedPr: '',
+          createdAt: HANDOFF_AT,
+        }),
+      ],
+      comments: [waiverComment()],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      forcedHandoffEnabled: true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === TRUSTED,
+      // Non-empty even for an issue-only marker -- always true in
+      // production (`--pr` is required), which is exactly why
+      // `prFirstCommitAt` (not just an empty `expectedLinkedPrs`) is
+      // required to reach this branch at all.
+      expectedLinkedPrs: ['1234'],
+      prFirstCommitAt: PR_FIRST_COMMIT_AT,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.waiver.activeClaimId, SUCCESSOR_CLAIM_ID);
+  assert.equal(verdict.waived, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('forced-handoff (issue-only) is rejected once it no longer predates the PR (prFirstCommitAt fails closed)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [
+        claimComment(),
+        forcedHandoffComment({
+          contextScope: 'issue-only',
+          linkedPr: '',
+          createdAt: HANDOFF_AT,
+        }),
+      ],
+      comments: [waiverComment()],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      forcedHandoffEnabled: true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === TRUSTED,
+      expectedLinkedPrs: ['1234'],
+      // The handoff (HANDOFF_AT) no longer predates this -- Part B denies
+      // the issue-only allowance, so the claim stays with the ORIGINAL
+      // agent and the successor-bound waiver must not validate.
+      prFirstCommitAt: '2026-06-01T00:00:01Z',
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.waiver.activeClaimId, CLAIM_ID);
+  assert.equal(verdict.waiver.validCount, 0);
+  assert.equal(verdict.waived, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('regression: forced-handoff options default OFF -- the marker is inert and a successor-bound waiver never validates', () => {
+  // Identical fixture to the first forced-handoff test above, but through
+  // `baseOptions()` alone (no forcedHandoffEnabled / isAuthorizedForced-
+  // Handoff / expectedLinkedPrs) -- proves the four new options are a
+  // true no-op when a caller never sets them, matching today's exact
+  // behavior before #1344.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment(), forcedHandoffComment()],
+      comments: [waiverComment()],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.waiver.activeClaimId, CLAIM_ID);
+  assert.equal(verdict.waiver.validCount, 0);
+  assert.equal(verdict.waived, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('collaborator-marker trust (PR side): a waiver from a login outside trustedMarkerActors is honored once it is folded into trustedMarkerLogins', () => {
+  // `collectFromGitHub` (I/O layer, not under test here) folds a
+  // Write/Maintain/Admin collaborator's login into `trustedMarkerLogins`
+  // only when `markerTrust.allowCollaboratorMarkers` /
+  // `IDD_TRUST_COLLABORATOR_MARKERS` is enabled -- see
+  // `resolveTrustedCollaboratorMarkerLogins`. This test supplies the
+  // resolved set directly (the pure-function half of that feature) the
+  // same way every other test in this file supplies pre-resolved
+  // evidence; the I/O permission lookup itself is not mocked here,
+  // matching this codebase's own convention (see
+  // `tests/collaborator-permission.test.mts`'s documented #1212 scope
+  // note: the `gh api .../permission` subprocess path is deliberately
+  // left untested, exercised only via its cache-seeding seam).
+  const COLLABORATOR = 'collab-write-user';
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        waiverComment({
+          agentId: AGENT_ID,
+          claimId: CLAIM_ID,
+          actor: COLLABORATOR,
+        }),
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      trustedMarkerLogins: [TRUSTED, COLLABORATOR],
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.waiver.activeClaimId, CLAIM_ID);
+  assert.equal(verdict.waiver.validCount, 1);
+  assert.equal(verdict.waived, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('collaborator-marker trust (claim-issue side): a forced-handoff marker AUTHORED by a login outside trustedMarkerActors is honored once folded into trustedMarkerLogins', () => {
+  // Regression coverage added during #1344's own review loop: forced-
+  // handoff markers are always posted to the claim ISSUE, never the PR
+  // (see `forced-handoff-marker.mts`), so `collectFromGitHub` must fold
+  // collaborator-marker-trust logins from the resolved claim issue's
+  // comments too, not just PR `comments` -- see
+  // `resolveTrustedCollaboratorMarkerLogins`'s call site (the union of
+  // `comments` and `claimEvents`, matching `pre-merge-readiness.mts`'s
+  // `[...comments, ...claimComments]` exactly). As above, this test
+  // supplies the already-resolved `trustedMarkerLogins` directly and
+  // proves the CONSEQUENCE: once a Write-permission collaborator's login
+  // is trusted, a forced-handoff marker they AUTHORED (relaying a
+  // separately-authorized maintainer's approval; see
+  // `forcedHandoffComment`'s `author` parameter) is honored the same way
+  // a `trustedMarkerActors`-listed author's marker already is.
+  const COLLABORATOR = 'collab-write-user';
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [
+        claimComment(),
+        forcedHandoffComment({ author: COLLABORATOR }),
+      ],
+      comments: [waiverComment()],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      forcedHandoffEnabled: true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === TRUSTED,
+      expectedLinkedPrs: ['1234'],
+      trustedMarkerLogins: [TRUSTED, COLLABORATOR],
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.waiver.activeClaimId, SUCCESSOR_CLAIM_ID);
+  assert.equal(verdict.waived, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('regression: collaborator-marker trust defaults OFF -- an untrusted marker author cannot force a handoff even with a valid forced-by maintainer', () => {
+  // Companion to both collaborator-marker-trust tests above: identical
+  // claim-issue-side fixture, but COLLABORATOR is never added to
+  // trustedMarkerLogins (baseOptions()'s default, [TRUSTED]) -- the
+  // marker's author fails the trusted-actor gate (idd-claim rule 2)
+  // before forced-handoff authorization is even evaluated, so the claim
+  // never transfers, regardless of markerTrust being the reason
+  // COLLABORATOR was omitted or simply not configured.
+  const COLLABORATOR = 'collab-write-user';
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [
+        claimComment(),
+        forcedHandoffComment({ author: COLLABORATOR }),
+      ],
+      comments: [waiverComment()],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      forcedHandoffEnabled: true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === TRUSTED,
+      expectedLinkedPrs: ['1234'],
+      // trustedMarkerLogins left at baseOptions()'s default ([TRUSTED]) --
+      // COLLABORATOR is never folded in.
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.waiver.activeClaimId, CLAIM_ID);
+  assert.equal(verdict.waiver.validCount, 0);
+  assert.equal(verdict.waived, false);
+  assert.equal(verdict.ready, false);
+});
+
+test('staleAgeMs: a configured shorter stale window allows a takeover the hardcoded 24h default would reject', () => {
+  // claimComment() is dated OLD (2026-06-01T00:00:00Z). TAKEOVER_AT is only
+  // 2h later -- fresh under the hardcoded 24h default (takeover rejected,
+  // active claim stays CLAIM_ID) but stale under a configured 1h window
+  // (takeover accepted, active claim becomes SUCCESSOR_CLAIM_ID). Proves
+  // `staleAgeMs` actually reaches `summarizeClaimValidation`, not just that
+  // it type-checks.
+  const TAKEOVER_AT = '2026-06-01T02:00:00Z';
+  const takeoverClaim = {
+    author: { login: TRUSTED },
+    body: `<!-- claimed-by: ${SUCCESSOR_AGENT_ID} ${SUCCESSOR_CLAIM_ID} supersedes: ${CLAIM_ID} ${TAKEOVER_AT} branch: issue/1234-test -->\n\n_${SUCCESSOR_AGENT_ID}: issue claim — IDD automation marker. Do not edit._`,
+    createdAt: TAKEOVER_AT,
+  };
+  const claimEvents = [claimComment(), takeoverClaim];
+
+  const underDefault = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [], claimEvents, comments: [waiverComment()] }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      // staleAgeMs omitted -- hardcoded 24h default; the 2h gap is not stale.
+    }),
+  );
+  assert.equal(underDefault.waiver.activeClaimId, CLAIM_ID);
+
+  const underConfiguredWindow = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [], claimEvents, comments: [waiverComment()] }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      staleAgeMs: 60 * 60 * 1000, // 1h -- the 2h gap now counts as stale.
+    }),
+  );
+  assertValidVerdict(underConfiguredWindow);
+  assert.equal(underConfiguredWindow.waiver.activeClaimId, SUCCESSOR_CLAIM_ID);
+});
+
 // --- classifyCopilotAuthoredThreadIds (pure helper) -------------------------
 
 test('classifyCopilotAuthoredThreadIds: a thread counts only when its ORIGINATING comment is bot-authored', () => {
