@@ -9,12 +9,12 @@ name: IDD advisory-convergence gate
 # not a default.
 #
 # Adjust `runs-on`, the pinned `actions/checkout` SHA (or use the
-# floating `@v4` tag as shipped here), and the `node scripts/...`
-# command to your own runner labels and helper-runtime profile. This
-# file intentionally uses the portable `ubuntu-latest` + `@v4` forms
-# rather than a repository-specific pinned SHA or custom runner label,
-# unlike this source repository's own dogfooded copy at
-# .github/workflows/idd-advisory-convergence.yml.
+# floating `@v4` tag as shipped here), the checkout `ref:` (see below),
+# and the `node scripts/...` command to your own runner labels and
+# helper-runtime profile. This file intentionally uses the portable
+# `ubuntu-latest` + `@v4` forms rather than a repository-specific
+# pinned SHA or custom runner label, unlike this source repository's
+# own dogfooded copy at .github/workflows/idd-advisory-convergence.yml.
 on:
   pull_request:
     types: [opened, reopened, synchronize]
@@ -38,13 +38,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # pull_request_review / pull_request_review_comment are not
-          # pull_request-family events, so a plain checkout resolves to
-          # the base branch on those triggers unless the PR head is
-          # pinned explicitly. workflow_dispatch has no pull_request
-          # context at all, so fall back to github.sha (the ref picked
-          # in the dispatch UI).
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # Trusted default-branch checkout, not the PR head, for any
+          # trigger type including workflow_dispatch: the enforcement
+          # script (scripts/advisory-convergence.mjs) and its config
+          # (.github/idd/config.json) must be the trusted copy, not the
+          # PR's own -- otherwise a PR could edit the verdict logic
+          # itself to force `ready: true`. The verdict still correctly
+          # evaluates the intended PR: `--pr <number>` below drives
+          # every live GitHub API call the script makes, independent of
+          # what is checked out locally. Replace `main` with your own
+          # default branch name if it differs.
+          ref: main
           persist-credentials: false
       # ubuntu-latest's preinstalled Node is not guaranteed to satisfy
       # this repo's engines.node floor (package.json), unlike this

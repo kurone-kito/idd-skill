@@ -782,6 +782,18 @@ conversation comments via the issue-comments REST endpoint, which
 GitHub gates under the Issues permission category even when the issue
 number is a pull request.
 
+**Trusted-code checkout.** The checkout step pins `ref: main` (adjust
+if your default branch differs) rather than the PR's own head, for
+every trigger type including `workflow_dispatch`. The enforcement
+script (`scripts/advisory-convergence.mjs`) and its config
+(`.github/idd/config.json`) must run from the trusted branch, not a
+PR's own copy — otherwise a PR could edit the verdict logic itself to
+force `ready: true` and defeat the whole required-check gate. The
+verdict still correctly evaluates the intended PR: `--pr <number>`
+drives every live GitHub API call the script makes (reviews, threads,
+comments), independent of what is checked out locally, so pinning the
+checkout to the trusted branch costs nothing functionally.
+
 Three automatic trigger types cover the cases where convergence can
 change without a new push: `pull_request` for the normal push case,
 `pull_request_review` for Copilot's review submission, and
