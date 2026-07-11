@@ -3,6 +3,7 @@ import { readdirSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import type { AdvisoryConvergenceVerdict } from '../src/scripts/advisory-convergence.mts';
 import type { AdvisoryWaitStateReport } from '../src/scripts/advisory-wait-state.mts';
 import type { BranchConflictResult } from '../src/scripts/branch-conflict-state.mts';
 import type { RoadmapGraphUnionReport } from '../src/scripts/discover-roadmap-graph.mts';
@@ -235,6 +236,24 @@ interface PolicyConfigFile {
 // ---------------------------------------------------------------------------
 // Top-level key lists (exported per the reconciliation contract).
 // ---------------------------------------------------------------------------
+
+export const advisoryConvergenceKeys = [
+  'protocolVersion',
+  'decisionAuthority',
+  'prNumber',
+  'prHeadSha',
+  'now',
+  'primaryBotLogin',
+  'review',
+  'threads',
+  'pending',
+  'deadline',
+  'waiver',
+  'converged',
+  'waived',
+  'ready',
+  'reasons',
+] as const satisfies readonly (keyof AdvisoryConvergenceVerdict)[];
 
 export const advisoryWaitStateKeys = [
   'protocolVersion',
@@ -507,6 +526,46 @@ const exhaustivenessWitnesses: {
 // ---------------------------------------------------------------------------
 // Canonical fixtures (compile-time side of the reconciliation).
 // ---------------------------------------------------------------------------
+
+const advisoryConvergenceFixture = {
+  protocolVersion: '1',
+  decisionAuthority: 'instructions',
+  prNumber: 1340,
+  prHeadSha: '0123456789abcdef0123456789abcdef01234567',
+  now: '2026-07-11T12:00:00Z',
+  primaryBotLogin: 'copilot',
+  review: {
+    found: true,
+    commitId: '0123456789abcdef0123456789abcdef01234567',
+    matchesHead: true,
+    itemCount: 0,
+    submittedAt: '2026-07-11T10:00:00Z',
+    satisfied: true,
+  },
+  threads: {
+    copilotThreadCount: 0,
+    blockingIds: [],
+    blockingCount: 0,
+    satisfied: true,
+  },
+  pending: false,
+  deadline: {
+    minutes: 1440,
+    headCommittedAt: '2026-07-11T09:00:00Z',
+    elapsedMinutes: 180,
+    passed: false,
+  },
+  waiver: {
+    mode: 'disabled',
+    checkSelector: 'idd-advisory-convergence',
+    activeClaimId: '',
+    validCount: 0,
+  },
+  converged: true,
+  waived: false,
+  ready: true,
+  reasons: [],
+} satisfies AdvisoryConvergenceVerdict;
 
 const advisoryWaitStateFixture = {
   protocolVersion: '1',
@@ -1063,6 +1122,13 @@ const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = [
     owningModule: 'src/scripts/post-idd-marker.mts',
     keys: postIddMarkerKeys,
     fixture: postIddMarkerFixture,
+  },
+  {
+    schemaFile: 'advisory-convergence.schema.json',
+    exportedType: 'AdvisoryConvergenceVerdict',
+    owningModule: 'src/scripts/advisory-convergence.mts',
+    keys: advisoryConvergenceKeys,
+    fixture: advisoryConvergenceFixture,
   },
   {
     schemaFile: 'advisory-wait-state.schema.json',

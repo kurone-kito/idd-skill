@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/advisory-convergence.schema.json",
+  "title": "Advisory Convergence",
+  "description": "Read-only deterministic verdict for whether the primary advisory bot's review has converged on the current PR HEAD (issue #1340).",
+  "type": "object",
+  "required": [
+    "protocolVersion",
+    "decisionAuthority",
+    "prNumber",
+    "prHeadSha",
+    "now",
+    "primaryBotLogin",
+    "review",
+    "threads",
+    "pending",
+    "deadline",
+    "waiver",
+    "converged",
+    "waived",
+    "ready",
+    "reasons"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "enum": ["1"]
+    },
+    "decisionAuthority": {
+      "type": "string",
+      "enum": ["instructions"]
+    },
+    "prNumber": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "prHeadSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "now": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+    },
+    "primaryBotLogin": {
+      "type": "string",
+      "minLength": 1
+    },
+    "review": {
+      "type": "object",
+      "required": ["found", "commitId", "matchesHead", "itemCount", "submittedAt", "satisfied"],
+      "additionalProperties": false,
+      "properties": {
+        "found": { "type": "boolean" },
+        "commitId": { "type": "string" },
+        "matchesHead": { "type": "boolean" },
+        "itemCount": { "type": ["integer", "null"] },
+        "submittedAt": { "type": "string" },
+        "satisfied": { "type": "boolean" }
+      }
+    },
+    "threads": {
+      "type": "object",
+      "required": [
+        "copilotThreadCount",
+        "blockingIds",
+        "blockingCount",
+        "satisfied"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "copilotThreadCount": { "type": "integer", "minimum": 0 },
+        "blockingIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "blockingCount": { "type": "integer", "minimum": 0 },
+        "satisfied": { "type": "boolean" }
+      }
+    },
+    "pending": {
+      "type": "boolean"
+    },
+    "deadline": {
+      "type": "object",
+      "required": ["minutes", "headCommittedAt", "elapsedMinutes", "passed"],
+      "additionalProperties": false,
+      "properties": {
+        "minutes": { "type": "number", "minimum": 0 },
+        "headCommittedAt": { "type": "string" },
+        "elapsedMinutes": { "type": ["number", "null"] },
+        "passed": { "type": "boolean" }
+      }
+    },
+    "waiver": {
+      "type": "object",
+      "required": ["mode", "checkSelector", "activeClaimId", "validCount"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string" },
+        "checkSelector": { "type": "string" },
+        "activeClaimId": { "type": "string" },
+        "validCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "converged": {
+      "type": "boolean"
+    },
+    "waived": {
+      "type": "boolean"
+    },
+    "ready": {
+      "type": "boolean"
+    },
+    "reasons": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

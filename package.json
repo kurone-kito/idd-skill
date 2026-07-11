@@ -7,6 +7,7 @@
   "repository": "github:kurone-kito/idd-skill",
   "type": "module",
   "bin": {
+    "idd-advisory-convergence": "./bin/idd-advisory-convergence.mjs",
     "idd-advisory-wait-state": "./bin/idd-advisory-wait-state.mjs",
     "idd-audit-pr-cleanup": "./bin/idd-audit-pr-cleanup.mjs",
     "idd-branch-conflict-state": "./bin/idd-branch-conflict-state.mjs",

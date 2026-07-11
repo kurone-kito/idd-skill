@@ -277,38 +277,20 @@ returns the workflow to E1 instead of merging over it.
   E1's regular-comment filter for non-advisory discussion. Copilot and
   CI advisory bot comments are handled earlier in the PATH B triage flow
   (E4-E7) and are excluded from this gate.
-- **E7 disposition evidence complete**: If helper evidence includes a
-  `dispositionEvidence` section, require
-  `dispositionEvidence.route == "proceed"` and
-  `dispositionEvidence.blockingCount == 0`. If either check fails, route
-  to E1/E4 with the missing-thread or missing-comment evidence reported
-  from that section. This gate consumes the `pre-merge-readiness`
-  `dispositionEvidence` shape only; do not substitute E7 verifier fields
-  (`passed`, `items[]`) here.
-
-  Deterministic override (advisory-only): if `dispositionEvidence.route`
-  is `return-to-e1` but `dispositionEvidence.soleCauseAckOnlyPostDisposition`
-  is `true` — every blocking item is an `ackOnlyPostDisposition` resolved
-  thread, with no missing regular comments — autopilot **may** treat this
-  gate as satisfied and proceed on the current HEAD SHA, mirroring the
-  review-currency ack-only carve-out. The override applies to that signal
-  **only**; any other `return-to-e1` cause (a missing regular comment, or
-  any thread whose `ackOnlyPostDisposition` is `false`) keeps the backstop
-  and routes to E1/E4 unchanged.
-
-  `dispositionEvidence.soleCauseInPlaceEditOnly` (and the per-thread
-  `inPlaceEditOnly`) is **informational-only**, not a second deterministic
-  override (#1313): it is a narrower sibling of `ackOnlyPostDisposition`
-  that additionally confirms the blocking comment is an edit of content
-  that already existed at-or-before its thread's disposition, rather than
-  a brand-new post-disposition comment. GitHub's API exposes no revision
-  diff for an edited comment, so neither this field nor the helper that
-  computes it can verify whether the edit only added cosmetic content
-  (e.g. an "addressed" badge) or changed the substance of the finding. An
-  agent may use it as a stronger hint when deciding whether to invoke the
-  `soleCauseAckOnlyPostDisposition` override above, but must still read
-  the comment's current body before doing so — this field alone never
-  authorizes proceeding.
+- **Advisory convergence** (exit-code obligation for Copilot-authored
+  review threads, not a judgment call): run `node
+  scripts/advisory-convergence.mjs --pr {pr-number} --assert` (or the
+  profile-selected `idd-advisory-convergence` command). A non-zero exit
+  is a hard merge block — route to E1/E4 using the printed `reasons`; a
+  zero exit (`ready: true`) satisfies this condition.
+  Separately, require `dispositionEvidence.missingRegularComments.length
+  == 0` (ad hoc advisory-bot or reviewer comments outside a review
+  thread, which the helper above does not cover); treat absent,
+  malformed, or non-list `dispositionEvidence`/`missingRegularComments`
+  as unmet, not as vacuously satisfied. A non-empty (or unusable) result
+  routes to E1/E4 with that evidence.
+  Fails closed per the shared default: if either check cannot run or its
+  output is unusable, treat this condition as unmet.
 
 When any F2 condition routes to a hold/stop or back to E1/E14, update
 the PR live status digest after the blocking evidence is recorded and

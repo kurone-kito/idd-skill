@@ -170,12 +170,19 @@ The current policy schema and helper runtime now support
 `.github/idd/config.json` `advisoryWait.requestCap`,
 `advisoryWait.pendingWindow`, `advisoryWait.settledWindow`,
 `advisoryWait.pollInterval`, `advisoryWait.capExhaustedRoute`,
-`advisoryWait.primaryBotLogin`, and `advisoryWait.secondaryBotLogin`.
-Omitted keys keep the distributed defaults below. The three duration keys
+`advisoryWait.primaryBotLogin`, `advisoryWait.secondaryBotLogin`, and
+`advisoryWait.convergenceDeadline`.
+Omitted keys keep the distributed defaults below. The four duration keys
 accept positive whole-minute ISO 8601 durations only.
 `advisoryWait.primaryBotLogin` selects the advisory bot whose review the
 advisory-wait gate tracks; it defaults to Copilot, so omitting it
 preserves the Copilot-advisory behavior exactly.
+`advisoryWait.convergenceDeadline` is the `advisory-convergence.mjs` helper's
+(#1340) deadlock deadline: while the primary bot has not posted a zero-item
+review on the current PR HEAD, the gate reports pending; once this deadline
+elapses (measured from the current HEAD commit's own timestamp, not an IDD
+marker), the only pass path is a valid maintainer external-check waiver for
+that HEAD under the selector `idd-advisory-convergence`.
 `advisoryWait.secondaryBotLogin` is an **optional, non-gating** supplement:
 when set, the secondary bot is requested once per HEAD only while the
 primary is cap-exhausted or stalled / rate-limited. It never satisfies the
@@ -196,6 +203,7 @@ install without a requestable-reviewer event cannot be tracked once per HEAD.
 | Primary advisory bot login              | `copilot` (via `advisoryWait.primaryBotLogin`)                               | [Review fix](../.github/instructions/idd-review-fix.instructions.md), [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md)                                                                     | Keep Copilot unless the repository routes the advisory-wait gate to a different primary bot.          |
 | Secondary advisory bot supplement       | unset (optional `advisoryWait.secondaryBotLogin`; non-gating, once per HEAD) | [Review fix](../.github/instructions/idd-review-fix.instructions.md), [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md)                                                                     | Leave unset unless the repository wants a non-gating fallback reviewer when the primary is throttled. |
 | Human re-review response wait           | 30 min after addressed `CHANGES_REQUESTED` feedback has a re-review request  | [Pre-merge](../.github/instructions/idd-pre-merge.instructions.md)                                                                                                                                                   | Keep unless the repository has a different required-reviewer response window.                         |
+| Advisory-convergence deadline           | 24 h (`advisoryWait.convergenceDeadline`)                                    | [Pre-merge](../.github/instructions/idd-pre-merge.instructions.md), [Helper scripts](idd-helper-scripts.md)                                                                                                          | Keep unless the repository needs a different bound before the maintainer waiver escape hatch applies. |
 
 ## CI Wait Defaults
 

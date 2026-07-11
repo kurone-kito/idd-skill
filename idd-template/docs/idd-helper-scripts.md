@@ -85,6 +85,10 @@ In the idd-skill source repository, the following optional helpers were adopted:
 - `scripts/idd-merge-execute.mjs` for the F3 merge gate: a dry-run
   verdict by default and, with `--apply`, the bound merge execution; it
   wraps `pre-merge-readiness` and adds no new decision authority
+- `scripts/advisory-convergence.mjs` for the F2 advisory/disposition
+  sub-gate (#1340): a deterministic `converged`/`ready` verdict with an
+  exit-code contract via `--assert`, claim-independent so it also works
+  as a required-check-able CI verdict
 - `scripts/live-status-digest.mjs` for issue or PR live status digest
   discovery, rendering, dry-run, and claim-checked upsert
 - `scripts/audit-pr-cleanup.mjs` for post-merge comment cleanup auditing
@@ -1113,6 +1117,54 @@ Interpretation rules:
   merge steps in `idd-merge.instructions.md`. The written F3 decision
   table and gate checklist remain canonical.
 
+### Advisory convergence (F2)
+
+- Read-only policy-engine helper (#1340) that deterministically asserts
+  whether the primary advisory bot's ("Copilot's") review has _converged_
+  on the current PR HEAD: `converged` = (the latest primary-bot review's
+  `commit_id` equals the current HEAD **and** that review carries zero
+  actionable items) **and** (every current-HEAD primary-bot-authored review
+  thread is resolved **or** carries a valid disposition marker).
+- Command: `node scripts/advisory-convergence.mjs --pr <pr-number>
+  [--claim-issue <issue-number>] [--owner <owner>] [--repo <repo>]
+  [--trusted-marker-logins "<login1,login2>"]
+  [--advisory-bot-logins "<bot1,bot2>"] [--now <ISO8601>] [--assert]`.
+  Unlike `pre-merge-readiness`, no claim flags are required: the linked
+  issue (and its active claim, needed only for the waiver check below) is
+  auto-discovered from the PR's closing references, the same way
+  `external-check-waiver.mjs`'s `--apply` path already resolves it — so
+  this helper also works as a claim-independent, required-check-able CI
+  verdict (the intended shape for #1341's workflow).
+- Stable contract:
+  [`advisory-convergence.schema.json`][advisory-convergence-schema]
+- Every invocation other than `--help`/`-h` prints the JSON verdict.
+  Without `--assert` it always exits `0` (report-only). With `--assert` it
+  exits non-zero unless `ready` is `true` (`ready = converged || (deadline
+  passed && validly waived)`).
+- **Deadlock / deadline policy**: while the primary bot has not reviewed
+  the current HEAD, `pending` is `true` and the gate is not ready. After
+  `advisoryWait.convergenceDeadline` (default 24h; see
+  [policy constants](policy-constants.md#advisory-review-defaults)) has
+  elapsed since the current HEAD commit's own timestamp, the only pass
+  path is a valid maintainer external-check waiver for that HEAD under the
+  selector `idd-advisory-convergence` (reusing the same
+  `<!-- idd-external-check-waiver: ... -->` marker format and validity
+  rules as `external-check-waiver.mjs`). Gated by the same two-dimensional
+  opt-in every other external-check waiver already requires:
+  `ciGate.externalCheckWaivers.mode == "maintainer-authorized"` **and**
+  `idd-advisory-convergence` registered under
+  `ciGate.externalChecks.waivable` — enabling waiver mode for some other
+  external check never silently makes this gate waivable too.
+- Reuses the existing evidence modules — `isCopilotReviewerLogin` /
+  `readAdvisoryPrimaryBotLogin`, `resolveAdvisoryBotLogins`,
+  `resolveTrustedMarkerActors`, `summarizeDispositionEvidenceForGate`,
+  `summarizeClaimValidation`, and `summarizeExternalCheckWaivers` — rather
+  than duplicating review- or waiver-parsing logic; only the
+  Copilot-thread-authorship filter and the review-item-count read are new.
+- Fail closed: if helper execution fails, output is invalid JSON, or
+  required fields are missing, discard helper output and apply the
+  written F2 advisory/disposition sub-gate check manually.
+
 ### E7 disposition verification
 
 - Preferred command when helper runtime is enabled:
@@ -1376,6 +1428,7 @@ Good future candidates remain read-only evidence collectors for
 pre-merge readiness or later claim-state inspection. They should not
 replace the written decision tables.
 
+[advisory-convergence-schema]: https://kurone-kito.github.io/idd-skill/schemas/advisory-convergence.schema.json
 [advisory-wait-state-schema]: https://kurone-kito.github.io/idd-skill/schemas/advisory-wait-state.schema.json
 [disposition-non-review-notices-schema]: https://kurone-kito.github.io/idd-skill/schemas/disposition-non-review-notices.schema.json
 [idd-merge-execute-schema]: https://kurone-kito.github.io/idd-skill/schemas/idd-merge-execute.schema.json
