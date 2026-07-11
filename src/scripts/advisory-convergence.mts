@@ -228,9 +228,13 @@ export function computeAdvisoryConvergenceVerdict(
   if (!isValidIsoTimestamp(now)) {
     throw new Error('now must be an ISO 8601 UTC timestamp');
   }
+  // Lowercased before validating, so a mixed-/upper-case 40-hex SHA is
+  // accepted (normalized), not rejected -- the error message below
+  // describes the post-normalization shape, not a case restriction on the
+  // input.
   const prHeadSha = String(inputs.prHeadSha ?? '').toLowerCase();
   if (!/^[0-9a-f]{40}$/.test(prHeadSha)) {
-    throw new Error('prHeadSha must be a 40-character lowercase commit SHA');
+    throw new Error('prHeadSha must be a 40-character hexadecimal commit SHA');
   }
 
   const primaryBotLogin =
