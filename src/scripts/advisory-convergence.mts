@@ -205,6 +205,12 @@ export interface AdvisoryConvergenceOptions {
   waiverMode?: string;
   waiverMaxValidity?: string;
   waiverCheckSelector?: string;
+  /** The configured `ciGate.externalChecks.waivable` selector list. A
+   * waiver only counts when its own selector overlaps one of these
+   * entries -- see the waiver escape-hatch computation below. */
+  waivableSelectors?:
+    | readonly { selector: string; matchMode?: string }[]
+    | null;
 }
 
 /**
@@ -254,7 +260,9 @@ export function computeAdvisoryConvergenceVerdict(
     );
   } else if (!review.satisfied) {
     reasons.push(
-      `latest ${primaryBotLogin} review on current HEAD carries ${review.itemCount} actionable item(s)`,
+      review.itemCount === null
+        ? `latest ${primaryBotLogin} review on current HEAD carries an unknown number of actionable items (comment count unavailable)`
+        : `latest ${primaryBotLogin} review on current HEAD carries ${review.itemCount} actionable item(s)`,
     );
   }
 
@@ -350,12 +358,24 @@ export function computeAdvisoryConvergenceVerdict(
       activeClaimId,
       trustedMarkerLogins,
       now,
-      waivableSelectors: [
-        { selector: waiverCheckSelector, matchMode: 'exact' },
-      ],
+      // The REAL configured `ciGate.externalChecks.waivable` list (not a
+      // hardcoded single-entry override for this gate's own selector):
+      // respects the existing two-dimensional waiver opt-in
+      // (`externalCheckWaivers.mode` AND a per-check `waivable`
+      // registration) instead of silently making this gate waivable the
+      // moment ANY external check is opted into waiver mode (see PR #1343
+      // review). An absent/empty list waives nothing, matching
+      // `summarizeExternalCheckWaivers`'s own "empty list waives nothing"
+      // contract.
+      waivableSelectors: [...(options.waivableSelectors ?? [])],
       maxValidity: String(options.waiverMaxValidity ?? 'PT24H'),
     });
-    validWaiverCount = waiverEvidence.valid.length;
+    // Even when the configured list makes SOME check waivable, only count a
+    // waiver whose own marker selector is THIS gate's selector -- a valid
+    // waiver for an unrelated external check must never satisfy this one.
+    validWaiverCount = waiverEvidence.valid.filter(
+      (entry) => entry.checkSelector === waiverCheckSelector,
+    ).length;
   }
   const waiver: AdvisoryConvergenceWaiver = {
     mode: waiverMode,
@@ -392,17 +412,21 @@ export function computeAdvisoryConvergenceVerdict(
 }
 
 /** Evaluate Clause 1 (the latest-review clause) against every Copilot
- * review that targets the current HEAD. Deliberately does not pick "the
- * single latest review by `submittedAt`" and check only that one: a fresh
- * push never reuses a commit SHA, so multiple same-HEAD Copilot reviews are
- * retries or duplicates of the same content, not a legitimate
- * "re-reviewed after a fix" sequence. Requiring every on-HEAD review to be
- * clean is the fail-closed choice, and it never depends on `submittedAt`
- * ordering -- which can be missing/invalid on a real GraphQL payload (the
- * field is nullable) -- to decide which single review "counts". A
- * timestamp-sort-based pick would let a later, dirty, timestamp-less review
- * be silently out-ranked by an earlier clean one; filtering by `commitId`
- * first sidesteps that ordering question entirely. */
+ * review that targets the current HEAD, and evaluate Clause 1 against
+ * *that* review only. Re-requesting a review without a new push is a real,
+ * supported flow in this repo's own advisory-wait protocol (AW3
+ * `REQUEST_NEEDED`), so two reviews can legitimately share one `commitId`
+ * with the later one superseding the earlier one (e.g. addressed via
+ * thread replies, then re-reviewed) -- requiring every on-HEAD review to
+ * be clean would wrongly keep a genuinely-converged PR blocked forever
+ * (see PR #1343 review). The latest on-HEAD review is simply the last
+ * on-HEAD entry in fetch order: GitHub's GraphQL `reviews` connection
+ * returns reviews in submission order (the same assumption
+ * `findLastCopilotReviewCommit` already relies on elsewhere in this
+ * codebase), so this deliberately does NOT re-sort by `submittedAt` --
+ * which can be missing/invalid on a real payload (the field is nullable)
+ * and would otherwise let an earlier, differently-ordered review win by
+ * comparator accident, hiding a genuinely later dirty review. */
 function resolveLatestCopilotReviewClause(
   reviews: ReviewPayload[],
   prHeadSha: string,
@@ -414,32 +438,30 @@ function resolveLatestCopilotReviewClause(
   const onHead = copilotReviews.filter(
     (review) => String(review.commitId ?? '').toLowerCase() === prHeadSha,
   );
-  if (onHead.length === 0) {
-    const last = copilotReviews.at(-1);
+  const latest = onHead.length > 0 ? onHead.at(-1) : copilotReviews.at(-1);
+  if (!latest) {
     return {
-      found: copilotReviews.length > 0,
-      commitId: String(last?.commitId ?? '').toLowerCase(),
+      found: false,
+      commitId: '',
       matchesHead: false,
       itemCount: null,
-      submittedAt: String(last?.submittedAt ?? ''),
+      submittedAt: '',
       satisfied: false,
     };
   }
-  const itemCounts = onHead.map((review) =>
-    Number.isFinite(review.itemCount) ? Number(review.itemCount) : null,
-  );
-  const worstItemCount = itemCounts.every(
-    (count): count is number => count !== null,
-  )
-    ? Math.max(...itemCounts)
+  const matchesHead = onHead.length > 0;
+  const itemCount = matchesHead
+    ? Number.isFinite(latest.itemCount)
+      ? Number(latest.itemCount)
+      : null
     : null;
   return {
     found: true,
-    commitId: prHeadSha,
-    matchesHead: true,
-    itemCount: worstItemCount,
-    submittedAt: String(onHead.at(-1)?.submittedAt ?? ''),
-    satisfied: worstItemCount === 0,
+    commitId: String(latest.commitId ?? '').toLowerCase(),
+    matchesHead,
+    itemCount,
+    submittedAt: String(latest.submittedAt ?? ''),
+    satisfied: matchesHead && itemCount === 0,
   };
 }
 
@@ -696,14 +718,13 @@ function collectFromGitHub(args: AdvisoryConvergenceArgs): {
     },
   ) as IssueCommentPayload[];
 
-  const claimIssueNumber =
-    args.claimIssueNumber ??
-    resolveSoleClosingIssueNumber(pr.closingIssuesReferences);
-  const claimEvents = claimIssueNumber
-    ? (ghApiJson(`repos/${owner}/${repo}/issues/${claimIssueNumber}/comments`, {
-        paginate: true,
-      }) as IssueCommentPayload[])
-    : [];
+  const claimEvents = resolveClaimEvents(
+    owner,
+    repo,
+    args.claimIssueNumber,
+    pr.closingIssuesReferences,
+    trustedMarkerLogins,
+  );
 
   const primaryBotLogin = readAdvisoryPrimaryBotLogin();
   const deadlineMinutes = readAdvisoryConvergenceDeadlineMinutes();
@@ -738,21 +759,59 @@ function collectFromGitHub(args: AdvisoryConvergenceArgs): {
         policy?.ciGate?.externalCheckWaivers?.maxValidity ?? 'PT24H',
       ),
       waiverCheckSelector: ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      waivableSelectors: policy?.ciGate?.externalChecks?.waivable ?? [],
     },
   };
 }
 
-function resolveSoleClosingIssueNumber(
+/**
+ * Resolve the linked (claim) issue's comment stream for waiver-claim
+ * binding. When `explicitIssueNumber` (`--claim-issue`) is given, use it
+ * directly -- no ambiguity to resolve. Otherwise a PR can close more than
+ * one issue (`pr.closingIssuesReferences`), so fetch every candidate's
+ * comments and keep only the one whose *active claim* actually resolves
+ * (`summarizeClaimValidation`), mirroring how `external-check-waiver.mts`'s
+ * own `selectLinkedIssueCandidate` disambiguates multiple linked issues by
+ * active-claim presence rather than requiring a single closing reference.
+ * Zero or multiple resolving candidates fail closed to `[]` (no waiver
+ * claim can bind unambiguously), same as before.
+ */
+function resolveClaimEvents(
+  owner: string,
+  repo: string,
+  explicitIssueNumber: number | null,
   refs: ClosingIssueRefPayload[] | null | undefined,
-): number | null {
-  const numbers = [
+  trustedMarkerLogins: string[],
+): IssueCommentPayload[] {
+  if (explicitIssueNumber) {
+    return ghApiJson(
+      `repos/${owner}/${repo}/issues/${explicitIssueNumber}/comments`,
+      { paginate: true },
+    ) as IssueCommentPayload[];
+  }
+  const candidateNumbers = [
     ...new Set(
       (refs ?? [])
         .map((ref) => ref?.number)
         .filter((n): n is number => Number.isInteger(n)),
     ),
   ];
-  return numbers.length === 1 ? numbers[0] : null;
+  const resolving = candidateNumbers
+    .map((issueNumber) => {
+      const comments = ghApiJson(
+        `repos/${owner}/${repo}/issues/${issueNumber}/comments`,
+        { paginate: true },
+      ) as IssueCommentPayload[];
+      return {
+        comments,
+        hasActiveClaim: Boolean(
+          summarizeClaimValidation(comments, { trustedMarkerLogins })
+            .activeClaimPresent,
+        ),
+      };
+    })
+    .filter((candidate) => candidate.hasActiveClaim);
+  return resolving.length === 1 ? resolving[0].comments : [];
 }
 
 function ghGraphql(
@@ -771,63 +830,87 @@ function ghGraphql(
   return JSON.parse(ghText(args).trim() || '{}');
 }
 
+interface RawReviewNode {
+  commit?: { oid?: string | null } | null;
+  submittedAt?: string | null;
+  author?: GhAuthorPayload | null;
+  comments?: { totalCount?: number | null } | null;
+}
+
 function fetchReviewsAndHeadCommit(
   owner: string,
   repo: string,
   prNumber: number,
 ): { reviews: ReviewPayload[]; headCommittedAt: string } {
-  const payload = ghGraphql(
-    `
-      query($owner: String!, $repo: String!, $number: Int!) {
-        repository(owner: $owner, name: $repo) {
-          pullRequest(number: $number) {
-            reviews(first: 100) {
-              nodes {
-                commit { oid }
-                submittedAt
-                author { login }
-                comments { totalCount }
+  const nodes: RawReviewNode[] = [];
+  let headCommittedAt = '';
+  let cursor: string | null | undefined = null;
+
+  // Paginate `reviews` the same way `fetchReviewThreads` paginates
+  // `reviewThreads` below: a PR with more than one page of reviews would
+  // otherwise silently evaluate Clause 1 against only the first 100,
+  // potentially missing a later, dirty, current-HEAD review (see PR #1343
+  // review). `commits(last: 1)` is fetched once, on the first page, since
+  // it never changes across pages.
+  while (true) {
+    const payload = ghGraphql(
+      `
+        query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $number) {
+              reviews(first: 100, after: $cursor) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  commit { oid }
+                  submittedAt
+                  author { login }
+                  comments { totalCount }
+                }
+              }
+              commits(last: 1) {
+                nodes { commit { committedDate } }
               }
             }
-            commits(last: 1) {
-              nodes { commit { committedDate } }
-            }
           }
-        }
-      }`,
-    { owner, repo, number: prNumber },
-  ) as {
-    data?: {
-      repository?: {
-        pullRequest?: {
-          reviews?: {
-            nodes?: {
-              commit?: { oid?: string | null } | null;
-              submittedAt?: string | null;
-              author?: GhAuthorPayload | null;
-              comments?: { totalCount?: number | null } | null;
-            }[];
-          } | null;
-          commits?: {
-            nodes?: { commit?: { committedDate?: string | null } | null }[];
+        }`,
+      { owner, repo, number: prNumber, cursor },
+    ) as {
+      data?: {
+        repository?: {
+          pullRequest?: {
+            reviews?: {
+              pageInfo?: PageInfoPayload | null;
+              nodes?: RawReviewNode[] | null;
+            } | null;
+            commits?: {
+              nodes?: { commit?: { committedDate?: string | null } | null }[];
+            } | null;
           } | null;
         } | null;
       } | null;
-    } | null;
-  };
+    };
 
-  const reviews = (
-    payload?.data?.repository?.pullRequest?.reviews?.nodes ?? []
-  ).map((node) => ({
+    const pullRequest = payload?.data?.repository?.pullRequest;
+    nodes.push(...(pullRequest?.reviews?.nodes ?? []));
+    if (!headCommittedAt) {
+      headCommittedAt = String(
+        pullRequest?.commits?.nodes?.[0]?.commit?.committedDate ?? '',
+      );
+    }
+
+    if (!pullRequest?.reviews?.pageInfo?.hasNextPage) break;
+    if (!pullRequest.reviews.pageInfo.endCursor) {
+      throw new Error('review pagination payload is missing endCursor');
+    }
+    cursor = pullRequest.reviews.pageInfo.endCursor;
+  }
+
+  const reviews = nodes.map((node) => ({
     author: node.author ?? null,
     submittedAt: node.submittedAt ?? null,
     commitId: node.commit?.oid ?? null,
     itemCount: node.comments?.totalCount ?? null,
   }));
-  const headCommittedAt = String(
-    payload?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit
-      ?.committedDate ?? '',
-  );
   return { reviews, headCommittedAt };
 }
 

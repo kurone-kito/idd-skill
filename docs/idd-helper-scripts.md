@@ -1148,8 +1148,12 @@ Interpretation rules:
   path is a valid maintainer external-check waiver for that HEAD under the
   selector `idd-advisory-convergence` (reusing the same
   `<!-- idd-external-check-waiver: ... -->` marker format and validity
-  rules as `external-check-waiver.mjs`, gated the same way by
-  `ciGate.externalCheckWaivers.mode == "maintainer-authorized"`).
+  rules as `external-check-waiver.mjs`). Gated by the same two-dimensional
+  opt-in every other external-check waiver already requires:
+  `ciGate.externalCheckWaivers.mode == "maintainer-authorized"` **and**
+  `idd-advisory-convergence` registered under
+  `ciGate.externalChecks.waivable` — enabling waiver mode for some other
+  external check never silently makes this gate waivable too.
 - Reuses the existing evidence modules — `isCopilotReviewerLogin` /
   `readAdvisoryPrimaryBotLogin`, `resolveAdvisoryBotLogins`,
   `resolveTrustedMarkerActors`, `summarizeDispositionEvidenceForGate`,

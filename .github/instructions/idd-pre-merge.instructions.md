@@ -283,11 +283,12 @@ returns the workflow to E1 instead of merging over it.
   profile-selected `idd-advisory-convergence` command). A non-zero exit
   is a hard merge block — route to E1/E4 using the printed `reasons`; a
   zero exit (`ready: true`) satisfies this condition.
-  Separately, if helper evidence includes `dispositionEvidence`, require
-  `dispositionEvidence.missingRegularComments.length == 0` (ad hoc
-  advisory-bot or reviewer comments outside a review thread, which the
-  helper above does not cover). A non-empty list routes to E1/E4 with
-  that evidence.
+  Separately, require `dispositionEvidence.missingRegularComments.length
+  == 0` (ad hoc advisory-bot or reviewer comments outside a review
+  thread, which the helper above does not cover); treat absent,
+  malformed, or non-list `dispositionEvidence`/`missingRegularComments`
+  as unmet, not as vacuously satisfied. A non-empty (or unusable) result
+  routes to E1/E4 with that evidence.
   Fails closed per the shared default: if either check cannot run or its
   output is unusable, treat this condition as unmet.
 

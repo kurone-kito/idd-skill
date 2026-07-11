@@ -24,6 +24,14 @@ const TRUSTED = 'kurone-kito';
 const COPILOT_LOGIN = 'copilot-pull-request-reviewer';
 const CLAIM_ID = 'claim-abc123';
 const AGENT_ID = 'claude-test';
+// A repo that has opted this gate into the waiver escape hatch: `mode`
+// alone (set per-test via `waiverMode`) is not sufficient -- the check
+// must also be registered here, matching the two-dimensional
+// `ciGate.externalCheckWaivers` / `ciGate.externalChecks.waivable`
+// contract every other F2/F3 waiver already follows.
+const ADVISORY_CONVERGENCE_WAIVABLE = [
+  { selector: 'idd-advisory-convergence', matchMode: 'exact' },
+];
 
 function baseInputs(
   overrides: Partial<AdvisoryConvergenceInputs> = {},
@@ -174,6 +182,29 @@ test('pending: the latest bot review targets an older commit than current HEAD',
   assert.equal(verdict.converged, false);
 });
 
+test('regression: a re-request without a new push supersedes an earlier dirty on-HEAD review', () => {
+  // Same commit reviewed twice (a legitimate re-request per this repo's own
+  // advisory-wait protocol, AW3 REQUEST_NEEDED, without a new push): the
+  // FIRST review found issues; the SECOND (later, superseding) review is
+  // clean. Requiring every on-HEAD review to be clean would wrongly block
+  // this genuinely-converged PR forever.
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ submittedAt: OLD, itemCount: 4 }),
+        copilotReview({ submittedAt: RECENT, itemCount: 0 }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.matchesHead, true);
+  assert.equal(verdict.review.itemCount, 0);
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
 test('regression: a dirty on-HEAD review is never silently ignored just because its own submittedAt is missing', () => {
   // Both reviews target the current HEAD. The earlier one is clean and has a
   // valid timestamp; the later one carries actionable items but its
@@ -306,7 +337,11 @@ test('deadline-passed-with-waiver: a valid maintainer waiver flips a stale-pendi
         { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
       ],
     }),
-    baseOptions({ headCommittedAt: OLD, waiverMode: 'maintainer-authorized' }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
   );
   assertValidVerdict(verdict);
   assert.equal(verdict.pending, true);
@@ -316,6 +351,39 @@ test('deadline-passed-with-waiver: a valid maintainer waiver flips a stale-pendi
   assert.equal(verdict.waived, true);
   assert.equal(verdict.converged, false);
   assert.equal(verdict.ready, true);
+});
+
+test('deadline-passed-with-waiver: an otherwise-valid marker does not waive unless this gate is in the configured waivable list', () => {
+  // Same valid marker as above, but the repo never opted `idd-advisory-
+  // convergence` into `ciGate.externalChecks.waivable` -- only `mode` is
+  // "maintainer-authorized". The existing two-dimensional waiver contract
+  // (mode AND a per-check registration) must still hold for this gate.
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: AGENT_ID,
+    claimId: CLAIM_ID,
+    headSha: HEAD,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'Copilot review API outage, maintainer verified the diff manually',
+    expiresAt: '2026-07-12T00:00:00Z',
+    actor: TRUSTED,
+  });
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: [], // not registered
+    }),
+  );
+  assert.equal(verdict.waiver.validCount, 0);
+  assert.equal(verdict.waived, false);
+  assert.equal(verdict.ready, false);
 });
 
 // --- 7. deadline-passed-no-waiver -----------------------------------------
