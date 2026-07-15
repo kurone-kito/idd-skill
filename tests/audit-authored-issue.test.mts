@@ -230,6 +230,35 @@ test('marker-prefix-consistency passes when a regex-metacharacter markerPrefix m
   assert.equal(findingResult(report, 'marker-prefix-consistency'), 'pass');
 });
 
+test('marker-prefix-consistency detects a wrong-prefix marker that is also missing its value', () => {
+  // A mandatory `:` in the scan regex would let a malformed, valueless,
+  // wrong-prefix marker evade detection entirely — but it is still
+  // evidence of a prefix leak and must be flagged.
+  const body = childBody({
+    extraMarkers: '<!-- other-roadmap-id -->',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    markerPrefix: 'idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'marker-prefix-consistency',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /other-roadmap-id/);
+});
+
+test('markerPrefix normalization trims accidental whitespace', () => {
+  const body = childBody();
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    markerPrefix: '  idd-skill  ',
+  });
+  assert.equal(report.markerPrefix, 'idd-skill');
+  assert.equal(findingResult(report, 'marker-prefix-consistency'), 'pass');
+  assert.equal(findingResult(report, 'suitability-marker'), 'pass');
+});
+
 // --- required-headings ---
 
 test('required-headings fails when a required heading is missing', () => {

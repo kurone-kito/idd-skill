@@ -228,8 +228,13 @@ function checkMarkerPrefixConsistency(
   // contain other characters (see marker-regex.mts's escapeRegex docstring:
   // `.`, `+`, `(`, ...); a narrower class here would silently fail to match
   // any marker (right or wrong prefix) and always report a false pass.
+  // The value after the suffix is optional (`\b[\s\S]*?-->`, mirroring
+  // createMarkerRegex's own shape) rather than requiring a `:` — a
+  // malformed, valueless, wrong-prefix marker (e.g. `<!-- other-roadmap-id
+  // -->`) is still evidence of a prefix leak and must not evade this scan
+  // just because it is also missing its value.
   const pattern = new RegExp(
-    `<!--\\s*([^\\s>:]+)-(${AUTHORING_MARKER_SUFFIXES.join('|')}):[^>]*-->`,
+    `<!--\\s*([^\\s>:]+)-(${AUTHORING_MARKER_SUFFIXES.join('|')})\\b[\\s\\S]*?-->`,
     'gi',
   );
   const mismatches: string[] = [];
@@ -480,9 +485,12 @@ function extractHeadings(text: string): Set<string> {
 }
 
 function normalizeMarkerPrefix(prefix: unknown): string {
-  return typeof prefix === 'string' && prefix.length > 0
-    ? prefix
-    : DEFAULT_MARKER_PREFIX;
+  // Trim first: a config value or CLI input with accidental leading/
+  // trailing whitespace (e.g. "idd-skill ") would otherwise become a
+  // distinct prefix that never matches any real marker, producing
+  // confusing false failures across every check.
+  const trimmed = typeof prefix === 'string' ? prefix.trim() : '';
+  return trimmed.length > 0 ? trimmed : DEFAULT_MARKER_PREFIX;
 }
 
 function pass(id: string, name: string, detail: string): AuditFinding {
@@ -562,6 +570,15 @@ function loadPolicy(configPath?: string): {
     ? loadConfigFromPath(resolve(process.cwd(), configPath))
     : loadIddConfig();
   if (!config) {
+    // Stay fail-safe (never hard-crash on a bad config, matching every
+    // sibling *.mts loadPolicy()), but surface an explicit --config that
+    // could not be read/parsed: silently validating against the wrong
+    // policy would be a confusing, hard-to-notice false pass/fail.
+    if (configPath) {
+      console.error(
+        `warning: could not read or parse --config ${configPath}; falling back to default policy (markerPrefix=${DEFAULT_MARKER_PREFIX})`,
+      );
+    }
     return {
       markerPrefix: DEFAULT_MARKER_PREFIX,
       blockedByHumanLabelName: POLICY_DEFAULTS.labels.blockedByHumanLabelName,
