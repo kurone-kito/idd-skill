@@ -244,14 +244,13 @@ This floor is independent of D2's own **pre-push-validate** gate and
 never substitutes for it. **fix-validate** satisfies the floor only
 when it ran at the branch's current HEAD; re-run it after every new
 commit, including a C5 fix commit. Apply this floor **uniformly** on
-every runtime — never
-condition it on self-classifying as "no-subagent" (see
-`docs/idd-workflow.md`'s "Critique pass invocation" section). On a
-no-subagent runtime, where critique degrades to same-response
-self-critique, the critique verdict is **advisory** and this floor is
-**load-bearing** instead. If the floor has not passed, C2 and C4
-continue to C5 instead of skipping, even when their other skip
-condition is otherwise met.
+every runtime; do not condition it on self-classifying as
+"no-subagent" (see `docs/idd-workflow.md`'s "Critique pass invocation"
+section). On a no-subagent runtime, where critique degrades to
+same-response self-critique, the critique verdict is **advisory** and
+this floor is **load-bearing** instead. If the floor has not passed,
+C2 and C4 continue to C5 instead of skipping, even when their other
+skip condition is otherwise met.
 
 After each critique loop decision, update the issue digest only if the
 next action changes materially: for example, `C accepted fixes` before
