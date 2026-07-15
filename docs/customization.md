@@ -334,10 +334,10 @@ waiver comment does not by itself turn the check green**: a waiver is a
 regular PR comment, which is not one of the workflow's triggers
 (`pull_request` push, `pull_request_review` submission, or
 `pull_request_review_comment` created/edited/deleted on a review
-thread), so after posting a waiver a maintainer must also trigger a new
-run on the _existing_ PR-linked check run — the Actions UI "Re-run
-jobs" button, or `gh run rerun <run-id>` — for the required check to
-actually reflect it. `workflow_dispatch` does **not** reliably do this:
+thread), so after posting a waiver a maintainer must also **re-run the
+existing** PR-linked check run — the Actions UI "Re-run jobs" button,
+or `gh run rerun <run-id>` — for the required check to actually
+reflect it. `workflow_dispatch` does **not** reliably do this:
 a dispatched run has no `pull_request` context of its own, so GitHub
 associates it with the dispatch ref rather than the PR's HEAD SHA, and
 the resulting run's conclusion can be invisible to that PR's
