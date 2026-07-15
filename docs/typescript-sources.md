@@ -4,9 +4,9 @@ The IDD helper migration to TypeScript is **complete**: every committed
 `scripts/*.mjs` / `bin/*.mjs` artifact is generated from a `src/**/*.mts`
 source by `pnpm run build`, and `src/**/*.mts` is the only hand-edited
 JavaScript surface in the helper bundle. No hand-written helper `.mjs`
-path remains, and the invariant is enforced mechanically: a committed
-`scripts/*.mjs` or `bin/*.mjs` with no matching `.mts` source fails CI
-(`tests/inventory-ordering.test.mts`).
+path remains, and the invariant is enforced mechanically: a
+`scripts/*.mjs` or `bin/*.mjs` on disk with no matching `.mts` source
+fails CI (`tests/inventory-ordering.test.mts`).
 
 > **Edit the `.mts` source, never the generated `.mjs`.** A direct edit
 > to a generated file is overwritten on the next build and is rejected
@@ -58,8 +58,8 @@ bare-node lane additionally runs `node scripts/audit-docs.mjs --check`,
 whose pairing guard fails when a source is missing its generated artifact
 or a banner-marked artifact is missing its source. `node --test
 tests/inventory-ordering.test.mts` (part of `lint:minimum`'s test run)
-closes the remaining gap: it fails when a committed `scripts/*.mjs` or
-`bin/*.mjs` has no matching `.mts` source at all, regardless of whether it
+closes the remaining gap: it fails when a `scripts/*.mjs` or `bin/*.mjs`
+on disk has no matching `.mts` source at all, regardless of whether it
 carries the generated-from banner — the check that keeps the
 hand-written-helper path closed for good.
 

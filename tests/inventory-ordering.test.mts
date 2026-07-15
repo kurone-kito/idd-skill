@@ -117,7 +117,7 @@ test('sync-manifest syncPairs and bundleBudgets[].files are in canonical order',
 });
 
 // Completion guard for the TypeScript helper migration (#1365): every
-// committed scripts/*.mjs and bin/*.mjs must be generated from a
+// scripts/*.mjs and bin/*.mjs on disk must be generated from a
 // src/scripts/*.mts / src/bin/*.mts source, so a future hand-written helper
 // with no .mts source cannot silently reopen the dual-path the migration
 // removed. This is deliberately keyed on **source existence**, not the
@@ -162,7 +162,7 @@ test('orphanGeneratedNames finds no orphan when every generated name is paired',
   );
 });
 
-test('every committed scripts/*.mjs and bin/*.mjs has a src/**/*.mts source', () => {
+test('every scripts/*.mjs and bin/*.mjs on disk has a src/**/*.mts source', () => {
   const root = new URL('../', import.meta.url);
   const scriptOrphans = orphanGeneratedNames(
     readdirSync(new URL('scripts/', root)),
