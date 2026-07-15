@@ -1023,3 +1023,30 @@ test('audit/sync-manifest.json has no duplicate syncPairs targets', () => {
   ) as { syncPairs?: { id?: string; target?: string }[] };
   assert.deepEqual(collectDuplicateSyncPairTargets(manifest.syncPairs), []);
 });
+
+test('audit/sync-manifest.json guards the .claude issue-authoring markdown mirror with a fileSet', () => {
+  const manifest = JSON.parse(
+    readFileSync(
+      new URL('../audit/sync-manifest.json', import.meta.url),
+      'utf8',
+    ),
+  ) as {
+    fileSets?: {
+      id?: string;
+      sourceGlob?: string;
+      targetGlob?: string;
+      match?: string;
+      requireSyncPairs?: boolean;
+    }[];
+  };
+  const fileSet = manifest.fileSets?.find(
+    (entry) => entry.id === 'claude-skills-issue-authoring-markdown-set',
+  );
+  assert.deepEqual(fileSet, {
+    id: 'claude-skills-issue-authoring-markdown-set',
+    sourceGlob: 'skills/issue-authoring/**/*.md',
+    targetGlob: '.claude/skills/issue-authoring/**/*.md',
+    match: 'basename',
+    requireSyncPairs: true,
+  });
+});
