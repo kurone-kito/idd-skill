@@ -64,7 +64,13 @@ if (isCliExecution(import.meta.url)) {
  * at once instead of stopping at the first failure.
  */
 export function auditAuthoredIssue(body, options) {
-  const text = typeof body === 'string' ? body : String(body ?? '');
+  const rawText = typeof body === 'string' ? body : String(body ?? '');
+  // Strip fenced code blocks once, up front, and run every check (marker
+  // counting, heading detection, visible-line scoping) against the result.
+  // A pasted template/example snippet inside a fence — quoting a marker or
+  // heading for illustration — must never count as the real thing; see
+  // stripFencedCodeBlocks.
+  const text = stripFencedCodeBlocks(rawText);
   const shape = options.shape;
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
   const blockedByHumanLabelName =
@@ -339,18 +345,25 @@ function lastParagraphBeforeMarker(text, markerPrefix, suffix) {
   const paragraphs = before.split(/\n\s*\n/);
   return paragraphs.at(-1) ?? '';
 }
-function extractHeadings(text) {
-  const headings = new Set();
-  // Skip lines inside fenced code blocks (``` or ~~~) so a heading-shaped
-  // line that only appears inside a pasted template/example snippet does
-  // not count as a genuine section heading and mask a truly missing one.
-  // Track both the fence character and its length: per CommonMark, an
-  // inner fence-shaped line only closes the block when it uses the same
-  // character AND is at least as long as the opening fence (a 4+ backtick
-  // block can safely contain a literal ``` line).
+/**
+ * Blank out the content of every fenced code block (``` or ~~~) in `text`,
+ * preserving line count/structure but replacing fenced lines (including the
+ * delimiters) with empty lines. Applied once, up front, so a pasted
+ * template/example snippet — quoting a marker or a `##` heading for
+ * illustration — never counts as the real thing in any downstream check
+ * (marker counting, prefix consistency, heading detection, visible-line
+ * scoping).
+ *
+ * Tracks both the fence character and its length: per CommonMark, an inner
+ * fence-shaped line only closes the block when it uses the same character
+ * AND is at least as long as the opening fence, so a 4+-backtick block can
+ * safely contain a literal ``` line as content.
+ */
+function stripFencedCodeBlocks(text) {
+  const lines = text.split(/\r?\n/);
   let fenceChar = null;
   let fenceLength = 0;
-  for (const line of text.split(/\r?\n/)) {
+  const kept = lines.map((line) => {
     const fenceMatch = /^(`{3,}|~{3,})/.exec(line.trim());
     if (fenceMatch) {
       const marker = fenceMatch[1];
@@ -358,19 +371,22 @@ function extractHeadings(text) {
       if (fenceChar === null) {
         fenceChar = char;
         fenceLength = marker.length;
-      } else if (char === fenceChar && marker.length >= fenceLength) {
+        return '';
+      }
+      if (char === fenceChar && marker.length >= fenceLength) {
         fenceChar = null;
         fenceLength = 0;
       }
-      continue;
+      return '';
     }
-    if (fenceChar !== null) {
-      continue;
-    }
-    const headingMatch = /^##\s+(.+?)\s*$/.exec(line);
-    if (headingMatch) {
-      headings.add(headingMatch[1].trim());
-    }
+    return fenceChar !== null ? '' : line;
+  });
+  return kept.join('\n');
+}
+function extractHeadings(text) {
+  const headings = new Set();
+  for (const match of text.matchAll(/^##\s+(.+?)\s*$/gm)) {
+    headings.add(match[1].trim());
   }
   return headings;
 }

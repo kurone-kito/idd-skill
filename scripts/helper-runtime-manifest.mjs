@@ -111,6 +111,15 @@ const HELPER_COMMANDS = [
     contractPaths: ['schemas/advisory-wait-state.schema.json'],
   },
   {
+    id: 'audit-authored-issue',
+    scriptName: 'idd:audit-authored-issue',
+    binName: 'idd-audit-authored-issue',
+    entryPath: 'scripts/audit-authored-issue.mjs',
+    vendoredCommand: 'node scripts/audit-authored-issue.mjs',
+    description:
+      'Mechanically audit a drafted issue body against the issue-authoring contract: the autopilot-suitability marker, its blocked-by-human cross-field rule, markerPrefix consistency, required headings, dependency-marker rules, and visible/hidden footer agreement.',
+  },
+  {
     id: 'audit-pr-cleanup',
     scriptName: 'idd:audit-pr-cleanup',
     binName: 'idd-audit-pr-cleanup',

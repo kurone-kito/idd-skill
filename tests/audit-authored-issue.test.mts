@@ -359,6 +359,48 @@ test('dependency-marker-rule fails when an orphan issue carries a blocked-by mar
   assert.equal(findingResult(report, 'dependency-marker-rule'), 'fail');
 });
 
+test('dependency-marker-rule ignores a roadmap-id marker that only appears inside a fenced example', () => {
+  // A pasted contract-example snippet showing marker syntax must not make
+  // an orphan/child draft look like it carries a real roadmap-id marker.
+  const body = childBody({
+    extraMarkers: [
+      'For reference, a roadmap marker looks like:',
+      '',
+      '```markdown',
+      '<!-- idd-skill-roadmap-id: some-roadmap -->',
+      '```',
+    ].join('\n'),
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  assert.equal(findingResult(report, 'dependency-marker-rule'), 'pass');
+});
+
+test('dependency-marker-rule still fails when a roadmap issue only has its marker inside a fence', () => {
+  // The converse: a roadmap-id marker that exists ONLY inside a fence does
+  // not count as the real, required marker for a roadmap issue.
+  const body = [
+    '## Goal',
+    '',
+    '## Background',
+    '',
+    '## Tracks',
+    '',
+    '## Success criteria',
+    '',
+    '```markdown',
+    '<!-- idd-skill-roadmap-id: some-roadmap -->',
+    '```',
+    '',
+    suitabilityFooter(3),
+  ].join('\n');
+  const report = auditAuthoredIssue(body, { shape: 'roadmap' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-marker-rule',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /found 0/);
+});
+
 // --- suitability-visible-line-agreement ---
 
 test('suitability-visible-line-agreement fails on a visible/hidden mismatch', () => {
