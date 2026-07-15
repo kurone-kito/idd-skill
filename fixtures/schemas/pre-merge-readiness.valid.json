@@ -106,7 +106,8 @@
       "codeownerApprovalSatisfied": true,
       "bypassDetected": false,
       "bypassMode": "none",
-      "currentUserCanBypass": "never"
+      "currentUserCanBypass": "never",
+      "rulesetBypassUnreadable": false
     },
     "humanChangesRequestedCount": 0,
     "blockingChangesRequestedLogins": []

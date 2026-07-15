@@ -2954,6 +2954,7 @@ export function summarizeReviewerStates(
     branchRules = [],
     branchRulesets = [],
     branchProtection = {},
+    branchRulesetsUnreadable = false,
     codeownersText = '',
     changedFiles = [],
     eligibleCodeownerUserLogins = null,
@@ -3073,6 +3074,7 @@ export function summarizeReviewerStates(
     viewerAppSlug,
     branchRules,
     branchRulesets,
+    branchRulesetsUnreadable,
     classicRequireCodeOwnerReview:
       branchReviewRequirements.classicRequireCodeOwnerReview,
     classicBypassPullRequestUserLogins:
@@ -3127,6 +3129,7 @@ function summarizeCodeownerSelfApproval({
   viewerAppSlug = '',
   branchRules = [],
   branchRulesets = [],
+  branchRulesetsUnreadable = false,
   classicRequireCodeOwnerReview = false,
   classicBypassPullRequestUserLogins = [],
   classicBypassPullRequestTeamSlugs = [],
@@ -3172,7 +3175,11 @@ function summarizeCodeownerSelfApproval({
             classicBypassPullRequestAppSlugs,
           ).includes(normalizedViewerAppSlug))),
   );
-  const bypass = summarizeRulesetPullRequestBypass(branchRulesets, branchRules);
+  const bypass = summarizeRulesetPullRequestBypass(
+    branchRulesets,
+    branchRules,
+    branchRulesetsUnreadable,
+  );
   const rulesetGateSatisfiedByBypass =
     bypass.relevantRulesetCount === 0 || bypass.detected;
   const classicGateSatisfiedByBypass =
@@ -3197,6 +3204,12 @@ function summarizeCodeownerSelfApproval({
     bypassDetected: applicableBypassDetected,
     bypassMode: applicableBypassMode,
     currentUserCanBypass: bypass.currentUserCanBypass,
+    // #1380: true when a codeowner-requiring ruleset's *detail* read was
+    // masked-404 unreadable, so `bypass.detected` could not rule out an
+    // actual configured bypass. Diagnostic only -- never flips a `status`
+    // to `clear` on its own -- but downgrades a would-be certain `deadlock`
+    // below to the already-documented `possible_deadlock`.
+    rulesetBypassUnreadable: bypass.unreadable,
   };
   if (!requireCodeOwnerReview) {
     return base;
@@ -3260,6 +3273,20 @@ function summarizeCodeownerSelfApproval({
     };
   }
   if (allDirectUsersAreAuthor) {
+    // #1380: a masked-404 on a relevant ruleset's detail read means
+    // `bypass.detected` could not rule out an actual configured bypass for
+    // this PR author -- asserting a *certain* `deadlock` here would be an
+    // unjustified false-certainty diagnostic. Downgrade to the
+    // already-documented `possible_deadlock` (idd-pre-merge.instructions.md:
+    // "could not prove ... applicable pull-request bypass, so fail closed")
+    // instead of inventing a new status value.
+    if (bypass.unreadable) {
+      return {
+        ...base,
+        status: 'possible_deadlock',
+        reason: 'ruleset-bypass-unreadable',
+      };
+    }
     return {
       ...base,
       status: 'deadlock',
@@ -3278,6 +3305,7 @@ function summarizeCodeownerSelfApproval({
 function summarizeRulesetPullRequestBypass(
   branchRulesets = [],
   branchRules = [],
+  branchRulesetsUnreadable = false,
 ) {
   const codeownerRulesetIds = new Set(
     (branchRules ?? [])
@@ -3336,11 +3364,26 @@ function summarizeRulesetPullRequestBypass(
       mode = 'exempt';
     }
   }
+  // #1380: only report `unreadable` when a *relevant* (codeowner-requiring)
+  // ruleset is actually missing from `relevantRulesets` -- not merely
+  // whenever `detected` is `false`, since a fully-read ruleset can
+  // legitimately report a real, non-bypass value (e.g. `never`) that also
+  // makes `detected` false. That is genuine data, not a masked-404 gap, and
+  // must not be relabeled as "could not determine". A masked-404 on a
+  // relevant ruleset's detail read only ever *prevents* `detected` from
+  // becoming `true` (the count check above requires every expected
+  // ruleset's detail to be present), so this can never cause a false
+  // `detected: true`.
+  const unreadable =
+    branchRulesetsUnreadable &&
+    expectedRulesetCount > 0 &&
+    relevantRulesets.length < expectedRulesetCount;
   return {
     detected,
     mode,
     currentUserCanBypass,
     relevantRulesetCount: expectedRulesetCount,
+    unreadable,
   };
 }
 export function resolveRulesetDetailPath(owner, repo, rule, rulesetId) {
@@ -3635,10 +3678,24 @@ export function computePreMergeReadinessBlockers(report) {
   const reviewerStates = preMergeAsRecord(report.reviewerStates);
   if (!isPreMergeReviewSatisfied(reviewerStates)) {
     const selfApproval = preMergeAsRecord(reviewerStates.codeownerSelfApproval);
-    blockers.push({
-      gate: 'required-reviews',
-      detail: `required/CODEOWNER reviews not satisfied (requiredApprovalsSatisfied=${Boolean(reviewerStates.requiredApprovalsSatisfied)}, codeownerApprovalSatisfied=${Boolean(reviewerStates.codeownerApprovalSatisfied)}, codeownerSelfApproval.status="${String(selfApproval.status ?? '')}")`,
-    });
+    // #1380: name the masked-403-as-404 ruleset-detail cause explicitly when
+    // that is *why* the required-reviews gate is unmet, mirroring the CI
+    // gate's `protectionReadsUnreadable`-specific detail above, instead of
+    // the generic status detail below. Gate on the specific `reason` (set
+    // only by the one branch in `summarizeCodeownerSelfApproval` that
+    // actually resolved to this cause), not the bare
+    // `rulesetBypassUnreadable` boolean: that flag is present on every
+    // returned branch (it lives on `base`), so an unrelated resolution --
+    // e.g. `possible_deadlock`/`team-codeowner-ambiguous` -- could also
+    // carry `rulesetBypassUnreadable: true` (the same fetch that flagged
+    // the ruleset unreadable) while the real blocking cause is the
+    // ambiguous team, not the unreadable ruleset. Naming the wrong cause
+    // would misdirect an operator's remediation.
+    const detail =
+      selfApproval.reason === 'ruleset-bypass-unreadable'
+        ? 'cannot determine CODEOWNER ruleset bypass: ruleset detail unreadable'
+        : `required/CODEOWNER reviews not satisfied (requiredApprovalsSatisfied=${Boolean(reviewerStates.requiredApprovalsSatisfied)}, codeownerApprovalSatisfied=${Boolean(reviewerStates.codeownerApprovalSatisfied)}, codeownerSelfApproval.status="${String(selfApproval.status ?? '')}")`;
+    blockers.push({ gate: 'required-reviews', detail });
   }
   const claim = preMergeAsRecord(report.claim);
   if (claim.matchesExpectedClaim !== true) {
@@ -3674,6 +3731,7 @@ export function buildPreMergeReadinessSummary(
     branchRulesets = [],
     branchProtection = {},
     protectionReadsUnreadable = false,
+    branchRulesetsUnreadable = false,
     requestedReviewers = [],
     timelineEvents = [],
     claimEvents = [],
@@ -3761,6 +3819,7 @@ export function buildPreMergeReadinessSummary(
     branchRules,
     branchRulesets,
     branchProtection,
+    branchRulesetsUnreadable,
     codeownersText,
     changedFiles,
     eligibleCodeownerUserLogins,
