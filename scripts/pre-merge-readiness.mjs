@@ -124,7 +124,13 @@ export function collectPreMergeReadiness(argv) {
     [],
   );
   const branchRules = branchRulesRead.value;
-  const branchRulesets = fetchBranchRulesets(owner, repo, branchRules);
+  const branchRulesetsRead = fetchBranchRulesets(
+    owner,
+    repo,
+    branchRules,
+    trustEmptyProtectionReads,
+  );
+  const branchRulesets = branchRulesetsRead.value;
   const branchProtectionRead = fetchGovernanceJson(
     `repos/${owner}/${repo}/branches/${encodedBaseRefName}/protection`,
     false,
@@ -138,6 +144,14 @@ export function collectPreMergeReadiness(argv) {
   // `summarizeRequiredChecks` in protocol-helpers.mts).
   const protectionReadsUnreadable =
     branchRulesRead.unreadable || branchProtectionRead.unreadable;
+  // #1380: a masked-403-as-404 on a ruleset's *detail* read is a distinct
+  // surface from the required-check reads above -- `branchRulesets` only
+  // feeds `summarizeReviewerStates`'s ruleset-bypass/CODEOWNER detection,
+  // never `summarizeRequiredChecks` (see `summarizeBranchReviewRequirements`
+  // in protocol-helpers.mts, which reads only `branchRules` /
+  // `branchProtection`) -- so it is threaded separately rather than folded
+  // into `protectionReadsUnreadable`.
+  const branchRulesetsUnreadable = branchRulesetsRead.unreadable;
   const reviews = ghApiJson(
     `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
     true,
@@ -235,6 +249,7 @@ export function collectPreMergeReadiness(argv) {
       branchRulesets,
       branchProtection,
       protectionReadsUnreadable,
+      branchRulesetsUnreadable,
       requestedReviewers: requestedReviewers.users ?? [],
       timelineEvents,
       claimEvents: claimComments.map(normalizeClaimComment),
@@ -514,13 +529,33 @@ function fetchCodeownersText(owner, repo, ref) {
   return selectCodeownersText(payloads);
 }
 /**
- * Fetch each referenced ruleset's detail, skipping ones that no longer exist.
+ * Fetch each referenced ruleset's detail, discriminating a masked `404`
+ * (unreadable) from a genuine deletion race.
  *
- * A 404 means the ruleset is gone, so it is mapped to `{}` and dropped by the
- * trailing empty-object filter. Any other status (403, rate limit, transient
- * failure) is re-thrown so the F2/F3 merge gate fails closed and falls back to
- * the written-rules path, instead of fabricating a "no ruleset" result that
- * would silently over-block a legitimately configured bypass.
+ * Every `ruleset_id` passed in via `branchRules` was already confirmed to
+ * exist moments earlier by the `rules/branches/{base}` list read in the same
+ * call (see `collectPreMergeReadiness`), so a `404` on its own detail read
+ * here is not a plausible independent deletion race. GitHub's "Get a
+ * repository ruleset" reference documents only `200`/`404`/`500` for this
+ * endpoint -- no `403` --
+ * (<https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset>),
+ * the same masked-403-as-404 pattern `#1377` documented for the other two
+ * governance reads (see `fetchGovernanceJson`'s doc comment for the full
+ * citation set, including GitHub's REST troubleshooting guide). A `404`
+ * here is therefore **unreadable** by default: the ruleset is still dropped
+ * from the returned array (the caller has no usable detail either way, so
+ * `#1380` cannot invent one), but `unreadable` is set so
+ * `summarizeReviewerStates` can distinguish "no bypass configured" from
+ * "could not determine" instead of asserting an unjustified certain
+ * `deadlock`. `trustEmptyReads` (`ciGate.trustEmptyProtectionReads`, the
+ * same policy key `fetchGovernanceJson` reads) restores the pre-`#1380`
+ * trusting behavior.
+ *
+ * Any other thrown status (`403`, rate limit, transient failure, …) is
+ * still re-thrown unchanged, preserving the existing fail-closed behavior
+ * for an explicit permission error (`#1371`) instead of fabricating a "no
+ * ruleset" result that would silently over-block a legitimately configured
+ * bypass.
  *
  * The 404 must be discriminated on the *thrown* status: `gh api` writes a 404
  * response body to stdout, so `allowHttpStatuses: [404]` would return that
@@ -535,6 +570,7 @@ export function fetchBranchRulesets(
   owner,
   repo,
   branchRules,
+  trustEmptyReads = false,
   fetchRulesetDetail = (path) =>
     ghApiJson(path, false, ['-H', 'Accept: application/vnd.github+json']),
 ) {
@@ -552,18 +588,23 @@ export function fetchBranchRulesets(
     seenPaths.add(path);
     rulesetPaths.push(path);
   }
-  return rulesetPaths
+  let unreadable = false;
+  const value = rulesetPaths
     .map((path) => {
       try {
         return fetchRulesetDetail(path);
       } catch (error) {
         if (deriveGhHttpStatus(error) === 404) {
+          if (!trustEmptyReads) {
+            unreadable = true;
+          }
           return {};
         }
         throw error;
       }
     })
     .filter((ruleset) => Object.keys(ruleset).length > 0);
+  return { value, unreadable };
 }
 function resolveViewerClassicBypassTeamSlugs(
   owner,

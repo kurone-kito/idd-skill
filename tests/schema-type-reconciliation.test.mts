@@ -928,6 +928,7 @@ const preMergeReadinessFixture = {
       bypassDetected: false,
       bypassMode: 'none',
       currentUserCanBypass: 'never',
+      rulesetBypassUnreadable: false,
     },
     humanChangesRequestedCount: 0,
     blockingChangesRequestedLogins: [],

@@ -538,7 +538,98 @@ test('self-CODEOWNER diagnostic reports deadlock without bypass', () => {
     bypassDetected: false,
     bypassMode: 'none',
     currentUserCanBypass: 'never',
+    rulesetBypassUnreadable: false,
   });
+});
+
+// #1380: when the sole-direct-codeowner-is-the-author ruleset's own detail
+// read was masked-404 (unreadable), `bypass.detected` could not rule out an
+// actual configured bypass -- asserting a *certain* `deadlock` would be an
+// unjustified false-certainty diagnostic. Downgrade to the
+// already-documented `possible_deadlock` instead.
+test('self-CODEOWNER diagnostic downgrades a certain deadlock to possible_deadlock when the ruleset bypass detail is unreadable', () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [
+      {
+        type: 'pull_request',
+        ruleset_id: 1,
+        parameters: { require_code_owner_review: true },
+      },
+    ],
+    // The one codeowner-requiring ruleset's own detail 404'd and was
+    // dropped, so `branchRulesets` is empty even though a ruleset is
+    // referenced by `branchRules`.
+    branchRulesets: [],
+    branchRulesetsUnreadable: true,
+    codeownersText: '* @author\n',
+    changedFiles: ['README.md'],
+    prAuthorLogin: 'author',
+  });
+
+  assert.deepEqual(summary.codeownerSelfApproval, {
+    status: 'possible_deadlock',
+    reason: 'ruleset-bypass-unreadable',
+    prAuthorLogin: 'author',
+    directCodeownerUserLogins: ['author'],
+    codeownerTeamSlugs: [],
+    requireCodeOwnerReview: true,
+    codeownerApprovalSatisfied: false,
+    bypassDetected: false,
+    bypassMode: 'none',
+    currentUserCanBypass: 'unknown',
+    rulesetBypassUnreadable: true,
+  });
+});
+
+// A globally unreadable ruleset detail that is *irrelevant* to this PR (no
+// codeowner-requiring ruleset referenced at all) must not manufacture a
+// diagnostic -- `rulesetBypassUnreadable` stays `false` and the existing
+// deadlock-free `not_applicable` outcome is unaffected.
+test('self-CODEOWNER diagnostic ignores an unreadable ruleset detail when no codeowner-requiring ruleset applies', () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [],
+    branchRulesets: [],
+    branchRulesetsUnreadable: true,
+    codeownersText: '* @author\n',
+    changedFiles: ['README.md'],
+    prAuthorLogin: 'author',
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, 'not_applicable');
+  assert.equal(summary.codeownerSelfApproval.rulesetBypassUnreadable, false);
+});
+
+// A relevant ruleset detail that *was* successfully read (bypass genuinely
+// not detected, e.g. `current_user_can_bypass: 'never'`) must not be
+// downgraded just because some *other*, unrelated ruleset in the same fetch
+// was unreadable -- `detected` already ruling out this ruleset is real data,
+// not an artifact of the drop.
+test('self-CODEOWNER diagnostic keeps a certain deadlock when the relevant ruleset detail was actually read', () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [
+      {
+        type: 'pull_request',
+        ruleset_id: 1,
+        parameters: { require_code_owner_review: true },
+      },
+    ],
+    branchRulesets: [
+      { id: 1, current_user_can_bypass: 'never', bypass_actors: [] },
+    ],
+    // Some other, unrelated ruleset in the same fetch was unreadable, but
+    // ruleset 1 (the only codeowner-requiring one) was fully read.
+    branchRulesetsUnreadable: true,
+    codeownersText: '* @author\n',
+    changedFiles: ['README.md'],
+    prAuthorLogin: 'author',
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, 'deadlock');
+  assert.equal(
+    summary.codeownerSelfApproval.reason,
+    'pr-author-is-only-direct-codeowner',
+  );
+  assert.equal(summary.codeownerSelfApproval.rulesetBypassUnreadable, false);
 });
 
 test('self-CODEOWNER diagnostic clears when another direct owner exists', () => {
@@ -4394,34 +4485,62 @@ const oneRulesetRule = [{ ruleset_id: 1 }] as Parameters<
 
 test('fetchBranchRulesets skips a 404 ruleset detail without throwing', () => {
   const seen: string[] = [];
-  const result = fetchBranchRulesets('o', 'r', oneRulesetRule, (path) => {
-    seen.push(path);
-    throw ghHttpError(404, 'Not Found');
-  });
+  const result = fetchBranchRulesets(
+    'o',
+    'r',
+    oneRulesetRule,
+    false,
+    (path) => {
+      seen.push(path);
+      throw ghHttpError(404, 'Not Found');
+    },
+  );
   assert.equal(seen.length, 1);
   assert.match(seen[0] ?? '', /\/rulesets\/1$/);
-  assert.deepEqual(result, []);
+  assert.deepEqual(result.value, []);
 });
 
 test('fetchBranchRulesets keeps real rulesets and drops empty results', () => {
   const rules = [{ ruleset_id: 1 }, { ruleset_id: 2 }] as Parameters<
     typeof fetchBranchRulesets
   >[2];
-  const result = fetchBranchRulesets('o', 'r', rules, (path) =>
+  const result = fetchBranchRulesets('o', 'r', rules, false, (path) =>
     path.endsWith('/1') ? { id: 1, current_user_can_bypass: 'always' } : {},
   );
-  assert.deepEqual(result, [{ id: 1, current_user_can_bypass: 'always' }]);
+  assert.deepEqual(result.value, [
+    { id: 1, current_user_can_bypass: 'always' },
+  ]);
+  assert.equal(result.unreadable, false);
 });
 
 test('fetchBranchRulesets propagates a non-404 fetch error instead of coercing to "no ruleset"', () => {
   const boom = ghHttpError(403, 'API rate limit exceeded');
   assert.throws(
     () =>
-      fetchBranchRulesets('o', 'r', oneRulesetRule, () => {
+      fetchBranchRulesets('o', 'r', oneRulesetRule, false, () => {
         throw boom;
       }),
     (error: unknown) => error === boom,
   );
+});
+
+// #1380: GitHub's "Get a repository ruleset" reference documents only
+// `200`/`404`/`500` for this endpoint -- no `403` -- so a `404` here is
+// structurally ambiguous the same way #1377 established for the other two
+// governance reads (see `fetchGovernanceJson`'s doc comment for the full
+// citation set).
+test('fetchBranchRulesets marks a masked-404 ruleset detail as unreadable by default (fail closed)', () => {
+  const result = fetchBranchRulesets('o', 'r', oneRulesetRule, false, () => {
+    throw ghHttpError(404, 'Not Found');
+  });
+  assert.deepEqual(result, { value: [], unreadable: true });
+});
+
+test('fetchBranchRulesets trusts a masked-404 ruleset detail as genuinely empty when ciGate.trustEmptyProtectionReads opts in', () => {
+  const result = fetchBranchRulesets('o', 'r', oneRulesetRule, true, () => {
+    throw ghHttpError(404, 'Not Found');
+  });
+  assert.deepEqual(result, { value: [], unreadable: false });
 });
 
 // #1377: neither `branches/{branch}/protection` nor `rules/branches/{branch}`
@@ -4688,6 +4807,68 @@ test('buildPreMergeReadinessSummary blocks on the ci gate with a specific detail
   assert.equal(
     ciBlocker?.detail,
     'cannot determine required checks: protection/ruleset unreadable',
+  );
+  assert.equal(unreadable.ready, false);
+});
+
+// #1380: a masked-403-as-404 on a codeowner-requiring ruleset's *detail*
+// read must block the required-reviews gate with a specific, actionable
+// detail (mirroring #1377's ci-gate detail above) instead of the generic
+// status dump, when that unreadable ruleset is why the gate cannot resolve.
+test('buildPreMergeReadinessSummary blocks on the required-reviews gate with a specific detail when the ruleset bypass detail is unreadable', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  // The PR author is the sole codeowner (no non-author eligible codeowner,
+  // no actual codeowner approval yet, and the aggregate reviewDecision is
+  // not APPROVED), and the one codeowner-requiring rule references a
+  // ruleset whose detail read was masked-404 and dropped.
+  const branchRules = (
+    fixture.input.branchRules as Record<string, unknown>[]
+  ).map((rule) =>
+    rule.type === 'pull_request' ? { ...rule, ruleset_id: 1 } : rule,
+  );
+  const baseInput = {
+    ...fixture.input,
+    branchRules,
+    branchRulesets: [],
+    reviewDecision: '',
+    codeownersText: '* @contributor\n',
+    reviews: [],
+  };
+
+  const withoutOverride = buildPreMergeReadinessSummary(baseInput, {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+  });
+  const reviewerStatesWithout = withoutOverride.reviewerStates as Record<
+    string,
+    unknown
+  >;
+  const selfApprovalWithout =
+    reviewerStatesWithout.codeownerSelfApproval as Record<string, unknown>;
+  assert.equal(selfApprovalWithout.status, 'deadlock');
+  assert.equal(selfApprovalWithout.rulesetBypassUnreadable, false);
+
+  const unreadable = buildPreMergeReadinessSummary(
+    { ...baseInput, branchRulesetsUnreadable: true },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+  const reviewerStates = unreadable.reviewerStates as Record<string, unknown>;
+  const selfApproval = reviewerStates.codeownerSelfApproval as Record<
+    string,
+    unknown
+  >;
+  assert.equal(selfApproval.status, 'possible_deadlock');
+  assert.equal(selfApproval.rulesetBypassUnreadable, true);
+  assert.deepEqual(
+    unreadable.blockers,
+    computePreMergeReadinessBlockers(unreadable),
+  );
+  const reviewBlocker = (
+    unreadable.blockers as { gate: string; detail: string }[]
+  ).find((blocker) => blocker.gate === 'required-reviews');
+  assert.equal(
+    reviewBlocker?.detail,
+    'cannot determine CODEOWNER ruleset bypass: ruleset detail unreadable',
   );
   assert.equal(unreadable.ready, false);
 });

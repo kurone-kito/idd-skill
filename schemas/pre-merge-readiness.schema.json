@@ -501,7 +501,8 @@
             "codeownerApprovalSatisfied",
             "bypassDetected",
             "bypassMode",
-            "currentUserCanBypass"
+            "currentUserCanBypass",
+            "rulesetBypassUnreadable"
           ],
           "additionalProperties": false,
           "properties": {
@@ -564,6 +565,9 @@
                 "exempt",
                 "mixed"
               ]
+            },
+            "rulesetBypassUnreadable": {
+              "type": "boolean"
             }
           }
         },
