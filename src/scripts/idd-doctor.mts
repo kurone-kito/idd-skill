@@ -18,6 +18,7 @@ import {
   POLICY_DEFAULTS,
   parseProjectCommandRows,
 } from './policy-helpers.mts';
+import { loadJson, validate } from './validate-schemas.mts';
 
 const WORKSHOP_ENTRY_POINTS = ['README.md', 'README.ja.md', 'docs/index.md'];
 const WORKSHOP_REL_PATH = 'docs/workshop';
@@ -128,6 +129,7 @@ export function runDoctor({
   );
   checkPolicySignals(root, report);
   checkHelperRuntimeConfig(root, report);
+  checkLiveConfigSchema(root, report);
   checkClaimTimingConsistency(root, report);
   checkDependencyVersionDrift(root, report);
   checkAgentEntryFiles(root, report);
@@ -911,6 +913,75 @@ function checkHelperRuntimeConfig(root: string, report: DoctorReport) {
       `${file} declares helper runtime profile "${helperRuntime.profile}"`,
     );
   }
+}
+
+/**
+ * Decide whether a parsed `.github/idd/config.json` document is a schema
+ * finding, given the canonical policy schema. Pure (no I/O) so it can be
+ * unit-tested directly. Returns `null` when `config` validates cleanly.
+ *
+ * This is the live-config counterpart to the `ciWait`/`advisoryWait`
+ * readers' own subtree-scoped validation (#1359): those readers only
+ * revert their own section on their own section's error, so a malformed
+ * config (an unknown top-level key, `additionalProperties: false`
+ * rejecting an adopter typo, a typo'd enum anywhere in the document, ...)
+ * would otherwise pass through with no diagnostic at all. This check
+ * surfaces every schema error against the whole document instead, so a
+ * malformed live config no longer passes idd-doctor silently.
+ */
+export function classifyLiveConfigSchemaFinding(
+  config: unknown,
+  schema: unknown,
+): { level: 'error'; message: string } | null {
+  const errors = validate(config, schema);
+  if (errors.length === 0) {
+    return null;
+  }
+  return {
+    level: 'error',
+    message: `.github/idd/config.json fails schema validation against policy.schema.json: ${errors.slice(0, 10).join('; ')}`,
+  };
+}
+
+/**
+ * Validate the live `.github/idd/config.json` (when present) against the
+ * canonical policy schema and report any errors as a doctor finding. Skips
+ * silently when the config file is absent (nothing to validate) or is not
+ * valid JSON (already reported by checkHelperRuntimeConfig above) or when
+ * the bundled schema itself cannot be loaded (a bootstrap edge case, not a
+ * live-config problem).
+ */
+export function checkLiveConfigSchema(root: string, report: DoctorReport) {
+  const configPath = join(root, '.github/idd/config.json');
+  if (!exists(configPath)) {
+    return;
+  }
+
+  let config: unknown;
+  try {
+    config = JSON.parse(readFileSync(configPath, 'utf8'));
+  } catch {
+    return;
+  }
+
+  let schema: unknown;
+  try {
+    schema = loadJson('schemas/policy.schema.json');
+  } catch {
+    report.warnings.push(
+      'live-config schema check skipped: schemas/policy.schema.json could not be loaded',
+    );
+    return;
+  }
+
+  const finding = classifyLiveConfigSchemaFinding(config, schema);
+  if (!finding) {
+    report.passes.push(
+      '.github/idd/config.json validates against policy.schema.json',
+    );
+    return;
+  }
+  report.errors.push(finding.message);
 }
 
 /** One reportable finding from the claimTiming config↔prose check. */

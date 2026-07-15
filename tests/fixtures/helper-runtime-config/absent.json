@@ -1,5 +1,6 @@
 {
   "iddVersion": "0.1.0",
+  "markerPrefix": "helper-runtime-fixture",
   "mergePolicy": "fully_autonomous_merge",
   "reviewPolicy": "copilot-advisory",
   "threadResolutionPolicy": "fast-agent-resolve",
@@ -7,6 +8,9 @@
     "staleAge": "PT24H",
     "heartbeatInterval": "PT12H"
   },
+  "trustedMarkerActors": [
+    "fixture-actor"
+  ],
   "commands": {
     "install-deps": "true",
     "fix-validate": "node --test tests/*.mjs",

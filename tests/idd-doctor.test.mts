@@ -8,9 +8,11 @@ import {
   backLinkPatternFor,
   checkClaimTimingConsistency,
   checkDependencyVersionDrift,
+  checkLiveConfigSchema,
   checkProjectCommands,
   classifyBacklog,
   classifyClaimTimingConsistency,
+  classifyLiveConfigSchemaFinding,
   classifyPrimaryHead,
   classifyReleaseTagDrift,
   classifyWorktreeGuardActivation,
@@ -42,6 +44,7 @@ import {
   scanFileForPlaceholders,
   stripMarkdownNonText,
 } from '../src/scripts/idd-doctor.mts';
+import { loadJson } from '../src/scripts/validate-schemas.mts';
 
 const ap = (n: number | string) =>
   `<!-- idd-skill-autopilot-suitability: ${n} -->`;
@@ -2009,6 +2012,102 @@ test('checkClaimTimingConsistency pushes no warning when config and prose agree,
     checkClaimTimingConsistency(dir, missingConfigReport);
     assert.equal(missingConfigReport.warnings.length, 0);
     assert.equal(missingConfigReport.errors.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const POLICY_SCHEMA = loadJson('schemas/policy.schema.json');
+const VALID_POLICY_CONFIG = loadJson(
+  'fixtures/schemas/policy.valid.json',
+) as Record<string, unknown>;
+
+test('classifyLiveConfigSchemaFinding returns null for a schema-valid config', () => {
+  assert.equal(
+    classifyLiveConfigSchemaFinding(VALID_POLICY_CONFIG, POLICY_SCHEMA),
+    null,
+  );
+});
+
+test('classifyLiveConfigSchemaFinding reports an unknown top-level key', () => {
+  const config = { ...VALID_POLICY_CONFIG, _note: 'adopter comment' };
+  const finding = classifyLiveConfigSchemaFinding(config, POLICY_SCHEMA);
+  assert.ok(finding);
+  assert.equal(finding?.level, 'error');
+  assert.match(finding?.message ?? '', /fails schema validation/);
+  assert.match(
+    finding?.message ?? '',
+    /additional property "_note" not allowed/,
+  );
+});
+
+test('classifyLiveConfigSchemaFinding reports every error, not just the first', () => {
+  const config = {
+    ...VALID_POLICY_CONFIG,
+    mergePolicy: 'not-a-real-policy',
+    reviewPolicy: 'not-a-real-review-policy',
+  };
+  const finding = classifyLiveConfigSchemaFinding(config, POLICY_SCHEMA);
+  assert.ok(finding);
+  assert.match(finding?.message ?? '', /mergePolicy/);
+  assert.match(finding?.message ?? '', /reviewPolicy/);
+});
+
+test('checkLiveConfigSchema reports a finding for an unknown-key live config (fixture)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-live-config-schema-'));
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify({ ...VALID_POLICY_CONFIG, _note: 'adopter comment' }),
+    );
+
+    const report = emptyReport(dir);
+    checkLiveConfigSchema(dir, report);
+    assert.equal(report.errors.length, 1);
+    assert.match(
+      report.errors[0],
+      /\.github\/idd\/config\.json fails schema validation/,
+    );
+    assert.match(report.errors[0], /additional property "_note" not allowed/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkLiveConfigSchema passes for a schema-valid live config and skips when absent or malformed', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-live-config-schema-ok-'));
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify(VALID_POLICY_CONFIG),
+    );
+
+    const validReport = emptyReport(dir);
+    checkLiveConfigSchema(dir, validReport);
+    assert.equal(validReport.errors.length, 0);
+    assert.ok(
+      validReport.passes.some((line) =>
+        line.includes('validates against policy.schema.json'),
+      ),
+    );
+
+    // Malformed JSON: already reported by checkHelperRuntimeConfig, so this
+    // check skips silently rather than double-reporting.
+    writeFileSync(join(dir, '.github/idd/config.json'), '{ not json');
+    const malformedReport = emptyReport(dir);
+    checkLiveConfigSchema(dir, malformedReport);
+    assert.equal(malformedReport.errors.length, 0);
+    assert.equal(malformedReport.warnings.length, 0);
+
+    // No config.json at all: nothing to validate.
+    rmSync(join(dir, '.github/idd/config.json'));
+    const missingReport = emptyReport(dir);
+    checkLiveConfigSchema(dir, missingReport);
+    assert.equal(missingReport.errors.length, 0);
+    assert.equal(missingReport.warnings.length, 0);
+    assert.equal(missingReport.passes.length, 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
