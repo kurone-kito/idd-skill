@@ -51,8 +51,8 @@ Obtain a server-anchored `now` from the `Date` HTTP response header of a
 already made while gathering the inputs above when one happened to use
 `gh api --include`; otherwise issue one lightweight `gh api --include`
 call for this purpose (a single extra request, not one per check).
-Extract and convert the header value to ISO8601 UTC in one step — Node
-is already a required dependency for helper runtime and parses RFC 7231
+Extract the header value, then convert it to ISO8601 UTC — Node is
+already a required dependency for helper runtime and parses RFC 7231
 dates directly, so prefer it over shell `date` utilities (whose flags
 differ across GNU/BSD/Windows executors):
 
