@@ -108,9 +108,7 @@ interpreting `gh pr checks` output.
    there is no fully reliable mechanical check available, that cannot
    itself be spoofed, to confirm that assumption for every caller (an
    actor's collaborator role is not proof the caller's own token
-   carries the scope the endpoint requires — tracked separately in
-   #1377, which also covers bringing the `pre-merge-readiness` helper
-   to matching behavior).
+   carries the scope the endpoint requires).
    When there is other reason to doubt it, treat an unexpected `404` on
    the branch-protection or ruleset reads **exactly like a `403`**:
    apply the same fail-closed hold immediately below, do not fall
