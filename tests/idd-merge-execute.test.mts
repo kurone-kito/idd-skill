@@ -432,3 +432,29 @@ test('evaluateMergeGates delegates to the shared computePreMergeReadinessBlocker
     ['advisory-wait', 'ci'],
   );
 });
+
+// #1377 (Copilot review finding on PR #1379): protectionReadsUnreadable must
+// block the ci gate even when the *other* (readable) required-check source
+// already yields a fully passing set -- requiredChecksPassing/status alone
+// must never short-circuit past an unreadable read, because a masked 404 on
+// one source can hide additional required checks the readable source never
+// surfaced. A report can be "requiredChecksPassing: true" from the readable
+// source and still be unsafe to merge.
+test('protectionReadsUnreadable blocks the ci gate even when requiredChecksPassing is already true', () => {
+  const report = readyReport();
+  report.ci = {
+    status: 'success',
+    requiredChecksPassing: true,
+    noRequiredChecksConfigured: false,
+    protectionReadsUnreadable: true,
+    presentRunConclusion: 'all-passing',
+  };
+
+  const blockers = evaluateMergeGates(report);
+  assert.deepEqual(computePreMergeReadinessBlockers(report), blockers);
+  const ciBlocker = blockers.find((blocker) => blocker.gate === 'ci');
+  assert.equal(
+    ciBlocker?.detail,
+    'cannot determine required checks: protection/ruleset unreadable',
+  );
+});

@@ -4517,6 +4517,15 @@ function preMergeAsRecord(value: unknown): Record<string, unknown> {
 }
 
 function isPreMergeCiAllPassing(ci: Record<string, unknown>): boolean {
+  // #1377: an unreadable protection/ruleset read means the required-check
+  // set this report computed may be incomplete -- a masked 404 can hide
+  // additional required checks the readable source(s) never surfaced. Block
+  // unconditionally here, before either shortcut below, so a passing
+  // subset of (possibly incomplete) required checks can never mark the
+  // report ready.
+  if (ci.protectionReadsUnreadable === true) {
+    return false;
+  }
   if (ci.requiredChecksPassing === true || ci.status === 'success') {
     return true;
   }
