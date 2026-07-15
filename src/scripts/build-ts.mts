@@ -8,10 +8,11 @@
 // Build the generated .mjs helper artifacts from the TypeScript sources.
 //
 // Emits with `tsc -p tsconfig.build.json --listEmittedFiles`, then
-// normalizes ONLY the files tsc just emitted with Biome. Scoping the
-// Biome pass to the emitted set keeps `pnpm run build` from rewriting
-// hand-written helpers during the migration window — those are validated
-// (not rewritten) by the standalone `biome check` in lint:minimum.
+// normalizes ONLY the files tsc just emitted with Biome. Scoping the Biome
+// pass to tsc's own emitted set — rather than every scripts/*.mjs or
+// bin/*.mjs on disk — keeps `pnpm run build` from touching a file tsc did
+// not just produce, such as a local file not yet registered with a .mts
+// source (tests/inventory-ordering.test.mts rejects that before merge).
 //
 // After emitting, it also rewrites the `.gitattributes`
 // `scripts/*.mjs linguist-generated=true` block so it lists exactly the
