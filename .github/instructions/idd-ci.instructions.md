@@ -236,7 +236,7 @@ with the PR's HEAD SHA the way a `pull_request` / `pull_request_review`
 [kurone-kito/idd-skill's own dogfooded copy of `.github/workflows/idd-advisory-convergence.yml`](https://github.com/kurone-kito/idd-skill/blob/main/.github/workflows/idd-advisory-convergence.yml)'s
 header comment for the full finding -- the investigation prose lives
 only in that upstream file, not in the portable stub this template
-mirrors at `idd-template/.github/workflows/idd-advisory-convergence.yml`.
+ships as your `.github/workflows/idd-advisory-convergence.yml`.
 When this check shows a stuck or stale rollup entry, apply the rerun
 mechanic above -- `gh run rerun <run-id>` on the _existing_ PR-linked
 run for the current HEAD SHA -- rather than `workflow_dispatch`.

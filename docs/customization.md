@@ -347,9 +347,9 @@ required-check rollup. See
 header comment for the full finding — this deliberately links the
 upstream source repository's copy, not a relative path to your own
 vendored workflow file, because the fuller investigation prose lives
-only in that dogfooded original; the portable stub this template
-mirrors at `idd-template/.github/workflows/idd-advisory-convergence.yml`
-does not carry it.
+only in that dogfooded original; the portable stub this template ships
+as your `.github/workflows/idd-advisory-convergence.yml` is
+intentionally shorter and does not carry it.
 
 ## Phase ID Compatibility Contract
 
