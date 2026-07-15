@@ -33,6 +33,22 @@ const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 // unsanitized fixture would then operate on (and could mutate) the host
 // repository instead of the temp fixture, despite `cwd` pointing at the
 // fixture. Same pattern as tests/worktree-guard-hook.test.mts.
+//
+// `git ls-files --exclude-standard` also honors `core.excludesFile`, which
+// git resolves from the global/system config file *or*, when that key is
+// entirely unset (as it is once GIT_CONFIG_GLOBAL/SYSTEM point at
+// /dev/null below), falls back to git's own hardcoded default
+// `$XDG_CONFIG_HOME/git/ignore`. An operator's real personal ignore file
+// there can exclude fixture paths for reasons that have nothing to do with
+// this suite (for example a `.claude/*` entry with a narrower allowlist
+// than this fixture's directory names need), silently dropping fixture
+// files from `git ls-files` and making the suite flaky depending on who
+// runs it. Force `core.excludesFile` itself to `/dev/null` via the
+// `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` env
+// injection (which git honors regardless of file-based config, and unlike
+// leaving the key unset, does not trigger the XDG-default fallback) so
+// fixture file discovery can never be influenced by the host's ignore
+// patterns.
 function fixtureEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
@@ -47,6 +63,9 @@ function fixtureEnv(): NodeJS.ProcessEnv {
   delete env.GIT_OBJECT_DIRECTORY;
   env.GIT_CONFIG_GLOBAL = devNull;
   env.GIT_CONFIG_SYSTEM = devNull;
+  env.GIT_CONFIG_COUNT = '1';
+  env.GIT_CONFIG_KEY_0 = 'core.excludesFile';
+  env.GIT_CONFIG_VALUE_0 = devNull;
   return env;
 }
 
@@ -86,7 +105,7 @@ function makeFixture(): { dir: string; cleanup: () => void } {
   mkdirSync(join(dir, 'skills', 'mirror-source', 'nested'), {
     recursive: true,
   });
-  mkdirSync(join(dir, 'mirror-target-tree'), { recursive: true });
+  mkdirSync(join(dir, '.claude', 'mirror-target'), { recursive: true });
   writeFileSync(
     join(dir, 'audit', 'sync-manifest.json'),
     JSON.stringify({
@@ -94,7 +113,7 @@ function makeFixture(): { dir: string; cleanup: () => void } {
         {
           id: 'fixture-set',
           sourceGlob: 'skills/mirror-source/**/*.md',
-          targetGlob: 'mirror-target-tree/**/*.md',
+          targetGlob: '.claude/mirror-target/**/*.md',
           match: 'basename',
           requireSyncPairs: false,
         },
@@ -113,7 +132,7 @@ test('checkFileSets passes a recursive fileSet with no basename collision', (t) 
   t.after(cleanup);
 
   writeFileSync(join(dir, 'skills', 'mirror-source', 'a.md'), '# a\n');
-  writeFileSync(join(dir, 'mirror-target-tree', 'a.md'), '# a mirror\n');
+  writeFileSync(join(dir, '.claude', 'mirror-target', 'a.md'), '# a mirror\n');
 
   const result = runAuditDocs(dir);
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -124,7 +143,7 @@ test('checkFileSets fails closed when two source files share a basename', (t) =>
   t.after(cleanup);
 
   writeFileSync(join(dir, 'skills', 'mirror-source', 'a.md'), '# a\n');
-  writeFileSync(join(dir, 'mirror-target-tree', 'a.md'), '# a mirror\n');
+  writeFileSync(join(dir, '.claude', 'mirror-target', 'a.md'), '# a mirror\n');
   // A new canonical file nested one directory deeper, sharing the basename
   // of the already-mirrored file above.
   writeFileSync(
@@ -147,12 +166,12 @@ test('checkFileSets fails closed when two target files share a basename', (t) =>
   t.after(cleanup);
 
   writeFileSync(join(dir, 'skills', 'mirror-source', 'a.md'), '# a\n');
-  writeFileSync(join(dir, 'mirror-target-tree', 'a.md'), '# a mirror\n');
-  mkdirSync(join(dir, 'mirror-target-tree', 'nested'), {
+  writeFileSync(join(dir, '.claude', 'mirror-target', 'a.md'), '# a mirror\n');
+  mkdirSync(join(dir, '.claude', 'mirror-target', 'nested'), {
     recursive: true,
   });
   writeFileSync(
-    join(dir, 'mirror-target-tree', 'nested', 'a.md'),
+    join(dir, '.claude', 'mirror-target', 'nested', 'a.md'),
     '# a mirror nested\n',
   );
 
