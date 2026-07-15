@@ -99,8 +99,9 @@ Before you publish a ready issue, confirm:
 ## Mechanical pre-publish gate
 
 Before you publish a drafted **ready orphan, roadmap, or child** body
-(the linter does not cover non-ready buckets like `blocked-by-human`),
-run the `audit-authored-issue` linter against it when a helper runtime
+(scoped to those ready shapes — non-ready buckets like
+`blocked-by-human` are not audited by this gate), run the
+`audit-authored-issue` linter against it when a helper runtime
 is available. It mechanically catches shape and marker mistakes — a
 missing or duplicated autopilot-suitability footer, a wrong
 markerPrefix, a missing required heading for the declared shape, a
