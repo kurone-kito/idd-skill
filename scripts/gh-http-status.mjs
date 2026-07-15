@@ -1,3 +1,9 @@
+// idd-generated-from: src/scripts/gh-http-status.mts
+//
+// The scripts/gh-http-status.mjs copy is generated from the .mts source named
+// above by `pnpm run build`. Edit the .mts source, never the generated .mjs.
+// See docs/typescript-sources.md.
+//
 // Shared HTTP-status derivation for failed `gh api` invocations.
 //
 // `gh` exits with process code 1 for 401, 403, and 404 alike, so the
