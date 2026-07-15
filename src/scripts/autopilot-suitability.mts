@@ -136,8 +136,13 @@ export function normalizeAutopilotSuitabilityFloor(floor: unknown): number {
  * - Ranking always runs (when enabled): items are stable-sorted by
  *   effective score descending, where a missing score uses the floor as
  *   a neutral baseline so unscored (e.g. pre-existing) issues are never
- *   buried. Ties keep input order, so callers that need a domain
- *   tie-break (e.g. lowest issue number) pre-sort the input by that key.
+ *   buried. At a tied effective score, a genuinely-scored candidate
+ *   always ranks above an unscored one defaulted to the floor (the
+ *   written A4 Step 2 "scored-vs-unscored floor tie-breaker" rule,
+ *   matching `compareUnionLeaves` in discover-roadmap-graph.mts). Beyond
+ *   that scored-vs-unscored split, ties keep input order, so callers
+ *   that need a domain tie-break (e.g. effort hint, lowest issue number)
+ *   pre-sort the input by that key.
  * - Routing is **opt-in** via `routeBelowFloor` (the autopilot-run
  *   behavior). When true, candidates whose score is present and
  *   `< floor` are moved to `routedToHuman` (kept visible, never
