@@ -178,8 +178,8 @@ structural audit found a concrete non-Copilot fail-open: the review-triage
 phase can mis-classify a non-Copilot bot's **non-review notice**
 (rate-limit, "usage limits reached", queued) as a completed clean review,
 and the disposition verifier validates the model's own self-report rather
-than live GitHub — so an omitted or false disposition passes. Under a
-fully autonomous merge policy, that path can reach merge without a
+than live GitHub — so an omitted or false disposition passes. Under
+`fully_autonomous_merge`, that path can reach merge without a
 GitHub-side block.
 
 The maintainer **reaffirmed kurone-kito/idd-skill#909** on
@@ -190,7 +190,7 @@ PR summary rather than actionable findings), re-review is mention-only
 with no clean per-HEAD completion signal, and pinging a bot risks waking a
 lenient reviewer mid-merge. The mis-classification and self-attested-
 disposition fail-opens are therefore recorded as an **accepted risk**
-under a fully autonomous merge policy, not a defect — recovered by the
+under `fully_autonomous_merge`, not a defect — recovered by the
 snapshot net and the manual sweep, same as kurone-kito/idd-skill#909
 originally decided. A repository that reaches this same conclusion
 independently should record it here rather than re-litigating it on every
@@ -234,8 +234,8 @@ context the way the model-run helper can); a full session-aware required
 check can also fight a deliberately narrow CI trigger topology
 (kurone-kito/idd-skill#832, which keeps CI scoped to `pull_request` only,
 so nothing re-checks the merge commit itself) and existing checklist
-hardening (kurone-kito/idd-skill#993). Under a fully autonomous merge
-policy this is then an **accepted risk**; adopter repos that keep a human
+hardening (kurone-kito/idd-skill#993). Under `fully_autonomous_merge`
+this is then an **accepted risk**; adopter repos that keep a human
 merge step retain that human as the backstop the autonomous path lacks. A
 repository that reaches this same conclusion independently should record
 it here rather than re-litigating it on every structural audit.
