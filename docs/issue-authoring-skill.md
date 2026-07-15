@@ -424,20 +424,22 @@ footers:
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \
-  --marker-prefix idd-skill --body-file <path-to-drafted-body> \
-  [--label <label>]...
+  --marker-prefix <resolved-target-prefix> \
+  --body-file <path-to-drafted-body> [--label <label>]...
 ```
 
-This repository's own `.github/idd/config.json` already resolves to
-`idd-skill`, so `--marker-prefix` is redundant here when run from the
-repository root — pass it explicitly anyway so the example stays
-correct when copied elsewhere. Outside this source repository, always
-resolve and pass the target's own prefix: without an explicit
-`--marker-prefix`, the linter falls back to reading
-`.github/idd/config.json` from the current working directory and
-silently defaults to `idd-skill` when that file is missing or
-unreadable, producing a false pass or fail against the wrong prefix
-instead of an error. See the bundled `contract.md`'s
+**Always keep `--marker-prefix`, and always replace the placeholder**
+with the resolved target prefix before running the command — in this
+source repository that value is `idd-skill` (already the
+`.github/idd/config.json` default here, so the flag is redundant only
+in this one repository), but auditing any other repository requires
+substituting that repository's own prefix. Never copy the literal
+`idd-skill` value into another repository's audit command. Omitting the
+flag entirely is unsafe everywhere: without it, the linter falls back
+to reading `.github/idd/config.json` from the current working
+directory and silently defaults to `idd-skill` when that file is
+missing or unreadable, producing a false pass or fail against the
+wrong prefix instead of an error. See the bundled `contract.md`'s
 [Target marker prefix](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#target-marker-prefix)
 section for the adopter-facing prefix-resolution rule.
 
