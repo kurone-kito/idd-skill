@@ -33,8 +33,8 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const EMITTED_PREFIX = 'TSFILE: ';
-// The provenance header every emitted artifact carries; a hand-written helper
-// (e.g. scripts/gh-http-status.mjs) does not. Kept identical to the
+// The provenance header every emitted artifact carries; a helper with no
+// `.mts` source of its own would not. Kept identical to the
 // `idd-generated-from` scan in tests/inventory-ordering.test.mts so the build
 // and that test always agree on the generated set.
 const GENERATED_MARKER = 'idd-generated-from';

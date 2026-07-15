@@ -36,6 +36,7 @@ scripts/external-check-waiver.mjs linguist-generated=true
 scripts/force-handoff.mjs linguist-generated=true
 scripts/forced-handoff-marker.mjs linguist-generated=true
 scripts/gh-exec.mjs linguist-generated=true
+scripts/gh-http-status.mjs linguist-generated=true
 scripts/helper-runtime-manifest.mjs linguist-generated=true
 scripts/idd-config.mjs linguist-generated=true
 scripts/idd-doctor.mjs linguist-generated=true
