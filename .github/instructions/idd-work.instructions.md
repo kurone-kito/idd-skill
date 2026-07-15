@@ -290,16 +290,18 @@ Decide Accept or Reject for each issue. Then check:
   and all remaining Accepts are Low **and** the floor has passed → skip
   to `idd-pr-submit.instructions.md`
 
-If a bullet's condition holds except the floor, continue to C5 instead
-of skipping.
+If a bullet's condition holds except the floor, continue to C5 to
+satisfy the floor only; the second bullet's remaining Low Accepts stay
+unfixed, per the guard.
 
 Otherwise continue to C5.
 
 ### C5 — Fix accepted issues
 
-Fix any Accepted issues (there may be none — C5 can be reached solely
-for the floor). Then run **fix-validate** if it has not yet run (or is
-stale) at the current HEAD, and fix anything it reports.
+Fix any Accepted issues the guard above does not exempt (there may be
+none — see C4). Then run **fix-validate**: a pass from before this
+step's own edits does not satisfy the floor, so re-run it now and fix
+anything it reports.
 
 An unmet floor is not a new failure class: run or fix **fix-validate**
 the same way the Project commands table handles a failing
