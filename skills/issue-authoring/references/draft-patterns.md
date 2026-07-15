@@ -42,6 +42,25 @@ sequencing, parallel tracks, or multi-session handoff.
 Draft only stable non-ready buckets when the work still depends on a
 human decision, missing asset, or unclear verification.
 
+## Under-clarification stop rule
+
+Before drafting a `ready` issue, confirm you can name a concrete surface
+to edit and an objective verification for it. If, after bounded
+clarification, you still cannot, route the candidate to `needs-decision`
+or ask — do not publish a confidently-vague `ready` issue. Reliability
+over speed.
+
+This is an Intake-phase gate on your own confidence, not a wording
+judgment on an already-written draft — it is distinct from the
+"Under-specified" band in the next section, which assesses a body that
+has already been drafted.
+
+**Example**: "Improve the error handling in the API layer" fails this
+check — no concrete surface, no objective verification — even before
+you consider how detailed to write the body. Ask which endpoint or
+module, and what the observable failure mode is, or route the request
+to `needs-decision` instead of guessing at a plausible-sounding scope.
+
 ## Specificity target
 
 Execution-ready issue drafts should land in a middle band:
@@ -76,6 +95,29 @@ Before you publish a ready issue, confirm:
 - removing one concrete detail would make the issue feel high-range-only,
   while adding more detail would start turning it into a lightweight
   model script
+
+## Mechanical pre-publish check
+
+Before you publish a drafted issue, run the `audit-authored-issue`
+linter against the drafted body. It mechanically catches shape and
+marker mistakes — a missing or duplicated autopilot-suitability footer,
+a wrong markerPrefix, a missing required heading for the declared shape,
+a malformed dependency marker — that a confident narrative can otherwise
+mask:
+
+```sh
+node scripts/audit-authored-issue.mjs --shape orphan --body-file draft.md
+```
+
+Use `--shape roadmap` or `--shape child` for those shapes, `--stdin`
+instead of `--body-file` when the draft is not yet on disk, and
+`--label <name>` (repeatable) to pass proposed labels for the
+suitability-`1` / `status:blocked-by-human` cross-field check. Fix every
+reported finding and re-run before publishing; a `passed: false` report
+means the draft is not ready yet, regardless of how complete the
+narrative reads. See
+[contract.md's Mechanical pre-publish gate](contract.md#mechanical-pre-publish-gate)
+for the full rubric.
 
 ## Hidden human-dependency quick check
 
@@ -248,9 +290,12 @@ Blocked by #445
 Now Discover and A4.5 defer `#450` until every sibling merges, so it is
 claimed only when its acceptance criteria can actually pass.
 
-Resolve `<marker-prefix>` from the target repository's onboarding or IDD
-docs before publishing the draft. Use `idd-skill` only when the target
-repository actually configured that prefix.
+**Prefix-first**: resolve `<marker-prefix>` from the target repository's
+onboarding or IDD docs before emitting any of these markers —
+`roadmap-id`, `blocked-by`, `autopilot-suitability`, or `effort` — not
+just the dependency markers shown above. Never default to `idd-skill`
+in an installed bundle; use it only when the target repository actually
+configured that prefix.
 
 ## Human-dependency isolation examples
 

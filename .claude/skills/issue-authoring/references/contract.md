@@ -6,13 +6,17 @@ contract in `docs/issue-authoring-skill.md`.
 
 ## Target marker prefix
 
-Resolve the target repository's hidden marker prefix before drafting any
-roadmap or blocked-by marker.
+**Prefix-first**: resolve the target repository's hidden marker prefix
+before emitting _any_ authoring marker — `roadmap-id`, `blocked-by`,
+`autopilot-suitability`, or `effort`. Resolve it once, up front, not as
+an afterthought once a marker is already half-drafted.
 
 - Use the prefix documented by the target repository's onboarding or
   IDD instructions.
 - In this source repository the prefix is `idd-skill`, but installed
-  bundles must not assume that value elsewhere.
+  bundles must not assume that value elsewhere. Never default to
+  `idd-skill` in an installed bundle; use it only when the target
+  repository actually configured that value.
 - If the prefix is not discoverable from the repository docs or user
   context, stop and ask instead of emitting a guessed marker.
 
@@ -58,6 +62,15 @@ locally. Clarification must be bounded; use the repository-local
 otherwise default to 3 rounds. If safe drafting is still impossible
 after that, stop and report the remaining blockers instead of looping
 indefinitely.
+
+**Under-clarification stop rule.** If, after bounded clarification, you
+still cannot name the concrete surface to edit or an objective
+verification for a candidate task, route it to `needs-decision` or ask
+— do not publish a confidently-vague `ready` issue. Reliability over
+speed. This is distinct from the "Under-specified" specificity band
+below: that band judges an already-drafted body's wording, while this
+rule stops publication earlier, during Intake, before a body is even
+drafted.
 
 ### 2. Decompose and Draft
 
@@ -393,6 +406,8 @@ Validation expectations:
   `issue-scope` setting
 - exactly one autopilot-suitability footer with an integer 1-5
   marker; a score of `1` also carries `status:blocked-by-human`
+- passes the `audit-authored-issue` mechanical pre-publish gate for the
+  `orphan` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
 ### Roadmap issue
 
@@ -420,6 +435,8 @@ Validation expectations:
   instead of normal execution leaves
 - exactly one autopilot-suitability footer with an integer 1-5
   marker; a score of `1` also carries `status:blocked-by-human`
+- passes the `audit-authored-issue` mechanical pre-publish gate for the
+  `roadmap` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
 ### Child issue under a roadmap
 
@@ -444,6 +461,8 @@ Validation expectations:
 - the issue can be claimed independently without absorbing sibling work
 - exactly one autopilot-suitability footer with an integer 1-5
   marker; a score of `1` also carries `status:blocked-by-human`
+- passes the `audit-authored-issue` mechanical pre-publish gate for the
+  `child` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
 ## A4.5 Suitability Gate Alignment
 
@@ -472,10 +491,45 @@ Pre-publish validation checklist:
 4. **Human dependency isolation**: Ready issues do not hide unresolved
    decisions, credentials, subjective approvals, or mid-implementation
    human handoffs
+5. **Mechanical audit**: the drafted body passes the
+   `audit-authored-issue` linter for its declared shape (see
+   [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
 If any check is uncertain, route the issue to `needs-decision` or
 `blocked-by-human` during drafting instead of publishing a
 marginally-ready issue.
+
+## Mechanical pre-publish gate
+
+Run the `audit-authored-issue` linter against every drafted body before
+publishing. It mechanically re-checks the structural rules this
+contract states in prose — the autopilot-suitability marker's
+exactly-one/coherent-value rule, its cross-field agreement with the
+configured `blocked-by-human` label, markerPrefix consistency across
+every authoring marker, the declared shape's required section headings,
+the roadmap-id/blocked-by dependency-marker rules, and visible/hidden
+line agreement for the suitability and effort footers — so a weak model
+does not have to hold every rule in its head at once while drafting.
+
+```sh
+node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \
+  --body-file <path-to-drafted-body> [--label <label>]...
+```
+
+Or, for npx/package-manager profiles, the equivalent
+`idd-audit-authored-issue` command. Pass `--stdin` instead of
+`--body-file` when the drafted body is not yet written to disk, and
+`--marker-prefix <prefix>` when the resolved target prefix (see
+[Target marker prefix](#target-marker-prefix)) differs from the local
+`.github/idd/config.json`.
+
+A `passed: false` report (or non-zero exit) means the draft is not
+ready to publish yet, regardless of how complete the narrative reads —
+fix every reported finding and re-run before treating the issue as
+`ready`. The linter is a mechanical structural check, not a substitute
+for the judgment-based checks above (human-dependency isolation,
+codebase fidelity, reuse-first) — passing it is necessary, not
+sufficient, for `ready`.
 
 ## Autopilot-suitability score
 
