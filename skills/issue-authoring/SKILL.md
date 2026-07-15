@@ -123,11 +123,11 @@ needs-decision, blocked-by-human, and out-of-scope.
   new issue.
 - Avoid widening drafting output beyond the user request without saying
   so.
-- Ran the `audit-authored-issue` linter against every drafted body and
-  resolved every reported failure before publishing.
-- Named a concrete surface to edit and an objective verification for
-  every `ready` candidate; routed anything else to `needs-decision` or
-  asked instead of guessing (the under-clarification stop rule).
-- Resolved the target repository's marker prefix before emitting any
-  authoring marker; never assumed this source repository's `idd-skill`
+- Run the `audit-authored-issue` linter against every drafted body and
+  resolve every reported failure before publishing.
+- Name a concrete surface to edit and an objective verification for
+  every `ready` candidate; route anything else to `needs-decision` or
+  ask instead of guessing (the under-clarification stop rule).
+- Resolve the target repository's marker prefix before emitting any
+  authoring marker; never assume this source repository's `idd-skill`
   prefix in an installed bundle (the prefix-first rule).
