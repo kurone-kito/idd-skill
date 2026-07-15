@@ -155,3 +155,85 @@ shared `resolveActiveClaim`, and forcing both sides strict would break the
 legitimate relay use-case. Any future change here must preserve the single
 resolver (do not fork `resolveActiveClaim`) and the resume-side
 self-signed-hijack block.
+
+## Advisory wait
+
+### Non-Copilot advisory convergence is intentionally not a merge gate
+
+`#909` (2026-06-17) decided the Copilot advisory-wait / convergence
+protocol stays **Copilot-only**; the configured non-Copilot
+`advisoryBotLogins` (e.g. `coderabbitai[bot]`,
+`chatgpt-codex-connector[bot]`) get no equivalent merge-blocking
+required check. `#899` recorded the deliberate scope and the safety
+net that recovers non-Copilot review misses after merge: the E1
+activity-universe snapshot plus `review-watermark` delta (re-checked
+at the F2/F3 pre-merge gate), backstopped by the recurring `#931`
+merged-PR unresolved-feedback sweep that routes anything missed into
+fresh issue authoring.
+
+`#1352` re-opened the question after `#1341`/`#1342` shipped
+`idd-advisory-convergence` as a trusted-checkout required CI check for
+the Copilot dimension, and after a 2026-07-13 weak-model structural
+audit found a concrete non-Copilot fail-open: E6 can mis-classify a
+CodeRabbit/Codex **non-review notice** (rate-limit, "usage limits
+reached", queued) as a completed clean review, and E7's disposition
+verifier validates the model's own self-report rather than live
+GitHub — so an omitted or false disposition passes. Under
+`fully_autonomous_merge`, that path can reach merge without a
+GitHub-side block.
+
+The maintainer **reaffirmed #909** on `#1352` (2026-07-14): the
+operational objections are unchanged and still outweigh a hard gate —
+non-Copilot bots are capricious (a run may post nothing at all, and
+CodeRabbit's first post is often a PR summary rather than actionable
+findings), re-review is mention-only with no clean per-HEAD completion
+signal, and pinging a bot risks waking a lenient reviewer mid-merge.
+The E6 mis-classification and E7 self-attested-disposition path are
+therefore recorded as an **accepted risk** under
+`fully_autonomous_merge`, not a defect — recovered by the snapshot net
+and the `#931` sweep, same as `#909` originally decided. A future
+weak-model audit that re-discovers this fail-open should treat it as a
+decided trade-off (cite `#909` / `#899` / `#931` / `#1352`) rather than
+re-filing it.
+
+## Pre-merge
+
+### The non-advisory pre-merge dimensions are model-attested, not GitHub-side enforced
+
+F2's pre-merge condition check (`idd-pre-merge.instructions.md`) and
+F3's merge-time re-verification (`idd-merge.instructions.md`) gate
+claim ownership/freshness, late non-Copilot review currency,
+non-Copilot unresolved threads, `dispositionEvidence` completeness,
+and unreplied comments through the `computePreMergeReadinessBlockers`
+helper (`scripts/protocol-helpers.mjs`, surfaced by
+`scripts/pre-merge-readiness.mjs`) plus the written F2/F3 checklist.
+None of these dimensions has a GitHub-side required check backing it —
+unlike the Copilot advisory-convergence dimension that `#1341`/`#1342`
+promoted to a trusted-checkout required check.
+
+The helper is explicitly allowed to be **discarded**: F2 states that
+when helper execution fails, its output is invalid, or live GitHub
+state disagrees with it, the session discards the helper output and
+falls back to a direct live fetch plus the written prose rules. `#1353`
+asked whether that posture should gain a session-aware GitHub-side
+backstop, given a weak model can reach `gh pr merge` via the
+self-attested prose path without the deterministic verdict actually
+forcing the block.
+
+The maintainer **reaffirmed** on `#1353` (2026-07-14): the
+helper-Preferred-plus-F2/F3-checklist posture stays the end state; no
+session-aware required check is added. The "discard on
+unavailable/invalid/conflict → prose fallback" clause is a deliberate
+adopter-resilience valve (the helper runtime is optional per
+`docs/idd-helper-scripts.md`, and a pure PR-level required check
+cannot see a session's live `claim-id`/`agent-id` context the way the
+model-run helper can). A full session-aware required check would also
+fight the deliberate `pull_request`-only CI topology (`#832`, which
+eliminated duplicate CI on `push`/`merge_group` so nothing re-checks
+the merge commit itself) and `#993`'s existing F3 checklist hardening.
+Under `fully_autonomous_merge` this is an **accepted risk**; adopter
+repos that keep a human merge step (`human_merge` or
+`separate_merge_agent` policy) retain that human as the backstop the
+autonomous path lacks. A future weak-model audit that re-discovers
+this fail-open should treat it as a decided trade-off (cite `#832` /
+`#993` / `#1341` / `#1342` / `#1353`) rather than re-filing it.

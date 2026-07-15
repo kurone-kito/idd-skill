@@ -155,3 +155,78 @@ shared `resolveActiveClaim`, and forcing both sides strict would break the
 legitimate relay use-case. Any future change here must preserve the single
 resolver (do not fork `resolveActiveClaim`) and the resume-side
 self-signed-hijack block.
+
+## Advisory wait
+
+### Non-Copilot advisory convergence is intentionally not a merge gate
+
+kurone-kito/idd-skill#909 (2026-06-17) decided the Copilot advisory-wait /
+convergence protocol stays **Copilot-only**; configured non-Copilot
+`advisoryBotLogins` (e.g. a CodeRabbit or Codex connector) get no
+equivalent merge-blocking required check. kurone-kito/idd-skill#899 recorded
+the deliberate scope and the safety net that recovers non-Copilot review
+misses after merge: the E1 activity-universe snapshot plus
+`review-watermark` delta (re-checked at the F2/F3 pre-merge gate),
+backstopped by a recurring merged-PR unresolved-feedback sweep
+(kurone-kito/idd-skill#931) that routes anything missed into fresh issue
+authoring.
+
+kurone-kito/idd-skill#1352 re-opened the question after a required-check
+promotion shipped for the Copilot dimension, and after a weak-model
+structural audit found a concrete non-Copilot fail-open: the review-triage
+phase can mis-classify a non-Copilot bot's **non-review notice**
+(rate-limit, "usage limits reached", queued) as a completed clean review,
+and the disposition verifier validates the model's own self-report rather
+than live GitHub — so an omitted or false disposition passes. Under a
+fully autonomous merge policy, that path can reach merge without a
+GitHub-side block.
+
+The maintainer **reaffirmed kurone-kito/idd-skill#909** on
+kurone-kito/idd-skill#1352 (2026-07-14): the operational objections are
+unchanged and still outweigh a hard gate — non-Copilot bots are capricious
+(a run may post nothing at all, and a review bot's first post is often a
+PR summary rather than actionable findings), re-review is mention-only
+with no clean per-HEAD completion signal, and pinging a bot risks waking a
+lenient reviewer mid-merge. The mis-classification and self-attested-
+disposition fail-opens are therefore recorded as an **accepted risk**
+under a fully autonomous merge policy, not a defect — recovered by the
+snapshot net and the recurring sweep, same as kurone-kito/idd-skill#909
+originally decided. A repository that reaches this same conclusion
+independently should record it here rather than re-litigating it on every
+structural audit.
+
+## Pre-merge
+
+### The non-advisory pre-merge dimensions are model-attested, not GitHub-side enforced
+
+The pre-merge condition check (`idd-pre-merge.instructions.md`) and the
+merge-time re-verification (`idd-merge.instructions.md`) gate claim
+ownership/freshness, late non-Copilot review currency, non-Copilot
+unresolved threads, disposition-evidence completeness, and unreplied
+comments through a deterministic readiness helper plus the written
+checklist. None of these dimensions has a GitHub-side required check
+backing it — unlike the Copilot advisory-convergence dimension that can be
+promoted to a trusted-checkout required check (kurone-kito/idd-skill#1341,
+kurone-kito/idd-skill#1342).
+
+The helper is explicitly allowed to be **discarded**: the pre-merge phase
+states that when helper execution fails, its output is invalid, or live
+GitHub state disagrees with it, the session discards the helper output and
+falls back to a direct live fetch plus the written prose rules. A weak
+model can reach the merge command via that self-attested prose path
+without the deterministic verdict actually forcing the block.
+
+A repository choosing to accept this posture (kurone-kito/idd-skill#1353
+reaffirmed it 2026-07-14) should record why: the "discard on
+unavailable/invalid/conflict → prose fallback" clause is a deliberate
+adopter-resilience valve (the helper runtime is optional, and a pure
+PR-level required check cannot see a session's live `claim-id`/`agent-id`
+context the way the model-run helper can); a full session-aware required
+check can also fight a deliberately narrow CI trigger topology
+(kurone-kito/idd-skill#832, which keeps CI scoped to `pull_request` only,
+so nothing re-checks the merge commit itself) and existing checklist
+hardening (kurone-kito/idd-skill#993). Under a fully autonomous merge
+policy this is then an **accepted risk**; adopter repos that keep a human
+merge step retain that human as the backstop the autonomous path lacks. A
+repository that reaches this same conclusion independently should record
+it here rather than re-litigating it on every structural audit.
