@@ -225,6 +225,19 @@ check name.
 If GH CLI cannot resolve a run ID, use Actions REST endpoints directly
 for the same run before posting a hold.
 
+**`idd-advisory-convergence` specifically** (when a repository hosts it
+as a required check): its own `workflow_dispatch` trigger does NOT
+reliably refresh the PR's required-check rollup for the current HEAD
+SHA, even though the workflow's own header comment frames it as a
+one-click re-check affordance -- a manually dispatched run has no
+`pull_request` context of its own, so it is not reliably associated
+with the PR's HEAD SHA the way a `pull_request` / `pull_request_review`
+/ `pull_request_review_comment`-triggered run is (see that workflow
+file's header comment for the full finding). When this check shows a
+stuck or stale rollup entry, apply the rerun mechanic above -- `gh run
+rerun <run-id>` on the _existing_ PR-linked run for the current HEAD
+SHA -- rather than `workflow_dispatch`.
+
 ## Interpretation
 
 <!-- dprint-ignore-start -->
