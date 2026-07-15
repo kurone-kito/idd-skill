@@ -85,15 +85,34 @@ interpreting `gh pr checks` output.
    gh api repos/{owner}/{repo}/branches/{url-encoded-base-branch}/protection
    ```
 
-4. Build the required-check set as the union of enforcing-ruleset checks
-   and branch-protection checks. Keep expected check source metadata
-   (GitHub App/integration) when configured.
+4. **Distinguish a permission error from a genuine empty result** on
+   each of the three reads above. A `404` on the branch-protection
+   endpoint, or an empty ruleset list, means that source genuinely has
+   nothing configured — a real empty result. A `403` / forbidden
+   response on any of these reads means the read itself failed (the
+   token lacks permission to inspect protection or rulesets), not that
+   no required checks exist. Never substitute an empty array/object for
+   a `403` — record it as **unreadable**.
 
-5. If neither source yields a required-check set, this is **not**
-   automatically a hold — it is the same `noRequiredChecksConfigured:
-   true` state `idd-pre-merge.instructions.md` F2's CI gate already
-   interprets. When `pre-merge-readiness` output is available, reuse
-   its `ci.presentRunConclusion` value directly. Otherwise, derive the
+   If any of the three reads returned `403` / unreadable, **fail
+   closed**: do not fall through to step 6 below. Hold and surface
+   "cannot determine required checks: protection/ruleset unreadable" as
+   the reason, then stop. This is distinct from the genuine
+   `noRequiredChecksConfigured` case in step 6, which requires every
+   read to have returned a genuine result (`200`, or an empty/`404`),
+   never an unread endpoint.
+
+5. Build the required-check set as the union of enforcing-ruleset checks
+   and branch-protection checks, using only the genuine (non-`403`)
+   results from step 4. Keep expected check source metadata (GitHub
+   App/integration) when configured.
+
+6. If neither source yields a required-check set — and step 4 found no
+   permission error on either read — this is **not** automatically a
+   hold — it is the same `noRequiredChecksConfigured: true` state
+   `idd-pre-merge.instructions.md` F2's CI gate already interprets. When
+   `pre-merge-readiness` output is available, reuse its
+   `ci.presentRunConclusion` value directly. Otherwise, derive the
    equivalent from the current PR head SHA's actual runs: `all-passing`
    (every present run completed green) may proceed; `pending` → wait
    per the polling algorithm below, then re-check; `some-failing`, or
