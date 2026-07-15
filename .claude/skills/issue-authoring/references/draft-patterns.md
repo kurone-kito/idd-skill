@@ -123,11 +123,13 @@ fail against the wrong prefix instead of an error.
 Use `--shape roadmap` or `--shape child` for those shapes, `--stdin`
 instead of `--body-file` when the draft is not yet on disk, and
 `--label <name>` (repeatable) to pass proposed labels for the check
-that a suitability score of `1` carries `status:blocked-by-human` (this
-check is one-directional — it does not flag the reverse, a non-`1`
-score paired with the label). Fix every reported finding and re-run
-before publishing; a `passed: false` report means the draft is not
-ready yet, regardless of how complete the narrative reads.
+that a suitability score of `1` carries the configured
+`blocked-by-human` label (default `status:blocked-by-human`; use
+`--config <path>` to point at a policy that overrides the label name —
+this check is also one-directional, it does not flag the reverse, a
+non-`1` score paired with the label). Fix every reported finding and
+re-run before publishing; a `passed: false` report means the draft is
+not ready yet, regardless of how complete the narrative reads.
 
 **No helper runtime available (`instructions-only` profile):** the
 linter cannot run. `instructions-only` is a first-class supported
