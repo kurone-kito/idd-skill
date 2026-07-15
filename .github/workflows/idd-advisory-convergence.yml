@@ -105,12 +105,19 @@ name: IDD advisory-convergence gate
 # associated with the default branch instead of the intended branch, so
 # it never surfaces in that PR's required-check rollup at all even when
 # the run itself succeeds. The verified recovery is `gh run rerun
-# <run-id>` (or `gh run rerun --failed <run-id>`) on the *existing*
-# PR-linked run for the current HEAD SHA -- found via `gh run list
-# --workflow=idd-advisory-convergence.yml --json databaseId,headSha,url`
-# filtered to the PR's HEAD SHA, or the Checks API -- because re-running
-# that run object preserves its original pull_request-family
-# association, so its fresh conclusion does update the rollup. Prefer
+# <run-id>` on the *existing* pull_request / pull_request_review /
+# pull_request_review_comment-triggered run for the current HEAD SHA --
+# found via `gh run list --workflow=idd-advisory-convergence.yml --json
+# databaseId,headSha,event,url` filtered to that exact SHA (not merely
+# a run that happens to share it, and not an older run for an earlier
+# HEAD on the same PR), or the Checks API -- because re-running that
+# run object preserves its original pull_request-family association, so
+# its fresh conclusion does update the rollup. Use the plain whole-run
+# form here, not `gh run rerun --failed <run-id>`: a stale CANCELLED run
+# (see the concurrency-hardening note below) has no job with a `failure`
+# conclusion for `--failed` to retry, so it would silently do nothing
+# and leave the stale entry in place; `--failed` stays appropriate only
+# when the run has genuinely failed jobs to retry. Prefer
 # this whenever an existing run for the current HEAD SHA is available to
 # rerun; fall back to workflow_dispatch only when no such run exists yet
 # for this HEAD (e.g. the check never triggered for it).
