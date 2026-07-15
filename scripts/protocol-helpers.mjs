@@ -3679,11 +3679,20 @@ export function computePreMergeReadinessBlockers(report) {
   if (!isPreMergeReviewSatisfied(reviewerStates)) {
     const selfApproval = preMergeAsRecord(reviewerStates.codeownerSelfApproval);
     // #1380: name the masked-403-as-404 ruleset-detail cause explicitly when
-    // that is why the required-reviews gate is unmet, mirroring the CI
+    // that is *why* the required-reviews gate is unmet, mirroring the CI
     // gate's `protectionReadsUnreadable`-specific detail above, instead of
-    // the generic status detail below.
+    // the generic status detail below. Gate on the specific `reason` (set
+    // only by the one branch in `summarizeCodeownerSelfApproval` that
+    // actually resolved to this cause), not the bare
+    // `rulesetBypassUnreadable` boolean: that flag is present on every
+    // returned branch (it lives on `base`), so an unrelated resolution --
+    // e.g. `possible_deadlock`/`team-codeowner-ambiguous` -- could also
+    // carry `rulesetBypassUnreadable: true` (the same fetch that flagged
+    // the ruleset unreadable) while the real blocking cause is the
+    // ambiguous team, not the unreadable ruleset. Naming the wrong cause
+    // would misdirect an operator's remediation.
     const detail =
-      selfApproval.rulesetBypassUnreadable === true
+      selfApproval.reason === 'ruleset-bypass-unreadable'
         ? 'cannot determine CODEOWNER ruleset bypass: ruleset detail unreadable'
         : `required/CODEOWNER reviews not satisfied (requiredApprovalsSatisfied=${Boolean(reviewerStates.requiredApprovalsSatisfied)}, codeownerApprovalSatisfied=${Boolean(reviewerStates.codeownerApprovalSatisfied)}, codeownerSelfApproval.status="${String(selfApproval.status ?? '')}")`;
     blockers.push({ gate: 'required-reviews', detail });

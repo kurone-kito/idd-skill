@@ -632,6 +632,43 @@ test('self-CODEOWNER diagnostic keeps a certain deadlock when the relevant rules
   assert.equal(summary.codeownerSelfApproval.rulesetBypassUnreadable, false);
 });
 
+// #1380: two codeowner-requiring rulesets, only one of which 404'd on its
+// detail read. `relevantRulesets.length` (1) falls short of
+// `expectedRulesetCount` (2) -- the exact partial-drop shape the
+// `relevantRulesets.length < expectedRulesetCount` formula (as opposed to a
+// coarser `!detected` check) exists to detect.
+test('self-CODEOWNER diagnostic reports unreadable when only one of several codeowner-requiring rulesets is missing', () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [
+      {
+        type: 'pull_request',
+        ruleset_id: 1,
+        parameters: { require_code_owner_review: true },
+      },
+      {
+        type: 'pull_request',
+        ruleset_id: 2,
+        parameters: { require_code_owner_review: true },
+      },
+    ],
+    // Ruleset 2's detail 404'd and was dropped; ruleset 1 was fully read.
+    branchRulesets: [
+      { id: 1, current_user_can_bypass: 'never', bypass_actors: [] },
+    ],
+    branchRulesetsUnreadable: true,
+    codeownersText: '* @author\n',
+    changedFiles: ['README.md'],
+    prAuthorLogin: 'author',
+  });
+
+  assert.equal(summary.codeownerSelfApproval.status, 'possible_deadlock');
+  assert.equal(
+    summary.codeownerSelfApproval.reason,
+    'ruleset-bypass-unreadable',
+  );
+  assert.equal(summary.codeownerSelfApproval.rulesetBypassUnreadable, true);
+});
+
 test('self-CODEOWNER diagnostic clears when another direct owner exists', () => {
   const summary = summarizeReviewerStates([], {
     branchRules: [
@@ -4871,6 +4908,59 @@ test('buildPreMergeReadinessSummary blocks on the required-reviews gate with a s
     'cannot determine CODEOWNER ruleset bypass: ruleset detail unreadable',
   );
   assert.equal(unreadable.ready, false);
+});
+
+// #1380: `rulesetBypassUnreadable` lives on `base` in
+// `summarizeCodeownerSelfApproval` and is therefore present on *every*
+// returned branch, not just the one that names it as the reason. When some
+// other escape path resolves first (here: an ambiguous team-only CODEOWNERS
+// entry, unrelated to ruleset bypass), the required-reviews blocker detail
+// must report the *actual* blocking cause instead of the unreadable-ruleset
+// message, even though the ruleset detail genuinely was unreadable too.
+test('buildPreMergeReadinessSummary reports the real blocking cause, not the unreadable-ruleset message, when a different codeowner escape path resolves first', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const branchRules = (
+    fixture.input.branchRules as Record<string, unknown>[]
+  ).map((rule) =>
+    rule.type === 'pull_request' ? { ...rule, ruleset_id: 1 } : rule,
+  );
+  const unreadable = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      branchRules,
+      branchRulesets: [],
+      branchRulesetsUnreadable: true,
+      reviewDecision: '',
+      // Team-only CODEOWNERS entry: no direct codeowner user at all, so the
+      // team-ambiguous escape path resolves before the sole-direct-codeowner
+      // (ruleset-bypass-unreadable) branch is ever reached.
+      codeownersText: '* @org/team\n',
+      reviews: [],
+    },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+  const reviewerStates = unreadable.reviewerStates as Record<string, unknown>;
+  const selfApproval = reviewerStates.codeownerSelfApproval as Record<
+    string,
+    unknown
+  >;
+  assert.equal(selfApproval.status, 'possible_deadlock');
+  assert.equal(selfApproval.reason, 'team-codeowner-ambiguous');
+  // The underlying fetch genuinely was unreadable -- this field must still
+  // reflect that -- but it must not drive the blocker message below.
+  assert.equal(selfApproval.rulesetBypassUnreadable, true);
+  assert.deepEqual(
+    unreadable.blockers,
+    computePreMergeReadinessBlockers(unreadable),
+  );
+  const reviewBlocker = (
+    unreadable.blockers as { gate: string; detail: string }[]
+  ).find((blocker) => blocker.gate === 'required-reviews');
+  assert.match(
+    reviewBlocker?.detail ?? '',
+    /codeownerSelfApproval\.status="possible_deadlock"/,
+  );
+  assert.doesNotMatch(reviewBlocker?.detail ?? '', /ruleset detail unreadable/);
 });
 
 test('a trusted machine-disposition clears the notice/summary in both merge gates without promoting the author to a global IDD agent (#1182)', () => {
