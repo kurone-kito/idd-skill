@@ -159,6 +159,16 @@ export function rankAndRouteBySuitability(items, options = {}) {
     .sort(
       (left, right) =>
         (right.score ?? floor) - (left.score ?? floor) ||
+        // Scored-before-unscored at a tie (written A4 Step 2 rule): a
+        // genuinely-scored candidate never ranks below an unscored one
+        // defaulted to the floor. `entry.score` is already normalized to
+        // "coherent 1-5 or null" above, so `!== null` is the same
+        // "genuinely scored" notion `compareUnionLeaves` derives from
+        // `isAutopilotSuitabilityScore`, reused rather than reimplemented.
+        // Applied before the caller's pre-sorted index order (which
+        // carries the effort-hint / issue-number tie-breakers), so those
+        // softer tie-breakers never outrank a real score.
+        Number(right.score !== null) - Number(left.score !== null) ||
         left.index - right.index,
     )
     .map((entry) => entry.item);
