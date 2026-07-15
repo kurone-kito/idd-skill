@@ -764,10 +764,21 @@ function checkHelperRuntimeConfig(root, report) {
     );
   }
 }
+// The two live-config filenames idd-doctor already recognizes elsewhere in
+// this file (checkHelperRuntimeConfig's and checkTemplateVersionSignal's own
+// candidate lists): `.github/idd/config.json` is canonical, `idd-policy.json`
+// is the legacy top-level name. Both get the same schema check so an adopter
+// still on the legacy filename gets the same #1359 coverage.
+const LIVE_CONFIG_CANDIDATE_FILES = [
+  '.github/idd/config.json',
+  'idd-policy.json',
+];
+const LIVE_CONFIG_ERRORS_SHOWN = 10;
 /**
- * Decide whether a parsed `.github/idd/config.json` document is a schema
- * finding, given the canonical policy schema. Pure (no I/O) so it can be
- * unit-tested directly. Returns `null` when `config` validates cleanly.
+ * Decide whether a parsed live-config document is a schema finding, given
+ * the canonical policy schema and the file it was read from (for the
+ * message). Pure (no I/O) so it can be unit-tested directly. Returns `null`
+ * when `config` validates cleanly.
  *
  * This is the live-config counterpart to the `ciWait`/`advisoryWait`
  * readers' own subtree-scoped validation (#1359): those readers only
@@ -778,35 +789,33 @@ function checkHelperRuntimeConfig(root, report) {
  * surfaces every schema error against the whole document instead, so a
  * malformed live config no longer passes idd-doctor silently.
  */
-export function classifyLiveConfigSchemaFinding(config, schema) {
+export function classifyLiveConfigSchemaFinding(
+  config,
+  schema,
+  file = '.github/idd/config.json',
+) {
   const errors = validate(config, schema);
   if (errors.length === 0) {
     return null;
   }
+  const shown = errors.slice(0, LIVE_CONFIG_ERRORS_SHOWN);
+  const remainder = errors.length - shown.length;
+  const suffix = remainder > 0 ? ` (and ${remainder} more)` : '';
   return {
     level: 'error',
-    message: `.github/idd/config.json fails schema validation against policy.schema.json: ${errors.slice(0, 10).join('; ')}`,
+    message: `${file} fails schema validation against policy.schema.json: ${shown.join('; ')}${suffix}`,
   };
 }
 /**
- * Validate the live `.github/idd/config.json` (when present) against the
- * canonical policy schema and report any errors as a doctor finding. Skips
- * silently when the config file is absent (nothing to validate) or is not
- * valid JSON (already reported by checkHelperRuntimeConfig above) or when
- * the bundled schema itself cannot be loaded (a bootstrap edge case, not a
- * live-config problem).
+ * Validate each present live-config file (`.github/idd/config.json` and the
+ * legacy `idd-policy.json`) against the canonical policy schema and report
+ * any errors as a doctor finding. Skips a candidate silently when it is
+ * absent (nothing to validate) or is not valid JSON (already reported by
+ * checkHelperRuntimeConfig above); skips the whole check when the bundled
+ * schema itself cannot be loaded (a bootstrap edge case, not a live-config
+ * problem).
  */
 export function checkLiveConfigSchema(root, report) {
-  const configPath = join(root, '.github/idd/config.json');
-  if (!exists(configPath)) {
-    return;
-  }
-  let config;
-  try {
-    config = JSON.parse(readFileSync(configPath, 'utf8'));
-  } catch {
-    return;
-  }
   let schema;
   try {
     schema = loadJson('schemas/policy.schema.json');
@@ -816,14 +825,24 @@ export function checkLiveConfigSchema(root, report) {
     );
     return;
   }
-  const finding = classifyLiveConfigSchemaFinding(config, schema);
-  if (!finding) {
-    report.passes.push(
-      '.github/idd/config.json validates against policy.schema.json',
-    );
-    return;
+  for (const file of LIVE_CONFIG_CANDIDATE_FILES) {
+    const configPath = join(root, file);
+    if (!exists(configPath)) {
+      continue;
+    }
+    let config;
+    try {
+      config = JSON.parse(readFileSync(configPath, 'utf8'));
+    } catch {
+      continue;
+    }
+    const finding = classifyLiveConfigSchemaFinding(config, schema, file);
+    if (!finding) {
+      report.passes.push(`${file} validates against policy.schema.json`);
+      continue;
+    }
+    report.errors.push(finding.message);
   }
-  report.errors.push(finding.message);
 }
 // Adding a future anchor is a one-line addition here — no new branching
 // logic — as long as its prose lives in the same Thresholds section

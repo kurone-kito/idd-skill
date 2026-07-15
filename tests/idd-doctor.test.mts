@@ -2053,6 +2053,65 @@ test('classifyLiveConfigSchemaFinding reports every error, not just the first', 
   assert.match(finding?.message ?? '', /reviewPolicy/);
 });
 
+test('classifyLiveConfigSchemaFinding truncates past 10 errors with an "and N more" suffix', () => {
+  const config = {
+    ...VALID_POLICY_CONFIG,
+    // 12 unrelated unknown top-level keys, each its own additionalProperties
+    // error, so the total exceeds the 10-error display cap.
+    ...Object.fromEntries(
+      Array.from({ length: 12 }, (_, i) => [`_extra${i}`, true]),
+    ),
+  };
+  const finding = classifyLiveConfigSchemaFinding(config, POLICY_SCHEMA);
+  assert.ok(finding);
+  assert.match(finding?.message ?? '', /\(and 2 more\)$/);
+});
+
+test('checkLiveConfigSchema also validates the legacy idd-policy.json path', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-live-config-schema-legacy-'));
+  try {
+    writeFileSync(
+      join(dir, 'idd-policy.json'),
+      JSON.stringify({ ...VALID_POLICY_CONFIG, _note: 'adopter comment' }),
+    );
+
+    const report = emptyReport(dir);
+    checkLiveConfigSchema(dir, report);
+    assert.equal(report.errors.length, 1);
+    assert.match(report.errors[0], /^idd-policy\.json fails schema validation/);
+    assert.match(report.errors[0], /additional property "_note" not allowed/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('checkLiveConfigSchema checks both live-config filenames independently when both are present', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-live-config-schema-both-'));
+  try {
+    mkdirSync(join(dir, '.github/idd'), { recursive: true });
+    writeFileSync(
+      join(dir, '.github/idd/config.json'),
+      JSON.stringify(VALID_POLICY_CONFIG),
+    );
+    writeFileSync(
+      join(dir, 'idd-policy.json'),
+      JSON.stringify({ ...VALID_POLICY_CONFIG, _note: 'adopter comment' }),
+    );
+
+    const report = emptyReport(dir);
+    checkLiveConfigSchema(dir, report);
+    assert.equal(report.errors.length, 1);
+    assert.match(report.errors[0], /^idd-policy\.json fails schema validation/);
+    assert.ok(
+      report.passes.some((line) =>
+        line.startsWith('.github/idd/config.json validates'),
+      ),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('checkLiveConfigSchema reports a finding for an unknown-key live config (fixture)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-live-config-schema-'));
   try {
