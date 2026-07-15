@@ -96,6 +96,22 @@ interpreting `gh pr checks` output.
    substitute an empty array/object for a `403` — record it as
    **unreadable**.
 
+   **A `404` deserves the same scrutiny when the caller's permission
+   level is not independently known.** Some GitHub REST endpoints
+   substitute `404` for `403` on a private resource specifically to
+   avoid revealing its existence to an unauthorized caller. The two
+   endpoints above are documented to return a dedicated `403` for an
+   authenticated caller with insufficient permission — the
+   branch-protection endpoint requires repository admin access, and its
+   own reference distinguishes `403` (forbidden) from `404` (branch not
+   protected) — so this file trusts `404` as genuine on that basis. When
+   the acting token's admin-level access to this repository has **not**
+   been independently confirmed (for example, via `GET
+   /repos/{owner}/{repo}/collaborators/{username}/permission`, which
+   only needs read access to call), treat an unexpected `404` on either
+   the branch-protection or ruleset reads with the same suspicion as a
+   `403` rather than trusting it outright.
+
    If any of the three reads returned `403` / unreadable, **fail
    closed**: do not fall through to step 6 below. Post a hold comment
    stating "cannot determine required checks: protection/ruleset
