@@ -238,12 +238,14 @@ implementation. The distributed defaults for the C-phase skip and loop
 guards are listed in `docs/policy-constants.md`.
 
 **Objective diff validation floor**: neither C2 nor C4 below may skip to
-`idd-pr-submit.instructions.md` unless **fix-validate** (the same
-command set C5 runs, reused as **pre-push-validate** at D2) has passed
-against the branch's current diff. A pass counts only if run at the
-current HEAD of this review pass; rerun it after any later commit,
-including a C5 fix commit. Apply this floor **uniformly** on every
-runtime — never condition it on self-classifying as "no-subagent" (see
+`idd-pr-submit.instructions.md` unless **fix-validate** — the same
+command set C5 runs — has passed against the branch's current diff.
+This floor is independent of D2's own, stronger **pre-push-validate**
+gate; passing it never substitutes for D2's own run. A pass counts
+only if run at the current
+HEAD of this review pass; rerun it after any later commit, including a
+C5 fix commit. Apply this floor **uniformly** on every runtime — never
+condition it on self-classifying as "no-subagent" (see
 `docs/idd-workflow.md`'s "Critique pass invocation" section). On a
 no-subagent runtime, where critique degrades to same-response
 self-critique, the critique verdict is **advisory** and this floor is
@@ -258,9 +260,11 @@ guardrails stop the loop.
 
 ### C2 — Check for issues
 
-If the critique pass reports zero issues **and** the floor (C1) has
-passed → skip to `idd-pr-submit.instructions.md`. If the floor has not
-passed, continue to C5 instead. Otherwise, continue to C3.
+If the critique pass reports zero issues: skip to
+`idd-pr-submit.instructions.md` when the floor (C1) has passed, or
+continue to C5 instead when it has not. If the critique reports one or
+more issues, continue to C3 regardless of the floor — C4 applies the
+floor check after Accept/Reject scoring.
 
 ### C3 — Score issues
 
@@ -293,10 +297,11 @@ Otherwise continue to C5.
 Fix all Accepted issues and any outstanding floor failures. Run
 **fix-validate**.
 
-Reaching C5 solely for a floor failure (zero critique issues/Accepts)
-is not a new failure class: fix **fix-validate**'s reported failures
-the same way D2 fixes a failing **pre-push-validate** ("If lint fails,
-run fix-validate, commit, then re-run pre-push-validate").
+A floor failure is not a new failure class, whether or not any
+critique issues were Accepted alongside it: fix **fix-validate**'s
+reported failures the same way D2 fixes a failing **pre-push-validate**
+("If lint fails, run fix-validate, commit, then re-run
+pre-push-validate").
 
 Commit fixes atomically.
 
