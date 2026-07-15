@@ -122,13 +122,35 @@ name: IDD advisory-convergence gate
 # rerun; fall back to workflow_dispatch only when no such run exists yet
 # for this HEAD (e.g. the check never triggered for it).
 #
+# When more than one run exists for the same HEAD SHA (the concurrency
+# race below), do NOT assume the most-recently-completed run is the one
+# the rollup is stuck on -- confirmed empirically (kurone-kito/idd-skill#1381,
+# live during that issue's own PR #1383): the rollup can stay pinned to
+# an *earlier* CANCELLED run's check-run object even after a genuinely
+# later run for the identical SHA completes with SUCCESS. Identify the
+# specific stuck run by matching `gh pr checks <pr-number>`'s reported
+# `completedAt` for this check against `gh run list
+# --workflow=idd-advisory-convergence.yml --json
+# databaseId,headSha,event,conclusion,createdAt` (or the per-check-run
+# `completed_at` from the Checks API) for that same HEAD SHA, then rerun
+# that exact run. If the match is unclear, rerun every run for that HEAD
+# SHA rather than guessing -- rerunning an already-successful run is a
+# harmless no-op, but rerunning the wrong one leaves the rollup stuck.
+#
 # Concurrency-hardening investigation (kurone-kito/idd-skill#1381): the
 # cancel-in-progress group above can cancel a legitimately in-flight run
 # when a near-simultaneous review event (Copilot/CodeRabbit/Codex
 # posting review comments in quick succession) fires another trigger for
 # the same PR, leaving a stale CANCELLED entry that can race a later
-# genuine SUCCESS in the rollup display. No safe mechanical fix was
-# identified: `cancel-in-progress: false` does not close this gap -- a
+# genuine SUCCESS in the rollup display -- directly reproduced during
+# this same issue's own PR #1383: several review-triage replies fired
+# five pull_request_review / pull_request_review_comment runs for one
+# HEAD SHA in quick succession, and the rollup stayed on the *earliest*
+# CANCELLED one even after two later runs for that identical SHA
+# completed with SUCCESS, until that specific earliest run was
+# individually rerun (see the recovery guidance above). No safe
+# mechanical fix was identified: `cancel-in-progress: false` does not
+# close this gap -- a
 # concurrency group's queue slot still holds only one pending run, so a
 # newer trigger unconditionally evicts (silently drops) whatever was
 # already queued, reproducing the same class of stale-entry race through
