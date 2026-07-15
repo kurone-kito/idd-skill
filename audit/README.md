@@ -23,7 +23,10 @@ manifest has these main responsibilities:
   `requireSyncPairs: true`, every matched pair must also have a
   `syncPairs` entry, so a new file added to the canonical side without
   a mirrored copy — or without a sync pair covering it — fails the
-  audit instead of shipping silently unmirrored.
+  audit instead of shipping silently unmirrored. An unexpected file on
+  the mirrored side fails too unless the set opts in with
+  `allowExtraTargets: true`; `requiredBasenames` can additionally pin
+  specific basenames that must always be present on the mirrored side.
 - The root Markdown allowlist names the only `*.md` files that may live
   at the repository root; anything else fails the audit with a hint to
   record session evidence in issue comments instead.
