@@ -18,6 +18,12 @@ manifest has these main responsibilities:
   repository state and compared with marked Markdown blocks.
 - Sync pairs define template versus dogfooding files and the comparison
   mode for each pair.
+- File sets guard mirror completeness between a canonical glob and a
+  mirrored glob, matched by basename (`match: "basename"`). With
+  `requireSyncPairs: true`, every matched pair must also have a
+  `syncPairs` entry, so a new file added to the canonical side without
+  a mirrored copy — or without a sync pair covering it — fails the
+  audit instead of shipping silently unmirrored.
 - The root Markdown allowlist names the only `*.md` files that may live
   at the repository root; anything else fails the audit with a hint to
   record session evidence in issue comments instead.
