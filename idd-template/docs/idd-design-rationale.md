@@ -155,3 +155,115 @@ shared `resolveActiveClaim`, and forcing both sides strict would break the
 legitimate relay use-case. Any future change here must preserve the single
 resolver (do not fork `resolveActiveClaim`) and the resume-side
 self-signed-hijack block.
+
+## Advisory wait
+
+### Non-Copilot advisory convergence is intentionally not a merge gate
+
+kurone-kito/idd-skill#909 (2026-06-17) decided, in the idd-skill source
+repository's own configuration, that the Copilot advisory-wait /
+convergence protocol stays **Copilot-only** there, where Copilot is
+the configured `advisoryWait.primaryBotLogin`. An adopter repository
+may mirror or override that posture. Configured secondary, non-primary
+`advisoryBotLogins` (e.g. a CodeRabbit or Codex connector) get no
+equivalent merge-blocking required check. (A repository using the
+`external-bot` profile to route `advisoryWait.primaryBotLogin` to a
+non-Copilot bot instead would gate on that bot's convergence the same
+way — this reaffirmation is scoped to the non-primary advisory bots,
+not to "non-Copilot" as a fixed identity.) kurone-kito/idd-skill#899
+recorded the deliberate scope and its two-part safety net: **pre-merge**, the E1
+activity-universe snapshot plus `review-watermark` delta catches a late
+finding before merge by forcing a return to E1 when the F2/F3
+pre-merge gate detects new activity; **post-merge**, a merged-PR
+unresolved-feedback sweep (kurone-kito/idd-skill#931) — a
+manually-invoked, read-only detector whose output an operator feeds
+into fresh issue authoring, not an automatic recovery path. It
+surfaces two kinds of item: (1) a top-level regular comment or
+`CHANGES_REQUESTED` review body with **no later** IDD disposition
+anywhere on the PR (its collectors compare each item's timestamp
+against a single global disposition cutoff, not a per-item reply
+check, so an item posted before the latest disposition counts as
+"addressed" even when that disposition was for something else
+entirely, including a disposition reply found inside a review thread —
+the global cutoff folds those in even though this collector's own
+output only ever lists top-level comments and review bodies, never
+thread items); and (2) any review thread still **unresolved** at
+merge time and not opened by an IDD agent itself, regardless of
+whether it carries a disposition reply (that collector filters on
+resolution state and origin-comment author, flagging
+`dispositioned: true`/`false` either way). Symmetrically, the sweep
+has **no backstop** for: a comment or review body with _any_ later
+disposition, correct or not; a thread an IDD agent itself opened; or
+a review thread that was **resolved** — whether with a correct
+disposition, a false disposition, or no disposition reply at all.
+Resolving a thread removes it from consideration outright.
+
+kurone-kito/idd-skill#1352 re-opened the question after a required-check
+promotion shipped for the Copilot dimension, and after a weak-model
+structural audit found a concrete non-Copilot fail-open: the review-triage
+phase can mis-classify a non-Copilot bot's **non-review notice**
+(rate-limit, "usage limits reached", queued) as a completed clean review,
+and the disposition verifier validates the model's own self-report rather
+than live GitHub — so an omitted or false disposition passes. Under
+`fully_autonomous_merge`, that path can reach merge without a
+GitHub-side block.
+
+The maintainer **reaffirmed kurone-kito/idd-skill#909** on
+kurone-kito/idd-skill#1352 (2026-07-14): the operational objections are
+unchanged and still outweigh a hard gate — non-Copilot bots are capricious
+(a run may post nothing at all, and a review bot's first post is often a
+PR summary rather than actionable findings), re-review is mention-only
+with no clean per-HEAD completion signal, and pinging a bot risks waking a
+lenient reviewer mid-merge. The mis-classification and self-attested-
+disposition fail-opens are therefore recorded as an **accepted risk**
+under `fully_autonomous_merge`, not a defect — the pre-merge snapshot
+net still catches a late-arriving finding before merge, but a false
+disposition it already produced has no sweep backstop (see above),
+same as kurone-kito/idd-skill#909 originally decided to accept. A
+repository that reaches this same conclusion
+independently should record it here rather than re-litigating it on every
+structural audit.
+
+## Pre-merge
+
+### The non-advisory pre-merge dimensions are model-attested, not GitHub-side enforced
+
+The pre-merge condition check (`idd-pre-merge.instructions.md`) and the
+merge-time re-verification (`idd-merge.instructions.md`) gate claim
+ownership/freshness, late non-Copilot review currency, non-Copilot
+unresolved threads, and `dispositionEvidence` completeness through a
+deterministic readiness helper. Unreplied comments are a separate
+case: that helper's rollup deliberately excludes them, so this
+dimension is gated only by the written checklist. None of these
+dimensions has a dedicated GitHub-side
+required check backing it — unlike the Copilot advisory-convergence
+dimension that can be promoted to a trusted-checkout required check
+(kurone-kito/idd-skill#1341, kurone-kito/idd-skill#1342). (A repository
+that separately turns on GitHub's branch-protection
+conversation-resolution requirement gets GitHub-side enforcement for
+the unresolved-threads dimension specifically, as a side effect of
+that unrelated setting — see the conversation-resolution exception in
+`idd-pre-merge.instructions.md` — but that is opt-in and not part of
+this reaffirmed posture.)
+
+The helper is explicitly allowed to be **discarded**: the pre-merge phase
+states that when helper execution fails, its output is invalid, or live
+GitHub state disagrees with it, the session discards the helper output and
+falls back to a direct live fetch plus the written prose rules. A weak
+model can reach the merge command via that self-attested prose path
+without the deterministic verdict actually forcing the block.
+
+A repository choosing to accept this posture (kurone-kito/idd-skill#1353
+reaffirmed it 2026-07-14) should record why: the "discard on
+unavailable/invalid/conflict → prose fallback" clause is a deliberate
+adopter-resilience valve (the helper runtime is optional, and a pure
+PR-level required check cannot see a session's live `claim-id`/`agent-id`
+context the way the model-run helper can); a full session-aware required
+check can also fight a deliberately narrow CI trigger topology
+(kurone-kito/idd-skill#832, which keeps CI scoped to `pull_request` only,
+so nothing re-checks the merge commit itself) and existing checklist
+hardening (kurone-kito/idd-skill#993). Under `fully_autonomous_merge`
+this is then an **accepted risk**; adopter repos that keep a human
+merge step retain that human as the backstop the autonomous path lacks. A
+repository that reaches this same conclusion independently should record
+it here rather than re-litigating it on every structural audit.

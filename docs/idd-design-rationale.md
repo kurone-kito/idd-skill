@@ -155,3 +155,132 @@ shared `resolveActiveClaim`, and forcing both sides strict would break the
 legitimate relay use-case. Any future change here must preserve the single
 resolver (do not fork `resolveActiveClaim`) and the resume-side
 self-signed-hijack block.
+
+## Advisory wait
+
+### Non-Copilot advisory convergence is intentionally not a merge gate
+
+Issue #909 (2026-06-17) decided the Copilot advisory-wait / convergence
+protocol stays **Copilot-only** in this repository's configuration,
+where Copilot is the configured `advisoryWait.primaryBotLogin`; the
+configured secondary, non-primary `advisoryBotLogins` (e.g.
+`coderabbitai[bot]`, `chatgpt-codex-connector[bot]`) get no equivalent
+merge-blocking required check. (A repository using the `external-bot`
+profile to route `advisoryWait.primaryBotLogin` to a non-Copilot bot
+instead would gate on that bot's convergence the same way — this
+reaffirmation is scoped to the non-primary advisory bots, not to
+"non-Copilot" as a fixed identity.) #899 recorded the deliberate
+scope and its two-part
+safety net: **pre-merge**, the E1 activity-universe snapshot plus
+`review-watermark` delta catches a late finding before merge by
+forcing a return to E1 when the F2/F3 pre-merge gate detects new
+activity; **post-merge**, the #931 merged-PR unresolved-feedback
+sweep (`scripts/merged-pr-feedback-sweep.mjs`) — a manually-invoked,
+read-only detector whose output an operator feeds into fresh issue
+authoring, not an automatic recovery path. It surfaces two kinds of
+item: (1) a top-level regular comment or `CHANGES_REQUESTED` review
+body with **no later** IDD disposition anywhere on the PR
+(`collectUnaddressedComments` compares each item's timestamp against
+a single global `latestDispositionAt` cutoff, not a per-item reply
+check, so an item posted before the latest disposition counts as
+"addressed" even when that disposition was for something else
+entirely, including a disposition reply found inside a review thread —
+the global cutoff folds those in even though `collectUnaddressedComments`'s
+own output only ever lists top-level comments and review bodies, never
+thread items); and (2) any review thread still **unresolved** at merge
+time and not opened by an IDD agent itself, regardless of whether it
+carries a disposition reply (`collectUnresolvedThreads` filters on
+resolution state and origin-comment author, flagging
+`dispositioned: true`/`false` either way). Symmetrically, the sweep
+has **no backstop** for: a comment or review body with _any_ later
+disposition, correct or not; a thread an IDD agent itself opened; or a
+review thread that was **resolved** — whether with a correct
+disposition, a false disposition, or no disposition reply at all.
+Resolving a thread removes it from `collectUnresolvedThreads`
+outright.
+
+Issue #1352 re-opened the question after #1341/#1342 shipped
+`idd-advisory-convergence` as a trusted-checkout required CI check for
+the Copilot dimension, and after a 2026-07-13 weak-model structural
+audit found a concrete non-Copilot fail-open: E6 can mis-classify a
+CodeRabbit/Codex **non-review notice** (rate-limit, "usage limits
+reached", queued) as a completed clean review, and E7's disposition
+verifier validates the model's own self-report rather than live
+GitHub — so an omitted or false disposition passes. Under
+`fully_autonomous_merge`, that path can reach merge without a
+GitHub-side block.
+
+The maintainer **reaffirmed #909** on #1352 (2026-07-14): the
+operational objections are unchanged and still outweigh a hard gate —
+non-Copilot bots are capricious (a run may post nothing at all, and
+CodeRabbit's first post is often a PR summary rather than actionable
+findings), re-review is mention-only with no clean per-HEAD completion
+signal, and pinging a bot risks waking a lenient reviewer mid-merge.
+The E6 mis-classification and E7 self-attested-disposition path are
+therefore recorded as an **accepted risk** under
+`fully_autonomous_merge`, not a defect — the pre-merge snapshot net
+still catches a late-arriving finding before merge, but a false
+disposition it already produced has no #931 sweep backstop (see
+above), same as #909 originally decided to accept. A future
+weak-model audit that re-discovers this fail-open should treat it as
+a decided trade-off — see #909, #899, #931, #1352 — rather than
+re-filing it.
+
+## Pre-merge
+
+### The non-advisory pre-merge dimensions are model-attested, not GitHub-side enforced
+
+F2's pre-merge condition check (`idd-pre-merge.instructions.md`) and
+F3's merge-time re-verification (`idd-merge.instructions.md`) gate
+claim ownership/freshness, late non-Copilot review currency,
+non-Copilot unresolved threads, and `dispositionEvidence` completeness
+through the `computePreMergeReadinessBlockers` rollup
+(`scripts/protocol-helpers.mjs`) — called directly by
+`scripts/idd-merge-execute.mjs`, and reproduced in the same
+`{ ready, blockers }` shape by `scripts/pre-merge-readiness.mjs`'s
+`buildPreMergeReadinessSummary`. Unreplied comments are a separate
+case: `unrepliedComments` deliberately does not feed that deterministic
+rollup, so this dimension is gated only by the written F2 checklist.
+None of these dimensions has a dedicated GitHub-side required check
+backing it — unlike the Copilot advisory-convergence dimension,
+promoted to a trusted-checkout required check by #1341/#1342. (A repo
+that separately turns on GitHub's branch-protection conversation-
+resolution requirement gets GitHub-side enforcement for the
+unresolved-threads dimension specifically, as a side effect of that
+unrelated setting — see the conversation-resolution exception in
+`idd-pre-merge.instructions.md` — but that is opt-in and not part of
+this reaffirmed posture.)
+
+The helper is explicitly allowed to be **discarded**: F2 states that
+when helper execution fails, its output is invalid, or live GitHub
+state disagrees with it, the session discards the helper output and
+falls back to a direct live fetch plus the written prose rules. #1353
+asked whether that posture should gain a session-aware GitHub-side
+backstop, given a weak model can reach `gh pr merge` via the
+self-attested prose path without the deterministic verdict actually
+forcing the block.
+
+The maintainer **reaffirmed** on #1353 (2026-07-14): the
+helper-Preferred-plus-F2/F3-checklist posture stays the end state; no
+session-aware required check is added. The "discard on
+unavailable/invalid/conflict → prose fallback" clause is a deliberate
+adopter-resilience valve (the helper runtime is optional per
+`docs/idd-helper-scripts.md`, and a pure PR-level required check
+cannot see a session's live `claim-id`/`agent-id` context the way the
+model-run helper can). A full session-aware required check would also
+fight the deliberate `pull_request`-only CI topology (#832 dropped
+the redundant `push`-triggered runs; for this repository's own
+PR-triggered runs, `lint`/`pnpm-boundary`/`idd-doctor` run against
+GitHub's synthetic PR merge-ref checkout — not the literal PR head
+SHA — and never independently re-check the actual merge commit that
+lands on `main`; `pnpm-boundary` also keeps a `workflow_call` trigger
+for downstream reusable-workflow callers, which runs against the
+caller's own ref instead) and #993's existing F3 checklist
+hardening.
+Under `fully_autonomous_merge` this is an **accepted risk**; adopter
+repos on `human_merge` retain a human as the backstop the autonomous
+path lacks, and repos on `separate_merge_agent` substitute a second,
+independently-invoked trusted session for that final gate instead of a
+human (`docs/permissions.md`). A future weak-model audit that
+re-discovers this fail-open should treat it as a decided trade-off —
+see #832, #993, #1341, #1342, #1353 — rather than re-filing it.

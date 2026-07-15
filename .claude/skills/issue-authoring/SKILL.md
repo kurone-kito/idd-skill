@@ -20,7 +20,11 @@ Use two stable phases:
    ask only the questions that block safe issue drafting. Keep
    clarification bounded; use the repository-local
    `issueAuthoring.maxClarificationRounds` value when available,
-   otherwise default to 3 rounds.
+   otherwise default to 3 rounds. **Under-clarification stop rule**: if,
+   after bounded clarification, you still cannot name the concrete
+   surface to edit or an objective verification for a candidate task,
+   route it to `needs-decision` or ask — do not publish a
+   confidently-vague `ready` issue. Reliability over speed.
 2. **Decompose and Draft** — restate the request in implementation
    terms, split it into atomic tasks, classify readiness, reuse existing
    issues when safe, and draft the smallest issue shape that preserves
@@ -46,10 +50,13 @@ needs-decision, blocked-by-human, and out-of-scope.
    - roadmap plus sub-issues for multi-task or multi-session work
    - stable non-ready buckets for deferred, needs-decision,
      blocked-by-human, or out-of-scope work
-4. Resolve the target repository marker prefix before drafting hidden
-   dependency markers. Use the prefix documented by the target
-   repository's onboarding or IDD docs, and ask the user instead of
-   guessing when the prefix is not discoverable.
+4. **Prefix-first**: resolve the target repository's marker prefix
+   before emitting any authoring marker — `roadmap-id`, `blocked-by`,
+   `autopilot-suitability`, or `effort`. Use the prefix documented by
+   the target repository's onboarding or IDD docs, and ask the user
+   instead of guessing when the prefix is not discoverable. Never
+   default to this source repository's `idd-skill` prefix in an
+   installed bundle.
 5. Keep dependencies machine-readable and minimal:
    - roadmap identity via
      `<!-- <marker-prefix>-roadmap-id: ... -->`
@@ -62,7 +69,14 @@ needs-decision, blocked-by-human, and out-of-scope.
    - keep independent sibling work in roadmap task lists unless a true
      correctness, availability, or ordering constraint requires a
      dependency edge
-6. When the user explicitly authorizes publication, manage the authoring
+6. Before publishing a ready orphan, roadmap, or child body, run the
+   `audit-authored-issue` linter against it as the mechanical
+   pre-publish gate — see
+   [Mechanical pre-publish gate](references/contract.md#mechanical-pre-publish-gate)
+   in the bundled contract, including the manual fallback for
+   `instructions-only` installs with no helper runtime. Resolve every
+   reported failure before treating the issue as ready.
+7. When the user explicitly authorizes publication, manage the authoring
    label for each created or updated issue:
    - resolve `issueAuthoring.authoringLabelName`, defaulting to
      `status:authoring`
@@ -80,7 +94,7 @@ needs-decision, blocked-by-human, and out-of-scope.
      published, the user confirms the result, and the user explicitly
      requests release from the authoring hold for IDD execution
    - leave the label in place if publishing is interrupted before release
-7. Stop at the approval boundary. Drafting issues does not authorize
+8. Stop at the approval boundary. Drafting issues does not authorize
    publishing them or starting the IDD execution loop unless the user
    explicitly asked for that.
 
@@ -111,3 +125,12 @@ needs-decision, blocked-by-human, and out-of-scope.
   new issue.
 - Avoid widening drafting output beyond the user request without saying
   so.
+- Run the `audit-authored-issue` linter (or its manual fallback in
+  `instructions-only` installs) against every drafted ready body and
+  resolve every reported failure before publishing.
+- Name a concrete surface to edit and an objective verification for
+  every `ready` candidate; route anything else to `needs-decision` or
+  ask instead of guessing (the under-clarification stop rule).
+- Resolve the target repository's marker prefix before emitting any
+  authoring marker; never assume this source repository's `idd-skill`
+  prefix in an installed bundle (the prefix-first rule).
