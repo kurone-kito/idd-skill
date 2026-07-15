@@ -21,8 +21,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseAutopilotSuitabilityMarker } from './autopilot-suitability.mjs';
+import { extractRoadmapMarkerId } from './discover-roadmap-graph.mjs';
 import { parseEffortMarker } from './effort.mjs';
 import { isCliExecution } from './gh-exec.mjs';
+import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import { createMarkerRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 
@@ -65,12 +67,14 @@ if (isCliExecution(import.meta.url)) {
  */
 export function auditAuthoredIssue(body, options) {
   const rawText = typeof body === 'string' ? body : String(body ?? '');
-  // Strip fenced code blocks once, up front, and run every check (marker
-  // counting, heading detection, visible-line scoping) against the result.
-  // A pasted template/example snippet inside a fence — quoting a marker or
-  // heading for illustration — must never count as the real thing; see
-  // stripFencedCodeBlocks.
-  const text = stripFencedCodeBlocks(rawText);
+  // Strip Markdown code regions (fenced blocks and inline spans) once, up
+  // front, and run every check (marker counting, heading detection,
+  // visible-line scoping) against the result. A pasted template/example
+  // snippet — quoting a marker or heading for illustration — must never
+  // count as the real thing. Reuses the same stripMarkdownCodeRegions
+  // primitive extractRoadmapMarkerId already relies on, rather than a
+  // second, independently-maintained fence tracker.
+  const text = stripMarkdownCodeRegions(rawText);
   const shape = options.shape;
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
   const blockedByHumanLabelName =
@@ -219,7 +223,22 @@ function checkDependencyMarkerRule(text, markerPrefix, shape) {
         `roadmap issues must carry exactly one roadmap-id marker, found ${roadmapIdCount}`,
       );
     }
-    return pass(id, name, 'exactly one roadmap-id marker is present');
+    // A single marker occurrence can still be malformed (missing its
+    // `: <roadmap-id>` value) and the loose shape-only count above would
+    // not catch it. extractRoadmapMarkerId requires the value, matching
+    // the same strict form Discover relies on to resolve the marker.
+    if (!extractRoadmapMarkerId(text, markerPrefix)) {
+      return fail(
+        id,
+        name,
+        'the roadmap-id marker is present but malformed (missing its `: <roadmap-id>` value)',
+      );
+    }
+    return pass(
+      id,
+      name,
+      'exactly one well-formed roadmap-id marker is present',
+    );
   }
   if (roadmapIdCount > 0) {
     return fail(
@@ -344,44 +363,6 @@ function lastParagraphBeforeMarker(text, markerPrefix, suffix) {
   const before = text.slice(0, lastIndex).replace(/\s+$/, '');
   const paragraphs = before.split(/\n\s*\n/);
   return paragraphs.at(-1) ?? '';
-}
-/**
- * Blank out the content of every fenced code block (``` or ~~~) in `text`,
- * preserving line count/structure but replacing fenced lines (including the
- * delimiters) with empty lines. Applied once, up front, so a pasted
- * template/example snippet — quoting a marker or a `##` heading for
- * illustration — never counts as the real thing in any downstream check
- * (marker counting, prefix consistency, heading detection, visible-line
- * scoping).
- *
- * Tracks both the fence character and its length: per CommonMark, an inner
- * fence-shaped line only closes the block when it uses the same character
- * AND is at least as long as the opening fence, so a 4+-backtick block can
- * safely contain a literal ``` line as content.
- */
-function stripFencedCodeBlocks(text) {
-  const lines = text.split(/\r?\n/);
-  let fenceChar = null;
-  let fenceLength = 0;
-  const kept = lines.map((line) => {
-    const fenceMatch = /^(`{3,}|~{3,})/.exec(line.trim());
-    if (fenceMatch) {
-      const marker = fenceMatch[1];
-      const char = marker[0];
-      if (fenceChar === null) {
-        fenceChar = char;
-        fenceLength = marker.length;
-        return '';
-      }
-      if (char === fenceChar && marker.length >= fenceLength) {
-        fenceChar = null;
-        fenceLength = 0;
-      }
-      return '';
-    }
-    return fenceChar !== null ? '' : line;
-  });
-  return kept.join('\n');
 }
 function extractHeadings(text) {
   const headings = new Set();

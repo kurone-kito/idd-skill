@@ -401,6 +401,22 @@ test('dependency-marker-rule still fails when a roadmap issue only has its marke
   assert.match(finding?.detail ?? '', /found 0/);
 });
 
+test('dependency-marker-rule fails when the roadmap-id marker is present but missing its value', () => {
+  // A single well-shaped-but-valueless marker (no `: <roadmap-id>`) passes
+  // the loose occurrence count but must still fail as malformed, so a
+  // roadmap draft is never left with no discoverable roadmap ID.
+  const body = roadmapBody({ roadmapIdCount: 0 }).replace(
+    '## Success criteria\n\nEverything ships.\n\n',
+    '## Success criteria\n\nEverything ships.\n\n<!-- idd-skill-roadmap-id -->\n\n',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'roadmap' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-marker-rule',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /malformed/);
+});
+
 // --- suitability-visible-line-agreement ---
 
 test('suitability-visible-line-agreement fails on a visible/hidden mismatch', () => {
