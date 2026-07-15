@@ -177,15 +177,16 @@ pre-merge gate detects new activity; **post-merge**, a merged-PR
 unresolved-feedback sweep (kurone-kito/idd-skill#931) — a
 manually-invoked, read-only detector whose output an operator feeds
 into fresh issue authoring, not an automatic recovery path — catches
-a regular comment that has **no later** IDD disposition anywhere on
-the PR: its collectors compare each comment's timestamp against a
-single global disposition cutoff, not a per-comment reply check, so a
-comment posted **before** the latest disposition counts as
-"addressed" even if that disposition was for something else entirely,
-while a comment posted **after** the latest disposition is always
-surfaced. It does **not** catch a false disposition on a **regular
-comment** (excluded the same way, correct or not) or on a review
-thread that was also
+a regular comment or a `CHANGES_REQUESTED` review body that has **no
+later** IDD disposition anywhere on the PR: its collectors compare
+each item's timestamp (a comment's timestamp, or a review's submit
+time) against a single global disposition cutoff, not a per-item
+reply check, so an item posted **before** the latest disposition
+counts as "addressed" even if that disposition was for something else
+entirely, while an item posted **after** the latest disposition is
+always surfaced. It does **not** catch a false disposition on a
+**regular comment or review body** (excluded the same way, correct or
+not) or on a review thread that was also
 **resolved** — the protocol's normal
 post-disposition step. A falsely dispositioned thread left
 **unresolved** is still surfaced by the sweep (flagged
