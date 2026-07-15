@@ -741,8 +741,10 @@ function fetchCodeownersText(owner: string, repo: string, ref: string): string {
  *
  * Every `ruleset_id` passed in via `branchRules` was already confirmed to
  * exist moments earlier by the `rules/branches/{base}` list read in the same
- * call (see `collectPreMergeReadiness`), so a `404` on its own detail read
- * here is not a plausible independent deletion race. GitHub's "Get a
+ * call (see `collectPreMergeReadiness`), so a genuine deletion between that
+ * read and this one is possible but unlikely. That timing alone would not
+ * justify treating every `404` as unreadable -- the real justification is
+ * that the response itself cannot distinguish the two cases. GitHub's "Get a
  * repository ruleset" reference documents only `200`/`404`/`500` for this
  * endpoint -- no `403` --
  * (<https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset>),
