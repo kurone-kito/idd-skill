@@ -164,13 +164,15 @@ self-signed-hijack block.
 protocol stays **Copilot-only**; the configured non-Copilot
 `advisoryBotLogins` (e.g. `coderabbitai[bot]`,
 `chatgpt-codex-connector[bot]`) get no equivalent merge-blocking
-required check. `#899` recorded the deliberate scope and the safety
-net that recovers non-Copilot review misses after merge: the E1
-activity-universe snapshot plus `review-watermark` delta (re-checked
-at the F2/F3 pre-merge gate), backstopped by the `#931` merged-PR
-unresolved-feedback sweep (`scripts/merged-pr-feedback-sweep.mjs`) — a
-manually-invoked, read-only detector whose output an operator feeds
-into fresh issue authoring, not an automatic recovery path.
+required check. `#899` recorded the deliberate scope and its two-part
+safety net: **pre-merge**, the E1 activity-universe snapshot plus
+`review-watermark` delta catches a late finding before merge by
+forcing a return to E1 when the F2/F3 pre-merge gate detects new
+activity; **post-merge**, the `#931` merged-PR unresolved-feedback
+sweep (`scripts/merged-pr-feedback-sweep.mjs`) — a manually-invoked,
+read-only detector whose output an operator feeds into fresh issue
+authoring, not an automatic recovery path — catches whatever still
+slipped through.
 
 `#1352` re-opened the question after `#1341`/`#1342` shipped
 `idd-advisory-convergence` as a trusted-checkout required CI check for
