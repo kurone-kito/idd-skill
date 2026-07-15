@@ -115,3 +115,66 @@ test('sync-manifest syncPairs and bundleBudgets[].files are in canonical order',
     assertSorted(`bundleBudgets[${budget.id}].files`, budget.files);
   }
 });
+
+// Completion guard for the TypeScript helper migration (#1365): every
+// scripts/*.mjs and bin/*.mjs on disk must be generated from a
+// src/scripts/*.mts / src/bin/*.mts source, so a future hand-written helper
+// with no .mts source cannot silently reopen the dual-path the migration
+// removed. This is deliberately keyed on **source existence**, not the
+// `idd-generated-from` banner scan used elsewhere in this file: a
+// shebang-led bin/*.mjs still carries the banner reliably today, but source
+// existence is the invariant that actually matters and does not depend on
+// banner placement at all. Complements (does not replace)
+// scripts/audit-docs.mjs's banner-based forward/reverse pairing guard, which
+// cannot see a hand-written .mjs that carries no banner in the first place.
+
+/**
+ * Returns the `.mjs` names in `generatedNames` that have no matching `.mts`
+ * source in `sourceNames` (compared by shared basename). A non-empty result
+ * names a hand-written orphan.
+ */
+function orphanGeneratedNames(
+  generatedNames: readonly string[],
+  sourceNames: readonly string[],
+): string[] {
+  const sourceBasenames = new Set(
+    sourceNames
+      .filter((name) => name.endsWith('.mts'))
+      .map((name) => name.slice(0, -'.mts'.length)),
+  );
+  return generatedNames
+    .filter((name) => name.endsWith('.mjs'))
+    .filter((name) => !sourceBasenames.has(name.slice(0, -'.mjs'.length)))
+    .sort();
+}
+
+test('orphanGeneratedNames flags a hand-written .mjs with no .mts source', () => {
+  assert.deepEqual(
+    orphanGeneratedNames(['known.mjs', 'orphan.mjs'], ['known.mts']),
+    ['orphan.mjs'],
+  );
+});
+
+test('orphanGeneratedNames finds no orphan when every generated name is paired', () => {
+  assert.deepEqual(
+    orphanGeneratedNames(['known.mjs'], ['known.mts', 'unused.mts']),
+    [],
+  );
+});
+
+test('every scripts/*.mjs and bin/*.mjs on disk has a src/**/*.mts source', () => {
+  const root = new URL('../', import.meta.url);
+  const scriptOrphans = orphanGeneratedNames(
+    readdirSync(new URL('scripts/', root)),
+    readdirSync(new URL('src/scripts/', root)),
+  );
+  const binOrphans = orphanGeneratedNames(
+    readdirSync(new URL('bin/', root)),
+    readdirSync(new URL('src/bin/', root)),
+  );
+  assert.deepEqual(
+    [...scriptOrphans, ...binOrphans],
+    [],
+    'hand-written helper with no src/**/*.mts source — the TypeScript helper migration is complete and no hand-written scripts/bin path remains; see docs/typescript-sources.md',
+  );
+});

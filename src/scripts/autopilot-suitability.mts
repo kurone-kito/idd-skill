@@ -136,8 +136,13 @@ export function normalizeAutopilotSuitabilityFloor(floor: unknown): number {
  * - Ranking always runs (when enabled): items are stable-sorted by
  *   effective score descending, where a missing score uses the floor as
  *   a neutral baseline so unscored (e.g. pre-existing) issues are never
- *   buried. Ties keep input order, so callers that need a domain
- *   tie-break (e.g. lowest issue number) pre-sort the input by that key.
+ *   buried. At a tied effective score, a genuinely-scored candidate
+ *   always ranks above an unscored one defaulted to the floor (the
+ *   written A4 Step 2 "scored-vs-unscored floor tie-breaker" rule,
+ *   matching `compareUnionLeaves` in discover-roadmap-graph.mts). Beyond
+ *   that scored-vs-unscored split, ties keep input order, so callers
+ *   that need a domain tie-break (e.g. effort hint, lowest issue number)
+ *   pre-sort the input by that key.
  * - Routing is **opt-in** via `routeBelowFloor` (the autopilot-run
  *   behavior). When true, candidates whose score is present and
  *   `< floor` are moved to `routedToHuman` (kept visible, never
@@ -190,6 +195,16 @@ export function rankAndRouteBySuitability<T>(
     .sort(
       (left, right) =>
         (right.score ?? floor) - (left.score ?? floor) ||
+        // Scored-before-unscored at a tie (written A4 Step 2 rule): a
+        // genuinely-scored candidate never ranks below an unscored one
+        // defaulted to the floor. `entry.score` is already normalized to
+        // "coherent 1-5 or null" above, so `!== null` is the same
+        // "genuinely scored" notion `compareUnionLeaves` derives from
+        // `isAutopilotSuitabilityScore`, reused rather than reimplemented.
+        // Applied before the caller's pre-sorted index order (which
+        // carries the effort-hint / issue-number tie-breakers), so those
+        // softer tie-breakers never outrank a real score.
+        Number(right.score !== null) - Number(left.score !== null) ||
         left.index - right.index,
     )
     .map((entry) => entry.item);

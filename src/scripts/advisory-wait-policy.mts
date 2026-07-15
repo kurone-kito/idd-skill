@@ -6,7 +6,7 @@
 
 import { readFileSync } from 'node:fs';
 
-import { loadJson, validate } from './validate-schemas.mts';
+import { loadJson, validateConfigSection } from './validate-schemas.mts';
 
 export const DEFAULT_ADVISORY_REQUEST_CAP = 30;
 export const DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES = 30;
@@ -36,7 +36,12 @@ export function readAdvisoryWaitPolicy(
 ): AdvisoryWaitPolicy {
   try {
     const config = JSON.parse(readFileSync(path, 'utf8'));
-    if (validate(config, POLICY_SCHEMA).length > 0) {
+    // Scoped to the advisoryWait subtree (#1359): an unrelated invalid
+    // field elsewhere in the document must not zero out an otherwise-valid
+    // advisoryWait section.
+    if (
+      validateConfigSection(config, POLICY_SCHEMA, 'advisoryWait').length > 0
+    ) {
       return resolveAdvisoryWaitPolicy({});
     }
     return resolveAdvisoryWaitPolicy(config);
@@ -102,7 +107,10 @@ export function readAdvisoryPrimaryBotLogin(
 ): string {
   try {
     const config = JSON.parse(readFileSync(path, 'utf8'));
-    if (validate(config, POLICY_SCHEMA).length > 0) {
+    // Scoped to the advisoryWait subtree (#1359); see readAdvisoryWaitPolicy.
+    if (
+      validateConfigSection(config, POLICY_SCHEMA, 'advisoryWait').length > 0
+    ) {
       return DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
     }
     return resolveAdvisoryPrimaryBotLogin(config);
@@ -146,7 +154,10 @@ export function readAdvisorySecondaryBotLogin(
 ): string {
   try {
     const config = JSON.parse(readFileSync(path, 'utf8'));
-    if (validate(config, POLICY_SCHEMA).length > 0) {
+    // Scoped to the advisoryWait subtree (#1359); see readAdvisoryWaitPolicy.
+    if (
+      validateConfigSection(config, POLICY_SCHEMA, 'advisoryWait').length > 0
+    ) {
       return '';
     }
     return resolveAdvisorySecondaryBotLogin(config);
@@ -185,7 +196,10 @@ export function readAdvisoryConvergenceDeadlineMinutes(
 ): number {
   try {
     const config = JSON.parse(readFileSync(path, 'utf8'));
-    if (validate(config, POLICY_SCHEMA).length > 0) {
+    // Scoped to the advisoryWait subtree (#1359); see readAdvisoryWaitPolicy.
+    if (
+      validateConfigSection(config, POLICY_SCHEMA, 'advisoryWait').length > 0
+    ) {
       return DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES;
     }
     return resolveAdvisoryConvergenceDeadlineMinutes(config);

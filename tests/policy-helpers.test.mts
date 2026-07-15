@@ -68,6 +68,30 @@ test('claimTiming.staleAge defaults to PT24H and accepts a configured override',
   );
 });
 
+test('ciWait.rerunPolicy defaults to rerun-once and accepts hold', () => {
+  // #1359: CI_RERUN_POLICIES previously only accepted 'rerun-once',
+  // silently downgrading a configured 'hold' — the schema and
+  // ci-wait-policy.mts's own RERUN_POLICIES both accept 'hold'.
+  assert.equal(POLICY_DEFAULTS.ciWait.rerunPolicy, 'rerun-once');
+  assert.equal(normalizePolicyConfig({}).ciWait.rerunPolicy, 'rerun-once');
+  assert.equal(
+    normalizePolicyConfig({ ciWait: { rerunPolicy: 'hold' } }).ciWait
+      .rerunPolicy,
+    'hold',
+  );
+  assert.equal(
+    normalizePolicyConfig({ ciWait: { rerunPolicy: 'rerun-once' } }).ciWait
+      .rerunPolicy,
+    'rerun-once',
+  );
+  // An unrecognized value still falls back to the default.
+  assert.equal(
+    normalizePolicyConfig({ ciWait: { rerunPolicy: 'rerun-forever' } }).ciWait
+      .rerunPolicy,
+    'rerun-once',
+  );
+});
+
 test('parseIsoDurationToMs parses supported ISO durations', () => {
   assert.equal(parseIsoDurationToMs('PT5S'), 5000);
   assert.equal(parseIsoDurationToMs('PT2H'), 2 * 60 * 60 * 1000);

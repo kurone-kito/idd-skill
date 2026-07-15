@@ -1,18 +1,16 @@
 # TypeScript helper sources
 
-The IDD helper logic is **migrating to TypeScript**, one
-dependency-ordered wave at a time. For every helper that has already been
-converted, the source of truth is its `src/**/*.mts` file, and the
-matching `scripts/*.mjs` / `bin/*.mjs` artifact is generated from it and
-committed to the repository. Helpers that have not been converted yet
-remain hand-edited `.mjs` until their wave lands. When the migration
-completes, `src/**/*.mts` will be the only hand-edited JavaScript surface.
+The IDD helper migration to TypeScript is **complete**: every
+`scripts/*.mjs` / `bin/*.mjs` artifact is generated from a `src/**/*.mts`
+source by `pnpm run build`, and `src/**/*.mts` is the only hand-edited
+JavaScript surface in the helper bundle. No hand-written helper `.mjs`
+path remains, and the invariant is enforced mechanically: a
+`scripts/*.mjs` or `bin/*.mjs` on disk with no matching `.mts` source
+fails CI (`tests/inventory-ordering.test.mts`).
 
-> **For a converted helper, edit the `.mts` source, never the generated
-> `.mjs`.** A direct edit to a generated file is overwritten on the next
-> build and is rejected by the drift guard in CI. A `.mjs` with no
-> `src/**/*.mts` counterpart is still hand-edited; convert it in its
-> migration wave rather than hand-editing a generated file.
+> **Edit the `.mts` source, never the generated `.mjs`.** A direct edit
+> to a generated file is overwritten on the next build and is rejected
+> by the drift guard in CI.
 
 ## Why generated `.mjs` are committed
 
@@ -41,8 +39,8 @@ generated file:
 ```
 
 Generated files are marked `linguist-generated=true` in `.gitattributes`
-(per file during the migration), which drops them from language
-statistics and collapses their diffs in review. This is distinct from
+on a per-file basis, which drops them from language statistics and
+collapses their diffs in review. This is distinct from
 `linguist-vendored`, which denotes third-party code and is reserved for
 adopter repositories that vendor the bundle.
 
@@ -58,7 +56,12 @@ adopter repositories that vendor the bundle.
 rebuild or a hand-edited generated file fails the installed CI lane. The
 bare-node lane additionally runs `node scripts/audit-docs.mjs --check`,
 whose pairing guard fails when a source is missing its generated artifact
-or a banner-marked artifact is missing its source.
+or a banner-marked artifact is missing its source. `node --test
+tests/inventory-ordering.test.mts` (part of `lint:minimum`'s test run)
+closes the remaining gap: it fails when a `scripts/*.mjs` or `bin/*.mjs`
+on disk has no matching `.mts` source at all, regardless of whether it
+carries the generated-from banner — the check that keeps the
+hand-written-helper path closed for good.
 
 ## Type-suppression budgets
 
@@ -81,9 +84,10 @@ Biome's `lint/suspicious/noExplicitAny` (on via the recommended set)
 surfaces explicit `any` as a warning during development; this audit
 budget is the **blocking** enforcement in both CI lanes.
 
-The migration converts modules in dependency-ordered waves; only the
-sources listed in `tsconfig.json`'s `include` set are type-checked, so
-unconverted hand-written `.mjs` stay untyped and CI is green throughout.
+Only the sources listed in `tsconfig.json`'s `include` set
+(`src/**/*.mts` and `tests/**/*.mts`) are type-checked; the generated
+`scripts/*.mjs` / `bin/*.mjs` artifacts are build output, not
+type-checked directly.
 
 ## Test suite
 
