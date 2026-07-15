@@ -171,7 +171,11 @@ pre-merge gate detects new activity; **post-merge**, a merged-PR
 unresolved-feedback sweep (kurone-kito/idd-skill#931) — a
 manually-invoked, read-only detector whose output an operator feeds
 into fresh issue authoring, not an automatic recovery path — catches
-whatever still slipped through.
+feedback that received no IDD reply at all. It does **not** catch a
+feedback item the agent falsely dispositioned: the sweep's collectors
+treat any IDD `**Accepted**` / `**Rejected**` reply as addressing the
+item, correct or not, so a semantically false disposition has no
+sweep backstop.
 
 kurone-kito/idd-skill#1352 re-opened the question after a required-check
 promotion shipped for the Copilot dimension, and after a weak-model
@@ -191,9 +195,11 @@ PR summary rather than actionable findings), re-review is mention-only
 with no clean per-HEAD completion signal, and pinging a bot risks waking a
 lenient reviewer mid-merge. The mis-classification and self-attested-
 disposition fail-opens are therefore recorded as an **accepted risk**
-under `fully_autonomous_merge`, not a defect — recovered by the
-snapshot net and the manual sweep, same as kurone-kito/idd-skill#909
-originally decided. A repository that reaches this same conclusion
+under `fully_autonomous_merge`, not a defect — the pre-merge snapshot
+net still catches a late-arriving finding before merge, but a false
+disposition it already produced has no sweep backstop (see above),
+same as kurone-kito/idd-skill#909 originally decided to accept. A
+repository that reaches this same conclusion
 independently should record it here rather than re-litigating it on every
 structural audit.
 

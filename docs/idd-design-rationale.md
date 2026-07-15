@@ -171,8 +171,12 @@ forcing a return to E1 when the F2/F3 pre-merge gate detects new
 activity; **post-merge**, the `#931` merged-PR unresolved-feedback
 sweep (`scripts/merged-pr-feedback-sweep.mjs`) — a manually-invoked,
 read-only detector whose output an operator feeds into fresh issue
-authoring, not an automatic recovery path — catches whatever still
-slipped through.
+authoring, not an automatic recovery path — catches feedback that
+received no IDD reply at all. It does **not** catch a feedback item
+the agent falsely dispositioned: `collectUnresolvedThreads` and
+`collectUnaddressedComments` both treat any IDD `**Accepted**` /
+`**Rejected**` reply as addressing the item, correct or not, so a
+semantically false disposition has no sweep backstop.
 
 `#1352` re-opened the question after `#1341`/`#1342` shipped
 `idd-advisory-convergence` as a trusted-checkout required CI check for
@@ -193,8 +197,10 @@ findings), re-review is mention-only with no clean per-HEAD completion
 signal, and pinging a bot risks waking a lenient reviewer mid-merge.
 The E6 mis-classification and E7 self-attested-disposition path are
 therefore recorded as an **accepted risk** under
-`fully_autonomous_merge`, not a defect — recovered by the snapshot net
-and the `#931` sweep, same as `#909` originally decided. A future
+`fully_autonomous_merge`, not a defect — the pre-merge snapshot net
+still catches a late-arriving finding before merge, but a false
+disposition it already produced has no `#931` sweep backstop (see
+above), same as `#909` originally decided to accept. A future
 weak-model audit that re-discovers this fail-open should treat it as a
 decided trade-off (cite `#909` / `#899` / `#931` / `#1352`) rather than
 re-filing it.
