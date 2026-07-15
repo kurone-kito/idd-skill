@@ -167,9 +167,10 @@ equivalent merge-blocking required check. kurone-kito/idd-skill#899 recorded
 the deliberate scope and the safety net that recovers non-Copilot review
 misses after merge: the E1 activity-universe snapshot plus
 `review-watermark` delta (re-checked at the F2/F3 pre-merge gate),
-backstopped by a recurring merged-PR unresolved-feedback sweep
-(kurone-kito/idd-skill#931) that routes anything missed into fresh issue
-authoring.
+backstopped by a merged-PR unresolved-feedback sweep
+(kurone-kito/idd-skill#931) — a manually-invoked, read-only detector
+whose output an operator feeds into fresh issue authoring, not an
+automatic recovery path.
 
 kurone-kito/idd-skill#1352 re-opened the question after a required-check
 promotion shipped for the Copilot dimension, and after a weak-model
@@ -204,10 +205,16 @@ merge-time re-verification (`idd-merge.instructions.md`) gate claim
 ownership/freshness, late non-Copilot review currency, non-Copilot
 unresolved threads, disposition-evidence completeness, and unreplied
 comments through a deterministic readiness helper plus the written
-checklist. None of these dimensions has a GitHub-side required check
-backing it — unlike the Copilot advisory-convergence dimension that can be
-promoted to a trusted-checkout required check (kurone-kito/idd-skill#1341,
-kurone-kito/idd-skill#1342).
+checklist. None of these dimensions has a dedicated GitHub-side
+required check backing it — unlike the Copilot advisory-convergence
+dimension that can be promoted to a trusted-checkout required check
+(kurone-kito/idd-skill#1341, kurone-kito/idd-skill#1342). (A repository
+that separately turns on GitHub's branch-protection
+conversation-resolution requirement gets GitHub-side enforcement for
+the unresolved-threads dimension specifically, as a side effect of
+that unrelated setting — see the conversation-resolution exception in
+`idd-pre-merge.instructions.md` — but that is opt-in and not part of
+this reaffirmed posture.)
 
 The helper is explicitly allowed to be **discarded**: the pre-merge phase
 states that when helper execution fails, its output is invalid, or live

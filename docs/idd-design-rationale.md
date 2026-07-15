@@ -167,9 +167,10 @@ protocol stays **Copilot-only**; the configured non-Copilot
 required check. `#899` recorded the deliberate scope and the safety
 net that recovers non-Copilot review misses after merge: the E1
 activity-universe snapshot plus `review-watermark` delta (re-checked
-at the F2/F3 pre-merge gate), backstopped by the recurring `#931`
-merged-PR unresolved-feedback sweep that routes anything missed into
-fresh issue authoring.
+at the F2/F3 pre-merge gate), backstopped by the `#931` merged-PR
+unresolved-feedback sweep (`scripts/merged-pr-feedback-sweep.mjs`) — a
+manually-invoked, read-only detector whose output an operator feeds
+into fresh issue authoring, not an automatic recovery path.
 
 `#1352` re-opened the question after `#1341`/`#1342` shipped
 `idd-advisory-convergence` as a trusted-checkout required CI check for
@@ -207,9 +208,15 @@ non-Copilot unresolved threads, `dispositionEvidence` completeness,
 and unreplied comments through the `computePreMergeReadinessBlockers`
 helper (`scripts/protocol-helpers.mjs`, surfaced by
 `scripts/pre-merge-readiness.mjs`) plus the written F2/F3 checklist.
-None of these dimensions has a GitHub-side required check backing it —
-unlike the Copilot advisory-convergence dimension that `#1341`/`#1342`
-promoted to a trusted-checkout required check.
+None of these dimensions has a dedicated GitHub-side required check
+backing it — unlike the Copilot advisory-convergence dimension that
+`#1341`/`#1342` promoted to a trusted-checkout required check. (A repo
+that separately turns on GitHub's branch-protection conversation-
+resolution requirement gets GitHub-side enforcement for the
+unresolved-threads dimension specifically, as a side effect of that
+unrelated setting — see the conversation-resolution exception in
+`idd-pre-merge.instructions.md` — but that is opt-in and not part of
+this reaffirmed posture.)
 
 The helper is explicitly allowed to be **discarded**: F2 states that
 when helper execution fails, its output is invalid, or live GitHub
@@ -234,8 +241,9 @@ the redundant `push`-triggered runs, so `lint`/`pnpm-boundary`/
 independently re-check the merge commit that lands on `main`) and
 `#993`'s existing F3 checklist hardening.
 Under `fully_autonomous_merge` this is an **accepted risk**; adopter
-repos that keep a human merge step (`human_merge` or
-`separate_merge_agent` policy) retain that human as the backstop the
-autonomous path lacks. A future weak-model audit that re-discovers
+repos on `human_merge` retain a human as the backstop the autonomous
+path lacks, and repos on `separate_merge_agent` substitute a second,
+independently-invoked trusted session for that final gate instead of a
+human (`docs/permissions.md`). A future weak-model audit that re-discovers
 this fail-open should treat it as a decided trade-off (cite `#832` /
 `#993` / `#1341` / `#1342` / `#1353`) rather than re-filing it.
