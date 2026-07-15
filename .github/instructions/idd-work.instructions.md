@@ -242,6 +242,20 @@ problems exist. See `idd-overview-appendix.instructions.md` for per-agent
 implementation. The distributed defaults for the C-phase skip and loop
 guards are listed in `docs/policy-constants.md`.
 
+**Objective diff validation floor**: neither C2 nor C4 below may skip to
+`idd-pr-submit.instructions.md` unless **fix-validate** — the same
+command set C5 runs — has passed against the branch's current diff.
+This floor is independent of D2's own **pre-push-validate** gate and
+never substitutes for it. **fix-validate** satisfies the floor only at
+the branch's current HEAD; re-run it after every new commit. Apply
+this floor **uniformly**; do not condition it on self-classifying as
+"no-subagent" (see `docs/idd-workflow.md`'s "Critique pass invocation"
+section). On a no-subagent runtime, where critique degrades to
+same-response self-critique, the critique verdict is **advisory** and
+this floor is **load-bearing** instead. If the floor has not passed,
+C2 and C4 continue to C5 instead of skipping, even when their other
+skip condition is otherwise met.
+
 After each critique loop decision, update the issue digest only if the
 next action changes materially: for example, `C accepted fixes` before
 C5, `C clean` before moving to PR submission, or a hold state when
@@ -249,8 +263,11 @@ guardrails stop the loop.
 
 ### C2 — Check for issues
 
-If the critique pass reports zero issues → skip to
-`idd-pr-submit.instructions.md`.
+If the critique pass reports zero issues: skip to
+`idd-pr-submit.instructions.md` when the floor (C1) has passed, or
+continue to C5 instead when it has not. If the critique reports one or
+more issues, continue to C3 regardless of the floor — C4 applies the
+floor check after Accept/Reject scoring.
 
 ### C3 — Score issues
 
@@ -266,19 +283,32 @@ For each issue reported, assess severity and relevance to PR intent:
 
 Decide Accept or Reject for each issue. Then check:
 
-- Accept count = 0 → skip to `idd-pr-submit.instructions.md`
+- Accept count = 0 **and** the floor (C1) has passed → skip to
+  `idd-pr-submit.instructions.md`
 - Loop count >
   `critiqueLoop.cPhaseLowSeveritySkipAfter` (distributed default: `3`)
-  and all remaining Accepts are Low → skip to
-  `idd-pr-submit.instructions.md`
+  and all remaining Accepts are Low **and** the floor has passed → skip
+  to `idd-pr-submit.instructions.md`
+
+If a bullet's condition holds except the floor, continue to C5 to
+satisfy the floor only; the second bullet's remaining Low Accepts stay
+unfixed, per the guard.
 
 Otherwise continue to C5.
 
 ### C5 — Fix accepted issues
 
-Fix all Accepted issues. Run **fix-validate**.
+Fix any Accepted issues the guard above does not exempt (there may be
+none — see C4). Then run **fix-validate**: a pass from before this
+step's own edits does not satisfy the floor, so re-run it now and fix
+anything it reports.
 
-Commit fixes atomically.
+An unmet floor is not a new failure class: run or fix **fix-validate**
+the same way the Project commands table handles a failing
+**pre-push-validate** ("If lint fails, run fix-validate, commit, then
+re-run pre-push-validate").
+
+If anything changed, commit atomically.
 
 ### C6 — Return to C1
 
