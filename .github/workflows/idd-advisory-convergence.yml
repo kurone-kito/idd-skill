@@ -91,6 +91,51 @@ name: IDD advisory-convergence gate
 # run's conclusion never changes on its own -- a new run has to
 # execute. workflow_dispatch gives that a one-click affordance instead
 # of relying solely on the Actions UI's generic "re-run failed jobs".
+#
+# Correction (kurone-kito/idd-skill#1381): in practice, workflow_dispatch
+# does NOT reliably flip the PR's required-check rollup for its own HEAD
+# SHA, despite the "one-click affordance" framing above -- roughly a
+# dozen PRs in one session each independently hit this and had to
+# rediscover the real fix. Most likely cause: a manually dispatched run
+# has no `pull_request` context of its own, so GitHub associates it with
+# whatever ref the dispatch targets (the default branch, absent an
+# explicit `--ref <pr-branch>`) rather than the PR's HEAD SHA -- this
+# matches GitHub's own documented/reported behavior that a
+# workflow_dispatch (or repository_dispatch) run's check-run can end up
+# associated with the default branch instead of the intended branch, so
+# it never surfaces in that PR's required-check rollup at all even when
+# the run itself succeeds. The verified recovery is `gh run rerun
+# <run-id>` (or `gh run rerun --failed <run-id>`) on the *existing*
+# PR-linked run for the current HEAD SHA -- found via `gh run list
+# --workflow=idd-advisory-convergence.yml --json databaseId,headSha,url`
+# filtered to the PR's HEAD SHA, or the Checks API -- because re-running
+# that run object preserves its original pull_request-family
+# association, so its fresh conclusion does update the rollup. Prefer
+# this whenever an existing run for the current HEAD SHA is available to
+# rerun; fall back to workflow_dispatch only when no such run exists yet
+# for this HEAD (e.g. the check never triggered for it).
+#
+# Concurrency-hardening investigation (kurone-kito/idd-skill#1381): the
+# cancel-in-progress group above can cancel a legitimately in-flight run
+# when a near-simultaneous review event (Copilot/CodeRabbit/Codex
+# posting review comments in quick succession) fires another trigger for
+# the same PR, leaving a stale CANCELLED entry that can race a later
+# genuine SUCCESS in the rollup display. No safe mechanical fix was
+# identified: `cancel-in-progress: false` does not close this gap -- a
+# concurrency group's queue slot still holds only one pending run, so a
+# newer trigger unconditionally evicts (silently drops) whatever was
+# already queued, reproducing the same class of stale-entry race through
+# a different code path rather than eliminating it (a documented,
+# still-open GitHub Actions platform limitation, not something this
+# workflow's own config controls). Narrowing the concurrency group (for
+# example splitting it per trigger type) would defeat the deliberate
+# cross-trigger debouncing already explained in the CI-topology comment
+# above, without addressing the underlying rollup-ordering race, which
+# is orthogonal to how the group happens to be keyed. The operational
+# recovery documented above (`gh run rerun <run-id>`) fully resolves the
+# resulting stale display without a config change, so this workflow
+# keeps its current concurrency configuration rather than trading it for
+# an equally-racy alternative.
 on:
   pull_request:
     types:
