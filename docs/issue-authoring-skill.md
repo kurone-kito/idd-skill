@@ -83,6 +83,15 @@ If bounded clarification is exhausted and safe drafting is still not
 possible, the skill should stop and report the unresolved blockers
 instead of looping indefinitely.
 
+**Under-clarification stop rule.** If, after bounded clarification, the
+skill still cannot name the concrete surface to edit or an objective
+verification for a candidate task, it should route that candidate to
+`needs-decision` or ask, instead of publishing a confidently-vague
+`ready` issue. Reliability over speed. This is distinct from the
+"Under-specified" specificity band below: that band judges an
+already-drafted body's wording, while this rule stops publication
+earlier, during Intake, before a body is even drafted.
+
 ### 2. Decompose and Draft
 
 In this phase, the agent:
@@ -396,6 +405,60 @@ during drafting:
 it will not fail A4.5 for coherence, safety, or uniqueness. If it would,
 resolve the issue during drafting instead of publishing it.
 
+### Mechanical pre-publish gate
+
+Before publishing a drafted `ready` **orphan, roadmap, or sub-issue**
+body (the linter's `orphan|roadmap|child` shapes; not the non-ready
+buckets above), run the `audit-authored-issue` linter
+(`scripts/audit-authored-issue.mjs` / `bin/idd-audit-authored-issue.mjs`)
+against it when a helper runtime is available. It mechanically
+re-checks a subset of the structural rules this document states in
+prose — the autopilot-suitability marker's exactly-one/coherent-value
+rule, the one-directional check that a suitability score of `1` carries
+the configured `blocked-by-human` label (it does not check the reverse:
+a non-`1` score paired with the label still passes), markerPrefix
+consistency across every authoring marker, the declared shape's
+required section headings, the roadmap-id/blocked-by dependency-marker
+rules, and visible/hidden line agreement for the suitability and effort
+footers:
+
+```sh
+node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \
+  --marker-prefix <resolved-target-prefix> \
+  --body-file <path-to-drafted-body> [--label <label>]...
+```
+
+**Always keep `--marker-prefix`, and always replace the placeholder**
+with the resolved target prefix before running the command — in this
+source repository that value is `idd-skill` (already the
+`.github/idd/config.json` default here, so the flag is redundant only
+in this one repository), but auditing any other repository requires
+substituting that repository's own prefix. Never copy the literal
+`idd-skill` value into another repository's audit command. Omitting the
+flag entirely is unsafe everywhere: without it, the linter falls back
+to reading `.github/idd/config.json` from the current working
+directory and silently defaults to `idd-skill` when that file is
+missing or unreadable, producing a false pass or fail against the
+wrong prefix instead of an error. See the bundled `contract.md`'s
+[Target marker prefix](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#target-marker-prefix)
+section for the adopter-facing prefix-resolution rule.
+
+**No helper runtime available (`instructions-only` profile).** The
+linter cannot run without Node.js and the vendored `scripts/`
+directory, and `instructions-only` is a first-class supported fallback,
+not a waiver — manually re-verify the same checks against this
+document's prose and the [Draft schemas](#draft-schemas) before
+publishing.
+
+A `passed: false` report (or non-zero exit, or a failed manual
+re-verification) means the draft is not ready to publish yet. The
+linter (or its manual equivalent) is a mechanical structural check, not
+a substitute for the judgment-based checks above (human-dependency
+isolation, codebase fidelity, reuse-first) — passing it is necessary,
+not sufficient, for `ready`. See the bundled `contract.md`'s
+[Mechanical pre-publish gate](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#mechanical-pre-publish-gate)
+section for the adopter-facing version of this rubric.
+
 ## Authoring label lifecycle
 
 The issue authoring skill must use the configured authoring label as a
@@ -561,6 +624,16 @@ natural cohesion.
 The skill must encode dependencies in forms that the discover phase can
 read safely.
 
+**Prefix-first.** The examples below use this source repository's own
+configured prefix, `idd-skill`, literally — this document describes
+this repository's own convention. Resolve the target repository's
+marker prefix before emitting any authoring marker in an installed
+bundle; never assume `idd-skill` outside this source repository. See
+the bundled `contract.md`'s
+[Target marker prefix](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#target-marker-prefix)
+section for the adopter-facing, prefix-parameterized version of this
+rule.
+
 ### Roadmap identity marker
 
 Every roadmap issue must include exactly one hidden roadmap marker in
@@ -684,6 +757,8 @@ Validation expectations:
   the final title, body, and generated plan are stable
 - exactly one autopilot-suitability footer with an integer 1-5 marker; a
   score of `1` also carries `status:blocked-by-human`
+- passes the `audit-authored-issue` mechanical pre-publish gate for the
+  `orphan` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
 ### Roadmap issue schema
 
@@ -726,6 +801,8 @@ Validation expectations:
   private session memory
 - exactly one autopilot-suitability footer with an integer 1-5 marker; a
   score of `1` also carries `status:blocked-by-human`
+- passes the `audit-authored-issue` mechanical pre-publish gate for the
+  `roadmap` shape (see [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
 ### Sub-issue schema
 
@@ -762,6 +839,10 @@ Validation expectations:
 - the issue can be claimed independently without absorbing sibling work
 - exactly one autopilot-suitability footer with an integer 1-5 marker; a
   score of `1` also carries `status:blocked-by-human`
+- passes the `audit-authored-issue` mechanical pre-publish gate using
+  `--shape child` (the linter's shape enum names this schema `child`,
+  matching `contract.md`'s "Child issue under a roadmap"; see
+  [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
 ## Validation checklist for drafted output
 
@@ -790,6 +871,10 @@ Before reporting or publishing issue drafts, the skill should verify:
   context
 - reuse or extension decisions are recorded when the skill chose not to
   create a new issue
+- each drafted ready body passes the `audit-authored-issue` mechanical
+  pre-publish gate for its declared shape, or the manual fallback when
+  no helper runtime is available (see
+  [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
 ## Repository-local implementation surface
 
