@@ -23,6 +23,13 @@
   ],
   "fileSets": [
     {
+      "id": "claude-skills-issue-authoring-markdown-set",
+      "sourceGlob": "skills/issue-authoring/**/*.md",
+      "targetGlob": ".claude/skills/issue-authoring/**/*.md",
+      "match": "basename",
+      "requireSyncPairs": true
+    },
+    {
       "id": "idd-instruction-template-dogfood-set",
       "sourceGlob": "idd-template/.github/instructions/idd-*.instructions.md",
       "targetGlob": ".github/instructions/idd-*.instructions.md",

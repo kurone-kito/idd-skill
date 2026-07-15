@@ -1271,10 +1271,18 @@ Interpretation rules:
 ### S2 quiet-window evidence
 
 - When helper runtime is enabled, Resume/S2 should call the
-  profile-selected `idd-stalled-session-quiet-check --pr <pr-number>`
-  command first. `node scripts/stalled-session-quiet-check.mjs --pr
-  <pr-number>` is the vendored equivalent.
-- Optional parameters: `--now <ISO8601>`, `--quiet-window-ms <ms>`,
+  profile-selected
+  `idd-stalled-session-quiet-check --pr <pr-number> --now <server-anchored-ISO8601>`
+  command first (see `idd-resume-stall.instructions.md` for how to
+  derive the server-anchored value).
+  `node scripts/stalled-session-quiet-check.mjs --pr <pr-number> --now <server-anchored-ISO8601>`
+  is the vendored equivalent.
+- `--now <ISO8601>` is CLI-optional (the helper falls back to its local
+  clock without it) but Resume/S2 and its S4 re-run always pass it
+  explicitly, per the "server timestamps only" mandate in
+  `idd-resume-stall.instructions.md` — omitting it there reintroduces
+  the executor-local-clock skew gap.
+  Other optional parameters: `--quiet-window-ms <ms>`,
   `--claim-created-at <ISO8601>`, and `--policy <path>`
 - Stable fields consumed by the instructions: `quiet_window_met`,
   `quiet_window_ms`, `window_start`, `now`, `latest_activity`,
