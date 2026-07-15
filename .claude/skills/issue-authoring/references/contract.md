@@ -518,15 +518,21 @@ not have to hold every rule in its head at once while drafting.
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \
+  --marker-prefix <resolved-target-prefix> \
   --body-file <path-to-drafted-body> [--label <label>]...
 ```
 
 Or, for npx/package-manager profiles, the equivalent
 `idd-audit-authored-issue` command. Pass `--stdin` instead of
-`--body-file` when the drafted body is not yet written to disk, and
-`--marker-prefix <prefix>` when the resolved target prefix (see
-[Target marker prefix](#target-marker-prefix)) differs from the local
-`.github/idd/config.json`.
+`--body-file` when the drafted body is not yet written to disk.
+**Always pass `--marker-prefix`** with the prefix resolved under
+[Target marker prefix](#target-marker-prefix): without it, the linter
+falls back to reading `.github/idd/config.json` from the current
+working directory, and if that file is missing or unreadable — for
+example when running from an installed bundle without a local
+checkout of the target repository's config — it silently defaults to
+this source repository's own `idd-skill` prefix, which produces a
+false pass or fail against the wrong prefix instead of an error.
 
 **No helper runtime available (`instructions-only` profile).** The
 linter cannot run without Node.js and the vendored `scripts/`

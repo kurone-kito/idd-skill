@@ -96,7 +96,7 @@ Before you publish a ready issue, confirm:
   while adding more detail would start turning it into a lightweight
   model script
 
-## Mechanical pre-publish check
+## Mechanical pre-publish gate
 
 Before you publish a drafted **ready orphan, roadmap, or child** body
 (the linter does not cover non-ready buckets like `blocked-by-human`),
@@ -108,8 +108,17 @@ malformed dependency marker — that a confident narrative can otherwise
 mask:
 
 ```sh
-node scripts/audit-authored-issue.mjs --shape orphan --body-file draft.md
+node scripts/audit-authored-issue.mjs --shape orphan \
+  --marker-prefix <resolved-target-prefix> --body-file draft.md
 ```
+
+**Always pass `--marker-prefix`** with the prefix resolved under
+[contract.md's Target marker prefix](contract.md#target-marker-prefix):
+without it, the linter falls back to reading
+`.github/idd/config.json` from the current working directory, and
+silently defaults to this source repository's own `idd-skill` prefix
+when that file is missing or unreadable — producing a false pass or
+fail against the wrong prefix instead of an error.
 
 Use `--shape roadmap` or `--shape child` for those shapes, `--stdin`
 instead of `--body-file` when the draft is not yet on disk, and
