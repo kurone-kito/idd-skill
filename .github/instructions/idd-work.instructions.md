@@ -246,10 +246,10 @@ guards are listed in `docs/policy-constants.md`.
 `idd-pr-submit.instructions.md` unless **fix-validate** — the same
 command set C5 runs — has passed against the branch's current diff.
 This floor is independent of D2's own, stronger **pre-push-validate**
-gate; passing it never substitutes for D2's own run. A pass counts
-only if run at the current
-HEAD of this review pass; rerun it after any later commit, including a
-C5 fix commit. Apply this floor **uniformly** on every runtime — never
+gate; it never substitutes for D2's run. **fix-validate** satisfies
+the floor only when it ran at the branch's current HEAD; re-run it
+after every new commit, including a C5 fix commit. Apply this floor
+**uniformly** on every runtime — never
 condition it on self-classifying as "no-subagent" (see
 `docs/idd-workflow.md`'s "Critique pass invocation" section). On a
 no-subagent runtime, where critique degrades to same-response
