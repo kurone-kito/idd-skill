@@ -83,11 +83,18 @@ interpreting `gh pr checks` output.
 4. **Distinguish a permission error from a genuine empty result** on
    each of the three reads above. A `404` on the branch-protection
    endpoint, or an empty ruleset list, means that source genuinely has
-   nothing configured — a real empty result. A `403` / forbidden
-   response on any of these reads means the read itself failed (the
-   token lacks permission to inspect protection or rulesets), not that
-   no required checks exist. Never substitute an empty array/object for
-   a `403` — record it as **unreadable**.
+   nothing configured — a real empty result. For the ruleset-**detail**
+   read (step 2), an empty result never arises from that call itself —
+   step 2 only runs once per ruleset ID already returned by step 1, so a
+   genuinely empty ruleset list in step 1 means step 2 has nothing to
+   iterate over and is skipped entirely, not called with an empty
+   result. A `403` / forbidden response on any of the three reads
+   (including a `403` on an individual ruleset-detail call, e.g. a
+   ruleset ID visible in the step 1 summary but not readable in detail)
+   means the read itself failed (the token lacks permission to inspect
+   protection or rulesets), not that no required checks exist. Never
+   substitute an empty array/object for a `403` — record it as
+   **unreadable**.
 
    If any of the three reads returned `403` / unreadable, **fail
    closed**: do not fall through to step 6 below. Post a hold comment
