@@ -203,7 +203,7 @@ structural audit.
 The pre-merge condition check (`idd-pre-merge.instructions.md`) and the
 merge-time re-verification (`idd-merge.instructions.md`) gate claim
 ownership/freshness, late non-Copilot review currency, non-Copilot
-unresolved threads, disposition-evidence completeness, and unreplied
+unresolved threads, `dispositionEvidence` completeness, and unreplied
 comments through a deterministic readiness helper plus the written
 checklist. None of these dimensions has a dedicated GitHub-side
 required check backing it — unlike the Copilot advisory-convergence
