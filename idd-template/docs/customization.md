@@ -334,9 +334,22 @@ waiver comment does not by itself turn the check green**: a waiver is a
 regular PR comment, which is not one of the workflow's triggers
 (`pull_request` push, `pull_request_review` submission, or
 `pull_request_review_comment` created/edited/deleted on a review
-thread), so after posting a waiver a maintainer must also trigger a new
-run explicitly — the Actions UI "Re-run jobs" button, or
-`workflow_dispatch` — for the required check to actually reflect it.
+thread), so after posting a waiver a maintainer must also **re-run the
+existing** PR-linked check run **for the current HEAD SHA** — the
+Actions UI "Re-run jobs" button, or `gh run rerun <run-id>` — for the
+required check to actually reflect it. `workflow_dispatch` does
+**not** reliably do this:
+a dispatched run has no `pull_request` context of its own, so GitHub
+associates it with the dispatch ref rather than the PR's HEAD SHA, and
+the resulting run's conclusion can be invisible to that PR's
+required-check rollup. See
+[kurone-kito/idd-skill's own dogfooded copy of `.github/workflows/idd-advisory-convergence.yml`](https://github.com/kurone-kito/idd-skill/blob/main/.github/workflows/idd-advisory-convergence.yml)'s
+header comment for the full finding — this deliberately links the
+upstream source repository's copy, not a relative path to your own
+vendored workflow file, because the fuller investigation prose lives
+only in that dogfooded original; the portable stub this template ships
+as your `.github/workflows/idd-advisory-convergence.yml` is
+intentionally shorter and does not carry it.
 
 ## Phase ID Compatibility Contract
 
