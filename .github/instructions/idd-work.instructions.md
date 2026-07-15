@@ -245,11 +245,11 @@ guards are listed in `docs/policy-constants.md`.
 **Objective diff validation floor**: neither C2 nor C4 below may skip to
 `idd-pr-submit.instructions.md` unless **fix-validate** — the same
 command set C5 runs — has passed against the branch's current diff.
-This floor is independent of D2's own, stronger **pre-push-validate**
-gate; it never substitutes for D2's run. **fix-validate** satisfies
-the floor only when it ran at the branch's current HEAD; re-run it
-after every new commit, including a C5 fix commit. Apply this floor
-**uniformly** on every runtime — never
+This floor is independent of D2's own **pre-push-validate** gate and
+never substitutes for it. **fix-validate** satisfies the floor only
+when it ran at the branch's current HEAD; re-run it after every new
+commit, including a C5 fix commit. Apply this floor **uniformly** on
+every runtime — never
 condition it on self-classifying as "no-subagent" (see
 `docs/idd-workflow.md`'s "Critique pass invocation" section). On a
 no-subagent runtime, where critique degrades to same-response
@@ -299,14 +299,13 @@ Otherwise continue to C5.
 
 ### C5 — Fix accepted issues
 
-Fix all Accepted issues and any outstanding floor failures. Run
-**fix-validate**.
+Fix all Accepted issues. Then satisfy the floor: run **fix-validate**
+if it has not yet run (or is stale) at the current HEAD, and fix
+anything it reports.
 
-A floor failure is not a new failure class, whether or not any
-critique issues were Accepted alongside it: fix **fix-validate**'s
-reported failures the same way D2 fixes a failing **pre-push-validate**
-("If lint fails, run fix-validate, commit, then re-run
-pre-push-validate").
+An unmet floor is not a new failure class: run or fix **fix-validate**
+the same way D2 handles a failing **pre-push-validate** ("If lint
+fails, run fix-validate, commit, then re-run pre-push-validate").
 
 Commit fixes atomically.
 

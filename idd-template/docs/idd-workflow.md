@@ -481,9 +481,9 @@ critique pass is same-response self-critique: the model reviews its own
 diff. Treat that self-critique verdict as **advisory only** on such a
 runtime — it is not sufficient by itself to let the C-phase skip to PR
 submission. The C-phase's objective diff validation floor (the
-**fix-validate** command set also run at C5; see
+**fix-validate** command set that C5 also runs; see
 `idd-work.instructions.md` C1/C2/C4) is the **load-bearing** gate
-instead — independent of D2's own, stronger **pre-push-validate** gate.
+instead — independent of D2's own **pre-push-validate** gate.
 This floor applies **uniformly** to every runtime — including
 subagent-capable ones — rather than being conditioned on a runtime
 self-classifying as "no-subagent". Uniform application keeps the gate
