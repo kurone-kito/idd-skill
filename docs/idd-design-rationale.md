@@ -204,10 +204,12 @@ re-filing it.
 F2's pre-merge condition check (`idd-pre-merge.instructions.md`) and
 F3's merge-time re-verification (`idd-merge.instructions.md`) gate
 claim ownership/freshness, late non-Copilot review currency,
-non-Copilot unresolved threads, `dispositionEvidence` completeness,
-and unreplied comments through the `computePreMergeReadinessBlockers`
-helper (`scripts/protocol-helpers.mjs`, surfaced by
-`scripts/pre-merge-readiness.mjs`) plus the written F2/F3 checklist.
+non-Copilot unresolved threads, and `dispositionEvidence` completeness
+through the `computePreMergeReadinessBlockers` helper
+(`scripts/protocol-helpers.mjs`, surfaced by
+`scripts/pre-merge-readiness.mjs`). Unreplied comments are a separate
+case: `unrepliedComments` deliberately does not feed that deterministic
+rollup, so this dimension is gated only by the written F2 checklist.
 None of these dimensions has a dedicated GitHub-side required check
 backing it — unlike the Copilot advisory-convergence dimension that
 `#1341`/`#1342` promoted to a trusted-checkout required check. (A repo
@@ -237,9 +239,10 @@ cannot see a session's live `claim-id`/`agent-id` context the way the
 model-run helper can). A full session-aware required check would also
 fight the deliberate `pull_request`-only CI topology (`#832` dropped
 the redundant `push`-triggered runs, so `lint`/`pnpm-boundary`/
-`idd-doctor` only ever run against the PR head SHA and never
-independently re-check the merge commit that lands on `main`) and
-`#993`'s existing F3 checklist hardening.
+`idd-doctor` only ever run against GitHub's synthetic PR merge-ref
+checkout — not the literal PR head SHA — and never independently
+re-check the actual merge commit that lands on `main`) and `#993`'s
+existing F3 checklist hardening.
 Under `fully_autonomous_merge` this is an **accepted risk**; adopter
 repos on `human_merge` retain a human as the backstop the autonomous
 path lacks, and repos on `separate_merge_agent` substitute a second,

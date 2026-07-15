@@ -191,7 +191,7 @@ with no clean per-HEAD completion signal, and pinging a bot risks waking a
 lenient reviewer mid-merge. The mis-classification and self-attested-
 disposition fail-opens are therefore recorded as an **accepted risk**
 under a fully autonomous merge policy, not a defect — recovered by the
-snapshot net and the recurring sweep, same as kurone-kito/idd-skill#909
+snapshot net and the manual sweep, same as kurone-kito/idd-skill#909
 originally decided. A repository that reaches this same conclusion
 independently should record it here rather than re-litigating it on every
 structural audit.
@@ -203,9 +203,11 @@ structural audit.
 The pre-merge condition check (`idd-pre-merge.instructions.md`) and the
 merge-time re-verification (`idd-merge.instructions.md`) gate claim
 ownership/freshness, late non-Copilot review currency, non-Copilot
-unresolved threads, `dispositionEvidence` completeness, and unreplied
-comments through a deterministic readiness helper plus the written
-checklist. None of these dimensions has a dedicated GitHub-side
+unresolved threads, and `dispositionEvidence` completeness through a
+deterministic readiness helper. Unreplied comments are a separate
+case: that helper's rollup deliberately excludes them, so this
+dimension is gated only by the written checklist. None of these
+dimensions has a dedicated GitHub-side
 required check backing it — unlike the Copilot advisory-convergence
 dimension that can be promoted to a trusted-checkout required check
 (kurone-kito/idd-skill#1341, kurone-kito/idd-skill#1342). (A repository
