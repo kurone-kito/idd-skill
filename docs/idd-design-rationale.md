@@ -177,22 +177,23 @@ forcing a return to E1 when the F2/F3 pre-merge gate detects new
 activity; **post-merge**, the #931 merged-PR unresolved-feedback
 sweep (`scripts/merged-pr-feedback-sweep.mjs`) — a manually-invoked,
 read-only detector whose output an operator feeds into fresh issue
-authoring, not an automatic recovery path — catches a regular comment
-or a `CHANGES_REQUESTED` review body that has **no later** IDD
-disposition anywhere on the PR: `collectUnaddressedComments` compares
-each item's timestamp (a comment's timestamp, or a review's
-`submittedAt`) against a single global `latestDispositionAt` cutoff,
-not a per-item reply check, so an item posted **before** the latest
-disposition counts as "addressed" even if that disposition was for
-something else entirely, while an item posted **after** the latest
-disposition is always surfaced. It does **not** catch a false
-disposition on a **regular comment or review body** (excluded the
-same way, correct or not) or on a review thread that was also
-**resolved** — the protocol's normal
-post-disposition step. A falsely dispositioned thread left
-**unresolved** is still surfaced by `collectUnresolvedThreads`
-(flagged `dispositioned: true` for an operator to notice), since that
-collector filters on resolution state, not disposition correctness.
+authoring, not an automatic recovery path. It surfaces two kinds of
+item: (1) a top-level regular comment or `CHANGES_REQUESTED` review
+body with **no later** IDD disposition anywhere on the PR
+(`collectUnaddressedComments` compares each item's timestamp against
+a single global `latestDispositionAt` cutoff, not a per-item reply
+check, so an item posted before the latest disposition counts as
+"addressed" even when that disposition was for something else
+entirely); and (2) any review thread still **unresolved** at merge
+time, regardless of whether it carries a disposition reply
+(`collectUnresolvedThreads` filters purely on resolution state and
+flags `dispositioned: true`/`false` either way). Symmetrically, the
+sweep has **no backstop** for: a comment or review body with _any_
+later disposition, correct or not; or a review thread that was
+**resolved** — whether with a correct disposition, a false
+disposition, or no disposition reply at all. Resolving a thread
+removes it from `collectUnresolvedThreads` outright, and
+`collectUnaddressedComments` never inspects thread-level replies.
 
 Issue #1352 re-opened the question after #1341/#1342 shipped
 `idd-advisory-convergence` as a trusted-checkout required CI check for
