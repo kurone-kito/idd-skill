@@ -424,6 +424,53 @@ test('dependency-marker-rule fails when an orphan issue carries a blocked-by mar
   assert.equal(findingResult(report, 'dependency-marker-rule'), 'fail');
 });
 
+test('dependency-marker-rule fails when a child blocked-by marker is missing its value', () => {
+  // A blocked-by marker with no `: <roadmap-id>` value looks present to the
+  // author but is invisible to Discover's extractBlockedByRoadmapMarkers,
+  // silently defeating the intended dependency.
+  const body = childBody({ extraMarkers: '<!-- idd-skill-blocked-by -->' });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-marker-rule',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /malformed/);
+});
+
+test('dependency-marker-rule fails when a child blocked-by marker has an empty value', () => {
+  const body = childBody({ extraMarkers: '<!-- idd-skill-blocked-by: -->' });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-marker-rule',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /malformed/);
+});
+
+test('dependency-marker-rule passes when a child blocked-by marker has a real value', () => {
+  const body = childBody({
+    extraMarkers: '<!-- idd-skill-blocked-by: some-roadmap -->',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  assert.equal(findingResult(report, 'dependency-marker-rule'), 'pass');
+});
+
+test('dependency-marker-rule fails when a roadmap blocked-by marker is missing its value', () => {
+  const body = roadmapBody().replace(
+    '## Success criteria',
+    '<!-- idd-skill-blocked-by -->\n\n## Success criteria',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'roadmap' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'dependency-marker-rule',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(
+    finding?.detail ?? '',
+    /blocked-by marker is present but malformed/,
+  );
+});
+
 test('dependency-marker-rule ignores a roadmap-id marker that only appears inside a fenced example', () => {
   // A pasted contract-example snippet showing marker syntax must not make
   // an orphan/child draft look like it carries a real roadmap-id marker.
@@ -584,6 +631,24 @@ test('effort-visible-line-agreement fails on a value-less effort marker instead 
   );
   assert.equal(finding?.result, 'fail');
   assert.doesNotMatch(finding?.detail ?? '', /not applicable/);
+});
+
+test('effort-visible-line-agreement fails when a well-formed marker is accompanied by a valueless one', () => {
+  // A well-formed effort marker plus an extra valueless one must still
+  // fail: parseEffortMarker silently ignores the valueless occurrence and
+  // resolves a coherent value from the good one, so without an explicit
+  // occurrence-count check this could pass by coincidence of which
+  // occurrence lastParagraphBeforeMarker happens to land on.
+  const body = orphanBody({ effort: 'M' }).replace(
+    '<!-- idd-skill-effort: M -->',
+    '<!-- idd-skill-effort: M -->\n\n<!-- idd-skill-effort: -->',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'orphan' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'effort-visible-line-agreement',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /found 2/);
 });
 
 // --- shape / markerPrefix pass-through ---

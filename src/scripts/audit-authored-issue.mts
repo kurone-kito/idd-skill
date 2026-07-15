@@ -23,6 +23,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { AutopilotSuitabilityMarkerDetection } from './autopilot-suitability.mts';
 import { parseAutopilotSuitabilityMarker } from './autopilot-suitability.mts';
+import { extractBlockedByRoadmapMarkers } from './discover-readiness-check.mts';
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mts';
 import type { EffortMarkerDetection } from './effort.mts';
 import { parseEffortMarker } from './effort.mts';
@@ -291,6 +292,17 @@ function checkDependencyMarkerRule(
     markerPrefix,
     'blocked-by',
   );
+  // A blocked-by marker missing its `: <roadmap-id>` value is invisible to
+  // Discover's own extractBlockedByRoadmapMarkers, so a marker that "looks
+  // present" to the author but resolves to no value would silently defeat
+  // the intended dependency. Reuse that same extractor (rather than a
+  // second hand-rolled value-requiring regex) to require at least one
+  // well-formed value whenever a blocked-by marker is present at all,
+  // wherever the shape permits the marker (roadmap, child).
+  const wellFormedBlockedByCount = extractBlockedByRoadmapMarkers(
+    text,
+    markerPrefix,
+  ).length;
 
   if (shape === 'roadmap') {
     if (roadmapIdCount !== 1) {
@@ -309,6 +321,13 @@ function checkDependencyMarkerRule(
         id,
         name,
         'the roadmap-id marker is present but malformed (missing its `: <roadmap-id>` value)',
+      );
+    }
+    if (blockedByCount > 0 && wellFormedBlockedByCount === 0) {
+      return fail(
+        id,
+        name,
+        'a blocked-by marker is present but malformed (missing its `: <roadmap-id>` value)',
       );
     }
     return pass(
@@ -331,6 +350,18 @@ function checkDependencyMarkerRule(
       id,
       name,
       `orphan issues must not carry a blocked-by marker, found ${blockedByCount}`,
+    );
+  }
+
+  if (
+    shape === 'child' &&
+    blockedByCount > 0 &&
+    wellFormedBlockedByCount === 0
+  ) {
+    return fail(
+      id,
+      name,
+      'a blocked-by marker is present but malformed (missing its `: <roadmap-id>` value)',
     );
   }
 
@@ -393,11 +424,26 @@ function checkEffortVisibleLineAgreement(
   // applicable" would let a clearly malformed footer silently pass. Use
   // the loose shape-only count to tell "genuinely absent" (0) apart from
   // "present but valueless/malformed" (>0 but not a coherent value).
+  //
+  // Requiring rawCount === 1 (not just > 0) also closes a second gap: a
+  // body with one well-formed marker plus a second, valueless one would
+  // otherwise still resolve a coherent value (parseEffortMarker's regex
+  // silently ignores the valueless occurrence) and could pass by
+  // coincidence of which occurrence lastParagraphBeforeMarker lands on.
+  // An extra malformed occurrence must fail the check even when a
+  // well-formed one is also present.
   const rawCount = countMarkerOccurrences(text, markerPrefix, 'effort');
-  const effort: EffortMarkerDetection = parseEffortMarker(text, markerPrefix);
   if (rawCount === 0) {
     return pass(id, name, 'not applicable: no effort footer (optional)');
   }
+  if (rawCount > 1) {
+    return fail(
+      id,
+      name,
+      `expected at most one effort marker, found ${rawCount}`,
+    );
+  }
+  const effort: EffortMarkerDetection = parseEffortMarker(text, markerPrefix);
   if (!effort.present || effort.malformed || effort.value === null) {
     return fail(
       id,
