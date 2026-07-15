@@ -246,10 +246,9 @@ guards are listed in `docs/policy-constants.md`.
 `idd-pr-submit.instructions.md` unless **fix-validate** — the same
 command set C5 runs — has passed against the branch's current diff.
 This floor is independent of D2's own **pre-push-validate** gate and
-never substitutes for it. **fix-validate** satisfies the floor only
-when it ran at the branch's current HEAD; re-run it after every new
-commit, including a C5 fix commit. Apply this floor **uniformly** on
-every runtime; do not condition it on self-classifying as
+never substitutes for it. **fix-validate** satisfies the floor only at
+the branch's current HEAD; re-run it after every new commit. Apply
+this floor **uniformly**; do not condition it on self-classifying as
 "no-subagent" (see `docs/idd-workflow.md`'s "Critique pass invocation"
 section). On a no-subagent runtime, where critique degrades to
 same-response self-critique, the critique verdict is **advisory** and
@@ -298,16 +297,16 @@ Otherwise continue to C5.
 
 ### C5 — Fix accepted issues
 
-Fix all Accepted issues. Then satisfy the floor: run **fix-validate**
-if it has not yet run (or is stale) at the current HEAD, and fix
-anything it reports.
+Fix any Accepted issues (there may be none — C5 can be reached solely
+for the floor). Then run **fix-validate** if it has not yet run (or is
+stale) at the current HEAD, and fix anything it reports.
 
 An unmet floor is not a new failure class: run or fix **fix-validate**
 the same way the Project commands table handles a failing
 **pre-push-validate** ("If lint fails, run fix-validate, commit, then
 re-run pre-push-validate").
 
-Commit fixes atomically.
+If anything changed, commit atomically.
 
 ### C6 — Return to C1
 
