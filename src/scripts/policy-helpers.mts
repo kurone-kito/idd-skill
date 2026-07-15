@@ -54,6 +54,7 @@ interface RawConfig {
       authorityPolicy?: unknown;
       maxValidity?: unknown;
     };
+    trustEmptyProtectionReads?: unknown;
   };
   discover?: {
     activeClaimPreScanBatchSize?: unknown;
@@ -172,6 +173,9 @@ export const POLICY_DEFAULTS = Object.freeze({
       authorityPolicy: 'owners-and-maintainers-only',
       maxValidity: 'PT24H',
     }),
+    // #1377: default false fails closed on a masked-403-as-404 branch-
+    // protection/ruleset read instead of trusting it as genuinely empty.
+    trustEmptyProtectionReads: false,
   }),
   discover: Object.freeze({
     activeClaimPreScanBatchSize: 10,
@@ -407,6 +411,7 @@ export function normalizePolicyConfig(config: unknown) {
           POLICY_DEFAULTS.ciGate.externalCheckWaivers.maxValidity,
         ),
       },
+      trustEmptyProtectionReads: c?.ciGate?.trustEmptyProtectionReads === true,
     },
     discover: {
       activeClaimPreScanBatchSize: parsePositiveInteger(

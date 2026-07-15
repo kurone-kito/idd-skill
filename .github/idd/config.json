@@ -42,5 +42,8 @@
   },
   "worktreeGuard": {
     "enabled": true
+  },
+  "ciGate": {
+    "trustEmptyProtectionReads": true
   }
 }

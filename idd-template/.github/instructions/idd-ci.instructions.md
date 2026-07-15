@@ -81,46 +81,60 @@ interpreting `gh pr checks` output.
    ```
 
 4. **Distinguish a permission error from a genuine empty result** on
-   each of the three reads above. A `404` on the branch-protection
-   endpoint, or an empty ruleset list, means that source genuinely has
-   nothing configured — a real empty result. For the ruleset-**detail**
-   read (step 2), an empty result never arises from that call itself —
-   step 2 only runs once per ruleset ID already returned by step 1, so a
-   genuinely empty ruleset list in step 1 means step 2 has nothing to
-   iterate over and is skipped entirely, not called with an empty
-   result. A `403` / forbidden response on any of the three reads
-   (including a `403` on an individual ruleset-detail call, e.g. a
-   ruleset ID visible in the step 1 summary but not readable in detail)
-   means the read itself failed (the token lacks permission to inspect
-   protection or rulesets), not that no required checks exist. Never
-   substitute an empty array/object for a `403` — record it as
-   **unreadable**.
+   each of the three reads above. For the ruleset-**detail** read (step
+   2), an empty result never arises from that call itself — step 2 only
+   runs once per ruleset ID already returned by step 1, so a genuinely
+   empty ruleset list in step 1 means step 2 has nothing to iterate over
+   and is skipped entirely, not called with an empty result. A `403` /
+   forbidden response on any of the three reads (including a `403` on
+   an individual ruleset-detail call, e.g. a ruleset ID visible in the
+   step 1 summary but not readable in detail) means the read itself
+   failed (the token lacks permission to inspect protection or
+   rulesets), not that no required checks exist. Never substitute an
+   empty array/object for a `403` — record it as **unreadable**.
 
-   **A `404` deserves the same scrutiny when the caller's permission
-   level is not independently known.** Some GitHub REST endpoints
-   substitute `404` for `403` on a private resource specifically to
-   avoid revealing its existence to an unauthorized caller. The reads
-   above are documented to return a dedicated `403` for an
-   authenticated caller with insufficient permission — the
-   branch-protection endpoint requires repository admin access, and its
-   own reference distinguishes `403` (forbidden) from `404` (branch not
-   protected) — so this file trusts `404` as genuine on that basis, and
-   there is no fully reliable mechanical check available that cannot
-   itself be spoofed to confirm that assumption for every caller (an
-   actor's collaborator role is not proof the caller's own token
-   carries the scope the endpoint requires).
-   When there is other reason to doubt it, treat an unexpected `404` on
-   the branch-protection or ruleset reads **exactly like a `403`**:
-   apply the same fail-closed hold immediately below, do not fall
-   through to step 6.
+   **A `404` on any of the three reads gets the same treatment by
+   default.** None of these endpoints documents `403` as a possible
+   response at all: the branch-protection reference lists only
+   `200`/`404`
+   (<https://docs.github.com/en/rest/branches/branch-protection#get-branch-protection>),
+   and the ruleset-list and ruleset-detail references list only
+   `200`/`404`/`500`
+   (<https://docs.github.com/en/rest/repos/rules#get-all-repository-rulesets>,
+   <https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset>).
+   GitHub's own REST troubleshooting guide documents this as general
+   API behavior: a `404` on a private resource substitutes for `403` to
+   avoid confirming the resource's existence, and insufficient token
+   scope is a listed cause of a `404` on a resource that actually
+   exists
+   (<https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api#404-not-found-for-an-existing-resource>).
+   Because these endpoints never document `403`, a `404` on any of them
+   is _structurally_ ambiguous between "genuinely nothing configured"
+   and "the token cannot read this" — the response body cannot resolve
+   that ambiguity, and an actor's collaborator role cannot either
+   (role is not proof the caller's own token carries the scope the
+   endpoint requires).
 
-   If any of the three reads is **unreadable** (a confirmed `403`, or a
-   suspicious `404` per above), **fail closed**: do not fall through to
-   step 6 below. Post a hold comment stating "cannot determine required
-   checks: protection/ruleset unreadable" and stop. This is distinct
-   from the genuine `noRequiredChecksConfigured` case in step 6, which
-   requires every read to have returned a genuine, trusted result
-   (`200`, or a genuinely empty `404`), never an unreadable one.
+   **Fail-closed default**: treat every `404` on these reads **exactly
+   like a `403`** — record it as **unreadable**, apply the same
+   fail-closed hold immediately below, do not fall through to step 6. A
+   repository may opt out and restore the pre-`#1377` trusting behavior
+   (a `404` on these reads is genuinely empty) by recording
+   `ciGate.trustEmptyProtectionReads: true` in `.github/idd/config.json`
+   — a git-committed, human-authorized policy decision that requires
+   the same repository-write access as any other policy edit, not a
+   runtime check of the caller's role or token scope that a
+   narrower-scoped token could spoof. Absent or `false` keeps the
+   fail-closed default.
+
+   If any of the three reads is **unreadable** (a confirmed `403`, or
+   an untrusted `404` per above), **fail closed**: do not fall through
+   to step 6 below. Post a hold comment stating "cannot determine
+   required checks: protection/ruleset unreadable" and stop. This is
+   distinct from the genuine `noRequiredChecksConfigured` case in step
+   6, which requires every read to have returned a genuine, trusted
+   result — a `200`, or a `404` trusted under
+   `ciGate.trustEmptyProtectionReads` — never an unreadable one.
 
 5. Build the required-check set as the union of enforcing-ruleset checks
    and branch-protection checks, using only the genuine (readable, not

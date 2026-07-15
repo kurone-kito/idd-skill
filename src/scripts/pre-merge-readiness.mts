@@ -293,19 +293,28 @@ export function collectPreMergeReadiness(
     ],
     { allowStatuses: [1, 8] },
   ) as CheckPayload[];
-  const branchRules = ghApiJson(
+  const trustEmptyProtectionReads = readTrustEmptyProtectionReads();
+  const branchRulesRead = fetchGovernanceJson<BranchRulePayload[]>(
     `repos/${owner}/${repo}/rules/branches/${encodedBaseRefName}`,
     true,
+    trustEmptyProtectionReads,
     [],
-    { allowHttpStatuses: [404] },
-  ) as BranchRulePayload[];
+  );
+  const branchRules = branchRulesRead.value;
   const branchRulesets = fetchBranchRulesets(owner, repo, branchRules);
-  const branchProtection = ghApiJson(
+  const branchProtectionRead = fetchGovernanceJson<BranchProtectionPayload>(
     `repos/${owner}/${repo}/branches/${encodedBaseRefName}/protection`,
     false,
-    [],
-    { allowHttpStatuses: [404] },
-  ) as BranchProtectionPayload;
+    trustEmptyProtectionReads,
+    {},
+  );
+  const branchProtection = branchProtectionRead.value;
+  // #1377: a masked-403-as-404 on either read means the required-check set
+  // this call collected cannot be trusted as complete, so the F2/F3 CI gate
+  // must not fall through to `noRequiredChecksConfigured` on it (see
+  // `summarizeRequiredChecks` in protocol-helpers.mts).
+  const protectionReadsUnreadable =
+    branchRulesRead.unreadable || branchProtectionRead.unreadable;
   const reviews = ghApiJson(
     `repos/${owner}/${repo}/pulls/${args.prNumber}/reviews`,
     true,
@@ -405,6 +414,7 @@ export function collectPreMergeReadiness(
       branchRules,
       branchRulesets,
       branchProtection,
+      protectionReadsUnreadable,
       requestedReviewers: requestedReviewers.users ?? [],
       timelineEvents,
       claimEvents: claimComments.map(normalizeClaimComment),
@@ -1155,4 +1165,68 @@ function readExternalCheckWaiverMaxValidity(): string {
 function readClaimStaleAgeMs(): number {
   const staleAge = normalizePolicyConfig(loadIddConfig()).claimTiming.staleAge;
   return parseIsoDurationToMs(staleAge) ?? DEFAULT_STALE_AGE_MS;
+}
+
+// Configured governance-read trust opt-in (`ciGate.trustEmptyProtectionReads`,
+// #1377). Reuses the shared `loadIddConfig` loader (already imported by this
+// file); an absent, unreadable, or unparseable config fails safe to the
+// `false` default via `normalizePolicyConfig(null)`, matching
+// `readClaimStaleAgeMs`'s pattern above.
+function readTrustEmptyProtectionReads(): boolean {
+  return (
+    normalizePolicyConfig(loadIddConfig()).ciGate.trustEmptyProtectionReads ===
+    true
+  );
+}
+
+/** Result of a governance-read fetch that discriminates a masked 404. */
+interface GovernanceReadResult<T> {
+  value: T;
+  /**
+   * `true` only when the read threw a `404` and the repository has not
+   * opted in to trusting it as genuinely empty (`trustEmptyReads`).
+   */
+  unreadable: boolean;
+}
+
+/**
+ * Fetch a branch-governance read that GitHub's documented status-code
+ * contracts never pair with `403` — `branches/{branch}/protection`
+ * documents only `200`/`404`, and `rules/branches/{branch}` can also
+ * surface a permission failure as `404` per GitHub's REST troubleshooting
+ * guide (see `idd-ci.instructions.md`'s Required-check discovery step 4
+ * for the citations `#1377` gathered). Because the response body cannot
+ * distinguish "genuinely nothing configured" from "the token cannot read
+ * this," a `404` here is **unreadable** by default: the caller still gets
+ * a valid empty shape (`emptyValue`) to keep working with, but
+ * `unreadable` is set so the CI gate can fail closed instead of silently
+ * accepting a vacuous "no required checks" result. `trustEmptyReads`
+ * (from `ciGate.trustEmptyProtectionReads`) restores the pre-`#1377`
+ * trusting behavior for a repository whose operator has git-committed
+ * that its automation token is known to carry full read access to these
+ * endpoints — an explicit, auditable policy decision, not a runtime
+ * signal a narrower-scoped token could spoof. Any other thrown status
+ * (`403`, `500`, a transient failure, …) still re-throws unchanged,
+ * preserving `#1363`'s existing fail-closed behavior for an explicit
+ * permission error.
+ *
+ * `fetchJson` is injectable for tests (mirrors `fetchBranchRulesets`'s
+ * `fetchRulesetDetail` parameter); production uses the default `gh api` call.
+ */
+export function fetchGovernanceJson<T>(
+  path: string,
+  paginate: boolean,
+  trustEmptyReads: boolean,
+  emptyValue: T,
+  fetchJson: (path: string, paginate: boolean) => unknown = (p, pg) =>
+    ghApiJson(p, pg, []),
+): GovernanceReadResult<T> {
+  try {
+    return { value: fetchJson(path, paginate) as T, unreadable: false };
+  } catch (error) {
+    if (deriveGhHttpStatus(error) === 404) {
+      return { value: emptyValue, unreadable: !trustEmptyReads };
+    }
+    throw error;
+  }
 }

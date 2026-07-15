@@ -500,6 +500,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         authorityPolicy: 'owners-and-maintainers-only',
         maxValidity: 'PT24H',
       },
+      trustEmptyProtectionReads: false,
     },
     discover: {
       activeClaimPreScanBatchSize: 10,
@@ -584,6 +585,7 @@ test('policy normalization provides default-safe values and supports aliases', (
           authorityPolicy: 'all-write-permission-actors',
           maxValidity: 'PT12H',
         },
+        trustEmptyProtectionReads: true,
       },
       discover: {
         activeClaimPreScanBatchSize: 11,
@@ -656,6 +658,7 @@ test('policy normalization provides default-safe values and supports aliases', (
           authorityPolicy: 'all-write-permission-actors',
           maxValidity: 'PT12H',
         },
+        trustEmptyProtectionReads: true,
       },
       discover: {
         activeClaimPreScanBatchSize: 11,
@@ -769,6 +772,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         authorityPolicy: 'owners-and-maintainers-only',
         maxValidity: 'PT24H',
       },
+      trustEmptyProtectionReads: false,
     },
   );
 
@@ -786,6 +790,21 @@ test('policy normalization provides default-safe values and supports aliases', (
       advisory: [],
       waivable: [],
     },
+  );
+
+  // #1377: a non-boolean value fails closed to `false` (the safe default),
+  // matching every other `=== true` boolean field in this normalizer.
+  assert.equal(
+    normalizePolicyConfig({
+      ciGate: { trustEmptyProtectionReads: 'true' },
+    }).ciGate.trustEmptyProtectionReads,
+    false,
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      ciGate: { trustEmptyProtectionReads: true },
+    }).ciGate.trustEmptyProtectionReads,
+    true,
   );
 });
 
