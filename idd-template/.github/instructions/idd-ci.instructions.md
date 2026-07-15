@@ -80,15 +80,59 @@ interpreting `gh pr checks` output.
    gh api repos/{owner}/{repo}/branches/{url-encoded-base-branch}/protection
    ```
 
-4. Build the required-check set as the union of enforcing-ruleset checks
-   and branch-protection checks. Keep expected check source metadata
+4. **Distinguish a permission error from a genuine empty result** on
+   each of the three reads above. A `404` on the branch-protection
+   endpoint, or an empty ruleset list, means that source genuinely has
+   nothing configured — a real empty result. For the ruleset-**detail**
+   read (step 2), an empty result never arises from that call itself —
+   step 2 only runs once per ruleset ID already returned by step 1, so a
+   genuinely empty ruleset list in step 1 means step 2 has nothing to
+   iterate over and is skipped entirely, not called with an empty
+   result. A `403` / forbidden response on any of the three reads
+   (including a `403` on an individual ruleset-detail call, e.g. a
+   ruleset ID visible in the step 1 summary but not readable in detail)
+   means the read itself failed (the token lacks permission to inspect
+   protection or rulesets), not that no required checks exist. Never
+   substitute an empty array/object for a `403` — record it as
+   **unreadable**.
+
+   **A `404` deserves the same scrutiny when the caller's permission
+   level is not independently known.** Some GitHub REST endpoints
+   substitute `404` for `403` on a private resource specifically to
+   avoid revealing its existence to an unauthorized caller. The reads
+   above are documented to return a dedicated `403` for an
+   authenticated caller with insufficient permission — the
+   branch-protection endpoint requires repository admin access, and its
+   own reference distinguishes `403` (forbidden) from `404` (branch not
+   protected) — so this file trusts `404` as genuine on that basis, and
+   there is no fully reliable mechanical check available that cannot
+   itself be spoofed to confirm that assumption for every caller (an
+   actor's collaborator role is not proof the caller's own token
+   carries the scope the endpoint requires).
+   When there is other reason to doubt it, treat an unexpected `404` on
+   the branch-protection or ruleset reads **exactly like a `403`**:
+   apply the same fail-closed hold immediately below, do not fall
+   through to step 6.
+
+   If any of the three reads is **unreadable** (a confirmed `403`, or a
+   suspicious `404` per above), **fail closed**: do not fall through to
+   step 6 below. Post a hold comment stating "cannot determine required
+   checks: protection/ruleset unreadable" and stop. This is distinct
+   from the genuine `noRequiredChecksConfigured` case in step 6, which
+   requires every read to have returned a genuine, trusted result
+   (`200`, or a genuinely empty `404`), never an unreadable one.
+
+5. Build the required-check set as the union of enforcing-ruleset checks
+   and branch-protection checks, using only the genuine (readable, not
+   unreadable) results from step 4. Keep expected check source metadata
    (GitHub App/integration) when configured.
 
-5. If neither source yields a required-check set, this is **not**
-   automatically a hold — it is the same `noRequiredChecksConfigured:
-   true` state `idd-pre-merge.instructions.md` F2's CI gate already
-   interprets. When `pre-merge-readiness` output is available, reuse
-   its `ci.presentRunConclusion` value directly. Otherwise, derive the
+6. If neither source yields a required-check set — and step 4 found no
+   unreadable result on any of the reads — this is **not** automatically a
+   hold — it is the same `noRequiredChecksConfigured: true` state
+   `idd-pre-merge.instructions.md` F2's CI gate already interprets. When
+   `pre-merge-readiness` output is available, reuse its
+   `ci.presentRunConclusion` value directly. Otherwise, derive the
    equivalent from the current PR head SHA's actual runs: `all-passing`
    (every present run completed green) may proceed; `pending` → wait
    per the polling algorithm below, then re-check; `some-failing`, or
