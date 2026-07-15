@@ -27,6 +27,10 @@ manifest has these main responsibilities:
   the mirrored side fails too unless the set opts in with
   `allowExtraTargets: true`; `requiredBasenames` can additionally pin
   specific basenames that must always be present on the mirrored side.
+  Basename matching requires **unique basenames on each side**: if a
+  recursive glob ever matches two files with the same name in different
+  directories, the audit fails closed with an "ambiguous basename"
+  error rather than silently keeping only one of them.
 - The root Markdown allowlist names the only `*.md` files that may live
   at the repository root; anything else fails the audit with a hint to
   record session evidence in issue comments instead.
