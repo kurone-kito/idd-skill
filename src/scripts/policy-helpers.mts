@@ -111,7 +111,11 @@ const LEGACY_ADVISORY_CAP_ROUTE_ALIASES = new Map([
   ['phase-default', 'phase-specific'],
   ['strict-hold', 'hold'],
 ]);
-const CI_RERUN_POLICIES = new Set(['rerun-once']);
+// Matches the schema enum and ci-wait-policy.mts's own RERUN_POLICIES set
+// (both accept `hold`); this set previously omitted it, silently
+// downgrading a configured `hold` to `rerun-once` for any future consumer
+// of normalizePolicyConfig(...).ciWait (see #1359).
+const CI_RERUN_POLICIES = new Set(['rerun-once', 'hold']);
 const LABEL_FRESHNESS_MODES = new Set(['presence-only', 'event-freshness']);
 const ISO_DURATION_RE =
   /^P(?=\d|T\d)(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$/;

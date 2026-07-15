@@ -181,7 +181,11 @@ test('readCiWaitPolicy reads nested ciWait config and CLI emits the same resolut
   });
 });
 
-test('readCiWaitPolicy falls back when the policy config is schema-invalid', (t) => {
+test('readCiWaitPolicy still honors ciWait when an unrelated top-level field is schema-invalid', (t) => {
+  // #1359 regression: an unknown top-level key like `unsupportedTopLevelKey`
+  // trips `additionalProperties: false` at the whole-document level, but
+  // must not zero out an otherwise schema-valid ciWait section — validation
+  // is scoped to ciWait's own subtree.
   const sandbox = mkdtempSync(join(tmpdir(), 'idd-ci-wait-policy-invalid-'));
   t.after(() => rmSync(sandbox, { recursive: true, force: true }));
 
@@ -213,6 +217,56 @@ test('readCiWaitPolicy falls back when the policy config is schema-invalid', (t)
           rerunPolicy: 'hold',
         },
         unsupportedTopLevelKey: true,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  assert.deepEqual(readCiWaitPolicy(configPath), {
+    runningTimeout: 'PT40M',
+    runningTimeoutMs: 40 * 60 * 1000,
+    generationTimeout: 'PT15M',
+    generationTimeoutMs: 15 * 60 * 1000,
+    rerunPolicy: 'hold',
+  });
+});
+
+test('readCiWaitPolicy falls back to defaults when its own ciWait section is schema-invalid', (t) => {
+  const sandbox = mkdtempSync(
+    join(tmpdir(), 'idd-ci-wait-policy-own-invalid-'),
+  );
+  t.after(() => rmSync(sandbox, { recursive: true, force: true }));
+
+  const configPath = join(sandbox, '.github', 'idd', 'config.json');
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(
+    configPath,
+    `${JSON.stringify(
+      {
+        iddVersion: '0.1.0',
+        markerPrefix: 'idd-skill',
+        mergePolicy: 'fully_autonomous_merge',
+        reviewPolicy: 'copilot-advisory',
+        threadResolutionPolicy: 'fast-agent-resolve',
+        claimTiming: {
+          staleAge: 'PT24H',
+          heartbeatInterval: 'PT12H',
+        },
+        trustedMarkerActors: ['kurone-kito'],
+        commands: {
+          'install-deps': 'true',
+          'fix-validate': 'true',
+          'pre-push-validate': 'true',
+          'post-fix-validate': 'true',
+        },
+        // Not in the ciWait.rerunPolicy schema enum (rerun-once | hold):
+        // the ciWait subtree is itself invalid, so this still reverts.
+        ciWait: {
+          runningTimeout: 'PT40M',
+          generationTimeout: 'PT15M',
+          rerunPolicy: 'rerun-forever',
+        },
       },
       null,
       2,
