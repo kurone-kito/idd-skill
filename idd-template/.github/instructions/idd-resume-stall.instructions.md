@@ -53,7 +53,7 @@ differ across GNU/BSD/Windows executors):
 
 ```bash
 SERVER_NOW=$(gh api repos/<owner>/<repo>/issues/<number> --include \
-  | grep -i '^date:' | sed -E 's/^[Dd]ate: *//' | tr -d '\r')
+  | grep -i '^date:' | head -1 | sed -E 's/^[Dd]ate: *//' | tr -d '\r')
 node -e "console.log(new Date(process.argv[1]).toISOString().replace(/\.\d{3}Z$/, 'Z'))" \
   "$SERVER_NOW"
 ```
@@ -61,7 +61,13 @@ node -e "console.log(new Date(process.argv[1]).toISOString().replace(/\.\d{3}Z$/
 The `sed` step strips the `Date:` header label so only the RFC 7231
 timestamp value (e.g. `Wed, 15 Jul 2026 03:42:53 GMT`) reaches the
 `node` conversion; passing the labeled line as-is may happen to parse in
-some `Date` implementations but is not a guaranteed contract.
+some `Date` implementations but is not a guaranteed contract. The
+`head -1` step matters when the reused call was **paginated**
+(`--paginate`): `--include` then emits one `Date` header per page
+response, and without `head -1` the multi-line result breaks the `node`
+conversion (an invalid `Date`), leaving S2/S4 unable to derive `--now`.
+A single page's `Date` value is accurate enough for a 30-minute window
+regardless of how many pages the overall call fetched.
 
 Pass the resulting value as `--now` to `idd-stalled-session-quiet-check`
 in S2 and again (freshly re-derived, not reused) in S4. **Hand-computing
