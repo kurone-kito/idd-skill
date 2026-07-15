@@ -40,7 +40,7 @@ terms literally.
 - **File naming**: lowercase with hyphens unless a platform
   convention requires otherwise
 - **Helper sources**: the helper migration to TypeScript is complete —
-  every committed `scripts/*.mjs` / `bin/*.mjs` is generated from a
+  every `scripts/*.mjs` / `bin/*.mjs` is generated from a
   `src/**/*.mts` source by `pnpm run build` and committed; no
   hand-written helper `.mjs` path remains. `.mts` is the source of
   truth — edit the `.mts`, never the generated `.mjs`.

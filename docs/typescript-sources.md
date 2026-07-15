@@ -1,6 +1,6 @@
 # TypeScript helper sources
 
-The IDD helper migration to TypeScript is **complete**: every committed
+The IDD helper migration to TypeScript is **complete**: every
 `scripts/*.mjs` / `bin/*.mjs` artifact is generated from a `src/**/*.mts`
 source by `pnpm run build`, and `src/**/*.mts` is the only hand-edited
 JavaScript surface in the helper bundle. No hand-written helper `.mjs`
