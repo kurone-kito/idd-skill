@@ -144,7 +144,7 @@ export function auditAuthoredIssue(
     checkMarkerPrefixConsistency(text, markerPrefix),
     checkRequiredHeadings(text, shape),
     checkDependencyMarkerRule(text, markerPrefix, shape),
-    checkSuitabilityVisibleLineAgreement(text, suitability),
+    checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
     checkEffortVisibleLineAgreement(text, markerPrefix),
   ];
 
@@ -307,6 +307,7 @@ function checkDependencyMarkerRule(
 
 function checkSuitabilityVisibleLineAgreement(
   text: string,
+  markerPrefix: string,
   suitability: AutopilotSuitabilityMarkerDetection,
 ): AuditFinding {
   const id = 'suitability-visible-line-agreement';
@@ -319,12 +320,17 @@ function checkSuitabilityVisibleLineAgreement(
       'not applicable: no coherent suitability marker value',
     );
   }
-  const match = /_Autopilot suitability:\s*([0-9]+)\s*\/\s*5/.exec(text);
+  const scope = lastParagraphBeforeMarker(
+    text,
+    markerPrefix,
+    'autopilot-suitability',
+  );
+  const match = /_Autopilot suitability:\s*([0-9]+)\s*\/\s*5/.exec(scope);
   if (!match) {
     return fail(
       id,
       name,
-      `missing or unparsable visible autopilot-suitability line for marker value ${suitability.value}`,
+      `missing or unparsable visible autopilot-suitability line immediately preceding the marker (value ${suitability.value})`,
     );
   }
   const visibleValue = Number.parseInt(match[1], 10);
@@ -359,12 +365,13 @@ function checkEffortVisibleLineAgreement(
       'effort marker is present but its value is not a single coherent S/M/L hint',
     );
   }
-  const match = /_Effort:\s*([A-Za-z]+)/.exec(text);
+  const scope = lastParagraphBeforeMarker(text, markerPrefix, 'effort');
+  const match = /_Effort:\s*([A-Za-z]+)/.exec(scope);
   if (!match) {
     return fail(
       id,
       name,
-      `missing or unparsable visible effort line for marker value ${effort.value}`,
+      `missing or unparsable visible effort line immediately preceding the marker (value ${effort.value})`,
     );
   }
   const visibleValue = match[1].toUpperCase();
@@ -392,17 +399,62 @@ function countMarkerOccurrences(
   return [...text.matchAll(global)].length;
 }
 
+/**
+ * The text of the last paragraph (block separated by a blank line) that
+ * appears before the LAST occurrence of the `{markerPrefix}-{suffix}`
+ * marker in `text`. Used to scope the visible-line/hidden-marker
+ * agreement checks to the footer's own paragraph, per the contract's
+ * "visible line + hidden marker, paired as one footer" shape — so a
+ * visible-line-shaped string elsewhere in the body (e.g. inside a pasted
+ * template/example snippet) cannot satisfy the check for a footer whose
+ * real visible line is missing or different. Returns '' when the marker
+ * is not found.
+ */
+function lastParagraphBeforeMarker(
+  text: string,
+  markerPrefix: string,
+  suffix: string,
+): string {
+  const base = createMarkerRegex(markerPrefix, suffix);
+  const global = new RegExp(base.source, `${base.flags}g`);
+  let lastIndex = -1;
+  for (const match of text.matchAll(global)) {
+    lastIndex = match.index;
+  }
+  if (lastIndex < 0) {
+    return '';
+  }
+  // Trim trailing whitespace first: `before` ends exactly at the blank-line
+  // separator that precedes the marker, so an untrimmed split would yield
+  // an empty trailing paragraph instead of the visible-line paragraph.
+  const before = text.slice(0, lastIndex).replace(/\s+$/, '');
+  const paragraphs = before.split(/\n\s*\n/);
+  return paragraphs.at(-1) ?? '';
+}
+
 function extractHeadings(text: string): Set<string> {
   const headings = new Set<string>();
   // Skip lines inside fenced code blocks (``` or ~~~) so a heading-shaped
   // line that only appears inside a pasted template/example snippet does
   // not count as a genuine section heading and mask a truly missing one.
+  // Track both the fence character and its length: per CommonMark, an
+  // inner fence-shaped line only closes the block when it uses the same
+  // character AND is at least as long as the opening fence (a 4+ backtick
+  // block can safely contain a literal ``` line).
   let fenceChar: string | null = null;
+  let fenceLength = 0;
   for (const line of text.split(/\r?\n/)) {
     const fenceMatch = /^(`{3,}|~{3,})/.exec(line.trim());
     if (fenceMatch) {
-      const char = fenceMatch[1][0];
-      fenceChar = fenceChar === char ? null : (fenceChar ?? char);
+      const marker = fenceMatch[1];
+      const char = marker[0];
+      if (fenceChar === null) {
+        fenceChar = char;
+        fenceLength = marker.length;
+      } else if (char === fenceChar && marker.length >= fenceLength) {
+        fenceChar = null;
+        fenceLength = 0;
+      }
       continue;
     }
     if (fenceChar !== null) {

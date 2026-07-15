@@ -296,6 +296,33 @@ test('required-headings still finds a heading that appears after a closed fence'
   assert.equal(findingResult(report, 'required-headings'), 'pass');
 });
 
+test('required-headings does not let a literal ``` line inside a 4-backtick fence close it early', () => {
+  // Per CommonMark, a closing fence must be at least as long as the
+  // opening one, so a 4-backtick block may safely contain a 3-backtick
+  // line as literal content. A length-blind fence tracker would treat
+  // that inner ``` as a close and then read "## Proposed change" below
+  // it as a real heading, even though it is still inside the fence.
+  const body = [
+    '## Background',
+    '',
+    '````markdown',
+    '```',
+    '## Proposed change',
+    '```',
+    '````',
+    '',
+    '## Acceptance criteria',
+    '',
+    suitabilityFooter(4),
+  ].join('\n');
+  const report = auditAuthoredIssue(body, { shape: 'orphan' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'required-headings',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /Proposed change/);
+});
+
 // --- dependency-marker-rule ---
 
 test('dependency-marker-rule fails when a child issue carries a roadmap-id marker', () => {
@@ -354,6 +381,29 @@ test('suitability-visible-line-agreement passes when the visible line agrees', (
   );
 });
 
+test('suitability-visible-line-agreement is not satisfied by a stray line elsewhere in the body', () => {
+  // A visible-line-shaped string earlier in the body (e.g. a pasted
+  // example/template) must not satisfy the check for a footer whose own
+  // real visible line, immediately before the marker, is missing.
+  const body = [
+    'Example footer for reference:',
+    '',
+    '_Autopilot suitability: 2 / 5 -- higher is more autopilot-suitable;',
+    'below the configured floor is human-oriented._',
+    '',
+    orphanBody({ includeEffort: false }).replace(
+      '_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;\nbelow the configured floor is human-oriented._\n\n',
+      '',
+    ),
+  ].join('\n');
+  const report = auditAuthoredIssue(body, { shape: 'orphan' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'suitability-visible-line-agreement',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /missing or unparsable/);
+});
+
 // --- effort-visible-line-agreement ---
 
 test('effort-visible-line-agreement is not applicable when no effort footer is present', () => {
@@ -374,6 +424,26 @@ test('effort-visible-line-agreement passes when the visible line agrees', () => 
     shape: 'orphan',
   });
   assert.equal(findingResult(report, 'effort-visible-line-agreement'), 'pass');
+});
+
+test('effort-visible-line-agreement is not satisfied by a stray line elsewhere in the body', () => {
+  const body = [
+    'Example footer for reference:',
+    '',
+    '_Effort: S -- author-estimated size; a soft autopilot',
+    'selection tie-breaker only._',
+    '',
+    orphanBody({ effort: 'M' }).replace(
+      '_Effort: M -- author-estimated size; a soft autopilot\nselection tie-breaker only._\n\n',
+      '',
+    ),
+  ].join('\n');
+  const report = auditAuthoredIssue(body, { shape: 'orphan' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'effort-visible-line-agreement',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /missing or unparsable/);
 });
 
 // --- shape / markerPrefix pass-through ---
