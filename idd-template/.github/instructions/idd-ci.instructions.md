@@ -104,11 +104,13 @@ interpreting `gh pr checks` output.
    authenticated caller with insufficient permission — the
    branch-protection endpoint requires repository admin access, and its
    own reference distinguishes `403` (forbidden) from `404` (branch not
-   protected) — so this file trusts `404` as genuine on that basis. When
-   the acting token's admin-level access to this repository has **not**
-   been independently confirmed (for example, via `GET
-   /repos/{owner}/{repo}/collaborators/{username}/permission`, which
-   only needs read access to call), treat an unexpected `404` on either
+   protected) — so this file trusts `404` as genuine on that basis.
+   There is no reliable low-privilege mechanical check to confirm this
+   independently — a permission-lookup call that itself requires
+   elevated access cannot help a least-privilege caller disambiguate.
+   When there is other reason to suspect the acting token lacks
+   admin-level repository access (for example, another admin-gated read
+   on this repository has already failed), treat an unexpected `404` on
    the branch-protection or ruleset reads with the same suspicion as a
    `403` rather than trusting it outright.
 
