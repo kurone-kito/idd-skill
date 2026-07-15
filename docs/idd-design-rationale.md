@@ -184,16 +184,20 @@ body with **no later** IDD disposition anywhere on the PR
 a single global `latestDispositionAt` cutoff, not a per-item reply
 check, so an item posted before the latest disposition counts as
 "addressed" even when that disposition was for something else
-entirely); and (2) any review thread still **unresolved** at merge
-time, regardless of whether it carries a disposition reply
-(`collectUnresolvedThreads` filters purely on resolution state and
-flags `dispositioned: true`/`false` either way). Symmetrically, the
-sweep has **no backstop** for: a comment or review body with _any_
-later disposition, correct or not; or a review thread that was
-**resolved** — whether with a correct disposition, a false
-disposition, or no disposition reply at all. Resolving a thread
-removes it from `collectUnresolvedThreads` outright, and
-`collectUnaddressedComments` never inspects thread-level replies.
+entirely, including a disposition reply found inside a review thread —
+the global cutoff folds those in even though `collectUnaddressedComments`'s
+own output only ever lists top-level comments and review bodies, never
+thread items); and (2) any review thread still **unresolved** at merge
+time and not opened by an IDD agent itself, regardless of whether it
+carries a disposition reply (`collectUnresolvedThreads` filters on
+resolution state and origin-comment author, flagging
+`dispositioned: true`/`false` either way). Symmetrically, the sweep
+has **no backstop** for: a comment or review body with _any_ later
+disposition, correct or not; a thread an IDD agent itself opened; or a
+review thread that was **resolved** — whether with a correct
+disposition, a false disposition, or no disposition reply at all.
+Resolving a thread removes it from `collectUnresolvedThreads`
+outright.
 
 Issue #1352 re-opened the question after #1341/#1342 shipped
 `idd-advisory-convergence` as a trusted-checkout required CI check for
@@ -230,9 +234,11 @@ F2's pre-merge condition check (`idd-pre-merge.instructions.md`) and
 F3's merge-time re-verification (`idd-merge.instructions.md`) gate
 claim ownership/freshness, late non-Copilot review currency,
 non-Copilot unresolved threads, and `dispositionEvidence` completeness
-through the `computePreMergeReadinessBlockers` helper
-(`scripts/protocol-helpers.mjs`, surfaced by
-`scripts/pre-merge-readiness.mjs`). Unreplied comments are a separate
+through the `computePreMergeReadinessBlockers` rollup
+(`scripts/protocol-helpers.mjs`) — called directly by
+`scripts/idd-merge-execute.mjs`, and reproduced in the same
+`{ ready, blockers }` shape by `scripts/pre-merge-readiness.mjs`'s
+`buildPreMergeReadinessSummary`. Unreplied comments are a separate
 case: `unrepliedComments` deliberately does not feed that deterministic
 rollup, so this dimension is gated only by the written F2 checklist.
 None of these dimensions has a dedicated GitHub-side required check

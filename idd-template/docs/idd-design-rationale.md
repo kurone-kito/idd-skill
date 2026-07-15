@@ -184,16 +184,19 @@ anywhere on the PR (its collectors compare each item's timestamp
 against a single global disposition cutoff, not a per-item reply
 check, so an item posted before the latest disposition counts as
 "addressed" even when that disposition was for something else
-entirely); and (2) any review thread still **unresolved** at merge
-time, regardless of whether it carries a disposition reply (that
-collector filters purely on resolution state and flags
+entirely, including a disposition reply found inside a review thread —
+the global cutoff folds those in even though this collector's own
+output only ever lists top-level comments and review bodies, never
+thread items); and (2) any review thread still **unresolved** at
+merge time and not opened by an IDD agent itself, regardless of
+whether it carries a disposition reply (that collector filters on
+resolution state and origin-comment author, flagging
 `dispositioned: true`/`false` either way). Symmetrically, the sweep
 has **no backstop** for: a comment or review body with _any_ later
-disposition, correct or not; or a review thread that was
-**resolved** — whether with a correct disposition, a false
-disposition, or no disposition reply at all. Resolving a thread
-removes it from consideration outright, and the comment/review-body
-collector never inspects thread-level replies.
+disposition, correct or not; a thread an IDD agent itself opened; or
+a review thread that was **resolved** — whether with a correct
+disposition, a false disposition, or no disposition reply at all.
+Resolving a thread removes it from consideration outright.
 
 kurone-kito/idd-skill#1352 re-opened the question after a required-check
 promotion shipped for the Copilot dimension, and after a weak-model
