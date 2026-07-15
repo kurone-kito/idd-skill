@@ -203,6 +203,33 @@ test('marker-prefix-consistency passes when every marker uses the resolved prefi
   assert.equal(findingResult(report, 'marker-prefix-consistency'), 'pass');
 });
 
+test('marker-prefix-consistency detects a mismatch when markerPrefix contains regex metacharacters', () => {
+  // A prefix capture group narrowed to [a-z0-9-] would never match a marker
+  // under a `.`/`+`-bearing prefix at all (right or wrong), silently
+  // reporting a false pass instead of flagging the mismatch below.
+  const body = childBody({
+    extraMarkers: '<!-- other.prefix+x-roadmap-id: foo -->',
+  }).replace(/idd-skill/g, 'a.b+c');
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    markerPrefix: 'a.b+c',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'marker-prefix-consistency',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /other\.prefix\+x-roadmap-id/);
+});
+
+test('marker-prefix-consistency passes when a regex-metacharacter markerPrefix matches every marker', () => {
+  const body = childBody().replace(/idd-skill/g, 'a.b+c');
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    markerPrefix: 'a.b+c',
+  });
+  assert.equal(findingResult(report, 'marker-prefix-consistency'), 'pass');
+});
+
 // --- required-headings ---
 
 test('required-headings fails when a required heading is missing', () => {
@@ -218,6 +245,46 @@ test('required-headings fails when a required heading is missing', () => {
 test('required-headings passes when an anyOf alternative is used', () => {
   const body = [
     '## Goal',
+    '',
+    '## Proposed change',
+    '',
+    '## Acceptance criteria',
+    '',
+    suitabilityFooter(4),
+  ].join('\n');
+  const report = auditAuthoredIssue(body, { shape: 'orphan' });
+  assert.equal(findingResult(report, 'required-headings'), 'pass');
+});
+
+test('required-headings ignores a heading-shaped line inside a fenced code block', () => {
+  // A pasted template/example snippet containing "## Proposed change" only
+  // inside a fence must not count as satisfying the real requirement.
+  const body = [
+    '## Background',
+    '',
+    '```markdown',
+    '## Proposed change',
+    '```',
+    '',
+    '## Acceptance criteria',
+    '',
+    suitabilityFooter(4),
+  ].join('\n');
+  const report = auditAuthoredIssue(body, { shape: 'orphan' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'required-headings',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /Proposed change/);
+});
+
+test('required-headings still finds a heading that appears after a closed fence', () => {
+  const body = [
+    '## Background',
+    '',
+    '```markdown',
+    'example content',
+    '```',
     '',
     '## Proposed change',
     '',

@@ -146,8 +146,15 @@ function checkSuitabilityBlockedByHuman(
 function checkMarkerPrefixConsistency(text, markerPrefix) {
   const id = 'marker-prefix-consistency';
   const name = 'Every authoring marker uses the resolved target markerPrefix';
+  // The captured prefix is compared by string equality below (never
+  // re-embedded into a regex), so it only needs to exclude the characters
+  // that end a marker prefix syntactically (whitespace, `:`, `>`) — not be
+  // restricted to `[a-z0-9-]`. A namespaced adopter prefix may legitimately
+  // contain other characters (see marker-regex.mts's escapeRegex docstring:
+  // `.`, `+`, `(`, ...); a narrower class here would silently fail to match
+  // any marker (right or wrong prefix) and always report a false pass.
   const pattern = new RegExp(
-    `<!--\\s*([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)-(${AUTHORING_MARKER_SUFFIXES.join('|')}):[^>]*-->`,
+    `<!--\\s*([^\\s>:]+)-(${AUTHORING_MARKER_SUFFIXES.join('|')}):[^>]*-->`,
     'gi',
   );
   const mismatches = [];
@@ -300,8 +307,24 @@ function countMarkerOccurrences(text, markerPrefix, suffix) {
 }
 function extractHeadings(text) {
   const headings = new Set();
-  for (const match of text.matchAll(/^##\s+(.+?)\s*$/gm)) {
-    headings.add(match[1].trim());
+  // Skip lines inside fenced code blocks (``` or ~~~) so a heading-shaped
+  // line that only appears inside a pasted template/example snippet does
+  // not count as a genuine section heading and mask a truly missing one.
+  let fenceChar = null;
+  for (const line of text.split(/\r?\n/)) {
+    const fenceMatch = /^(`{3,}|~{3,})/.exec(line.trim());
+    if (fenceMatch) {
+      const char = fenceMatch[1][0];
+      fenceChar = fenceChar === char ? null : (fenceChar ?? char);
+      continue;
+    }
+    if (fenceChar !== null) {
+      continue;
+    }
+    const headingMatch = /^##\s+(.+?)\s*$/.exec(line);
+    if (headingMatch) {
+      headings.add(headingMatch[1].trim());
+    }
   }
   return headings;
 }
