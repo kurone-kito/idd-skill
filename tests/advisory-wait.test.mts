@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
+  DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+  readAdvisoryConvergenceDeadlineMinutes,
   readAdvisoryPrimaryBotLogin,
   readAdvisorySecondaryBotLogin,
   readAdvisoryWaitPolicy,
@@ -254,7 +256,7 @@ test('advisory wait policy resolves defaults, explicit values, and fail-safe fal
   );
 });
 
-test('advisory wait policy only applies file overrides from schema-valid policy config', () => {
+test('advisory wait policy only applies file overrides from a schema-valid advisoryWait section', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-advisory-policy-'));
   const validPath = join(root, 'policy.valid.json');
   const invalidPath = join(root, 'policy.invalid.json');
@@ -271,11 +273,14 @@ test('advisory wait policy only applies file overrides from schema-valid policy 
   };
 
   writeFileSync(validPath, JSON.stringify(validConfig), 'utf8');
+  // The pendingWindow value itself is a genuine advisoryWait schema
+  // violation (fails the whole-minute-duration pattern), so the
+  // advisoryWait subtree is invalid on its own terms and still reverts.
   writeFileSync(
     invalidPath,
     JSON.stringify({
       advisoryWait: {
-        pendingWindow: 'PT1M',
+        pendingWindow: 'not-a-duration',
       },
     }),
     'utf8',
@@ -295,6 +300,37 @@ test('advisory wait policy only applies file overrides from schema-valid policy 
     settledWindowMinutes: 10,
     pollIntervalMinutes: 2,
     capExhaustedRoute: 'phase-specific',
+  });
+});
+
+test('advisory wait policy still honors advisoryWait when an unrelated top-level field is schema-invalid', () => {
+  // #1359 regression: an unknown top-level key trips `additionalProperties:
+  // false` at the whole-document level, but must not zero out an otherwise
+  // schema-valid advisoryWait section — validation is scoped to
+  // advisoryWait's own subtree.
+  const root = mkdtempSync(join(tmpdir(), 'idd-advisory-policy-scoped-'));
+  const configPath = join(root, 'policy.json');
+  const config = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+
+  config.advisoryWait = {
+    requestCap: 12,
+    pendingWindow: 'PT45M',
+    settledWindow: 'PT15M',
+    pollInterval: 'PT3M',
+    capExhaustedRoute: 'hold',
+  };
+  config.unsupportedTopLevelKey = true;
+
+  writeFileSync(configPath, JSON.stringify(config), 'utf8');
+
+  assert.deepEqual(readAdvisoryWaitPolicy(configPath), {
+    requestCap: 12,
+    pendingWindowMinutes: 45,
+    settledWindowMinutes: 15,
+    pollIntervalMinutes: 3,
+    capExhaustedRoute: 'hold',
   });
 });
 
@@ -465,6 +501,36 @@ test('readAdvisorySecondaryBotLogin only applies a schema-valid file override, e
   assert.equal(readAdvisorySecondaryBotLogin(validPath), 'coderabbitai[bot]');
   assert.equal(readAdvisorySecondaryBotLogin(invalidPath), '');
   assert.equal(readAdvisorySecondaryBotLogin(join(root, 'missing.json')), '');
+});
+
+test('readAdvisoryConvergenceDeadlineMinutes applies a schema-valid override and is scoped to advisoryWait', () => {
+  const root = mkdtempSync(
+    join(tmpdir(), 'idd-advisory-convergence-deadline-'),
+  );
+  const validPath = join(root, 'policy.valid.json');
+  const invalidPath = join(root, 'policy.invalid.json');
+  const validConfig = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  validConfig.advisoryWait = { convergenceDeadline: 'PT6H' };
+  writeFileSync(validPath, JSON.stringify(validConfig), 'utf8');
+  // A non-string convergenceDeadline violates the advisoryWait schema, so
+  // the reader fails closed to the default.
+  writeFileSync(
+    invalidPath,
+    JSON.stringify({ advisoryWait: { convergenceDeadline: 5 } }),
+    'utf8',
+  );
+
+  assert.equal(readAdvisoryConvergenceDeadlineMinutes(validPath), 6 * 60);
+  assert.equal(
+    readAdvisoryConvergenceDeadlineMinutes(invalidPath),
+    DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
+  );
+  assert.equal(
+    readAdvisoryConvergenceDeadlineMinutes(join(root, 'missing.json')),
+    DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
+  );
 });
 
 test('computeSecondaryRequestedForHead detects a same-HEAD secondary request and resets per HEAD', () => {

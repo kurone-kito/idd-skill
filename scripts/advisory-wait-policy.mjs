@@ -4,7 +4,7 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { readFileSync } from 'node:fs';
-import { loadJson, validate } from './validate-schemas.mjs';
+import { loadJson, validateConfigSection } from './validate-schemas.mjs';
 export const DEFAULT_ADVISORY_REQUEST_CAP = 30;
 export const DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES = 30;
 export const DEFAULT_ADVISORY_SETTLED_WINDOW_MINUTES = 10;
@@ -22,7 +22,12 @@ const POLICY_SCHEMA = loadJson('schemas/policy.schema.json');
 export function readAdvisoryWaitPolicy(path = '.github/idd/config.json') {
   try {
     const config = JSON.parse(readFileSync(path, 'utf8'));
-    if (validate(config, POLICY_SCHEMA).length > 0) {
+    // Scoped to the advisoryWait subtree (#1359): an unrelated invalid
+    // field elsewhere in the document must not zero out an otherwise-valid
+    // advisoryWait section.
+    if (
+      validateConfigSection(config, POLICY_SCHEMA, 'advisoryWait').length > 0
+    ) {
       return resolveAdvisoryWaitPolicy({});
     }
     return resolveAdvisoryWaitPolicy(config);
@@ -77,7 +82,10 @@ export function resolveAdvisoryPrimaryBotLogin(config = {}) {
 export function readAdvisoryPrimaryBotLogin(path = '.github/idd/config.json') {
   try {
     const config = JSON.parse(readFileSync(path, 'utf8'));
-    if (validate(config, POLICY_SCHEMA).length > 0) {
+    // Scoped to the advisoryWait subtree (#1359); see readAdvisoryWaitPolicy.
+    if (
+      validateConfigSection(config, POLICY_SCHEMA, 'advisoryWait').length > 0
+    ) {
       return DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
     }
     return resolveAdvisoryPrimaryBotLogin(config);
@@ -117,7 +125,10 @@ export function readAdvisorySecondaryBotLogin(
 ) {
   try {
     const config = JSON.parse(readFileSync(path, 'utf8'));
-    if (validate(config, POLICY_SCHEMA).length > 0) {
+    // Scoped to the advisoryWait subtree (#1359); see readAdvisoryWaitPolicy.
+    if (
+      validateConfigSection(config, POLICY_SCHEMA, 'advisoryWait').length > 0
+    ) {
       return '';
     }
     return resolveAdvisorySecondaryBotLogin(config);
@@ -151,7 +162,10 @@ export function readAdvisoryConvergenceDeadlineMinutes(
 ) {
   try {
     const config = JSON.parse(readFileSync(path, 'utf8'));
-    if (validate(config, POLICY_SCHEMA).length > 0) {
+    // Scoped to the advisoryWait subtree (#1359); see readAdvisoryWaitPolicy.
+    if (
+      validateConfigSection(config, POLICY_SCHEMA, 'advisoryWait').length > 0
+    ) {
       return DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES;
     }
     return resolveAdvisoryConvergenceDeadlineMinutes(config);

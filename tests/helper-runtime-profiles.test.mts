@@ -57,6 +57,23 @@ const PROFILE_FIXTURE_FILES = [
   'profiles/external-bot/README.md',
 ];
 const DEFAULT_MARKER_PREFIX = 'helper-runtime-fixture';
+// The eight fields policy.schema.json's top-level `required` array
+// demands. Inline test configs below only set the fields their own
+// scenario cares about (commands, helperRuntime, ...); this base keeps
+// every inline fixture schema-valid so checkLiveConfigSchema (#1359) does
+// not add an unrelated finding to tests exercising other doctor checks.
+const REQUIRED_CONFIG_BASE = {
+  iddVersion: '0.1.0',
+  markerPrefix: DEFAULT_MARKER_PREFIX,
+  mergePolicy: 'fully_autonomous_merge',
+  reviewPolicy: 'copilot-advisory',
+  threadResolutionPolicy: 'fast-agent-resolve',
+  claimTiming: {
+    staleAge: 'PT24H',
+    heartbeatInterval: 'PT12H',
+  },
+  trustedMarkerActors: ['fixture-actor'],
+};
 
 test('idd-doctor accepts missing helperRuntime as instructions-only fallback fixture', (t) => {
   const root = createDoctorFixtureRepo('absent.json');
@@ -148,6 +165,7 @@ test('idd-doctor fixture rejects unsupported helperRuntime keys', (t) => {
 test('idd-doctor warns when adopter marker prefix keeps source-repo lint toolchain commands', (t) => {
   const root = createDoctorFixtureRepoFromConfig(
     {
+      ...REQUIRED_CONFIG_BASE,
       commands: {
         'fix-validate': 'npx dprint check "**/*.md"',
         'pre-push-validate': 'npm run lint',
@@ -199,6 +217,7 @@ test('idd-doctor still checks overview residue when policy config is missing', (
 test('idd-doctor skips residue warnings for idd-skill marker prefix', (t) => {
   const root = createDoctorFixtureRepoFromConfig(
     {
+      ...REQUIRED_CONFIG_BASE,
       commands: {
         'fix-validate': 'npx dprint check "**/*.md"',
         'pre-push-validate': 'npx markdownlint-cli2 "**/*.md"',
@@ -224,6 +243,7 @@ test('idd-doctor skips residue warnings for idd-skill marker prefix', (t) => {
 test('idd-doctor does not warn when config and overview concrete commands agree', (t) => {
   const root = createDoctorFixtureRepoFromConfig(
     {
+      ...REQUIRED_CONFIG_BASE,
       commands: {
         'fix-validate': 'npm run fix',
         'pre-push-validate': 'npm run lint',
@@ -258,6 +278,7 @@ test('idd-doctor does not warn when config and overview concrete commands agree'
 test('idd-doctor warns when config and overview concrete commands differ', (t) => {
   const root = createDoctorFixtureRepoFromConfig(
     {
+      ...REQUIRED_CONFIG_BASE,
       commands: {
         'fix-validate': 'npm run fix && npm test',
         'pre-push-validate': 'npm run lint',
