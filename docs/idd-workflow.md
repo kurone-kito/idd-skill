@@ -507,7 +507,8 @@ available, counts as independent), treat that self-critique verdict as
 **advisory only** — it is not sufficient by itself to let the C-phase
 skip to PR submission. The C-phase's objective diff validation floor (the
 **fix-validate** command set that C5 also runs; see
-`idd-work.instructions.md` C1/C2/C4) is the **load-bearing** gate
+`.github/instructions/idd-work.instructions.md` C1/C2/C4) is the
+**load-bearing** gate
 instead — independent of D2's own **pre-push-validate** gate.
 This floor applies **uniformly** to every runtime — including
 subagent-capable ones — rather than being conditioned on a runtime
