@@ -53,7 +53,7 @@ differ across GNU/BSD/Windows executors):
 
 ```bash
 SERVER_NOW=$(gh api repos/<owner>/<repo>/issues/<number> --include \
-  | grep -i '^date:' | head -1 | sed -E 's/^[Dd]ate: *//' | tr -d '\r')
+  | grep -i '^date:' | head -1 | sed 's/^[Dd]ate: *//' | tr -d '\r')
 node -e "console.log(new Date(process.argv[1]).toISOString().replace(/\.\d{3}Z$/, 'Z'))" \
   "$SERVER_NOW"
 ```
