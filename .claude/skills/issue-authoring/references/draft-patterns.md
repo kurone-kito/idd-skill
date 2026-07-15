@@ -98,11 +98,13 @@ Before you publish a ready issue, confirm:
 
 ## Mechanical pre-publish check
 
-Before you publish a drafted issue, run the `audit-authored-issue`
-linter against the drafted body. It mechanically catches shape and
-marker mistakes — a missing or duplicated autopilot-suitability footer,
-a wrong markerPrefix, a missing required heading for the declared shape,
-a malformed dependency marker — that a confident narrative can otherwise
+Before you publish a drafted **ready orphan, roadmap, or child** body
+(the linter does not cover non-ready buckets like `blocked-by-human`),
+run the `audit-authored-issue` linter against it when a helper runtime
+is available. It mechanically catches shape and marker mistakes — a
+missing or duplicated autopilot-suitability footer, a wrong
+markerPrefix, a missing required heading for the declared shape, a
+malformed dependency marker — that a confident narrative can otherwise
 mask:
 
 ```sh
@@ -111,13 +113,18 @@ node scripts/audit-authored-issue.mjs --shape orphan --body-file draft.md
 
 Use `--shape roadmap` or `--shape child` for those shapes, `--stdin`
 instead of `--body-file` when the draft is not yet on disk, and
-`--label <name>` (repeatable) to pass proposed labels for the
-suitability-`1` / `status:blocked-by-human` cross-field check. Fix every
-reported finding and re-run before publishing; a `passed: false` report
-means the draft is not ready yet, regardless of how complete the
-narrative reads. See
+`--label <name>` (repeatable) to pass proposed labels for the check
+that a suitability score of `1` carries `status:blocked-by-human` (this
+check is one-directional — it does not flag the reverse, a non-`1`
+score paired with the label). Fix every reported finding and re-run
+before publishing; a `passed: false` report means the draft is not
+ready yet, regardless of how complete the narrative reads.
+
+**No helper runtime available (`instructions-only` profile):** the
+linter cannot run. `instructions-only` is a first-class supported
+fallback, not a waiver — manually re-verify the same checks against
 [contract.md's Mechanical pre-publish gate](contract.md#mechanical-pre-publish-gate)
-for the full rubric.
+before publishing instead.
 
 ## Hidden human-dependency quick check
 

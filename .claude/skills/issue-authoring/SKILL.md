@@ -69,11 +69,13 @@ needs-decision, blocked-by-human, and out-of-scope.
    - keep independent sibling work in roadmap task lists unless a true
      correctness, availability, or ordering constraint requires a
      dependency edge
-6. Before publishing, run the `audit-authored-issue` linter against
-   each drafted body as the mechanical pre-publish gate — see
+6. Before publishing a ready orphan, roadmap, or child body, run the
+   `audit-authored-issue` linter against it as the mechanical
+   pre-publish gate — see
    [Mechanical pre-publish gate](references/contract.md#mechanical-pre-publish-gate)
-   in the bundled contract. Resolve every reported failure before
-   treating the issue as ready.
+   in the bundled contract, including the manual fallback for
+   `instructions-only` installs with no helper runtime. Resolve every
+   reported failure before treating the issue as ready.
 7. When the user explicitly authorizes publication, manage the authoring
    label for each created or updated issue:
    - resolve `issueAuthoring.authoringLabelName`, defaulting to
@@ -123,7 +125,8 @@ needs-decision, blocked-by-human, and out-of-scope.
   new issue.
 - Avoid widening drafting output beyond the user request without saying
   so.
-- Run the `audit-authored-issue` linter against every drafted body and
+- Run the `audit-authored-issue` linter (or its manual fallback in
+  `instructions-only` installs) against every drafted ready body and
   resolve every reported failure before publishing.
 - Name a concrete surface to edit and an objective verification for
   every `ready` candidate; route anything else to `needs-decision` or

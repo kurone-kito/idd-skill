@@ -501,15 +501,20 @@ marginally-ready issue.
 
 ## Mechanical pre-publish gate
 
-Run the `audit-authored-issue` linter against every drafted body before
-publishing. It mechanically re-checks the structural rules this
-contract states in prose — the autopilot-suitability marker's
-exactly-one/coherent-value rule, its cross-field agreement with the
-configured `blocked-by-human` label, markerPrefix consistency across
-every authoring marker, the declared shape's required section headings,
-the roadmap-id/blocked-by dependency-marker rules, and visible/hidden
-line agreement for the suitability and effort footers — so a weak model
-does not have to hold every rule in its head at once while drafting.
+Before publishing a drafted `ready` **orphan, roadmap, or child** body
+(the shapes the linter supports — not the non-ready buckets below,
+which are not audited by this gate), run the
+`audit-authored-issue` linter against it when a helper runtime is
+available. It mechanically re-checks a subset of the structural rules
+this contract states in prose — the autopilot-suitability marker's
+exactly-one/coherent-value rule, the one-directional check that a
+suitability score of `1` carries the configured `blocked-by-human`
+label (it does not check the reverse: a non-`1` score paired with the
+label still passes), markerPrefix consistency across every authoring
+marker, the declared shape's required section headings, the
+roadmap-id/blocked-by dependency-marker rules, and visible/hidden line
+agreement for the suitability and effort footers — so a weak model does
+not have to hold every rule in its head at once while drafting.
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \
@@ -523,13 +528,22 @@ Or, for npx/package-manager profiles, the equivalent
 [Target marker prefix](#target-marker-prefix)) differs from the local
 `.github/idd/config.json`.
 
-A `passed: false` report (or non-zero exit) means the draft is not
-ready to publish yet, regardless of how complete the narrative reads —
-fix every reported finding and re-run before treating the issue as
-`ready`. The linter is a mechanical structural check, not a substitute
-for the judgment-based checks above (human-dependency isolation,
-codebase fidelity, reuse-first) — passing it is necessary, not
-sufficient, for `ready`.
+**No helper runtime available (`instructions-only` profile).** The
+linter cannot run without Node.js and the vendored `scripts/`
+directory, and an `instructions-only` install is a first-class
+supported fallback, not a degraded one. Unavailability is never a
+waiver: manually re-verify the same checks listed above against this
+contract's prose and the [Draft schemas](#required-draft-content)
+before publishing.
+
+A `passed: false` report (or non-zero exit, or a failed manual
+re-verification) means the draft is not ready to publish yet,
+regardless of how complete the narrative reads — fix every reported
+finding and re-run before treating the issue as `ready`. The linter (or
+its manual equivalent) is a mechanical structural check, not a
+substitute for the judgment-based checks above (human-dependency
+isolation, codebase fidelity, reuse-first) — passing it is necessary,
+not sufficient, for `ready`.
 
 ## Autopilot-suitability score
 
