@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { devNull, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +26,30 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
+// Fixture invariant: fixture git processes (and the audit-docs.mjs
+// subprocess, which itself shells out to `git ls-files`) must never read
+// the ambient GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE state. A caller that
+// runs this suite from inside a git hook exports those variables, and an
+// unsanitized fixture would then operate on (and could mutate) the host
+// repository instead of the temp fixture, despite `cwd` pointing at the
+// fixture. Same pattern as tests/worktree-guard-hook.test.mts.
+function fixtureEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_CONFIG')) {
+      delete env[key];
+    }
+  }
+  delete env.GIT_DIR;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_OBJECT_DIRECTORY;
+  env.GIT_CONFIG_GLOBAL = devNull;
+  env.GIT_CONFIG_SYSTEM = devNull;
+  return env;
+}
+
 interface RunResult {
   status: number;
   stdout: string;
@@ -37,7 +61,12 @@ function runAuditDocs(cwd: string): RunResult {
     const stdout = execFileSync(
       process.execPath,
       [join(REPO_ROOT, 'scripts', 'audit-docs.mjs'), '--check'],
-      { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      {
+        cwd,
+        env: fixtureEnv(),
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
     );
     return { status: 0, stdout, stderr: '' };
   } catch (error) {
@@ -52,12 +81,12 @@ function runAuditDocs(cwd: string): RunResult {
 
 function makeFixture(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), 'audit-docs-file-sets-'));
-  execFileSync('git', ['init', '--quiet'], { cwd: dir });
+  execFileSync('git', ['init', '--quiet'], { cwd: dir, env: fixtureEnv() });
   mkdirSync(join(dir, 'audit'), { recursive: true });
   mkdirSync(join(dir, 'skills', 'mirror-source', 'nested'), {
     recursive: true,
   });
-  mkdirSync(join(dir, '.claude', 'mirror-target'), { recursive: true });
+  mkdirSync(join(dir, 'mirror-target-tree'), { recursive: true });
   writeFileSync(
     join(dir, 'audit', 'sync-manifest.json'),
     JSON.stringify({
@@ -65,7 +94,7 @@ function makeFixture(): { dir: string; cleanup: () => void } {
         {
           id: 'fixture-set',
           sourceGlob: 'skills/mirror-source/**/*.md',
-          targetGlob: '.claude/mirror-target/**/*.md',
+          targetGlob: 'mirror-target-tree/**/*.md',
           match: 'basename',
           requireSyncPairs: false,
         },
@@ -84,7 +113,7 @@ test('checkFileSets passes a recursive fileSet with no basename collision', (t) 
   t.after(cleanup);
 
   writeFileSync(join(dir, 'skills', 'mirror-source', 'a.md'), '# a\n');
-  writeFileSync(join(dir, '.claude', 'mirror-target', 'a.md'), '# a mirror\n');
+  writeFileSync(join(dir, 'mirror-target-tree', 'a.md'), '# a mirror\n');
 
   const result = runAuditDocs(dir);
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -95,7 +124,7 @@ test('checkFileSets fails closed when two source files share a basename', (t) =>
   t.after(cleanup);
 
   writeFileSync(join(dir, 'skills', 'mirror-source', 'a.md'), '# a\n');
-  writeFileSync(join(dir, '.claude', 'mirror-target', 'a.md'), '# a mirror\n');
+  writeFileSync(join(dir, 'mirror-target-tree', 'a.md'), '# a mirror\n');
   // A new canonical file nested one directory deeper, sharing the basename
   // of the already-mirrored file above.
   writeFileSync(
@@ -118,12 +147,12 @@ test('checkFileSets fails closed when two target files share a basename', (t) =>
   t.after(cleanup);
 
   writeFileSync(join(dir, 'skills', 'mirror-source', 'a.md'), '# a\n');
-  writeFileSync(join(dir, '.claude', 'mirror-target', 'a.md'), '# a mirror\n');
-  mkdirSync(join(dir, '.claude', 'mirror-target', 'nested'), {
+  writeFileSync(join(dir, 'mirror-target-tree', 'a.md'), '# a mirror\n');
+  mkdirSync(join(dir, 'mirror-target-tree', 'nested'), {
     recursive: true,
   });
   writeFileSync(
-    join(dir, '.claude', 'mirror-target', 'nested', 'a.md'),
+    join(dir, 'mirror-target-tree', 'nested', 'a.md'),
     '# a mirror nested\n',
   );
 
