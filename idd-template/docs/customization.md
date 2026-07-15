@@ -335,8 +335,15 @@ regular PR comment, which is not one of the workflow's triggers
 (`pull_request` push, `pull_request_review` submission, or
 `pull_request_review_comment` created/edited/deleted on a review
 thread), so after posting a waiver a maintainer must also trigger a new
-run explicitly — the Actions UI "Re-run jobs" button, or
-`workflow_dispatch` — for the required check to actually reflect it.
+run on the _existing_ PR-linked check run — the Actions UI "Re-run
+jobs" button, or `gh run rerun <run-id>` — for the required check to
+actually reflect it. `workflow_dispatch` does **not** reliably do this:
+a dispatched run has no `pull_request` context of its own, so GitHub
+associates it with the dispatch ref rather than the PR's HEAD SHA, and
+the resulting run's conclusion can be invisible to that PR's
+required-check rollup (see
+[`.github/workflows/idd-advisory-convergence.yml`](https://github.com/kurone-kito/idd-skill/blob/main/.github/workflows/idd-advisory-convergence.yml)'s
+header comment for the full finding).
 
 ## Phase ID Compatibility Contract
 

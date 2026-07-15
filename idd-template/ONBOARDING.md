@@ -846,9 +846,16 @@ for some other external check never silently makes this one waivable
 too. **Posting the waiver comment does not by itself turn the check
 green**: a PR comment is not one of this workflow's trigger events and
 a completed run's conclusion never changes on its own, so after
-posting the waiver a maintainer must also trigger a new run — push,
-a fresh review, the Actions UI "Re-run jobs" button, or
-`workflow_dispatch` — for the required check to actually reflect it.
+posting the waiver a maintainer must also trigger a new run — push, a
+fresh review, the Actions UI "Re-run jobs" button on the _existing_
+PR-linked run, or `gh run rerun <run-id>` — for the required check to
+actually reflect it. `workflow_dispatch` does **not** reliably do
+this: a dispatched run has no `pull_request` context of its own, so
+GitHub associates it with the dispatch ref rather than the PR's HEAD
+SHA, and the resulting run's conclusion can be invisible to that PR's
+required-check rollup (see this source repository's own
+`.github/workflows/idd-advisory-convergence.yml` header comment for
+the full finding).
 
 ### Optional — mark the vendored helper bundle `linguist-vendored`
 
