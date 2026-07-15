@@ -160,10 +160,11 @@ self-signed-hijack block.
 
 ### Non-Copilot advisory convergence is intentionally not a merge gate
 
-kurone-kito/idd-skill#909 (2026-06-17) decided the Copilot advisory-wait /
-convergence protocol stays **Copilot-only** in this repository's
-configuration, where Copilot is the configured
-`advisoryWait.primaryBotLogin`; configured secondary, non-primary
+kurone-kito/idd-skill#909 (2026-06-17) decided, in the idd-skill source
+repository's own configuration, that the Copilot advisory-wait /
+convergence protocol stays **Copilot-only** there, where Copilot is
+the configured `advisoryWait.primaryBotLogin`. An adopter repository
+may mirror or override that posture. Configured secondary, non-primary
 `advisoryBotLogins` (e.g. a CodeRabbit or Codex connector) get no
 equivalent merge-blocking required check. (A repository using the
 `external-bot` profile to route `advisoryWait.primaryBotLogin` to a
