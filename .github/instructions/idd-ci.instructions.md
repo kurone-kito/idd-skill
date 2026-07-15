@@ -95,9 +95,9 @@ interpreting `gh pr checks` output.
    a `403` — record it as **unreadable**.
 
    If any of the three reads returned `403` / unreadable, **fail
-   closed**: do not fall through to step 6 below. Hold and surface
-   "cannot determine required checks: protection/ruleset unreadable" as
-   the reason, then stop. This is distinct from the genuine
+   closed**: do not fall through to step 6 below. Post a hold comment
+   stating "cannot determine required checks: protection/ruleset
+   unreadable" and stop. This is distinct from the genuine
    `noRequiredChecksConfigured` case in step 6, which requires every
    read to have returned a genuine result (`200`, or an empty/`404`),
    never an unread endpoint.
@@ -108,7 +108,7 @@ interpreting `gh pr checks` output.
    App/integration) when configured.
 
 6. If neither source yields a required-check set — and step 4 found no
-   permission error on either read — this is **not** automatically a
+   permission error on any of the reads — this is **not** automatically a
    hold — it is the same `noRequiredChecksConfigured: true` state
    `idd-pre-merge.instructions.md` F2's CI gate already interprets. When
    `pre-merge-readiness` output is available, reuse its
