@@ -173,9 +173,10 @@ manually-invoked, read-only detector whose output an operator feeds
 into fresh issue authoring, not an automatic recovery path — catches
 feedback that received no IDD reply at all. It does **not** catch a
 feedback item the agent falsely dispositioned: the sweep's collectors
-treat any IDD `**Accepted**` / `**Rejected**` reply as addressing the
-item, correct or not, so a semantically false disposition has no
-sweep backstop.
+treat any IDD `**Accepted**` / `**Rejected**` /
+`**Awaiting maintainer decision**` reply as addressing the item,
+correct or not, so a semantically false disposition has no sweep
+backstop.
 
 kurone-kito/idd-skill#1352 re-opened the question after a required-check
 promotion shipped for the Copilot dimension, and after a weak-model
