@@ -228,9 +228,11 @@ adopter-resilience valve (the helper runtime is optional per
 `docs/idd-helper-scripts.md`, and a pure PR-level required check
 cannot see a session's live `claim-id`/`agent-id` context the way the
 model-run helper can). A full session-aware required check would also
-fight the deliberate `pull_request`-only CI topology (`#832`, which
-eliminated duplicate CI on `push`/`merge_group` so nothing re-checks
-the merge commit itself) and `#993`'s existing F3 checklist hardening.
+fight the deliberate `pull_request`-only CI topology (`#832` dropped
+the redundant `push`-triggered runs, so `lint`/`pnpm-boundary`/
+`idd-doctor` only ever run against the PR head SHA and never
+independently re-check the merge commit that lands on `main`) and
+`#993`'s existing F3 checklist hardening.
 Under `fully_autonomous_merge` this is an **accepted risk**; adopter
 repos that keep a human merge step (`human_merge` or
 `separate_merge_agent` policy) retain that human as the backstop the
