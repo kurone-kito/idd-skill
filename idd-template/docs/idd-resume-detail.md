@@ -32,6 +32,10 @@ forced-handoff if:
 - The evidence `{claim-id}`, branch, or linked PR does not match the live
   active claim or inheritable released branch/PR state — stop and report
   the mismatch; do not claim, push, or mutate review state.
+- The forced-handoff **authorization gate** does not hold. See
+  [`idd-claim.instructions.md` rule 7](../.github/instructions/idd-claim.instructions.md#claim-state-parsing)
+  for the full criteria — apply it in addition to the checks above; it
+  is not restated here.
 
 **Re-claim rule** — Re-claim only after the human-gated handoff mechanism
 has already updated the GitHub claim stream to a released or

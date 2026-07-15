@@ -69,7 +69,7 @@ test('Project standards keeps the Helper sources rule in every agent entry file'
     );
     assert.match(
       section,
-      /\*\*Helper sources\*\*: the helper logic is migrating to TypeScript wave/,
+      /\*\*Helper sources\*\*: the helper migration to TypeScript is complete/,
       `${file} must keep the Helper sources rule`,
     );
     assert.ok(

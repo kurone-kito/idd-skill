@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { isCliExecution } from './gh-exec.mjs';
-import { loadJson, validate } from './validate-schemas.mjs';
+import { loadJson, validateConfigSection } from './validate-schemas.mjs';
 
 const DEFAULT_RUNNING_TIMEOUT = 'PT30M';
 const DEFAULT_GENERATION_TIMEOUT = 'PT10M';
@@ -63,7 +63,11 @@ export function readCiWaitPolicy(policyPath = DEFAULT_POLICY_PATH) {
     : resolve(process.cwd(), DEFAULT_POLICY_PATH);
   try {
     const config = JSON.parse(readFileSync(source, 'utf8'));
-    if (validate(config, POLICY_SCHEMA).length > 0) {
+    // Scoped to the ciWait subtree (#1359): an unrelated invalid field
+    // elsewhere in the document (an unknown top-level key, a typo'd enum in
+    // a sibling section, ...) must not zero out an otherwise-valid ciWait
+    // section.
+    if (validateConfigSection(config, POLICY_SCHEMA, 'ciWait').length > 0) {
       return { ...DEFAULT_CI_WAIT_POLICY };
     }
     return normalizeCiWaitPolicy(config?.ciWait);

@@ -249,6 +249,47 @@ test('rankAndRouteBySuitability never routes or buries unscored items (fail-safe
   );
 });
 
+test('rankAndRouteBySuitability ranks a genuinely floor-scored candidate above an unscored one at a tie', () => {
+  // Mirrors the written A4 Step 2 rule and compareUnionLeaves in
+  // discover-roadmap-graph.mts: a genuinely-scored candidate never ranks
+  // below an unscored candidate defaulted to the floor, even though the
+  // unscored candidate has a lower input index.
+  const items = [
+    { id: '#10', score: null },
+    { id: '#20', score: 3 },
+  ];
+  const { ranked } = rankAndRouteBySuitability(items, {
+    floor: 3,
+    getScore: (item) => item.score,
+  });
+  assert.deepEqual(
+    ranked.map((item) => item.id),
+    ['#20', '#10'],
+  );
+});
+
+test('rankAndRouteBySuitability applies the scored-vs-unscored term before the effort-hint tie-break', () => {
+  // discover-orphan-filter.mts pre-sorts candidates by effort-then-number
+  // before calling rankAndRouteBySuitability (ties keep input order). This
+  // reproduces that pre-sorted input: an unscored `S`-effort candidate
+  // would sort first by the soft effort tie-break alone, but a genuinely
+  // floor-scored `M`-effort candidate must still win the tie, per the
+  // written rule ordering (score band -> scored-before-unscored ->
+  // effort/number).
+  const items = [
+    { id: 'unscored-S', score: null },
+    { id: 'scored-M', score: 3 },
+  ];
+  const { ranked } = rankAndRouteBySuitability(items, {
+    floor: 3,
+    getScore: (item) => item.score,
+  });
+  assert.deepEqual(
+    ranked.map((item) => item.id),
+    ['scored-M', 'unscored-S'],
+  );
+});
+
 test('rankAndRouteBySuitability honors the enabled kill-switch', () => {
   const items = [
     { id: 'a', score: 1 },

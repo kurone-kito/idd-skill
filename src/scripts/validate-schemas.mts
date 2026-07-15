@@ -296,6 +296,42 @@ export function validate(data: unknown, schema: unknown, path = '$'): string[] {
 }
 
 /**
+ * Validate one top-level section of a config document against its own
+ * schema node (`schema.properties[sectionKey]`), ignoring errors anywhere
+ * else in `config` or `schema`. This is the scoped counterpart to calling
+ * `validate(config, schema)` on the whole document: a config-section reader
+ * (e.g. `ciWait`, `advisoryWait`) that reverts only its own values to
+ * defaults on its own section's error must not be zeroed out by an
+ * unrelated top-level key — an unknown property, a missing required field,
+ * or a typo'd enum in a sibling section — because that section's own values
+ * were never invalid (see #1359).
+ *
+ * Returns no errors (treats the section as valid) when `config` is not a
+ * plain object, `schema` declares no schema for `sectionKey`, or
+ * `sectionKey` is absent from `config` — an absent section is valid on its
+ * own terms; the caller's own defaults apply.
+ */
+export function validateConfigSection(
+  config: unknown,
+  schema: unknown,
+  sectionKey: string,
+): string[] {
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    return [];
+  }
+  const sectionSchema = (schema as { properties?: Record<string, unknown> })
+    ?.properties?.[sectionKey];
+  if (sectionSchema === undefined) {
+    return [];
+  }
+  const obj = config as Record<string, unknown>;
+  if (!Object.hasOwn(obj, sectionKey)) {
+    return [];
+  }
+  return validate(obj[sectionKey], sectionSchema, `$.${sectionKey}`);
+}
+
+/**
  * Load and parse a JSON file by path relative to repository root.
  */
 export function loadJson(relPath: string): unknown {
