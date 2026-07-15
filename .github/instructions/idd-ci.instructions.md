@@ -104,8 +104,8 @@ interpreting `gh pr checks` output.
    **A `404` deserves the same scrutiny when the caller's permission
    level is not independently known.** Some GitHub REST endpoints
    substitute `404` for `403` on a private resource specifically to
-   avoid revealing its existence to an unauthorized caller. The two
-   endpoints above are documented to return a dedicated `403` for an
+   avoid revealing its existence to an unauthorized caller. The reads
+   above are documented to return a dedicated `403` for an
    authenticated caller with insufficient permission — the
    branch-protection endpoint requires repository admin access, and its
    own reference distinguishes `403` (forbidden) from `404` (branch not
