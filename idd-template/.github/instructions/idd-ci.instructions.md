@@ -105,8 +105,8 @@ interpreting `gh pr checks` output.
    branch-protection endpoint requires repository admin access, and its
    own reference distinguishes `403` (forbidden) from `404` (branch not
    protected) — so this file trusts `404` as genuine on that basis, and
-   there is no fully reliable mechanical check available, that cannot
-   itself be spoofed, to confirm that assumption for every caller (an
+   there is no fully reliable mechanical check available that cannot
+   itself be spoofed to confirm that assumption for every caller (an
    actor's collaborator role is not proof the caller's own token
    carries the scope the endpoint requires).
    When there is other reason to doubt it, treat an unexpected `404` on
