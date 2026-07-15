@@ -496,8 +496,14 @@ function loadPolicy(configPath) {
     // could not be read/parsed: silently validating against the wrong
     // policy would be a confusing, hard-to-notice false pass/fail.
     if (configPath) {
+      // Describe this as loadPolicy's own fallback, not the audit's final
+      // effective markerPrefix: main() still applies --marker-prefix on
+      // top of this return value when the operator passed it, so naming a
+      // specific value here (e.g. DEFAULT_MARKER_PREFIX) could mislead
+      // when that flag is also present. The report's own markerPrefix
+      // field is the authoritative source for the value actually used.
       console.error(
-        `warning: could not read or parse --config ${configPath}; falling back to default policy (markerPrefix=${DEFAULT_MARKER_PREFIX})`,
+        `warning: could not read or parse --config ${configPath}; falling back to default policy unless overridden by --marker-prefix (see the report's markerPrefix field for the effective value)`,
       );
     }
     return {
