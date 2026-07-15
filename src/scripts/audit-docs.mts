@@ -281,6 +281,33 @@ function checkFileSets(fileSets: FileSet[], syncPairs: SyncPair[]) {
       continue;
     }
 
+    // Basename matching is ambiguous when two files on the same side of a
+    // recursive glob share a basename (for example a new
+    // `references/a/contract.md` alongside an existing
+    // `references/contract.md`): the Set/Map keyed by basename below would
+    // silently collapse them to one entry, so the new file's coverage would
+    // never actually be checked and could pass by riding the existing
+    // file's target and syncPairs entry. Fail closed instead of guessing
+    // which path the basename "really" refers to.
+    const ambiguousSourceBasenames = findDuplicateBasenames(sourceFiles);
+    for (const [name, paths] of ambiguousSourceBasenames) {
+      errors.push(
+        `${fileSet.id}: ambiguous basename ${name} matches multiple source files (${paths.join(', ')}); basename matching cannot distinguish them`,
+      );
+    }
+    const ambiguousTargetBasenames = findDuplicateBasenames(targetFiles);
+    for (const [name, paths] of ambiguousTargetBasenames) {
+      errors.push(
+        `${fileSet.id}: ambiguous basename ${name} matches multiple target files (${paths.join(', ')}); basename matching cannot distinguish them`,
+      );
+    }
+    if (
+      ambiguousSourceBasenames.size > 0 ||
+      ambiguousTargetBasenames.size > 0
+    ) {
+      continue;
+    }
+
     const sourceNames = new Set(sourceFiles.map((file) => basename(file)));
     const targetNames = new Set(targetFiles.map((file) => basename(file)));
     const sourceByName = new Map(
@@ -994,6 +1021,30 @@ function git(args: string[]): string {
 
 function basename(file: string): string {
   return file.slice(file.lastIndexOf('/') + 1);
+}
+
+// Returns only the basenames that collide across two or more distinct
+// paths in `files`, each mapped to every path sharing that basename.
+// Used by checkFileSets to fail closed on an ambiguous basename match
+// instead of silently keeping only one path per name.
+function findDuplicateBasenames(files: string[]): Map<string, string[]> {
+  const byName = new Map<string, string[]>();
+  for (const file of files) {
+    const name = basename(file);
+    const existing = byName.get(name);
+    if (existing) {
+      existing.push(file);
+    } else {
+      byName.set(name, [file]);
+    }
+  }
+  const duplicates = new Map<string, string[]>();
+  for (const [name, paths] of byName) {
+    if (paths.length > 1) {
+      duplicates.set(name, paths);
+    }
+  }
+  return duplicates;
 }
 
 function uniqueSorted(values: string[]): string[] {
