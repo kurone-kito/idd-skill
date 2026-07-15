@@ -500,12 +500,12 @@ When a phase file says "run a critique pass", apply the row for your
 agent above. If no subagent mechanism is available, perform the critique
 as a structured self-review step within the same response.
 
-On a runtime without an independent subagent mechanism (the last row
-above, or any agent falling back to structured self-review), the
-critique pass is same-response self-critique: the model reviews its own
-diff. Treat that self-critique verdict as **advisory only** on such a
-runtime — it is not sufficient by itself to let the C-phase skip to PR
-submission. The C-phase's objective diff validation floor (the
+When a runtime falls back to structured same-response self-review
+instead of an independent subagent mechanism (see the table above; a
+runtime's own native multi-step mechanism, such as Gemini's when
+available, counts as independent), treat that self-critique verdict as
+**advisory only** — it is not sufficient by itself to let the C-phase
+skip to PR submission. The C-phase's objective diff validation floor (the
 **fix-validate** command set that C5 also runs; see
 `idd-work.instructions.md` C1/C2/C4) is the **load-bearing** gate
 instead — independent of D2's own **pre-push-validate** gate.

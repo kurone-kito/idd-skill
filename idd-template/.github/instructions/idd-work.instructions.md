@@ -299,8 +299,9 @@ if it has not yet run (or is stale) at the current HEAD, and fix
 anything it reports.
 
 An unmet floor is not a new failure class: run or fix **fix-validate**
-the same way D2 handles a failing **pre-push-validate** ("If lint
-fails, run fix-validate, commit, then re-run pre-push-validate").
+the same way the Project commands table handles a failing
+**pre-push-validate** ("If lint fails, run fix-validate, commit, then
+re-run pre-push-validate").
 
 Commit fixes atomically.
 
