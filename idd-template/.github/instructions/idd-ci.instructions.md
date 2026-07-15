@@ -114,21 +114,21 @@ interpreting `gh pr checks` output.
    apply the same fail-closed hold immediately below, do not fall
    through to step 6.
 
-   If any of the three reads returned `403` / unreadable, **fail
-   closed**: do not fall through to step 6 below. Post a hold comment
-   stating "cannot determine required checks: protection/ruleset
-   unreadable" and stop. This is distinct from the genuine
-   `noRequiredChecksConfigured` case in step 6, which requires every
-   read to have returned a genuine result (`200`, or an empty/`404`),
-   never an unread endpoint.
+   If any of the three reads is **unreadable** (a confirmed `403`, or a
+   suspicious `404` per above), **fail closed**: do not fall through to
+   step 6 below. Post a hold comment stating "cannot determine required
+   checks: protection/ruleset unreadable" and stop. This is distinct
+   from the genuine `noRequiredChecksConfigured` case in step 6, which
+   requires every read to have returned a genuine, trusted result
+   (`200`, or a genuinely empty `404`), never an unreadable one.
 
 5. Build the required-check set as the union of enforcing-ruleset checks
-   and branch-protection checks, using only the genuine (non-`403`)
-   results from step 4. Keep expected check source metadata (GitHub
-   App/integration) when configured.
+   and branch-protection checks, using only the genuine (readable, not
+   unreadable) results from step 4. Keep expected check source metadata
+   (GitHub App/integration) when configured.
 
 6. If neither source yields a required-check set — and step 4 found no
-   permission error on any of the reads — this is **not** automatically a
+   unreadable result on any of the reads — this is **not** automatically a
    hold — it is the same `noRequiredChecksConfigured: true` state
    `idd-pre-merge.instructions.md` F2's CI gate already interprets. When
    `pre-merge-readiness` output is available, reuse its
