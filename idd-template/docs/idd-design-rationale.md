@@ -161,10 +161,16 @@ self-signed-hijack block.
 ### Non-Copilot advisory convergence is intentionally not a merge gate
 
 kurone-kito/idd-skill#909 (2026-06-17) decided the Copilot advisory-wait /
-convergence protocol stays **Copilot-only**; configured non-Copilot
+convergence protocol stays **Copilot-only** in this repository's
+configuration, where Copilot is the configured
+`advisoryWait.primaryBotLogin`; configured secondary, non-primary
 `advisoryBotLogins` (e.g. a CodeRabbit or Codex connector) get no
-equivalent merge-blocking required check. kurone-kito/idd-skill#899 recorded
-the deliberate scope and its two-part safety net: **pre-merge**, the E1
+equivalent merge-blocking required check. (A repository using the
+`external-bot` profile to route `advisoryWait.primaryBotLogin` to a
+non-Copilot bot instead would gate on that bot's convergence the same
+way — this reaffirmation is scoped to the non-primary advisory bots,
+not to "non-Copilot" as a fixed identity.) kurone-kito/idd-skill#899
+recorded the deliberate scope and its two-part safety net: **pre-merge**, the E1
 activity-universe snapshot plus `review-watermark` delta catches a late
 finding before merge by forcing a return to E1 when the F2/F3
 pre-merge gate detects new activity; **post-merge**, a merged-PR
@@ -172,11 +178,14 @@ unresolved-feedback sweep (kurone-kito/idd-skill#931) — a
 manually-invoked, read-only detector whose output an operator feeds
 into fresh issue authoring, not an automatic recovery path — catches
 feedback that received no IDD reply at all. It does **not** catch a
-feedback item the agent falsely dispositioned: the sweep's collectors
-treat any IDD `**Accepted**` / `**Rejected**` /
-`**Awaiting maintainer decision**` reply as addressing the item,
-correct or not, so a semantically false disposition has no sweep
-backstop.
+false disposition on a **regular comment** (the sweep excludes any
+comment with a later IDD `**Accepted**` / `**Rejected**` /
+`**Awaiting maintainer decision**` reply, correct or not) or on a
+review thread that was also **resolved** — the protocol's normal
+post-disposition step. A falsely dispositioned thread left
+**unresolved** is still surfaced by the sweep (flagged
+`dispositioned: true` for an operator to notice), since that collector
+filters on resolution state, not disposition correctness.
 
 kurone-kito/idd-skill#1352 re-opened the question after a required-check
 promotion shipped for the Copilot dimension, and after a weak-model
