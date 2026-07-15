@@ -256,11 +256,14 @@ adopter-resilience valve (the helper runtime is optional per
 cannot see a session's live `claim-id`/`agent-id` context the way the
 model-run helper can). A full session-aware required check would also
 fight the deliberate `pull_request`-only CI topology (`#832` dropped
-the redundant `push`-triggered runs, so `lint`/`pnpm-boundary`/
-`idd-doctor` only ever run against GitHub's synthetic PR merge-ref
-checkout — not the literal PR head SHA — and never independently
-re-check the actual merge commit that lands on `main`) and `#993`'s
-existing F3 checklist hardening.
+the redundant `push`-triggered runs; for this repository's own
+PR-triggered runs, `lint`/`pnpm-boundary`/`idd-doctor` run against
+GitHub's synthetic PR merge-ref checkout — not the literal PR head
+SHA — and never independently re-check the actual merge commit that
+lands on `main`; `pnpm-boundary` also keeps a `workflow_call` trigger
+for downstream reusable-workflow callers, which runs against the
+caller's own ref instead) and `#993`'s existing F3 checklist
+hardening.
 Under `fully_autonomous_merge` this is an **accepted risk**; adopter
 repos on `human_merge` retain a human as the backstop the autonomous
 path lacks, and repos on `separate_merge_agent` substitute a second,
