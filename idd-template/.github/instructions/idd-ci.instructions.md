@@ -267,16 +267,20 @@ keeps the **wait itself cheap**: the dominant cost of a wait is each
 re-invocation's context re-read (worse once it crosses the prompt-cache TTL,
 as CI/e2e waits routinely do), not the idle time.
 
-**Portability**: prefer a synchronous / blocking wait in the worker's own
-turn under supervisor/worker or multi-agent topologies — a background
-wait's completion notification often reaches only the supervisor, so the
-worker's turn ends and stalls until re-prompted (the background-wait
-resumption caveat). Background the watch (below) only when the topology
-is known to route completion back to the same turn.
+**Portability**: under supervisor/worker or multi-agent topologies, a
+background wait's completion notification often reaches only the
+supervisor, so the worker's turn ends and stalls until re-prompted (the
+background-wait resumption caveat). The topology-safety condition this
+implies is folded directly into the first bullet below, not just stated
+here.
 
-- **No interim polling turns** — background the watch, or schedule one wake at
-  the **expected** completion interval; do not insert "is it done yet?" turns
-  or peek at an empty watch buffer between wakes.
+- **No interim polling turns** — schedule one wake at the **expected**
+  completion interval, or background the watch only if the topology is
+  confirmed to route completion back to this turn; otherwise default to a
+  synchronous / blocking wait here. Do not insert "is it done yet?" turns,
+  peek at an empty watch buffer, or end this turn assuming an unconfirmed
+  background/async notification resumes it — that stalls silently under
+  supervisor/worker topologies.
 - **Batch post-wait actions** into a single turn once the wait resolves
   (disposition, replies, marker, next gate together — not one round-trip each).
 - **Scope post-fix re-validation to the changed surface** when the change is
