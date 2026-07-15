@@ -323,6 +323,42 @@ test('required-headings does not let a literal ``` line inside a 4-backtick fenc
   assert.match(finding?.detail ?? '', /Proposed change/);
 });
 
+test('required-headings tolerates up to 3 leading spaces on an ATX heading', () => {
+  // CommonMark allows up to 3 leading spaces before a `##` heading; a
+  // column-0-only regex would wrongly report this as missing.
+  const body = [
+    '   ## Background',
+    '',
+    '## Proposed change',
+    '',
+    '  ## Acceptance criteria',
+    '',
+    suitabilityFooter(4),
+  ].join('\n');
+  const report = auditAuthoredIssue(body, { shape: 'orphan' });
+  assert.equal(findingResult(report, 'required-headings'), 'pass');
+});
+
+test('required-headings does not tolerate 4+ leading spaces on an ATX heading', () => {
+  // 4+ leading spaces is an indented code line under CommonMark, not a
+  // heading, so this must still fail.
+  const body = [
+    '## Background',
+    '',
+    '    ## Proposed change',
+    '',
+    '## Acceptance criteria',
+    '',
+    suitabilityFooter(4),
+  ].join('\n');
+  const report = auditAuthoredIssue(body, { shape: 'orphan' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'required-headings',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /Proposed change/);
+});
+
 // --- dependency-marker-rule ---
 
 test('dependency-marker-rule fails when a child issue carries a roadmap-id marker', () => {
@@ -502,6 +538,23 @@ test('effort-visible-line-agreement is not satisfied by a stray line elsewhere i
   );
   assert.equal(finding?.result, 'fail');
   assert.match(finding?.detail ?? '', /missing or unparsable/);
+});
+
+test('effort-visible-line-agreement fails on a value-less effort marker instead of passing as absent', () => {
+  // parseEffortMarker requires a value token, so a marker missing its
+  // value entirely reads as "not present" from that field alone — but it
+  // is not genuinely absent, so it must not be waved through as "no
+  // effort footer (optional)".
+  const body = orphanBody({ includeEffort: false }).replace(
+    /(<!-- idd-skill-autopilot-suitability: 4 -->)/,
+    '$1\n\n<!-- idd-skill-effort: -->',
+  );
+  const report = auditAuthoredIssue(body, { shape: 'orphan' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'effort-visible-line-agreement',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.doesNotMatch(finding?.detail ?? '', /not applicable/);
 });
 
 // --- shape / markerPrefix pass-through ---

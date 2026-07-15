@@ -27,6 +27,8 @@ import { extractRoadmapMarkerId } from './discover-roadmap-graph.mts';
 import type { EffortMarkerDetection } from './effort.mts';
 import { parseEffortMarker } from './effort.mts';
 import { isCliExecution } from './gh-exec.mts';
+import type { IddConfig } from './idd-config.mts';
+import { loadIddConfig } from './idd-config.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import { createMarkerRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
@@ -379,11 +381,19 @@ function checkEffortVisibleLineAgreement(
 ): AuditFinding {
   const id = 'effort-visible-line-agreement';
   const name = 'Visible effort line agrees with the hidden marker';
+  // parseEffortMarker requires a value token ([^\s>]+ after the colon), so
+  // a value-less marker like `<!-- {prefix}-effort: -->` reads as
+  // `present: false` — indistinguishable, by that field alone, from no
+  // marker at all. Since effort is optional, treating that as "not
+  // applicable" would let a clearly malformed footer silently pass. Use
+  // the loose shape-only count to tell "genuinely absent" (0) apart from
+  // "present but valueless/malformed" (>0 but not a coherent value).
+  const rawCount = countMarkerOccurrences(text, markerPrefix, 'effort');
   const effort: EffortMarkerDetection = parseEffortMarker(text, markerPrefix);
-  if (!effort.present) {
+  if (rawCount === 0) {
     return pass(id, name, 'not applicable: no effort footer (optional)');
   }
-  if (effort.malformed || effort.value === null) {
+  if (!effort.present || effort.malformed || effort.value === null) {
     return fail(
       id,
       name,
@@ -459,7 +469,11 @@ function lastParagraphBeforeMarker(
 
 function extractHeadings(text: string): Set<string> {
   const headings = new Set<string>();
-  for (const match of text.matchAll(/^##\s+(.+?)\s*$/gm)) {
+  // CommonMark/GitHub Markdown allow up to 3 leading spaces before an ATX
+  // heading (the same tolerance stripMarkdownCodeRegions already applies to
+  // fence openers), so a slightly-indented "   ## Background" must still
+  // count as a real heading.
+  for (const match of text.matchAll(/^ {0,3}##\s+(.+?)\s*$/gm)) {
     headings.add(match[1].trim());
   }
   return headings;
@@ -538,23 +552,35 @@ function loadPolicy(configPath?: string): {
   markerPrefix: string;
   blockedByHumanLabelName: string;
 } {
-  const targetPath = configPath
-    ? resolve(process.cwd(), configPath)
-    : resolve(process.cwd(), '.github/idd/config.json');
-  try {
-    const config = JSON.parse(readFileSync(targetPath, 'utf8')) as {
-      markerPrefix?: unknown;
-    };
-    return {
-      markerPrefix: normalizeMarkerPrefix(config.markerPrefix),
-      blockedByHumanLabelName:
-        normalizePolicyConfig(config).labels.blockedByHumanLabelName,
-    };
-  } catch {
+  // Default path: reuse the shared loadIddConfig() (idd-config.mts) rather
+  // than a second "readFileSync + JSON.parse, null on error" copy of the
+  // exact pattern it was extracted from (see that module's header, #1208).
+  // loadIddConfig() always reads '.github/idd/config.json' relative to cwd
+  // and has no path parameter, so an explicit --config override still
+  // falls back to its own JSON.parse branch.
+  const config = configPath
+    ? loadConfigFromPath(resolve(process.cwd(), configPath))
+    : loadIddConfig();
+  if (!config) {
     return {
       markerPrefix: DEFAULT_MARKER_PREFIX,
       blockedByHumanLabelName: POLICY_DEFAULTS.labels.blockedByHumanLabelName,
     };
+  }
+  return {
+    markerPrefix: normalizeMarkerPrefix(
+      (config as { markerPrefix?: unknown }).markerPrefix,
+    ),
+    blockedByHumanLabelName:
+      normalizePolicyConfig(config).labels.blockedByHumanLabelName,
+  };
+}
+
+function loadConfigFromPath(targetPath: string): IddConfig | null {
+  try {
+    return JSON.parse(readFileSync(targetPath, 'utf8')) as IddConfig;
+  } catch {
+    return null;
   }
 }
 
