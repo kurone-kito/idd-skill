@@ -341,9 +341,14 @@ reflect it. `workflow_dispatch` does **not** reliably do this:
 a dispatched run has no `pull_request` context of its own, so GitHub
 associates it with the dispatch ref rather than the PR's HEAD SHA, and
 the resulting run's conclusion can be invisible to that PR's
-required-check rollup (see
-[`.github/workflows/idd-advisory-convergence.yml`](https://github.com/kurone-kito/idd-skill/blob/main/.github/workflows/idd-advisory-convergence.yml)'s
-header comment for the full finding).
+required-check rollup. See
+[kurone-kito/idd-skill's own dogfooded copy of `.github/workflows/idd-advisory-convergence.yml`](https://github.com/kurone-kito/idd-skill/blob/main/.github/workflows/idd-advisory-convergence.yml)'s
+header comment for the full finding — this deliberately links the
+upstream source repository's copy, not a relative path to your own
+vendored workflow file, because the fuller investigation prose lives
+only in that dogfooded original; the portable stub this template
+mirrors at `idd-template/.github/workflows/idd-advisory-convergence.yml`
+does not carry it.
 
 ## Phase ID Compatibility Contract
 
