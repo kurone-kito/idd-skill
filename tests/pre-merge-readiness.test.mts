@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   fetchBranchRulesets,
+  fetchGovernanceJson,
   parseArgs,
   resolveToleratedGhFailure,
 } from '../src/scripts/pre-merge-readiness.mts';
@@ -167,6 +168,7 @@ test('required check summaries block when no merge-gate policy evidence exists',
   assert.deepEqual(summarizeRequiredChecks([], [], {}), {
     status: 'unknown',
     noRequiredChecksConfigured: true,
+    protectionReadsUnreadable: false,
     presentRunConclusion: 'none',
     requiredCheckCount: 0,
     generatedRequiredCheckCount: 0,
@@ -4422,6 +4424,69 @@ test('fetchBranchRulesets propagates a non-404 fetch error instead of coercing t
   );
 });
 
+// #1377: neither `branches/{branch}/protection` nor `rules/branches/{branch}`
+// documents a `403` response at all (only `200`/`404`), so a `404` is
+// structurally ambiguous between "genuinely nothing configured" and "the
+// token cannot read this" (see idd-ci.instructions.md's Required-check
+// discovery step 4 for the citations). fetchGovernanceJson is the shared
+// helper that both reads go through.
+test('fetchGovernanceJson passes a successful fetch through unchanged', () => {
+  const result = fetchGovernanceJson(
+    'repos/o/r/branches/main/protection',
+    false,
+    false,
+    {},
+    () => ({ required_status_checks: { contexts: ['lint'] } }),
+  );
+  assert.deepEqual(result, {
+    value: { required_status_checks: { contexts: ['lint'] } },
+    unreadable: false,
+  });
+});
+
+test('fetchGovernanceJson treats a 404 as unreadable by default (fail closed)', () => {
+  const result = fetchGovernanceJson(
+    'repos/o/r/branches/main/protection',
+    false,
+    false,
+    {},
+    () => {
+      throw ghHttpError(404, 'Branch not protected');
+    },
+  );
+  assert.deepEqual(result, { value: {}, unreadable: true });
+});
+
+test('fetchGovernanceJson trusts a 404 as genuinely empty when ciGate.trustEmptyProtectionReads opts in', () => {
+  const result = fetchGovernanceJson(
+    'repos/o/r/branches/main/protection',
+    false,
+    true,
+    {},
+    () => {
+      throw ghHttpError(404, 'Branch not protected');
+    },
+  );
+  assert.deepEqual(result, { value: {}, unreadable: false });
+});
+
+test('fetchGovernanceJson propagates a non-404 fetch error instead of coercing to "unreadable"', () => {
+  const boom = ghHttpError(403, 'Forbidden');
+  assert.throws(
+    () =>
+      fetchGovernanceJson(
+        'repos/o/r/rules/branches/main',
+        true,
+        false,
+        [],
+        () => {
+          throw boom;
+        },
+      ),
+    (error: unknown) => error === boom,
+  );
+});
+
 // gh api writes the JSON error body to stdout on a non-2xx response, so an
 // allowed HTTP status must yield an empty result rather than that error object.
 const ghHttpErrorWithStdout = (
@@ -4571,6 +4636,60 @@ test('buildPreMergeReadinessSummary embeds a strict ready/blockers rollup', () =
   const readyBlockers = ready.blockers as { gate: string }[];
   assert.deepEqual(ready.blockers, computePreMergeReadinessBlockers(ready));
   assert.equal(ready.ready, readyBlockers.length === 0);
+});
+
+// #1377: a masked-403-as-404 on the branch-protection or ruleset reads must
+// block the ci gate with a specific, actionable detail instead of silently
+// falling through to noRequiredChecksConfigured, even in the exact "all
+// present runs are green and no required-check rule was found" shape that
+// would otherwise vacuously pass (isPreMergeCiAllPassing's
+// noRequiredChecksConfigured && presentRunConclusion === 'all-passing'
+// branch).
+test('buildPreMergeReadinessSummary blocks on the ci gate with a specific detail when protection reads are unreadable', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  // Drop the `required_status_checks` rule so the (fallback-empty) reads
+  // alone would otherwise report noRequiredChecksConfigured: true, matching
+  // the "unprotected repo" shape this vulnerability is indistinguishable
+  // from at the response level.
+  const branchRules = (fixture.input.branchRules as { type: string }[]).filter(
+    (rule) => rule.type !== 'required_status_checks',
+  );
+
+  const withoutOverride = buildPreMergeReadinessSummary(
+    { ...fixture.input, branchRules },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+  assert.equal(
+    (withoutOverride.ci as Record<string, unknown>).noRequiredChecksConfigured,
+    true,
+    'sanity check: dropping the rule alone reproduces the vacuous-pass shape',
+  );
+  assert.equal(withoutOverride.ready, true);
+
+  const unreadable = buildPreMergeReadinessSummary(
+    { ...fixture.input, branchRules, protectionReadsUnreadable: true },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+  assert.equal(
+    (unreadable.ci as Record<string, unknown>).noRequiredChecksConfigured,
+    false,
+  );
+  assert.equal(
+    (unreadable.ci as Record<string, unknown>).protectionReadsUnreadable,
+    true,
+  );
+  assert.deepEqual(
+    unreadable.blockers,
+    computePreMergeReadinessBlockers(unreadable),
+  );
+  const ciBlocker = (
+    unreadable.blockers as { gate: string; detail: string }[]
+  ).find((blocker) => blocker.gate === 'ci');
+  assert.equal(
+    ciBlocker?.detail,
+    'cannot determine required checks: protection/ruleset unreadable',
+  );
+  assert.equal(unreadable.ready, false);
 });
 
 test('a trusted machine-disposition clears the notice/summary in both merge gates without promoting the author to a global IDD agent (#1182)', () => {

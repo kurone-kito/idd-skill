@@ -680,6 +680,7 @@
       "required": [
         "status",
         "noRequiredChecksConfigured",
+        "protectionReadsUnreadable",
         "presentRunConclusion",
         "requiredCheckCount",
         "generatedRequiredCheckCount",
@@ -703,6 +704,10 @@
         },
         "noRequiredChecksConfigured": {
           "type": "boolean"
+        },
+        "protectionReadsUnreadable": {
+          "type": "boolean",
+          "description": "#1377: true when a branch-protection or ruleset read threw a masked-403-as-404 that was not trusted as genuinely empty (ciGate.trustEmptyProtectionReads). noRequiredChecksConfigured is always false when this is true."
         },
         "presentRunConclusion": {
           "type": "string",

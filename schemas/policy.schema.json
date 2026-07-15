@@ -356,6 +356,10 @@
               "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$"
             }
           }
+        },
+        "trustEmptyProtectionReads": {
+          "type": "boolean",
+          "description": "Opt-in toggle for trusting a `404` on the branch-protection or ruleset reads as a genuinely empty result (default false; absent means false). GitHub's documented status-code contracts for these reads never include `403`, so a `404` can also mean the token lacks permission to read a real configuration and GitHub is masking that as `404` to avoid confirming the resource's existence. Default `false` fails closed: an unreadable `404` on these reads is treated the same as an explicit `403` (hold) rather than as `noRequiredChecksConfigured`. Set `true` only when the repository operator has verified the automation token is known to carry full read access to these specific endpoints; this is a git-committed, human-authorized decision, not a runtime check of the caller's role or token scope."
         }
       }
     },

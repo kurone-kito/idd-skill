@@ -252,6 +252,7 @@
     "ci": {
       "status": "success",
       "noRequiredChecksConfigured": false,
+      "protectionReadsUnreadable": false,
       "presentRunConclusion": "all-passing",
       "requiredCheckCount": 1,
       "generatedRequiredCheckCount": 1,

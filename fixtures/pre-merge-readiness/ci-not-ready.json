@@ -225,6 +225,7 @@
     "ci": {
       "status": "missing",
       "noRequiredChecksConfigured": false,
+      "protectionReadsUnreadable": false,
       "presentRunConclusion": "all-passing",
       "requiredCheckCount": 2,
       "generatedRequiredCheckCount": 1,

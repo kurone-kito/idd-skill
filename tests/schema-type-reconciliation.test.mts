@@ -200,6 +200,7 @@ interface PolicyConfigFile {
       authorityPolicy?: ApprovalActorPolicy;
       maxValidity?: string;
     };
+    trustEmptyProtectionReads?: boolean;
   };
   discover?: {
     activeClaimPreScanBatchSize?: number;
@@ -800,6 +801,7 @@ const policyConfigFixture = {
       authorityPolicy: 'owners-and-maintainers-only',
       maxValidity: 'PT24H',
     },
+    trustEmptyProtectionReads: true,
   },
   discover: {
     activeClaimPreScanBatchSize: 10,
@@ -950,6 +952,7 @@ const preMergeReadinessFixture = {
   ci: {
     status: 'success',
     noRequiredChecksConfigured: false,
+    protectionReadsUnreadable: false,
     presentRunConclusion: 'all-passing',
     requiredCheckCount: 1,
     generatedRequiredCheckCount: 1,

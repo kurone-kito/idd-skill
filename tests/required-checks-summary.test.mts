@@ -75,3 +75,27 @@ test('an app-pinned classic required check with no context is not no-required-ch
   });
   assert.equal(r.noRequiredChecksConfigured, false);
 });
+
+// #1377: a masked-403-as-404 on the branch-protection or ruleset reads must
+// not fall through to "no required checks configured" just because the
+// (fallback-empty) reads found nothing — that is indistinguishable from a
+// genuinely unprotected branch at the response level (see
+// idd-ci.instructions.md's Required-check discovery step 4).
+test('unprotected + green runs, but the protection/ruleset reads were unreadable: noRequiredChecksConfigured stays false', () => {
+  const r = summarizeRequiredChecks(
+    [{ name: 'build', state: 'SUCCESS' }],
+    [],
+    {},
+    {
+      protectionReadsUnreadable: true,
+    },
+  );
+  assert.equal(r.noRequiredChecksConfigured, false);
+  assert.equal(r.protectionReadsUnreadable, true);
+  assert.equal(r.requiredChecksPassing, false);
+});
+
+test('a genuinely protected branch reports protectionReadsUnreadable: false even without the option', () => {
+  const r = summarize([{ name: 'lint', state: 'SUCCESS' }], protectedRules);
+  assert.equal(r.protectionReadsUnreadable, false);
+});

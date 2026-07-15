@@ -2777,7 +2777,11 @@ export function summarizeRequiredChecks(
   checks = [],
   branchRules = [],
   branchProtection = {},
-  { waivers = null, waivableSelectors = null } = {},
+  {
+    waivers = null,
+    waivableSelectors = null,
+    protectionReadsUnreadable = false,
+  } = {},
 ) {
   const branchReviewRequirements = summarizeBranchReviewRequirements(
     branchRules,
@@ -2841,8 +2845,13 @@ export function summarizeRequiredChecks(
   return {
     status,
     noRequiredChecksConfigured:
+      !protectionReadsUnreadable &&
       requiredCheckNames.length === 0 &&
       !branchReviewRequirements.requiredCheckSourcePinned,
+    // #1377: surfaced separately from `noRequiredChecksConfigured` so a hold
+    // message can name the unreadable-read cause specifically instead of a
+    // generic "CI is not all-passing".
+    protectionReadsUnreadable,
     presentRunConclusion: resolvePresentRunConclusion(normalizedChecks),
     requiredCheckCount: requiredCheckNames.length,
     generatedRequiredCheckCount: matchedRequiredChecks.length,
@@ -3605,10 +3614,14 @@ export function computePreMergeReadinessBlockers(report) {
   }
   const ci = preMergeAsRecord(report.ci);
   if (!isPreMergeCiAllPassing(ci)) {
-    blockers.push({
-      gate: 'ci',
-      detail: `CI is not all-passing (status="${String(ci.status ?? '')}", noRequiredChecksConfigured=${Boolean(ci.noRequiredChecksConfigured)}, presentRunConclusion="${String(ci.presentRunConclusion ?? '')}")`,
-    });
+    // #1377: name the masked-403-as-404 cause explicitly when that is why the
+    // gate is not all-passing, matching idd-ci.instructions.md's wording,
+    // instead of the generic status/noRequiredChecksConfigured detail below.
+    const detail =
+      ci.protectionReadsUnreadable === true
+        ? 'cannot determine required checks: protection/ruleset unreadable'
+        : `CI is not all-passing (status="${String(ci.status ?? '')}", noRequiredChecksConfigured=${Boolean(ci.noRequiredChecksConfigured)}, presentRunConclusion="${String(ci.presentRunConclusion ?? '')}")`;
+    blockers.push({ gate: 'ci', detail });
   }
   const reviewerStates = preMergeAsRecord(report.reviewerStates);
   if (!isPreMergeReviewSatisfied(reviewerStates)) {
@@ -3651,6 +3664,7 @@ export function buildPreMergeReadinessSummary(
     branchRules = [],
     branchRulesets = [],
     branchProtection = {},
+    protectionReadsUnreadable = false,
     requestedReviewers = [],
     timelineEvents = [],
     claimEvents = [],
@@ -3790,6 +3804,7 @@ export function buildPreMergeReadinessSummary(
   const ci = summarizeRequiredChecks(checks, branchRules, branchProtection, {
     waivers: waiverEvidence,
     waivableSelectors: waivableCheckSelectors,
+    protectionReadsUnreadable,
   });
   const dispositionEvidence = options.includeDispositionEvidence
     ? summarizeDispositionEvidenceForGate(
