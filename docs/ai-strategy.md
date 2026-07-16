@@ -9,9 +9,10 @@ in this project.
 - [.github/copilot-instructions.md](../.github/copilot-instructions.md)
   is the canonical, fully detailed AI guide. Keep it complete enough
   for GitHub Copilot CLI and VS Code Copilot Chat.
-- [AGENTS.md](../AGENTS.md) is a Codex compatibility entry point. It
-  must stay self-contained for the rules that Codex needs immediately,
-  then point to the canonical Copilot guide for the remaining detail.
+- [AGENTS.md](../AGENTS.md) is a Codex CLI and OpenCode compatibility
+  entry point. It must stay self-contained for the rules those agents
+  need immediately, then point to the canonical Copilot guide for the
+  remaining detail.
 - [CLAUDE.md](../CLAUDE.md) is a Claude Code compatibility entry point
   with the same role.
 - [GEMINI.md](../GEMINI.md) is a Gemini CLI compatibility entry point
