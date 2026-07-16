@@ -690,8 +690,8 @@ function loadPolicy(policyPath: string) {
       // No config was readable, so buildClaimStateResolution falls back to
       // its own defaults (24h stale age, env-only trusted actors) — the
       // same soft-default philosophy the graph helper already relies on.
-      claimTiming: undefined as { staleAge?: unknown } | undefined,
-      trustedMarkerActors: undefined as unknown,
+      claimTiming: undefined,
+      trustedMarkerActors: undefined,
     };
   }
 }
