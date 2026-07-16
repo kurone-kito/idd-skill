@@ -8,10 +8,10 @@ project.
 **Canonical reference**: The full, authoritative project guidance
 lives in
 [`.github/copilot-instructions.md`](.github/copilot-instructions.md).
-This file contains tool-specific guidance for Codex. When
-Copilot-specific workflow names appear, apply the intent in Codex
-using Codex's own interaction model rather than following product
-terms literally.
+This file contains tool-specific guidance for agents that read the
+agents.md standard — currently Codex CLI and OpenCode. When
+Copilot-specific workflow names appear, apply the intent using your
+own interaction model rather than following product terms literally.
 
 ## Minimum requirements
 
@@ -79,7 +79,9 @@ terms literally.
 Open `.github/instructions/idd-overview-core.instructions.md` and the
 relevant phase file before starting work. See
 [docs/idd-workflow.md](docs/idd-workflow.md) for the cross-agent
-entry path and phase routing.
+entry path and phase routing. See
+[Model capability expectations](docs/idd-workflow.md#model-capability-expectations)
+before running this loop on a lightweight local or compact cloud model.
 
 ## Issue-authoring skill (dogfooded)
 

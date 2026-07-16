@@ -79,7 +79,9 @@ terms literally.
 Open `.github/instructions/idd-overview-core.instructions.md` and the
 relevant phase file before starting work. See
 [docs/idd-workflow.md](docs/idd-workflow.md) for the cross-agent
-entry path and phase routing.
+entry path and phase routing. See
+[Model capability expectations](docs/idd-workflow.md#model-capability-expectations)
+before running this loop on a lightweight local or compact cloud model.
 
 ## Issue-authoring skill (dogfooded)
 

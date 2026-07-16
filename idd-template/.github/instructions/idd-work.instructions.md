@@ -201,6 +201,13 @@ plan comment and verified claim.
 
 ## B3 — Implement
 
+**Plan-comment checkpoint**: before writing any implementation code,
+confirm the B2 plan comment already exists on the issue. If it does
+not, stop and return to B2. If code was already written before this
+checkpoint is noticed, disclose the ordering deviation on the issue,
+post the plan retroactively with an explicit note about the
+reordering, and run the C1 critique pass against the completed diff.
+
 Implement the plan. Before each commit, run **fix-validate**.
 
 Keep commits atomic — one logical change per commit.
@@ -217,6 +224,20 @@ a broken `main` baseline, not necessarily the current change — verify
 with a fresh-vs-stale `node_modules` comparison, or by rerunning
 **install-deps** in a clean worktree, before assuming the failure traces
 to this diff.
+
+**Local test flakiness under concurrent load**: a test this diff did
+not touch failing or timing out locally, then passing an isolated
+re-run, while hosted CI for the same push stays green, is a signal of
+expected CPU/resource contention from many concurrent local sessions on
+one machine — not a defect in this diff. Re-run the failing test in
+isolation once; if it passes and hosted CI stays green, trust the
+hosted result and stop investigating it as a regression. **Hosted CI is
+authoritative over local validation for this diagnosis** — it resolves
+a genuine local-vs-hosted disagreement for the same push in favor of
+the hosted result; it does not waive the fix-validate /
+pre-push-validate requirements above. If the test still fails after the
+isolated re-run, or hosted CI is not green, treat it as a real failure
+and fix it.
 
 If B3 or C must stop for a hold, use the shared Hold / suspend rules in
 `idd-overview-appendix.instructions.md` and update the issue digest with the
