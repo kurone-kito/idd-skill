@@ -42,9 +42,10 @@ entry file should be an explicit operator choice, not the default.
 The workflow above assumes at least a **middle-tier cloud-class**
 model for the full Discover → Claim → Work → PR → Review → Merge → F4
 loop, reusing the three model-capability classes from the
-issue-authoring skill's specificity target
-(`skills/issue-authoring/references/contract.md`): **frontier**,
-**middle-tier cloud**, and **lightweight local or compact cloud**.
+issue-authoring skill's
+[specificity target](issue-authoring-skill.md#specificity-target):
+**frontier**, **middle-tier cloud**, and **lightweight local or
+compact cloud**.
 
 - **Frontier** and **middle-tier cloud** classes need no additional
   guardrails beyond the rest of this guide; this is the assumed
