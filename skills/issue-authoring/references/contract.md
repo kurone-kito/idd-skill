@@ -199,8 +199,8 @@ the fix already landed on the default branch, then closes its own
 issue and (unmerged) PR as superseded, citing the verifying evidence.
 This is the same manual verify-then-close judgment call the execution
 loop's B2.0 supersession re-check (`idd-work.instructions.md`) applies
-after claim — this scan only adds an earlier, pre-publish checkpoint. A
-fast enough race can still surface even after B2.0; when it does, it
+after claim — this scan only adds an earlier, pre-publish checkpoint.
+A fast enough race can still surface even after B2.0; when it does, it
 resolves the same way.
 
 ## Output chooser
