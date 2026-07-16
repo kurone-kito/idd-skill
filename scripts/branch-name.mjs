@@ -89,13 +89,25 @@ function runCli() {
     printHelp();
     process.exit(0);
   }
-  if (!Number.isInteger(args.number) || (args.number ?? 0) <= 0) {
+  if (args.number === null) {
     throw new Error('--number is required and must be a positive integer');
   }
   if (args.title === null) {
     throw new Error('--title is required');
   }
   process.stdout.write(`${computeBranchName(args.number, args.title)}\n`);
+}
+/**
+ * Parse a canonical positive-integer command-line token (whole-token
+ * `^[1-9]\d*$`, e.g. `"42"`) and return the parsed value, or `null` when the
+ * token is not a canonical positive integer. `Number.parseInt` alone is too
+ * lenient for CLI validation: it silently truncates `"3.5"` to `3` and
+ * `"5abc"` to `5` before any positivity check ever runs, so the check must
+ * run against the raw string, not the already-parsed (and already-lossy)
+ * number.
+ */
+function parsePositiveInteger(token) {
+  return /^[1-9]\d*$/.test(token) ? Number.parseInt(token, 10) : null;
 }
 function parseArgs(argv) {
   const parsed = { number: null, title: null, help: false };
@@ -109,7 +121,7 @@ function parseArgs(argv) {
       return value;
     };
     if (token === '--number') {
-      parsed.number = Number.parseInt(String(requireValue()), 10);
+      parsed.number = parsePositiveInteger(requireValue());
       index += 1;
       continue;
     }

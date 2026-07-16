@@ -37,10 +37,22 @@ function runCli() {
   if (args.token === null || args.token === '') {
     throw new Error('--token is required');
   }
-  if (!Number.isInteger(args.bandSize) || (args.bandSize ?? 0) <= 0) {
+  if (args.bandSize === null) {
     throw new Error('--band-size is required and must be a positive integer');
   }
   process.stdout.write(`${selectDesyncedIndex(args.token, args.bandSize)}\n`);
+}
+/**
+ * Parse a canonical positive-integer command-line token (whole-token
+ * `^[1-9]\d*$`, e.g. `"42"`) and return the parsed value, or `null` when the
+ * token is not a canonical positive integer. `Number.parseInt` alone is too
+ * lenient for CLI validation: it silently truncates `"3.5"` to `3` and
+ * `"5abc"` to `5` before any positivity check ever runs, so the check must
+ * run against the raw string, not the already-parsed (and already-lossy)
+ * number.
+ */
+function parsePositiveInteger(token) {
+  return /^[1-9]\d*$/.test(token) ? Number.parseInt(token, 10) : null;
 }
 function parseArgs(argv) {
   const parsed = { token: null, bandSize: null, help: false };
@@ -59,7 +71,7 @@ function parseArgs(argv) {
       continue;
     }
     if (flag === '--band-size') {
-      parsed.bandSize = Number.parseInt(String(requireValue()), 10);
+      parsed.bandSize = parsePositiveInteger(requireValue());
       index += 1;
       continue;
     }
