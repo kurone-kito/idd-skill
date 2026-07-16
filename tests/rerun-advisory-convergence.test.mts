@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  buildCheckRunsForRefArgs,
   computeRerunPlan,
   parseArgs,
   parseRunIdFromUrl,
@@ -372,6 +373,43 @@ test('parseRunIdFromUrl returns null for a non-matching URL', () => {
 
 test('parseRunIdFromUrl returns null for an empty URL', () => {
   assert.equal(parseRunIdFromUrl(''), null);
+});
+
+// --- fetchCheckRunsForRef argv construction (regression: #1431 review) --
+//
+// `gh api` defaults to POST as soon as any `-f`/`-F` value is present
+// (per `gh help api`), and the commit check-runs endpoint only accepts
+// GET -- an earlier draft of this helper omitted `--method GET` and every
+// real invocation 404'd (confirmed against the live GitHub API while
+// fixing this during review). These tests assert the exact constructed
+// argv without shelling out to `gh`, so a future edit cannot silently
+// drop `--method GET` again.
+
+test('buildCheckRunsForRefArgs includes --method GET alongside the -f check_name field', () => {
+  const args = buildCheckRunsForRefArgs(
+    'kurone-kito',
+    'idd-skill',
+    HEAD,
+    RERUN_PLAN_CHECK_NAME,
+  );
+  assert.deepEqual(args, [
+    'api',
+    `repos/kurone-kito/idd-skill/commits/${HEAD}/check-runs`,
+    '--method',
+    'GET',
+    '-f',
+    `check_name=${RERUN_PLAN_CHECK_NAME}`,
+    '--paginate',
+    '--jq',
+    '.check_runs[]',
+  ]);
+});
+
+test('buildCheckRunsForRefArgs places --method immediately before GET (gh api requires the value to follow its flag)', () => {
+  const args = buildCheckRunsForRefArgs('o', 'r', HEAD, 'name');
+  const methodIndex = args.indexOf('--method');
+  assert.notEqual(methodIndex, -1);
+  assert.equal(args[methodIndex + 1], 'GET');
 });
 
 // --- CLI argument parsing ----------------------------------------------

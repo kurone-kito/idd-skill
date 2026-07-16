@@ -609,9 +609,15 @@ interface RawWorkflowRunPayload {
  * a busy SHA can sit many pages deep -- exactly the "paged out of the
  * recent-runs window" problem the issue calls out. This endpoint is
  * scoped to the single commit and check name instead, via the documented
- * `check_name` query parameter (passed as a GET-style `-f` field, per
- * `gh api`'s own convention of appending `-f`/`-F` values to the query
- * string for GET requests).
+ * `check_name` query parameter.
+ *
+ * `--method GET` is required alongside the `-f check_name=...` field:
+ * `gh api` defaults to POST as soon as any `-f`/`-F` value is present
+ * (its own `--help` text: "The default HTTP request method is GET
+ * normally and POST if any parameters were added"), and this endpoint
+ * only accepts GET -- an unqualified `-f` here silently sends a POST that
+ * 404s, confirmed against the live API while fixing #1431. `--method GET`
+ * is what makes `-f` append to the query string instead.
  *
  * Not built on {@link ghApiJson}'s own `paginate` option: that option
  * hardcodes `--jq '.[]'`, which assumes a bare top-level array, but this
@@ -619,24 +625,35 @@ interface RawWorkflowRunPayload {
  * function passes `--jq '.check_runs[]'` directly and reuses the same
  * {@link parsePaginatedGhNdjson} parser `ghApiJson` uses internally.
  */
+export function buildCheckRunsForRefArgs(
+  owner: string,
+  repo: string,
+  ref: string,
+  checkName: string,
+): string[] {
+  const path = `repos/${owner}/${repo}/commits/${ref}/check-runs`;
+  return [
+    'api',
+    path,
+    '--method',
+    'GET',
+    '-f',
+    `check_name=${checkName}`,
+    '--paginate',
+    '--jq',
+    '.check_runs[]',
+  ];
+}
+
 function fetchCheckRunsForRef(
   owner: string,
   repo: string,
   ref: string,
   checkName: string,
 ): RawCheckRunPayload[] {
-  const path = `repos/${owner}/${repo}/commits/${ref}/check-runs`;
   const raw = execFileSync(
     'gh',
-    [
-      'api',
-      path,
-      '-f',
-      `check_name=${checkName}`,
-      '--paginate',
-      '--jq',
-      '.check_runs[]',
-    ],
+    buildCheckRunsForRefArgs(owner, repo, ref, checkName),
     { encoding: 'utf8' },
   );
   return parsePaginatedGhNdjson(raw) as RawCheckRunPayload[];
