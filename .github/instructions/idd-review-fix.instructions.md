@@ -358,8 +358,8 @@ proceeding to F — do not skip triage.
   if the policy is `hold`, post a hold comment on the PR documenting the
   pre-existing failure and stop. A maintainer must resolve or bypass the
   failing check; do not auto-continue or treat as passed without human
-  confirmation. See the externally-owned-blocker rule in
-  `idd-overview-appendix.instructions.md`.
+  confirmation. Phrase the resume condition per the invariant-first
+  guidance in `idd-overview-appendix.instructions.md` (Hold / suspend).
 - **On cancelled / timed_out / code-caused**: fix, run **fix-validate**,
   commit, return to E11
 - **On cancelled / timed_out / infra**: apply `ciWait.rerunPolicy`.
