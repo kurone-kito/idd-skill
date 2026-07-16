@@ -235,6 +235,13 @@ plan comment and verified claim.
 
 ## B3 — Implement
 
+**Plan-comment checkpoint**: before writing any implementation code,
+confirm the B2 plan comment already exists on the issue. If it does
+not, stop and return to B2. If code was already written before this
+checkpoint is noticed, disclose the ordering deviation on the issue,
+post the plan retroactively with an explicit note about the
+reordering, and run the C1 critique pass against the completed diff.
+
 Implement the plan. Before each commit, run **fix-validate**.
 
 Keep commits atomic — one logical change per commit.
