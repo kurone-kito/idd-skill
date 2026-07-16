@@ -77,6 +77,11 @@ blocking condition in `Open blockers`, and the resume condition in
 `Next action`. Long holds still need claim heartbeats; the digest does
 not reset the claim stale clock.
 
+For an externally owned blocker (sibling PR/issue, maintainer-owned
+check, base-branch health), phrase the resume condition as the checkable
+invariant (e.g. a named check passing on main), not the sibling alone —
+the proxy may resolve differently, or never.
+
 ## Roadmap markers
 
 For roadmap markers and their usage rules, see
