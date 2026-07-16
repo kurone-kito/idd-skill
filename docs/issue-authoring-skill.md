@@ -533,6 +533,34 @@ Then apply these checks in order:
 The skill should report when it reuses, extends, or declines to reuse
 an existing issue so a later session can follow the reasoning.
 
+**Recent-window scan for just-discovered problems.** The checks above
+assume the work already has a candidate home to reuse or extend. When
+instead authoring an ad hoc issue for a problem just discovered during
+the current session — a build-breaking regression noticed mid-session,
+for example, rather than a task drafted from an existing backlog — the
+skill should run a recent-window duplicate scan immediately before
+publishing: list the newest issues regardless of state and check
+whether a concurrent session already authored the same problem.
+
+```sh
+gh issue list --repo <owner>/<repo> --state all --limit 20
+# or, scoped to a recency window (mirrors B2.0's own idiom):
+gh issue list --repo <owner>/<repo> --search "created:>=<recent-cutoff-timestamp>"
+```
+
+A hit routes back into the checks above: extend the discovered issue
+instead of publishing a duplicate. When the race slips past this scan
+anyway (near-simultaneous discovery), the outcome is anticipated and
+self-resolving, not a coordination failure: both sessions proceed
+independently through their own claim and implementation cycle;
+whichever PR merges first wins; the other session manually verifies
+the fix already landed on the default branch, then closes its own
+issue and (unmerged) PR as superseded, citing the verifying evidence.
+This is the same manual verify-then-close judgment call the execution
+loop's B2.0 supersession re-check applies after claim — this scan only
+adds an earlier, pre-publish checkpoint; a fast enough race can still
+surface even after B2.0, resolved the same way.
+
 ## Decomposition and roadmap planning rules
 
 The skill should identify atomic execution units first, then decide how
