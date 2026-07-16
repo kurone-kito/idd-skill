@@ -185,6 +185,15 @@ zero; for `roadmap-first`, both the roadmap path and the orphan fallback
 returned zero; for `roadmap`, only the roadmap path runs and A3 applies
 when it returns zero.
 
+**Claim-state annotation (optional).** When helper support is enabled,
+`discover-orphan-filter` accepts an opt-in `--with-claim-state` flag
+(plus `--current-claim-id`) that annotates each candidate with
+active-claim eligibility, mirroring `discover-roadmap-graph`'s flag of
+the same name — see `docs/idd-helper-scripts.md`. This lets an A0-O
+caller fold live claim state into its output the same way the roadmap
+path already can, instead of discovering a concurrent claim only at the
+A5 pre-check.
+
 ## A1 — Find the roadmap
 
 Use GH CLI or GH MCP to find the roadmap among open issues. Identify it

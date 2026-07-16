@@ -20,6 +20,12 @@ import {
   rankAndRouteBySuitability,
 } from './autopilot-suitability.mts';
 import { extractBlockedByIssueNumbers } from './discover-readiness-check.mts';
+import {
+  annotateLeafClaimState,
+  buildClaimStateResolution,
+  type ClaimStateResolution,
+  type LeafActiveClaim,
+} from './discover-roadmap-graph.mts';
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
 import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
@@ -92,6 +98,13 @@ interface FilterOrphanIssuesOptions {
   autopilotSuitabilityEnabled?: boolean;
   autopilot?: boolean;
   now?: Date | string;
+  /**
+   * Opt-in active-claim annotation (`--with-claim-state`, #1395). Gated the
+   * same way as `discover-roadmap-graph`: absent means NO extra GitHub API
+   * calls and no claim fields on any candidate, keeping the default output
+   * byte-stable.
+   */
+  claimState?: ClaimStateResolution;
 }
 
 interface FilteredIssueEntry {
@@ -111,6 +124,20 @@ interface OrphanCandidate {
   url: unknown;
   autopilotSuitability: number | null;
   effort: EffortHint | null;
+  /**
+   * Active-claim annotation, present only under `--with-claim-state` (#1395),
+   * mirroring `discover-roadmap-graph`'s `RoadmapGraphNode.activeClaim` shape
+   * exactly (Design O): `present: false` (with `claimId: null`,
+   * `agentId: null`) means no trusted claim is present, `present: true` means
+   * one exists (possibly stale). Absent in the default (flag-absent) path so
+   * the byte-stable output shape is unchanged.
+   */
+  activeClaim?: LeafActiveClaim;
+  /**
+   * Derived eligibility: `true` when no present, non-stale, trusted-actor
+   * claim blocks this candidate. Present only under `--with-claim-state`.
+   */
+  claimEligible?: boolean;
 }
 
 interface ParsedArgs {
@@ -121,10 +148,12 @@ interface ParsedArgs {
   help: boolean;
   now: string;
   autopilot: boolean;
+  withClaimState: boolean;
+  currentClaimId: string;
 }
 
 if (isCliExecution(import.meta.url)) {
-  runCli();
+  await runCli();
 }
 
 /**
@@ -242,7 +271,7 @@ export function classifyIssue(
   return { orphan: true, reason: 'blocked_references_closed' };
 }
 
-export function filterOrphanIssues(
+export async function filterOrphanIssues(
   issues: OrphanIssueInput[],
   options: FilterOrphanIssuesOptions = {},
 ) {
@@ -337,6 +366,22 @@ export function filterOrphanIssues(
     filtered[result.reason].push(entry);
   }
 
+  // Opt-in (#1395): annotate each orphan candidate with active-claim
+  // eligibility, mirroring `discover-roadmap-graph`'s own sequential
+  // per-leaf loop. Gated on `options.claimState` so the default path makes
+  // no extra GitHub API call and the output shape stays byte-stable. Runs
+  // before the ranking/routing split below so both the ranked `orphans` and
+  // `routed_to_human` partitions carry the annotation (they share the same
+  // object references; `rankAndRouteBySuitability` only reorders/filters).
+  if (options.claimState) {
+    const claimState = options.claimState;
+    for (const orphan of orphans) {
+      const annotated = await annotateLeafClaimState(orphan.number, claimState);
+      orphan.activeClaim = annotated.activeClaim;
+      orphan.claimEligible = annotated.claimEligible;
+    }
+  }
+
   // Rank the orphan candidate list by authored autopilot-suitability
   // score. Pre-sort by the soft effort tie-breaker (lower effort first,
   // with a missing hint at the neutral middle) and then issue number, so
@@ -386,7 +431,7 @@ export function filterOrphanIssues(
   };
 }
 
-function runCli() {
+async function runCli() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -415,7 +460,25 @@ function runCli() {
     ),
   );
 
-  const result = filterOrphanIssues(openIssues, {
+  // The claim-state annotation is strictly opt-in: only when
+  // --with-claim-state is passed do we build the comment loader (the sole
+  // new GitHub API surface) and resolve the trusted-actor / stale-age
+  // policy. The default path leaves `claimState` undefined, so no extra
+  // fetch is made and the output is byte-stable (mirrors
+  // discover-roadmap-graph's own CLI wiring).
+  const claimState = args.withClaimState
+    ? buildClaimStateResolution(
+        owner,
+        repo,
+        {
+          claimTiming: policy.claimTiming,
+          trustedMarkerActors: policy.trustedMarkerActors,
+        },
+        args.currentClaimId,
+      )
+    : undefined;
+
+  const result = await filterOrphanIssues(openIssues, {
     issueStateByNumber: openStateByNumber,
     fetchIssueStateByNumber: (issueNumber) =>
       fetchIssueState(repoRef, issueNumber),
@@ -430,6 +493,7 @@ function runCli() {
     autopilotSuitabilityEnabled: policy.autopilotSuitabilityEnabled,
     autopilot: args.autopilot,
     now: args.now || new Date(),
+    claimState,
   });
 
   const output = {
@@ -461,6 +525,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     help: false,
     now: '',
     autopilot: false,
+    withClaimState: false,
+    currentClaimId: '',
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -499,6 +565,23 @@ function parseArgs(argv: string[]): ParsedArgs {
       parsed.autopilot = true;
       continue;
     }
+    if (token === '--with-claim-state') {
+      parsed.withClaimState = true;
+      continue;
+    }
+    if (token === '--current-claim-id') {
+      // Only consume the next token as the id when it exists and is not
+      // itself a flag, mirroring discover-roadmap-graph's own parsing, so
+      // `--current-claim-id --with-claim-state` does not swallow the
+      // following flag as the id. A missing/flag value leaves
+      // currentClaimId empty and the next flag is left for its own
+      // iteration.
+      if (value !== undefined && !value.startsWith('--')) {
+        parsed.currentClaimId = value;
+        index += 1;
+      }
+      continue;
+    }
     if (token === '--help' || token === '-h') {
       parsed.help = true;
       continue;
@@ -510,15 +593,15 @@ function parseArgs(argv: string[]): ParsedArgs {
 
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>] [--pr <number>] [--now <ISO8601>] [--autopilot]
+  node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>] [--pr <number>] [--now <ISO8601>] [--autopilot] [--with-claim-state] [--current-claim-id <id>]
 
 Output schema:
 {
   "repository": {"owner": "...", "repo": "..."},
   "diagnostics": {"pr": 404},
   "policy": {"source": "...", "orphanFirstPolicy": "none|maintainer-approved|public-disabled", "markerPrefix": "...", "authoringLabelName": "...", "authoringStaleAge": "...", "autopilotSuitabilityFloor": 3, "autopilotSuitabilityEnabled": true},
-  "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|blocked_references_closed", "url": "...", "autopilotSuitability": 4}],
-  "routed_to_human": [{"number": 2, "title": "...", "state": "OPEN", "reason": "orphan", "url": "...", "autopilotSuitability": 1}],
+  "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|blocked_references_closed", "url": "...", "autopilotSuitability": 4, "effort": "S|M|L|null"}],
+  "routed_to_human": [{"number": 2, "title": "...", "state": "OPEN", "reason": "orphan", "url": "...", "autopilotSuitability": 1, "effort": "S|M|L|null"}],
   "filtered": {
     "roadmap_marker": [...],
     "blocked_by_marker": [...],
@@ -538,6 +621,25 @@ first; equal scores tie-break by lowest issue number). With --autopilot
 (default 3) are moved to routed_to_human; without it (attended runs) they
 stay in orphans, ranked last. A missing or out-of-range score is treated
 as no score: the issue stays in orphans and is never routed out.
+
+--with-claim-state (opt-in) annotates each candidate in "orphans" and
+"routed_to_human" with active-claim eligibility, exactly mirroring
+discover-roadmap-graph's flag of the same name: it fetches that issue's
+comments and resolves the active claim using the configured
+trustedMarkerActors and claimTiming.staleAge (default PT24H). Each
+annotated candidate gains (activeClaim is always an object):
+  "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null }
+                 (present:false with claimId/agentId null = no trusted claim)
+  "claimEligible": bool   (eligible = no present, non-stale, trusted claim)
+Absent the flag, NO comment API calls are made and no claim fields are
+emitted (the output shape is byte-stable).
+--current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
+each activeClaim (true when the active claim's claimId equals <id>).
+NOTE: claimEligible is a best-effort SOFT discovery hint (same limitation
+as discover-roadmap-graph's annotation): it resolves only new-format
+claimed-by markers and intentionally does NOT account for legacy
+claim-id-less markers or forced-handoff transfers; the authoritative A5
+claim gate (idd-claim.instructions.md) remains the real protection.
 `);
 }
 
@@ -549,6 +651,8 @@ function loadPolicy(policyPath: string) {
   try {
     const config = JSON.parse(readFileSync(targetPath, 'utf8')) as {
       markerPrefix?: unknown;
+      claimTiming?: { staleAge?: unknown };
+      trustedMarkerActors?: unknown;
     };
     const authoringPolicy = resolveAuthoringGuardPolicy(config);
     const labelsPolicy = normalizePolicyConfig(config).labels;
@@ -563,6 +667,11 @@ function loadPolicy(policyPath: string) {
       needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
       autopilotSuitabilityFloor: resolveAutopilotSuitabilityFloor(config),
       autopilotSuitabilityEnabled: resolveAutopilotSuitabilityEnabled(config),
+      // Passed through verbatim (raw, un-normalized) for
+      // buildClaimStateResolution (#1395), which expects this same shape —
+      // it is only consumed when --with-claim-state is passed.
+      claimTiming: config.claimTiming,
+      trustedMarkerActors: config.trustedMarkerActors,
     };
   } catch {
     const authoringPolicy = resolveAuthoringGuardPolicy({});
@@ -578,6 +687,11 @@ function loadPolicy(policyPath: string) {
       needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
       autopilotSuitabilityFloor: DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
       autopilotSuitabilityEnabled: true,
+      // No config was readable, so buildClaimStateResolution falls back to
+      // its own defaults (24h stale age, env-only trusted actors) — the
+      // same soft-default philosophy the graph helper already relies on.
+      claimTiming: undefined,
+      trustedMarkerActors: undefined,
     };
   }
 }
