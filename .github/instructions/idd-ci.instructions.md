@@ -250,7 +250,8 @@ rerun <run-id>` the _existing_ non-bot `pull_request`-triggered run that
 already executed for this HEAD, subject to `ciWait.rerunPolicy` (a `hold`
 policy inspects instead). Do **not** rerun the gated bot run: a re-run
 keeps the original actor's privileges and re-enters `action_required`
-(approve it via `POST /actions/runs/{run_id}/approve` if it must run).
+(approve it via `POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve`
+if it must run).
 The check also self-heals on the next non-bot trigger -- a push, or a
 **review-thread** disposition reply (`pull_request_review_comment`), but
 not a regular-comment (PATH B) one, since the workflow ignores
