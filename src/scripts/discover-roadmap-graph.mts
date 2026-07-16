@@ -424,8 +424,21 @@ interface RoadmapNodeRecord {
  * `claimState` option against this same shape when reusing
  * {@link buildClaimStateResolution} / {@link annotateLeafClaimState}.
  */
+/** A value that may be returned directly or as a promise. */
+type Awaitable<T> = T | Promise<T>;
+
 export interface ClaimStateResolution {
-  loadComments: (issueNumber: number) => unknown;
+  /**
+   * Injected per-issue comment loader. Returns the issue's comment list —
+   * synchronously or as a promise ({@link annotateLeafClaimState} awaits it).
+   * Elements are the raw, untrusted comment entries (GitHub REST/GraphQL
+   * shape, or a test fixture); {@link normalizeClaimComments} defensively
+   * reads only `body` / `createdAt` (or `created_at`) / `author.login`
+   * (or `user.login`) and tolerates any other element, so the element type
+   * stays `unknown` rather than over-promising a shape the loader never
+   * guarantees.
+   */
+  loadComments: (issueNumber: number) => Awaitable<readonly unknown[]>;
   /**
    * Trusted-actor predicate, resolved from `IDD_TRUSTED_MARKER_ACTORS` then
    * the configured `trustedMarkerActors`.
