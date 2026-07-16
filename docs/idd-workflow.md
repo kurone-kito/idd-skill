@@ -2,7 +2,7 @@
 
 This document is the neutral entry point for the repository's
 Issue-Driven Development (IDD) workflow across GitHub Copilot, Codex
-CLI, Claude Code, and Antigravity CLI (formerly Gemini CLI).
+CLI, OpenCode, Claude Code, and Antigravity CLI (formerly Gemini CLI).
 
 Use it when you need to answer three questions quickly:
 
@@ -28,8 +28,14 @@ you are reading this guide first, start at step 1.
 | ----------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | GitHub Copilot surfaces | `.github/copilot-instructions.md` | `.github/instructions/idd-overview-core.instructions.md` for execution surfaces; package-scoped `.instructions.md` files in VS Code Copilot when editing matching paths | The routed phase file when the current step changes                                |
 | Codex CLI               | `AGENTS.md`                       | None from `.github/instructions/`                                                                                                                                       | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file |
+| OpenCode                | `AGENTS.md`                       | `AGENTS.md` itself — OpenCode's native rules mechanism auto-loads it; none from `.github/instructions/`                                                                 | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file |
 | Claude Code             | `CLAUDE.md`                       | None from `.github/instructions/` by default                                                                                                                            | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file |
 | Antigravity CLI         | `GEMINI.md`                       | None from `.github/instructions/`                                                                                                                                       | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file |
+
+OpenCode also discovers the `issue-authoring` skill bundle in this
+repository through its `.claude/skills/` compatibility, since
+`.claude/skills/issue-authoring/` is a generated, byte-identical copy
+of the canonical bundle at `skills/issue-authoring/`.
 
 During onboarding, create or update `CLAUDE.md`, `AGENTS.md`, and
 `GEMINI.md` so each non-Copilot agent listed above has a stable first
@@ -489,12 +495,13 @@ produces a list of issues with severity, correctness, and coverage
 assessment. The goal and expected output are the same regardless of
 agent; only the mechanism differs.
 
-| Agent           | How to run a critique pass                                                                |
-| --------------- | ----------------------------------------------------------------------------------------- |
-| Copilot         | Launch a subagent in Agent mode; use the calling phase's critique checklist as the prompt |
-| Claude Code     | `Agent(subagent_type="general-purpose")` with the calling phase's critique checklist      |
-| Codex CLI       | Self-critique: add a "review the above for issues" step in the next response              |
-| Antigravity CLI | Self-critique or use Antigravity's native multi-step task mechanism if available          |
+| Agent           | How to run a critique pass                                                                                                                 |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Copilot         | Launch a subagent in Agent mode; use the calling phase's critique checklist as the prompt                                                  |
+| Claude Code     | `Agent(subagent_type="general-purpose")` with the calling phase's critique checklist                                                       |
+| Codex CLI       | Self-critique: add a "review the above for issues" step in the next response                                                               |
+| OpenCode        | Launch a subagent via OpenCode's Task tool (e.g. the built-in `general` subagent, or a `subtask: true` command) — an independent mechanism |
+| Antigravity CLI | Self-critique or use Antigravity's native multi-step task mechanism if available                                                           |
 
 When a phase file says "run a critique pass", apply the row for your
 agent above. If no subagent mechanism is available, perform the critique
