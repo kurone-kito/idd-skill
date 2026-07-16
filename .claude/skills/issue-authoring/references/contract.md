@@ -185,7 +185,7 @@ whether a concurrent session already authored the same problem.
 
 ```sh
 gh issue list --repo <owner>/<repo> --state all --limit 20
-# or, scoped to a recency window (mirrors B2.0's own idiom):
+# or, scoped to a recency window:
 gh issue list --repo <owner>/<repo> --state all --search "created:>=<recent-cutoff-timestamp>"
 ```
 
@@ -199,9 +199,9 @@ the fix already landed on the default branch, then closes its own
 issue and (unmerged) PR as superseded, citing the verifying evidence.
 This is the same manual verify-then-close judgment call the execution
 loop's B2.0 supersession re-check (`idd-work.instructions.md`) applies
-after claim — this scan only adds an earlier, pre-publish checkpoint; a
-fast enough race can still surface even after B2.0, resolved the same
-way.
+after claim — this scan only adds an earlier, pre-publish checkpoint. A
+fast enough race can still surface even after B2.0; when it does, it
+resolves the same way.
 
 ## Output chooser
 
