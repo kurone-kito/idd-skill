@@ -60,10 +60,11 @@ If stalled-session routing returns hold/inconclusive, stop.
 - When an operator asks the agent to proceed with forced handoff, the
   agent's correct action is to report the stalled-claim evidence back
   and hand the operator the exact helper invocation to run themselves in
-  their own interactive terminal (the repository's packaged
-  `idd-force-handoff` bin command, or `node ./bin/idd-force-handoff.mjs`
-  from the repository root for an uninstalled checkout) — not to author
-  or post the `forced-handoff` marker itself.
+  their own interactive terminal — the repository's packaged
+  `idd-force-handoff` bin command where that facade is vended, or
+  `node scripts/force-handoff.mjs` from the repository root under
+  profiles (such as `vendored-node`) that vend only the `scripts/` form
+  — not to author or post the `forced-handoff` marker itself.
 
 ## Step 1 — Identify claim state
 
