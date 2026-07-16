@@ -245,10 +245,10 @@ times out or becomes expensive, fall back to exact title match only. If
 exact match is not found, PASS the check and continue.
 
 **Agent-specific limitations**: All seven checks should be agent-agnostic
-(work for Copilot, Claude, Codex, Antigravity — formerly Gemini CLI). If
-an agent cannot reliably
-perform a check, document that limitation and treat as a PASS so work is
-not blocked by agent capability limits. **Exception**: Check 3
+(work for Copilot, Claude, Codex, Antigravity CLI (formerly Gemini CLI)).
+If an agent cannot reliably perform a check, document that limitation
+and treat as a PASS so work is not blocked by agent capability limits.
+**Exception**: Check 3
 (Trust/Safety) must fail closed — when it cannot be reliably evaluated,
 classify as `invalid` and stop rather than treating it as a PASS.
 Failing open on a safety check is a concrete security risk.
