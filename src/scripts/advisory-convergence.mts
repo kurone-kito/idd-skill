@@ -758,16 +758,26 @@ export function runAdvisoryConvergence(
  * Actions we capture that run's stderr (`stdio` pipe) to keep the log clean.
  *
  * Outside Actions (a local/interactive run) the probe normally succeeds; if it
- * genuinely fails we deliberately keep stderr **inherited** so the failure
- * stays visible — a silently-empty `viewerLogin` narrows self-marker trust,
- * the same fail-noisy concern #1396 hardens for the roadmap-audit helper.
+ * genuinely fails we deliberately **inherit** stderr so the failure stays
+ * visible — a silently-empty `viewerLogin` narrows self-marker trust, the same
+ * fail-noisy concern #1396 hardens for the roadmap-audit helper.
+ *
+ * Both branches set `stdio` **explicitly** rather than leaning on
+ * `execFileSync`'s default: that default already writes the child's stderr to
+ * the parent (so a bare call would leak the 403), but relying on it is
+ * non-obvious. `pipe` captures stderr (silent); `inherit` forwards it to the
+ * parent (visible). stdin is `ignore` on both, matching `GH_TEXT_LOOP_OPTIONS`'
+ * stdin-safety.
  */
 export function viewerProbeGhOptions(
   env: NodeJS.ProcessEnv = process.env,
 ): GhTextOptions {
-  return env.GITHUB_ACTIONS === 'true'
-    ? { stdio: ['ignore', 'pipe', 'pipe'] }
-    : {};
+  return {
+    stdio:
+      env.GITHUB_ACTIONS === 'true'
+        ? ['ignore', 'pipe', 'pipe']
+        : ['ignore', 'pipe', 'inherit'],
+  };
 }
 
 function collectFromGitHub(args: AdvisoryConvergenceArgs): {

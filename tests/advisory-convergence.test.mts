@@ -1068,19 +1068,20 @@ test('runAdvisoryConvergence: missing --pr throws before any collection happens'
   assert.equal(called, false);
 });
 
-test('viewerProbeGhOptions suppresses gh stderr only under GitHub Actions', () => {
-  // Under Actions: capture the probe's stdout AND stderr (stdio pipe) so the
-  // expected `gh api user` 403 does not leak into the run log.
+test('viewerProbeGhOptions captures gh stderr only under GitHub Actions', () => {
+  // Under Actions: capture stderr (pipe) so the expected `gh api user` 403 does
+  // not leak into the run log; stdout is still piped so viewerLogin is read.
   const ci = viewerProbeGhOptions({ GITHUB_ACTIONS: 'true' });
   assert.deepEqual(ci.stdio, ['ignore', 'pipe', 'pipe']);
 
-  // Outside Actions: no stdio override, so stderr stays inherited and a real
-  // local viewer-lookup failure stays visible (the #1396 fail-noisy concern).
-  assert.equal(viewerProbeGhOptions({}).stdio, undefined);
-  assert.equal(
+  // Outside Actions: inherit stderr so a real local viewer-lookup failure
+  // stays visible (the #1396 fail-noisy concern). Both are set explicitly.
+  const local = ['ignore', 'pipe', 'inherit'];
+  assert.deepEqual(viewerProbeGhOptions({}).stdio, local);
+  assert.deepEqual(
     viewerProbeGhOptions({ GITHUB_ACTIONS: 'false' }).stdio,
-    undefined,
+    local,
   );
   // Only the literal string 'true' opts in (matches GitHub's own value).
-  assert.equal(viewerProbeGhOptions({ GITHUB_ACTIONS: '1' }).stdio, undefined);
+  assert.deepEqual(viewerProbeGhOptions({ GITHUB_ACTIONS: '1' }).stdio, local);
 });
