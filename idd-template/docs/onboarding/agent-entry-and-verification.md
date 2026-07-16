@@ -131,10 +131,14 @@ workflow stub above to every session; the steps below are an
   }
   ```
 
-- OpenCode discovers Claude-compatible skill bundles from
-  `.claude/skills/` (and `.opencode/skills/`), so the `issue-authoring`
-  skill installed under `.claude/skills/issue-authoring/` in Step 2 is
-  already available to OpenCode without extra configuration.
+- If the operator installs the optional `issue-authoring` companion
+  from Step 2 under a directory OpenCode reads natively —
+  `.claude/skills/` or `.opencode/skills/` — it is already available to
+  OpenCode without extra configuration. Step 2 also allows other
+  runtime-specific locations (for example `.github/skills/`); OpenCode
+  does not discover a bundle placed only in one of those, so copy or
+  symlink it into `.claude/skills/` or `.opencode/skills/` as well when
+  OpenCode also needs it.
 - If a target repository runs OpenCode as an autonomous worker under
   its own GitHub identity (not just an interactive assistant), add
   that login to `trustedMarkerActors` (and the advisory-bot lists if
