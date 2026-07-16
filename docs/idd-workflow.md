@@ -43,6 +43,70 @@ file to read. GitHub Copilot remains an update-if-present surface via
 `.github/copilot-instructions.md`. Skipping creation of a missing root
 entry file should be an explicit operator choice, not the default.
 
+## Model capability expectations
+
+The workflow above assumes at least a **middle-tier cloud-class**
+model for the full Discover → Claim → Work → PR → Review → Merge → F4
+loop, reusing the three model-capability classes from the
+issue-authoring skill's
+[specificity target](issue-authoring-skill.md#specificity-target):
+**frontier**, **middle-tier cloud**, and **lightweight local or
+compact cloud**.
+
+- **Frontier** and **middle-tier cloud** classes need no additional
+  guardrails beyond the rest of this guide; this is the assumed
+  default for every phase file above.
+- **Lightweight local or compact cloud** (the supported low tier):
+  large-context, low-reasoning models such as the phi-4-mini class
+  (roughly 128K context, tool calling supported, but weak adherence to
+  long multi-file instruction sets). Confine this tier to
+  narrowly-scoped roles under operator supervision:
+  - executing a single, fully-specified `idd:ready` issue rather than
+    Discover's open-ended candidate selection;
+  - preferring a deterministic helper command (see
+    [IDD helper script evaluation](idd-helper-scripts.md)) over prose
+    judgment wherever one exists for the current step;
+  - drafting output for human review rather than running the
+    autonomous merge phases.
+- **Unsupported**: a model whose context window cannot hold the entry
+  file, `idd-overview-core.instructions.md`, the routed phase file, and
+  tool schemas at the same time — the qwen2.5-coder-1.5b class (roughly
+  32K context) is the practical cutoff example. Below this floor, IDD
+  execution is out of scope; such a model can still be a downstream
+  _consumer_ of an artifact this workflow produces, just not an IDD
+  execution agent.
+
+### Weak-model guardrails
+
+When a lightweight-tier model runs any part of this loop:
+
+- Prefer a documented helper command over prose interpretation
+  wherever [IDD helper script evaluation](idd-helper-scripts.md) lists
+  one for the current step **and the repository's helper runtime is
+  not the `instructions-only` profile**; treat an expected helper that
+  is missing or failing as a stop-and-ask condition, never a silent
+  fallback to prose judgment. On the default `instructions-only`
+  profile, following the documented Markdown / `gh` / `jq` procedure
+  directly is the normal, supported path for this tier too, not a stop
+  condition.
+- Do not run the autonomous merge phases (F3 onward) on this tier. See
+  the merge-policy recommendation for weak-model sessions at
+  <https://github.com/kurone-kito/idd-skill/blob/main/idd-template/docs/onboarding/policy-decisions.md#merge-policy>.
+- This is additional to, not a replacement for, the uniform C-phase
+  objective diff validation floor in
+  [Critique pass invocation](#critique-pass-invocation): that floor
+  exists precisely because judging whether a same-response
+  self-critique is truly independent is the kind of fragile runtime
+  self-detection a weak model could get wrong, so it applies uniformly
+  regardless of declared model tier.
+
+These tiers are practical operating guidance, not a new enforced
+runtime gate: `.github/instructions/idd-suitability.instructions.md`'s
+Edge Cases already treat an agent's inability to reliably perform a
+check as a PASS (fail-closed only for Check 3, Trust/Safety), so this
+section documents an operator-facing expectation rather than a new
+A4/A4.5 check.
+
 ## IDD file map
 
 | File                                                       | Role                                                                                                            |
