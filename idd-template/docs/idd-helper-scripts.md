@@ -97,6 +97,16 @@ In the idd-skill source repository, the following optional helpers were adopted:
   sub-gate (#1340): a deterministic `converged`/`ready` verdict with an
   exit-code contract via `--assert`, claim-independent so it also works
   as a required-check-able CI verdict
+- `scripts/rerun-advisory-convergence.mjs` (#1431) for a read-only
+  rerun-plan diagnosis of stuck `idd-advisory-convergence` check-run
+  rollups: fetches every check-run instance for a PR's current HEAD SHA
+  (paged commit check-runs API), classifies each as `pass` / `pending` /
+  `bot-gated-skip` / `unresolved` / `rerun-eligible`, and prints the
+  ordered, deduplicated `gh run rerun <id>` recovery plan for the
+  rerun-eligible instances — referenced from `idd-ci.instructions.md`
+  §Rerun mechanics as the preferred way to produce that plan. Never
+  calls `gh run rerun` itself; a mutating `--apply` mode is a deliberate
+  follow-up.
 - `scripts/live-status-digest.mjs` for issue or PR live status digest
   discovery, rendering, dry-run, and claim-checked upsert
 - `scripts/audit-pr-cleanup.mjs` for post-merge comment cleanup auditing
