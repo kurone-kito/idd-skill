@@ -225,10 +225,10 @@ to this diff.
 
 **Local test flakiness under concurrent load**: a spec this diff did
 not touch failing or timing out locally, then passing an isolated
-re-run, while hosted CI for the same commit is green, is expected
-CPU/resource contention from many concurrent local sessions on one
-machine — not a defect in this diff. Re-run the failing spec in
-isolation once; once it passes and hosted CI stays green, trust the
+re-run, while hosted CI for the same commit stays green, is a signal of
+expected CPU/resource contention from many concurrent local sessions on
+one machine — not a defect in this diff. Re-run the failing spec in
+isolation once; if it passes and hosted CI stays green, trust the
 hosted result and stop investigating it as a regression. **Hosted CI is
 authoritative over local validation**: when a local outcome disagrees
 with the hosted CI result for the same commit, the hosted CI result
