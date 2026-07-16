@@ -419,8 +419,12 @@ interface RoadmapNodeRecord {
  * present, each open execution leaf is annotated with active-claim eligibility
  * using `loadComments` (an injected per-issue comment loader, mirroring the
  * existing `loadIssue`/`loadSubIssues` injection so tests stay network-free).
+ *
+ * Exported (#1395) so `discover-orphan-filter.mts` can type its own opt-in
+ * `claimState` option against this same shape when reusing
+ * {@link buildClaimStateResolution} / {@link annotateLeafClaimState}.
  */
-interface ClaimStateResolution {
+export interface ClaimStateResolution {
   loadComments: (issueNumber: number) => unknown;
   /**
    * Trusted-actor predicate, resolved from `IDD_TRUSTED_MARKER_ACTORS` then
@@ -1641,8 +1645,13 @@ export function isClaimStaleByAge(
  * resolved trusted-actor predicate, configured stale age, and "now". Only
  * invoked when `--with-claim-state` is passed, so the live comment fetch is
  * never wired in the default path.
+ *
+ * Exported (#1395) so `discover-orphan-filter.mts`'s CLI can build the same
+ * resolution from its own parsed policy/args instead of re-implementing this
+ * wiring. `policy` intentionally takes the *raw* parsed config shape (as
+ * returned by this file's own `loadPolicy`), not a normalized/flattened view.
  */
-function buildClaimStateResolution(
+export function buildClaimStateResolution(
   owner: string,
   repo: string,
   policy: {
@@ -1722,8 +1731,13 @@ export function buildTrustedAuthorPredicate(policy: {
     );
 }
 
-/** Live per-issue comment loader (the sole new GitHub API surface). */
-function buildCommentLoader(owner: string, repo: string) {
+/**
+ * Live per-issue comment loader (the sole new GitHub API surface).
+ *
+ * Exported (#1395) so `discover-orphan-filter.mts` can reuse the identical
+ * loader instead of duplicating this pagination/`gh` wiring.
+ */
+export function buildCommentLoader(owner: string, repo: string) {
   return (issueNumber: number) => {
     const comments: unknown[] = [];
     const pageSize = 100;
