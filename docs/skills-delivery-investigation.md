@@ -36,9 +36,14 @@ were not evaluated by the prior note.
 
 ## Current delivery model (baseline)
 
-- **Copilot** — reads `.github/copilot-instructions.md` with `applyTo`
-  frontmatter auto-scoping which phase file loads for which file path.
-  Copilot has no skill-loading mechanism at all. Skills would be a
+- **Copilot** — reads the lightweight `.github/copilot-instructions.md`
+  (which carries no `applyTo` frontmatter) and auto-loads the single
+  `applyTo: "**"` file, `idd-overview-core.instructions.md`; the phase
+  files themselves are opened via that overview's routing table, not
+  path-auto-scoped, so this is already the same on-demand read Claude
+  Code uses (package-scoped `.instructions.md` files do auto-load by path
+  in the VS Code Copilot surface, but the phase files are not among
+  them). Copilot has no skill-loading mechanism at all. Skills would be a
   purely additive channel for Copilot: adopting them elsewhere changes
   nothing about how Copilot behaves, and Copilot cannot regress as a
   result of this decision either way.
@@ -51,8 +56,10 @@ were not evaluated by the prior note.
   chooses to read it.
 - **OpenCode** (planned via
   [#1414](https://github.com/kurone-kito/idd-skill/issues/1414), not yet
-  shipped — no `.opencode/skills/`, `.agents/skills/`, or OpenCode
-  reference exists anywhere in this repository as of this writing) —
+  shipped — no `.opencode/skills/` or `.agents/skills/` skill/config
+  directory exists in this repository as of this writing, though OpenCode
+  is already referenced in prose here and in the related rationale
+  entries) —
   resolves project rules by walking up from the cwd and loading the
   **first** matching file among `AGENTS.md`, then `CLAUDE.md` (no merge
   between the two; `opencode.json`'s `instructions` array is the one
@@ -84,7 +91,9 @@ They are categorically **not** skill candidates: something that must
 always be present cannot be delivered through a primitive that only
 loads on invocation (see the Safety analysis below). The mapping
 question applies only to the remaining 16 phase-specific files
-(291,645 bytes combined across all 18 files at present; read live sizes
+(271,814 bytes combined across those 16 files at present — the two
+always-loaded overview files above are excluded, so this is the
+skill-candidate size, not the 296,377-byte all-18 total; read live sizes
 with `wc -c .github/instructions/*.instructions.md` rather than trusting
 this snapshot to stay current).
 

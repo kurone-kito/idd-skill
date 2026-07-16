@@ -297,10 +297,9 @@ load-bearing phase file (e.g. `idd-claim.instructions.md`,
 deterministic routing-table read with a probabilistic model judgment
 call, weakening exactly the fail-closed guarantee the overview-core
 claim-revalidation gate relies on those phase files being read for. A
-third
-synchronized surface alongside the canonical template and the generated
-instruction files would also multiply the drift matrix for every
-phase-file edit.
+third synchronized surface alongside the canonical template and the
+generated instruction files would also multiply the drift matrix for
+every phase-file edit.
 
 Conditions that would revisit this: recorded evidence of routing-table
 navigation failures on either agent at a material rate; either runtime
