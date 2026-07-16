@@ -135,7 +135,7 @@ test('classifyIssue supports custom marker prefix', () => {
   assert.equal(blocked.reason, 'blocked_by_marker');
 });
 
-test('filterOrphanIssues excludes blocked labels and open blockers', () => {
+test('filterOrphanIssues excludes blocked labels and open blockers', async () => {
   const issues = [
     {
       number: 10,
@@ -163,7 +163,7 @@ test('filterOrphanIssues excludes blocked labels and open blockers', () => {
     },
   ];
 
-  const result = filterOrphanIssues(issues, {
+  const result = await filterOrphanIssues(issues, {
     issueStateByNumber: new Map([[20, 'OPEN']]),
     fetchIssueStateByNumber: () => 'UNRESOLVABLE',
   });
@@ -174,7 +174,7 @@ test('filterOrphanIssues excludes blocked labels and open blockers', () => {
   assert.equal(result.filtered.blocked_label.length, 1);
 });
 
-test('filterOrphanIssues resolves configured blocked-label names (#1273)', () => {
+test('filterOrphanIssues resolves configured blocked-label names (#1273)', async () => {
   const issues = [
     {
       number: 30,
@@ -194,7 +194,7 @@ test('filterOrphanIssues resolves configured blocked-label names (#1273)', () =>
     },
   ];
 
-  const result = filterOrphanIssues(issues, {
+  const result = await filterOrphanIssues(issues, {
     issueStateByNumber: new Map(),
     fetchIssueStateByNumber: () => 'UNRESOLVABLE',
     blockedByHumanLabelName: 'triage:human-gate',
@@ -209,7 +209,7 @@ test('filterOrphanIssues resolves configured blocked-label names (#1273)', () =>
   assert.equal(result.orphans[0].number, 31);
 });
 
-test('filterOrphanIssues excludes custom authoring label and warns when stale', () => {
+test('filterOrphanIssues excludes custom authoring label and warns when stale', async () => {
   const issues = [
     {
       number: 21,
@@ -228,7 +228,7 @@ test('filterOrphanIssues excludes custom authoring label and warns when stale', 
     },
   ];
 
-  const result = filterOrphanIssues(issues, {
+  const result = await filterOrphanIssues(issues, {
     issueStateByNumber: new Map(),
     fetchIssueStateByNumber: () => 'UNRESOLVABLE',
     authoringLabelName: 'status:drafting',
@@ -246,7 +246,7 @@ test('filterOrphanIssues excludes custom authoring label and warns when stale', 
   );
 });
 
-test('filterOrphanIssues keeps closed-blocker issues as orphan candidates', () => {
+test('filterOrphanIssues keeps closed-blocker issues as orphan candidates', async () => {
   const issues = [
     {
       number: 30,
@@ -258,7 +258,7 @@ test('filterOrphanIssues keeps closed-blocker issues as orphan candidates', () =
     },
   ];
 
-  const result = filterOrphanIssues(issues, {
+  const result = await filterOrphanIssues(issues, {
     issueStateByNumber: new Map([[31, 'CLOSED']]),
     fetchIssueStateByNumber: () => 'UNRESOLVABLE',
   });
@@ -267,7 +267,7 @@ test('filterOrphanIssues keeps closed-blocker issues as orphan candidates', () =
   assert.equal(result.orphans[0].reason, 'blocked_references_closed');
 });
 
-test('filterOrphanIssues reports unresolvable and circular references', () => {
+test('filterOrphanIssues reports unresolvable and circular references', async () => {
   const issues = [
     {
       number: 40,
@@ -295,7 +295,7 @@ test('filterOrphanIssues reports unresolvable and circular references', () => {
     },
   ];
 
-  const result = filterOrphanIssues(issues, {
+  const result = await filterOrphanIssues(issues, {
     issueStateByNumber: new Map([
       [41, 'OPEN'],
       [42, 'OPEN'],
@@ -314,7 +314,7 @@ test('filterOrphanIssues reports unresolvable and circular references', () => {
   });
 });
 
-test('classifyIssue handles lowercase state casing', () => {
+test('classifyIssue handles lowercase state casing', async () => {
   const issue = {
     number: 50,
     title: 'blocked by open issue with lowercase state',
@@ -324,7 +324,7 @@ test('classifyIssue handles lowercase state casing', () => {
     url: 'https://example.com/50',
   };
 
-  const result = filterOrphanIssues([issue], {
+  const result = await filterOrphanIssues([issue], {
     issueStateByNumber: new Map([[51, 'open']]),
     fetchIssueStateByNumber: () => 'UNRESOLVABLE',
   });
@@ -341,7 +341,7 @@ test('classifyIssue handles lowercase state casing', () => {
   );
 });
 
-test('classifyIssue supports custom marker prefix in filtering', () => {
+test('classifyIssue supports custom marker prefix in filtering', async () => {
   const issue = {
     number: 60,
     title: 'issue with custom marker',
@@ -351,7 +351,7 @@ test('classifyIssue supports custom marker prefix in filtering', () => {
     url: 'https://example.com/60',
   };
 
-  const result = filterOrphanIssues([issue], {
+  const result = await filterOrphanIssues([issue], {
     issueStateByNumber: new Map(),
     fetchIssueStateByNumber: () => 'UNRESOLVABLE',
     markerPrefix: 'my-org-idd',
@@ -369,7 +369,7 @@ test('classifyIssue supports custom marker prefix in filtering', () => {
   );
 });
 
-test('filterOrphanIssues handles pagination with PR-heavy pages', () => {
+test('filterOrphanIssues handles pagination with PR-heavy pages', async () => {
   const mockFetchIssueStateByNumber = (number: number) => {
     return number === 100 ? 'CLOSED' : 'UNRESOLVABLE';
   };
@@ -385,7 +385,7 @@ test('filterOrphanIssues handles pagination with PR-heavy pages', () => {
     },
   ];
 
-  const result = filterOrphanIssues(issues, {
+  const result = await filterOrphanIssues(issues, {
     issueStateByNumber: new Map([[100, 'CLOSED']]),
     fetchIssueStateByNumber: mockFetchIssueStateByNumber,
   });
@@ -398,7 +398,7 @@ test('filterOrphanIssues handles pagination with PR-heavy pages', () => {
   assert.equal(result.orphans[0].reason, 'blocked_references_closed');
 });
 
-test('filterOrphanIssues ranks orphans by autopilot-suitability and routes below-floor to humans (autopilot)', () => {
+test('filterOrphanIssues ranks orphans by autopilot-suitability and routes below-floor to humans (autopilot)', async () => {
   const m = (n: number) => `<!-- idd-skill-autopilot-suitability: ${n} -->`;
   const issues = [
     { number: 1, title: 'low', state: 'OPEN', body: `task\n${m(1)}` },
@@ -406,7 +406,7 @@ test('filterOrphanIssues ranks orphans by autopilot-suitability and routes below
     { number: 3, title: 'mid', state: 'OPEN', body: `task\n${m(3)}` },
     { number: 4, title: 'unscored', state: 'OPEN', body: 'task with no score' },
   ];
-  const result = filterOrphanIssues(issues, {
+  const result = await filterOrphanIssues(issues, {
     issueStateByNumber: new Map(),
     fetchIssueStateByNumber: () => 'UNRESOLVABLE',
     autopilotSuitabilityFloor: 3,
@@ -433,13 +433,13 @@ test('filterOrphanIssues ranks orphans by autopilot-suitability and routes below
   );
 });
 
-test('filterOrphanIssues keeps below-floor orphans selectable in attended (default) mode', () => {
+test('filterOrphanIssues keeps below-floor orphans selectable in attended (default) mode', async () => {
   const m = (n: number) => `<!-- idd-skill-autopilot-suitability: ${n} -->`;
   const issues = [
     { number: 1, title: 'low', state: 'OPEN', body: `task\n${m(1)}` },
     { number: 2, title: 'high', state: 'OPEN', body: `task\n${m(5)}` },
   ];
-  const result = filterOrphanIssues(issues, {
+  const result = await filterOrphanIssues(issues, {
     issueStateByNumber: new Map(),
     fetchIssueStateByNumber: () => 'UNRESOLVABLE',
     autopilotSuitabilityFloor: 3,
@@ -453,14 +453,14 @@ test('filterOrphanIssues keeps below-floor orphans selectable in attended (defau
   assert.deepEqual(result.routed_to_human, []);
 });
 
-test('filterOrphanIssues tie-breaks equal scores by lowest issue number', () => {
+test('filterOrphanIssues tie-breaks equal scores by lowest issue number', async () => {
   const m = (n: number) => `<!-- idd-skill-autopilot-suitability: ${n} -->`;
   const issues = [
     { number: 20, title: 'twenty', state: 'OPEN', body: `task\n${m(5)}` },
     { number: 7, title: 'seven', state: 'OPEN', body: `task\n${m(5)}` },
     { number: 13, title: 'thirteen', state: 'OPEN', body: `task\n${m(5)}` },
   ];
-  const result = filterOrphanIssues(issues, {
+  const result = await filterOrphanIssues(issues, {
     issueStateByNumber: new Map(),
     fetchIssueStateByNumber: () => 'UNRESOLVABLE',
   });
@@ -470,7 +470,7 @@ test('filterOrphanIssues tie-breaks equal scores by lowest issue number', () => 
   );
 });
 
-test('filterOrphanIssues applies the effort hint as a soft tie-breaker within a score band', () => {
+test('filterOrphanIssues applies the effort hint as a soft tie-breaker within a score band', async () => {
   const s = (n: number) => `<!-- idd-skill-autopilot-suitability: ${n} -->`;
   const e = (hint: string) => `<!-- idd-skill-effort: ${hint} -->`;
   // All four share score 4; effort orders the band: S (7, 20) before the
@@ -486,7 +486,7 @@ test('filterOrphanIssues applies the effort hint as a soft tie-breaker within a 
     { number: 13, title: 'thirteen', state: 'OPEN', body: `t\n${s(4)}` },
     { number: 4, title: 'four', state: 'OPEN', body: `t\n${s(4)}\n${e('L')}` },
   ];
-  const result = filterOrphanIssues(issues, {
+  const result = await filterOrphanIssues(issues, {
     issueStateByNumber: new Map(),
     fetchIssueStateByNumber: () => 'UNRESOLVABLE',
   });
@@ -500,13 +500,13 @@ test('filterOrphanIssues applies the effort hint as a soft tie-breaker within a 
   assert.equal(result.orphans.find((o) => o.number === 4)?.effort, 'L');
 });
 
-test('filterOrphanIssues leaves orphans unrouted when suitability is disabled', () => {
+test('filterOrphanIssues leaves orphans unrouted when suitability is disabled', async () => {
   const m = (n: number) => `<!-- idd-skill-autopilot-suitability: ${n} -->`;
   const issues = [
     { number: 1, title: 'low', state: 'OPEN', body: `task\n${m(1)}` },
     { number: 2, title: 'high', state: 'OPEN', body: `task\n${m(5)}` },
   ];
-  const result = filterOrphanIssues(issues, {
+  const result = await filterOrphanIssues(issues, {
     issueStateByNumber: new Map(),
     fetchIssueStateByNumber: () => 'UNRESOLVABLE',
     autopilotSuitabilityFloor: 3,
@@ -518,4 +518,244 @@ test('filterOrphanIssues leaves orphans unrouted when suitability is disabled', 
     [1, 2],
   );
   assert.deepEqual(result.routed_to_human, []);
+});
+
+// ---------------------------------------------------------------------------
+// --with-claim-state annotation (#1395), mirroring
+// discover-roadmap-graph.test.mts's claim-state block against
+// filterOrphanIssues's own `claimState` option.
+// ---------------------------------------------------------------------------
+
+const CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
+const CLAIM_NOW = '2026-06-25T12:00:00Z';
+
+// A claim posted recently relative to CLAIM_NOW is non-stale; one posted
+// well over the 24h stale age earlier is stale.
+const FRESH_CLAIM_AT = '2026-06-25T06:00:00Z';
+const STALE_CLAIM_AT = '2026-06-20T06:00:00Z';
+
+function claimComment(
+  agentId: string,
+  claimId: string,
+  createdAt: string,
+  { author = 'kurone-kito', branch = 'issue/701-task' } = {},
+) {
+  return {
+    body: `<!-- claimed-by: ${agentId} ${claimId} supersedes: none ${createdAt} branch: ${branch} -->`,
+    createdAt,
+    author: { login: author },
+  };
+}
+
+function buildClaimState(
+  commentsByIssue: Map<number, unknown[]>,
+  {
+    currentClaimId = '',
+    trustedActors = ['kurone-kito'],
+    staleAgeMs = CLAIM_STALE_AGE_MS,
+  }: {
+    currentClaimId?: string;
+    trustedActors?: string[];
+    staleAgeMs?: number;
+  } = {},
+) {
+  const trusted = new Set(trustedActors.map((value) => value.toLowerCase()));
+  const seen: number[] = [];
+  return {
+    seen,
+    resolution: {
+      loadComments: (issueNumber: number) => {
+        seen.push(issueNumber);
+        return commentsByIssue.get(issueNumber) ?? [];
+      },
+      isTrustedAuthor: (login: string) =>
+        trusted.has(String(login ?? '').toLowerCase()),
+      staleAgeMs,
+      nowIso: CLAIM_NOW,
+      currentClaimId,
+    },
+  };
+}
+
+// Two open orphan candidates, no blockers.
+function claimOrphanIssues() {
+  return [
+    { number: 701, title: 'leaf 701', state: 'OPEN', labels: [], body: '' },
+    { number: 702, title: 'leaf 702', state: 'OPEN', labels: [], body: '' },
+  ];
+}
+
+test('without --with-claim-state, orphans carry no claim fields and fetch no comments', async () => {
+  const issues = claimOrphanIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT)]],
+  ]);
+  const { seen } = buildClaimState(commentsByIssue);
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    // claimState intentionally omitted (default path).
+  });
+
+  for (const orphan of result.orphans) {
+    const record = orphan as unknown as Record<string, unknown>;
+    assert.equal(Object.hasOwn(record, 'activeClaim'), false);
+    assert.equal(Object.hasOwn(record, 'claimEligible'), false);
+  }
+  // No comment fetch happened — the loader was never invoked.
+  assert.deepEqual(seen, []);
+});
+
+test('a present non-stale claim marks the orphan claimEligible:false', async () => {
+  const issues = claimOrphanIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT)]],
+  ]);
+  const { resolution, seen } = buildClaimState(commentsByIssue);
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    claimState: resolution,
+  });
+
+  const byNumber = new Map(result.orphans.map((o) => [o.number, o]));
+  const leaf701 = byNumber.get(701);
+  assert.deepEqual(leaf701?.activeClaim, {
+    present: true,
+    stale: false,
+    claimId: 'claim-701',
+    agentId: 'agent-a',
+  });
+  assert.equal(leaf701?.claimEligible, false);
+  // Both open orphan candidates are probed.
+  assert.deepEqual(
+    [...seen].sort((a, b) => a - b),
+    [701, 702],
+  );
+});
+
+test('a stale claim is takeover-eligible: present:true, stale:true, claimEligible:true', async () => {
+  const issues = claimOrphanIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', STALE_CLAIM_AT)]],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    claimState: resolution,
+  });
+
+  const byNumber = new Map(result.orphans.map((o) => [o.number, o]));
+  const leaf701 = byNumber.get(701);
+  assert.deepEqual(leaf701?.activeClaim, {
+    present: true,
+    stale: true,
+    claimId: 'claim-701',
+    agentId: 'agent-a',
+  });
+  assert.equal(leaf701?.claimEligible, true);
+});
+
+test('an unclaimed orphan is eligible: present:false, claimEligible:true', async () => {
+  const issues = claimOrphanIssues();
+  // 702 has no comments at all.
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT)]],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    claimState: resolution,
+  });
+
+  const byNumber = new Map(result.orphans.map((o) => [o.number, o]));
+  const leaf702 = byNumber.get(702);
+  assert.deepEqual(leaf702?.activeClaim, {
+    present: false,
+    stale: false,
+    claimId: null,
+    agentId: null,
+  });
+  assert.equal(leaf702?.claimEligible, true);
+});
+
+test('an untrusted-author claim does not block the orphan', async () => {
+  const issues = claimOrphanIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [
+      701,
+      [
+        claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT, {
+          author: 'random-passerby',
+        }),
+      ],
+    ],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    claimState: resolution,
+  });
+
+  const byNumber = new Map(result.orphans.map((o) => [o.number, o]));
+  assert.equal(byNumber.get(701)?.activeClaim?.present, false);
+  assert.equal(byNumber.get(701)?.claimEligible, true);
+});
+
+test('--current-claim-id sets ownedByCurrentSession on the matching claim', async () => {
+  const issues = claimOrphanIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT)]],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue, {
+    currentClaimId: 'claim-701',
+  });
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    claimState: resolution,
+  });
+
+  const byNumber = new Map(result.orphans.map((o) => [o.number, o]));
+  assert.equal(byNumber.get(701)?.activeClaim?.ownedByCurrentSession, true);
+  // 702 is unclaimed, so ownedByCurrentSession is still emitted, as false.
+  assert.equal(byNumber.get(702)?.activeClaim?.ownedByCurrentSession, false);
+});
+
+test('claim-state annotation survives the autopilot floor routing split', async () => {
+  const m = (n: number) => `<!-- idd-skill-autopilot-suitability: ${n} -->`;
+  const issues = [
+    { number: 701, title: 'low', state: 'OPEN', body: `task\n${m(1)}` },
+    { number: 702, title: 'high', state: 'OPEN', body: `task\n${m(5)}` },
+  ];
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', FRESH_CLAIM_AT)]],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    autopilotSuitabilityFloor: 3,
+    autopilot: true,
+    claimState: resolution,
+  });
+
+  // #701 is routed below the floor, but still carries the annotation.
+  assert.deepEqual(
+    result.routed_to_human.map((o) => o.number),
+    [701],
+  );
+  assert.equal(result.routed_to_human[0]?.claimEligible, false);
+  assert.equal(result.orphans[0]?.number, 702);
+  assert.equal(result.orphans[0]?.claimEligible, true);
 });
