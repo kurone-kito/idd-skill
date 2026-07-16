@@ -535,12 +535,13 @@ an existing issue so a later session can follow the reasoning.
 
 **Recent-window scan for just-discovered problems.** The checks above
 assume the work already has a candidate home to reuse or extend. When
-instead authoring an ad hoc issue for a problem just discovered during
-the current session — a build-breaking regression noticed mid-session,
-for example, rather than a task drafted from an existing backlog — the
-skill should run a recent-window duplicate scan immediately before
-publishing: list the newest issues regardless of state and check
-whether a concurrent session already authored the same problem.
+instead authoring an ad hoc issue for a problem **just discovered**
+during the current session — a build-breaking regression noticed
+mid-session, for example, rather than a task drafted from an existing
+backlog — the skill should run a recent-window duplicate scan
+immediately before publishing: list the newest issues regardless of
+state and check whether a concurrent session already authored the
+same problem.
 
 ```sh
 gh issue list --repo <owner>/<repo> --state all --limit 20
@@ -550,8 +551,8 @@ gh issue list --repo <owner>/<repo> --state all --search "created:>=<YYYY-MM-DD>
 
 A hit routes back into the checks above: extend the discovered issue
 instead of publishing a duplicate. When the race slips past this scan
-anyway (near-simultaneous discovery), the outcome is anticipated and
-self-resolving, not a coordination failure: both sessions proceed
+anyway (near-simultaneous discovery), the outcome is **anticipated and
+self-resolving, not a coordination failure**: both sessions proceed
 independently through their own claim and implementation cycle;
 whichever PR merges first wins; the other session manually verifies
 the fix already landed on the default branch, then closes its own
