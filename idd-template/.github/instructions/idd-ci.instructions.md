@@ -250,8 +250,7 @@ if it must run).
 The check also self-heals on the next non-bot trigger -- a push, or a
 **review-thread** disposition reply (`pull_request_review_comment`), but
 not a regular PR comment, since the workflow does not subscribe to
-`issue_comment`. This is the exception to the `action_required` row
-below.
+`issue_comment`.
 
 ## Interpretation
 
@@ -259,7 +258,7 @@ below.
 | State (required checks only, normalized) | Action |
 | --- | --- |
 | All required checks are generated and pass-equivalent | → **on-success** (caller-defined) |
-| Any required check is non-pass `failure`, `action_required`, `startup_failure`, or `stale` | Inspect the log. If infra/flaky: apply `ciWait.rerunPolicy` (default `rerun-once`). If it resolves to rerun, rerun the exact failed run once and resume polling. If it resolves to hold, post a hold comment and stop. If code-caused: fix, run **fix-validate**, commit atomically, then return to caller's pre-push step. `action_required`, `startup_failure`, and `stale` rarely clear on a blind rerun: inspect, and if the check needs a maintainer action or a fresh run, post a hold comment and stop rather than looping reruns. Exception: `idd-advisory-convergence` stuck at `action_required` from a gated bot-triggered review run clears by rerunning the _existing_ PR-linked run, not a hold (see §Rerun mechanics). |
+| Any required check is non-pass `failure`, `action_required`, `startup_failure`, or `stale` | Inspect the log. If infra/flaky: apply `ciWait.rerunPolicy` (default `rerun-once`). If it resolves to rerun, rerun the exact failed run once and resume polling. If it resolves to hold, post a hold comment and stop. If code-caused: fix, run **fix-validate**, commit atomically, then return to caller's pre-push step. `action_required`, `startup_failure`, and `stale` rarely clear on a blind rerun: inspect, and if the check needs a maintainer action or a fresh run, post a hold comment and stop rather than looping reruns. Exception: `idd-advisory-convergence` stuck at `action_required` from a gated bot-triggered review run is recovered by rerunning the _existing_ PR-linked run, subject to `ciWait.rerunPolicy` (see §Rerun mechanics). |
 | Any required check is non-pass `cancelled` or `timed_out` | Investigate cause. If code-caused: fix, run **fix-validate**, commit atomically, then return to caller's pre-push step. If infra-caused: apply `ciWait.rerunPolicy`; rerun or re-push only when the current rerun budget allows it, otherwise post a hold comment and stop. |
 | Any required check is running (`pending`/`requested`/`waiting`/`expected`/...) | Continue waiting. After `ciWait.runningTimeout` — measured from the check's server `startedAt` (see the Polling algorithm) — elapses with no completion (default: 30 min), apply `ciWait.rerunPolicy`. If it resolves to rerun, rerun CI once and resume polling. If the same route recurs after that rerun, or if the policy is `hold`, post a hold comment and stop. |
 | Required checks are not generated after `ciWait.generationTimeout` | Treat as running. Default: 10 min. If the corresponding workflow run does not exist at all when that window elapses, post a hold comment and escalate to a maintainer, then stop. |
