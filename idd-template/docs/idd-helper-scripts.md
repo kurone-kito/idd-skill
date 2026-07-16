@@ -31,6 +31,10 @@ In the idd-skill source repository, the following optional helpers were adopted:
   whose `## Candidate files` collide with actively-claimed / open-PR work on
   the F-phase bundle instruction files (referenced in
   [kurone-kito/idd-skill#1019](https://github.com/kurone-kito/idd-skill/issues/1019))
+- `scripts/select-desynced-index.mjs` for the A4 Step 2 concurrent-selection
+  desync band-index computation; deterministic and network-free (referenced
+  in
+  [kurone-kito/idd-skill#1397](https://github.com/kurone-kito/idd-skill/issues/1397))
 - `scripts/suitability-triage.mjs` for A4.5 seven-check suitability
   evaluation (referenced in
   [kurone-kito/idd-skill#392](https://github.com/kurone-kito/idd-skill/issues/392))
@@ -866,6 +870,23 @@ Interpretation rules:
   and the written algorithm stays the canonical fallback
 - The `tests/branch-name.test.mts` drift test re-derives the pre-check (e)
   "Worked examples" table, so the prose and the helper cannot diverge
+
+### Concurrent-selection desync index
+
+- Source repo / vendored-node command:
+  `node scripts/select-desynced-index.mjs --token <session-token> --band-size <band-size>`
+- Package-manager / ephemeral-npx command: use the profile-selected
+  `idd:select-desynced-index` command from the helper runtime manifest
+  wiring above
+- Prints a single plain integer line: the band index chosen by the A4
+  Step 2 `discover.selectionDesync: session-offset` rule, implementing
+  `selectDesyncedIndex` (a pure FNV-1a 32-bit hash of the session token,
+  modulo the tie-band size) exactly
+- Deterministic and network-free; a missing token or a non-positive /
+  non-integer band size exits non-zero with a clear message instead of
+  silently returning the library function's safe-default `0`
+- The written formula in `idd-discover.instructions.md` stays the
+  canonical spec and fallback when the helper is unavailable
 
 ### Per-cycle marker bodies
 

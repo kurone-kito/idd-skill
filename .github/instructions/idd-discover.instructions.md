@@ -577,12 +577,26 @@ relative order to any tie that remains afterward.
 (default `off`) and the chosen highest-score tie band has more than one
 eligible candidate, pick the band entry at index
 `selectDesyncedIndex(session-token, band-size)` instead of index 0 (a
-pure, deterministic `hash(session-token) mod band-size` from
-`scripts/policy-helpers.mjs`, over the band ordered by ascending issue
-number, `session-token` being this session's `{agent-id}`). It reorders
-**only within** a single score tie band, never across score bands, and
-never bypasses A4.5/A5. With `off`, a single-entry band, or no applicable
-score, keep the deterministic **lowest issue number** pick. See
+pure, deterministic `hash(session-token) mod band-size`, over the band
+ordered by ascending issue number, `session-token` being this session's
+`{agent-id}`). Compute it with the CLI instead of hand-tracing
+`scripts/policy-helpers.mjs`:
+
+```sh
+# source repo / vendored-node
+node scripts/select-desynced-index.mjs --token <session-token> --band-size <band-size>
+
+# package-manager / ephemeral-npx
+<profile-selected-select-desynced-index-command> --token <session-token> --band-size <band-size>
+```
+
+Resolve `<profile-selected-select-desynced-index-command>` from
+`docs/idd-helper-scripts.md`; do not hardcode `node scripts/...` for
+non-vendored profiles. The formula above remains the canonical spec and
+fallback when the helper is unavailable. It reorders **only within** a
+single score tie band, never across score bands, and never bypasses
+A4.5/A5. With `off`, a single-entry band, or no applicable score, keep
+the deterministic **lowest issue number** pick. See
 [rationale](../../docs/idd-design-rationale.md#a4-step-2--rationale-concurrent-selection-desync).
 
 **Author-recorded effort hint (soft tie-breaker).** When candidates remain

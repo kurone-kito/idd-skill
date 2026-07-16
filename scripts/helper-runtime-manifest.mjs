@@ -393,6 +393,15 @@ const HELPER_COMMANDS = [
     contractPaths: ['schemas/idd-roadmap-audit-execute.schema.json'],
   },
   {
+    id: 'select-desynced-index',
+    scriptName: 'idd:select-desynced-index',
+    binName: 'idd-select-desynced-index',
+    entryPath: 'scripts/select-desynced-index.mjs',
+    vendoredCommand: 'node scripts/select-desynced-index.mjs',
+    description:
+      'Compute the deterministic A4 Step 2 concurrent-selection desync band index for a session token and band size.',
+  },
+  {
     id: 'stalled-session-quiet-check',
     scriptName: 'idd:stalled-session-quiet-check',
     binName: 'idd-stalled-session-quiet-check',
