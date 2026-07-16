@@ -30,7 +30,12 @@ Choose exactly one merge policy before unattended runs begin:
 
 Use `fully_autonomous_merge` as the proposed default unless the
 operator explicitly opts out. For public or OSS repositories, recommend
-`human_merge` before granting unattended credentials.
+`human_merge` before granting unattended credentials. For repositories
+where lightweight-tier ("weak-model") sessions run the loop unattended,
+recommend `human_merge` or `separate_merge_agent` instead of
+`fully_autonomous_merge`, since that tier should not run the
+autonomous merge phases. See
+[Model capability expectations](../idd-workflow.md#model-capability-expectations).
 
 ### Credential scope
 
