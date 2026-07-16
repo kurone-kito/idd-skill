@@ -29,7 +29,7 @@ Three shapes were considered for an execution-loop skill:
    `.github/instructions/`.
 
 Shapes 1 and 2 re-package the canonical instruction set that four agent
-surfaces (Copilot, Codex CLI, Claude Code, Gemini CLI) all consume
+surfaces (Copilot, Codex CLI, Claude Code, Antigravity CLI) all consume
 today. The artifact taxonomy in
 [IDD workflow guide](idd-workflow.md) already rules this out as policy:
 native skill bundles "should not duplicate or replace the exported IDD

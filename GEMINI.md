@@ -8,10 +8,10 @@ project.
 **Canonical reference**: The full, authoritative project guidance
 lives in
 [`.github/copilot-instructions.md`](.github/copilot-instructions.md).
-This file contains tool-specific guidance for Gemini. When
-Copilot-specific workflow names appear, apply the intent in Gemini
-using Gemini's own interaction model rather than following product
-terms literally.
+This file contains tool-specific guidance for Antigravity (formerly
+Gemini CLI). When Copilot-specific workflow names appear, apply the
+intent in Antigravity using Antigravity's own interaction model rather
+than following product terms literally.
 
 ## Minimum requirements
 

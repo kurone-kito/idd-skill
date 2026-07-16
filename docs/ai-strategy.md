@@ -14,8 +14,8 @@ in this project.
   then point to the canonical Copilot guide for the remaining detail.
 - [CLAUDE.md](../CLAUDE.md) is a Claude Code compatibility entry point
   with the same role.
-- [GEMINI.md](../GEMINI.md) is a Gemini CLI compatibility entry point
-  with the same role.
+- [GEMINI.md](../GEMINI.md) is an Antigravity CLI (formerly Gemini CLI)
+  compatibility entry point with the same role.
 
 ## Change policy
 

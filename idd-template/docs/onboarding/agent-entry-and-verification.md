@@ -103,8 +103,8 @@ phase file manually when the current step changes.
 ### GEMINI.md
 
 If `GEMINI.md` already exists, apply the same IDD workflow section as
-`AGENTS.md`, adapted to Gemini CLI's wording and still pointing to
-`docs/idd-workflow.md`.
+`AGENTS.md`, adapted to the Antigravity CLI (formerly Gemini CLI)
+wording and still pointing to `docs/idd-workflow.md`.
 
 If `GEMINI.md` does not exist, create a minimal file such as:
 

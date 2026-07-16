@@ -156,3 +156,24 @@ test('canonical-reference tool naming stays per-tool and does not cross-contamin
     }
   }
 });
+
+test('GEMINI.md canonical-reference paragraph names Antigravity; the other entry files do not', () => {
+  for (const file of FILES) {
+    const section = extractSection(
+      readText(file),
+      '**Canonical reference**',
+      '## Minimum requirements',
+    );
+    if (file === 'GEMINI.md') {
+      assert.ok(
+        section.includes('Antigravity'),
+        'GEMINI.md canonical-reference paragraph must name Antigravity',
+      );
+    } else {
+      assert.ok(
+        !section.includes('Antigravity'),
+        `${file} canonical-reference paragraph must not name Antigravity`,
+      );
+    }
+  }
+});

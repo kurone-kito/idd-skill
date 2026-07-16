@@ -44,7 +44,7 @@ body:
       value: |
         - idd-skill version / commit:
         - imported from main or tag:
-        - target agent: [Copilot/Codex/Claude Code/Gemini/other]
+        - target agent: [Copilot/Codex/Claude Code/Antigravity/other]
         - target repo visibility: [public/private]
         - merge policy:
         - review policy:
