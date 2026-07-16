@@ -128,16 +128,21 @@ test('non-positive --band-size exits non-zero with a clear message', () => {
 });
 
 test('non-integer --band-size exits non-zero with a clear message', () => {
-  const { stderr } = runCliExpectFailure([
-    '--token',
-    'x',
-    '--band-size',
-    'not-a-number',
-  ]);
-  assert.match(
-    stderr,
-    /--band-size is required and must be a positive integer/,
-  );
+  // Includes non-integer-*looking* values (`3.5`, `5abc`) that
+  // `Number.parseInt` alone would silently truncate to a valid integer
+  // (`3`, `5`) before any positivity check ever ran.
+  for (const bandSize of ['not-a-number', '3.5', '5abc']) {
+    const { stderr } = runCliExpectFailure([
+      '--token',
+      'x',
+      '--band-size',
+      bandSize,
+    ]);
+    assert.match(
+      stderr,
+      /--band-size is required and must be a positive integer/,
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------

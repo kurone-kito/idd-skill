@@ -1,10 +1,46 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   computeBranchName,
   computeBranchSlug,
 } from '../src/scripts/branch-name.mts';
+
+const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const CLI_PATH = join(REPO_ROOT, 'scripts/branch-name.mjs');
+
+/** Run the built CLI and return its trimmed stdout. */
+function runCli(args: string[]): string {
+  return execFileSync(process.execPath, [CLI_PATH, ...args], {
+    encoding: 'utf8',
+    timeout: 60_000,
+  }).trim();
+}
+
+/** Run the built CLI expecting a non-zero exit, and return its stderr. */
+function runCliExpectFailure(args: string[]): {
+  status: number;
+  stderr: string;
+} {
+  try {
+    execFileSync(process.execPath, [CLI_PATH, ...args], {
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    throw new Error('expected the CLI to exit non-zero, but it succeeded');
+  } catch (error) {
+    const status = (error as { status?: number }).status;
+    const stderr = String((error as { stderr?: unknown }).stderr ?? '');
+    assert.ok(
+      typeof status === 'number' && status !== 0,
+      `expected a non-zero exit status, got ${String(status)}`,
+    );
+    return { status: status as number, stderr };
+  }
+}
 
 // Worked examples shared verbatim with the "Worked examples" block in
 // `.github/instructions/idd-claim.instructions.md` pre-check (e). This is
@@ -115,4 +151,68 @@ test('handles nullish and non-string titles defensively', () => {
   assert.equal(computeBranchSlug(true), 'task');
   assert.equal(computeBranchName(8, null), 'issue/8-task');
   assert.equal(computeBranchName(9, 123), 'issue/9-task');
+});
+
+// ---------------------------------------------------------------------------
+// CLI: drift guard plus invalid-input rejection. `parseArgs`/`runCli` are not
+// exported (only the pure `computeBranchName`/`computeBranchSlug` are), so
+// these cases run against the built CLI, mirroring the CLI test structure in
+// `tests/select-desynced-index.test.mts`.
+// ---------------------------------------------------------------------------
+
+test('drift: CLI output equals computeBranchName for an ordinary number and title', () => {
+  const number = 42;
+  const title = 'Add the OAuth login flow';
+  assert.equal(
+    runCli(['--number', String(number), '--title', title]),
+    computeBranchName(number, title),
+  );
+});
+
+test('missing --number exits non-zero with a clear message', () => {
+  const { stderr } = runCliExpectFailure(['--title', 'x']);
+  assert.match(stderr, /--number is required and must be a positive integer/);
+});
+
+test('non-positive --number exits non-zero with a clear message', () => {
+  for (const number of ['0', '-3']) {
+    const { stderr } = runCliExpectFailure([
+      '--number',
+      number,
+      '--title',
+      'x',
+    ]);
+    assert.match(stderr, /--number is required and must be a positive integer/);
+  }
+});
+
+test('non-integer --number exits non-zero with a clear message', () => {
+  // Includes non-integer-*looking* values (`3.5`, `5abc`) that
+  // `Number.parseInt` alone would silently truncate to a valid integer
+  // (`3`, `5`) before any positivity check ever ran.
+  for (const number of ['not-a-number', '3.5', '5abc']) {
+    const { stderr } = runCliExpectFailure([
+      '--number',
+      number,
+      '--title',
+      'x',
+    ]);
+    assert.match(stderr, /--number is required and must be a positive integer/);
+  }
+});
+
+test('missing --title exits non-zero with a clear message', () => {
+  const { stderr } = runCliExpectFailure(['--number', '5']);
+  assert.match(stderr, /--title is required/);
+});
+
+test('--help prints usage and exits 0', () => {
+  const output = execFileSync(process.execPath, [CLI_PATH, '--help'], {
+    encoding: 'utf8',
+    timeout: 60_000,
+  });
+  assert.match(output, /^Usage:/);
+  assert.match(output, /--number <issue-number> --title <issue-title>/);
+  // The worked example in the help text must itself be correct.
+  assert.match(output, /=> issue\/42-add-oauth-login-flow\n/);
 });
