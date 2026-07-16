@@ -10,6 +10,7 @@ import {
   parseArgs,
   pickResolvingClaimEvents,
   runAdvisoryConvergence,
+  viewerProbeGhOptions,
 } from '../src/scripts/advisory-convergence.mts';
 import { renderExternalCheckWaiverComment } from '../src/scripts/marker-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
@@ -1065,4 +1066,22 @@ test('runAdvisoryConvergence: missing --pr throws before any collection happens'
   };
   assert.throws(() => runAdvisoryConvergence([], deps));
   assert.equal(called, false);
+});
+
+test('viewerProbeGhOptions captures gh stderr only under GitHub Actions', () => {
+  // Under Actions: capture stderr (pipe) so the expected `gh api user` 403 does
+  // not leak into the run log; stdout is still piped so viewerLogin is read.
+  const ci = viewerProbeGhOptions({ GITHUB_ACTIONS: 'true' });
+  assert.deepEqual(ci.stdio, ['ignore', 'pipe', 'pipe']);
+
+  // Outside Actions: inherit stderr so a real local viewer-lookup failure
+  // stays visible (the #1396 fail-noisy concern). Both are set explicitly.
+  const local = ['ignore', 'pipe', 'inherit'];
+  assert.deepEqual(viewerProbeGhOptions({}).stdio, local);
+  assert.deepEqual(
+    viewerProbeGhOptions({ GITHUB_ACTIONS: 'false' }).stdio,
+    local,
+  );
+  // Only the literal string 'true' opts in (matches GitHub's own value).
+  assert.deepEqual(viewerProbeGhOptions({ GITHUB_ACTIONS: '1' }).stdio, local);
 });

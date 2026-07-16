@@ -47,6 +47,7 @@ import type { CollaboratorPermissionCache } from './collaborator-permission.mts'
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mts';
 import {
   GH_TEXT_LOOP_OPTIONS,
+  type GhTextOptions,
   ghApiJson,
   ghText,
   isCliExecution,
@@ -745,6 +746,40 @@ export function runAdvisoryConvergence(
 
 // --- Production I/O: fetch PR/review/thread/comment evidence via `gh` ----
 
+/**
+ * `gh` options for the viewer-login probe (`gh api user`).
+ *
+ * Under GitHub Actions the workflow token is a GitHub App installation token
+ * with no authenticated user, so `gh api user` always returns 403 ("Resource
+ * not accessible by integration"). That is expected and harmless here:
+ * {@link safeGhText} swallows it and `viewerLogin === ''` is the correct value
+ * in CI (there is no runner "self" whose markers should be trusted). Only the
+ * inherited stderr leaks the confusing 403 line into the run log, so under
+ * Actions we capture that run's stderr (`stdio` pipe) to keep the log clean.
+ *
+ * Outside Actions (a local/interactive run) the probe normally succeeds; if it
+ * genuinely fails we deliberately **inherit** stderr so the failure stays
+ * visible — a silently-empty `viewerLogin` narrows self-marker trust, the same
+ * fail-noisy concern #1396 hardens for the roadmap-audit helper.
+ *
+ * Both branches set `stdio` **explicitly** rather than leaning on
+ * `execFileSync`'s default: that default already writes the child's stderr to
+ * the parent (so a bare call would leak the 403), but relying on it is
+ * non-obvious. `pipe` captures stderr (silent); `inherit` forwards it to the
+ * parent (visible). stdin is `ignore` on both, matching `GH_TEXT_LOOP_OPTIONS`'
+ * stdin-safety.
+ */
+export function viewerProbeGhOptions(
+  env: NodeJS.ProcessEnv = process.env,
+): GhTextOptions {
+  return {
+    stdio:
+      env.GITHUB_ACTIONS === 'true'
+        ? ['ignore', 'pipe', 'pipe']
+        : ['ignore', 'pipe', 'inherit'],
+  };
+}
+
 function collectFromGitHub(args: AdvisoryConvergenceArgs): {
   inputs: AdvisoryConvergenceInputs;
   options: AdvisoryConvergenceOptions;
@@ -755,12 +790,10 @@ function collectFromGitHub(args: AdvisoryConvergenceArgs): {
   const repo =
     args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
   const repoRef = `${owner}/${repo}`;
-  const viewerLogin = safeGhText([
-    'api',
-    'user',
-    '--jq',
-    '.login',
-  ]).toLowerCase();
+  const viewerLogin = safeGhText(
+    ['api', 'user', '--jq', '.login'],
+    viewerProbeGhOptions(),
+  ).toLowerCase();
   const rawConfig = loadIddConfig();
   const { actors: configuredTrustedActors } = resolveTrustedMarkerActors({
     flagValue: args.trustedMarkerLogins,
