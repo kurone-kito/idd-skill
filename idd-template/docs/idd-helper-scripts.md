@@ -12,7 +12,11 @@ In the idd-skill source repository, the following optional helpers were adopted:
 
 - `scripts/discover-orphan-filter.mjs` for A0-O orphan issue detection and
   filtering (referenced in
-  [kurone-kito/idd-skill#390](https://github.com/kurone-kito/idd-skill/issues/390))
+  [kurone-kito/idd-skill#390](https://github.com/kurone-kito/idd-skill/issues/390)),
+  with opt-in `--with-claim-state` / `--current-claim-id` active-claim
+  annotation parity with `discover-roadmap-graph`'s flag of the same name
+  (referenced in
+  [kurone-kito/idd-skill#1395](https://github.com/kurone-kito/idd-skill/issues/1395))
 - `scripts/discover-roadmap-graph.mjs` for A1.5/A2 recursive roadmap graph
   enumeration and classification
 - `scripts/discover-readiness-check.mjs` for A3 readiness criterion
