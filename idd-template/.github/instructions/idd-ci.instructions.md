@@ -239,14 +239,17 @@ run for the current HEAD SHA -- rather than `workflow_dispatch`.
 A second cause leaves the same check stuck: GitHub gates a bot-triggered
 run -- for example Copilot posting its review via a `pull_request_review`
 / `pull_request_review_comment` event -- to `action_required`, so it
-never executes. Subscribing to a review trigger is thus not the same as
-running on it, and the check does **not** self-refresh after the bot
-re-reviews the current HEAD. Recovery is the same `gh run rerun
-<run-id>` on the _existing_ PR-linked run for that HEAD; it also
-self-heals on the next non-bot trigger (a push, or an E-phase
-disposition reply). The run here is merely bot-gated -- not awaiting a
-maintainer action or a code fix -- so a rerun clears it rather than a
-hold (the exception noted in the Interpretation table below).
+waits for approval instead of running. Subscribing to a review trigger
+is thus not the same as running on it, and the bot's review event does
+**not** by itself refresh the check for the current HEAD. Recovery does
+not approve that gated run: instead `gh run rerun <run-id>` the
+_existing_ PR-linked (`pull_request`-family) run for the current HEAD --
+the one that already executed -- so it re-evaluates now that the bot has
+reviewed; the check also self-heals on the next non-bot trigger (a push,
+or an E-phase disposition reply). So the `action_required` row in the
+Interpretation table below does not apply here: rerunning the already-run
+PR-linked run clears the rollup, with no hold or gated-run approval
+needed.
 
 ## Interpretation
 
