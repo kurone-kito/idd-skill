@@ -30,8 +30,11 @@ function runCli() {
   // returns 0 for any invalid input (safe default for internal callers), but
   // a CLI invocation with a missing token or a non-positive band size is
   // almost always an operator/caller mistake that should fail loudly rather
-  // than silently print 0.
-  if (args.token === null) {
+  // than silently print 0. An empty-string token (e.g. `--token "$VAR"` with
+  // an unset $VAR) is treated the same as a missing flag for this reason:
+  // otherwise it would silently degrade to the same output as `off`/no-tie
+  // instead of surfacing the caller's mistake.
+  if (args.token === null || args.token === '') {
     throw new Error('--token is required');
   }
   if (!Number.isInteger(args.bandSize) || (args.bandSize ?? 0) <= 0) {

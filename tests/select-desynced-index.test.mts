@@ -97,6 +97,13 @@ test('missing --token exits non-zero with a clear message', () => {
   assert.match(stderr, /--token is required/);
 });
 
+test('an empty-string --token exits non-zero with a clear message', () => {
+  // A blank value (e.g. `--token "$VAR"` with an unset $VAR) must not
+  // silently degrade to selectDesyncedIndex's own safe-default `0`.
+  const { stderr } = runCliExpectFailure(['--token', '', '--band-size', '5']);
+  assert.match(stderr, /--token is required/);
+});
+
 test('missing --band-size exits non-zero with a clear message', () => {
   const { stderr } = runCliExpectFailure(['--token', 'x']);
   assert.match(
