@@ -162,7 +162,13 @@ Then apply these checks in order:
    refine task-list entries there instead of creating a competing
    umbrella.
 3. If an existing issue is close but too broad, split follow-up work
-   out of it rather than widening the original issue further.
+   out of it rather than widening the original issue further. When the
+   split issue is a roadmap child, update the parent roadmap's
+   `## Tracks` list in the same authoring action — add the new issue's
+   link and adjust any sequencing notes (a short dated note is the
+   observed good pattern) — subject to the claim-state precondition
+   above applied to the roadmap issue's own claim/PR state, and record
+   the provenance in the new issue's body (e.g., `Split out of #<n>`).
 4. If an existing issue has an **active claim**, an open PR, or is
    otherwise being actively executed, do **not** edit its body or
    repurpose it (see the claim-state precondition, which exempts

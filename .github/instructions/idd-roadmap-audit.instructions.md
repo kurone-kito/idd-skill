@@ -173,3 +173,9 @@ Apply one outcome:
   before A2 after reporting a non-autonomous gap, even if the
   repository does not have the blocker labels, so the same unattended
   run cannot select child work under a roadmap that needs human input.
+
+**Child issue split.** A further roadmap-currency trigger, orthogonal to
+the three outcomes above: when a child issue is split into two or more
+issues, bring the roadmap task list and sequencing notes current in the
+same action, per the issue-authoring contract's same-action rule
+(`skills/issue-authoring/references/contract.md`).
