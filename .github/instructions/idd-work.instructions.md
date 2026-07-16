@@ -194,6 +194,35 @@ superseding PR. If the criteria only **partly** hold, keep the issue open,
 record the overlap, and plan only the genuinely-remaining work. On no hit,
 continue with the plan below.
 
+### Premise verification (decision-transcription issues)
+
+Apply this check only when **both** hold: the issue's deliverable is to
+record or act on an already-recorded human decision (for example, an
+issue whose entire scope is to document a maintainer's prior ruling),
+and that decision's rationale asserts a specific checkable fact about
+what a prior change actually shipped (for example, "PR #NNN shipped
+mechanism X"). This check is out of scope for ordinary feature or
+bugfix issues.
+
+Before drafting the plan, verify the asserted fact against the prior
+change's actual shipped code or its own documentation — especially when
+this issue's deliverable is documentation that would re-assert the
+claim. Do not treat the recorded decision's rationale as ground truth
+without this check. If the prior change cannot be identified, or its
+shipped state cannot be checked, treat verification as inconclusive and
+follow the conflict path below — do not default to continuing.
+
+**On a genuine conflict or inconclusive verification**: follow the
+shared Hold / suspend rules in `idd-overview-appendix.instructions.md`,
+and include the primary-source evidence (file, line, or excerpt, or the
+reason verification was inconclusive) in the hold comment. Do not
+silently propagate the unverified premise into the new deliverable, and
+do not unilaterally overwrite the recorded decision — the correction
+must land as an addendum from a maintainer, not a silent edit of the
+original record. Resume planning only after the addendum is recorded.
+
+On no conflict, continue with the plan below.
+
 Draft an implementation plan and post it as an issue comment. Then run a
 critique pass to review the plan for correctness and concreteness (see
 `idd-overview-appendix.instructions.md` for per-agent implementation). Post the
