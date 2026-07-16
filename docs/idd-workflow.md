@@ -82,8 +82,9 @@ When a lightweight-tier model runs any part of this loop:
 - This is additional to, not a replacement for, the uniform C-phase
   objective diff validation floor in
   [Critique pass invocation](#critique-pass-invocation): that floor
-  already exists because "a weak model could get wrong" whether a
-  same-response self-critique is independent, and it applies uniformly
+  exists precisely because judging whether a same-response
+  self-critique is truly independent is the kind of fragile runtime
+  self-detection a weak model could get wrong, so it applies uniformly
   regardless of declared model tier.
 
 These tiers are practical operating guidance, not a new enforced

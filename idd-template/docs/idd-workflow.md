@@ -78,12 +78,13 @@ When a lightweight-tier model runs any part of this loop:
   stop-and-ask condition, never a silent fallback to prose judgment.
 - Do not run the autonomous merge phases (F3 onward) on this tier. See
   the merge-policy recommendation for weak-model sessions in
-  [Onboarding — Policy decisions](onboarding/policy-decisions.md#merge-policy).
+  [Onboarding Reference — Policy Decisions](onboarding/policy-decisions.md#merge-policy).
 - This is additional to, not a replacement for, the uniform C-phase
   objective diff validation floor in
   [Critique pass invocation](#critique-pass-invocation): that floor
-  already exists because "a weak model could get wrong" whether a
-  same-response self-critique is independent, and it applies uniformly
+  exists precisely because judging whether a same-response
+  self-critique is truly independent is the kind of fragile runtime
+  self-detection a weak model could get wrong, so it applies uniformly
   regardless of declared model tier.
 
 These tiers are practical operating guidance, not a new enforced
