@@ -241,10 +241,10 @@ The full phase map lives in
 - **Portable rules, not a black box** — The workflow is plain Markdown
   that can be inspected, forked, and customized in the target repo.
 - **Agent choice** — The core loop works across GitHub Copilot, Claude
-  Code, OpenAI Codex CLI, OpenCode, and Antigravity CLI
-  (formerly Gemini CLI). The distributed default PR policy still
-  includes a Copilot advisory review step, with documented review
-  policy profiles for adopters who use another gate.
+  Code, OpenAI Codex CLI, OpenCode, and Antigravity CLI (formerly Gemini CLI).
+  The distributed default PR policy still includes a Copilot advisory
+  review step, with documented review policy profiles for adopters who
+  use another gate.
 - **No service to operate** — Import the template files; no separate
   server, scheduler, or SaaS account is required to start.
 
