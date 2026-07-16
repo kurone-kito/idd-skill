@@ -275,6 +275,6 @@ checks, confirm the detailed items below.
 - [ ] If the operator opted into the optional `opencode.json`
       Copilot-parity recipe, the target repository's `opencode.json`
       lists only
-      `.github/instructions/idd-overview-core.instructions.md`, and no
-      `opencode.json` file was added to the target repository unless
-      the operator explicitly requested one.
+      `.github/instructions/idd-overview-core.instructions.md`.
+- [ ] If the operator did not opt into that recipe, no `opencode.json`
+      file was added to the target repository as part of onboarding.
