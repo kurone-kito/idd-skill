@@ -194,6 +194,35 @@ superseding PR. If the criteria only **partly** hold, keep the issue open,
 record the overlap, and plan only the genuinely-remaining work. On no hit,
 continue with the plan below.
 
+### B2.1 — Premise verification (decision-transcription issues)
+
+Apply this check only when **both** hold: the issue's deliverable is to
+record or act on an already-recorded human decision (for example, an
+issue whose entire scope is to document a maintainer's prior ruling),
+and that decision's rationale asserts a specific checkable fact about
+what a prior change actually shipped (for example, that it added a
+named safety mechanism). This check is out of scope for ordinary
+feature or bugfix issues.
+
+Before drafting the plan, verify the asserted fact against the prior
+change's actual shipped code or its own documentation — especially when
+this issue's deliverable is documentation that would re-assert the
+claim. Do not treat the recorded decision's rationale as ground truth
+without this check. If the prior change cannot be identified, or its
+shipped state cannot be checked, treat verification as inconclusive and
+follow the conflict path below — do not default to continuing.
+
+**On a genuine conflict or inconclusive verification**: follow the
+shared Hold / suspend rules in `idd-overview-appendix.instructions.md`,
+and include the primary-source evidence (file, line, or excerpt, or the
+reason verification was inconclusive) in the hold comment. Do not
+silently propagate the unverified premise into the new deliverable, and
+do not unilaterally overwrite the recorded decision — the correction
+must land as an addendum from a maintainer, not a silent edit of the
+original record. Resume planning only after the addendum is recorded.
+
+On no conflict, continue with the plan below.
+
 Draft an implementation plan and post it as an issue comment. Then run a
 critique pass to review the plan for correctness and concreteness (see
 `idd-overview-appendix.instructions.md` for per-agent implementation). Post the
@@ -229,6 +258,20 @@ a broken `main` baseline, not necessarily the current change — verify
 with a fresh-vs-stale `node_modules` comparison, or by rerunning
 **install-deps** in a clean worktree, before assuming the failure traces
 to this diff.
+
+**Local test flakiness under concurrent load**: a test this diff did
+not touch failing or timing out locally, then passing an isolated
+re-run, while hosted CI for the same push stays green, is a signal of
+expected CPU/resource contention from many concurrent local sessions on
+one machine — not a defect in this diff. Re-run the failing test in
+isolation once; if it passes and hosted CI stays green, trust the
+hosted result and stop investigating it as a regression. **Hosted CI is
+authoritative over local validation for this diagnosis** — it resolves
+a genuine local-vs-hosted disagreement for the same push in favor of
+the hosted result; it does not waive the fix-validate /
+pre-push-validate requirements above. If the test still fails after the
+isolated re-run, or hosted CI is not green, treat it as a real failure
+and fix it.
 
 If B3 or C must stop for a hold, use the shared Hold / suspend rules in
 `idd-overview-appendix.instructions.md` and update the issue digest with the

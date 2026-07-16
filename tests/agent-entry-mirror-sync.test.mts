@@ -9,10 +9,10 @@ import {
 const FILES = ['CLAUDE.md', 'AGENTS.md', 'GEMINI.md'] as const;
 type EntryFile = (typeof FILES)[number];
 
-const TOOL_NAMES: Record<EntryFile, string> = {
-  'CLAUDE.md': 'Claude',
-  'AGENTS.md': 'Codex',
-  'GEMINI.md': 'Gemini',
+const REQUIRED_TOOL_NAMES: Record<EntryFile, readonly string[]> = {
+  'CLAUDE.md': ['Claude'],
+  'AGENTS.md': ['Codex', 'OpenCode'],
+  'GEMINI.md': ['Gemini'],
 };
 
 const SHARED_TOP_LEVEL_SECTIONS = [
@@ -140,18 +140,41 @@ test('canonical-reference tool naming stays per-tool and does not cross-contamin
       '**Canonical reference**',
       '## Minimum requirements',
     );
-    const ownTool = TOOL_NAMES[file];
-    const otherTools = FILES.map((other) => TOOL_NAMES[other]).filter(
-      (name) => name !== ownTool,
+    const ownNames = REQUIRED_TOOL_NAMES[file];
+    const otherNames = FILES.filter((other) => other !== file).flatMap(
+      (other) => REQUIRED_TOOL_NAMES[other],
     );
-    assert.ok(
-      section.includes(ownTool),
-      `${file} canonical-reference paragraph must name ${ownTool}`,
-    );
-    for (const other of otherTools) {
+    for (const name of ownNames) {
+      assert.ok(
+        section.includes(name),
+        `${file} canonical-reference paragraph must name ${name}`,
+      );
+    }
+    for (const other of otherNames) {
       assert.ok(
         !section.includes(other),
         `${file} canonical-reference paragraph must not name ${other}`,
+      );
+    }
+  }
+});
+
+test('GEMINI.md canonical-reference paragraph names Antigravity; the other entry files do not', () => {
+  for (const file of FILES) {
+    const section = extractSection(
+      readText(file),
+      '**Canonical reference**',
+      '## Minimum requirements',
+    );
+    if (file === 'GEMINI.md') {
+      assert.ok(
+        section.includes('Antigravity'),
+        'GEMINI.md canonical-reference paragraph must name Antigravity',
+      );
+    } else {
+      assert.ok(
+        !section.includes('Antigravity'),
+        `${file} canonical-reference paragraph must not name Antigravity`,
       );
     }
   }

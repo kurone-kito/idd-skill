@@ -1099,8 +1099,13 @@ export function isClaimStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs) {
  * resolved trusted-actor predicate, configured stale age, and "now". Only
  * invoked when `--with-claim-state` is passed, so the live comment fetch is
  * never wired in the default path.
+ *
+ * Exported (#1395) so `discover-orphan-filter.mts`'s CLI can build the same
+ * resolution from its own parsed policy/args instead of re-implementing this
+ * wiring. `policy` intentionally takes the *raw* parsed config shape (as
+ * returned by this file's own `loadPolicy`), not a normalized/flattened view.
  */
-function buildClaimStateResolution(owner, repo, policy, currentClaimId) {
+export function buildClaimStateResolution(owner, repo, policy, currentClaimId) {
   const staleAgeMs =
     parseClaimStaleAgeMs(policy.claimTiming?.staleAge) ??
     DEFAULT_CLAIM_STALE_AGE_MS;
@@ -1163,8 +1168,13 @@ export function buildTrustedAuthorPredicate(policy) {
         .toLowerCase(),
     );
 }
-/** Live per-issue comment loader (the sole new GitHub API surface). */
-function buildCommentLoader(owner, repo) {
+/**
+ * Live per-issue comment loader (the sole new GitHub API surface).
+ *
+ * Exported (#1395) so `discover-orphan-filter.mts` can reuse the identical
+ * loader instead of duplicating this pagination/`gh` wiring.
+ */
+export function buildCommentLoader(owner, repo) {
   return (issueNumber) => {
     const comments = [];
     const pageSize = 100;

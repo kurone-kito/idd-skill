@@ -929,7 +929,10 @@ any copied file.
 
 By default, leave the repository with root entry files for every
 manually-routed non-Copilot agent named in `docs/idd-workflow.md`:
-`CLAUDE.md`, `AGENTS.md`, and `GEMINI.md`.
+`CLAUDE.md`, `AGENTS.md`, and `GEMINI.md`. `AGENTS.md` is the shared
+agents.md-standard entry for both Codex CLI and OpenCode — OpenCode
+auto-loads it natively, so no dedicated root file is needed for
+OpenCode.
 
 - If the file already exists, append or adapt an IDD section without
   replacing unrelated repository guidance.

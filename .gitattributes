@@ -60,6 +60,7 @@ scripts/resume-claim-routing.mjs linguist-generated=true
 scripts/resume-route-selection.mjs linguist-generated=true
 scripts/review-activity-snapshot.mjs linguist-generated=true
 scripts/review-disposition-verify.mjs linguist-generated=true
+scripts/select-desynced-index.mjs linguist-generated=true
 scripts/stalled-session-quiet-check.mjs linguist-generated=true
 scripts/suitability-triage.mjs linguist-generated=true
 scripts/sync-docs.mjs linguist-generated=true
