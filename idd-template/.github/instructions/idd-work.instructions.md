@@ -225,9 +225,12 @@ expected CPU/resource contention from many concurrent local sessions on
 one machine — not a defect in this diff. Re-run the failing spec in
 isolation once; if it passes and hosted CI stays green, trust the
 hosted result and stop investigating it as a regression. **Hosted CI is
-authoritative over local validation**: when a local outcome disagrees
-with the hosted CI result for the same commit, the hosted CI result
-governs.
+authoritative over local validation for this diagnosis** — it resolves
+a genuine local-vs-hosted disagreement for the same commit in favor of
+the hosted result; it does not waive the fix-validate /
+pre-push-validate requirements above. If the spec still fails after the
+isolated re-run, or hosted CI is not green, treat it as a real failure
+and fix it.
 
 If B3 or C must stop for a hold, use the shared Hold / suspend rules in
 `idd-overview-appendix.instructions.md` and update the issue digest with the
