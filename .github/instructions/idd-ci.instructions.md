@@ -242,19 +242,20 @@ mechanic above -- `gh run rerun <run-id>` on the _existing_ PR-linked
 run for the current HEAD SHA -- rather than `workflow_dispatch`.
 
 A second cause leaves the same check stuck: GitHub gates a bot-triggered
-run -- for example Copilot posting its review via a `pull_request_review`
-/ `pull_request_review_comment` event -- to `action_required`, so it
-waits for approval instead of running. Subscribing to a review trigger
-is thus not the same as running on it, and the bot's review event does
-**not** by itself refresh the check for the current HEAD. Recovery does
-not approve that gated run: instead `gh run rerun <run-id>` the
-_existing_ PR-linked (`pull_request`-family) run for the current HEAD --
-the one that already executed -- so it re-evaluates now that the bot has
-reviewed; the check also self-heals on the next non-bot trigger (a push,
-or an E-phase disposition reply). So the `action_required` row in the
-Interpretation table below does not apply here: rerunning the already-run
-PR-linked run clears the rollup, with no hold or gated-run approval
-needed.
+run -- e.g. Copilot posting its review via a `pull_request_review` /
+`pull_request_review_comment` event -- to `action_required`, so it waits
+for approval instead of running, and the bot's review event does **not**
+by itself refresh the check for the current HEAD. To recover, `gh run
+rerun <run-id>` the _existing_ non-bot `pull_request`-triggered run that
+already executed for this HEAD, subject to `ciWait.rerunPolicy` (a `hold`
+policy inspects instead). Do **not** rerun the gated bot run: a re-run
+keeps the original actor's privileges and re-enters `action_required`
+(approve it via `POST /actions/runs/{run_id}/approve` if it must run).
+The check also self-heals on the next non-bot trigger -- a push, or a
+**review-thread** disposition reply (`pull_request_review_comment`), but
+not a regular-comment (PATH B) one, since the workflow ignores
+`issue_comment`. This is the exception to the `action_required` row
+below.
 
 ## Interpretation
 
