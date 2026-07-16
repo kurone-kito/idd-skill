@@ -252,6 +252,10 @@ The check also self-heals on the next non-bot trigger -- a push, or a
 not a regular PR comment, since the workflow does not subscribe to
 `issue_comment`.
 
+**Helper-first**: `node scripts/rerun-advisory-convergence.mjs --pr <n>`
+prints this diagnosis and ordered rerun plan, read-only (see
+`docs/idd-helper-scripts.md`).
+
 ## Interpretation
 
 <!-- dprint-ignore-start -->
