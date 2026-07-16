@@ -477,6 +477,27 @@ export function runAdvisoryConvergence(argv, deps = defaultDeps) {
   return { verdict, exitCode, help: false };
 }
 // --- Production I/O: fetch PR/review/thread/comment evidence via `gh` ----
+/**
+ * `gh` options for the viewer-login probe (`gh api user`).
+ *
+ * Under GitHub Actions the workflow token is a GitHub App installation token
+ * with no authenticated user, so `gh api user` always returns 403 ("Resource
+ * not accessible by integration"). That is expected and harmless here:
+ * {@link safeGhText} swallows it and `viewerLogin === ''` is the correct value
+ * in CI (there is no runner "self" whose markers should be trusted). Only the
+ * inherited stderr leaks the confusing 403 line into the run log, so under
+ * Actions we capture that run's stderr (`stdio` pipe) to keep the log clean.
+ *
+ * Outside Actions (a local/interactive run) the probe normally succeeds; if it
+ * genuinely fails we deliberately keep stderr **inherited** so the failure
+ * stays visible — a silently-empty `viewerLogin` narrows self-marker trust,
+ * the same fail-noisy concern #1396 hardens for the roadmap-audit helper.
+ */
+export function viewerProbeGhOptions(env = process.env) {
+  return env.GITHUB_ACTIONS === 'true'
+    ? { stdio: ['ignore', 'pipe', 'pipe'] }
+    : {};
+}
 function collectFromGitHub(args) {
   const owner =
     args.owner ||
@@ -484,12 +505,10 @@ function collectFromGitHub(args) {
   const repo =
     args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
   const repoRef = `${owner}/${repo}`;
-  const viewerLogin = safeGhText([
-    'api',
-    'user',
-    '--jq',
-    '.login',
-  ]).toLowerCase();
+  const viewerLogin = safeGhText(
+    ['api', 'user', '--jq', '.login'],
+    viewerProbeGhOptions(),
+  ).toLowerCase();
   const rawConfig = loadIddConfig();
   const { actors: configuredTrustedActors } = resolveTrustedMarkerActors({
     flagValue: args.trustedMarkerLogins,
