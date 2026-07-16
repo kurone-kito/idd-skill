@@ -470,7 +470,7 @@ assessment. The goal and expected output are the same regardless of
 agent; only the mechanism differs.
 
 | Agent           | How to run a critique pass                                                                                                                 |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | Copilot         | Launch a subagent in Agent mode; use the calling phase's critique checklist as the prompt                                                  |
 | Claude Code     | `Agent(subagent_type="general-purpose")` with the calling phase's critique checklist                                                       |
 | Codex CLI       | Self-critique: add a "review the above for issues" step in the next response                                                               |
