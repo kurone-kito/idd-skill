@@ -189,15 +189,15 @@ superseding PR. If the criteria only **partly** hold, keep the issue open,
 record the overlap, and plan only the genuinely-remaining work. On no hit,
 continue with the plan below.
 
-### Premise verification (decision-transcription issues)
+### B2.1 — Premise verification (decision-transcription issues)
 
 Apply this check only when **both** hold: the issue's deliverable is to
 record or act on an already-recorded human decision (for example, an
 issue whose entire scope is to document a maintainer's prior ruling),
 and that decision's rationale asserts a specific checkable fact about
-what a prior change actually shipped (for example, "PR #NNN shipped
-mechanism X"). This check is out of scope for ordinary feature or
-bugfix issues.
+what a prior change actually shipped (for example, a prior change whose
+own comment claims it shipped a specific mechanism). This check is out
+of scope for ordinary feature or bugfix issues.
 
 Before drafting the plan, verify the asserted fact against the prior
 change's actual shipped code or its own documentation — especially when
