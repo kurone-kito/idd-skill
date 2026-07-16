@@ -186,7 +186,7 @@ whether a concurrent session already authored the same problem.
 ```sh
 gh issue list --repo <owner>/<repo> --state all --limit 20
 # or, scoped to a recency window (mirrors B2.0's own idiom):
-gh issue list --repo <owner>/<repo> --search "created:>=<recent-cutoff-timestamp>"
+gh issue list --repo <owner>/<repo> --state all --search "created:>=<recent-cutoff-timestamp>"
 ```
 
 A hit routes back into the checks above: extend the discovered issue
