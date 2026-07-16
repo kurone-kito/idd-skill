@@ -69,11 +69,12 @@ on its own otherwise.)
   - drafting output for human review rather than running the
     autonomous merge phases.
 - **Unsupported**: a model whose context window cannot hold the entry
-  file, the routed phase file, and tool schemas at the same time — the
-  qwen2.5-coder-1.5b class (roughly 32K context) is the practical
-  cutoff example. Below this floor, IDD execution is out of scope; such
-  a model can still be a downstream _consumer_ of an artifact this
-  workflow produces, just not an IDD execution agent.
+  file, `idd-overview-core.instructions.md`, the routed phase file, and
+  tool schemas at the same time — the qwen2.5-coder-1.5b class (roughly
+  32K context) is the practical cutoff example. Below this floor, IDD
+  execution is out of scope; such a model can still be a downstream
+  _consumer_ of an artifact this workflow produces, just not an IDD
+  execution agent.
 
 ### Weak-model guardrails
 
@@ -81,8 +82,13 @@ When a lightweight-tier model runs any part of this loop:
 
 - Prefer a documented helper command over prose interpretation
   wherever [IDD helper script evaluation](idd-helper-scripts.md) lists
-  one for the current step; treat helper unavailability as a
-  stop-and-ask condition, never a silent fallback to prose judgment.
+  one for the current step **and the repository's helper runtime is
+  not the `instructions-only` profile**; treat an expected helper that
+  is missing or failing as a stop-and-ask condition, never a silent
+  fallback to prose judgment. On the default `instructions-only`
+  profile, following the documented Markdown / `gh` / `jq` procedure
+  directly is the normal, supported path for this tier too, not a stop
+  condition.
 - Do not run the autonomous merge phases (F3 onward) on this tier. See
   the merge-policy recommendation for weak-model sessions in
   [Onboarding Reference — Policy Decisions](onboarding/policy-decisions.md#merge-policy).
