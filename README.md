@@ -45,13 +45,13 @@ repository at
 
 If this is your first visit, choose the path that matches your goal:
 
-| Goal                            | Start here                                                                                                                                             |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Understand the concept first    | [`docs/concepts.md`](docs/concepts.md)                                                                                                                 |
-| Adopt IDD in my repository      | [`idd-template/ONBOARDING.md`](idd-template/ONBOARDING.md)                                                                                             |
-| Run an agent on this repository | [`AGENTS.md`](AGENTS.md), [`CLAUDE.md`](CLAUDE.md), [`GEMINI.md`](GEMINI.md), and [`.github/copilot-instructions.md`](.github/copilot-instructions.md) |
-| Customize policy                | [`docs/customization.md`](docs/customization.md)                                                                                                       |
-| Author AI-ready issues          | [`skills/issue-authoring/SKILL.md`](skills/issue-authoring/SKILL.md)                                                                                   |
+| Goal                            | Start here                                                                                                                                                                      |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Understand the concept first    | [`docs/concepts.md`](docs/concepts.md)                                                                                                                                          |
+| Adopt IDD in my repository      | [`idd-template/ONBOARDING.md`](idd-template/ONBOARDING.md)                                                                                                                      |
+| Run an agent on this repository | [`AGENTS.md`](AGENTS.md) (Codex CLI and OpenCode), [`CLAUDE.md`](CLAUDE.md), [`GEMINI.md`](GEMINI.md), and [`.github/copilot-instructions.md`](.github/copilot-instructions.md) |
+| Customize policy                | [`docs/customization.md`](docs/customization.md)                                                                                                                                |
+| Author AI-ready issues          | [`skills/issue-authoring/SKILL.md`](skills/issue-authoring/SKILL.md)                                                                                                            |
 
 ## Why Teams Use IDD
 
@@ -241,9 +241,9 @@ The full phase map lives in
 - **Portable rules, not a black box** — The workflow is plain Markdown
   that can be inspected, forked, and customized in the target repo.
 - **Agent choice** — The core loop works across GitHub Copilot, Claude
-  Code, OpenAI Codex CLI, and Gemini CLI. The distributed default PR
-  policy still includes a Copilot advisory review step, with documented
-  review policy profiles for adopters who use another gate.
+  Code, OpenAI Codex CLI, OpenCode, and Gemini CLI. The distributed
+  default PR policy still includes a Copilot advisory review step, with
+  documented review policy profiles for adopters who use another gate.
 - **No service to operate** — Import the template files; no separate
   server, scheduler, or SaaS account is required to start.
 
@@ -260,7 +260,7 @@ read repository settings (merge policy, command strings, marker prefix)
 without parsing Markdown.
 
 This repository also includes compatibility entry files such as
-`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and
+`AGENTS.md` (Codex CLI and OpenCode), `CLAUDE.md`, `GEMINI.md`, and
 `.github/copilot-instructions.md` so different agents know where to
 start here.
 
