@@ -130,7 +130,7 @@ The Project commands table (`fix-validate`, `pre-push-validate`,
 A **critique pass** is an independent review of a plan or diff that
 produces a list of issues with severity, correctness, and coverage
 assessment. For the per-agent invocation table (Copilot / Claude Code /
-Codex CLI / Gemini CLI), see
+Codex CLI / Antigravity CLI (formerly Gemini CLI)), see
 [`docs/idd-workflow.md` → Critique pass invocation](../../docs/idd-workflow.md#critique-pass-invocation).
 
 ### Mutation / write-side helper lens
