@@ -2,7 +2,7 @@
 
 This document is the neutral entry point for the repository's
 Issue-Driven Development (IDD) workflow across GitHub Copilot, Codex
-CLI, Claude Code, and Gemini CLI.
+CLI, OpenCode, Claude Code, and Antigravity CLI (formerly Gemini CLI).
 
 Use it when you need to answer three questions quickly:
 
@@ -28,14 +28,84 @@ you are reading this guide first, start at step 1.
 | ----------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | GitHub Copilot surfaces | `.github/copilot-instructions.md` | `.github/instructions/idd-overview-core.instructions.md` for execution surfaces; package-scoped `.instructions.md` files in VS Code Copilot when editing matching paths | The routed phase file when the current step changes                                |
 | Codex CLI               | `AGENTS.md`                       | None from `.github/instructions/`                                                                                                                                       | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file |
+| OpenCode                | `AGENTS.md`                       | `AGENTS.md` itself — OpenCode's native rules mechanism auto-loads it; none from `.github/instructions/`                                                                 | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file |
 | Claude Code             | `CLAUDE.md`                       | None from `.github/instructions/` by default                                                                                                                            | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file |
-| Gemini CLI              | `GEMINI.md`                       | None from `.github/instructions/`                                                                                                                                       | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file |
+| Antigravity CLI         | `GEMINI.md`                       | None from `.github/instructions/`                                                                                                                                       | `.github/instructions/idd-overview-core.instructions.md` and the routed phase file |
+
+OpenCode also discovers the `issue-authoring` skill bundle in this
+repository through its `.claude/skills/` compatibility, since
+`.claude/skills/issue-authoring/` is a generated, byte-identical copy
+of the canonical bundle at `skills/issue-authoring/`.
 
 During onboarding, create or update `CLAUDE.md`, `AGENTS.md`, and
 `GEMINI.md` so each non-Copilot agent listed above has a stable first
 file to read. GitHub Copilot remains an update-if-present surface via
 `.github/copilot-instructions.md`. Skipping creation of a missing root
 entry file should be an explicit operator choice, not the default.
+
+## Model capability expectations
+
+The workflow above assumes at least a **middle-tier cloud-class**
+model for the full Discover → Claim → Work → PR → Review → Merge → F4
+loop, reusing the three model-capability classes from the
+issue-authoring skill's
+[specificity target](issue-authoring-skill.md#specificity-target):
+**frontier**, **middle-tier cloud**, and **lightweight local or
+compact cloud**.
+
+- **Frontier** and **middle-tier cloud** classes need no additional
+  guardrails beyond the rest of this guide; this is the assumed
+  default for every phase file above.
+- **Lightweight local or compact cloud** (the supported low tier):
+  large-context, low-reasoning models such as the phi-4-mini class
+  (roughly 128K context, tool calling supported, but weak adherence to
+  long multi-file instruction sets). Confine this tier to
+  narrowly-scoped roles under operator supervision:
+  - executing a single, fully-specified `idd:ready` issue rather than
+    Discover's open-ended candidate selection;
+  - preferring a deterministic helper command (see
+    [IDD helper script evaluation](idd-helper-scripts.md)) over prose
+    judgment wherever one exists for the current step;
+  - drafting output for human review rather than running the
+    autonomous merge phases.
+- **Unsupported**: a model whose context window cannot hold the entry
+  file, `idd-overview-core.instructions.md`, the routed phase file, and
+  tool schemas at the same time — the qwen2.5-coder-1.5b class (roughly
+  32K context) is the practical cutoff example. Below this floor, IDD
+  execution is out of scope; such a model can still be a downstream
+  _consumer_ of an artifact this workflow produces, just not an IDD
+  execution agent.
+
+### Weak-model guardrails
+
+When a lightweight-tier model runs any part of this loop:
+
+- Prefer a documented helper command over prose interpretation
+  wherever [IDD helper script evaluation](idd-helper-scripts.md) lists
+  one for the current step **and the repository's helper runtime is
+  not the `instructions-only` profile**; treat an expected helper that
+  is missing or failing as a stop-and-ask condition, never a silent
+  fallback to prose judgment. On the default `instructions-only`
+  profile, following the documented Markdown / `gh` / `jq` procedure
+  directly is the normal, supported path for this tier too, not a stop
+  condition.
+- Do not run the autonomous merge phases (F3 onward) on this tier. See
+  the merge-policy recommendation for weak-model sessions at
+  <https://github.com/kurone-kito/idd-skill/blob/main/idd-template/docs/onboarding/policy-decisions.md#merge-policy>.
+- This is additional to, not a replacement for, the uniform C-phase
+  objective diff validation floor in
+  [Critique pass invocation](#critique-pass-invocation): that floor
+  exists precisely because judging whether a same-response
+  self-critique is truly independent is the kind of fragile runtime
+  self-detection a weak model could get wrong, so it applies uniformly
+  regardless of declared model tier.
+
+These tiers are practical operating guidance, not a new enforced
+runtime gate: `.github/instructions/idd-suitability.instructions.md`'s
+Edge Cases already treat an agent's inability to reliably perform a
+check as a PASS (fail-closed only for Check 3, Trust/Safety), so this
+section documents an operator-facing expectation rather than a new
+A4/A4.5 check.
 
 ## IDD file map
 
@@ -489,12 +559,13 @@ produces a list of issues with severity, correctness, and coverage
 assessment. The goal and expected output are the same regardless of
 agent; only the mechanism differs.
 
-| Agent       | How to run a critique pass                                                                |
-| ----------- | ----------------------------------------------------------------------------------------- |
-| Copilot     | Launch a subagent in Agent mode; use the calling phase's critique checklist as the prompt |
-| Claude Code | `Agent(subagent_type="general-purpose")` with the calling phase's critique checklist      |
-| Codex CLI   | Self-critique: add a "review the above for issues" step in the next response              |
-| Gemini CLI  | Self-critique or use Gemini's native multi-step task mechanism if available               |
+| Agent           | How to run a critique pass                                                                                                                 |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Copilot         | Launch a subagent in Agent mode; use the calling phase's critique checklist as the prompt                                                  |
+| Claude Code     | `Agent(subagent_type="general-purpose")` with the calling phase's critique checklist                                                       |
+| Codex CLI       | Self-critique: add a "review the above for issues" step in the next response                                                               |
+| OpenCode        | Launch a subagent via OpenCode's Task tool (e.g. the built-in `general` subagent, or a `subtask: true` command) — an independent mechanism |
+| Antigravity CLI | Self-critique or use Antigravity's native multi-step task mechanism if available                                                           |
 
 When a phase file says "run a critique pass", apply the row for your
 agent above. If no subagent mechanism is available, perform the critique
@@ -502,7 +573,7 @@ as a structured self-review step within the same response.
 
 When a runtime falls back to structured same-response self-review
 instead of an independent subagent mechanism (see the table above; a
-runtime's own native multi-step mechanism, such as Gemini's when
+runtime's own native multi-step mechanism, such as Antigravity's when
 available, counts as independent), treat that self-critique verdict as
 **advisory only** — it is not sufficient by itself to let the C-phase
 skip to PR submission. The C-phase's objective diff validation floor (the
