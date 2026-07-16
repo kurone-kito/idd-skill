@@ -223,6 +223,17 @@ with a fresh-vs-stale `node_modules` comparison, or by rerunning
 **install-deps** in a clean worktree, before assuming the failure traces
 to this diff.
 
+**Local test flakiness under concurrent load**: a spec this diff did
+not touch failing or timing out locally, then passing an isolated
+re-run, while hosted CI for the same commit is green, is expected
+CPU/resource contention from many concurrent local sessions on one
+machine — not a defect in this diff. Re-run the failing spec in
+isolation once; once it passes and hosted CI stays green, trust the
+hosted result and stop investigating it as a regression. **Hosted CI is
+authoritative over local validation**: when a local outcome disagrees
+with the hosted CI result for the same commit, the hosted CI result
+governs.
+
 If B3 or C must stop for a hold, use the shared Hold / suspend rules in
 `idd-overview-appendix.instructions.md` and update the issue digest with the
 blocking condition before stopping. Do not use the digest as the only
