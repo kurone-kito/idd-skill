@@ -249,7 +249,7 @@ keeps the original actor's privileges and re-enters `action_required`
 if it must run).
 The check also self-heals on the next non-bot trigger -- a push, or a
 **review-thread** disposition reply (`pull_request_review_comment`), but
-not a regular-comment (PATH B) one, since the workflow ignores
+not a regular PR comment, since the workflow does not subscribe to
 `issue_comment`. This is the exception to the `action_required` row
 below.
 
