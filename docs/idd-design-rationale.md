@@ -284,3 +284,45 @@ independently-invoked trusted session for that final gate instead of a
 human (`docs/permissions.md`). A future weak-model audit that
 re-discovers this fail-open should treat it as a decided trade-off —
 see #832, #993, #1341, #1342, #1353 — rather than re-filing it.
+
+## Instruction delivery
+
+### Skill-based on-demand delivery of phase instructions: no-go (2026-07-16)
+
+Issue #1416 investigated packaging IDD phase instructions
+(`.github/instructions/idd-*.instructions.md`) as Claude-compatible
+skill bundles (`SKILL.md` under `.claude/skills/` / `.opencode/skills/`),
+on demand, motivated by issue #1413's OpenCode support track: OpenCode's
+only conditional-loading mechanism is skills, unlike Copilot's `applyTo`
+frontmatter. The full findings live in
+`docs/skills-delivery-investigation.md`, which reaffirms and extends
+`docs/claude-skill-strategy.md`'s prior Claude-Code-only no-go (which
+evaluated wrapping the whole execution loop as a skill) to explicitly
+cover OpenCode.
+
+The decision: **no-go**, for either agent, under the current phase-file
+boundaries. Once issue #1414 generalizes `AGENTS.md` into the shared
+OpenCode/Codex CLI entry stub, OpenCode gains the same
+routing-table-plus-on-demand-Read mechanism Claude Code already has, so
+a skill wrapper would change only _how_ a phase file is requested, not
+_whether_ it already loads on demand. More importantly, neither runtime
+documents a "must load unconditionally" primitive for skills — every
+invocation path is either an explicit model/user action or a subagent
+preload, never a forced load at session start — so converting a
+load-bearing phase file (e.g. `idd-claim.instructions.md`,
+`idd-pre-merge.instructions.md`) into a skill would replace a
+deterministic routing-table read with a probabilistic model judgment
+call, weakening exactly the fail-closed guarantee the
+overview-core claim-revalidation gate relies on those phase files being
+read for. A third
+synchronized surface alongside `idd-template/` and the generated
+`.github/instructions/` files would also multiply the drift matrix for
+every phase-file edit.
+
+Conditions that would revisit this: recorded evidence of routing-table
+navigation failures on either agent at a material rate; either runtime
+documenting a mandatory/required skill-invocation primitive; or explicit
+adopter demand for skill-form delivery with a concrete use case the
+routing table does not already serve. A future audit that re-discovers
+this question (see issues #1413, #1414, and #1416) should treat it as a
+decided trade-off rather than re-running the investigation.

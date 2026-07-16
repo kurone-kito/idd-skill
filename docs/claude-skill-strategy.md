@@ -5,6 +5,14 @@ loop as a Claude Code skill. It is a planning note, not an instruction
 surface for any agent; the execution loop remains owned by
 `.github/instructions/` regardless of the outcome recorded here.
 
+**Related evaluation**:
+[`docs/skills-delivery-investigation.md`](skills-delivery-investigation.md)
+extends this question to OpenCode and to phase-instruction delivery
+specifically (not just the execution loop as a whole), motivated by
+OpenCode's skill-only conditional-loading model. It reaffirms the no-go
+recorded below across both agents and adds the cross-agent discovery,
+sync-design, and safety analysis this note does not cover.
+
 **Current state**: Claude Code enters the loop through `CLAUDE.md`,
 which routes to `.github/instructions/idd-overview-core.instructions.md`
 and the phase files via the routing table. The repository ships one
