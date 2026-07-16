@@ -48,6 +48,18 @@ timestamps.
 Quiet-window evidence does not bypass the shared stale threshold.
 If stalled-session routing returns hold/inconclusive, stop.
 
+- Conversational or chat-based operator approval given mid-session never
+  substitutes for the TTY-gated `idd-force-handoff` helper's own `y/N`
+  confirmation — this holds even when the operator explicitly says to
+  proceed.
+- When an operator asks the agent to proceed with forced handoff, the
+  agent's correct action is to report the stalled-claim evidence back
+  and hand the operator the exact helper invocation to run themselves in
+  their own interactive terminal (the repository's packaged
+  `idd-force-handoff` bin command, or `node ./bin/idd-force-handoff.mjs`
+  from the repository root for an uninstalled checkout) — not to author
+  or post the `forced-handoff` marker itself.
+
 ## Step 1 — Identify claim state
 
 When helper runtime is enabled, you may collect Step 1 evidence with:
