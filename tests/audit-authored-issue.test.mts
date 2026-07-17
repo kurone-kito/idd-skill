@@ -1403,6 +1403,27 @@ test('prose-dependency still separates top-level sibling list items sharing a ti
   assert.doesNotMatch(finding.detail, /#1386/);
 });
 
+test('prose-dependency recognizes a tab-indented nested child as deeper than its space-indented parent', () => {
+  // Regression test for a real review finding on this same PR (Codex):
+  // CommonMark expands a tab to the next column that is a multiple of 4
+  // when it participates in block structure, so a tab-indented marker
+  // (raw length 1) can still be a deeper nested child than a 2-space
+  // parent (raw length 2) once expanded (column 4 vs. column 2). A raw
+  // character-count comparison would undercount the tab and wrongly
+  // treat this as a same-or-shallower marker, starting a new block and
+  // losing the parent's coordination language -- the same failure mode
+  // the nested-scoping fix above exists to prevent.
+  const body = childBody({
+    extraMarkers: '  - Before starting this work:\n\t- PR #1391 must land',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
 // --- prose-dependency: empty-string currentRepo (#1472) ---
 
 test('prose-dependency treats an empty-string currentRepo as unknown', () => {

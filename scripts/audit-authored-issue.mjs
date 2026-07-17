@@ -738,6 +738,23 @@ function splitIntoSentences(paragraph) {
     return flattened.length === 0 ? [] : flattened.split(/(?<=[.!?])\s+/);
   });
 }
+// CommonMark expands a tab to the next column that is a multiple of 4
+// when it participates in block structure (e.g. list-item indentation),
+// rather than counting as a single character. Comparing raw
+// `.length` would undercount a tab-indented marker's effective depth,
+// wrongly treating a tab-indented nested child as shallower than (or
+// equal to) a same-or-deeper space-indented parent and starting a new
+// block instead of keeping the child scoped with its parent — the same
+// loss-of-parent-scope splitIntoListItemBlocks exists to prevent, just
+// triggered by mixed tab/space indentation instead of an indentation
+// depth mismatch.
+function indentColumnWidth(indent) {
+  let column = 0;
+  for (const char of indent) {
+    column = char === '\t' ? (Math.floor(column / 4) + 1) * 4 : column + 1;
+  }
+  return column;
+}
 /**
  * Split a paragraph into blocks at each Markdown list item boundary, while
  * still joining a soft-wrapped continuation line (one with no list marker
@@ -771,18 +788,19 @@ function splitIntoListItemBlocks(paragraph) {
   let lastMarkerIndent = null;
   for (const line of paragraph.split('\n')) {
     const marker = LIST_ITEM_MARKER_PATTERN.exec(line);
+    const indent = marker === null ? null : indentColumnWidth(marker[1]);
     const startsNewBlock =
-      marker !== null &&
+      indent !== null &&
       current.length > 0 &&
-      (lastMarkerIndent === null || marker[1].length <= lastMarkerIndent);
+      (lastMarkerIndent === null || indent <= lastMarkerIndent);
     if (startsNewBlock) {
       blocks.push(current.join('\n'));
       current = [line];
     } else {
       current.push(line);
     }
-    if (marker !== null) {
-      lastMarkerIndent = marker[1].length;
+    if (indent !== null) {
+      lastMarkerIndent = indent;
     }
   }
   if (current.length > 0) {
