@@ -29,7 +29,7 @@ Commit fixes atomically — one logical change per commit.
 travel as their own atomic commits, but push together in a single push
 at E12 — do not push after each individual fix. This is already the
 implicit shape of E9-E12; this rule states it explicitly so it is never
-read as license to push per commit. See E12 for the push step itself
+read as a license to push per commit. See E12 for the push step itself
 and the bounded cross-round allowance for comments that arrive before
 that push.
 
