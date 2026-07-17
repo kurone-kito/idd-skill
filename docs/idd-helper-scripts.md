@@ -244,9 +244,19 @@ default below is unchanged.
     **once** and is never double-counted.
   - **Opt-in leaf annotations** (additive; absent flags leave the leaf shape
     byte-stable and make no extra API call). `--with-claim-state` adds
-    `activeClaim` (always an object: `{ present, stale, claimId, agentId }`,
-    plus `ownedByCurrentSession` when `--current-claim-id` is passed) and
-    `claimEligible: boolean` on each open leaf. `--with-readiness` adds
+    `activeClaim` (always an object: `{ present, stale, claimId, agentId,`
+    `heartbeatOverdue }`, plus `ownedByCurrentSession` when
+    `--current-claim-id` is passed) and `claimEligible: boolean` on each
+    open leaf. Both `discover-roadmap-graph.mjs` and
+    `discover-orphan-filter.mjs` emit this exact shape under
+    `--with-claim-state`. `heartbeatOverdue` (#1433) is `true` when the
+    latest valid `claimed-by`/heartbeat `created_at` is at or past the
+    configured `claimTiming.heartbeatInterval` (default `PT12H`), with no
+    later trusted heartbeat; `false` otherwise, including whenever
+    `present` is `false`. It is **purely diagnostic**: unlike `stale`, it
+    never feeds `claimEligible` or `readiness.startable` below, and it
+    never changes the 24h stale-takeover threshold
+    (`idd-resume-stall.instructions.md` S3). `--with-readiness` adds
     `readiness: { ready: boolean, reasons: string[], authoringHeld: boolean,`
     `startable: boolean }` — the A3 startability of each open leaf (dependency
     resolution across visible `Blocked by #N` / `Depends on #N` / task-list refs
