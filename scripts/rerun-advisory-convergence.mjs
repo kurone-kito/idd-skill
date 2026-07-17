@@ -813,19 +813,24 @@ function fetchCheckRunsForRef(owner, repo, ref, checkName) {
  * Fetch and parse `.github/idd/config.json` for `owner/repo` **at `ref`**
  * via the Contents API. Used unconditionally -- both a same-repo and a
  * true cross-repository invocation -- rather than a local `readFileSync`
- * fallback for the same-repo case (`loadIddConfig`, idd-config.mts): this
- * helper diagnoses check-run instances that were evaluated under the PR
- * HEAD's own committed config, so resolving bot-identity /
- * `ciWait.rerunPolicy` from anything else -- the local working tree's
- * checked-out ref (which can be a different branch entirely, or simply
- * behind the PR's actual remote HEAD by the time this helper runs), or
- * (for a cross-repository invocation) the target repository's default
- * branch -- can silently apply the WRONG `primaryBotLogin` /
- * `advisoryBotLogins` / `ciWait.rerunPolicy` to a PR whose own config
- * differs, misclassifying bot-triggered runs or mis-honoring the rerun
- * budget there (#1434 review, Codex P2). Always pass `prHeadSha`, never a
- * branch name, so the fetched config is pinned to the exact commit the
- * diagnosed check-runs ran against.
+ * fallback for the same-repo case (`loadIddConfig`, idd-config.mts).
+ *
+ * `ref` must be the repository's TRUSTED default branch (see
+ * {@link resolveDefaultBranch}), never `prHeadSha` and never a local
+ * working-tree read: the `idd-advisory-convergence` workflow this helper
+ * diagnoses deliberately checks out the DEFAULT branch, not the PR head,
+ * for both its verdict script and `.github/idd/config.json` --
+ * `idd-advisory-convergence.yml`'s own header comment documents this
+ * exact "trusted-code checkout" posture, precisely so a PR cannot edit
+ * its own bot-identity config to disguise a bot-triggered run as
+ * non-bot, or loosen `ciWait.rerunPolicy` to grant itself a rerun the
+ * repository's real policy forbids. This helper must resolve the SAME
+ * trusted config the workflow itself used to produce the check-run
+ * verdicts being diagnosed, or its classification and rerun
+ * recommendations can disagree with (and be gamed relative to) what
+ * actually governed those runs (#1434 review, Codex P2, second
+ * occurrence -- reverts this file's own prior "always prHeadSha" fix,
+ * which solved the "unpinned ref" bug but pinned the wrong ref).
  *
  * `--method GET` is required alongside the `-f ref=...` field, for the
  * same reason `buildCheckRunsForRefArgs` above needs it: `gh api` defaults
@@ -880,12 +885,40 @@ function loadRemoteIddConfig(owner, repo, ref) {
     );
   }
 }
+/**
+ * Resolve `owner/repo`'s default branch via the Repository API -- the
+ * `ref` {@link loadRemoteIddConfig} must read `.github/idd/config.json`
+ * from (see its own doc comment for why). Never hardcoded to `main`:
+ * both this source repository's own `idd-advisory-convergence.yml` and
+ * the `idd-template/` copy distributed to adopters document their
+ * checkout's `ref: main` as standing in for "your own default branch
+ * name if it differs" -- a portable, reusable helper must resolve this
+ * dynamically per target repository rather than assume the source
+ * repository's own convention. No `-f` value is present, so `gh api`
+ * defaults to GET here without needing `--method GET` (confirmed
+ * empirically; the POST-default only triggers once a `-f`/`-F` value is
+ * added, unlike the other `gh api` calls in this file).
+ */
+function resolveDefaultBranch(owner, repo) {
+  return ghText(
+    ['api', `repos/${owner}/${repo}`, '--jq', '.default_branch'],
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  );
+}
 function collectFromGitHub(args) {
   // A true cross-repository invocation only when the caller explicitly
   // named both --owner and --repo (parseArgs already rejects naming only
   // one) -- the common case (neither given) auto-detects the local
-  // checkout's own repo below and must keep reading its own local config,
-  // unchanged from before this fix.
+  // checkout's own repo below. `isCrossRepo` no longer changes which
+  // config source this function reads from (both paths fetch
+  // .github/idd/config.json from owner/repo's trusted default branch via
+  // resolveDefaultBranch + loadRemoteIddConfig below) -- it still gates
+  // the IDD_ADVISORY_BOT_LOGINS env-var scoping further down, since that
+  // env var describes the *caller's own local context*, not either
+  // config source (#1434 review, Copilot: this comment previously
+  // claimed the same-repo path "must keep reading its own local config",
+  // which stopped being true once config resolution moved off local disk
+  // entirely).
   const isCrossRepo = Boolean(args.owner) && Boolean(args.repo);
   const owner =
     args.owner ||
@@ -975,15 +1008,19 @@ function collectFromGitHub(args) {
       runAttempt: meta?.runAttempt ?? null,
     };
   });
-  // Fetched at prHeadSha unconditionally -- same-repo and cross-repo
-  // alike -- rather than a local `loadIddConfig()` read for the same-repo
-  // case: the check-runs above were evaluated under the PR HEAD's own
-  // committed config, which a local working-tree read cannot guarantee
-  // (a different checked-out branch, or simply a stale fetch of the same
-  // branch) any more than the previous cross-repo-only fix guaranteed it
-  // reads the default branch instead of the PR head (#1434 review, Codex
-  // P2, second occurrence -- see loadRemoteIddConfig's own doc comment).
-  const rawConfig = loadRemoteIddConfig(owner, repo, prHeadSha);
+  // Fetched from owner/repo's TRUSTED DEFAULT BRANCH, unconditionally --
+  // same-repo and cross-repo alike -- never the PR head and never a local
+  // `loadIddConfig()` read: the idd-advisory-convergence workflow whose
+  // check-runs this helper diagnoses deliberately checks out the default
+  // branch (never the PR head) for both its verdict script and this
+  // config, so this is the config that actually governed the runs being
+  // diagnosed. Reading the PR-head config instead (this file's own prior
+  // fix) would let a PR redefine its own bot identity or loosen
+  // `ciWait.rerunPolicy` to influence its own classification/rerun
+  // recommendation -- see buildIddConfigContentsArgs's doc comment for
+  // the full rationale (#1434 review, Codex P2, second occurrence).
+  const configRef = resolveDefaultBranch(owner, repo);
+  const rawConfig = loadRemoteIddConfig(owner, repo, configRef);
   const primaryBotLogin = resolveAdvisoryPrimaryBotLogin(rawConfig);
   // The caller's local IDD_ADVISORY_BOT_LOGINS env var describes the
   // *local* checkout's own advisory bots. resolveAdvisoryBotLogins gives
@@ -997,9 +1034,10 @@ function collectFromGitHub(args) {
     envValue: isCrossRepo ? '' : process.env.IDD_ADVISORY_BOT_LOGINS,
     config: rawConfig,
   });
-  // Same config source as the bot-identity fields above -- the inspected
-  // repo's own ciWait.rerunPolicy at prHeadSha, never a stale local read
-  // or (for a cross-repo invocation) the caller's own repo's policy.
+  // Same config source as the bot-identity fields above -- the trusted
+  // default-branch ciWait.rerunPolicy, never a stale local read, the PR's
+  // own (possibly loosened) policy, or (for a cross-repo invocation) the
+  // caller's own repo's policy.
   const { rerunPolicy } = normalizeCiWaitPolicy(rawConfig?.ciWait);
   return {
     input: {
