@@ -535,7 +535,7 @@ Applies only from the E-phase branch-sync check's `clean` /
 `ReviewItems_snapshot` was last non-empty in this E-phase episode, the
 Accepted PATH A count was zero **and** at least one PATH B item
 received a _completed-review_ disposition (`**Accepted**` or
-`**Rejected**` on a real review of current HEAD, never a
+`**Rejected**` on a review of that pass's HEAD, never a
 notice-only rejection; see the E6 non-review-notice rule).
 Otherwise this gate is a no-op: a **true-virgin** empty snapshot (zero
 PATH B items ever dispositioned this episode) never fires it; a
