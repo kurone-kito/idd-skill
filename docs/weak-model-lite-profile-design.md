@@ -146,11 +146,11 @@ review-triage classification and the F2 merge-readiness gate decision.
 | `idd-ci.instructions.md` | In scope | Shared mechanical CI-polling helper for D and E; no judgment call of its own. |
 | `idd-review-snapshot.instructions.md` (E1-E3) | In scope | Mostly mechanical fetch, freeze, and empty/non-empty routing; the critique-pass invocation is a deterministic "always run one" step, not a judgment call. |
 | `idd-review-triage.instructions.md` (E4-E8) | **Excluded (judgment-heavy)** | Classification, severity scoring, and Accept/Reject disposition are exactly the judgment-based gates the roadmap says this tier fails. Stays excluded even though it is not F3-onward. |
-| `idd-review-fix.instructions.md` (E9-E15) | Partial — in scope for the mechanical fix/push/reply/resolve subset (E9-E13) | Fixing and pushing an **already-triaged** Accepted item is mechanical execution; the file's E14 advisory-wait usage is a deterministic decision table (in scope). The triage decisions being fixed must still come from an excluded E4-E8 pass authored by a stronger session or a human — a lite E9-E15 file must say this boundary explicitly, not assume it. |
-| `idd-pre-merge.instructions.md` (F1-F2) | Excluded | F1's read-only branch check is mechanical, but the file's dominant content is the F2 merge-readiness gate — judgment-heavy per the roadmap's own example, and excluded even though not F3-onward. |
-| `idd-merge-handoff.instructions.md` (F2.5) | In scope, for the handoff-stop outcome only | #1415 bullet 3 ("drafting output for human review rather than running the autonomous merge phases") plus the [merge-policy recommendation](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/docs/onboarding/policy-decisions.md#merge-policy) (`human_merge` / `separate_merge_agent` for weak-model repositories) mean a lite session's only job at F2.5 is to stop and hand off cleanly, not to evaluate whether autonomous merge should proceed. |
+| `idd-review-fix.instructions.md` (E9-E15) | Partial — in scope for the whole mechanical E9-E15 execution chain (fix, validate, resolve conflicts, lint/test/push, reply, re-review request, CI wait) | Every step here executes an **already-triaged** Accepted item: E9's fix, E13's reply, and E14's re-review request (a deterministic AW3 decision table, not judgment) all act on a disposition someone else already made. E15 delegates to `idd-ci.instructions.md`, itself in scope below. The triage decisions being executed must still come from an excluded E4-E8 pass authored by a stronger session or a human — a lite E9-E15 file must say this boundary explicitly, not assume it. |
+| `idd-pre-merge.instructions.md` (F1-F2) | Partial — F1's read-only branch check and reading the `pre-merge-readiness` helper's `ready`/`blockers` verdict are mechanical (in scope); the written prose fallback stays excluded | Per [F2 merge-readiness evidence checklist](idd-workflow.md#f2-merge-readiness-evidence-checklist), the live `pre-merge-readiness` helper run is already "the authoritative source for the F2/F3 merge decision" — reading its verdict is a mechanical helper-gate read, matching content principle 4. But F2 explicitly allows discarding that helper output and falling back to live-fetch-plus-prose-judgment when it is unavailable, invalid, or disagrees with GitHub state; that fallback is the judgment-heavy part and stays excluded. A lite F2 file should therefore treat a missing/failing/discarded helper as the stop-and-ask condition (principle 5) rather than attempt the prose fallback itself. |
+| `idd-merge-handoff.instructions.md` (F2.5) | In scope, for the handoff-stop outcome only | #1415 bullet 3 ("drafting output for human review rather than running the autonomous merge phases") plus the [merge-policy recommendation](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/docs/onboarding/policy-decisions.md#merge-policy) (`human_merge` / `separate_merge_agent` for weak-model repositories) mean a lite session's only job at F2.5 is to stop and hand off cleanly, not to evaluate whether autonomous merge should proceed. This still depends on the mechanical F2 helper evidence above already existing to quote in the handoff comment — the same must-say-the-boundary-explicitly pattern as the E9-E15/E4-E8 dependency. |
 | `idd-merge.instructions.md` (F3-F5) | **Excluded** | Autonomous merge phases — #1415 bullet 3's explicit exclusion and the roadmap's own named example. |
-| `idd-advisory-wait.instructions.md` | Split by caller | In scope via its E14 caller (in-scope); excluded via its F2/F3 callers (excluded) — a lite session correctly never reaches the F2/F3 call sites if it stops at F2.5 as designed above. |
+| `idd-advisory-wait.instructions.md` | Split by caller | In scope via its E14 caller (in-scope); excluded via F2's prose-fallback caller and the F3 caller (both excluded) — a lite session correctly never reaches those call sites if it stops at F2.5 as designed above. |
 | `idd-roadmap-audit.instructions.md` (A1.5) | Excluded | Roadmap-level completion judgment, not single-issue execution. |
 <!-- dprint-ignore-end -->
 
@@ -201,16 +201,11 @@ exact tier least able to compensate for a missed trigger.
 Option (a) also wins on the property a lite profile actually needs:
 **mechanical drift control**, via the same `sync-docs.mjs` /
 `audit-docs.mjs --check` machinery the standard profile already relies
-on. Concretely, this needs one new `fileSets` entry in
-`audit/sync-manifest.json` analogous to the existing
-`idd-instruction-template-dogfood-set` (a
-`idd-template/.github/instructions/lite/idd-*.instructions.md` →
-`.github/instructions/lite/idd-*.instructions.md` basename-matched pair,
-`requireSyncPairs: true`), and likely a new `bundleBudgets` entry sized
-for the lite bundle set once real files exist to measure — both
-mechanical additions to an already-proven system, not a new
-content-authoring discipline. See
-[Drift control](#drift-control) below for the full mechanism.
+on — concretely, one new `fileSets` entry plus its required per-file
+`syncPairs` entries, and likely a new `bundleBudgets` entry. See
+[Drift control](#drift-control) below for the full mechanism and why
+that is three mechanical additions to an already-proven system, not a
+new content-authoring discipline.
 
 ### Option (b)'s trade-offs, recorded
 
@@ -232,14 +227,15 @@ points that this design inherits rather than re-deriving:
 Neither point flips the verdict for the lite profile specifically:
 untested table-parsing-vs-skill-matching reliability does not help the
 judgment-heavy phases the lite profile excludes regardless of how it
-resolves, and `docs/skills-delivery-investigation.md`'s own "Revisit
-conditions" section already names this issue as the venue pursuing "the
-same underlying worry through content condensation rather than a
+resolves, and `docs/skills-delivery-investigation.md`'s own
+"Recommendation: No-Go (for now)" section already names this issue, in
+its "strongest opposing case" paragraph, as the venue pursuing "the same
+underlying worry through content condensation rather than a
 delivery-mechanism change" — i.e., that document already anticipated and
-deferred to this one. The conditions that would revisit the no-go
-(recorded routing-failure evidence, a runtime shipping a mandatory
+deferred to this one. Its separate "Revisit conditions" section (recorded
+routing-failure evidence, a runtime shipping a mandatory
 skill-invocation primitive, or explicit adopter demand with a concrete
-unserved use case) are unchanged by this design and remain the correct
+unserved use case) is unchanged by this design and remains the correct
 trigger for re-evaluating both documents together.
 
 ## Drift control
@@ -253,12 +249,20 @@ generated pair rather than a third _kind_ of surface:
   regenerates the lite files the same way it regenerates the standard
   ones today, from a new `fileSets` entry (see
   [Recommendation](#recommendation-option-a) above) covering
-  `idd-template/.github/instructions/lite/*.instructions.md`.
+  `idd-template/.github/instructions/lite/idd-*.instructions.md` →
+  `.github/instructions/lite/idd-*.instructions.md`, `match: "basename"`.
 - **Audit mechanism**: `node scripts/audit-docs.mjs --check` fails on
   drift for the new pair the same way it already does for
   `idd-instruction-template-dogfood-set`, so an edit to a lite file's
   canonical source without regenerating the mirror is caught
-  mechanically, not by review discipline.
+  mechanically, not by review discipline. A `fileSets` entry with
+  `requireSyncPairs: true` (the setting the existing dogfood set already
+  uses) additionally requires one explicit `syncPairs` entry per matched
+  file — the existing dogfood set has 18 such companion entries, one per
+  instruction file, each naming its own `mode` (`exact`, `structure`, or
+  `concreted`). A new lite `fileSets` entry needs the same: one
+  `syncPairs` entry per lite file added, not just the `fileSets` entry
+  itself.
 - **Budget mechanism**: a new `bundleBudgets` entry (for example
   `bundle-work-lite`) gives the lite variant its own byte ceiling,
   separate from the standard bundle's `limitBytes`. This is deliberately
@@ -284,8 +288,9 @@ pass. Titles and one-line scopes only — filing them is out of scope for
 this design issue.
 
 - **Wire sync-manifest drift control for lite instruction files** — add
-  the `fileSets` / `syncPairs` / `bundleBudgets` entries described in
-  [Drift control](#drift-control) so `audit-docs.mjs --check` enforces
+  the `fileSets` entry, its required per-file `syncPairs` entries, and a
+  new `bundleBudgets` entry, all described in
+  [Drift control](#drift-control), so `audit-docs.mjs --check` enforces
   parity for the new surface before any lite content lands; sequence
   this first so every subsequent lite file is drift-checked from its
   first commit.
@@ -305,17 +310,20 @@ this design issue.
   `idd-resume.instructions.md` / `idd-resume-stall.instructions.md`,
   leaning on the existing deterministic classifier helpers per
   [Phase scoping](#phase-scoping).
-- **Author the lite instruction set for the mechanical review-fix
-  subset (E9-E13)** — condense `idd-review-fix.instructions.md`'s
-  fix/push/reply/resolve steps only, with an explicit stated boundary
-  that E4-E8 triage dispositions must already exist from an excluded,
-  stronger-session or human-authored pass before a lite session acts on
-  them.
-- **Author the lite handoff-stop instructions for F2.5** — condense
-  `idd-merge-handoff.instructions.md` down to the single in-scope
+- **Author the lite instruction set for the mechanical review-fix chain
+  (E9-E15)** — condense `idd-review-fix.instructions.md`'s fix,
+  validate, resolve-conflicts, lint/test/push, reply, re-review-request,
+  and CI-wait steps, with an explicit stated boundary that E4-E8 triage
+  dispositions must already exist from an excluded, stronger-session or
+  human-authored pass before a lite session acts on them.
+- **Author the lite instructions for the mechanical F2 helper-read
+  subset and the F2.5 handoff-stop** — condense the in-scope parts of
+  `idd-pre-merge.instructions.md` (reading the `pre-merge-readiness`
+  helper verdict; stop-and-ask if it is missing, failing, or discarded)
+  and `idd-merge-handoff.instructions.md` down to the single in-scope
   outcome identified in [Phase scoping](#phase-scoping): stop and hand
   off cleanly under `human_merge` / `separate_merge_agent`, never
-  evaluate autonomous-merge readiness.
+  evaluate autonomous-merge readiness via the excluded prose fallback.
 - **Document the lite-profile entry and opt-in convention** — specify
   how a weak-model session discovers and opts into the lite bundle set
   (for example, an explicit operator-set policy field, or a distinct
