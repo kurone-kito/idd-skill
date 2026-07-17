@@ -214,11 +214,17 @@ function disambiguateSingleDashValues(
 function extractFlagToken(message: string): string {
   const quoted = /'([^']*)'/.exec(message)?.[1] ?? '';
   if (!quoted.startsWith('-')) {
-    // Not a flag-shaped quoted span (the positional-argument case) --
-    // take the first whitespace/comma-delimited word verbatim. Checked
-    // before the flag-form searches below, which otherwise risk matching
-    // an embedded hyphen inside an ordinary word (e.g. "stray-positional").
-    return quoted.split(/[\s,]/)[0] || '<unknown>';
+    // Not a flag-shaped quoted span (the positional-argument case). Node's
+    // "Unexpected argument '<token>'. ..." message closes the quote
+    // immediately after the exact token -- unlike the flag-missing-value
+    // shape, there is no trailing "<value>" (or anything else) sharing
+    // the same quoted span to trim off -- so the captured content is
+    // already the whole token verbatim. Return it as-is rather than
+    // splitting on whitespace/commas, which would truncate a positional
+    // that itself contains one of those characters (checked before the
+    // flag-form searches below, which otherwise risk matching an embedded
+    // hyphen inside an ordinary word, e.g. "stray-positional").
+    return quoted || '<unknown>';
   }
   // Flag-shaped: prefer a long form found anywhere in the span -- Node's
   // combined "-p, --pr <value>" missing-value message (a flag declared

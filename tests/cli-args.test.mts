@@ -30,6 +30,16 @@ test('parseCliArgs: rejects a stray positional the same way as an unknown flag',
   });
 });
 
+test('parseCliArgs: a stray positional containing a space or comma is reported verbatim, not truncated', () => {
+  // Third Copilot follow-up on #1446: the positional fallback previously
+  // split on whitespace/commas (a carry-over from the flag-form path,
+  // which needs that trimming to drop a trailing "<value>" from the same
+  // quoted span -- a positional's quoted span has no such suffix to trim).
+  assert.throws(() => parseCliArgs(['hello, world'], SAMPLE_SPEC), {
+    message: 'unknown argument: hello, world',
+  });
+});
+
 test('parseCliArgs: rejects a missing value at end of argv', () => {
   assert.throws(() => parseCliArgs(['--pr'], SAMPLE_SPEC), {
     message: 'missing value for argument: --pr',
