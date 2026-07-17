@@ -7,7 +7,7 @@
 
 import {
   existsSync,
-  readdirSync,
+  globSync,
   readFileSync,
   realpathSync,
   statSync,
@@ -734,14 +734,48 @@ export function computeExitCode(report: Report): number {
   return report.issues.length > 0 ? 1 : 0;
 }
 
+/**
+ * #1449: replaces a manual `readdirSync` recursion with `fs.globSync`
+ * (stable since Node v22.17.0; this repo requires `^22.22.2 || >=24`).
+ * Three discovery-semantics deltas were checked and closed or documented
+ * before this swap, each verified empirically against the real
+ * `docs/workshop` tree (10 files) and synthetic fixtures:
+ *
+ * 1. **Case-insensitive matching**: the old code matched via
+ *    `full.toLowerCase().endsWith('.md')`; `globSync` has no `nocase`
+ *    option, so the bracket pattern `[mM][dD]` reproduces it exactly
+ *    (verified against `.MD`/`.Md` fixtures). No non-lowercase `.md` file
+ *    exists anywhere in this repo today (this repo's own naming
+ *    convention requires lowercase filenames), so this is defensive
+ *    rather than currently load-bearing.
+ * 2. **Directories matching the pattern**: a plain recursive glob for
+ *    `.md` entries also returns directory names that happen to match (e.g. a
+ *    hypothetical `weird.md/`), which the caller's `readFileSync` loop
+ *    would crash on (`EISDIR`) — the old `Dirent`-based walk never
+ *    collects a directory because it checks `isDirectory()` first and
+ *    recurses instead. Closed by requesting `Dirent`s and filtering
+ *    `isFile()`, matching the old walk's file-only collection exactly.
+ * 3. **Result order**: `globSync`'s match order does not reproduce the
+ *    alphabetical depth-first order the old `readdirSync`-based recursion
+ *    happens to produce on this filesystem, so results are sorted
+ *    explicitly — verified byte-identical to the pre-change order for
+ *    the real `docs/workshop` tree.
+ *
+ * Two further deltas were checked and found inert for the current tree
+ * (zero occurrences anywhere under `docs/workshop`), so they are recorded
+ * here rather than worked around: a symlinked `.md` **file** sitting
+ * directly in the tree is included by `globSync` even with the default
+ * `followSymlinks: false` (both old and new agree on not traversing
+ * *into* a symlinked directory), and `**` does not descend into
+ * dot-prefixed files or directories by default.
+ */
 function collectMarkdown(dir: string, out: string[]): void {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      collectMarkdown(full, out);
-    } else if (entry.isFile() && full.toLowerCase().endsWith('.md')) {
-      out.push(full);
-    }
+  const matches = globSync('**/*.[mM][dD]', { cwd: dir, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name))
+    .sort();
+  for (const file of matches) {
+    out.push(file);
   }
 }
 
