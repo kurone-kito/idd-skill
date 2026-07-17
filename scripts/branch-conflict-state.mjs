@@ -376,6 +376,118 @@ function probeConflictFilesReadOnly(
     return null;
   }
 }
+/** Default `origin` URL reader: `git remote get-url origin` in the current
+ * working directory (this file's other git probes are likewise un-scoped
+ * to a `-C <dir>`, since they always run from inside the target checkout).
+ * `gitText` already swallows any git failure and returns `''`. */
+function readOriginRemoteUrl() {
+  return gitText(['remote', 'get-url', 'origin']);
+}
+/**
+ * Parse the scheme and host (hostname, plus `:port` when meaningful) from
+ * a git remote URL. Supports the `http://` / `https://` URL-scheme forms
+ * (parseable by the WHATWG URL parser) and the scp-like SSH shorthand
+ * (`[user@]host:path`, which has no `://` scheme and is not
+ * `URL`-parseable; per git's own URL syntax the `user@` prefix is
+ * optional, e.g. a bare `ghes.example.com:owner/repo.git` is valid).
+ *
+ * The returned `scheme` always matches an `http://` or `https://` origin's
+ * own scheme — an `http://`-only GHES instance (no TLS, e.g. behind a
+ * private network boundary) must stay `http`, since silently upgrading to
+ * `https` on the same port would target a port that is not serving TLS
+ * and the fetch would fail; that origin's port is preserved too, since it
+ * is directly reusable here.
+ *
+ * An `ssh://` URL-scheme origin (or any other non-`http(s)` scheme)
+ * deliberately returns `null` rather than reusing its hostname: an SSH
+ * hostname is sometimes an alias with no HTTPS service of its own —
+ * GitHub's own documented `ssh.github.com` (used for SSH-over-443
+ * firewall traversal) accepts SSH, not HTTPS, on that hostname, and a
+ * local `~/.ssh/config` `Host` alias may not resolve via DNS at all.
+ * Guessing wrong here would regress a previously-working `github.com`
+ * fallback into a broken fetch, so this signal is treated as unusable
+ * rather than guessed at. The scp-like shorthand keeps reusing its host,
+ * since that syntax has no port field of its own and is therefore not
+ * used for GitHub's SSH-over-443 workaround in practice — the same
+ * hostname is the overwhelmingly common real-world case for a GHES
+ * remote's SSH and HTTPS endpoints.
+ *
+ * Returns `null` for empty, unparseable, or host-less input (e.g. a
+ * `file://` URL, whose `hostname` is `''`) so callers fall back to
+ * another signal. The host is lowercased for consistent comparison —
+ * DNS/HTTP hosts are case-insensitive.
+ */
+export function parseGitFetchOrigin(url) {
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes('://')) {
+    try {
+      const parsed = new URL(trimmed);
+      if (!parsed.hostname) return null;
+      if (parsed.protocol === 'http:') {
+        return { scheme: 'http', host: parsed.host.toLowerCase() };
+      }
+      if (parsed.protocol === 'https:') {
+        return { scheme: 'https', host: parsed.host.toLowerCase() };
+      }
+      // ssh:// (or any other scheme): no reusable host -- see the doc
+      // comment above.
+      return null;
+    } catch {
+      return null;
+    }
+  }
+  // scp-like shorthand: [user@]host:path (no scheme, so URL() can't parse
+  // it). A single-character "host" is excluded rather than requiring
+  // `user@`: git's own scp-like syntax makes the username optional (a
+  // real GHES remote can validly omit it), but no real git host is a
+  // single letter, so this is almost always a Windows drive-letter path
+  // (`C:\Users\...`, `C:repo.git`) rather than a real host.
+  //
+  // A bracketed IPv6 literal host (`[2001:db8::1]`) is matched before the
+  // generic host pattern: IPv6 literals contain colons of their own, so
+  // the generic `[^:/\s]+` alternative would otherwise stop at the first
+  // one and capture only a truncated fragment (e.g. `[2001`).
+  const scpMatch = trimmed.match(/^(?:[^@\s]+@)?(\[[^\]\s]+\]|[^:/\s]+):/);
+  const host = scpMatch?.[1];
+  return host && host.length > 1
+    ? { scheme: 'https', host: host.toLowerCase() }
+    : null;
+}
+/**
+ * Resolve the scheme + host to use for the read-only base-ref fetch
+ * fallback in {@link tryFetchBase}, instead of hardcoding
+ * `https://github.com` (#1454) — a GitHub Enterprise Server (GHES)
+ * checkout must fetch from its own host, or the fallback silently targets
+ * an unrelated github.com repo of the same owner/repo name (or just
+ * fails outright). Preference order:
+ *
+ * 1. The `GH_HOST` environment variable — the same override `gh` itself
+ *    honors — when set and non-blank. `GH_HOST` never carries a scheme,
+ *    so this always resolves to `https` (the same assumption `gh` itself
+ *    makes for its own HTTPS operations).
+ * 2. The scheme and host parsed from the local checkout's `origin`
+ *    remote URL. This assumes the fetch-worthy remote is named `origin`,
+ *    the conventional default for a single-remote checkout; an unusual
+ *    multi-remote checkout that names its GHES remote something else
+ *    falls through to (3).
+ * 3. `https://github.com`, the pre-existing default, when neither signal
+ *    resolves.
+ */
+export function resolveFetchOrigin(env = process.env, readers = {}) {
+  const ghHost = env.GH_HOST?.trim();
+  // Lowercased for consistency with the origin-derived path below (DNS/HTTP
+  // hosts are case-insensitive either way, so this does not change fetch
+  // behavior -- only comparison/display consistency).
+  if (ghHost) return { scheme: 'https', host: ghHost.toLowerCase() };
+  const readOriginUrl = readers.readOriginUrl ?? readOriginRemoteUrl;
+  return (
+    parseGitFetchOrigin(readOriginUrl()) ?? {
+      scheme: 'https',
+      host: 'github.com',
+    }
+  );
+}
 function tryFetchBase(prBaseRef, owner, repo, notes) {
   if (!prBaseRef) return;
   if (!owner || !repo) {
@@ -385,7 +497,14 @@ function tryFetchBase(prBaseRef, owner, repo, notes) {
     return;
   }
   try {
-    const remote = `https://github.com/${owner}/${repo}.git`;
+    // resolveFetchOrigin()'s own branching (GH_HOST / origin-remote /
+    // default) is unit-tested directly; this URL-assembly line and the
+    // real `git fetch` below stay deliberately untested at this call
+    // site, matching this file's existing test-suite convention of never
+    // letting a test reach a live network fetch (see the "unresolvable
+    // merge-base" test's `baseRefName: ''` short-circuit).
+    const { scheme, host } = resolveFetchOrigin();
+    const remote = `${scheme}://${host}/${owner}/${repo}.git`;
     execFileSync(
       'git',
       ['fetch', '--no-tags', '--depth=1', remote, prBaseRef],
