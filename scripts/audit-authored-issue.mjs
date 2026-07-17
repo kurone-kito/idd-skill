@@ -160,8 +160,9 @@ const ISSUE_OR_PR_REFERENCE_PATTERN =
 // followed by a task-list checkbox. Captures the leading indentation
 // (group 1) so splitIntoListItemBlocks can tell a deeper-indented
 // nested/child marker from a new marker at the same or shallower
-// indentation as the most recently seen one — see that function for how
-// the two are told apart. Declared here (before the CLI entry
+// indentation as the currently open node at that depth in its
+// indentation-ancestry stack — see that function for how the two are
+// told apart. Declared here (before the CLI entry
 // block below), not next to splitIntoSentences/splitIntoListItemBlocks
 // that use it, because those are hoisted function declarations but this
 // is a module-level `const` — declaring it after the entry block would be
@@ -762,49 +763,90 @@ function indentColumnWidth(indent) {
  * at all yields exactly one block spanning every line, preserving prior
  * behavior for plain prose.
  *
- * A marker line's indentation is compared against the *most recently
- * seen* marker line's indentation (not the current block's own starting
- * indentation): a *deeper* indentation is a nested/child item and stays
- * part of the running block, so a parent bullet's coordination language
- * and a nested child's reference are scoped together instead of being
- * split into unrelated blocks (see issue #1472). A marker at the *same or
- * shallower* indentation as the most recently seen marker still starts a
- * new block, preserving the original tight-list sentence-conflation fix
- * this function exists for — separate sibling bullets, at any shared
- * indentation depth, never merge with each other.
+ * Tracks a full indentation-ancestry stack of open `ListItemNode`s rather
+ * than a single most-recently-seen marker indentation (see issue #1474):
+ * a marker line strictly *deeper* than the stack's top is pushed as a new
+ * child node, nested under it. A marker at the *same or shallower*
+ * indentation pops nodes off the stack — closing each one — until the top
+ * is strictly shallower (or the stack empties), then pushes the new
+ * marker as a fresh node at that level.
  *
- * Known, accepted residual gap: a parent bullet with two or more nested
- * children only keeps the *first* child merged with the parent's text — a
- * later same-depth sibling still starts its own new block (indistinguishable
- * here from a same-depth sibling of the parent itself, without tracking a
- * full indentation stack). Not a regression: today, every nested child is
- * already split away from its parent unconditionally, so this is
- * strictly no worse for the second-and-later children while fixing the
- * common single-child case.
+ * Closing a node emits it as its own block *only when it never acquired a
+ * child* (a leaf): the block is that leaf's still-open ancestors' own
+ * lines (root through parent, in document order) followed by the leaf's
+ * own lines. A node that did acquire a child is never emitted standalone
+ * — its own lines already appear as the ancestor prefix of every one of
+ * its descendant leaf blocks, so nothing is lost. Net effect: every
+ * root-to-leaf path down the tree emits exactly one block containing
+ * every node on that path, and every node lies on at least one such path.
+ * That scopes a parent bullet's coordination language together with
+ * *every* nested child's reference at any depth — not only the first
+ * child under a given parent, fixing the residual gap #1472 left behind
+ * — while same-depth sibling bullets never share a leaf block with each
+ * other, preserving the original tight-list sentence-conflation fix this
+ * function exists for.
+ *
+ * Lines seen before any node has opened (a plain-prose preamble, or an
+ * entire paragraph with no markers at all) accumulate in a separate
+ * `preamble` buffer rather than the stack — there is no ancestor above
+ * pre-first-marker prose to scope it with. `preamble` is flushed as its
+ * own standalone block as soon as the first marker line opens a node
+ * (preserving the existing behavior that leading prose never merges with
+ * the first list item), or as the paragraph's sole block if no marker
+ * ever appears.
  */
 function splitIntoListItemBlocks(paragraph) {
   const blocks = [];
-  let current = [];
-  let lastMarkerIndent = null;
+  const stack = [];
+  let preamble = [];
+  const closeNode = (node) => {
+    if (node.hasChild) {
+      return;
+    }
+    const ancestorLines = stack.flatMap((ancestor) => ancestor.lines);
+    blocks.push([...ancestorLines, ...node.lines].join('\n'));
+  };
   for (const line of paragraph.split('\n')) {
     const marker = LIST_ITEM_MARKER_PATTERN.exec(line);
     const indent = marker === null ? null : indentColumnWidth(marker[1]);
-    const startsNewBlock =
-      indent !== null &&
-      current.length > 0 &&
-      (lastMarkerIndent === null || indent <= lastMarkerIndent);
-    if (startsNewBlock) {
-      blocks.push(current.join('\n'));
-      current = [line];
-    } else {
-      current.push(line);
+    if (indent === null) {
+      // Continuation line: attach to the deepest open node, or to the
+      // pre-first-marker preamble if no node is open yet.
+      const top = stack.at(-1);
+      if (top === undefined) {
+        preamble.push(line);
+      } else {
+        top.lines.push(line);
+      }
+      continue;
     }
-    if (indent !== null) {
-      lastMarkerIndent = indent;
+    // A same-or-shallower marker closes every open node at this depth or
+    // deeper — one level at a time — before the new marker starts its own
+    // node, mirroring the original single-value comparison per stack
+    // level instead of once against a single flattened scalar.
+    for (
+      let top = stack.at(-1);
+      top !== undefined && indent <= top.indent;
+      top = stack.at(-1)
+    ) {
+      stack.pop();
+      closeNode(top);
     }
+    const parent = stack.at(-1);
+    if (parent !== undefined) {
+      parent.hasChild = true;
+    } else if (preamble.length > 0) {
+      blocks.push(preamble.join('\n'));
+      preamble = [];
+    }
+    stack.push({ indent, lines: [line], hasChild: false });
   }
-  if (current.length > 0) {
-    blocks.push(current.join('\n'));
+  for (let top = stack.at(-1); top !== undefined; top = stack.at(-1)) {
+    stack.pop();
+    closeNode(top);
+  }
+  if (preamble.length > 0) {
+    blocks.push(preamble.join('\n'));
   }
   return blocks;
 }
