@@ -603,14 +603,17 @@ without ending the title early and losing the rest of the link. An empty
 or whitespace-only `--current-repo` (or `$GITHUB_REPOSITORY`) is treated
 the same as omitting it entirely, rather than as a known repository that
 can never match. A nested/child list item's reference is evaluated
-together with its parent bullet's coordination-language text instead of
-being scoped away from it, while a sibling bullet at the same
+together with its full ancestor chain's coordination-language text
+instead of being scoped away from it, while a sibling bullet at the same
 indentation — nested or top-level — still starts its own separate scope,
 preserving the tight-list sentence-conflation fix mentioned above. This
-holds for the first nested child under a given parent; a parent with two
-or more nested children currently keeps only the first one scoped with
-it — a known, tracked limitation, not a guarantee for every nested
-child. Unlike every other check above, a
+holds for every nested child under a given parent, at any depth — not
+only the first. A known, tracked limitation remains for a tight list
+only: a continuation line resuming at an ancestor's own indentation
+after a deeper child has already opened is still attributed to that
+child rather than the ancestor, and a loose list (a blank line between
+sibling items) resets scope at the paragraph boundary before this check
+ever sees it. Unlike every other check above, a
 `prose-dependency` warning never flips `passed` to `false` and never
 changes the linter's exit code: it prompts the author to either
 convert the prose into a proper dependency marker or consciously

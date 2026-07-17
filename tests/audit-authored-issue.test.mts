@@ -1424,6 +1424,100 @@ test('prose-dependency recognizes a tab-indented nested child as deeper than its
   assert.match(finding?.detail ?? '', /#1391/);
 });
 
+// --- prose-dependency: every nested sibling under one parent, not just
+// the first (#1474) ---
+
+test('prose-dependency recognizes a reference in the second nested child under one parent, not only the first', () => {
+  // Regression test for the exact gap #1474 tracks: the pre-#1474
+  // single-most-recently-seen-marker comparison kept only the FIRST
+  // child merged with the parent's block -- once that first child was
+  // processed, the comparison value became the child's own (deeper)
+  // indentation, so the second same-depth child compared against that
+  // instead of the parent and started a fresh block, losing the
+  // parent's coordination language exactly like every child did before
+  // #1472 shipped.
+  const body = childBody({
+    extraMarkers:
+      '- Before starting this work:\n' +
+      '  - Gather context\n' +
+      '  - PR #1391 must land',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency recognizes a reference in the third nested child under one parent', () => {
+  // Generalizes the second-child case above to a third sibling, proving
+  // the indentation-ancestry stack scopes every child at a given depth
+  // with the parent -- not merely the first two.
+  const body = childBody({
+    extraMarkers:
+      '- Before starting this work:\n' +
+      '  - Gather context\n' +
+      '  - Draft the plan\n' +
+      '  - PR #1391 must land',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency recognizes a reference nested under a non-first branch of a multi-level list', () => {
+  // Multi-level nesting (grandparent / two sibling parent branches /
+  // child), reference in a child under the SECOND (non-first) branch.
+  // Under the pre-#1474 single-most-recently-seen-marker comparison,
+  // once the first branch's own child was processed, the comparison
+  // value sat at that child's depth; the second branch's marker (same
+  // depth as the first branch) started a fresh block with nothing
+  // carried over, so the grandparent's coordination language never
+  // reached the second branch's own child -- the reference was silently
+  // never flagged. The indentation-ancestry stack fixes this: every
+  // node still open above the current one (grandparent, and this
+  // branch) prefixes the leaf block, regardless of what an earlier
+  // sibling branch already consumed.
+  const body = childBody({
+    extraMarkers:
+      '- Before this release:\n' +
+      '  - First branch: nothing notable here\n' +
+      '  - Second branch:\n' +
+      '    - PR #1391 must land',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency does not merge plain prose directly followed by a list item with no blank line', () => {
+  // Regression guard for the preamble-flush rule the #1474 rework
+  // introduces: lines seen before any list marker opens must still be
+  // flushed as their OWN block the moment the first marker appears
+  // (matching pre-#1474 behavior), not merged into the first list
+  // item's block. No terminal punctuation is used deliberately -- an
+  // incorrect merge of the preamble into the following list item's
+  // block would put the keyword and the reference in the same
+  // sentence (nothing else would split them apart), which would wrongly
+  // flag it.
+  const body = childBody({
+    extraMarkers: 'Confirm before merging\n- PR #1391 is an unrelated bullet',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
 // --- prose-dependency: empty-string currentRepo (#1472) ---
 
 test('prose-dependency treats an empty-string currentRepo as unknown', () => {
