@@ -446,6 +446,19 @@ test('parseRunIdFromUrl extracts the run id from a bare run URL', () => {
   );
 });
 
+// Regression (#1434 review, Copilot): a run id followed directly by a
+// query string (GitHub appends `?check_suite_focus=true` to some check-run
+// permalinks) previously failed to match, since the run id had to be
+// followed by `/` or end-of-string only.
+test('parseRunIdFromUrl extracts the run id when followed by a query string', () => {
+  assert.equal(
+    parseRunIdFromUrl(
+      'https://github.com/kurone-kito/idd-skill/actions/runs/12345?check_suite_focus=true',
+    ),
+    '12345',
+  );
+});
+
 test('parseRunIdFromUrl returns null for a non-matching URL', () => {
   assert.equal(
     parseRunIdFromUrl('https://github.com/kurone-kito/idd-skill/pull/1431'),

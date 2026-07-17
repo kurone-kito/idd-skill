@@ -513,9 +513,14 @@ function buildOrderedPlan(
  * the same URL shape `idd-ci.instructions.md`'s Rerun mechanics already
  * document extracting a run id from. Returns `null` (fails closed) rather
  * than guessing when the URL does not match.
+ *
+ * The run id may be followed by `/` (a job segment), `?` (GitHub appends
+ * query strings such as `?check_suite_focus=true` to some check-run
+ * permalinks), or end-of-string -- a run id immediately followed by `?`
+ * was previously misclassified `unresolved` (#1434 review, Copilot).
  */
 export function parseRunIdFromUrl(url: string): string | null {
-  const match = /\/actions\/runs\/(\d+)(?:\/|$)/.exec(String(url ?? ''));
+  const match = /\/actions\/runs\/(\d+)(?:[/?]|$)/.exec(String(url ?? ''));
   return match ? match[1] : null;
 }
 
