@@ -363,7 +363,10 @@ proceeding to F — do not skip triage.
   if the route recurs after that rerun, or if the policy is `hold`,
   post a hold comment and stop (do not loop). On success after the
   rerun, **return to E1**.
-- `idd-advisory-convergence` alone, `pending: false` → E1, not E11.
+- **On failure / `idd-advisory-convergence` alone, verdict `pending: false`
+  with outstanding review reasons** (see `idd-ci.instructions.md`
+  §Interpretation): return to E1, not E11 — neither code-caused nor
+  infra.
 
 When E15 stops on a CI hold, re-validate the claim and then update the
 digest with `Phase: E15 hold`, the failing or missing checks in
