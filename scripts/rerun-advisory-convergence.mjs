@@ -60,8 +60,10 @@
 //   - `deriveGhHttpStatus` -- discriminates a confirmed 404 (genuinely no
 //     remote config) from any other unreadable state, so a cross-repo
 //     config fetch fails closed instead of guessing (gh-http-status.mts).
-//   - `ghText`, `isCliExecution` -- shared `gh` execution + CLI-entry-point
-//     guard (gh-exec.mts).
+//   - `ghText` -- shared `gh` execution (gh-exec.mts). The CLI-entry-point
+//     guard below uses Node's own native `import.meta.main`, which
+//     replaced this repo's hand-rolled `isCliExecution` helper (removed
+//     from gh-exec.mts by an unrelated `main`-sync merge).
 //   - `parsePaginatedGhNdjson` -- shared NDJSON pagination parser
 //     (protocol-helpers.mts), reused directly here rather than through
 //     `ghApiJson`'s `paginate` mode: that mode hardcodes `--jq '.[]'` for a
@@ -81,11 +83,7 @@ import {
   normalizeCiWaitPolicy,
   resolveCiRerunDecision,
 } from './ci-wait-policy.mjs';
-import {
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-  isCliExecution,
-} from './gh-exec.mjs';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { isValidIsoTimestamp } from './marker-helpers.mjs';
 import {
@@ -1203,10 +1201,11 @@ function collectFromGitHub(args) {
   };
 }
 // CLI: emit the plan as JSON plus a human-readable ordered command list.
-// Guarded behind isCliExecution(import.meta.url) (shared, see gh-exec.mts)
+// Guarded behind `import.meta.main` (Node's own native CLI-entry-point
+// detection, matching every other already-migrated helper in this repo)
 // so importing this module (for unit tests) never parses process.argv,
 // prints usage, or makes a `gh` call.
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   const { plan, help } = runRerunAdvisoryConvergence(process.argv.slice(2));
   if (help) {
     printHelp();
