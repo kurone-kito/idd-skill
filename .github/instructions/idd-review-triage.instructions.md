@@ -73,12 +73,12 @@ Accepted PATH B items do **not** enter review-fix. They are fully
 handled in E6-E7.
 
 **Resolved-thread duplicate pre-check (PATH B, before verification).**
-Before verification below, check whether a new **thread-sourced** PATH B
-item matches an entry in this PR's resolved-thread index
-(`idd-review-snapshot.instructions.md` E1 Step 3). This pre-check applies
-only to thread-sourced PATH B items — a regular comment has no resolved
-thread state to index against — and matching is scoped to **this PR's**
-resolved threads only.
+Before verification below, check whether a new PATH B item — a review
+thread or a regular comment (E6 supports both PATH B sources) — matches
+an entry in this PR's resolved-thread index
+(`idd-review-snapshot.instructions.md` E1 Step 3). Matching is scoped to
+**this PR's** resolved threads only: a regular comment has no resolved
+state of its own, but can still match a prior resolved thread's claim.
 
 - Match the new item against the index by file area and substantive
   claim, requiring the identical claim rather than merely a related
@@ -95,12 +95,13 @@ resolved threads only.
   current HEAD — the diff moves between rounds, so a prior file/line
   citation can be stale.
 - **Shortcut.** If the prior disposition was a reasoned rejection with
-  evidence and that evidence still holds: reply to the new thread with a
+  evidence and that evidence still holds: reply to the new item with a
   fresh, individually-authored disposition citing the prior thread's URL
-  and its evidence, then apply the existing E6 resolve step. Every
-  recurrence still gets its own reply, so the 1:1 disposition-count /
-  no-combined-replies rule (E6) is unchanged — only the reply's content
-  is shortcut.
+  and its evidence, then apply the existing E6 PATH B reply rules for
+  that item's source — resolve immediately after replying for a review
+  thread; reply only for a regular comment. Every recurrence still gets
+  its own reply, so the 1:1 disposition-count / no-combined-replies rule
+  (E6) is unchanged — only the reply's content is shortcut.
 - **Fall through** unchanged to "Verify before accept (PATH B)" below
   when there is no match, re-confirmation shows the new item is not
   actually the same underlying claim, the matched disposition is not a
