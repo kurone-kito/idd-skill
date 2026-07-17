@@ -1216,6 +1216,384 @@ test('prose-dependency does not misparse a three-segment slash path ending in #N
   assert.equal(finding.severity, undefined);
 });
 
+// --- prose-dependency: reference-style Markdown links (#1472) ---
+
+test('prose-dependency recognizes a reference-style Markdown link target', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before starting, [PR #1391][upstream] must land.\n\n' +
+      '[upstream]: https://github.com/kurone-kito/idd-skill/pull/1391',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency does not warn on a cross-repo reference-style Markdown link when currentRepo is known', () => {
+  // Regression test for the exact scenario #1472 describes: without
+  // resolving the reference-style link to its definition's URL, the
+  // label's own bare `#1391` leaks through to the bare-`#` alternative and
+  // gets wrongly flagged as local even though the definition targets
+  // another repository.
+  const body = childBody({
+    extraMarkers:
+      'Before starting, [PR #1391][upstream] must land.\n\n' +
+      '[upstream]: https://github.com/acme/other-repo/pull/1391',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency still warns on a cross-repo reference-style Markdown link when currentRepo is unknown', () => {
+  // Preserves the same default polarity as the full-URL and Markdown-link
+  // alternatives: without repo context, a reference-style link is still
+  // flagged by default.
+  const body = childBody({
+    extraMarkers:
+      'Before starting, [PR #1391][upstream] must land.\n\n' +
+      '[upstream]: https://github.com/acme/other-repo/pull/1391',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency does not warn on a reference-style Markdown link when the number already has a Blocked by encoding', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by #1391\n\nBefore starting, [PR #1391][upstream] must land.\n\n' +
+      '[upstream]: https://github.com/kurone-kito/idd-skill/pull/1391',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency resolves a reference-style link whose definition uses an angle-bracket destination', () => {
+  // Regression test for a real review finding on this same PR (Copilot):
+  // CommonMark (section 6.6) allows a reference definition's destination
+  // to be wrapped in angle brackets (`[ref]: <https://...>`). Without
+  // stripping the brackets before rewriting, the usage would become
+  // `[text](<https://...>)`, which the Markdown-link alternative does not
+  // recognize, silently leaving the reference-style link unresolved and
+  // re-leaking the label's bare `#N` -- the same failure mode this item
+  // exists to prevent, just for this one destination-encoding shape.
+  const body = childBody({
+    extraMarkers:
+      'Before starting, [PR #1391][upstream] must land.\n\n' +
+      '[upstream]: <https://github.com/acme/other-repo/pull/1391>',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not resolve a reference-style link whose ref has no matching definition', () => {
+  // A dangling ref (no matching `[ref]: target` definition anywhere in
+  // the body) is left as literal text -- it falls through to the bare-`#`
+  // alternative like any other unrecognized bracket shape, the same
+  // fallback that already applies to every other unmatched shape.
+  const body = childBody({
+    extraMarkers: 'Before starting, [PR #1391][missing-ref] must land.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency resolves a reference-style link whose ref label differs in case and whitespace from its definition', () => {
+  // CommonMark compares reference labels case-insensitively after
+  // trimming and collapsing internal whitespace (normalizeLinkReferenceLabel).
+  // Every other reference-style test uses an identical single-word label
+  // on both sides, which would still resolve-and-flag correctly (via the
+  // bare-`#` fallback) even if label normalization were entirely broken --
+  // not a discriminating test. A *cross-repo* definition with currentRepo
+  // known is: if normalization fails to match "Upstream  PR" to "upstream
+  // pr", the usage is left unresolved, falls through to the bare-`#`
+  // alternative (which has no owner/repo of its own and is therefore
+  // always treated as local, unlike the resolved Markdown-link form),
+  // and gets wrongly flagged -- only correct label resolution lets the
+  // cross-repo exclusion apply.
+  const body = childBody({
+    extraMarkers:
+      'Before starting, [PR #1391][Upstream  PR] must land.\n\n' +
+      '[upstream pr]: https://github.com/acme/other-repo/pull/1391',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+// --- prose-dependency: nested list item parent-scope loss (#1472) ---
+
+test('prose-dependency recognizes a nested list item reference alongside its parent bullet coordination language', () => {
+  const body = childBody({
+    extraMarkers: '- Before starting this work:\n  - PR #1391 must land',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency does not warn on a nested list item reference when the number already has a Blocked by encoding', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by #1391\n\n- Before starting this work:\n  - PR #1391 must land',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency still separates top-level sibling list items sharing a tight list with a nested child', () => {
+  // Regression guard: the nested-scoping fix above must not regress the
+  // original tight-list sentence-conflation fix for TOP-LEVEL siblings --
+  // a nested child's own reference must not leak into an unrelated
+  // top-level sibling bullet's block.
+  const body = childBody({
+    extraMarkers:
+      '- Part of roadmap #1386\n' +
+      '- Before starting this work:\n' +
+      '  - PR #1391 must land',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, 'warning');
+  assert.match(finding.detail, /#1391/);
+  assert.doesNotMatch(finding.detail, /#1386/);
+});
+
+test('prose-dependency recognizes a tab-indented nested child as deeper than its space-indented parent', () => {
+  // Regression test for a real review finding on this same PR (Codex):
+  // CommonMark expands a tab to the next column that is a multiple of 4
+  // when it participates in block structure, so a tab-indented marker
+  // (raw length 1) can still be a deeper nested child than a 2-space
+  // parent (raw length 2) once expanded (column 4 vs. column 2). A raw
+  // character-count comparison would undercount the tab and wrongly
+  // treat this as a same-or-shallower marker, starting a new block and
+  // losing the parent's coordination language -- the same failure mode
+  // the nested-scoping fix above exists to prevent.
+  const body = childBody({
+    extraMarkers: '  - Before starting this work:\n\t- PR #1391 must land',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+// --- prose-dependency: empty-string currentRepo (#1472) ---
+
+test('prose-dependency treats an empty-string currentRepo as unknown', () => {
+  // Regression test for the exact bug #1472 describes: `currentRepo !==
+  // undefined` is true for `''`, so a local full-URL reference was
+  // silently excluded (misread as cross-repo) instead of flagged by the
+  // "unknown repo" default.
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      'https://github.com/kurone-kito/idd-skill/pull/1391 has merged.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child', currentRepo: '' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency treats a whitespace-only currentRepo as unknown', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      'https://github.com/kurone-kito/idd-skill/pull/1391 has merged.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: '   ',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency trims a currentRepo with incidental leading/trailing whitespace before comparing', () => {
+  // normalizeCurrentRepo's non-empty branch returns the trimmed value, not
+  // the original string. A *local* URL reference is the discriminating
+  // case: an explicit currentRepo that matches the reference's owner/repo
+  // is still flagged by design (see the AuditOptions.currentRepo JSDoc),
+  // so if trimming were broken -- comparing the padded string as-is --
+  // the padded value would never equal the unpadded local repo, the
+  // reference would be wrongly treated as cross-repo, and this would
+  // silently NOT warn instead.
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      'https://github.com/kurone-kito/idd-skill/pull/1391 has merged.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: '  kurone-kito/idd-skill  ',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency does not warn with an empty-string currentRepo when the number already has a Blocked by encoding', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by #1391\n\nBefore this can start, confirm ' +
+      'https://github.com/kurone-kito/idd-skill/pull/1391 has merged.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child', currentRepo: '' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+// --- prose-dependency: escaped quotes in a Markdown link title (#1472) ---
+
+test('prose-dependency recognizes a Markdown link whose quoted title contains an escaped double quote', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/idd-skill/pull/1391 "reviewed \\"API\\"") has merged.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency recognizes a Markdown link whose quoted title contains an escaped single quote', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      "[PR #1391](https://github.com/kurone-kito/idd-skill/pull/1391 'reviewed \\'API\\'') has merged.",
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency does not warn on a cross-repo Markdown link with an escaped-quote title when currentRepo is known', () => {
+  // Regression test for the exact label-leak #1472 describes: without
+  // tolerating the escaped quote, the title sub-pattern closes early, the
+  // whole Markdown-link alternative fails, and the label's own bare
+  // `#1391` leaks through to the bare-`#` alternative and gets wrongly
+  // flagged as local even though the link targets another repository.
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/other-repo/pull/1391 "reviewed \\"API\\"") has shipped.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not warn on a Markdown link with an escaped-quote title when the number already has a Blocked by encoding', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by #1391\n\nBefore this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/idd-skill/pull/1391 "reviewed \\"API\\"") has merged.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not exhibit catastrophic backtracking on an adversarial escaped-quote-like run', () => {
+  // Regression test for a real exponential-backtracking vulnerability
+  // CodeQL caught in this PR's first draft of the escaped-quote fix: an
+  // earlier version of the title sub-pattern let its "any non-quote,
+  // non-newline character" alternative also match a bare backslash,
+  // overlapping with the "backslash + any character" escape alternative.
+  // That overlap gives the engine a combinatorially large (Fibonacci-many)
+  // number of ways to partition a long run of backslashes before
+  // concluding no match is possible, once no real closing quote/paren
+  // follows -- an unbounded-length adversarial title is plausible input
+  // (e.g. a pasted issue body). The fixed pattern excludes a literal
+  // backslash from that character class, making the two alternatives
+  // non-overlapping, so this must stay linear-time regardless of run
+  // length.
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      `[x](https://github.com/o/r/pull/1 "${'\\!'.repeat(5000)}`,
+  });
+  const start = Date.now();
+  auditAuthoredIssue(body, { shape: 'child' });
+  const elapsedMs = Date.now() - start;
+  assert.ok(
+    elapsedMs < 2000,
+    `expected linear-time evaluation, took ${elapsedMs}ms`,
+  );
+});
+
 // --- shape / markerPrefix pass-through ---
 
 test('the report echoes the declared shape and resolved markerPrefix', () => {
