@@ -14,7 +14,13 @@ const scriptFiles = readdirSync(scriptsDir).filter((file) =>
 );
 
 // Match the flag as a quoted string literal regardless of quote style, so
-// the source-scan survives formatter quote-style migrations.
+// the source-scan survives formatter quote-style migrations. This also
+// covers helpers migrated onto the shared cli-args.mts wrapper (#1446):
+// their declarative flag spec keeps the dashed literal as an object key
+// (e.g. `'--pr': { type: 'string' }`, defined locally in the migrated
+// helper's own .mts source -- see cli-args.mts's module header), which
+// still compiles down to the same quoted substring this scan looks for.
+// No separate spec-object-aware matcher is needed.
 function includesQuotedFlag(src: string, flag: string) {
   return src.includes(`'${flag}'`) || src.includes(`"${flag}"`);
 }
@@ -59,6 +65,7 @@ const FLAG_CONCEPTS = [
     concept: 'pull request number',
     canonical: '--pr',
     helpers: [
+      'advisory-convergence.mjs',
       'advisory-wait-state.mjs',
       'audit-pr-cleanup.mjs',
       'branch-conflict-state.mjs',
@@ -75,6 +82,7 @@ const FLAG_CONCEPTS = [
     concept: 'trusted marker logins',
     canonical: '--trusted-marker-logins',
     helpers: [
+      'advisory-convergence.mjs',
       'advisory-wait-state.mjs',
       'forced-handoff-marker.mjs',
       'minimize-superseded-markers.mjs',
@@ -91,7 +99,11 @@ const FLAG_CONCEPTS = [
   {
     concept: 'advisory bot logins',
     canonical: '--advisory-bot-logins',
-    helpers: ['pre-merge-readiness.mjs', 'review-activity-snapshot.mjs'],
+    helpers: [
+      'advisory-convergence.mjs',
+      'pre-merge-readiness.mjs',
+      'review-activity-snapshot.mjs',
+    ],
   },
 ];
 

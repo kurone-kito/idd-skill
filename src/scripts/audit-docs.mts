@@ -7,7 +7,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import type {
   DocBudgetGuardConfig,
   InstructionSizeBudgetConfig,
@@ -308,13 +308,17 @@ function checkFileSets(fileSets: FileSet[], syncPairs: SyncPair[]) {
       continue;
     }
 
-    const sourceNames = new Set(sourceFiles.map((file) => basename(file)));
-    const targetNames = new Set(targetFiles.map((file) => basename(file)));
+    const sourceNames = new Set(
+      sourceFiles.map((file) => posix.basename(file)),
+    );
+    const targetNames = new Set(
+      targetFiles.map((file) => posix.basename(file)),
+    );
     const sourceByName = new Map(
-      sourceFiles.map((file) => [basename(file), file]),
+      sourceFiles.map((file) => [posix.basename(file), file]),
     );
     const targetByName = new Map(
-      targetFiles.map((file) => [basename(file), file]),
+      targetFiles.map((file) => [posix.basename(file), file]),
     );
 
     for (const sourceName of sourceNames) {
@@ -849,6 +853,13 @@ function listRepoFiles(): string[] {
   return output.split(/\r?\n/).filter(Boolean).sort();
 }
 
+// Excluded from the node-core-builtins roadmap's (#1445) built-in swaps:
+// this matches `pattern` against `repoFiles`, an in-memory list already
+// fetched from `git ls-files --cached --others --exclude-standard` (see
+// `listRepoFiles`), which correctly excludes gitignored and untracked
+// files. Swapping this for `fs.globSync` would instead search the real
+// filesystem and widen the matched set to files `git ls-files` deliberately
+// omits.
 function globFiles(pattern: string): string[] {
   const regex = globToRegExp(pattern);
   return repoFiles.filter((file) => regex.test(file)).sort();
@@ -1019,10 +1030,6 @@ function git(args: string[]): string {
   });
 }
 
-function basename(file: string): string {
-  return file.slice(file.lastIndexOf('/') + 1);
-}
-
 // Returns only the basenames that collide across two or more distinct
 // paths in `files`, each mapped to every path sharing that basename.
 // Used by checkFileSets to fail closed on an ambiguous basename match
@@ -1030,7 +1037,7 @@ function basename(file: string): string {
 function findDuplicateBasenames(files: string[]): Map<string, string[]> {
   const byName = new Map<string, string[]>();
   for (const file of files) {
-    const name = basename(file);
+    const name = posix.basename(file);
     const existing = byName.get(name);
     if (existing) {
       existing.push(file);
