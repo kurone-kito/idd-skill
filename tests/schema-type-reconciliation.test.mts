@@ -292,6 +292,7 @@ export const branchConflictStateKeys = [
   'mergeStateStatus',
   'branchState',
   'syncRecommendation',
+  'baseAdvancedSinceMergeBase',
   'readOnly',
   'worktreeUnchanged',
   'diagnostics',
@@ -614,6 +615,7 @@ const branchConflictStateFixture = {
   mergeStateStatus: 'CLEAN',
   branchState: 'clean',
   syncRecommendation: 'none',
+  baseAdvancedSinceMergeBase: false,
   readOnly: true,
   worktreeUnchanged: true,
   diagnostics: {
