@@ -926,6 +926,296 @@ test('prose-dependency ignores a coordination word and reference that only appea
   assert.equal(finding.severity, undefined);
 });
 
+// --- prose-dependency: trailing Markdown-link content (#1468) ---
+
+test('prose-dependency recognizes a Markdown link whose target has a trailing URL fragment', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/idd-skill/pull/1391#issuecomment-123) has merged.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency does not warn on a cross-repo Markdown link with a trailing URL fragment when currentRepo is known', () => {
+  // Regression test for the exact label-leak false positive this issue's
+  // Background describes: without trailing-content support, this link
+  // would fail the Markdown-link alternative and let its label's bare
+  // `#1391` leak through to the bare-`#` alternative, wrongly flagging a
+  // cross-repo reference as local.
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/other-repo/pull/1391#issuecomment-123) has shipped.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not warn on a cross-repo Markdown link whose fragment contains a dot', () => {
+  // Regression test for a review finding on this same PR (#1469): a
+  // fragment charset restricted to [\w-]+ rejects a fragment containing a
+  // `.` (e.g. a heading-anchor-style fragment), which fails the whole
+  // Markdown-link alternative and reintroduces the exact label-leak this
+  // shape exists to prevent -- the same failure mode as not tolerating a
+  // fragment at all, just triggered by an overly narrow charset instead.
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      '[PR #12](https://github.com/kurone-kito/other-repo/pull/12#foo.bar) has shipped.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not warn on a cross-repo Markdown link with a non-ASCII fragment', () => {
+  // Regression test for a review finding on this same PR (#1469): a
+  // fragment charset restricted to ASCII \w rejects a non-ASCII fragment
+  // (realistic for this repository, whose docs/issues carry Japanese
+  // content routinely), with the same label-leak failure mode as above.
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/other-repo/pull/1391#背景) has shipped.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency recognizes a Markdown link whose target has a trailing slash', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/idd-skill/pull/1391/) has merged.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency does not warn on a cross-repo Markdown link with a trailing slash when currentRepo is known', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/other-repo/pull/1391/) has shipped.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency recognizes a Markdown link whose target has a double-quoted title', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/idd-skill/pull/1391 "Merge base change") has merged.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency recognizes a Markdown link whose target has a single-quoted title', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      "[PR #1391](https://github.com/kurone-kito/idd-skill/pull/1391 'Merge base change') has merged.",
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency does not warn on a cross-repo Markdown link with a quoted title when currentRepo is known', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/other-repo/pull/1391 "Merge base change") has shipped.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not warn on a Markdown link with a trailing URL fragment when the number already has a Blocked by encoding', () => {
+  const body = childBody({
+    extraMarkers:
+      'Blocked by #1391\n\nBefore this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/idd-skill/pull/1391#issuecomment-123) has merged.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not warn on a Markdown link with a quoted title when the number already has a task-list encoding', () => {
+  const body = childBody({
+    extraMarkers:
+      '- [ ] #1391\n\nBefore this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/idd-skill/pull/1391 "Merge base change") has merged.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+// --- prose-dependency: owner/repo#N shorthand (#1468) ---
+
+test('prose-dependency flags an owner/repo#N shorthand naming currentRepo', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before starting, confirm kurone-kito/idd-skill#4321 has shipped.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#4321/);
+});
+
+test('prose-dependency does not warn on an owner/repo#N shorthand naming a different repo', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before starting, confirm kurone-kito/other-repo#4321 has shipped.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not warn on an owner/repo#N shorthand when currentRepo is unknown', () => {
+  // No behavior change from before this issue: this shorthand was never
+  // recognized at all pre-#1468, so the default without currentRepo stays
+  // "excluded" — the opposite default from the full-URL alternatives,
+  // which stay flagged-by-default when currentRepo is unknown.
+  const body = childBody({
+    extraMarkers:
+      'Before starting, confirm kurone-kito/idd-skill#4321 has shipped.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency owner/repo#N shorthand currentRepo comparison is case-insensitive', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before starting, confirm Kurone-Kito/IDD-Skill#4321 has shipped.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#4321/);
+});
+
+test('prose-dependency does not warn on an owner/repo#N shorthand when the number already has a Depends on encoding', () => {
+  const body = childBody({
+    extraMarkers:
+      'Depends on #4321\n\nBefore starting, confirm ' +
+      'kurone-kito/idd-skill#4321 has shipped.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not misparse a three-segment slash path ending in #N as an owner/repo#N shorthand', () => {
+  // Regression test for the new alternative's own false-positive risk: a
+  // greedy owner/repo#N match starting mid-path (e.g. the "b/c#123" tail of
+  // "a/b/c#123") would misread an unrelated multi-segment path as a
+  // shorthand reference. The shared (?<![\w/]) lookbehind must reject
+  // starting the match right after another `/`.
+  const body = childBody({
+    extraMarkers: 'Before starting, see a/b/c#4321 for details.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
 // --- shape / markerPrefix pass-through ---
 
 test('the report echoes the declared shape and resolved markerPrefix', () => {

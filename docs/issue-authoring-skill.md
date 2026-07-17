@@ -440,7 +440,17 @@ CI) — a cross-repo dependency cannot be encoded with these
 repository-local markers, so flagging it would recommend an impossible
 fix; without that context a full-URL reference is still flagged by
 default, unless its number happens to already match a local dependency
-marker elsewhere in the body. A
+marker elsewhere in the body. A Markdown link's target may also carry
+trailing content between the issue/PR number and the link's closing
+paren — a URL fragment (`#issuecomment-123`), a trailing `/`, or a
+quoted link title (`"..."` or `'...'`) — and is still recognized as one
+link match rather than leaking its label's bare `#NNN` through to the
+bare-`#` check. A local `owner/repo#N` shorthand (e.g.
+`kurone-kito/idd-skill#4321`) is recognized too, but with the reverse
+default from the full-URL case: it is flagged only when
+`--current-repo` is supplied and case-insensitively matches
+`owner/repo`; a different repository, or no `--current-repo` at all,
+always excludes it. A
 `prose-dependency` warning never flips `passed` to
 `false` and never changes the linter's exit code; it prompts the author
 to convert the prose into a proper dependency marker or consciously
