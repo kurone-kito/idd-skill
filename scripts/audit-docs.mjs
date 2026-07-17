@@ -6,7 +6,7 @@
 // .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import {
   collectDocBudgetDriftViolations,
   collectDuplicateSyncPairTargets,
@@ -209,13 +209,17 @@ function checkFileSets(fileSets, syncPairs) {
     ) {
       continue;
     }
-    const sourceNames = new Set(sourceFiles.map((file) => basename(file)));
-    const targetNames = new Set(targetFiles.map((file) => basename(file)));
+    const sourceNames = new Set(
+      sourceFiles.map((file) => posix.basename(file)),
+    );
+    const targetNames = new Set(
+      targetFiles.map((file) => posix.basename(file)),
+    );
     const sourceByName = new Map(
-      sourceFiles.map((file) => [basename(file), file]),
+      sourceFiles.map((file) => [posix.basename(file), file]),
     );
     const targetByName = new Map(
-      targetFiles.map((file) => [basename(file), file]),
+      targetFiles.map((file) => [posix.basename(file), file]),
     );
     for (const sourceName of sourceNames) {
       if (!targetNames.has(sourceName)) {
@@ -832,9 +836,6 @@ function git(args) {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
-function basename(file) {
-  return file.slice(file.lastIndexOf('/') + 1);
-}
 // Returns only the basenames that collide across two or more distinct
 // paths in `files`, each mapped to every path sharing that basename.
 // Used by checkFileSets to fail closed on an ambiguous basename match
@@ -842,7 +843,7 @@ function basename(file) {
 function findDuplicateBasenames(files) {
   const byName = new Map();
   for (const file of files) {
-    const name = basename(file);
+    const name = posix.basename(file);
     const existing = byName.get(name);
     if (existing) {
       existing.push(file);
