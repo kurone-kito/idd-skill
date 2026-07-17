@@ -1631,7 +1631,7 @@ function printHelp(): void {
   an unexpected blank response) is reported as { viewerLoginUnavailable: true }
   on the verdict, and any not-owned "result" message gets a trailing NOTE, so a
   failed lookup is never silently indistinguishable from a real not-owned
-  claim. Absent (or false) whenever the lookup succeeded normally.
+  claim. Absent (never explicitly false) whenever the lookup succeeded.
 
   SCOPE: this helper gates only the MECHANICAL completion preconditions (all
   descendants closed/complete; no open / unresolved / inaccessible / linked-PR

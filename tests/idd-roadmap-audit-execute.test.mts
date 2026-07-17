@@ -1107,7 +1107,15 @@ test('resolveViewerLogin reports unavailable on a blank-but-successful response'
 // explainRoadmapClaimReason (#1396)
 // ---------------------------------------------------------------------------
 
-test('explainRoadmapClaimReason covers every reason code evaluateRoadmapClaim can emit', () => {
+// This list is hand-maintained against evaluateRoadmapClaim / (the
+// summarizeClaimValidation it wraps) as of #1396 — it does NOT introspect
+// the reason-emitting source, so it cannot by itself catch a future reason
+// code added there without a matching CLAIM_REASON_EXPLANATIONS entry (C1
+// review, #1396). explainRoadmapClaimReason() degrades gracefully in that
+// case (UNKNOWN_CLAIM_REASON_EXPLANATION, exercised by the test below), so
+// the gap is cosmetic, not a crash risk; the vocabulary itself stays
+// pinned by the exact-equality reason assertions elsewhere in this file.
+test('explainRoadmapClaimReason maps each of the six currently-known reason codes to a distinct explanation (#1396)', () => {
   const knownReasons = [
     'match',
     'missing-active-claim',
