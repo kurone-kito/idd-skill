@@ -962,6 +962,11 @@ if (isCliExecution(import.meta.url)) {
     process.exit(2);
   }
 }
+// Excluded from the #1446 cli-args.mts wrapper: the placeholder-override
+// flags below (`flagToName`) are data-driven from `ONBOARDING_PLACEHOLDERS`
+// -- the accepted flag set is built from a runtime table, not a fixed spec
+// declared in source. A static cli-args.mts spec object cannot represent a
+// flag set that is only known once that table is read.
 function parseArgs(argv) {
   const parsed = {
     substitute: false,
