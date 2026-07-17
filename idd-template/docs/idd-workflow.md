@@ -328,10 +328,21 @@ Running this variant safely requires:
   a worker; claiming several issues concurrently is never a shortcut
   around those gates.
 - **A delegation brief that restates the background-wait topology
-  warning.** Each worker's brief must carry the
+  warning and the worker's exit boundary.** Each worker's brief must
+  carry the
   [wake-up discipline](../.github/instructions/idd-ci.instructions.md#wake-up-discipline)
   topology-safety condition, so a worker never assumes an unconfirmed
-  background wait resumes its own turn.
+  background wait resumes its own turn. The brief must also state that
+  the worker's B-through-F execution ends at F4-complete: the worker
+  reports its final result back to the orchestrator instead of
+  independently entering F5's Discover step, so Discover/Claim ownership
+  stays with the orchestrator alone.
+- **Serialized worktree/clone lifecycle operations when workers share
+  one clone.** Concurrent `git fetch` / `git worktree add` / `git
+  worktree remove` / local-`main` updates from the same primary clone
+  can collide; serialize these specific operations behind a per-clone
+  lock, or give concurrent workers separate clones, once the
+  concurrency cap allows more than one worker at a time.
 - **Resume-specific recovery when a worker dies mid-turn.** Re-verify
   claim ownership and worktree state before continuing; treat any
   uncommitted work found in the worktree as unverified input to check,
