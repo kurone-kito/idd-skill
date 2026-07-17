@@ -5,7 +5,7 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { ghText, isCliExecution } from './gh-exec.mjs';
+import { ghText } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   buildActivitySnapshotSummary,
@@ -13,12 +13,12 @@ import {
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mjs';
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   main();
 }
-// The CLI body. Guarded behind isCliExecution(import.meta.url) (shared,
-// see gh-exec.mts) so importing this module (for unit tests) does not
-// parse process.argv, fail, or make a `gh` call.
+// The CLI body. Guarded behind `import.meta.main` so importing this
+// module (for unit tests) does not parse process.argv, fail, or make a
+// `gh` call.
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.prNumber) {

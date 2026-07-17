@@ -5,11 +5,7 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import {
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-  isCliExecution,
-} from './gh-exec.mjs';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 
 const RUNNING_STATES = new Set([
@@ -40,7 +36,7 @@ const BRANCH_STATES = new Set([
   'computing',
   'unknown',
 ]);
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 export function selectResumeRoute(input) {

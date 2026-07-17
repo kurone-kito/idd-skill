@@ -15,7 +15,6 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { isCliExecution } from './gh-exec.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
 import type { ClaimValidationSummary } from './protocol-helpers.mts';
 import {
@@ -189,13 +188,13 @@ let cachedConfiguredTrustedMarkerActorSources: {
 } | null = null;
 let cachedCurrentViewerLogin: string | null = null;
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   await main();
 }
 
-// The CLI body. Guarded behind isCliExecution(import.meta.url) (shared,
-// see gh-exec.mts) so importing this module (for unit tests) does not
-// parse process.argv, fail, or make a `gh` call. This one stays async
+// The CLI body. Guarded behind `import.meta.main` so importing this
+// module (for unit tests) does not parse process.argv, fail, or make a
+// `gh` call. This one stays async
 // because it retains a pre-existing await (buildReport) from before the
 // guard was added.
 async function main(): Promise<void> {

@@ -6,17 +6,16 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 // Resolve the package root by walking up to the nearest package.json.
 // This is location-independent, so it returns the same root whether this
 // module runs as the emitted scripts/helper-runtime-manifest.mjs (one
 // level deep), the src/scripts/helper-runtime-manifest.mts source under
 // Node type-stripping (two levels deep), or is imported by another
-// module — a fixed `..` from import.meta.url would resolve to src/ for
-// the source.
-function resolveRepoRoot(fromUrl) {
-  let dir = dirname(fileURLToPath(fromUrl));
+// module — a fixed `..` from import.meta.dirname would resolve to src/
+// for the source.
+function resolveRepoRoot(fromDir) {
+  let dir = fromDir;
   for (let depth = 0; depth < 16; depth += 1) {
     if (existsSync(resolve(dir, 'package.json'))) {
       return dir;
@@ -29,7 +28,7 @@ function resolveRepoRoot(fromUrl) {
   }
   return dir;
 }
-const PACKAGE_ROOT = resolveRepoRoot(import.meta.url);
+const PACKAGE_ROOT = resolveRepoRoot(import.meta.dirname);
 const PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn'];
 // Exported so other onboarding-stage CLIs (e.g. idd-onboard.mts's --import
 // mode) can validate a --profile flag against the same canonical set
@@ -46,7 +45,7 @@ const DEFAULT_PACKAGE_SPEC =
 const SOURCE_REPOSITORY = 'github:kurone-kito/idd-skill';
 const PACKAGE_SPEC_PIN_HINT =
   'Pass --package-spec with a pinned tarball URL or reviewed commit archive when you need reproducible helper imports.';
-const NODE_ENGINES = '^22.22.2 || >=24';
+const NODE_ENGINES = '^22.22.2 || >=24.2.0';
 const SCRIPT_FILE_EXTENSIONS = ['.mjs', '.js', '.json'];
 // Runtime data files a helper reads at execution time (not via `import`),
 // so the import-graph walk cannot discover them. A consumer that vendors
@@ -429,7 +428,7 @@ const HELPER_COMMANDS = [
       'Evaluate A4.5 suitability checks and map deterministic outcomes.',
   },
 ];
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -925,10 +924,4 @@ function resolveRelativeImport(fromFile, specifier) {
 }
 function relativePath(root, target) {
   return relative(root, target).replaceAll('\\', '/');
-}
-function isMainModule(moduleUrl) {
-  if (!process.argv[1]) {
-    return false;
-  }
-  return fileURLToPath(moduleUrl) === resolve(process.argv[1]);
 }

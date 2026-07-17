@@ -8,11 +8,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
-import {
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-  isCliExecution,
-} from './gh-exec.mts';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 
 const APPROVAL_POLICIES = new Set([
@@ -89,7 +85,7 @@ interface EvaluateInput {
   generatedPlanUpdatedAt?: unknown;
 }
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 

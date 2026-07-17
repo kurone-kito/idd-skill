@@ -106,7 +106,7 @@ interface MinimizeArgs {
   help: boolean;
 }
 
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   let args: MinimizeArgs;
   try {
     args = parseArgs(process.argv.slice(2));
@@ -655,17 +655,4 @@ Convert a REST ID to its node ID first, using the command for the
 subject type:
 ${NODE_ID_CONVERSION_COMMANDS}`,
   );
-}
-
-function isMainModule(metaUrl: string): boolean {
-  const entry = process.argv[1];
-  if (!entry) return false;
-  try {
-    return (
-      new URL(metaUrl).pathname === entry ||
-      new URL(metaUrl).pathname.endsWith(entry)
-    );
-  } catch {
-    return false;
-  }
 }

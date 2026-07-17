@@ -10,8 +10,13 @@
 // marker's exactly-one/coherent-value rule, its cross-field agreement with
 // the configured blocked-by-human label, markerPrefix consistency across
 // every authoring marker, the declared shape's required section headings,
-// the roadmap-id/blocked-by dependency-marker rules, and visible/hidden
-// line agreement for the suitability and effort footers.
+// the roadmap-id/blocked-by dependency-marker rules, visible/hidden line
+// agreement for the suitability and effort footers, and an advisory
+// warning-severity check that flags an issue/PR reference used near
+// coordination language (e.g. "before", "once", "requires") with no
+// corresponding Blocked-by/Depends-on/task-list dependency encoding. The
+// advisory check never fails the report or changes the exit code — see
+// checkProseOnlyDependency.
 //
 // All marker value parsing is delegated to the existing
 // autopilot-suitability.mts / effort.mts / marker-regex.mts /
@@ -21,13 +26,16 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseAutopilotSuitabilityMarker } from './autopilot-suitability.mjs';
-import { extractBlockedByRoadmapMarkers } from './discover-readiness-check.mjs';
+import {
+  extractBlockedByIssueNumbers,
+  extractBlockedByRoadmapMarkers,
+  extractDependencyIssueNumbers,
+} from './discover-readiness-check.mjs';
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mjs';
 import { parseEffortMarker } from './effort.mjs';
-import { isCliExecution } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
-import { createMarkerRegex } from './marker-regex.mjs';
+import { createMarkerRegex, escapeRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
@@ -58,14 +66,64 @@ const SHAPE_HEADING_REQUIREMENTS = {
     { anyOf: ['Acceptance criteria'] },
   ],
 };
-if (isCliExecution(import.meta.url)) {
+// Coordination-language keywords that, alongside an unencoded issue/PR
+// reference in the same sentence, suggest the reference is being used as a
+// prose-only start-blocking dependency instead of the required `Blocked by`
+// / `Depends on` / task-list encoding. Deliberately broad (an advisory
+// check can tolerate false positives; the author "consciously confirms" per
+// the contract) rather than an exhaustive parse of every possible phrasing.
+const PROSE_DEPENDENCY_KEYWORDS = [
+  'before',
+  'after',
+  'once',
+  'until',
+  'predates',
+  'gate',
+  'gated',
+  'requires',
+  'lands first',
+];
+// Matches a Markdown link whose target is a full GitHub issue/PR URL (e.g.
+// `[PR #1391](https://github.com/owner/repo/pull/1391)`), a bare `#123`
+// issue/PR reference, or a bare full GitHub issue/PR URL — in that order,
+// capturing each URL alternative's owner and repo so callers can tell a
+// local reference from a cross-repo one (see `currentRepo` handling in
+// checkProseOnlyDependency below). The Markdown-link alternative is tried
+// (and, being anchored at the label's own `[`, wins) first specifically so
+// that a cross-repo link's *label* text — which often repeats the same
+// `#N` the URL already names, e.g. the `#1391` above — is consumed as part
+// of that one link match rather than separately re-matched by the bare-`#`
+// alternative and misread as a local reference once the link's URL itself
+// is correctly filtered out as cross-repo. `#` alone (as in an ATX
+// heading) never matches without trailing digits. The bare-`#` alternative
+// excludes a `#` immediately preceded by a word character or `/` (a
+// negative lookbehind), so cross-repo shorthand like `other/repo#123`
+// does not match on its trailing `#123` — a cross-repo reference cannot be
+// encoded with this repository's local `Blocked by` / `Depends on`
+// markers, so flagging it here would be misleading rather than
+// actionable.
+const ISSUE_OR_PR_REFERENCE_PATTERN =
+  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b/gi;
+// Matches a Markdown list item marker at the start of a line (unordered
+// `-`/`*`/`+`, or ordered `1.`/`1)`), optionally indented and optionally
+// followed by a task-list checkbox. Declared here (before the CLI entry
+// block below), not next to splitIntoSentences/splitIntoListItemBlocks
+// that use it, because those are hoisted function declarations but this
+// is a module-level `const` — declaring it after the entry block would be
+// a TDZ risk under the CLI path, which calls main() synchronously at this
+// point in module evaluation (see tests/cli-entry-smoke.test.mts).
+const LIST_ITEM_MARKER_PATTERN = /^\s*(?:[-*+]|\d+[.)])\s+/;
+if (import.meta.main) {
   main();
 }
 /**
  * Audit a drafted issue body against the issue-authoring contract's
  * structural expectations for the declared shape. Every check runs
  * independently (no short-circuit), so one report surfaces every problem
- * at once instead of stopping at the first failure.
+ * at once instead of stopping at the first failure. One check
+ * (`prose-dependency`) is advisory-only: it always reports `result:
+ * 'pass'` and only ever adds a `severity: 'warning'` marker plus detail,
+ * so it never affects `passed` or the caller's exit code.
  */
 export function auditAuthoredIssue(body, options) {
   const rawText = typeof body === 'string' ? body : String(body ?? '');
@@ -105,6 +163,7 @@ export function auditAuthoredIssue(body, options) {
     checkDependencyMarkerRule(text, markerPrefix, shape),
     checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
     checkEffortVisibleLineAgreement(text, markerPrefix),
+    checkProseOnlyDependency(text, options.currentRepo),
   ];
   return {
     shape,
@@ -390,6 +449,146 @@ function checkEffortVisibleLineAgreement(text, markerPrefix) {
     `visible line agrees with marker value ${effort.value}`,
   );
 }
+function checkProseOnlyDependency(text, currentRepo) {
+  const id = 'prose-dependency';
+  const name =
+    'Advisory: issue/PR references near coordination language should use a dependency marker';
+  // Numbers already covered by a real machine-readable dependency encoding
+  // (Blocked by / Depends on / task-list) are never flagged, regardless of
+  // nearby prose — the whole point of this check is to catch references
+  // that carry *no* such encoding.
+  const encoded = new Set([
+    ...extractBlockedByIssueNumbers(text),
+    ...extractDependencyIssueNumbers(text),
+  ]);
+  const keywordPattern = new RegExp(
+    `\\b(?:${PROSE_DEPENDENCY_KEYWORDS.map(escapeRegex).join('|')})\\b`,
+    'i',
+  );
+  const flagged = new Set();
+  for (const paragraph of text.split(/\n\s*\n/)) {
+    for (const sentence of splitIntoSentences(paragraph)) {
+      // Scope proximity to one sentence, not the whole paragraph: a long
+      // paragraph can legitimately combine an unrelated coordination word
+      // with a pure breadcrumb reference (e.g. "Part of roadmap (#1386)."
+      // followed by an unrelated "... before it correctly held ..." later
+      // in the same paragraph). Paragraph-level scoping would falsely flag
+      // the breadcrumb; sentence-level scoping does not.
+      if (!keywordPattern.test(sentence)) {
+        continue;
+      }
+      for (const match of sentence.matchAll(ISSUE_OR_PR_REFERENCE_PATTERN)) {
+        const [
+          ,
+          linkOwner,
+          linkRepo,
+          linkNumber,
+          bareNumber,
+          urlOwner,
+          urlRepo,
+          urlNumber,
+        ] = match;
+        // Whichever of the two URL-bearing alternatives matched (a
+        // Markdown-link target or a bare URL) supplies the owner/repo/number
+        // trio; only one of the two can be present for a given match. A URL
+        // match with a known currentRepo that points elsewhere is a
+        // cross-repo reference: the Blocked by / Depends on markers this
+        // check recommends are inherently local, so flagging it here would
+        // be actively misleading rather than merely a nuisance false
+        // positive. Skip it entirely — for the Markdown-link alternative,
+        // this also discards any bare `#N` the link's own label repeated,
+        // since that label text was consumed as part of this same match and
+        // never separately visited by the bare-`#` alternative. When
+        // currentRepo is unknown, keep the prior behavior of flagging a
+        // full-URL match by default rather than guessing — though, like
+        // any match, it is still suppressed below if its number coincides
+        // with one already captured by a local Blocked-by/Depends-on/
+        // task-list marker elsewhere in the body.
+        const owner = linkOwner ?? urlOwner;
+        const repo = linkRepo ?? urlRepo;
+        if (
+          owner !== undefined &&
+          currentRepo !== undefined &&
+          `${owner}/${repo}`.toLowerCase() !== currentRepo.toLowerCase()
+        ) {
+          continue;
+        }
+        const numberText = bareNumber ?? linkNumber ?? urlNumber;
+        const number = Number.parseInt(numberText, 10);
+        if (!encoded.has(number)) {
+          flagged.add(number);
+        }
+      }
+    }
+  }
+  if (flagged.size === 0) {
+    return pass(
+      id,
+      name,
+      'no unencoded issue/PR reference found near coordination language',
+    );
+  }
+  const refs = [...flagged]
+    .sort((left, right) => left - right)
+    .map((number) => `#${number}`)
+    .join(', ');
+  return {
+    id,
+    name,
+    result: 'pass',
+    severity: 'warning',
+    detail:
+      `possible prose-only dependency on ${refs} — convert to a Blocked ` +
+      'by / Depends on marker, or confirm this is a breadcrumb reference ' +
+      'only',
+  };
+}
+/**
+ * Split a paragraph into sentences on `.`/`!`/`?` followed by whitespace,
+ * after collapsing internal newlines to spaces (so a sentence that wraps
+ * across a Markdown soft line break is still scoped as one sentence). This
+ * is intentionally simple — good enough to separate two independent
+ * clauses sharing one paragraph, not a full natural-language sentence
+ * boundary detector.
+ *
+ * Markdown list items are treated as hard sentence boundaries first,
+ * *before* that whitespace-collapsing step: a tight list (items with no
+ * blank line between them) is one `\n\s*\n`-delimited "paragraph" to the
+ * caller, so collapsing every newline to a space would otherwise merge
+ * separate bullets that lack terminal punctuation into a single
+ * "sentence" — reintroducing exactly the false-positive risk this
+ * sentence-level scoping exists to avoid (e.g. a pure breadcrumb bullet
+ * conflated with a sibling bullet's unrelated coordination language).
+ */
+function splitIntoSentences(paragraph) {
+  return splitIntoListItemBlocks(paragraph).flatMap((block) => {
+    const flattened = block.replace(/\s+/g, ' ').trim();
+    return flattened.length === 0 ? [] : flattened.split(/(?<=[.!?])\s+/);
+  });
+}
+/**
+ * Split a paragraph into blocks at each Markdown list item boundary, while
+ * still joining a soft-wrapped continuation line (one with no list marker
+ * of its own) onto the item it continues. A paragraph with no list items
+ * at all yields exactly one block spanning every line, preserving prior
+ * behavior for plain prose.
+ */
+function splitIntoListItemBlocks(paragraph) {
+  const blocks = [];
+  let current = [];
+  for (const line of paragraph.split('\n')) {
+    if (LIST_ITEM_MARKER_PATTERN.test(line) && current.length > 0) {
+      blocks.push(current.join('\n'));
+      current = [line];
+    } else {
+      current.push(line);
+    }
+  }
+  if (current.length > 0) {
+    blocks.push(current.join('\n'));
+  }
+  return blocks;
+}
 function countMarkerOccurrences(text, markerPrefix, suffix) {
   const base = createMarkerRegex(markerPrefix, suffix);
   const global = new RegExp(base.source, `${base.flags}g`);
@@ -473,6 +672,12 @@ function main() {
     markerPrefix,
     labels: args.labels,
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
+    // Explicit --current-repo wins; otherwise fall back to the
+    // GITHUB_REPOSITORY env var GitHub Actions sets automatically, so CI
+    // usage narrows cross-repo URL false positives with no extra flag.
+    // undefined (neither present) keeps the pre-#1399-fix default of
+    // flagging every full-URL reference.
+    currentRepo: args.currentRepo ?? process.env.GITHUB_REPOSITORY,
   });
   writeReport(report, args.format);
   process.exit(report.passed ? 0 : 1);
@@ -529,9 +734,16 @@ function writeReport(report, format) {
     console.log(
       `shape=${report.shape} markerPrefix=${report.markerPrefix} passed=${report.passed}`,
     );
-    console.log(['id', 'result', 'detail'].join('\t'));
+    console.log(['id', 'result', 'severity', 'detail'].join('\t'));
     for (const finding of report.findings) {
-      console.log([finding.id, finding.result, finding.detail].join('\t'));
+      console.log(
+        [
+          finding.id,
+          finding.result,
+          finding.severity ?? '',
+          finding.detail,
+        ].join('\t'),
+      );
     }
     return;
   }
@@ -560,6 +772,9 @@ function parseArgs(argv) {
         break;
       case '--config':
         parsed.configPath = readValue(argv, ++index, arg);
+        break;
+      case '--current-repo':
+        parsed.currentRepo = readValue(argv, ++index, arg);
         break;
       case '--label':
         parsed.labels.push(readValue(argv, ++index, arg));
@@ -591,9 +806,12 @@ contract's structural expectations (skills/issue-authoring/references/
 contract.md): the autopilot-suitability marker, its cross-field
 status:blocked-by-human agreement, markerPrefix consistency, required
 section headings for the declared shape, the roadmap-id/blocked-by
-dependency-marker rules, and visible/hidden suitability+effort line
-agreement. Exits 0 when every check passes, 1 when any check fails, 2 on
-a usage error.
+dependency-marker rules, visible/hidden suitability+effort line
+agreement, and an advisory (warning-severity only) check that flags an
+issue/PR reference used near coordination language with no corresponding
+dependency marker. Exits 0 when every check passes, 1 when any check
+fails, 2 on a usage error; the advisory check never affects the exit
+code.
 
 Options:
   --shape <orphan|roadmap|child>   declared issue shape (required)
@@ -604,6 +822,9 @@ Options:
   --label <name>                   a label currently applied/proposed on the issue
                                     (repeatable; used for the suitability=1
                                     cross-field check)
+  --current-repo <owner/repo>      this repository, for the prose-dependency check
+                                    to recognize a full-URL issue/PR reference as
+                                    cross-repo (default: $GITHUB_REPOSITORY)
   --format <json|table>            output format (default: json)
   --help                           show this help
 `);

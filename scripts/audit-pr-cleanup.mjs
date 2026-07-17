@@ -12,7 +12,6 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
-import { isCliExecution } from './gh-exec.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   classifyRegularBotComment,
@@ -33,12 +32,12 @@ const trustedMarkerAuthorCache = new Map();
 const collaboratorPermissionCache = new Map();
 let cachedConfiguredTrustedMarkerActorSources = null;
 let cachedCurrentViewerLogin = null;
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   await main();
 }
-// The CLI body. Guarded behind isCliExecution(import.meta.url) (shared,
-// see gh-exec.mts) so importing this module (for unit tests) does not
-// parse process.argv, fail, or make a `gh` call. This one stays async
+// The CLI body. Guarded behind `import.meta.main` so importing this
+// module (for unit tests) does not parse process.argv, fail, or make a
+// `gh` call. This one stays async
 // because it retains a pre-existing await (buildReport) from before the
 // guard was added.
 async function main() {

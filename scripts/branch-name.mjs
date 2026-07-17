@@ -14,7 +14,6 @@
 // the same issue. The written algorithm remains the canonical spec and
 // fallback; this helper only removes the hand-tracing error surface.
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
-import { isCliExecution } from './gh-exec.mjs';
 
 // The fixed stop-word set from pre-check (e). Whole-token matches only.
 const STOP_WORDS = new Set([
@@ -38,7 +37,7 @@ const FALLBACK_SLUG = 'task';
 // (Deliberately not written inside matching quote marks in this comment --
 // see advisory-convergence.mts's identical note for why.)
 //
-// Declared here, above the isCliExecution trigger below, rather than
+// Declared here, above the import.meta.main trigger below, rather than
 // alongside parseArgs further down: the trigger calls runCli() ->
 // parseArgs() synchronously at module-evaluation time, and a `const`
 // declared after that point is still in the temporal dead zone when the
@@ -49,7 +48,7 @@ const BRANCH_NAME_FLAG_SPEC = {
   '--title': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 };
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 /**
