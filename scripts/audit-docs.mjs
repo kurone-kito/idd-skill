@@ -687,6 +687,13 @@ function listRepoFiles() {
   ]);
   return output.split(/\r?\n/).filter(Boolean).sort();
 }
+// Excluded from the node-core-builtins roadmap's (#1445) built-in swaps:
+// this matches `pattern` against `repoFiles`, an in-memory list already
+// fetched from `git ls-files --cached --others --exclude-standard` (see
+// `listRepoFiles`), which correctly excludes gitignored and untracked
+// files. Swapping this for `fs.globSync` would instead search the real
+// filesystem and widen the matched set to files `git ls-files` deliberately
+// omits.
 function globFiles(pattern) {
   const regex = globToRegExp(pattern);
   return repoFiles.filter((file) => regex.test(file)).sort();

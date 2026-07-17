@@ -1418,6 +1418,13 @@ function normalizeSubIssueNumbers(subIssues) {
     ),
   ];
 }
+// Excluded from the #1446 cli-args.mts wrapper: --current-claim-id and
+// --concurrency below are optional-value flags -- each may appear bare or
+// take a following value, consuming the next token only when one is
+// present and does not itself look like another flag. `util.parseArgs`
+// cannot express this: a `string`-type option always requires exactly one
+// value and a `boolean`-type option never takes one; there is no
+// in-between mode.
 function parseArgs(argv) {
   const parsed = {
     issue: 0,
