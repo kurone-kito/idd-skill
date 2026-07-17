@@ -10,7 +10,64 @@ import {
   checkTrustSafety,
   checkVerifiability,
   evaluateSuitability,
+  parseArgs,
 } from '../src/scripts/suitability-triage.mts';
+
+// --- #1450: migration onto the shared cli-args.mts wrapper -----------------
+
+test('parseArgs: parses --issue and applies string defaults', () => {
+  const args = parseArgs(['--issue', '42', '--verbose']);
+  assert.equal(args.issue, 42);
+  assert.equal(args.verbose, true);
+  assert.equal(args.owner, '');
+  assert.equal(args.help, false);
+});
+
+test('parseArgs: a present-but-invalid --issue resolves to NaN, matching the pre-#1450 contract', () => {
+  // This file's original hand-rolled parser assigned the raw (possibly
+  // NaN) Number.parseInt result directly -- it never coerced an invalid
+  // value to null inside parseArgs itself. The caller's own
+  // `args.issue === null || !Number.isInteger(args.issue) ||
+  // args.issue <= 0` guard (outside parseArgs) treats NaN as invalid the
+  // same way it treats null.
+  const args = parseArgs(['--issue', 'not-a-number']);
+  assert.ok(Number.isNaN(args.issue));
+});
+
+test('parseArgs: an absent --issue resolves to null', () => {
+  const args = parseArgs([]);
+  assert.equal(args.issue, null);
+});
+
+test('parseArgs: --issue keeps its pre-#1450 permissive Number.parseInt contract', () => {
+  // Regression coverage for a CodeRabbit review finding on #1450: the
+  // wrapper migration must not swap in cli-args.mts's stricter
+  // canonical-pattern integer parser here, which would reject trailing-
+  // garbage and leading-zero tokens the original Number.parseInt-based
+  // parser always accepted.
+  assert.equal(parseArgs(['--issue', '42abc']).issue, 42);
+  assert.equal(parseArgs(['--issue', '007']).issue, 7);
+});
+
+test('parseArgs: a missing --issue value throws', () => {
+  assert.throws(() => parseArgs(['--issue']));
+});
+
+test('parseArgs: a flag-shaped value throws instead of being swallowed', () => {
+  // Previously --owner would greedily accept '--verbose' as its literal
+  // value, silently leaving --verbose unset (the #1082 gap this
+  // migration closes structurally for this helper).
+  assert.throws(() => parseArgs(['--owner', '--verbose']));
+});
+
+test('parseArgs: rejects an unknown flag', () => {
+  assert.throws(() => parseArgs(['--bogus']));
+});
+
+test('parseArgs: --help is recognized without requiring --issue', () => {
+  const args = parseArgs(['--help']);
+  assert.equal(args.help, true);
+});
 
 // The check helpers only read the context fields each test supplies, so
 // the partial literals are widened with a structural cast instead of

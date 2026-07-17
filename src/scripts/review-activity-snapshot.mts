@@ -7,6 +7,7 @@
 
 import { execFileSync } from 'node:child_process';
 
+import { parseCliArgs } from './cli-args.mts';
 import { ghText } from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
@@ -81,7 +82,30 @@ interface ReviewActivitySnapshotArgs {
   repo: string;
   trustedMarkerLogins: string;
   advisoryBotLogins: string;
+  help: boolean;
 }
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --pr spec key
+// below. See cli-args.mts's module header for the full invariant. (This
+// comment deliberately avoids writing that key inside matching quote
+// marks, so it cannot itself satisfy the scan if the real key is ever
+// renamed -- see #1446's PR description for why that matters.)
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls main() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires (see ci-wait-policy.mts's identical note).
+const REVIEW_ACTIVITY_SNAPSHOT_FLAG_SPEC = {
+  '--pr': { type: 'string' },
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--trusted-marker-logins': { type: 'string', default: '' },
+  '--advisory-bot-logins': { type: 'string', default: '' },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
 
 if (import.meta.main) {
   main();
@@ -92,6 +116,10 @@ if (import.meta.main) {
 // `gh` call.
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
   if (!args.prNumber) {
     throw new Error('missing required --pr <number> argument');
   }
@@ -188,55 +216,42 @@ function main(): void {
   );
 }
 
-function parseArgs(argv: string[]): ReviewActivitySnapshotArgs {
-  const parsed: ReviewActivitySnapshotArgs = {
-    prNumber: null,
-    owner: '',
-    repo: '',
-    trustedMarkerLogins: '',
-    advisoryBotLogins: '',
+/**
+ * Restores this file's pre-#1450 permissive `Number.parseInt` contract:
+ * `Number.parseInt` accepts trailing-garbage ("42abc" -> 42) and
+ * leading-zero ("007" -> 7) tokens the same way the original hand-rolled
+ * `Number.parseInt(value ?? '', 10)` always did, then the original's own
+ * `!Number.isInteger(...) || (... ?? 0) < 1` post-check collapses an
+ * invalid or absent value to `null`. `cli-args.mts`'s
+ * `parseCanonicalIntegerOrNull` is a poor substitute: its canonical-pattern
+ * regex rejects those same permissive tokens outright, which is a real
+ * contract change a CodeRabbit review on PR #1466 caught -- #1450's
+ * acceptance criteria protect the post-parse integer contract as-is, only
+ * flag *syntax* (missing/flag-shaped values, unknown flags) is meant to
+ * tighten.
+ */
+function parseLenientPositiveIntegerOrNull(
+  token: string | undefined,
+): number | null {
+  const value = Number.parseInt(token ?? '', 10);
+  return Number.isInteger(value) && value >= 1 ? value : null;
+}
+
+export function parseArgs(argv: string[]): ReviewActivitySnapshotArgs {
+  const { values, help } = parseCliArgs(
+    argv,
+    REVIEW_ACTIVITY_SNAPSHOT_FLAG_SPEC,
+  );
+  return {
+    prNumber: parseLenientPositiveIntegerOrNull(
+      values.pr as string | undefined,
+    ),
+    owner: values.owner as string,
+    repo: values.repo as string,
+    trustedMarkerLogins: values['trusted-marker-logins'] as string,
+    advisoryBotLogins: values['advisory-bot-logins'] as string,
+    help,
   };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    if (token === '--pr') {
-      parsed.prNumber = Number.parseInt(value ?? '', 10);
-      index += 1;
-      continue;
-    }
-    if (token === '--owner') {
-      parsed.owner = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--trusted-marker-logins') {
-      parsed.trustedMarkerLogins = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--advisory-bot-logins') {
-      parsed.advisoryBotLogins = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      printHelp();
-      process.exit(0);
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-
-  if (!Number.isInteger(parsed.prNumber) || (parsed.prNumber ?? 0) < 1) {
-    parsed.prNumber = null;
-  }
-
-  return parsed;
 }
 
 function printHelp(): void {

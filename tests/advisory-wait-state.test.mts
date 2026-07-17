@@ -1,28 +1,17 @@
-import assert from 'node:assert/strict';
+import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
-import { parseArgs } from '../src/scripts/review-activity-snapshot.mts';
+import { parseArgs } from '../src/scripts/advisory-wait-state.mts';
 
-// Importing the CLI module directly is only possible now that its top-level
-// statements are guarded behind `import.meta.main` (#1210, migrated from
-// isCliExecution() by #1447); previously the import parsed process.argv and
-// called a `gh` command, aborting the test process when no --pr argument or
-// gh binary was available.
-test('importing review-activity-snapshot.mts has no import-time side effect', async () => {
-  const originalPath = process.env.PATH;
-  process.env.PATH = '';
-  try {
-    await assert.doesNotReject(
-      import('../src/scripts/review-activity-snapshot.mts'),
-    );
-  } finally {
-    process.env.PATH = originalPath;
-  }
-});
+// This file previously had no parse-level coverage at all (#1450: roughly
+// 30 of the repository's parsers were in that state before this issue).
+// It only tests the #1446 shared cli-args.mts wrapper migration; the
+// business-logic summary building (buildAdvisoryWaitSummary et al.) is
+// covered via protocol-helpers.test.mts.
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
 
-test('parseArgs: parses --pr, --owner, --repo, and the login-list flags', () => {
+test('parseArgs: parses --pr, --owner, --repo, --trusted-marker-logins, and --now', () => {
   const args = parseArgs([
     '--pr',
     '42',
@@ -32,14 +21,14 @@ test('parseArgs: parses --pr, --owner, --repo, and the login-list flags', () => 
     'idd-skill',
     '--trusted-marker-logins',
     'a,b',
-    '--advisory-bot-logins',
-    'c,d',
+    '--now',
+    '2026-07-17T00:00:00Z',
   ]);
   assert.equal(args.prNumber, 42);
   assert.equal(args.owner, 'kurone-kito');
   assert.equal(args.repo, 'idd-skill');
   assert.equal(args.trustedMarkerLogins, 'a,b');
-  assert.equal(args.advisoryBotLogins, 'c,d');
+  assert.equal(args.now, '2026-07-17T00:00:00Z');
   assert.equal(args.help, false);
 });
 
@@ -49,9 +38,6 @@ test('parseArgs: an invalid --pr resolves to null (fails closed at the caller)',
 });
 
 test('parseArgs: an absent --pr also resolves to null', () => {
-  // CodeRabbit review finding on #1450: only the invalid-value case was
-  // covered; --help doesn't assert prNumber, so the absent-value contract
-  // was unprotected.
   const args = parseArgs([]);
   assert.equal(args.prNumber, null);
 });
@@ -71,10 +57,10 @@ test('parseArgs: a missing --pr value throws', () => {
 });
 
 test('parseArgs: a flag-shaped value throws instead of being swallowed', () => {
-  // Previously --owner would greedily accept '--repo' as its literal
-  // value, silently leaving --repo unset (the #1082 gap this migration
+  // Previously --owner would greedily accept '--now' as its literal
+  // value, silently leaving --now unset (the #1082 gap this migration
   // closes structurally for this helper).
-  assert.throws(() => parseArgs(['--pr', '42', '--owner', '--repo']));
+  assert.throws(() => parseArgs(['--pr', '42', '--owner', '--now']));
 });
 
 test('parseArgs: rejects an unknown flag', () => {

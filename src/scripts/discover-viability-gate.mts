@@ -5,6 +5,7 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
+import { parseCliArgs } from './cli-args.mts';
 import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 
@@ -94,8 +95,34 @@ const SUBJECTIVE_VERIFICATION_PATTERN =
 const EXTERNAL_COORDINATION_PATTERN =
   /\b(external coordination|human decision|maintainer decision|stakeholder sign-?off|manual approval|waiting for (?:maintainer|stakeholder)|external system|third-?party access|credential|production access|cross-repo dependency)\b/i;
 
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --issue spec key
+// below. See cli-args.mts's module header for the full invariant. (This
+// comment deliberately avoids writing that key inside matching quote
+// marks, so it cannot itself satisfy the scan if the real key is ever
+// renamed -- see #1446's PR description for why that matters.)
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger block calls parseArgs()
+// synchronously at module-evaluation time, and a `const` declared after
+// that point is still in the temporal dead zone when the trigger fires
+// (see ci-wait-policy.mts's identical note).
+const DISCOVER_VIABILITY_GATE_FLAG_SPEC = {
+  '--issue': { type: 'string', multiple: true },
+  '--issues': { type: 'string', multiple: true },
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--csv': { type: 'boolean', default: false },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
+
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
   if (args.issueNumbers.length === 0) {
     throw new Error(
       'missing required --issue <number> (repeatable) or --issues <n1,n2,...>',
@@ -275,61 +302,67 @@ export function evaluateAutonomousCompletion(
   };
 }
 
-function parseArgs(argv: string[]): {
+/**
+ * Walk `argv` and return every occurrence of the given long-flag literals
+ * (e.g. `--issue`, `--issues`) in argv order, tagged with which flag
+ * matched and its literal string value. `parseCliArgs` has already thrown
+ * on anything malformed (a missing value, a flag-shaped value, an unknown
+ * flag) by the time this runs, so this is a pure order-reconstruction pass
+ * over already-validated input, not a second parse/validation pass. Covers
+ * both the `--flag value` and `--flag=value` forms Node's `util.parseArgs`
+ * itself accepts for a long option (#1450 review follow-up: grouping every
+ * `--issue` occurrence before every `--issues` occurrence silently
+ * reordered interleaved input, e.g. `--issues 1,2 --issue 3`).
+ */
+function collectOrderedOccurrences(
+  argv: readonly string[],
+  flagNames: readonly string[],
+): { flag: string; value: string }[] {
+  const occurrences: { flag: string; value: string }[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    const equalsIndex = token.indexOf('=');
+    const bareFlag = equalsIndex === -1 ? token : token.slice(0, equalsIndex);
+    if (!flagNames.includes(bareFlag)) {
+      continue;
+    }
+    const value =
+      equalsIndex === -1 ? argv[index + 1] : token.slice(equalsIndex + 1);
+    occurrences.push({ flag: bareFlag, value });
+  }
+  return occurrences;
+}
+
+export function parseArgs(argv: string[]): {
   issueNumbers: number[];
   csv: boolean;
   owner: string;
   repo: string;
+  help: boolean;
 } {
-  const parsed: {
-    issueNumbers: (string | number)[];
-    csv: boolean;
-    owner: string;
-    repo: string;
-  } = {
-    issueNumbers: [],
-    csv: false,
-    owner: '',
-    repo: '',
-  };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    if (token === '--issue') {
-      parsed.issueNumbers.push(value ?? '');
-      index += 1;
-      continue;
-    }
-    if (token === '--issues') {
-      parsed.issueNumbers.push(...String(value ?? '').split(','));
-      index += 1;
-      continue;
-    }
-    if (token === '--owner') {
-      parsed.owner = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--csv') {
-      parsed.csv = true;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      printHelp();
-      process.exit(0);
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-
+  const { values, help } = parseCliArgs(
+    argv,
+    DISCOVER_VIABILITY_GATE_FLAG_SPEC,
+  );
+  // Preserves the existing "collect every --issue occurrence plus every
+  // comma-split --issues entry, in argv order, then silently drop
+  // non-numeric tokens" contract (normalizeIssueNumbers) unchanged by this
+  // migration -- only the flag-syntax parsing (missing/flag-shaped values,
+  // unknown flags) is now strict.
+  const issueTokens = collectOrderedOccurrences(argv, [
+    '--issue',
+    '--issues',
+  ]).flatMap((occurrence) =>
+    occurrence.flag === '--issues'
+      ? occurrence.value.split(',')
+      : [occurrence.value],
+  );
   return {
-    ...parsed,
-    issueNumbers: normalizeIssueNumbers(parsed.issueNumbers),
+    issueNumbers: normalizeIssueNumbers(issueTokens),
+    csv: values.csv as boolean,
+    owner: values.owner as string,
+    repo: values.repo as string,
+    help,
   };
 }
 
@@ -337,7 +370,7 @@ function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/discover-viability-gate.mjs --issue <number> [--issue <number> ...]
   node scripts/discover-viability-gate.mjs --issues <n1,n2,...>
-    [--csv] [--owner <owner>] [--repo <repo>]
+    [--csv] [--owner <owner>] [--repo <repo>] [--help]
 
 Output schema (JSON mode):
   {

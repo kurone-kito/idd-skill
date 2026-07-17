@@ -17,6 +17,7 @@ import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
 } from './autopilot-suitability.mts';
+import { parseCliArgs } from './cli-args.mts';
 import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
@@ -141,12 +142,43 @@ interface ParsedArgs {
   // requirement, sweeps every open issue (orphans included), and reports the
   // at-or-above-floor eligible set. `null` keeps the default per-issue mode.
   swarmFloor: number | null;
+  help: boolean;
 }
 
 type CachedIssue = NormalizedIssue | InaccessibleIssueSentinel | null;
 
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --issue spec key
+// below. See cli-args.mts's module header for the full invariant. (This
+// comment deliberately avoids writing that key inside matching quote
+// marks, so it cannot itself satisfy the scan if the real key is ever
+// renamed -- see #1446's PR description for why that matters.)
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger block calls parseArgs()
+// synchronously at module-evaluation time, and a `const` declared after
+// that point is still in the temporal dead zone when the trigger fires
+// (see ci-wait-policy.mts's identical note).
+const DISCOVER_READINESS_CHECK_FLAG_SPEC = {
+  '--issue': { type: 'string', multiple: true },
+  '--issues': { type: 'string', multiple: true },
+  '--include-unresolvable': { type: 'boolean', default: false },
+  '--csv': { type: 'boolean', default: false },
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--policy': { type: 'string', default: '' },
+  '--now': { type: 'string', default: '' },
+  '--swarm-floor': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
+
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
   if (args.swarmFloor === null && args.issueNumbers.length === 0) {
     throw new Error(
       'missing required --issue <number> (repeatable) or --issues <n1,n2,...>',
@@ -587,83 +619,72 @@ export function extractDependencyIssueNumbers(body: string): number[] {
   ]);
 }
 
-function parseArgs(argv: string[]): ParsedArgs {
-  const parsed: {
-    issueNumbers: (number | string)[];
-    includeUnresolvable: boolean;
-    csv: boolean;
-    owner: string;
-    repo: string;
-    policy: string;
-    now: string;
-    swarmFloor: number | null;
-  } = {
-    issueNumbers: [],
-    includeUnresolvable: false,
-    csv: false,
-    owner: '',
-    repo: '',
-    policy: '',
-    now: '',
-    swarmFloor: null,
-  };
-
+/**
+ * Walk `argv` and return every occurrence of the given long-flag literals
+ * (e.g. `--issue`, `--issues`) in argv order, tagged with which flag
+ * matched and its literal string value. `parseCliArgs` has already thrown
+ * on anything malformed (a missing value, a flag-shaped value, an unknown
+ * flag) by the time this runs, so this is a pure order-reconstruction pass
+ * over already-validated input, not a second parse/validation pass. Covers
+ * both the `--flag value` and `--flag=value` forms Node's `util.parseArgs`
+ * itself accepts for a long option (#1450 review follow-up: grouping every
+ * `--issue` occurrence before every `--issues` occurrence silently
+ * reordered interleaved input, e.g. `--issues 1,2 --issue 3`).
+ */
+function collectOrderedOccurrences(
+  argv: readonly string[],
+  flagNames: readonly string[],
+): { flag: string; value: string }[] {
+  const occurrences: { flag: string; value: string }[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
-    const value = argv[index + 1];
-    if (token === '--issue') {
-      parsed.issueNumbers.push(value ?? '');
-      index += 1;
+    const equalsIndex = token.indexOf('=');
+    const bareFlag = equalsIndex === -1 ? token : token.slice(0, equalsIndex);
+    if (!flagNames.includes(bareFlag)) {
       continue;
     }
-    if (token === '--issues') {
-      parsed.issueNumbers.push(...String(value ?? '').split(','));
-      index += 1;
-      continue;
-    }
-    if (token === '--owner') {
-      parsed.owner = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--policy') {
-      parsed.policy = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--now') {
-      parsed.now = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--swarm-floor') {
-      parsed.swarmFloor = parseSwarmFloorArg(value ?? '');
-      index += 1;
-      continue;
-    }
-    if (token === '--include-unresolvable') {
-      parsed.includeUnresolvable = true;
-      continue;
-    }
-    if (token === '--csv') {
-      parsed.csv = true;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      printHelp();
-      process.exit(0);
-    }
-    throw new Error(`unknown argument: ${token}`);
+    const value =
+      equalsIndex === -1 ? argv[index + 1] : token.slice(equalsIndex + 1);
+    occurrences.push({ flag: bareFlag, value });
   }
+  return occurrences;
+}
 
+export function parseArgs(argv: string[]): ParsedArgs {
+  const { values, help } = parseCliArgs(
+    argv,
+    DISCOVER_READINESS_CHECK_FLAG_SPEC,
+  );
+  // Preserves the existing "collect every --issue occurrence plus every
+  // comma-split --issues entry, in argv order, then silently drop
+  // non-numeric tokens" contract (normalizeIssueNumbers) unchanged by this
+  // migration -- only the flag-syntax parsing (missing/flag-shaped values,
+  // unknown flags) is now strict.
+  const issueTokens = collectOrderedOccurrences(argv, [
+    '--issue',
+    '--issues',
+  ]).flatMap((occurrence) =>
+    occurrence.flag === '--issues'
+      ? occurrence.value.split(',')
+      : [occurrence.value],
+  );
+  const swarmFloorToken = values['swarm-floor'] as string | undefined;
   return {
-    ...parsed,
-    issueNumbers: normalizeIssueNumbers(parsed.issueNumbers),
+    issueNumbers: normalizeIssueNumbers(issueTokens),
+    includeUnresolvable: values['include-unresolvable'] as boolean,
+    csv: values.csv as boolean,
+    owner: values.owner as string,
+    repo: values.repo as string,
+    policy: values.policy as string,
+    now: values.now as string,
+    // parseSwarmFloorArg keeps its existing throw-on-invalid contract
+    // (range 1-5, hard error on a non-integer or out-of-range value)
+    // unchanged; only called when --swarm-floor is actually present.
+    swarmFloor:
+      swarmFloorToken === undefined
+        ? null
+        : parseSwarmFloorArg(swarmFloorToken),
+    help,
   };
 }
 
@@ -671,9 +692,9 @@ function printHelp() {
   process.stdout.write(`Usage:
   node scripts/discover-readiness-check.mjs --issue <number> [--issue <number> ...]
   node scripts/discover-readiness-check.mjs --issues <n1,n2,...>
-    [--include-unresolvable] [--csv] [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>]
+    [--include-unresolvable] [--csv] [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>] [--help]
   node scripts/discover-readiness-check.mjs --swarm-floor <N>
-    [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>]
+    [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>] [--help]
 
   --swarm-floor <N> ignores --issue/--issues, sweeps every open issue in the
   repository (orphans included, pull requests excluded), runs readiness, and

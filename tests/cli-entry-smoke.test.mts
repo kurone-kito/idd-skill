@@ -502,3 +502,19 @@ test('audit-pr-cleanup.mjs without --pr fails before any gh invocation', () => {
     },
   );
 });
+
+// #1450: merged-pr-feedback-sweep.mjs had no --help at all before this
+// migration (--help threw "unknown argument: --help"); the issue's
+// acceptance criteria require it to print usage and exit 0 instead.
+test('merged-pr-feedback-sweep.mjs --help prints usage and exits 0', () => {
+  const output = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/merged-pr-feedback-sweep.mjs'), '--help'],
+    { encoding: 'utf8', timeout: 60_000 },
+  );
+  assert.match(
+    output,
+    /^Usage:\n {2}node scripts\/merged-pr-feedback-sweep\.mjs/,
+  );
+  assert.match(output, /--prs <n1,n2,\.\.\.>/);
+});

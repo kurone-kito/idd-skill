@@ -9,8 +9,43 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+import { parseCliArgs } from './cli-args.mts';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
+
+/** Parsed CLI arguments. */
+interface SuitabilityTriageArgs {
+  issue: number | null;
+  token: string;
+  owner: string;
+  repo: string;
+  policy: string;
+  verbose: boolean;
+  help: boolean;
+}
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --issue spec key
+// below. See cli-args.mts's module header for the full invariant. (This
+// comment deliberately avoids writing that key inside matching quote
+// marks, so it cannot itself satisfy the scan if the real key is ever
+// renamed -- see #1446's PR description for why that matters.)
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls runCli() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires (see ci-wait-policy.mts's identical note).
+const SUITABILITY_TRIAGE_FLAG_SPEC = {
+  '--issue': { type: 'string' },
+  '--token': { type: 'string', default: '' },
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--policy': { type: 'string', default: '' },
+  '--verbose': { type: 'boolean', default: false },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
 
 interface NormalizedIssue {
   number: number;
@@ -738,73 +773,39 @@ function runCli(): void {
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
 
-function parseArgs(argv: string[]): {
-  issue: number | null;
-  token: string;
-  owner: string;
-  repo: string;
-  policy: string;
-  verbose: boolean;
-  help: boolean;
-} {
-  const parsed: {
-    issue: number | null;
-    token: string;
-    owner: string;
-    repo: string;
-    policy: string;
-    verbose: boolean;
-    help: boolean;
-  } = {
-    issue: null,
-    token: '',
-    owner: '',
-    repo: '',
-    policy: '',
-    verbose: false,
-    help: false,
+/**
+ * Restores this file's pre-#1450 permissive `Number.parseInt` contract:
+ * absent resolves to `null` (the original `issue: null` default, never
+ * overwritten when `--issue` is absent); present feeds the raw token
+ * straight to `Number.parseInt`, which accepts trailing-garbage ("42abc"
+ * -> 42) and leading-zero ("007" -> 7) tokens the same way the original
+ * hand-rolled `Number.parseInt(String(value ?? ''), 10)` always did.
+ * `cli-args.mts`'s `parseCanonicalIntegerOrNull` is a poor substitute
+ * here: its canonical-pattern regex rejects those same tokens outright,
+ * which is a real contract change a CodeRabbit review on PR #1466 caught
+ * -- #1450's acceptance criteria protect the post-parse integer contract
+ * as-is, only flag *syntax* (missing/flag-shaped values, unknown flags)
+ * is meant to tighten. This file's own `args.issue === null ||
+ * !Number.isInteger(args.issue) || args.issue <= 0` use-site guard
+ * already treats `NaN` (an invalid parseInt result) the same as `null`,
+ * so this restores the exact original resolved value, not just an
+ * equivalent downstream verdict.
+ */
+function parseLenientIntegerOrNull(token: string | undefined): number | null {
+  return token === undefined ? null : Number.parseInt(token, 10);
+}
+
+export function parseArgs(argv: string[]): SuitabilityTriageArgs {
+  const { values, help } = parseCliArgs(argv, SUITABILITY_TRIAGE_FLAG_SPEC);
+  return {
+    issue: parseLenientIntegerOrNull(values.issue as string | undefined),
+    token: values.token as string,
+    owner: values.owner as string,
+    repo: values.repo as string,
+    policy: values.policy as string,
+    verbose: values.verbose as boolean,
+    help,
   };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    if (token === '--issue') {
-      parsed.issue = Number.parseInt(String(value ?? ''), 10);
-      index += 1;
-      continue;
-    }
-    if (token === '--owner') {
-      parsed.owner = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--token') {
-      parsed.token = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--policy') {
-      parsed.policy = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--verbose') {
-      parsed.verbose = true;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-
-  return parsed;
 }
 
 /**
@@ -832,7 +833,7 @@ function loadPolicy(policyPath: string): unknown {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/suitability-triage.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--verbose]
+  node scripts/suitability-triage.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--verbose] [--help]
 
 Output schema:
 {
