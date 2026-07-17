@@ -98,6 +98,22 @@ const PENDING_STATUSES = new Set([
   'pending',
 ]);
 
+/** Workflow-run trigger events this helper trusts to reliably refresh the
+ * PR's required-check rollup on rerun, matching the events
+ * `idd-advisory-convergence` itself subscribes to (its own header comment,
+ * mirrored in `idd-ci.instructions.md` §Rerun mechanics): `pull_request`,
+ * `pull_request_review`, `pull_request_review_comment`. A run triggered by
+ * any other event -- most notably `workflow_dispatch` -- has no
+ * `pull_request` context of its own and is documented as NOT reliably
+ * associated with the PR's HEAD SHA, so rerunning it would not dependably
+ * clear a stuck rollup even though the run itself is otherwise a plain,
+ * non-bot failure. */
+const PULL_REQUEST_FAMILY_EVENTS = new Set([
+  'pull_request',
+  'pull_request_review',
+  'pull_request_review_comment',
+]);
+
 /** One classification this helper can assign to a check-run instance. See
  * the module header for the full definition of each state. */
 export type RerunPlanClassification =
@@ -191,6 +207,12 @@ export interface RerunPlanInput {
   prNumber: number;
   prHeadSha: string;
   checkName?: string;
+  /** Repository the generated `gh run rerun` plan commands should target
+   * via `-R owner/repo`, so the plan is safe to run from outside the
+   * source checkout (e.g. after inspecting a PR with `--owner`/`--repo`).
+   * Empty/omitted omits the `-R` flag from generated commands. */
+  owner?: string;
+  repo?: string;
   instances: RerunPlanRawInstance[];
 }
 
@@ -223,6 +245,8 @@ export function computeRerunPlan(
   }
   const checkName =
     String(input.checkName ?? '').trim() || RERUN_PLAN_CHECK_NAME;
+  const owner = String(input.owner ?? '').trim();
+  const repo = String(input.repo ?? '').trim();
   const primaryBotLogin =
     String(options.primaryBotLogin ?? '')
       .trim()
@@ -259,7 +283,7 @@ export function computeRerunPlan(
     now,
     instances,
     counts,
-    plan: buildOrderedPlan(instances),
+    plan: buildOrderedPlan(instances, owner, repo),
     planCaveat: PLAN_CAVEAT,
   };
 }
@@ -352,11 +376,29 @@ function classifyInstance(
     };
   }
 
-  // 6. Non-pass, terminal, non-bot, resolved -- safe to rerun.
+  // 6. Fail closed on a non-pull_request-family trigger event (most
+  // commonly workflow_dispatch): rerunning it is not documented as a
+  // reliable way to refresh the PR's required-check rollup, so never
+  // recommend it -- see idd-ci.instructions.md Rerun mechanics.
+  const runEvent = String(instance.runEvent ?? '')
+    .trim()
+    .toLowerCase();
+  if (!PULL_REQUEST_FAMILY_EVENTS.has(runEvent)) {
+    return {
+      ...instance,
+      classification: 'unresolved',
+      reason: runEvent
+        ? `triggering event "${runEvent}" is not pull_request-family (pull_request / pull_request_review / pull_request_review_comment); rerunning it is not a reliable way to refresh the PR's required-check rollup -- inspect manually`
+        : 'triggering event is unknown; inspect manually rather than assuming it is safe to rerun',
+    };
+  }
+
+  // 7. Non-pass, terminal, non-bot, resolved, pull_request-family --
+  // safe to rerun.
   return {
     ...instance,
     classification: 'rerun-eligible',
-    reason: `conclusion "${conclusion}" is non-passing, non-bot, and resolved; safe to rerun`,
+    reason: `conclusion "${conclusion}" is non-passing, non-bot, and resolved (event "${runEvent}"); safe to rerun`,
   };
 }
 
@@ -402,10 +444,19 @@ function isBotTriggered(
  * `startedAt` (empty/unknown sorts first, as the more cautious default),
  * then numeric run id, so the output is deterministic across runs with the
  * same input.
+ *
+ * `owner`/`repo` are embedded as `-R owner/repo` on each generated command
+ * (when both are non-empty) so the plan is safe to run from outside the
+ * checkout this helper itself was invoked from -- `gh run rerun <id>` alone
+ * resolves its target repository from the caller's cwd/`GH_REPO`, not from
+ * whatever `--owner`/`--repo` this helper was given.
  */
 function buildOrderedPlan(
   instances: RerunPlanClassifiedInstance[],
+  owner: string,
+  repo: string,
 ): RerunPlanCommand[] {
+  const repoFlag = owner && repo ? ` -R ${owner}/${repo}` : '';
   const eligible = instances.filter(
     (instance) => instance.classification === 'rerun-eligible',
   );
@@ -429,7 +480,7 @@ function buildOrderedPlan(
         .sort();
       return {
         runId,
-        command: `gh run rerun ${runId}`,
+        command: `gh run rerun ${runId}${repoFlag}`,
         checkRunIds: items.map((item) => item.checkRunId),
         startedAt: startedAts[0] ?? '',
       };
@@ -619,6 +670,15 @@ interface RawWorkflowRunPayload {
  * 404s, confirmed against the live API while fixing #1431. `--method GET`
  * is what makes `-f` append to the query string instead.
  *
+ * `-f filter=all` is required alongside `check_name`: this endpoint's own
+ * `filter` query parameter defaults to `latest`, which -- per GitHub's own
+ * documented behavior, confirmed empirically against this repo's actual
+ * PR history during review -- collapses same-named check runs down to
+ * only the most-recently-completed instance, silently dropping exactly
+ * the older non-passing instance this helper exists to recover. Without
+ * `filter=all`, `instances` can (and did, in the reproduction above) omit
+ * real check-run instances even though `--paginate` runs correctly.
+ *
  * Not built on {@link ghApiJson}'s own `paginate` option: that option
  * hardcodes `--jq '.[]'`, which assumes a bare top-level array, but this
  * endpoint's shape is `{ total_count, check_runs: [...] }` -- so this
@@ -639,10 +699,28 @@ export function buildCheckRunsForRefArgs(
     'GET',
     '-f',
     `check_name=${checkName}`,
+    '-f',
+    'filter=all',
     '--paginate',
     '--jq',
     '.check_runs[]',
   ];
+}
+
+/**
+ * Resolve the URL used to extract a check-run's workflow-run id, preferring
+ * `details_url` over `html_url`. For a GitHub-Actions-created check run
+ * (which `idd-advisory-convergence` always is) the two are typically
+ * identical, but the Checks API's own field semantics make `html_url` the
+ * one more likely to diverge to a non-Actions permalink (e.g. a
+ * `/checks/<check_run_id>`-shaped URL) -- `details_url` is documented as
+ * "the full details of the check" and is the one this repo's own
+ * `idd-ci.instructions.md` Rerun mechanics already document extracting a
+ * run id from. Preferring it first costs nothing when the two agree and
+ * avoids a spurious `unresolved` classification when they do not.
+ */
+export function resolveCheckRunUrl(run: RawCheckRunPayload): string {
+  return String(run.details_url ?? run.html_url ?? '');
 }
 
 function fetchCheckRunsForRef(
@@ -695,9 +773,7 @@ function collectFromGitHub(args: RerunPlanArgs): {
   const runIdsToResolve = [
     ...new Set(
       rawCheckRuns
-        .map((run) =>
-          parseRunIdFromUrl(String(run.html_url ?? run.details_url ?? '')),
-        )
+        .map((run) => parseRunIdFromUrl(resolveCheckRunUrl(run)))
         .filter((id): id is string => id !== null),
     ),
   ];
@@ -730,7 +806,7 @@ function collectFromGitHub(args: RerunPlanArgs): {
   }
 
   const instances: RerunPlanRawInstance[] = rawCheckRuns.map((run) => {
-    const url = String(run.html_url ?? run.details_url ?? '');
+    const url = resolveCheckRunUrl(run);
     const runId = parseRunIdFromUrl(url);
     const meta = runId !== null ? runMetaById.get(runId) : undefined;
     return {
@@ -762,6 +838,8 @@ function collectFromGitHub(args: RerunPlanArgs): {
       prNumber: Number(args.prNumber),
       prHeadSha,
       checkName: RERUN_PLAN_CHECK_NAME,
+      owner,
+      repo,
       instances,
     },
     options: {
@@ -794,5 +872,10 @@ if (isCliExecution(import.meta.url)) {
       process.stdout.write('\nNo rerun-eligible instances; nothing to do.\n');
     }
   }
-  process.exit(0);
+  // Set exitCode and let the process end naturally instead of calling
+  // process.exit(0) directly: an explicit exit() can terminate the process
+  // before a large stdout write finishes flushing through a pipe (a
+  // well-established Node.js footgun, confirmed empirically during
+  // review), silently truncating the emitted JSON or recovery plan.
+  process.exitCode = 0;
 }

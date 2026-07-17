@@ -10,6 +10,7 @@ import {
   type RerunPlanInput,
   type RerunPlanOptions,
   type RerunPlanRawInstance,
+  resolveCheckRunUrl,
   runRerunAdvisoryConvergence,
 } from '../src/scripts/rerun-advisory-convergence.mts';
 
@@ -238,6 +239,52 @@ test('classifies a completed run with no conclusion as unresolved (malformed pay
   assert.equal(plan.instances[0]?.classification, 'unresolved');
 });
 
+// Regression (#1434 review, Codex P1): a non-bot, terminal, resolved
+// workflow_dispatch run must never be classified rerun-eligible -- this
+// helper's own CI guidance documents that a manually dispatched run has
+// no pull_request context of its own and is not reliably associated with
+// the PR's HEAD SHA, so rerunning it would not dependably clear a stuck
+// rollup.
+test('classifies a non-bot workflow_dispatch failure as unresolved, not rerun-eligible', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({ conclusion: 'failure', runEvent: 'workflow_dispatch' }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.instances[0]?.classification, 'unresolved');
+  assert.match(plan.instances[0]?.reason ?? '', /workflow_dispatch/);
+  assert.equal(plan.plan.length, 0);
+});
+
+test('classifies an instance with an unknown/empty triggering event as unresolved', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [baseInstance({ conclusion: 'failure', runEvent: null })],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.instances[0]?.classification, 'unresolved');
+});
+
+for (const event of [
+  'pull_request',
+  'pull_request_review',
+  'pull_request_review_comment',
+]) {
+  test(`treats a non-bot terminal failure triggered by "${event}" as rerun-eligible`, () => {
+    const plan = computeRerunPlan(
+      baseInput({
+        instances: [baseInstance({ conclusion: 'failure', runEvent: event })],
+      }),
+      baseOptions(),
+    );
+    assert.equal(plan.instances[0]?.classification, 'rerun-eligible');
+  });
+}
+
 // --- Classification: rerun-eligible + ordered plan -----------------------
 
 test('classifies a resolved, non-bot, terminal failure as rerun-eligible and includes it in the plan', () => {
@@ -257,6 +304,41 @@ test('classifies a resolved, non-bot, terminal failure as rerun-eligible and inc
       startedAt: '2026-07-16T10:00:00Z',
     },
   ]);
+});
+
+// Regression (#1434 review, Codex P2 + CodeRabbit Major): `gh run rerun
+// <id>` alone resolves its target repository from the caller's own
+// cwd/`GH_REPO`, not from whatever `--owner`/`--repo` this helper was
+// invoked with -- following the plan from a different checkout could
+// silently target the wrong repository. Every generated command must
+// carry `-R owner/repo` whenever both are known.
+test('embeds -R owner/repo in each generated plan command when owner/repo are known', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      owner: 'kurone-kito',
+      repo: 'idd-skill',
+      instances: [baseInstance({ conclusion: 'cancelled' })],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.plan, [
+    {
+      runId: '5001',
+      command: 'gh run rerun 5001 -R kurone-kito/idd-skill',
+      checkRunIds: ['1001'],
+      startedAt: '2026-07-16T10:00:00Z',
+    },
+  ]);
+});
+
+test('omits -R from generated plan commands when owner/repo are not provided', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [baseInstance({ conclusion: 'cancelled' })],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.plan[0]?.command, 'gh run rerun 5001');
 });
 
 test('orders the plan by earliest startedAt, then numeric run id, and dedupes by run id', () => {
@@ -375,6 +457,30 @@ test('parseRunIdFromUrl returns null for an empty URL', () => {
   assert.equal(parseRunIdFromUrl(''), null);
 });
 
+// Regression (#1434 review, Copilot, 2 threads): the Checks API's `html_url`
+// is more likely than `details_url` to diverge to a non-Actions permalink
+// for a check run; `details_url` is documented as "the full details of the
+// check" and must be preferred so an otherwise-resolvable run is never
+// marked unresolved.
+test('resolveCheckRunUrl prefers details_url over html_url when both are present', () => {
+  const url = resolveCheckRunUrl({
+    html_url: 'https://github.com/o/r/checks/999',
+    details_url: 'https://github.com/o/r/actions/runs/12345/job/6789',
+  });
+  assert.equal(url, 'https://github.com/o/r/actions/runs/12345/job/6789');
+});
+
+test('resolveCheckRunUrl falls back to html_url when details_url is absent', () => {
+  const url = resolveCheckRunUrl({
+    html_url: 'https://github.com/o/r/actions/runs/12345/job/6789',
+  });
+  assert.equal(url, 'https://github.com/o/r/actions/runs/12345/job/6789');
+});
+
+test('resolveCheckRunUrl returns an empty string when neither URL is present', () => {
+  assert.equal(resolveCheckRunUrl({}), '');
+});
+
 // --- fetchCheckRunsForRef argv construction (regression: #1431 review) --
 //
 // `gh api` defaults to POST as soon as any `-f`/`-F` value is present
@@ -385,7 +491,7 @@ test('parseRunIdFromUrl returns null for an empty URL', () => {
 // argv without shelling out to `gh`, so a future edit cannot silently
 // drop `--method GET` again.
 
-test('buildCheckRunsForRefArgs includes --method GET alongside the -f check_name field', () => {
+test('buildCheckRunsForRefArgs includes --method GET and filter=all alongside the -f check_name field', () => {
   const args = buildCheckRunsForRefArgs(
     'kurone-kito',
     'idd-skill',
@@ -399,10 +505,26 @@ test('buildCheckRunsForRefArgs includes --method GET alongside the -f check_name
     'GET',
     '-f',
     `check_name=${RERUN_PLAN_CHECK_NAME}`,
+    '-f',
+    'filter=all',
     '--paginate',
     '--jq',
     '.check_runs[]',
   ]);
+});
+
+// Regression (#1434 review, Codex P1): the commit check-runs endpoint's
+// `filter` query parameter defaults to `latest`, which collapses same-named
+// check runs down to only the most-recently-completed instance -- silently
+// dropping exactly the older non-passing instance this helper exists to
+// recover. Confirmed empirically against this repo's own PR history during
+// review (the default-filter result omitted the very first check-run
+// instance that `filter=all` correctly included).
+test('buildCheckRunsForRefArgs requests filter=all so older non-passing instances are never silently dropped', () => {
+  const args = buildCheckRunsForRefArgs('o', 'r', HEAD, 'name');
+  const filterIndex = args.indexOf('-f', args.indexOf('-f') + 1);
+  assert.notEqual(filterIndex, -1, 'expected a second -f flag for filter=all');
+  assert.equal(args[filterIndex + 1], 'filter=all');
 });
 
 test('buildCheckRunsForRefArgs places --method immediately before GET (gh api requires the value to follow its flag)', () => {
