@@ -250,12 +250,18 @@ generated pair rather than a third _kind_ of surface:
 - **Generation mechanism**: `node scripts/sync-docs.mjs --apply`
   regenerates the lite files the same way it regenerates the standard
   ones today. Generation is driven entirely by `syncPairs` —
-  `sync-docs.mjs` reads only that array, never `fileSets` — so what
-  actually produces each `.github/instructions/lite/idd-*.instructions.md`
-  from its `idd-template/` source is one new `syncPairs` entry **per lite
-  file**, each naming its own `mode` (`exact`, `structure`, or
-  `concreted`): one companion entry per matched instruction file, the
-  same pattern the existing dogfood set already follows.
+  `sync-docs.mjs` reads only that array, never `fileSets` — so one new
+  `syncPairs` entry per lite file (one companion entry per matched
+  instruction file, the same pattern the existing dogfood set already
+  follows) is what actually produces each
+  `.github/instructions/lite/idd-*.instructions.md` from its
+  `idd-template/` source, **provided the entry uses a generatable
+  `mode`**: only `exact` and `concreted` write content.
+  `structure` and `contains` are audit-only — `sync-docs.mjs` explicitly
+  skips them ("no source to copy" per its own header comment) — so a
+  lite `syncPairs` entry wired with `structure` mode would never
+  actually get generated; pick `exact` (or `concreted`, if a
+  placeholder needs substitution) for a lite file's entry instead.
 - **Audit mechanism**: `node scripts/audit-docs.mjs --check` reads both
   `fileSets` and `syncPairs`. A new `fileSets` entry (see
   [Recommendation](#recommendation-option-a) above) covering
