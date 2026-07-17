@@ -10,7 +10,6 @@
 // ready-to-post body string to stdout and performs NO network write; the
 // agent posts it via the documented HTTP path. The render logic lives in
 // protocol-helpers; this is the thin CLI surface.
-import { isCliExecution } from './gh-exec.mjs';
 import {
   renderClaimedByMarker,
   renderReviewBaselineMarker,
@@ -18,7 +17,7 @@ import {
 } from './protocol-helpers.mjs';
 
 const MARKER_TYPES = ['claimed-by', 'review-watermark', 'review-baseline'];
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 function runCli() {
@@ -60,6 +59,13 @@ function runCli() {
   }
   process.stdout.write(`${body}\n`);
 }
+// Excluded from the #1446 cli-args.mts wrapper: this parser collects
+// dynamic, marker-type-dependent keys into an index-signature bag
+// (`[key: string]: string | boolean` above) rather than a fixed set of
+// declared flags. `util.parseArgs`'s `strict: true` rejects any option not
+// named in its static spec, and `strict: false` would instead coerce every
+// unrecognized flag to `true` -- neither matches this file's "accept
+// whatever field this marker type needs" contract.
 function parseArgs(argv) {
   const parsed = { type: '', help: false };
   for (let index = 0; index < argv.length; index += 1) {

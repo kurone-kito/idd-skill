@@ -9,7 +9,6 @@ import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghApiJson,
   ghText,
-  isCliExecution,
   safeGhText,
   withBoundedRetry,
 } from '../src/scripts/gh-exec.mts';
@@ -262,28 +261,6 @@ process.exit(1);
     );
   } finally {
     restore();
-  }
-});
-
-test('isCliExecution is true when moduleUrl resolves to the live process entry point', () => {
-  const originalArgv1 = process.argv[1];
-  process.argv[1] = '/tmp/example/entry.mjs';
-  try {
-    assert.equal(isCliExecution('file:///tmp/example/entry.mjs'), true);
-  } finally {
-    process.argv[1] = originalArgv1;
-  }
-});
-
-test('isCliExecution is false for an unrelated moduleUrl or a missing argv[1]', () => {
-  const originalArgv1 = process.argv[1];
-  process.argv[1] = '/tmp/example/entry.mjs';
-  try {
-    assert.equal(isCliExecution('file:///tmp/example/other.mjs'), false);
-    process.argv[1] = undefined as unknown as string;
-    assert.equal(isCliExecution('file:///tmp/example/entry.mjs'), false);
-  } finally {
-    process.argv[1] = originalArgv1;
   }
 });
 

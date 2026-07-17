@@ -289,7 +289,7 @@ test('workflowName is trimmed so whitespace-only differences do not produce spur
 // buildCiWaitStateSummary from ci-wait-state.mts above, so a later dynamic
 // `import('../src/scripts/ci-wait-state.mts')` would just return the
 // already-cached module and re-run no top-level code, making that assertion
-// vacuous — it would pass even if the isCliExecution(import.meta.url) guard
-// were removed. ci-wait-policy.test.mts (a fellow builder+CLI single-file
+// vacuous — it would pass even if the `import.meta.main` guard were
+// removed. ci-wait-policy.test.mts (a fellow builder+CLI single-file
 // helper whose test file statically imports its builder functions too)
 // follows the same precedent and omits this test for the same reason.

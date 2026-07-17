@@ -27,7 +27,6 @@ import { extractBlockedByRoadmapMarkers } from './discover-readiness-check.mts';
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mts';
 import type { EffortMarkerDetection } from './effort.mts';
 import { parseEffortMarker } from './effort.mts';
-import { isCliExecution } from './gh-exec.mts';
 import type { IddConfig } from './idd-config.mts';
 import { loadIddConfig } from './idd-config.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
@@ -106,7 +105,7 @@ const SHAPE_HEADING_REQUIREMENTS: Record<
   ],
 };
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   main();
 }
 

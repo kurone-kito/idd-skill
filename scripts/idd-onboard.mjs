@@ -49,7 +49,6 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { isCliExecution } from './gh-exec.mjs';
 import {
   collectHelperRuntimeEvidence,
   collectVendoredFiles,
@@ -950,7 +949,7 @@ export function runVerify(sourceRoot, targetRoot, profile) {
     blocking,
   };
 }
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   try {
     runCli();
   } catch (error) {
@@ -962,6 +961,11 @@ if (isCliExecution(import.meta.url)) {
     process.exit(2);
   }
 }
+// Excluded from the #1446 cli-args.mts wrapper: the placeholder-override
+// flags below (`flagToName`) are data-driven from `ONBOARDING_PLACEHOLDERS`
+// -- the accepted flag set is built from a runtime table, not a fixed spec
+// declared in source. A static cli-args.mts spec object cannot represent a
+// flag set that is only known once that table is read.
 function parseArgs(argv) {
   const parsed = {
     substitute: false,

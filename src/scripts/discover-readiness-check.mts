@@ -8,7 +8,6 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { LabelEvent } from './authoring-label-guard.mts';
 import {
   buildAuthoringLabelWarning,
@@ -35,9 +34,9 @@ const DEFAULT_MARKER_PREFIX = 'idd-skill';
 // masked out — treating code-quoted markers as false positives, consistent with
 // the #1121 repo behavior; excluding backticks from this prefix is a second
 // line of defense for the inline-code case. This const is declared before the
-// `isMainModule` CLI block on purpose so it is initialized when the CLI path
-// runs `extractBlockedByIssueNumbers` (a const declared after that block would
-// be in the temporal dead zone).
+// `import.meta.main` CLI block on purpose so it is initialized when the CLI
+// path runs `extractBlockedByIssueNumbers` (a const declared after that block
+// would be in the temporal dead zone).
 const DEPENDENCY_LINE_PREFIX = String.raw`^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+)?`;
 
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
@@ -146,7 +145,7 @@ interface ParsedArgs {
 
 type CachedIssue = NormalizedIssue | InaccessibleIssueSentinel | null;
 
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   if (args.swarmFloor === null && args.issueNumbers.length === 0) {
     throw new Error(
@@ -1088,13 +1087,4 @@ export function isInaccessibleIssueLookupError(error: unknown): boolean {
   return /resource not accessible|not accessible by integration|visibility/i.test(
     stderr,
   );
-}
-
-function isMainModule(metaUrl: string): boolean {
-  if (!metaUrl || !process.argv[1]) {
-    return false;
-  }
-  // Compare filesystem paths instead of building a file:// URL from
-  // argv[1], which mis-parses Windows drive-letter paths.
-  return fileURLToPath(metaUrl) === resolve(process.argv[1]);
 }

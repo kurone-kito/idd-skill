@@ -42,12 +42,12 @@ import {
   readAdvisoryConvergenceDeadlineMinutes,
   readAdvisoryPrimaryBotLogin,
 } from './advisory-wait-policy.mjs';
+import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
 import {
   GH_TEXT_LOOP_OPTIONS,
   ghApiJson,
   ghText,
-  isCliExecution,
   safeGhText,
 } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
@@ -375,76 +375,41 @@ function minutesBetween(start, end) {
   }
   return Math.floor((endMs - startMs) / 60000);
 }
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --pr spec key
+// below. See cli-args.mts's module header for the full invariant. (This
+// comment deliberately avoids writing that key inside matching quote
+// marks, so it cannot itself satisfy the scan if the real key is ever
+// renamed -- see #1446's PR description for why that matters.)
+const ADVISORY_CONVERGENCE_FLAG_SPEC = {
+  '--pr': { type: 'string' },
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--claim-issue': { type: 'string' },
+  '--trusted-marker-logins': { type: 'string', default: '' },
+  '--advisory-bot-logins': { type: 'string', default: '' },
+  '--now': { type: 'string', default: '' },
+  '--assert': { type: 'boolean', default: false },
+  '--help': { type: 'boolean', short: 'h' },
+};
 export function parseArgs(argv) {
-  const parsed = {
-    prNumber: null,
-    owner: '',
-    repo: '',
-    claimIssueNumber: null,
-    trustedMarkerLogins: '',
-    advisoryBotLogins: '',
-    now: '',
-    assert: false,
-    help: false,
+  const { values, help } = parseCliArgs(argv, ADVISORY_CONVERGENCE_FLAG_SPEC);
+  return {
+    // Both resolve-to-null on an invalid/absent value (fails closed at the
+    // caller) -- the established contract this migration must preserve;
+    // see "an invalid --pr resolves to null" in tests/advisory-convergence.
+    // test.mts.
+    prNumber: parseCanonicalIntegerOrNull(values.pr),
+    owner: values.owner,
+    repo: values.repo,
+    claimIssueNumber: parseCanonicalIntegerOrNull(values['claim-issue']),
+    trustedMarkerLogins: values['trusted-marker-logins'],
+    advisoryBotLogins: values['advisory-bot-logins'],
+    now: values.now,
+    assert: values.assert,
+    help,
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    if (token === '--pr') {
-      parsed.prNumber = Number.parseInt(value ?? '', 10);
-      index += 1;
-      continue;
-    }
-    if (token === '--owner') {
-      parsed.owner = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--claim-issue') {
-      parsed.claimIssueNumber = Number.parseInt(value ?? '', 10);
-      index += 1;
-      continue;
-    }
-    if (token === '--trusted-marker-logins') {
-      parsed.trustedMarkerLogins = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--advisory-bot-logins') {
-      parsed.advisoryBotLogins = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--now') {
-      parsed.now = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--assert') {
-      parsed.assert = true;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-  if (!Number.isInteger(parsed.prNumber) || (parsed.prNumber ?? 0) < 1) {
-    parsed.prNumber = null;
-  }
-  if (
-    !Number.isInteger(parsed.claimIssueNumber) ||
-    (parsed.claimIssueNumber ?? 0) < 1
-  ) {
-    parsed.claimIssueNumber = null;
-  }
-  return parsed;
 }
 function printHelp() {
   process.stdout.write(`Usage:
@@ -994,10 +959,9 @@ function fetchThreadCommentPages(threadId, afterCursor) {
   return nodes;
 }
 // CLI: emit the verdict as JSON and set the exit code when invoked directly.
-// Guarded behind isCliExecution(import.meta.url) (shared, see gh-exec.mts)
-// so importing this module (for unit tests) never parses process.argv,
-// prints usage, or makes a `gh` call.
-if (isCliExecution(import.meta.url)) {
+// Guarded behind `import.meta.main` so importing this module (for unit
+// tests) never parses process.argv, prints usage, or makes a `gh` call.
+if (import.meta.main) {
   const { verdict, exitCode, help } = runAdvisoryConvergence(
     process.argv.slice(2),
   );

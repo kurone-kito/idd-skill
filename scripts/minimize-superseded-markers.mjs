@@ -52,7 +52,7 @@ const NODE_ID_CONVERSION_COMMANDS = [
   "  PR review:         gh api repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id} -q '.node_id'",
   "  PR review comment: gh api repos/{owner}/{repo}/pulls/comments/{comment_id} -q '.node_id'",
 ].join('\n');
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   let args;
   try {
     args = parseArgs(process.argv.slice(2));
@@ -526,16 +526,4 @@ IC_kwDOSWpaqs8AAAABIk9VAg), not REST numeric IDs (e.g. 4870591746).
 Convert a REST ID to its node ID first, using the command for the
 subject type:
 ${NODE_ID_CONVERSION_COMMANDS}`);
-}
-function isMainModule(metaUrl) {
-  const entry = process.argv[1];
-  if (!entry) return false;
-  try {
-    return (
-      new URL(metaUrl).pathname === entry ||
-      new URL(metaUrl).pathname.endsWith(entry)
-    );
-  } catch {
-    return false;
-  }
 }

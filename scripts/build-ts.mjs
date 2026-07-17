@@ -30,8 +30,6 @@
 // bare-node boundary.
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 const EMITTED_PREFIX = 'TSFILE: ';
 // The provenance header every emitted artifact carries; a helper with no
@@ -129,15 +127,7 @@ function build() {
     });
   }
 }
-function isMainModule(metaUrl) {
-  if (!metaUrl || !process.argv[1]) {
-    return false;
-  }
-  // Compare filesystem paths instead of building a file:// URL from
-  // argv[1], which mis-parses Windows drive-letter paths.
-  return fileURLToPath(metaUrl) === resolve(process.argv[1]);
-}
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   build();
   syncGitattributes();
 }

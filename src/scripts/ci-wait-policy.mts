@@ -8,7 +8,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { isCliExecution } from './gh-exec.mts';
+import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mts';
 import { loadJson, validateConfigSection } from './validate-schemas.mts';
 
 const DEFAULT_RUNNING_TIMEOUT = 'PT30M';
@@ -43,7 +43,26 @@ export const DEFAULT_CI_WAIT_POLICY = Object.freeze({
   rerunPolicy: DEFAULT_RERUN_POLICY,
 });
 
-if (isCliExecution(import.meta.url)) {
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `policy:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --rerun-count spec
+// key below. See cli-args.mts's module header for the full invariant.
+// (Deliberately not written inside matching quote marks in this comment --
+// see advisory-convergence.mts's identical note for why.)
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls runCli() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires (see #1177's entry-order TDZ hardening for the same class
+// of bug in this file).
+const CI_WAIT_POLICY_FLAG_SPEC = {
+  '--policy': { type: 'string', default: DEFAULT_POLICY_PATH },
+  '--rerun-count': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
+
+if (import.meta.main) {
   runCli();
 }
 
@@ -188,48 +207,21 @@ function parseArgs(argv: string[]): {
   rerunCount: number | null;
   help: boolean;
 } {
-  const parsed: { policy: string; rerunCount: number | null; help: boolean } = {
-    policy: DEFAULT_POLICY_PATH,
-    rerunCount: null,
-    help: false,
+  const { values, help } = parseCliArgs(argv, CI_WAIT_POLICY_FLAG_SPEC);
+  const rerunCountToken = values['rerun-count'] as string | undefined;
+  return {
+    policy: values.policy as string,
+    // `min: 0`: --rerun-count is a non-negative counter (0 is a valid
+    // "no reruns yet" value), unlike the positive-integer contracts
+    // elsewhere in this file's siblings. Throws (rather than resolving to
+    // null) on violation, preserving this flag's existing fail-fast
+    // contract -- see tests/ci-wait-policy.test.mts.
+    rerunCount:
+      rerunCountToken === undefined
+        ? null
+        : parseCanonicalIntegerOrThrow(rerunCountToken, '--rerun-count', 0),
+    help,
   };
-
-  for (let i = 0; i < argv.length; i += 1) {
-    const flag = argv[i];
-    const value = argv[i + 1];
-    const requireValue = (): string => {
-      if (value === undefined || String(value).startsWith('--')) {
-        throw new Error(`missing value for argument: ${flag}`);
-      }
-      return value;
-    };
-
-    if (flag === '--policy') {
-      parsed.policy = requireValue();
-      i += 1;
-      continue;
-    }
-    if (flag === '--rerun-count') {
-      parsed.rerunCount = Number.parseInt(String(requireValue()), 10);
-      i += 1;
-      continue;
-    }
-    if (flag === '--help' || flag === '-h') {
-      parsed.help = true;
-      continue;
-    }
-
-    throw new Error(`unknown argument: ${flag}`);
-  }
-
-  if (
-    parsed.rerunCount !== null &&
-    (!Number.isInteger(parsed.rerunCount) || parsed.rerunCount < 0)
-  ) {
-    throw new Error('--rerun-count must be a non-negative integer');
-  }
-
-  return parsed;
 }
 
 function printHelp(): void {

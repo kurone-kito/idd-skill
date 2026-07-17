@@ -23,16 +23,12 @@ import {
   buildClaimStateResolution,
 } from './discover-roadmap-graph.mjs';
 import { effortOrdinal, parseEffort } from './effort.mjs';
-import {
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-  isCliExecution,
-} from './gh-exec.mjs';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { createMarkerRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   await runCli();
 }
 /**
@@ -350,6 +346,12 @@ async function runCli() {
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
+// Excluded from the #1446 cli-args.mts wrapper: --current-claim-id below
+// is an optional-value flag -- it may appear bare or take a following
+// value, and only consumes the next token when one is present and does
+// not itself look like another flag. `util.parseArgs` cannot express this:
+// a `string`-type option always requires exactly one value and a
+// `boolean`-type option never takes one; there is no in-between mode.
 function parseArgs(argv) {
   const parsed = {
     owner: '',

@@ -27,11 +27,7 @@ import {
   type LeafActiveClaim,
 } from './discover-roadmap-graph.mts';
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
-import {
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-  isCliExecution,
-} from './gh-exec.mts';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { createMarkerRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 
@@ -152,7 +148,7 @@ interface ParsedArgs {
   currentClaimId: string;
 }
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   await runCli();
 }
 
@@ -516,6 +512,12 @@ async function runCli() {
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
 
+// Excluded from the #1446 cli-args.mts wrapper: --current-claim-id below
+// is an optional-value flag -- it may appear bare or take a following
+// value, and only consumes the next token when one is present and does
+// not itself look like another flag. `util.parseArgs` cannot express this:
+// a `string`-type option always requires exactly one value and a
+// `boolean`-type option never takes one; there is no in-between mode.
 function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {
     owner: '',

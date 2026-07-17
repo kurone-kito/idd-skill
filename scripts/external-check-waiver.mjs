@@ -6,8 +6,6 @@
 // .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { createInterface } from 'node:readline';
-import { pathToFileURL } from 'node:url';
 import { resolveHelperActiveClaim } from './forced-handoff-marker.mjs';
 import { ghText, safeGhText } from './gh-exec.mjs';
 import {
@@ -19,6 +17,7 @@ import {
   parsePaginatedGhNdjson,
   renderExternalCheckWaiverComment,
 } from './protocol-helpers.mjs';
+import { makeReadlinePrompt } from './readline-prompt.mjs';
 
 const APPROVAL_ACTOR_POLICIES = new Set([
   'owners-and-maintainers-only',
@@ -808,15 +807,6 @@ function renderTextReport(report) {
     '',
   ].join('\n');
 }
-function makeReadlinePrompt() {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (question) =>
-    new Promise((resolve) =>
-      rl.question(question, (answer) => resolve(answer)),
-    );
-  ask.close = () => rl.close();
-  return ask;
-}
 function parseArgs(argv) {
   const parsed = {
     prNumber: 0,
@@ -948,10 +938,7 @@ export async function main(argv = process.argv.slice(2)) {
   const result = await runExternalCheckWaiver({ args: parseArgs(argv) });
   process.exit(result.exitCode);
 }
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (import.meta.main) {
   main().catch((error) => {
     process.stderr.write(`Error: ${error.message}\n`);
     process.exit(1);

@@ -6,7 +6,7 @@
 // never the generated .mjs. See docs/typescript-sources.md.
 import {
   existsSync,
-  readdirSync,
+  globSync,
   readFileSync,
   realpathSync,
   statSync,
@@ -23,7 +23,7 @@ import {
 
 const WORKSHOP_ROOTS = ['docs/workshop'];
 const WORKSHOP_ASSET_DIRS = ['docs/workshop/assets'];
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   let args;
   try {
     args = parseArgs(process.argv.slice(2));
@@ -610,14 +610,70 @@ function isInside(targetPath, rootPath) {
 export function computeExitCode(report) {
   return report.issues.length > 0 ? 1 : 0;
 }
+/**
+ * #1449: replaces a manual `readdirSync` recursion with `fs.globSync`
+ * (stable since Node v22.17.0; this repo requires `^22.22.2 || >=24`).
+ * Three discovery-semantics deltas were checked and closed or documented
+ * before this swap, each verified empirically against the real
+ * `docs/workshop` tree (10 files) and synthetic fixtures:
+ *
+ * 1. **Case-insensitive matching**: the old code matched via
+ *    `full.toLowerCase().endsWith('.md')`; `globSync` has no
+ *    case-insensitive matching option, so the bracket pattern `[mM][dD]`
+ *    reproduces it exactly
+ *    (verified against `.MD`/`.Md` fixtures). No non-lowercase `.md` file
+ *    exists anywhere in this repo today (this repo's own naming
+ *    convention requires lowercase filenames), so this is defensive
+ *    rather than currently load-bearing.
+ * 2. **Directories matching the pattern**: a plain recursive glob for
+ *    `.md` entries also returns directory names that happen to match (e.g. a
+ *    hypothetical `weird.md/`), which the caller's `readFileSync` loop
+ *    would crash on (`EISDIR`) — the old `Dirent`-based walk never
+ *    collects a directory because it checks `isDirectory()` first and
+ *    recurses instead. Closed by requesting `Dirent`s and filtering
+ *    `isFile()`, matching the old walk's file-only collection exactly.
+ * 3. **Result order**: `globSync`'s match order does not reproduce the
+ *    alphabetical depth-first order the old `readdirSync`-based recursion
+ *    happens to produce on this filesystem, so results are sorted
+ *    explicitly — verified byte-identical to the pre-change order for
+ *    the real `docs/workshop` tree.
+ *
+ * Two further points are recorded here for completeness rather than
+ * worked around, but they are **not equally benign** — read them
+ * separately:
+ *
+ * - A symlinked `.md` **file** sitting directly in the tree is a genuine
+ *   **non-issue**: excluded by both the old and the new walk.
+ *   `Dirent#isFile()` is `lstat`-based (checks the entry itself, not its
+ *   resolved target) for `globSync`'s `Dirent`s exactly as it was for
+ *   `readdirSync`'s, so `entry.isFile()` is `false` for a symlink either
+ *   way, and neither walk traverses *into* a symlinked directory (`**`
+ *   default `followSymlinks: false`).
+ * - Dot-prefixed files and directories are a **real, confirmed behavior
+ *   difference**, not a non-issue: the old `readdirSync`-based walk had
+ *   no dot-exclusion of its own and would traverse them, while `**` does
+ *   not descend into a dot-prefixed path by default (`fs.globSync` has no
+ *   dot-inclusion option at all — verified there is nothing equivalent to
+ *   other glob libraries' `dot: true`). This delta is inert *only*
+ *   because `docs/workshop` has zero dot-prefixed entries today; it would
+ *   change scanned output the moment one was added. Deliberately left
+ *   unclosed rather than shipping a partial pattern fix (see the PR #1463
+ *   review-thread disposition for the full reasoning) (Copilot review,
+ *   #1463).
+ *
+ * One more delta favors the new code: `globSync` on a nonexistent `dir`
+ * silently returns no matches, where `readdirSync` would throw `ENOENT`.
+ * Unreachable today — `runVerification`'s sole call site already guards
+ * with `existsSync(abs) && statSync(abs).isDirectory()` before calling
+ * this function — recorded for whoever removes that guard later.
+ */
 function collectMarkdown(dir, out) {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      collectMarkdown(full, out);
-    } else if (entry.isFile() && full.toLowerCase().endsWith('.md')) {
-      out.push(full);
-    }
+  const matches = globSync('**/*.[mM][dD]', { cwd: dir, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name))
+    .sort();
+  for (const file of matches) {
+    out.push(file);
   }
 }
 function printTable(report) {
@@ -673,14 +729,4 @@ validated for syntax only (no live HTTP fetch — the check stays
 offline-safe). Targets that resolve outside the repository root via
 path traversal are reported as errors.
 `);
-}
-function isMainModule(metaUrl) {
-  const entry = process.argv[1];
-  if (!entry) return false;
-  try {
-    const url = new URL(metaUrl);
-    return url.pathname === entry || url.pathname.endsWith(entry);
-  } catch {
-    return false;
-  }
 }

@@ -240,6 +240,18 @@ Copilot and CI advisory bot comments; they follow PATH B in E4-E7
 request acknowledgement / error — are dispositioned under the E6
 non-review-notice rule).
 
+**Resolved-thread index (for the E5 duplicate pre-check).** Also carry
+forward, from the same Step 1 review-thread set, a light index of this
+PR's **resolved** threads (`isResolved=true`): for each, record the file
+or file area, a short summary of the substantive claim, the source URL,
+and any IDD-agent `**Accepted**` / `**Rejected**` disposition marker
+found in the thread. Do **not** add resolved threads back into
+ReviewItems_snapshot — they stay out of scoring and disposition. This
+index is a **routing hint only** for E5's resolved-thread duplicate
+pre-check (`idd-review-triage.instructions.md`): it tells triage where a
+possible prior recurrence might be, not what to conclude — confirming
+the recorded evidence still requires opening the linked thread.
+
 ## E2 — Critique pass
 
 Run a critique pass on the branch's changes and add any newly found

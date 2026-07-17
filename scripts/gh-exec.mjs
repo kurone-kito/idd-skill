@@ -15,8 +15,7 @@
 // Consumed by the `src/scripts/*.mts` helpers that shell out to `gh` or
 // need the CLI-entry-point guard.
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 /**
  * Shared `{ stdio }` override for callers that invoke `gh` in a tight or
@@ -97,12 +96,6 @@ export function ghApiJson(path, options = {}) {
 }
 const DEFAULT_BOUNDED_RETRY_ATTEMPTS = 3;
 const DEFAULT_BOUNDED_RETRY_BASE_DELAY_MS = 200;
-/** `await`-able delay, used only for the backoff between retry attempts. */
-function delay(ms) {
-  return new Promise((resolveDelay) => {
-    setTimeout(resolveDelay, ms);
-  });
-}
 /**
  * Run `task`, retrying a bounded number of times on a retryable failure
  * (#1394): a transient `gh`/API hiccup (e.g. truncated captured stdout under
@@ -144,22 +137,9 @@ export async function withBoundedRetry(task, options = {}) {
       if (attempt >= totalAttempts || !isRetryable(error)) {
         throw error;
       }
-      await delay(
+      await sleep(
         effectiveBaseDelayMs * attempt + Math.random() * effectiveBaseDelayMs,
       );
     }
   }
-}
-/**
- * True when this module is executing as the invoked CLI entry point
- * (`node <this-file>.mjs ...`), false when it is only imported (e.g. from
- * a test). Callers pass their own `import.meta.url`; the check itself
- * compares against `process.argv[1]`, as every existing per-helper copy
- * already does.
- */
-export function isCliExecution(moduleUrl) {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(moduleUrl) === resolve(process.argv[1])
-  );
 }

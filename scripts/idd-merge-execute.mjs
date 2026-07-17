@@ -12,7 +12,6 @@
 // reports the bound merge command; the ONLY mutation anywhere is the
 // `gh pr merge` issued under `--apply` once every F3 gate holds and the
 // head + claim re-validate immediately before the merge.
-import { fileURLToPath } from 'node:url';
 import { ghText } from './gh-exec.mjs';
 import { collectPreMergeReadiness } from './pre-merge-readiness.mjs';
 import { computePreMergeReadinessBlockers } from './protocol-helpers.mjs';
@@ -145,6 +144,14 @@ export function runMergeExecute(argv, deps = defaultDeps) {
   verdict.mergeResult = mergeOutput || 'merge command completed';
   return { verdict, exitCode: 0 };
 }
+// Excluded from the #1446 cli-args.mts wrapper: `passthrough` below
+// collects every unrecognized flag (plus its value, when present) into an
+// array forwarded verbatim to the collector, rather than rejecting it
+// against a fixed declared spec. `util.parseArgs`'s `strict: true` rejects
+// any option not named in its static spec, and `strict: false` would
+// instead coerce every unrecognized flag to `true` -- neither matches this
+// file's "collect and forward whatever the collector itself accepts"
+// contract.
 function parseArgs(argv) {
   const parsed = {
     prNumber: null,
@@ -241,7 +248,7 @@ function printHelp() {
 `);
 }
 // CLI: print the verdict as JSON and exit with the gate/merge status.
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   const { verdict, exitCode } = runMergeExecute(process.argv.slice(2));
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
   process.exit(exitCode);

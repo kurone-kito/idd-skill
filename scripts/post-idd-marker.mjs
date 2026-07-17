@@ -17,8 +17,7 @@
 // claim-revalidation gate immediately before invoking `--apply`, exactly as the
 // manual POST path it replaces already requires.
 import { execFileSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import { ghText } from './gh-exec.mjs';
 import {
   renderAdvisoryWaitMarker,
@@ -150,6 +149,13 @@ function parsePositiveIntToken(token, label) {
   }
   return parsed;
 }
+// Excluded from the #1446 cli-args.mts wrapper: `fields` below collects
+// per-marker-type keys dynamically (each `--type` accepts a different
+// field set) rather than a fixed declared spec. `util.parseArgs`'s
+// `strict: true` rejects any option not named in its static spec, and
+// `strict: false` would instead coerce every unrecognized flag to `true`
+// -- neither matches this file's "accept whatever fields this marker type
+// needs" contract.
 export function parseArgs(argv) {
   const args = {
     type: '',
@@ -298,10 +304,7 @@ function runReviewActivitySnapshot(
   trustedMarkerLogins,
   advisoryBotLogins,
 ) {
-  const script = resolve(
-    dirname(fileURLToPath(import.meta.url)),
-    'review-activity-snapshot.mjs',
-  );
+  const script = resolve(import.meta.dirname, 'review-activity-snapshot.mjs');
   const snapshotArgs = [
     script,
     '--pr',
@@ -322,18 +325,7 @@ function runReviewActivitySnapshot(
   });
   return JSON.parse(out);
 }
-function isMainModule(moduleUrl) {
-  const entry = process.argv[1];
-  if (!entry) {
-    return false;
-  }
-  // Compare decoded filesystem paths (matching the emit-marker / manifest entry
-  // guards). A raw `file://${entry}` string compare fails when the install path
-  // contains spaces: import.meta.url percent-encodes them while process.argv[1]
-  // does not, so the CLI body would silently never run.
-  return fileURLToPath(moduleUrl) === resolve(entry);
-}
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   let args;
   try {
     args = parseArgs(process.argv.slice(2));
