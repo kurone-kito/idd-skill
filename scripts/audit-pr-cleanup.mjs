@@ -1134,10 +1134,13 @@ function parseArgs(argv) {
   // an explicit empty-string value was rejected the same as an omitted
   // flag for EVERY flag in this file. parseCliArgs accepts an empty
   // string (matching bare node:util parseArgs), so this check restores
-  // that exact uniform pre-migration behavior.
+  // that exact uniform pre-migration behavior. The message matches
+  // parseCliArgs' own "missing value for argument: <flag>" phrasing
+  // (Copilot review finding on PR #1467) so an empty-string value and an
+  // omitted/flag-shaped value report the same failure style.
   const requireNonEmpty = (token, flag) => {
     if (token === '') {
-      fail(`${flag} requires a value`);
+      fail(`missing value for argument: ${flag}`);
     }
     return token;
   };
