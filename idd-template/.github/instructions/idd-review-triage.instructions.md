@@ -10,8 +10,8 @@ current `{claim-id}`.
 
 **Skip condition E8**: if the Accepted PATH A count after verification
 is zero, proceed to the **E-phase branch-sync check** below (its
-`clean`/`behind-no-conflict` exit applies the **Zero-Accepted-PATH-A
-advisory re-review gate**).
+no-sync-required `clean`/`behind-no-conflict` exit applies the
+**Zero-Accepted-PATH-A advisory re-review gate**).
 
 ## E4 — Classify and score ReviewItems_snapshot
 
@@ -525,8 +525,8 @@ Route based on `branchState` from the helper (or `mergeable` /
 
 ## Zero-Accepted-PATH-A advisory re-review gate
 
-Applies only from the E-phase branch-sync check's `clean` /
-`behind-no-conflict`-not-required exit above, and only when, since
+Applies only from the E-phase branch-sync check's no-sync-required
+`clean` / `behind-no-conflict` exit above, and only when, since
 `ReviewItems_snapshot` was last non-empty in this E-phase episode, the
 Accepted PATH A count was zero **and** at least one PATH B item
 received a _completed-review_ disposition (`**Accepted**` or
@@ -567,7 +567,7 @@ request — and it never requests at all when the bot's latest review
 already covers current HEAD but still carries items. That residual
 keeps the same 24h deadline / maintainer-waiver escape hatch as any
 other non-converged state; re-reviewing unchanged code is a separate,
-tracked problem this gate does not solve.
+tracked problem (#1465).
 
 ## Advisory courtesy-ack convergence
 
