@@ -275,3 +275,37 @@ test('readCiWaitPolicy falls back to defaults when its own ciWait section is sch
 
   assert.deepEqual(readCiWaitPolicy(configPath), { ...DEFAULT_CI_WAIT_POLICY });
 });
+
+// #1446: --rerun-count migrated onto the shared cli-args.mts wrapper's
+// "throw" integer contract (parseCanonicalIntegerOrThrow, min: 0). This
+// exercises the CLI end-to-end to demonstrate the throw survives migration
+// -- no earlier test in this file covered the invalid/negative CLI path.
+test('CLI --rerun-count still throws on a non-negative-integer violation', () => {
+  for (const rerunCount of ['-1', 'not-a-number', '3.5']) {
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            join(REPO_ROOT, 'scripts/ci-wait-policy.mjs'),
+            '--rerun-count',
+            rerunCount,
+          ],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+        ),
+      /invalid value for argument: --rerun-count/,
+      `expected --rerun-count ${rerunCount} to throw`,
+    );
+  }
+});
+
+test('CLI --rerun-count 0 does not throw (0 is a valid non-negative value)', () => {
+  const output = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [join(REPO_ROOT, 'scripts/ci-wait-policy.mjs'), '--rerun-count', '0'],
+      { encoding: 'utf8' },
+    ),
+  );
+  assert.equal(output.rerunDecision.rerunCount, 0);
+});
