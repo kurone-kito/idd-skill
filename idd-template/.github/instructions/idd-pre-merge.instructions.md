@@ -40,12 +40,9 @@ This check is read-only — F1 does not rebase, merge, or push.
 
 - **`clean`** (`mergeable` is `MERGEABLE` and `mergeStateStatus` is
   `CLEAN`) or **`behind-no-conflict`** when no up-to-date-head policy
-  applies: proceed to F2. Note: `clean` is textual conflict-freeness only,
-  not whole-tree CI-invariant freedom — when the helper reports
-  `baseAdvancedSinceMergeBase: true`, base has moved since this branch's
-  merge-base and a `pull_request`-triggered CI result may be pinned to a
-  stale merge-ref; this does not block F2 by itself, but prefer a fresh CI
-  result over trusting an old green check in that case.
+  applies: proceed to F2. `clean` is conflict-freeness only; if
+  `baseAdvancedSinceMergeBase: true`, prefer a fresh CI result over an
+  old green check (base may have moved since the merge-base).
 - **`behind-no-conflict`** when branch protection or recorded repository
   policy requires an up-to-date head, or **`content-conflict`**
   (`mergeable` is `CONFLICTING`): return to the E-phase branch-sync check
