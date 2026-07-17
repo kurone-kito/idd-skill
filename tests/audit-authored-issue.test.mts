@@ -1466,6 +1466,34 @@ test('prose-dependency does not warn on a Markdown link with an escaped-quote ti
   assert.equal(finding.severity, undefined);
 });
 
+test('prose-dependency does not exhibit catastrophic backtracking on an adversarial escaped-quote-like run', () => {
+  // Regression test for a real exponential-backtracking vulnerability
+  // CodeQL caught in this PR's first draft of the escaped-quote fix: an
+  // earlier version of the title sub-pattern let its "any non-quote,
+  // non-newline character" alternative also match a bare backslash,
+  // overlapping with the "backslash + any character" escape alternative.
+  // That overlap gives the engine a combinatorially large (Fibonacci-many)
+  // number of ways to partition a long run of backslashes before
+  // concluding no match is possible, once no real closing quote/paren
+  // follows -- an unbounded-length adversarial title is plausible input
+  // (e.g. a pasted issue body). The fixed pattern excludes a literal
+  // backslash from that character class, making the two alternatives
+  // non-overlapping, so this must stay linear-time regardless of run
+  // length.
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      `[x](https://github.com/o/r/pull/1 "${'\\!'.repeat(5000)}`,
+  });
+  const start = Date.now();
+  auditAuthoredIssue(body, { shape: 'child' });
+  const elapsedMs = Date.now() - start;
+  assert.ok(
+    elapsedMs < 2000,
+    `expected linear-time evaluation, took ${elapsedMs}ms`,
+  );
+});
+
 // --- shape / markerPrefix pass-through ---
 
 test('the report echoes the declared shape and resolved markerPrefix', () => {

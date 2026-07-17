@@ -125,19 +125,36 @@ const PROSE_DEPENDENCY_KEYWORDS = [
 // The quoted-title sub-pattern tolerates a backslash-escaped quote
 // matching the title's own delimiter (`\"` inside a `"..."` title, or
 // `\'` inside a `'...'` title) as content instead of letting it close the
-// title early: `(?:\\.|[^"\n])*` (and the single-quote equivalent) tries
-// consuming a backslash plus the character right after it as one unit
-// before falling back to "any non-quote, non-newline character", so an
-// escaped quote is never mistaken for the real closing delimiter. Without
-// this, a title like `"reviewed \"API\""` would close at the first
-// escaped quote, leave the rest of the title as unconsumed content before
-// the link's real closing paren, fail the whole Markdown-link
-// alternative, and re-leak the label's own bare `#N` to the bare-`#`
-// alternative — the same failure mode the trailing-content tolerances
-// above already guard against, just triggered by escaping instead of an
-// unhandled trailing shape.
+// title early: `(?:\\.|[^"\\\n])*` (and the single-quote equivalent)
+// tries consuming a backslash plus the character right after it as one
+// unit before falling back to "any character that is not the quote, a
+// backslash, or a newline", so an escaped quote is never mistaken for the
+// real closing delimiter. Without this, a title like `"reviewed
+// \"API\""` would close at the first escaped quote, leave the rest of
+// the title as unconsumed content before the link's real closing paren,
+// fail the whole Markdown-link alternative, and re-leak the label's own
+// bare `#N` to the bare-`#` alternative — the same failure mode the
+// trailing-content tolerances above already guard against, just
+// triggered by escaping instead of an unhandled trailing shape.
+//
+// The character class excludes a literal backslash (not just the quote
+// and newline) so the two alternatives never overlap on the same input
+// character: `\\.` is the only alternative that can ever consume a `\`,
+// and the class-based alternative is the only one that can consume
+// anything else. A version that let the class also match a bare `\`
+// (`[^"\n]` alone) would let the engine choose, for every backslash in a
+// run of them, between pairing it with the next character via `\\.` or
+// consuming it alone via the class — an ambiguity that multiplies
+// combinatorially (Fibonacci-many partitions of an N-backslash run) and
+// causes catastrophic backtracking once the overall match fails, i.e.
+// exponential-time behavior on a long run of backslashes with no closing
+// quote (confirmed empirically: a ~30-character adversarial input took
+// several seconds under the ambiguous form; a ~10,000-character one
+// resolves in under a millisecond after excluding the backslash from the
+// class). This is the standard non-overlapping idiom for a
+// backslash-escaped quoted string and applies to both quote styles.
 const ISSUE_OR_PR_REFERENCE_PATTERN =
-  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:\/)?(?:#[^)\s"']+)?(?:\s+(?:"(?:\\.|[^"\n])*"|'(?:\\.|[^'\n])*'))?\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b|(?<![\w/])([\w.-]+)\/([\w.-]+)#(\d+)\b/gi;
+  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:\/)?(?:#[^)\s"']+)?(?:\s+(?:"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'))?\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b|(?<![\w/])([\w.-]+)\/([\w.-]+)#(\d+)\b/gi;
 // Matches a Markdown list item marker at the start of a line (unordered
 // `-`/`*`/`+`, or ordered `1.`/`1)`), optionally indented and optionally
 // followed by a task-list checkbox. Captures the leading indentation
