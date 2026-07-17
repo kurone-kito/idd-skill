@@ -61,13 +61,14 @@
 // --apply follow-up) to execute.
 
 import { execFileSync } from 'node:child_process';
+import { parseArgs as nodeParseArgs } from 'node:util';
 
 import {
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
-  readAdvisoryPrimaryBotLogin,
+  resolveAdvisoryPrimaryBotLogin,
 } from './advisory-wait-policy.mts';
 import { ghApiJson, ghText, isCliExecution } from './gh-exec.mts';
-import { loadIddConfig } from './idd-config.mts';
+import { type IddConfig, loadIddConfig } from './idd-config.mts';
 import { isValidIsoTimestamp } from './marker-helpers.mts';
 import {
   isCopilotReviewerLogin,
@@ -607,72 +608,100 @@ interface RerunPlanArgs {
 }
 
 /**
- * Require the token following a value-taking flag to be present and to not
- * itself look like another flag. Without this, a missing value (the flag
- * is the last argument) or an accidental flag collision (e.g. `--owner
- * --repo idd-skill`, where `--repo` would silently become `--owner`'s
- * value) both degrade into a confusing "unknown argument" error pointing
- * at the wrong token instead of the real problem (#1434 review, Copilot).
+ * Mechanical CLI-argument parsing is delegated to `node:util`'s own
+ * stable (since Node 20; this repo's engines floor is `^22.22.2 || >=24`)
+ * `parseArgs`, per a maintainer's review suggestion on PR #1434: it
+ * already rejects a missing value, a value that looks like another
+ * option (long `--foo` or short `-h` alike -- the hand-rolled
+ * `requireFlagValue` this replaced only checked for `--`, so `--owner -h`
+ * silently consumed `-h` as the owner instead of erroring), and an
+ * unknown option, each with Node's own stable `ERR_PARSE_ARGS_*` error
+ * codes. This function's own job narrows to the domain-specific
+ * validation `parseArgs` cannot express declaratively: the `--pr` value
+ * must be all digits (not just numeric-prefixed), and `--owner`/`--repo`
+ * must be given together or not at all.
  */
-function requireFlagValue(flag: string, value: string | undefined): string {
-  if (value === undefined || value.startsWith('--')) {
-    throw new Error(`missing value for ${flag}`);
-  }
-  return value;
-}
-
 export function parseArgs(argv: string[]): RerunPlanArgs {
-  const parsed: RerunPlanArgs = {
-    prNumber: null,
-    owner: '',
-    repo: '',
-    now: '',
+  const { values } = nodeParseArgs({
+    args: argv,
+    options: {
+      pr: { type: 'string' },
+      owner: { type: 'string' },
+      repo: { type: 'string' },
+      now: { type: 'string' },
+      help: { type: 'boolean', short: 'h' },
+    },
+    strict: true,
+  });
+
+  if (values.help) {
+    return { prNumber: null, owner: '', repo: '', now: '', help: true };
+  }
+
+  const owner = String(values.owner ?? '').trim();
+  const repo = String(values.repo ?? '').trim();
+  // A caller inspecting a different repository must fully specify it --
+  // mixing a user-supplied owner with a `gh repo view`-derived repo (or
+  // vice versa) would query a mismatched, unintended repository
+  // (#1434 review, Copilot).
+  if (Boolean(owner) !== Boolean(repo)) {
+    throw new Error('provide both --owner and --repo, or neither');
+  }
+
+  // Number.parseInt parses only a leading numeric prefix ("1431abc" ->
+  // 1431), which would silently run this recovery helper -- and whatever
+  // `gh run rerun` plan it prints -- against the wrong PR on a typo.
+  // Require the entire value to be digits before parsing (#1434 review,
+  // Codex P2).
+  const rawPr = String(values.pr ?? '').trim();
+  const parsedPr = /^\d+$/.test(rawPr)
+    ? Number.parseInt(rawPr, 10)
+    : Number.NaN;
+
+  return {
+    prNumber: Number.isInteger(parsedPr) && parsedPr >= 1 ? parsedPr : null,
+    owner,
+    repo,
+    now: String(values.now ?? '').trim(),
     help: false,
   };
+}
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    if (token === '--pr') {
-      // Number.parseInt parses only a leading numeric prefix ("1431abc"
-      // -> 1431), which would silently run this recovery helper -- and
-      // whatever `gh run rerun` plan it prints -- against the wrong PR on
-      // a typo. Require the entire value to be digits before parsing
-      // (#1434 review, Codex P2).
-      const rawPr = requireFlagValue(token, value).trim();
-      parsed.prNumber = /^\d+$/.test(rawPr)
-        ? Number.parseInt(rawPr, 10)
-        : Number.NaN;
-      index += 1;
-      continue;
-    }
-    if (token === '--owner') {
-      parsed.owner = requireFlagValue(token, value);
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = requireFlagValue(token, value);
-      index += 1;
-      continue;
-    }
-    if (token === '--now') {
-      parsed.now = requireFlagValue(token, value);
-      index += 1;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
+/**
+ * Describe the terminal state when neither `plan` nor `recoveryRefreshPlan`
+ * has any entries. "Nothing to do" would be accurate only when every
+ * instance is `pass` (or there are no instances at all) -- `pending`,
+ * `unresolved`, and `bot-gated-skip` all still require an operator action
+ * (waiting, manual inspection, approval, or a non-bot trigger, per each
+ * instance's own `reason`), so presenting them as no-action risked leaving
+ * a genuinely stuck required check unresolved (#1434 review, Codex P2).
+ */
+export function describeNoActionState(
+  plan: RerunAdvisoryConvergencePlan,
+): string {
+  if (plan.counts.total === 0) {
+    return `No "${plan.checkName}" check-run instances found for this HEAD; nothing to do.`;
   }
-
-  if (!Number.isInteger(parsed.prNumber) || (parsed.prNumber ?? 0) < 1) {
-    parsed.prNumber = null;
+  const notes: string[] = [];
+  if (plan.counts.pending > 0) {
+    notes.push(
+      `${plan.counts.pending} instance(s) are still running -- wait for them to complete, then re-run this diagnosis`,
+    );
   }
-
-  return parsed;
+  if (plan.counts.botGatedSkip > 0) {
+    notes.push(
+      `${plan.counts.botGatedSkip} instance(s) are bot-gated -- they need a non-bot trigger or maintainer approval (see idd-ci.instructions.md §Rerun mechanics), not a rerun`,
+    );
+  }
+  if (plan.counts.unresolved > 0) {
+    notes.push(
+      `${plan.counts.unresolved} instance(s) could not be resolved -- inspect each instance's "reason" above manually`,
+    );
+  }
+  if (notes.length === 0) {
+    return 'Every instance is pass-equivalent; nothing to do.';
+  }
+  return `No rerun-eligible instance and no recovery-refresh option, but this is not a clean "nothing to do": ${notes.join('; ')}.`;
 }
 
 function printHelp(): void {
@@ -840,10 +869,46 @@ function fetchCheckRunsForRef(
   return parsePaginatedGhNdjson(raw) as RawCheckRunPayload[];
 }
 
+/**
+ * Fetch and parse `.github/idd/config.json` from `owner/repo` via the
+ * Contents API, instead of the local working tree. Used only for a true
+ * cross-repository invocation (`--owner`/`--repo` explicitly given) --
+ * reading the *local* checkout's config while inspecting a *different*
+ * repository would resolve bot identity from the wrong repository
+ * entirely, misclassifying a bot-triggered run as rerun-eligible (or vice
+ * versa) there (#1434 review, Codex P2). Returns `null` (falls back to
+ * documented defaults, same as a missing local file) on any failure --
+ * network, a 404 (no config committed), or invalid content -- never
+ * throwing and never silently mixing in local config as a partial
+ * fallback.
+ */
+function loadRemoteIddConfig(owner: string, repo: string): IddConfig | null {
+  try {
+    const encoded = ghText([
+      'api',
+      `repos/${owner}/${repo}/contents/.github/idd/config.json`,
+      '--jq',
+      '.content',
+    ]);
+    const decoded = Buffer.from(encoded.replace(/\n/g, ''), 'base64').toString(
+      'utf8',
+    );
+    return JSON.parse(decoded) as IddConfig;
+  } catch {
+    return null;
+  }
+}
+
 function collectFromGitHub(args: RerunPlanArgs): {
   input: RerunPlanInput;
   options: RerunPlanOptions;
 } {
+  // A true cross-repository invocation only when the caller explicitly
+  // named both --owner and --repo (parseArgs already rejects naming only
+  // one) -- the common case (neither given) auto-detects the local
+  // checkout's own repo below and must keep reading its own local config,
+  // unchanged from before this fix.
+  const isCrossRepo = Boolean(args.owner) && Boolean(args.repo);
   const owner =
     args.owner ||
     ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
@@ -929,8 +994,14 @@ function collectFromGitHub(args: RerunPlanArgs): {
     };
   });
 
-  const primaryBotLogin = readAdvisoryPrimaryBotLogin();
-  const rawConfig = loadIddConfig();
+  // Both bot-identity fields resolve from the SAME config source -- the
+  // inspected repo's own config for a cross-repo invocation, the local
+  // checkout's file otherwise -- so they never disagree with each other
+  // about which repository they describe.
+  const rawConfig = isCrossRepo
+    ? loadRemoteIddConfig(owner, repo)
+    : loadIddConfig();
+  const primaryBotLogin = resolveAdvisoryPrimaryBotLogin(rawConfig);
   const { logins: advisoryBotLogins } = resolveAdvisoryBotLogins({
     envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
     config: rawConfig,
@@ -980,7 +1051,7 @@ if (isCliExecution(import.meta.url)) {
       });
       process.stdout.write(`\n${plan.recoveryRefreshCaveat}\n`);
     } else {
-      process.stdout.write('\nNo rerun-eligible instances; nothing to do.\n');
+      process.stdout.write(`\n${describeNoActionState(plan)}\n`);
     }
   }
   // Set exitCode and let the process end naturally instead of calling

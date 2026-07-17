@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   buildCheckRunsForRefArgs,
   computeRerunPlan,
+  describeNoActionState,
   parseArgs,
   parseRunIdFromUrl,
   RERUN_PLAN_CHECK_NAME,
@@ -556,6 +557,63 @@ test('embeds -R owner/repo in recovery-refresh plan commands when known', () => 
   );
 });
 
+// --- describeNoActionState (regression: #1434 review, Codex P2) ---------
+//
+// "No rerun-eligible instances; nothing to do" previously covered every
+// terminal state with no plan, including pending/unresolved/bot-gated-only
+// results that actually still need an operator action.
+
+test('describeNoActionState reports a clean "nothing to do" only when every instance passed', () => {
+  const plan = computeRerunPlan(
+    baseInput({ instances: [baseInstance({ conclusion: 'success' })] }),
+    baseOptions(),
+  );
+  assert.match(
+    describeNoActionState(plan),
+    /Every instance is pass-equivalent/,
+  );
+});
+
+test('describeNoActionState reports no instances found when the batch is empty', () => {
+  const plan = computeRerunPlan(baseInput({ instances: [] }), baseOptions());
+  assert.match(
+    describeNoActionState(plan),
+    /No ".*" check-run instances found/,
+  );
+});
+
+test('describeNoActionState surfaces pending, bot-gated, and unresolved counts instead of claiming nothing to do', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1',
+          status: 'in_progress',
+          conclusion: null,
+          completedAt: null,
+        }),
+        baseInstance({ checkRunId: '2', conclusion: 'action_required' }),
+        baseInstance({
+          checkRunId: '3',
+          conclusion: 'failure',
+          runId: null,
+          runEvent: null,
+          actorLogin: null,
+          actorType: null,
+          triggeringActorLogin: null,
+          triggeringActorType: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  const description = describeNoActionState(plan);
+  assert.match(description, /1 instance\(s\) are still running/);
+  assert.match(description, /1 instance\(s\) are bot-gated/);
+  assert.match(description, /1 instance\(s\) could not be resolved/);
+  assert.doesNotMatch(description, /^Every instance is pass-equivalent/);
+});
+
 // --- Empty case -----------------------------------------------------------
 
 test('reports zero counts and an empty plan when there are no check-run instances', () => {
@@ -779,38 +837,106 @@ test('parseArgs recognizes --help', () => {
   assert.equal(parseArgs(['-h']).help, true);
 });
 
+// parseArgs delegates mechanical parsing to node:util's own stable
+// `parseArgs` (a maintainer's review suggestion, adopted -- see the
+// function's doc comment). Its `strict: true` mode raises Node's own
+// stable `ERR_PARSE_ARGS_*` error codes for an unknown option or a
+// missing/ambiguous value; these tests assert on the stable `code`
+// rather than message text, which is Node's own to change.
 test('parseArgs rejects an unknown argument', () => {
-  assert.throws(() => parseArgs(['--bogus']), /unknown argument/);
+  assert.throws(() => parseArgs(['--bogus']), {
+    code: 'ERR_PARSE_ARGS_UNKNOWN_OPTION',
+  });
 });
 
-// Regression (#1434 review, Copilot): a value-taking flag with no
-// following token, or followed by another flag (a missing-value typo),
-// previously degraded into a confusing "unknown argument" error pointing
-// at the wrong token instead of the real problem.
+// Regression (#1434 review, Copilot + CodeRabbit): a value-taking flag
+// with no following token, or followed by another option -- long
+// (`--repo`) or short (`-h`) alike -- previously degraded into a
+// confusing "unknown argument" error (or, worse, silently accepted the
+// next flag as a value). node:util's parseArgs rejects all of these
+// forms natively.
 test('parseArgs fails fast when --owner is the last argument (missing value)', () => {
-  assert.throws(
-    () => parseArgs(['--pr', '1431', '--owner']),
-    /missing value for --owner/,
-  );
+  assert.throws(() => parseArgs(['--pr', '1431', '--owner']), {
+    code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE',
+  });
 });
 
-test('parseArgs fails fast when --owner is immediately followed by another flag', () => {
+test('parseArgs fails fast when --owner is immediately followed by another long flag', () => {
   assert.throws(
     () => parseArgs(['--pr', '1431', '--owner', '--repo', 'idd-skill']),
-    /missing value for --owner/,
+    { code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE' },
   );
+});
+
+test('parseArgs fails fast when --owner is immediately followed by the short help flag', () => {
+  assert.throws(() => parseArgs(['--owner', '-h']), {
+    code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE',
+  });
 });
 
 test('parseArgs fails fast when --repo has a missing value', () => {
-  assert.throws(() => parseArgs(['--repo']), /missing value for --repo/);
+  assert.throws(() => parseArgs(['--repo']), {
+    code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE',
+  });
 });
 
 test('parseArgs fails fast when --now has a missing value', () => {
-  assert.throws(() => parseArgs(['--now']), /missing value for --now/);
+  assert.throws(() => parseArgs(['--now']), {
+    code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE',
+  });
 });
 
 test('parseArgs fails fast when --pr has a missing value', () => {
-  assert.throws(() => parseArgs(['--pr']), /missing value for --pr/);
+  assert.throws(() => parseArgs(['--pr']), {
+    code: 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE',
+  });
+});
+
+// Regression (#1434 review, Copilot): --owner/--repo/--now values were
+// not trimmed, so accidental whitespace could break API path
+// construction downstream.
+test('parseArgs trims --owner, --repo, and --now values', () => {
+  const args = parseArgs([
+    '--owner',
+    '  kurone-kito  ',
+    '--repo',
+    '  idd-skill  ',
+    '--now',
+    '  2026-07-17T00:00:00Z  ',
+  ]);
+  assert.equal(args.owner, 'kurone-kito');
+  assert.equal(args.repo, 'idd-skill');
+  assert.equal(args.now, '2026-07-17T00:00:00Z');
+});
+
+// Regression (#1434 review, Copilot): passing only one of --owner/--repo
+// let `collectFromGitHub` mix a user-supplied value with a
+// `gh repo view`-derived value, constructing a mismatched, unintended
+// repository.
+test('parseArgs rejects --owner without --repo', () => {
+  assert.throws(
+    () => parseArgs(['--owner', 'kurone-kito']),
+    /provide both --owner and --repo, or neither/,
+  );
+});
+
+test('parseArgs rejects --repo without --owner', () => {
+  assert.throws(
+    () => parseArgs(['--repo', 'idd-skill']),
+    /provide both --owner and --repo, or neither/,
+  );
+});
+
+test('parseArgs accepts neither --owner nor --repo', () => {
+  const args = parseArgs(['--pr', '1431']);
+  assert.equal(args.owner, '');
+  assert.equal(args.repo, '');
+});
+
+test('parseArgs accepts both --owner and --repo together', () => {
+  const args = parseArgs(['--owner', 'kurone-kito', '--repo', 'idd-skill']);
+  assert.equal(args.owner, 'kurone-kito');
+  assert.equal(args.repo, 'idd-skill');
 });
 
 // --- runRerunAdvisoryConvergence (DI) -----------------------------------
