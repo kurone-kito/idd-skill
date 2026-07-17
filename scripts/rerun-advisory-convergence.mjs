@@ -652,6 +652,15 @@ export function parseRunIdFromUrl(url) {
   const match = /\/actions\/runs\/(\d+)(?:[/?]|$)/.exec(String(url ?? ''));
   return match ? match[1] : null;
 }
+/** A conservative GitHub owner/repo identifier character class --
+ * alphanumeric, hyphen, underscore, period. Not GitHub's own exact
+ * validation rule (real usernames additionally forbid a leading/trailing
+ * hyphen and consecutive hyphens); this is a defensive CLI-input guard,
+ * not the authoritative source of what GitHub itself allows, so erring
+ * slightly permissive-of-valid-names is fine -- the goal is rejecting
+ * whitespace and shell metacharacters, not exactly replicating GitHub's
+ * own registration rules. */
+const GITHUB_IDENTIFIER_PATTERN = /^[A-Za-z0-9_.-]+$/;
 /**
  * Rewrite a `--pr VALUE` pair into the single token `--pr=VALUE` whenever
  * `VALUE` starts with a single dash (not `--`) -- `node:util`'s own
@@ -734,6 +743,23 @@ export function parseArgs(argv) {
   // (#1434 review, Copilot).
   if (Boolean(owner) !== Boolean(repo)) {
     throw new Error('provide both --owner and --repo, or neither');
+  }
+  // A conservative GitHub-identifier character class, rejected otherwise:
+  // --owner/--repo are only trimmed above, never validated, so whitespace
+  // or a shell metacharacter would still build a syntactically-valid
+  // `-R owner/repo` string here, but the generated `gh run rerun <id> -R
+  // owner/repo` recovery commands are meant to be copy-pasted directly
+  // by an operator -- an unvalidated value could make that copy-paste
+  // unsafe (Copilot review, #1434).
+  if (owner && !GITHUB_IDENTIFIER_PATTERN.test(owner)) {
+    throw new Error(
+      '--owner must contain only letters, digits, hyphens, underscores, or periods',
+    );
+  }
+  if (repo && !GITHUB_IDENTIFIER_PATTERN.test(repo)) {
+    throw new Error(
+      '--repo must contain only letters, digits, hyphens, underscores, or periods',
+    );
   }
   // Number.parseInt parses only a leading numeric prefix ("1431abc" ->
   // 1431), which would silently run this recovery helper -- and whatever

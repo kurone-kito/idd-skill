@@ -1425,6 +1425,39 @@ test('parseArgs accepts both --owner and --repo together', () => {
   assert.equal(args.repo, 'idd-skill');
 });
 
+// Regression (Copilot review, #1434): --owner/--repo were only trimmed
+// and presence-checked, never validated -- a value containing whitespace
+// or a shell metacharacter would still build a syntactically-valid
+// -R owner/repo string, but the generated `gh run rerun <id> -R
+// owner/repo` recovery commands are meant to be copy-pasted directly by
+// an operator, so an unvalidated value could make that copy-paste unsafe.
+
+test('parseArgs rejects an --owner value containing whitespace', () => {
+  assert.throws(
+    () => parseArgs(['--owner', 'owner name', '--repo', 'idd-skill']),
+    /--owner must contain only letters, digits, hyphens, underscores, or periods/,
+  );
+});
+
+test('parseArgs rejects a --repo value containing a shell metacharacter', () => {
+  assert.throws(
+    () =>
+      parseArgs(['--owner', 'kurone-kito', '--repo', 'idd-skill; rm -rf /']),
+    /--repo must contain only letters, digits, hyphens, underscores, or periods/,
+  );
+});
+
+test('parseArgs still accepts ordinary GitHub owner/repo identifiers with dots and underscores', () => {
+  const args = parseArgs([
+    '--owner',
+    'my_org.name',
+    '--repo',
+    'my-repo_name.js',
+  ]);
+  assert.equal(args.owner, 'my_org.name');
+  assert.equal(args.repo, 'my-repo_name.js');
+});
+
 // --- runRerunAdvisoryConvergence (DI) -----------------------------------
 
 test('runRerunAdvisoryConvergence returns help without calling collect', () => {
