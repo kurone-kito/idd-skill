@@ -337,6 +337,7 @@ export const iddRoadmapAuditExecuteKeys = [
   'closed',
   'claimReleased',
   'result',
+  'viewerLoginUnavailable',
 ] as const satisfies readonly (keyof IddRoadmapAuditExecuteVerdict)[];
 
 export const forcedHandoffMarkerKeys = [
