@@ -6,7 +6,6 @@
 // .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { resolveHelperActiveClaim } from './forced-handoff-marker.mjs';
 import { ghText, safeGhText } from './gh-exec.mjs';
@@ -19,6 +18,7 @@ import {
   parsePaginatedGhNdjson,
   renderExternalCheckWaiverComment,
 } from './protocol-helpers.mjs';
+import { makeReadlinePrompt } from './readline-prompt.mjs';
 
 const APPROVAL_ACTOR_POLICIES = new Set([
   'owners-and-maintainers-only',
@@ -807,15 +807,6 @@ function renderTextReport(report) {
     report.body || '<none>',
     '',
   ].join('\n');
-}
-function makeReadlinePrompt() {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (question) =>
-    new Promise((resolve) =>
-      rl.question(question, (answer) => resolve(answer)),
-    );
-  ask.close = () => rl.close();
-  return ask;
 }
 function parseArgs(argv) {
   const parsed = {
