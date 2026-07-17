@@ -470,9 +470,12 @@ list (a blank line between sibling items) preserves the same ancestor
 scope across the blank line, as long as the following item's own marker
 is no deeper than whatever is still open at the end of the preceding
 item -- a same-depth sibling, or a resumption at a shallower ancestor's
-own level; a blank line directly followed by a more deeply indented
-marker is not bridged, to avoid grafting an unrelated item onto an open
-ancestor as a false child. A
+own level -- and the preceding item ends in a list marker rather than
+trailing plain prose (once plain prose follows the last marker, the
+list reads as already having ended, so the blank line is not bridged).
+A blank line directly followed by a more deeply indented marker is also
+not bridged, to avoid grafting an unrelated item onto an open ancestor
+as a false child. A
 `prose-dependency` warning never flips `passed` to
 `false` and never changes the linter's exit code; it prompts the author
 to convert the prose into a proper dependency marker or consciously

@@ -734,23 +734,45 @@ function isSingleBlankLine(separator) {
   return (separator.match(/\n/g)?.length ?? 0) === 2;
 }
 // Once any list-item marker line appears in a blank-line-free run of
-// text, only a *later* marker line can close its node (a continuation
-// line never does -- see splitIntoListItemBlocks). So the *last* marker
-// line anywhere in such a run is necessarily still open at the run's
-// end, and that marker's own indentation is an exact, cheap proxy for
-// "the indentation of whatever node is still open right before the
-// blank line" -- without re-running the full ancestry-stack simulation
-// just to find out. Returns undefined when `text` has no marker line at
-// all.
+// text, only a *later* marker line can close its node in
+// splitIntoListItemBlocks's own stack bookkeeping (a continuation line
+// never does). So, structurally, the *last* marker line anywhere in such
+// a run is necessarily still open at the run's end, and that marker's
+// own indentation is a cheap proxy for "the indentation of whatever node
+// is still open right before the blank line" -- without re-running the
+// full ancestry-stack simulation just to find out.
+//
+// That structural fact is not the same as the list still being open in
+// the Markdown a human reader sees, though (found on this PR's own
+// review, Codex): a marker followed by unindented plain prose --
+// `- Before merging\n  - child\nIndependent prose` -- reads as the list
+// having ended before the blank line, even though the algorithm's stack
+// still shows a node open (the trailing prose is a continuation line
+// attached via the ancestry walk, not a marker, so nothing closes it).
+// Bridging across the blank line in that shape would scope "Before"
+// onto a reference in the next chunk that the source never associated
+// with it. Rather than trying to re-derive CommonMark's real
+// list-termination rule, require the last marker line to *be* the run's
+// last line -- any trailing continuation line makes "is this list still
+// open" ambiguous enough that refusing to bridge (a missed advisory,
+// not a false one) is the safer default, matching the same
+// prefer-a-miss-over-a-false-positive stance the indentation guard below
+// already takes for a too-deep right-hand marker.
+//
+// Returns undefined when `text` has no marker line at all, or when a
+// continuation line follows the last marker line.
 function lastListItemMarkerIndent(text) {
-  let last;
-  for (const line of text.split('\n')) {
-    const marker = LIST_ITEM_MARKER_PATTERN.exec(line);
+  const lines = text.split('\n');
+  let lastMarkerIndex = -1;
+  let lastMarkerIndent;
+  for (let index = 0; index < lines.length; index += 1) {
+    const marker = LIST_ITEM_MARKER_PATTERN.exec(lines[index]);
     if (marker !== null) {
-      last = indentColumnWidth(marker[1]);
+      lastMarkerIndex = index;
+      lastMarkerIndent = indentColumnWidth(marker[1]);
     }
   }
-  return last;
+  return lastMarkerIndex === lines.length - 1 ? lastMarkerIndent : undefined;
 }
 // Two adjacent blank-line-delimited chunks bridge into one loose-list
 // paragraph only when the right chunk's first marker is no deeper than

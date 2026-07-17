@@ -1691,6 +1691,37 @@ test('prose-dependency bridges a loose-list blank line to a shallower open ances
   assert.match(finding?.detail ?? '', /#1391/);
 });
 
+test('prose-dependency does not bridge a loose-list blank line when the left chunk ends in plain prose, not a marker', () => {
+  // Regression test for a Codex review finding on this PR: `- Before
+  // merging\n  - child\nIndependent prose` reads, under CommonMark, as
+  // the nested list having ended before the blank line -- "Independent
+  // prose" is unindented plain text, not a continuation of "child".
+  // lastListItemMarkerIndent previously found "child" as the left
+  // chunk's last MARKER line and used its indentation as "whatever is
+  // still open", ignoring that a later continuation line (attached via
+  // the ancestry walk, since nothing but a marker line closes a node)
+  // followed it. That let the bridge fire and incorrectly scope
+  // "Before" onto the next chunk's "#1391" -- a reference the source
+  // never associated with it. A trailing continuation line after the
+  // left chunk's last marker now blocks the bridge entirely, matching
+  // the pre-#1476 behavior for this shape (paragraph splitting already
+  // kept the two references apart).
+  const body = childBody({
+    extraMarkers:
+      '- Before merging\n' +
+      '  - child\n' +
+      'Independent prose\n' +
+      '\n' +
+      '  - PR #1391',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
 // --- prose-dependency: empty-string currentRepo (#1472) ---
 
 test('prose-dependency treats an empty-string currentRepo as unknown', () => {
