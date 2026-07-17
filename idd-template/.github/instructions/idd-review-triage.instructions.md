@@ -325,10 +325,10 @@ ack / error, as defined in E4):
   trusted same-HEAD `advisory-wait` marker as Copilot evidence, so doing
   so could wrongly satisfy the Copilot advisory gate and consume its
   request cap. (The **Zero-Accepted-PATH-A advisory re-review gate**
-  below is a narrow, sanctioned exception to this rule: it never
-  triggers on a notice alone — only on a completed-review disposition —
-  and still defers the actual request decision to this same AW1-AW3
-  protocol.)
+  below is a narrow, sanctioned exception to the notice-upgrade rule
+  above: it never triggers on a notice alone — only on a
+  completed-review disposition — and still defers the actual request
+  decision to this same AW1-AW3 protocol.)
 - **Fail-closed honesty**: never cite a non-review notice as evidence
   that the advisory reviewer reviewed the current HEAD — not in the
   disposition reply, the `Authoritative by` line, or the PR live status
@@ -483,8 +483,13 @@ Accepted PATH A count was zero **and** at least one PATH B item
 received a _completed-review_ disposition (`**Accepted**` or
 `**Rejected**` on a real advisory review of the current HEAD — never a
 non-review-notice-only rejection; see the E6 non-review-notice rule).
-Otherwise this gate is a no-op, including when zero PATH B items were
-ever dispositioned (E3's empty-list case never reaches it).
+Otherwise this gate is a no-op — including a **true-virgin** empty
+snapshot (zero PATH B items ever dispositioned this episode). This
+differs from a **later-pass** empty snapshot reached only after a
+prior non-empty pass already dispositioned PATH B items (e.g. after a
+sync loop-back): the lookback above still finds that prior pass and
+still fires the gate then, even though the pass landing on this
+branch-sync check is itself empty.
 
 Without this gate, E8's zero-count path skips
 `idd-review-fix.instructions.md` (and E14, the only step that requests
@@ -505,9 +510,12 @@ Human reviewers step or its optional secondary-bot step 5. Substitute
 watermark-refresh clause, then F1)" for each of E14's four literal
 "proceed to E15" exits: step 2's `SATISFIED` short-circuit, step 4's
 AW3 `SATISFIED` row, step 4's `CAP_EXHAUSTED` phase-specific default,
-and the active polling loop's `SATISFIED` exit. Leave every "return to
-E1" exit in that procedure unchanged — follow it instead of resuming
-here.
+and the active polling loop's `SATISFIED` exit. Leave every other exit
+unchanged — both "return to E1" and every "post the hold comment …
+and stop" exit (AW3 `HOLD`, `CAP_EXHAUSTED`'s `hold` route, the
+pending-refresh-failed hold, the polling loop's `HOLD` row) halt this
+session exactly as in a normal E9-E15 pass; never redirect a hold to
+branch-sync or F1.
 
 E14's own AW1 check (its step 2, run fresh against this HEAD) already
 makes this gate inert whenever the bot has already reviewed current
