@@ -242,7 +242,7 @@ this turn); otherwise wait synchronously. Delegate polling mechanics to
   its own verdict — a JSON object printed in that check's run log, whose
   `pending` field is distinct from any GitHub check-run status —
   reports `pending: false` with outstanding review reasons** (thread
-  disposition, actionable review-item count on the latest review, or
+  disposition, actionable item count on the latest review, or
   both; see `idd-ci.instructions.md` §Interpretation for this shared
   trigger condition) → this is not a CI-wait state: the
   check turns green only after E-phase disposition, which is downstream
