@@ -526,9 +526,9 @@ Route based on `branchState` from the helper (or `mergeable` /
 ## Zero-Accepted-PATH-A advisory re-review gate
 
 Applies only from the E-phase branch-sync check's no-sync-required
-`clean` / `behind-no-conflict` exit above, and only when, since
-`ReviewItems_snapshot` was last non-empty in this E-phase episode, the
-Accepted PATH A count was zero **and** at least one PATH B item
+`clean` / `behind-no-conflict` exit above, and only when, in the pass
+where `ReviewItems_snapshot` was last non-empty this E-phase episode,
+the Accepted PATH A count was zero **and** at least one PATH B item
 received a _completed-review_ disposition (`**Accepted**` or
 `**Rejected**` on a review of that pass's HEAD, never a
 notice-only rejection; see the E6 non-review-notice rule).
