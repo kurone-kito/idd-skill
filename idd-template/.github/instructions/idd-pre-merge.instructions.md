@@ -150,9 +150,11 @@ returns the workflow to E1 instead of merging over it.
   re-covers them so this check passes on the refreshed watermark. If a
   return-to-E1 is triggered solely by those disposition replies, refresh
   the watermark rather than treating them as new reviewer activity.
-- **Advisory bot wait** (restart-safe enforcement): `PR_HEAD_SHA` is
-  already available from the review-currency check above. Apply the
-  advisory-wait protocol (`idd-advisory-wait.instructions.md`):
+- **Advisory bot wait** (restart-safe enforcement): schedule a wake, or
+  background only if the topology-safety condition holds (confirmed to
+  route completion back to this turn); otherwise wait synchronously.
+  `PR_HEAD_SHA` is already available from the review-currency check above.
+  Apply the advisory-wait protocol (`idd-advisory-wait.instructions.md`):
 
   1. Run **AW1**. If **SATISFIED** → this check is **satisfied**;
      continue to the **CI** check.
