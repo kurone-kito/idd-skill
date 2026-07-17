@@ -1285,6 +1285,31 @@ test('prose-dependency does not warn on a reference-style Markdown link when the
   assert.equal(finding.severity, undefined);
 });
 
+test('prose-dependency resolves a reference-style link whose definition uses an angle-bracket destination', () => {
+  // Regression test for a real review finding on this same PR (Copilot):
+  // CommonMark (section 6.6) allows a reference definition's destination
+  // to be wrapped in angle brackets (`[ref]: <https://...>`). Without
+  // stripping the brackets before rewriting, the usage would become
+  // `[text](<https://...>)`, which the Markdown-link alternative does not
+  // recognize, silently leaving the reference-style link unresolved and
+  // re-leaking the label's bare `#N` -- the same failure mode this item
+  // exists to prevent, just for this one destination-encoding shape.
+  const body = childBody({
+    extraMarkers:
+      'Before starting, [PR #1391][upstream] must land.\n\n' +
+      '[upstream]: <https://github.com/acme/other-repo/pull/1391>',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
 test('prose-dependency does not resolve a reference-style link whose ref has no matching definition', () => {
   // A dangling ref (no matching `[ref]: target` definition anywhere in
   // the body) is left as literal text -- it falls through to the bare-`#`

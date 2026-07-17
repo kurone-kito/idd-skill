@@ -670,6 +670,21 @@ function checkProseOnlyDependency(text, currentRepo) {
 function normalizeLinkReferenceLabel(label) {
   return label.trim().toLowerCase().replace(/\s+/g, ' ');
 }
+// CommonMark §6.6 allows a reference definition's destination to be
+// wrapped in angle brackets (`[ref]: <https://...>`), captured verbatim
+// (brackets included) by LINK_REFERENCE_DEFINITION_PATTERN's `\S+`.
+// Without unwrapping, resolveReferenceStyleLinks would rewrite a usage to
+// `[text](<https://...>)`, which ISSUE_OR_PR_REFERENCE_PATTERN's
+// Markdown-link alternative does not recognize (it expects the URL
+// immediately after the opening paren, no angle brackets) — silently
+// leaving the reference-style link unresolved and re-leaking the label's
+// bare `#N` to the bare-`#` alternative, the same failure mode item 1
+// exists to prevent.
+function unwrapAngleBracketDestination(target) {
+  return target.startsWith('<') && target.endsWith('>')
+    ? target.slice(1, -1)
+    : target;
+}
 /**
  * Resolves every `[text][ref]` reference-style link usage in `text`
  * against its `[ref]: target` definition — which may appear anywhere else
@@ -686,7 +701,7 @@ function resolveReferenceStyleLinks(text) {
   for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_PATTERN)) {
     const key = normalizeLinkReferenceLabel(match[1]);
     if (!definitions.has(key)) {
-      definitions.set(key, match[2]);
+      definitions.set(key, unwrapAngleBracketDestination(match[2]));
     }
   }
   if (definitions.size === 0) {
