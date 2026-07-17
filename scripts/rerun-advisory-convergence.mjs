@@ -795,14 +795,16 @@ export function resolveCheckRunUrl(run) {
 }
 function fetchCheckRunsForRef(owner, repo, ref, checkName) {
   // GH_TEXT_LOOP_TIMEOUT_OPTIONS (stdin ignored, 30s timeout) here too --
-  // sibling gap to the per-run lookup loop's own fix above: this is the
-  // FIRST `gh` call this helper makes, and `--paginate` can mean several
-  // HTTP round-trips within the one `execFileSync` invocation on a busy
-  // PR's check-run history, so a stalled or unexpectedly-interactive `gh`
-  // (rate limiting, network stall, an auth re-prompt) here would hang this
-  // read-only helper before it ever reaches the fail-closed classification
-  // logic below, let alone the per-run loop's own timeout (#1434 review,
-  // Copilot).
+  // sibling gap to the per-run lookup loop's own fix above. Not the FIRST
+  // `gh` call this helper makes overall (collectFromGitHub's own
+  // `repo view` / `pr view` calls run before this one) but the first
+  // potentially long-running one: `--paginate` can mean several HTTP
+  // round-trips within the one `execFileSync` invocation on a busy PR's
+  // check-run history, so a stalled or unexpectedly-interactive `gh`
+  // (rate limiting, network stall, an auth re-prompt) here would hang
+  // this read-only helper before it ever reaches the fail-closed
+  // classification logic below, let alone the per-run loop's own timeout
+  // (#1434 review, Copilot).
   const raw = ghText(
     buildCheckRunsForRefArgs(owner, repo, ref, checkName),
     GH_TEXT_LOOP_TIMEOUT_OPTIONS,
@@ -920,23 +922,39 @@ function collectFromGitHub(args) {
   // which stopped being true once config resolution moved off local disk
   // entirely).
   const isCrossRepo = Boolean(args.owner) && Boolean(args.repo);
+  // GH_TEXT_LOOP_TIMEOUT_OPTIONS on every `gh` call in this function,
+  // including these first three (owner/repo/PR-head resolution) -- same
+  // hang hazard as fetchCheckRunsForRef and the per-run lookup loop below:
+  // a stalled or unexpectedly-interactive `gh` here would hang this
+  // read-only helper before it resolves even the basic identity of what
+  // it is diagnosing (#1434 review, Copilot).
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
   const repoRef = `${owner}/${repo}`;
-  const prHeadSha = ghText([
-    'pr',
-    'view',
-    String(args.prNumber),
-    '-R',
-    repoRef,
-    '--json',
-    'headRefOid',
-    '--jq',
-    '.headRefOid',
-  ]).toLowerCase();
+  const prHeadSha = ghText(
+    [
+      'pr',
+      'view',
+      String(args.prNumber),
+      '-R',
+      repoRef,
+      '--json',
+      'headRefOid',
+      '--jq',
+      '.headRefOid',
+    ],
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ).toLowerCase();
   const rawCheckRuns = fetchCheckRunsForRef(
     owner,
     repo,
