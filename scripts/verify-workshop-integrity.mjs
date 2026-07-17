@@ -638,13 +638,23 @@ export function computeExitCode(report) {
  *    explicitly — verified byte-identical to the pre-change order for
  *    the real `docs/workshop` tree.
  *
- * Two further deltas were checked and found inert for the current tree
- * (zero occurrences anywhere under `docs/workshop`), so they are recorded
- * here rather than worked around: a symlinked `.md` **file** sitting
- * directly in the tree is included by `globSync` even with the default
- * `followSymlinks: false` (both old and new agree on not traversing
- * *into* a symlinked directory), and `**` does not descend into
- * dot-prefixed files or directories by default.
+ * Two further points, checked and confirmed non-issues, are recorded here
+ * for completeness rather than worked around: a symlinked `.md` **file**
+ * sitting directly in the tree is excluded by both the old and the new
+ * walk — `Dirent#isFile()` is `lstat`-based (checks the entry itself, not
+ * its resolved target) for `globSync`'s `Dirent`s exactly as it was for
+ * `readdirSync`'s, so `entry.isFile()` is `false` for a symlink either
+ * way, and neither walk traverses *into* a symlinked directory (`**`
+ * default `followSymlinks: false`); and `**` does not descend into
+ * dot-prefixed files or directories by default. Both are moot for the
+ * current tree (zero symlinks or dot-prefixed entries exist anywhere
+ * under `docs/workshop`).
+ *
+ * One more delta favors the new code: `globSync` on a nonexistent `dir`
+ * silently returns no matches, where `readdirSync` would throw `ENOENT`.
+ * Unreachable today — `runVerification`'s sole call site already guards
+ * with `existsSync(abs) && statSync(abs).isDirectory()` before calling
+ * this function — recorded for whoever removes that guard later.
  */
 function collectMarkdown(dir, out) {
   const matches = globSync('**/*.[mM][dD]', { cwd: dir, withFileTypes: true })
