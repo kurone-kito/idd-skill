@@ -51,6 +51,12 @@
 //   - `normalizeCiWaitPolicy` -- the same ciWait.rerunPolicy resolution
 //     `idd-ci.instructions.md` §Rerun mechanics makes this helper's own
 //     recovery recommendations subject to.
+//   - `resolveCiRerunDecision` -- the same rerun-once-budget decision
+//     (policy string AND per-run rerun-attempt count) CI-wait itself
+//     applies, reused per instance here (via each instance's own
+//     `runAttempt`) rather than re-derived, so this helper can never
+//     recommend a rerun CI-wait's own budget would already refuse
+//     (ci-wait-policy.mts).
 //   - `deriveGhHttpStatus` -- discriminates a confirmed 404 (genuinely no
 //     remote config) from any other unreadable state, so a cross-repo
 //     config fetch fails closed instead of guessing (gh-http-status.mts).
@@ -74,7 +80,10 @@ import {
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   resolveAdvisoryPrimaryBotLogin,
 } from './advisory-wait-policy.mts';
-import { normalizeCiWaitPolicy } from './ci-wait-policy.mts';
+import {
+  normalizeCiWaitPolicy,
+  resolveCiRerunDecision,
+} from './ci-wait-policy.mts';
 import { ghApiJson, ghText, isCliExecution } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { type IddConfig, loadIddConfig } from './idd-config.mts';
@@ -163,6 +172,14 @@ export interface RerunPlanRawInstance {
   actorType: string | null;
   triggeringActorLogin: string | null;
   triggeringActorType: string | null;
+  /** The workflow run's `run_attempt` (1 for the original run; 2, 3, ...
+   * after a rerun -- `gh run rerun <id>` increments this on the SAME
+   * `runId` rather than minting a new one). `null` when unresolved (same
+   * conditions as `runEvent`). Used to derive how many reruns have
+   * already happened for this run, so the resolved `ciWait.rerunPolicy`'s
+   * rerun-once budget (not just its policy string) can be honored per
+   * instance. */
+  runAttempt: number | null;
 }
 
 /** {@link RerunPlanRawInstance} plus the assigned classification and a
@@ -170,6 +187,30 @@ export interface RerunPlanRawInstance {
 export interface RerunPlanClassifiedInstance extends RerunPlanRawInstance {
   classification: RerunPlanClassification;
   reason: string;
+}
+
+/**
+ * {@link RerunPlanClassifiedInstance} plus the resolved rerun-budget
+ * verdict. A distinct type (rather than a field on
+ * {@link RerunPlanClassifiedInstance} itself) because the verdict cannot be
+ * known per-instance in isolation: it depends on the fully classified set
+ * (recovery-refresh candidacy needs to know whether ANY instance is
+ * `bot-gated-skip`) and on whether `plan` already has entries from other
+ * instances. This is what {@link RerunAdvisoryConvergencePlan.instances}
+ * actually reports.
+ */
+export interface RerunPlanFinalizedInstance
+  extends RerunPlanClassifiedInstance {
+  /** `true` when this instance was excluded from `plan` (or
+   * `recoveryRefreshPlan`) specifically because its own `runAttempt`
+   * already exhausted the resolved `ciWait.rerunPolicy`'s rerun-once
+   * budget ({@link resolveCiRerunDecision}, ci-wait-policy.mts) -- as
+   * opposed to being excluded for any other reason (a non-rerun-target
+   * classification, or a `"hold"` policy withholding everything). Lets a
+   * caller see WHY an otherwise `rerun-eligible` (or recovery-refresh
+   * candidate) instance is absent from its plan without re-deriving the
+   * budget decision itself. Always `false` for every other instance. */
+  rerunBudgetHeld: boolean;
 }
 
 /** One entry in the ordered, deduplicated-by-run-id rerun plan. */
@@ -192,13 +233,21 @@ export interface RerunAdvisoryConvergencePlan {
   prHeadSha: string;
   checkName: string;
   now: string;
-  instances: RerunPlanClassifiedInstance[];
+  instances: RerunPlanFinalizedInstance[];
   counts: {
     pass: number;
     pending: number;
     botGatedSkip: number;
     unresolved: number;
     rerunEligible: number;
+    /** How many instances (across `rerun-eligible` classifications and
+     * recovery-refresh candidates alike) were excluded from their
+     * respective plan specifically due to rerun-budget exhaustion --
+     * already counted within `rerunEligible` (or within `pass`, for a
+     * refresh candidate); this is the quick-scan aggregate of the same
+     * signal as each instance's own
+     * {@link RerunPlanFinalizedInstance.rerunBudgetHeld} flag. */
+    rerunBudgetHeld: number;
     total: number;
   };
   plan: RerunPlanCommand[];
@@ -232,10 +281,15 @@ export interface RerunAdvisoryConvergencePlan {
    * explicitly opted out of via a `"hold"` policy (#1434 review, Codex
    * P1). */
   rerunPolicy: string;
-  /** Non-empty only when `rerunPolicy` is `"hold"` and at least one
-   * instance would otherwise have populated `plan` or
-   * `recoveryRefreshPlan` -- explains why those arrays are empty despite
-   * eligible instances existing, instead of silently omitting the
+  /** Non-empty whenever at least one instance that would otherwise have
+   * been included was withheld from `plan` or `recoveryRefreshPlan`, for
+   * either of two distinct reasons: the resolved `ciWait.rerunPolicy` is `"hold"`
+   * (withholds every instance), or the policy is `"rerun-once"` and an
+   * instance's own `runAttempt` already exhausted its one-rerun budget
+   * (withholds only that instance -- see
+   * {@link RerunPlanFinalizedInstance.rerunBudgetHeld} for the
+   * per-instance signal). Explains why an array is empty, or smaller than
+   * `counts.rerunEligible` would suggest, instead of silently omitting
    * commands with no explanation. */
   rerunPolicyHoldNotice: string;
 }
@@ -309,12 +363,110 @@ export function computeRerunPlan(
     classifyInstance(instance, classifyOptions),
   );
 
+  // idd-ci.instructions.md §Rerun mechanics makes the advisory-convergence
+  // recovery explicitly subject to the resolved ciWait.rerunPolicy: a
+  // `"hold"` policy means a repository has deliberately opted out of
+  // automatic reruns (withholds every instance), and even under the
+  // default `"rerun-once"` policy, an instance whose own `runAttempt`
+  // shows a rerun already happened has already used its one-rerun budget
+  // (withholds only that instance). Both flow through the SAME
+  // {@link resolveCiRerunDecision} (ci-wait-policy.mts) CI-wait itself
+  // applies, reused per instance here rather than re-derived, so this
+  // helper's recovery recommendations can never drift out of sync with
+  // the budget CI-wait already enforces. `runAttempt` counts every rerun
+  // of the underlying workflow run regardless of trigger (a manual UI
+  // rerun, another session's `gh run rerun`, or this helper's own
+  // previously-followed plan) -- treating any prior attempt as already
+  // having consumed the budget is intentional: a rollup still stuck after
+  // one rerun warrants a human look, not another automated rerun (#1434
+  // review, Codex P1).
+  const rerunPolicy =
+    String(options.rerunPolicy ?? '').trim() === 'hold' ? 'hold' : 'rerun-once';
+
+  const eligibleInstances = instances.filter(
+    (instance) => instance.classification === 'rerun-eligible',
+  );
+  const eligibleDecisions = new Map(
+    eligibleInstances.map(
+      (instance) =>
+        [
+          instance.checkRunId,
+          resolveInstanceRerunDecision(instance, rerunPolicy),
+        ] as const,
+    ),
+  );
+  const plan = buildOrderedPlan(
+    eligibleInstances.filter(
+      (instance) =>
+        eligibleDecisions.get(instance.checkRunId)?.action === 'rerun',
+    ),
+    owner,
+    repo,
+  );
+
+  const recoveryRefreshCandidates = selectRecoveryRefreshCandidates(
+    instances,
+    classifyOptions,
+  );
+  // Only evaluated (and only meaningful) when `plan` is empty, mirroring
+  // recoveryRefreshPlan's own gating below: a genuine rerun-eligible
+  // instance already triggers the same non-bot refresh, so a refresh
+  // candidate's own budget is irrelevant on top of it.
+  const refreshDecisions =
+    plan.length === 0
+      ? new Map(
+          recoveryRefreshCandidates.map(
+            (instance) =>
+              [
+                instance.checkRunId,
+                resolveInstanceRerunDecision(instance, rerunPolicy),
+              ] as const,
+          ),
+        )
+      : new Map<string, ReturnType<typeof resolveCiRerunDecision>>();
+  const recoveryRefreshPlan =
+    plan.length === 0
+      ? buildOrderedPlan(
+          recoveryRefreshCandidates.filter(
+            (instance) =>
+              refreshDecisions.get(instance.checkRunId)?.action === 'rerun',
+          ),
+          owner,
+          repo,
+        )
+      : [];
+
+  const heldEligibleCount = [...eligibleDecisions.values()].filter(
+    (decision) => decision.action === 'hold',
+  ).length;
+  const heldRefreshCount = [...refreshDecisions.values()].filter(
+    (decision) => decision.action === 'hold',
+  ).length;
+  const totalHeldCount = heldEligibleCount + heldRefreshCount;
+  const rerunPolicyHoldNotice =
+    totalHeldCount === 0
+      ? ''
+      : rerunPolicy === 'hold'
+        ? `ciWait.rerunPolicy is "hold": ${describeHeldCounts(heldEligibleCount, heldRefreshCount)} found, but auto-rerun is disallowed by this repository's policy -- a maintainer must manually decide (see idd-ci.instructions.md §Rerun mechanics).`
+        : `ciWait.rerunPolicy is "rerun-once" and the one-rerun budget is already used (run_attempt > 1): ${describeHeldCounts(heldEligibleCount, heldRefreshCount)} withheld from the plan -- a maintainer must manually decide (see idd-ci.instructions.md §Rerun mechanics).`;
+
+  const budgetHeldCheckRunIds = new Set(
+    [...eligibleDecisions.entries(), ...refreshDecisions.entries()]
+      .filter(([, decision]) => decision.reason === 'rerun-budget-exhausted')
+      .map(([checkRunId]) => checkRunId),
+  );
+  const finalInstances = instances.map((instance) => ({
+    ...instance,
+    rerunBudgetHeld: budgetHeldCheckRunIds.has(instance.checkRunId),
+  }));
+
   const counts = {
     pass: 0,
     pending: 0,
     botGatedSkip: 0,
     unresolved: 0,
     rerunEligible: 0,
+    rerunBudgetHeld: budgetHeldCheckRunIds.size,
     total: instances.length,
   };
   for (const instance of instances) {
@@ -326,53 +478,13 @@ export function computeRerunPlan(
     else counts.rerunEligible += 1;
   }
 
-  // idd-ci.instructions.md §Rerun mechanics makes the advisory-convergence
-  // recovery explicitly subject to the resolved ciWait.rerunPolicy ("a
-  // `hold` policy inspects instead"): a `hold` policy means a repository
-  // has deliberately opted out of automatic reruns, so this helper must
-  // not still hand an operator ready-to-run `gh run rerun` commands for
-  // either the normal plan or the recovery-refresh plan -- both are
-  // fundamentally "rerun an existing run" actions (#1434 review, Codex
-  // P1).
-  const rerunPolicy =
-    String(options.rerunPolicy ?? '').trim() === 'hold' ? 'hold' : 'rerun-once';
-  const holdPolicyActive = rerunPolicy === 'hold';
-
-  const eligibleInstances = instances.filter(
-    (instance) => instance.classification === 'rerun-eligible',
-  );
-  const plan = holdPolicyActive
-    ? []
-    : buildOrderedPlan(eligibleInstances, owner, repo);
-  const recoveryRefreshCandidates = selectRecoveryRefreshCandidates(
-    instances,
-    classifyOptions,
-  );
-  const recoveryRefreshPlan =
-    !holdPolicyActive && plan.length === 0
-      ? buildOrderedPlan(recoveryRefreshCandidates, owner, repo)
-      : [];
-
-  const suppressedCount =
-    holdPolicyActive && plan.length === 0 && recoveryRefreshPlan.length === 0
-      ? eligibleInstances.length
-      : 0;
-  const suppressedRefreshCount =
-    holdPolicyActive && recoveryRefreshPlan.length === 0
-      ? recoveryRefreshCandidates.length
-      : 0;
-  const rerunPolicyHoldNotice =
-    holdPolicyActive && (suppressedCount > 0 || suppressedRefreshCount > 0)
-      ? `ciWait.rerunPolicy is "hold": ${suppressedCount} rerun-eligible instance(s)${suppressedRefreshCount > 0 ? ` and ${suppressedRefreshCount} recovery-refresh candidate(s)` : ''} found, but auto-rerun is disallowed by this repository's policy -- a maintainer must manually decide (see idd-ci.instructions.md §Rerun mechanics).`
-      : '';
-
   return {
     protocolVersion: '1',
     prNumber: Number(input.prNumber),
     prHeadSha,
     checkName,
     now,
-    instances,
+    instances: finalInstances,
     counts,
     plan,
     planCaveat: PLAN_CAVEAT,
@@ -382,6 +494,41 @@ export function computeRerunPlan(
     rerunPolicy,
     rerunPolicyHoldNotice,
   };
+}
+
+/**
+ * Resolve whether `instance` may still be rerun under `rerunPolicy`, given
+ * its own `runAttempt`. Reuses {@link resolveCiRerunDecision}
+ * (ci-wait-policy.mts) -- the same rerun-once-budget decision
+ * `idd-ci.instructions.md` §Rerun mechanics documents CI-wait itself
+ * applying -- rather than re-deriving the budget rule here, so this
+ * helper's recovery recommendations can never drift out of sync with the
+ * policy CI-wait already enforces. `Math.max(0, ...)` guards against a
+ * `null`/`0` `runAttempt` (an unresolved or not-yet-enriched instance)
+ * ever underflowing into a spurious negative rerun count.
+ */
+function resolveInstanceRerunDecision(
+  instance: RerunPlanRawInstance,
+  rerunPolicy: string,
+): ReturnType<typeof resolveCiRerunDecision> {
+  const rerunCount = Math.max(0, (instance.runAttempt ?? 1) - 1);
+  return resolveCiRerunDecision({ rerunPolicy, rerunCount });
+}
+
+/** Render "N rerun-eligible instance(s)" and/or "N recovery-refresh
+ * candidate(s)" for {@link RerunAdvisoryConvergencePlan.rerunPolicyHoldNotice},
+ * omitting either half when its own count is zero. */
+function describeHeldCounts(
+  eligibleCount: number,
+  refreshCount: number,
+): string {
+  const parts: string[] = [];
+  if (eligibleCount > 0)
+    parts.push(`${eligibleCount} rerun-eligible instance(s)`);
+  if (refreshCount > 0) {
+    parts.push(`${refreshCount} recovery-refresh candidate(s)`);
+  }
+  return parts.join(' and ');
 }
 
 /**
@@ -872,6 +1019,9 @@ interface RawWorkflowRunPayload {
   event?: string | null;
   actor?: RunActorPayload | null;
   triggering_actor?: RunActorPayload | null;
+  /** 1 for the original run; increments on the SAME run id after `gh run
+   * rerun` -- see {@link RerunPlanRawInstance.runAttempt}. */
+  run_attempt?: number | null;
 }
 
 /**
@@ -1061,6 +1211,7 @@ function collectFromGitHub(args: RerunPlanArgs): {
       actorType: string | null;
       triggeringActorLogin: string | null;
       triggeringActorType: string | null;
+      runAttempt: number | null;
     } | null // null means the per-run lookup itself failed
   >();
   for (const runId of runIdsToResolve) {
@@ -1074,6 +1225,11 @@ function collectFromGitHub(args: RerunPlanArgs): {
         actorType: runPayload.actor?.type ?? null,
         triggeringActorLogin: runPayload.triggering_actor?.login ?? null,
         triggeringActorType: runPayload.triggering_actor?.type ?? null,
+        runAttempt:
+          typeof runPayload.run_attempt === 'number' &&
+          Number.isInteger(runPayload.run_attempt)
+            ? runPayload.run_attempt
+            : null,
       });
     } catch {
       runMetaById.set(runId, null);
@@ -1098,6 +1254,7 @@ function collectFromGitHub(args: RerunPlanArgs): {
       actorType: meta?.actorType ?? null,
       triggeringActorLogin: meta?.triggeringActorLogin ?? null,
       triggeringActorType: meta?.triggeringActorType ?? null,
+      runAttempt: meta?.runAttempt ?? null,
     };
   });
 

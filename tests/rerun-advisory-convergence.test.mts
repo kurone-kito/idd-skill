@@ -36,6 +36,7 @@ function baseInstance(
     actorType: 'User',
     triggeringActorLogin: 'kurone-kito',
     triggeringActorType: 'User',
+    runAttempt: 1,
     ...overrides,
   };
 }
@@ -666,6 +667,97 @@ test('normalizes an unrecognized rerunPolicy value to "rerun-once"', () => {
   );
   assert.equal(plan.rerunPolicy, 'rerun-once');
   assert.equal(plan.plan.length, 1);
+});
+
+// --- Rerun-once budget (regression: #1434 review, Codex P1) --------------
+//
+// The "hold" *policy string* alone is not the whole picture:
+// resolveCiRerunDecision (ci-wait-policy.mts) also holds once a run's own
+// run_attempt shows a rerun already happened, even under the default
+// "rerun-once" policy. Without this, rerunning this helper after a failed
+// recovery would emit `gh run rerun` again for the same run, bypassing the
+// configured one-rerun limit.
+
+test('withholds a rerun-eligible instance whose run_attempt already shows a prior rerun', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [baseInstance({ conclusion: 'failure', runAttempt: 2 })],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.rerunPolicy, 'rerun-once');
+  assert.deepEqual(plan.plan, []);
+  assert.equal(plan.counts.rerunEligible, 1);
+  assert.equal(plan.counts.rerunBudgetHeld, 1);
+  assert.equal(plan.instances[0]?.rerunBudgetHeld, true);
+  assert.match(plan.rerunPolicyHoldNotice, /rerun-once/);
+  assert.match(plan.rerunPolicyHoldNotice, /1 rerun-eligible instance\(s\)/);
+});
+
+test('still includes a rerun-eligible instance whose run_attempt is 1 (never rerun)', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [baseInstance({ conclusion: 'failure', runAttempt: 1 })],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.plan.length, 1);
+  assert.equal(plan.counts.rerunBudgetHeld, 0);
+  assert.equal(plan.instances[0]?.rerunBudgetHeld, false);
+  assert.equal(plan.rerunPolicyHoldNotice, '');
+});
+
+test('treats a null run_attempt as attempt 1 (never rerun), not budget-exhausted', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [baseInstance({ conclusion: 'failure', runAttempt: null })],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.plan.length, 1);
+  assert.equal(plan.counts.rerunBudgetHeld, 0);
+});
+
+test('withholds a recovery-refresh candidate whose run_attempt already shows a prior rerun', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+          runAttempt: 2,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.plan, []);
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
+  assert.equal(plan.counts.rerunBudgetHeld, 1);
+  const passingInstance = plan.instances.find(
+    (instance) => instance.checkRunId === 'passing',
+  );
+  assert.equal(passingInstance?.rerunBudgetHeld, true);
+  assert.match(plan.rerunPolicyHoldNotice, /1 recovery-refresh candidate\(s\)/);
+});
+
+test('a "hold" policy still holds every instance regardless of run_attempt', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [baseInstance({ conclusion: 'failure', runAttempt: 1 })],
+    }),
+    baseOptions({ rerunPolicy: 'hold' }),
+  );
+  assert.deepEqual(plan.plan, []);
+  assert.equal(plan.counts.rerunBudgetHeld, 0);
+  assert.equal(plan.instances[0]?.rerunBudgetHeld, false);
+  assert.match(plan.rerunPolicyHoldNotice, /"hold"/);
 });
 
 // --- describeNoActionState (regression: #1434 review, Codex P2) ---------
