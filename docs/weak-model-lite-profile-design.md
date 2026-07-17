@@ -135,12 +135,12 @@ review-triage classification and the F2 merge-readiness gate decision.
 <!-- dprint-ignore-start -->
 | Phase file | Scope | Rationale |
 | --- | --- | --- |
-| `idd-overview-core.instructions.md` | N/A (always-loaded) | Already always-loaded regardless of tier; no lite variant needed. Content principle 1 has each lite file inline its load-bearing rules instead of citing it. |
+| `idd-overview-core.instructions.md` | N/A (always-loaded) | Already read first regardless of tier, though the mechanism differs by agent: an unconditional runtime injection under Copilot's `applyTo: "**"`, versus the mandatory first-open every other agent surface's entry-point contract requires (see [Entry points and auto-load expectations](idd-workflow.md#entry-points-and-auto-load-expectations)) — no lite variant needed either way. Content principle 1 has each lite file inline its load-bearing rules instead of citing it. |
 | `idd-overview-appendix.instructions.md` | Excluded | Reference/appendix content; a self-contained lite file (principle 3) should not need it at all. |
 | `idd-discover.instructions.md` (A0-A4) | Excluded | Open-ended candidate selection — #1415 bullet 1 names this exact exclusion. |
 | `idd-suitability.instructions.md` (A4.5) | Excluded | Judgment gate feeding candidate selection; same reasoning as Discover. |
 | `idd-claim.instructions.md` (A5) | In scope | Mechanical pre-checks (a)-(e) for a single already-selected issue; already largely helper-first. |
-| `idd-resume.instructions.md` / `idd-resume-stall.instructions.md` | In scope, helper-first | Deterministic external-signal classifier (see [Resume routing model](idd-workflow.md#resume-routing-model)) backed by `resume-claim-routing.mjs` / `resume-route-selection.mjs`; fits principle 4. |
+| `idd-resume.instructions.md` / `idd-resume-stall.instructions.md` | In scope, helper-first | Deterministic external-signal classifier (see [Resume routing model](idd-workflow.md#resume-routing-model)) backed by `scripts/resume-claim-routing.mjs` / `scripts/resume-route-selection.mjs`; fits principle 4. |
 | `idd-work.instructions.md` (B1-C6) | In scope | The canonical single-issue execution phase named by the roadmap and #1415 bullet 1. |
 | `idd-pr-submit.instructions.md` (D1-D4) | In scope | Mechanical rebase/validate/push/open-PR continuation of the same single issue. |
 | `idd-ci.instructions.md` | In scope | Shared mechanical CI-polling helper for D and E; no judgment call of its own. |
