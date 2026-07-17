@@ -527,10 +527,12 @@ test('filterOrphanIssues leaves orphans unrouted when suitability is disabled', 
 // ---------------------------------------------------------------------------
 
 const CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
+const CLAIM_HEARTBEAT_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const CLAIM_NOW = '2026-06-25T12:00:00Z';
 
-// A claim posted recently relative to CLAIM_NOW is non-stale; one posted
-// well over the 24h stale age earlier is stale.
+// A claim posted recently relative to CLAIM_NOW is non-stale (and within the
+// heartbeat interval); one posted well over the 24h stale age earlier is
+// both stale AND heartbeat-overdue (24h > 12h, so stale implies overdue).
 const FRESH_CLAIM_AT = '2026-06-25T06:00:00Z';
 const STALE_CLAIM_AT = '2026-06-20T06:00:00Z';
 
@@ -553,10 +555,12 @@ function buildClaimState(
     currentClaimId = '',
     trustedActors = ['kurone-kito'],
     staleAgeMs = CLAIM_STALE_AGE_MS,
+    heartbeatIntervalMs = CLAIM_HEARTBEAT_INTERVAL_MS,
   }: {
     currentClaimId?: string;
     trustedActors?: string[];
     staleAgeMs?: number;
+    heartbeatIntervalMs?: number;
   } = {},
 ) {
   const trusted = new Set(trustedActors.map((value) => value.toLowerCase()));
@@ -571,6 +575,7 @@ function buildClaimState(
       isTrustedAuthor: (login: string) =>
         trusted.has(String(login ?? '').toLowerCase()),
       staleAgeMs,
+      heartbeatIntervalMs,
       nowIso: CLAIM_NOW,
       currentClaimId,
     },
@@ -627,6 +632,7 @@ test('a present non-stale claim marks the orphan claimEligible:false', async () 
     stale: false,
     claimId: 'claim-701',
     agentId: 'agent-a',
+    heartbeatOverdue: false,
   });
   assert.equal(leaf701?.claimEligible, false);
   // Both open orphan candidates are probed.
@@ -656,6 +662,7 @@ test('a stale claim is takeover-eligible: present:true, stale:true, claimEligibl
     stale: true,
     claimId: 'claim-701',
     agentId: 'agent-a',
+    heartbeatOverdue: true,
   });
   assert.equal(leaf701?.claimEligible, true);
 });
@@ -681,6 +688,7 @@ test('an unclaimed orphan is eligible: present:false, claimEligible:true', async
     stale: false,
     claimId: null,
     agentId: null,
+    heartbeatOverdue: false,
   });
   assert.equal(leaf702?.claimEligible, true);
 });
@@ -758,4 +766,119 @@ test('claim-state annotation survives the autopilot floor routing split', async 
   assert.equal(result.routed_to_human[0]?.claimEligible, false);
   assert.equal(result.orphans[0]?.number, 702);
   assert.equal(result.orphans[0]?.claimEligible, true);
+});
+
+// ---------------------------------------------------------------------------
+// activeClaim.heartbeatOverdue diagnostic annotation (#1433), mirroring
+// discover-roadmap-graph.test.mts's own heartbeatOverdue block against
+// filterOrphanIssues's `claimState` option.
+//
+// Purely additive and purely diagnostic: every case below re-asserts
+// claimEligible unchanged from what the pre-#1433 stale-only rule would have
+// produced, proving heartbeatOverdue never leaks into the takeover gate.
+// ---------------------------------------------------------------------------
+
+// Exactly at the 12h heartbeat-interval boundary, but well inside the 24h
+// stale window.
+const HEARTBEAT_OVERDUE_NOT_STALE_AT = '2026-06-25T00:00:00Z';
+// Just under the 12h boundary.
+const HEARTBEAT_WITHIN_WINDOW_AT = '2026-06-25T00:01:00Z';
+
+test('heartbeatOverdue:true at the 12h boundary while remaining non-stale and claim-eligible unchanged', async () => {
+  const issues = claimOrphanIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [
+      701,
+      [claimComment('agent-a', 'claim-701', HEARTBEAT_OVERDUE_NOT_STALE_AT)],
+    ],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(result.orphans.map((o) => [o.number, o])).get(701);
+  assert.deepEqual(leaf701?.activeClaim, {
+    present: true,
+    stale: false,
+    claimId: 'claim-701',
+    agentId: 'agent-a',
+    heartbeatOverdue: true,
+  });
+  // The diagnostic never becomes a gate: still eligible/blocking exactly as
+  // a non-stale claim always was, pre-#1433.
+  assert.equal(leaf701?.claimEligible, false);
+});
+
+test('heartbeatOverdue:false just inside the 12h window', async () => {
+  const issues = claimOrphanIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', HEARTBEAT_WITHIN_WINDOW_AT)]],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(result.orphans.map((o) => [o.number, o])).get(701);
+  assert.equal(leaf701?.activeClaim?.heartbeatOverdue, false);
+  assert.equal(leaf701?.claimEligible, false);
+});
+
+test('heartbeatOverdue:false when no active claim is present', async () => {
+  const issues = claimOrphanIssues();
+  // 702 has no comments at all.
+  const { resolution } = buildClaimState(new Map());
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    claimState: resolution,
+  });
+
+  const leaf702 = new Map(result.orphans.map((o) => [o.number, o])).get(702);
+  assert.equal(leaf702?.activeClaim?.present, false);
+  assert.equal(leaf702?.activeClaim?.heartbeatOverdue, false);
+  assert.equal(leaf702?.claimEligible, true);
+});
+
+test('heartbeatOverdue:false when a later trusted heartbeat repost refreshes the clock', async () => {
+  const issues = claimOrphanIssues();
+  // The ORIGINAL claim is old enough to be both stale and heartbeat-overdue
+  // on its own, but a later, same agent/claim/branch heartbeat repost
+  // refreshes resolveActiveClaim's folded createdAt to a recent instant —
+  // the exact same fold the pre-existing `stale` computation already relies
+  // on, reused here with no new scan.
+  const commentsByIssue = new Map<number, unknown[]>([
+    [
+      701,
+      [
+        claimComment('agent-a', 'claim-701', STALE_CLAIM_AT),
+        claimComment('agent-a', 'claim-701', '2026-06-25T09:00:00Z'),
+      ],
+    ],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(result.orphans.map((o) => [o.number, o])).get(701);
+  assert.deepEqual(leaf701?.activeClaim, {
+    present: true,
+    stale: false,
+    claimId: 'claim-701',
+    agentId: 'agent-a',
+    heartbeatOverdue: false,
+  });
+  assert.equal(leaf701?.claimEligible, false);
 });
