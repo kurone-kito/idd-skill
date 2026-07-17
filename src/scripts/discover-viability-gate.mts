@@ -110,7 +110,7 @@ const EXTERNAL_COORDINATION_PATTERN =
 // (see ci-wait-policy.mts's identical note).
 const DISCOVER_VIABILITY_GATE_FLAG_SPEC = {
   '--issue': { type: 'string', multiple: true },
-  '--issues': { type: 'string' },
+  '--issues': { type: 'string', multiple: true },
   '--owner': { type: 'string', default: '' },
   '--repo': { type: 'string', default: '' },
   '--csv': { type: 'boolean', default: false },
@@ -320,9 +320,9 @@ export function parseArgs(argv: string[]): {
   // is now strict.
   const issueTokens = [
     ...((values.issue as string[] | undefined) ?? []),
-    ...(values.issues === undefined
-      ? []
-      : String(values.issues as string).split(',')),
+    ...((values.issues as string[] | undefined) ?? []).flatMap((token) =>
+      token.split(','),
+    ),
   ];
   return {
     issueNumbers: normalizeIssueNumbers(issueTokens),

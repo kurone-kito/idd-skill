@@ -53,7 +53,7 @@ const OPEN_PR_SCAN_LIMIT = 500;
 // trigger fires (see ci-wait-policy.mts's identical note).
 const DISCOVER_SHARED_FILE_OVERLAP_FLAG_SPEC = {
   '--candidate': { type: 'string', multiple: true },
-  '--candidates': { type: 'string' },
+  '--candidates': { type: 'string', multiple: true },
   '--owner': { type: 'string', default: '' },
   '--repo': { type: 'string', default: '' },
   '--policy': { type: 'string', default: '' },
@@ -765,8 +765,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
   const candidates: number[] = (
     (values.candidate as string[] | undefined) ?? []
   ).map((token) => parsePositiveInt(token, '--candidate'));
-  if (values.candidates !== undefined) {
-    for (const part of String(values.candidates as string).split(',')) {
+  for (const occurrence of (values.candidates as string[] | undefined) ?? []) {
+    for (const part of occurrence.split(',')) {
       const trimmed = part.trim();
       if (trimmed) {
         candidates.push(parsePositiveInt(trimmed, '--candidates'));

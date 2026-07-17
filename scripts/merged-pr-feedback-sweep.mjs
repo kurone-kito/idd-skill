@@ -299,7 +299,7 @@ const MERGED_PR_FEEDBACK_SWEEP_FLAG_SPEC = {
   '--since': { type: 'string' },
   '--days': { type: 'string' },
   '--pr': { type: 'string', multiple: true },
-  '--prs': { type: 'string' },
+  '--prs': { type: 'string', multiple: true },
   '--limit': { type: 'string', default: '100' },
   '--owner': { type: 'string', default: '' },
   '--repo': { type: 'string', default: '' },
@@ -329,12 +329,12 @@ export function parseArgs(argv) {
   const prNumbers = (values.pr ?? []).map((token) =>
     parsePositiveIntToken(token, '--pr'),
   );
-  if (values.prs !== undefined) {
-    // Distinct error message/validation shape preserved verbatim: each
-    // comma-separated part is compared against its OWN trimmed self (not
-    // the shared --pr/--days label), and the error embeds the untrimmed
-    // part.
-    for (const part of String(values.prs).split(',')) {
+  // Distinct error message/validation shape preserved verbatim: each
+  // comma-separated part is compared against its OWN trimmed self (not
+  // the shared --pr/--days label), and the error embeds the untrimmed
+  // part. Every --prs occurrence is now accumulated (not just the last).
+  for (const occurrence of values.prs ?? []) {
+    for (const part of occurrence.split(',')) {
       const trimmed = part.trim();
       const value = Number.parseInt(trimmed, 10);
       if (!Number.isFinite(value) || String(value) !== trimmed || value < 1) {

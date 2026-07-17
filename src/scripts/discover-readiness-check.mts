@@ -162,7 +162,7 @@ type CachedIssue = NormalizedIssue | InaccessibleIssueSentinel | null;
 // (see ci-wait-policy.mts's identical note).
 const DISCOVER_READINESS_CHECK_FLAG_SPEC = {
   '--issue': { type: 'string', multiple: true },
-  '--issues': { type: 'string' },
+  '--issues': { type: 'string', multiple: true },
   '--include-unresolvable': { type: 'boolean', default: false },
   '--csv': { type: 'boolean', default: false },
   '--owner': { type: 'string', default: '' },
@@ -631,9 +631,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
   // now strict.
   const issueTokens = [
     ...((values.issue as string[] | undefined) ?? []),
-    ...(values.issues === undefined
-      ? []
-      : String(values.issues as string).split(',')),
+    ...((values.issues as string[] | undefined) ?? []).flatMap((token) =>
+      token.split(','),
+    ),
   ];
   const swarmFloorToken = values['swarm-floor'] as string | undefined;
   return {

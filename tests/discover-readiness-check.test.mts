@@ -22,6 +22,14 @@ test('parseArgs: --issue is repeatable and --issues is comma-split', () => {
   assert.equal(args.swarmFloor, null);
 });
 
+test('parseArgs: repeated --issues occurrences all accumulate (not just the last)', () => {
+  // Regression coverage for a Codex review finding on #1450: a
+  // non-multiple parseArgs string flag keeps only the LAST occurrence
+  // when repeated, which would silently drop 1 and 2 here.
+  const args = parseArgs(['--issues', '1,2', '--issues', '3,4']);
+  assert.deepEqual(args.issueNumbers, [1, 2, 3, 4]);
+});
+
 test('parseArgs: --swarm-floor keeps its existing throw-on-invalid contract', () => {
   assert.throws(
     () => parseArgs(['--swarm-floor', '9']),

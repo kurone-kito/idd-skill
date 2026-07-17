@@ -55,7 +55,7 @@ const INACCESSIBLE_HTTP_STATUSES = new Set([403, 410, 451]);
 // (see ci-wait-policy.mts's identical note).
 const DISCOVER_READINESS_CHECK_FLAG_SPEC = {
   '--issue': { type: 'string', multiple: true },
-  '--issues': { type: 'string' },
+  '--issues': { type: 'string', multiple: true },
   '--include-unresolvable': { type: 'boolean', default: false },
   '--csv': { type: 'boolean', default: false },
   '--owner': { type: 'string', default: '' },
@@ -488,7 +488,7 @@ export function parseArgs(argv) {
   // now strict.
   const issueTokens = [
     ...(values.issue ?? []),
-    ...(values.issues === undefined ? [] : String(values.issues).split(',')),
+    ...(values.issues ?? []).flatMap((token) => token.split(',')),
   ];
   const swarmFloorToken = values['swarm-floor'];
   return {

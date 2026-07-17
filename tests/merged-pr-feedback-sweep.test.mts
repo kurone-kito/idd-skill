@@ -34,6 +34,14 @@ test('parseArgs: --prs is comma-split and preserves its own error shape', () => 
   );
 });
 
+test('parseArgs: repeated --prs occurrences all accumulate (not just the last)', () => {
+  // Regression coverage for a Codex review finding on #1450: a
+  // non-multiple parseArgs string flag keeps only the LAST occurrence
+  // when repeated, which would silently drop 1 and 2 here.
+  const args = parseArgs(['--prs', '1,2', '--prs', '3,4']);
+  assert.deepEqual(args.prNumbers, [1, 2, 3, 4]);
+});
+
 test('parseArgs: a missing --days value throws', () => {
   assert.throws(() => parseArgs(['--days']));
 });
