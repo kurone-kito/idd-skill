@@ -84,7 +84,11 @@ import {
   normalizeCiWaitPolicy,
   resolveCiRerunDecision,
 } from './ci-wait-policy.mts';
-import { ghApiJson, ghText, isCliExecution } from './gh-exec.mts';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  isCliExecution,
+} from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { type IddConfig, loadIddConfig } from './idd-config.mts';
 import { isValidIsoTimestamp } from './marker-helpers.mts';
@@ -1234,10 +1238,22 @@ function collectFromGitHub(args: RerunPlanArgs): {
       runAttempt: number | null;
     } | null // null means the per-run lookup itself failed
   >();
+  // GH_TEXT_LOOP_TIMEOUT_OPTIONS (stdin ignored, 30s timeout), not a bare
+  // `ghApiJson` call: this loop can run once per distinct run id on a busy
+  // PR, and `ghApiJson` execs `gh` with no stdio override and no timeout,
+  // so a single stalled or unexpectedly-interactive `gh` invocation (rate
+  // limiting, network stall, an auth re-prompt) would hang this read-only
+  // helper indefinitely instead of failing closed into the existing
+  // per-run `catch` below -- the same tight-loop hazard every other
+  // high-volume `gh api` loop in this repo already guards against with
+  // this shared options constant (#1434 review, Copilot).
   for (const runId of runIdsToResolve) {
     try {
-      const runPayload = ghApiJson(
-        `repos/${owner}/${repo}/actions/runs/${runId}`,
+      const runPayload = JSON.parse(
+        ghText(
+          ['api', `repos/${owner}/${repo}/actions/runs/${runId}`],
+          GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+        ),
       ) as RawWorkflowRunPayload;
       runMetaById.set(runId, {
         event: runPayload.event ? String(runPayload.event) : null,
