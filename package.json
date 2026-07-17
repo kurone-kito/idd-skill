@@ -36,6 +36,7 @@
     "idd-phase-id-resolver": "./bin/idd-phase-id-resolver.mjs",
     "idd-post-idd-marker": "./bin/idd-post-idd-marker.mjs",
     "idd-pre-merge-readiness": "./bin/idd-pre-merge-readiness.mjs",
+    "idd-rerun-advisory-convergence": "./bin/idd-rerun-advisory-convergence.mjs",
     "idd-resolve-review-thread": "./bin/idd-resolve-review-thread.mjs",
     "idd-resume-claim-routing": "./bin/idd-resume-claim-routing.mjs",
     "idd-resume-route-selection": "./bin/idd-resume-route-selection.mjs",
