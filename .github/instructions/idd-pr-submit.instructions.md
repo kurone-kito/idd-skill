@@ -251,8 +251,13 @@ this turn); otherwise wait synchronously. Delegate polling mechanics to
   both; see `idd-ci.instructions.md` §Interpretation for this shared
   trigger condition) → this is not a CI-wait state: the
   check turns green only after E-phase disposition, which is downstream
-  of D4, so continued polling and `ciWait.rerunPolicy` reruns cannot
-  resolve it. Exit CI-wait and proceed directly to
+  of D4, so continued polling cannot resolve it, and a
+  `ciWait.rerunPolicy` rerun only reproduces the same red **unless a
+  maintainer has since posted a valid external-check waiver for this
+  HEAD** — that case still needs the rerun, to make the check reflect
+  the waiver (a pre-existing F2/F3 concern this branch leaves unchanged;
+  see `idd-pre-merge.instructions.md`'s External-check waivers). Absent
+  a waiver, exit CI-wait and proceed directly to
   `idd-review-snapshot.instructions.md` (E1) instead, matching the phase
   routing table's "PR open, CI running, reviews exist" row. This does
   not relax the merge gate — the check stays required, and F2
