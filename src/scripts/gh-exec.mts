@@ -149,6 +149,72 @@ export function ghApiJson(
   return JSON.parse(raw.trim() || '{}');
 }
 
+/** Options accepted by {@link withBoundedRetry}. */
+export interface BoundedRetryOptions {
+  /** Total attempts including the first. Default 3. */
+  attempts?: number;
+  /**
+   * Base delay (ms) for the linear-ish backoff + jitter between attempts.
+   * Default 200.
+   */
+  baseDelayMs?: number;
+  /**
+   * Retryable predicate, checked BEFORE consuming an extra attempt.
+   * Returning `false` rethrows immediately, without waiting or re-invoking
+   * `task` — this is how a caller keeps an already-classified non-transient
+   * failure (e.g. a 404) short-circuiting to exactly one `task` invocation,
+   * byte-identical to having no retry wrapper at all. Default: retry every
+   * failure.
+   */
+  isRetryable?: (error: unknown) => boolean;
+}
+
+const DEFAULT_BOUNDED_RETRY_ATTEMPTS = 3;
+const DEFAULT_BOUNDED_RETRY_BASE_DELAY_MS = 200;
+
+/** `await`-able delay, used only for the backoff between retry attempts. */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolveDelay) => {
+    setTimeout(resolveDelay, ms);
+  });
+}
+
+/**
+ * Run `task`, retrying a bounded number of times on a retryable failure
+ * (#1394): a transient `gh`/API hiccup (e.g. truncated captured stdout under
+ * heavy concurrent load) no longer has to abort a whole caller-side
+ * traversal when an immediate retry would have succeeded in isolation.
+ *
+ * Fail-closed is preserved: once the bounded attempts are exhausted, the
+ * final attempt's error is rethrown unchanged — the exact same error
+ * instance, never re-wrapped — so an existing caller-side classifier (e.g.
+ * this module's own `allowStatuses` consumers, or a 404/access-style
+ * predicate) still reads the identical shape it read before this wrapper
+ * existed.
+ */
+export async function withBoundedRetry<T>(
+  task: () => Promise<T>,
+  options: BoundedRetryOptions = {},
+): Promise<T> {
+  const {
+    attempts = DEFAULT_BOUNDED_RETRY_ATTEMPTS,
+    baseDelayMs = DEFAULT_BOUNDED_RETRY_BASE_DELAY_MS,
+    isRetryable = () => true,
+  } = options;
+  const totalAttempts = Math.max(1, Math.trunc(attempts));
+
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await task();
+    } catch (error) {
+      if (attempt >= totalAttempts || !isRetryable(error)) {
+        throw error;
+      }
+      await delay(baseDelayMs * attempt + Math.random() * baseDelayMs);
+    }
+  }
+}
+
 /**
  * True when this module is executing as the invoked CLI entry point
  * (`node <this-file>.mjs ...`), false when it is only imported (e.g. from

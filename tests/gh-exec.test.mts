@@ -11,6 +11,7 @@ import {
   ghText,
   isCliExecution,
   safeGhText,
+  withBoundedRetry,
 } from '../src/scripts/gh-exec.mts';
 
 // Stub `gh` on PATH (the discover-roadmap-graph.test.mts / post-idd-marker.test.mts
@@ -284,4 +285,65 @@ test('isCliExecution is false for an unrelated moduleUrl or a missing argv[1]', 
   } finally {
     process.argv[1] = originalArgv1;
   }
+});
+
+test('withBoundedRetry succeeds after transient failures within the attempt budget', async () => {
+  let calls = 0;
+  const result = await withBoundedRetry(
+    async () => {
+      calls += 1;
+      if (calls < 3) {
+        throw new Error(`transient failure ${calls}`);
+      }
+      return 'ok';
+    },
+    { baseDelayMs: 1 },
+  );
+  assert.equal(result, 'ok');
+  assert.equal(calls, 3);
+});
+
+test('withBoundedRetry rethrows immediately, without retrying, when isRetryable returns false', async () => {
+  let calls = 0;
+  const thrown = new Error('not retryable');
+  let caught: unknown;
+  try {
+    await withBoundedRetry(
+      async () => {
+        calls += 1;
+        throw thrown;
+      },
+      { baseDelayMs: 1, isRetryable: () => false },
+    );
+    assert.fail('expected withBoundedRetry to reject');
+  } catch (error) {
+    caught = error;
+  }
+  // Same instance, never re-wrapped, and called exactly once (no wasted
+  // attempt or backoff wait once isRetryable says no).
+  assert.equal(caught, thrown);
+  assert.equal(calls, 1);
+});
+
+test('withBoundedRetry exhausts bounded attempts and rethrows the final error unchanged', async () => {
+  let calls = 0;
+  let lastError: Error | undefined;
+  let caught: unknown;
+  try {
+    await withBoundedRetry(
+      async () => {
+        calls += 1;
+        lastError = new Error(`persistent failure ${calls}`);
+        throw lastError;
+      },
+      { attempts: 3, baseDelayMs: 1 },
+    );
+    assert.fail('expected withBoundedRetry to reject');
+  } catch (error) {
+    caught = error;
+  }
+  // Bounded to exactly `attempts` tries, and the rethrown error is the same
+  // instance the final attempt threw (fail-closed, never re-wrapped).
+  assert.equal(calls, 3);
+  assert.equal(caught, lastError);
 });

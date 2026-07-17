@@ -95,6 +95,45 @@ export function ghApiJson(path, options = {}) {
   // decide whether the output was empty.
   return JSON.parse(raw.trim() || '{}');
 }
+const DEFAULT_BOUNDED_RETRY_ATTEMPTS = 3;
+const DEFAULT_BOUNDED_RETRY_BASE_DELAY_MS = 200;
+/** `await`-able delay, used only for the backoff between retry attempts. */
+function delay(ms) {
+  return new Promise((resolveDelay) => {
+    setTimeout(resolveDelay, ms);
+  });
+}
+/**
+ * Run `task`, retrying a bounded number of times on a retryable failure
+ * (#1394): a transient `gh`/API hiccup (e.g. truncated captured stdout under
+ * heavy concurrent load) no longer has to abort a whole caller-side
+ * traversal when an immediate retry would have succeeded in isolation.
+ *
+ * Fail-closed is preserved: once the bounded attempts are exhausted, the
+ * final attempt's error is rethrown unchanged — the exact same error
+ * instance, never re-wrapped — so an existing caller-side classifier (e.g.
+ * this module's own `allowStatuses` consumers, or a 404/access-style
+ * predicate) still reads the identical shape it read before this wrapper
+ * existed.
+ */
+export async function withBoundedRetry(task, options = {}) {
+  const {
+    attempts = DEFAULT_BOUNDED_RETRY_ATTEMPTS,
+    baseDelayMs = DEFAULT_BOUNDED_RETRY_BASE_DELAY_MS,
+    isRetryable = () => true,
+  } = options;
+  const totalAttempts = Math.max(1, Math.trunc(attempts));
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await task();
+    } catch (error) {
+      if (attempt >= totalAttempts || !isRetryable(error)) {
+        throw error;
+      }
+      await delay(baseDelayMs * attempt + Math.random() * baseDelayMs);
+    }
+  }
+}
 /**
  * True when this module is executing as the invoked CLI entry point
  * (`node <this-file>.mjs ...`), false when it is only imported (e.g. from

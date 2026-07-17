@@ -21,7 +21,7 @@ import {
   evaluateDiscoverReadiness,
 } from './discover-readiness-check.mts';
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
-import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
+import { GH_TEXT_LOOP_OPTIONS, ghText, withBoundedRetry } from './gh-exec.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
 import {
   normalizePolicyConfig,
@@ -1749,19 +1749,28 @@ export function buildTrustedAuthorPredicate(policy: {
  *
  * Exported (#1395) so `discover-orphan-filter.mts` can reuse the identical
  * loader instead of duplicating this pagination/`gh` wiring.
+ *
+ * Async (#1394) so each page's `runGh(...) + JSON.parse(...)` fetch can be
+ * bounded-retried on a transient failure (e.g. truncated captured stdout
+ * under heavy concurrent load). Behavior-preserving: the sole caller
+ * (`annotateLeafClaimState`) already `await`s the returned value, and
+ * `ClaimStateResolution.loadComments` is typed as `Awaitable<...>` (#1395)
+ * to accommodate exactly this.
  */
 export function buildCommentLoader(owner: string, repo: string) {
-  return (issueNumber: number) => {
+  return async (issueNumber: number) => {
     const comments: unknown[] = [];
     const pageSize = 100;
     for (let page = 1; ; page += 1) {
-      const raw = runGh([
-        'api',
-        `repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=${pageSize}&page=${page}`,
-        '--jq',
-        '.',
-      ]).trim();
-      const pageItems = raw && raw !== 'null' ? JSON.parse(raw) : [];
+      const pageItems = await withBoundedRetry(async () => {
+        const raw = runGh([
+          'api',
+          `repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=${pageSize}&page=${page}`,
+          '--jq',
+          '.',
+        ]).trim();
+        return raw && raw !== 'null' ? JSON.parse(raw) : [];
+      });
       if (!Array.isArray(pageItems) || pageItems.length === 0) {
         break;
       }
@@ -2307,6 +2316,19 @@ async function getIssue(
   return issue;
 }
 
+/**
+ * Live per-issue loader for the traversal hot path.
+ *
+ * Bounded-retried (#1394): the `runGhAsync(...) + JSON.parse(...)` body runs
+ * inside {@link withBoundedRetry} so a transient hiccup — including a
+ * truncated-stdout JSON parse failure — gets up to 2 additional fresh `gh`
+ * round-trips before this loader gives up. `isRetryable` reuses the same
+ * `isNotFoundIssueLookupError` / `isInaccessibleIssueLookupError` pair the
+ * outer `catch` already classifies with, so a genuine 404 or access-style
+ * failure is still recognized on the FIRST attempt (retried zero times,
+ * exactly like before this change) and still reaches the outer `catch`
+ * below unchanged.
+ */
 export function buildIssueLoader(owner: string, repo: string) {
   return async (issueNumber: number) => {
     const args = [
@@ -2316,11 +2338,22 @@ export function buildIssueLoader(owner: string, repo: string) {
       '.',
     ];
     try {
-      const result = (await runGhAsync(args, { allowStatuses: [404] })).trim();
-      if (!result || result === 'null') {
-        return null;
-      }
-      return JSON.parse(result);
+      return await withBoundedRetry(
+        async () => {
+          const result = (
+            await runGhAsync(args, { allowStatuses: [404] })
+          ).trim();
+          if (!result || result === 'null') {
+            return null;
+          }
+          return JSON.parse(result);
+        },
+        {
+          isRetryable: (error) =>
+            !isNotFoundIssueLookupError(error) &&
+            !isInaccessibleIssueLookupError(error),
+        },
+      );
     } catch (error) {
       if (isNotFoundIssueLookupError(error)) {
         return null;
@@ -2333,6 +2366,23 @@ export function buildIssueLoader(owner: string, repo: string) {
   };
 }
 
+/**
+ * Live sub-issue loader for the traversal hot path.
+ *
+ * Bounded-retried (#1394): each page's `runGraphqlQuery(...)` call runs
+ * inside {@link withBoundedRetry} with the default retry-everything
+ * classifier — unlike {@link buildIssueLoader}, this loader has no
+ * pre-existing REST-status-based classification to preserve, and every
+ * failure `runGraphqlQuery` can produce today (a transient truncated-stdout
+ * parse failure, a reported GraphQL `errors[]` entry, or a process-exec
+ * failure) already rethrows unclassified. A genuinely persistent failure
+ * (e.g. an inaccessible parent issue) still rethrows, just after up to 2
+ * extra bounded round-trips instead of 0 — a small, deliberate latency cost,
+ * not a fail-closed regression. The connection/cursor-shape checks below
+ * stay un-retried on purpose: they only fire once `runGraphqlQuery` already
+ * resolved without a transport/parse error, so retrying them would not
+ * change the outcome.
+ */
 export function buildSubIssueLoader(owner: string, repo: string) {
   return async (issueNumber: number) => {
     const numbers: number[] = [];
@@ -2347,7 +2397,9 @@ export function buildSubIssueLoader(owner: string, repo: string) {
       if (after) {
         variables.after = after;
       }
-      const result = (await runGraphqlQuery(SUB_ISSUES_QUERY, variables)) as {
+      const result = (await withBoundedRetry(() =>
+        runGraphqlQuery(SUB_ISSUES_QUERY, variables),
+      )) as {
         data?: {
           repository?: {
             issue?: {
