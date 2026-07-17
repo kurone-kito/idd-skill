@@ -454,14 +454,30 @@ test('parseGitFetchOrigin: strips embedded credentials from an actions/checkout-
   );
 });
 
-test('parseGitFetchOrigin: resolves an ssh:// GHES remote to https, dropping the SSH-specific port', () => {
-  // The SSH port is frequently unrelated to the HTTPS port behind a
-  // reverse proxy, so it must not leak into the https:// fetch URL; the
-  // ssh:// scheme itself cannot be reused since tryFetchBase's fetch is
-  // always anonymous HTTPS.
-  assert.deepEqual(
+test('parseGitFetchOrigin: returns null for an ssh:// origin instead of guessing an HTTPS host', () => {
+  // An ssh:// hostname is sometimes an SSH-only alias with no HTTPS
+  // service of its own -- guessing wrong would regress a
+  // previously-working github.com fallback into a broken fetch, so this
+  // signal is unusable rather than guessed at (see the dedicated
+  // ssh.github.com regression test below for the concrete case this
+  // protects against).
+  assert.equal(
     parseGitFetchOrigin('ssh://git@ghes.example.com:2222/owner/repo.git'),
-    { scheme: 'https', host: 'ghes.example.com' },
+    null,
+  );
+});
+
+test("parseGitFetchOrigin: returns null for GitHub's documented SSH-over-443 endpoint, not a broken HTTPS host", () => {
+  // ssh.github.com is GitHub's own documented alias for SSH traffic over
+  // the HTTPS port (firewall traversal); it accepts SSH, not HTTPS, on
+  // that hostname. Before #1454, this checkout shape already worked via
+  // the hardcoded github.com default -- treating the ssh:// origin's
+  // hostname as reusable for HTTPS would have silently regressed it to
+  // an unreachable https://ssh.github.com fetch (found by Codex review on
+  // PR #1470).
+  assert.equal(
+    parseGitFetchOrigin('ssh://git@ssh.github.com:443/owner/repo.git'),
+    null,
   );
 });
 
@@ -560,6 +576,21 @@ test('resolveFetchOrigin: falls back to a non-github.com origin remote when GH_H
       { readOriginUrl: () => 'http://ghes.example.com/owner/repo.git' },
     ),
     { scheme: 'http', host: 'ghes.example.com' },
+  );
+});
+
+test('resolveFetchOrigin: falls through to the github.com default for an ssh:// origin, not a guessed host', () => {
+  // End-to-end confirmation of the ssh.github.com regression fix: an
+  // ssh:// origin (unresolvable per parseGitFetchOrigin) must not block
+  // or corrupt resolution -- it falls through to the same github.com
+  // default as no origin at all, exactly matching this checkout shape's
+  // pre-#1454 behavior.
+  assert.deepEqual(
+    resolveFetchOrigin(
+      {},
+      { readOriginUrl: () => 'ssh://git@ssh.github.com:443/owner/repo.git' },
+    ),
+    { scheme: 'https', host: 'github.com' },
   );
 });
 

@@ -385,23 +385,32 @@ function readOriginRemoteUrl() {
 }
 /**
  * Parse the scheme and host (hostname, plus `:port` when meaningful) from
- * a git remote URL. Supports both URL-scheme forms parseable by the
- * WHATWG URL parser (`http(s)://host[:port]/owner/repo.git`,
- * `ssh://git@host[:port]/owner/repo.git`) and the scp-like SSH shorthand
+ * a git remote URL. Supports the `http://` / `https://` URL-scheme forms
+ * (parseable by the WHATWG URL parser) and the scp-like SSH shorthand
  * (`[user@]host:path`, which has no `://` scheme and is not
  * `URL`-parseable; per git's own URL syntax the `user@` prefix is
  * optional, e.g. a bare `ghes.example.com:owner/repo.git` is valid).
  *
- * The returned `scheme` always matches the origin's own scheme for an
- * `http://` or `https://` origin — an `http://`-only GHES instance (no
- * TLS, e.g. behind a private network boundary) must stay `http`, since
- * silently upgrading to `https` on the same port would target a port
- * that is not serving TLS and the fetch would fail. An `ssh://` origin or
- * the scp-like shorthand has no reusable scheme for this always-anonymous
- * fetch, so both resolve to `https`; the same reasoning drops an
- * `ssh://` origin's port (frequently unrelated to a GHES instance's
- * HTTPS port behind a reverse proxy), while an `http(s)://` origin's port
- * is preserved, since it is directly reusable here.
+ * The returned `scheme` always matches an `http://` or `https://` origin's
+ * own scheme — an `http://`-only GHES instance (no TLS, e.g. behind a
+ * private network boundary) must stay `http`, since silently upgrading to
+ * `https` on the same port would target a port that is not serving TLS
+ * and the fetch would fail; that origin's port is preserved too, since it
+ * is directly reusable here.
+ *
+ * An `ssh://` URL-scheme origin (or any other non-`http(s)` scheme)
+ * deliberately returns `null` rather than reusing its hostname: an SSH
+ * hostname is sometimes an alias with no HTTPS service of its own —
+ * GitHub's own documented `ssh.github.com` (used for SSH-over-443
+ * firewall traversal) accepts SSH, not HTTPS, on that hostname, and a
+ * local `~/.ssh/config` `Host` alias may not resolve via DNS at all.
+ * Guessing wrong here would regress a previously-working `github.com`
+ * fallback into a broken fetch, so this signal is treated as unusable
+ * rather than guessed at. The scp-like shorthand keeps reusing its host,
+ * since that syntax has no port field of its own and is therefore not
+ * used for GitHub's SSH-over-443 workaround in practice — the same
+ * hostname is the overwhelmingly common real-world case for a GHES
+ * remote's SSH and HTTPS endpoints.
  *
  * Returns `null` for empty, unparseable, or host-less input (e.g. a
  * `file://` URL, whose `hostname` is `''`) so callers fall back to
@@ -421,9 +430,9 @@ export function parseGitFetchOrigin(url) {
       if (parsed.protocol === 'https:') {
         return { scheme: 'https', host: parsed.host.toLowerCase() };
       }
-      // ssh:// (or any other scheme): no reusable scheme or port -- see
-      // the doc comment above.
-      return { scheme: 'https', host: parsed.hostname.toLowerCase() };
+      // ssh:// (or any other scheme): no reusable host -- see the doc
+      // comment above.
+      return null;
     } catch {
       return null;
     }
