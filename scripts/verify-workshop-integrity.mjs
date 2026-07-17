@@ -618,8 +618,9 @@ export function computeExitCode(report) {
  * `docs/workshop` tree (10 files) and synthetic fixtures:
  *
  * 1. **Case-insensitive matching**: the old code matched via
- *    `full.toLowerCase().endsWith('.md')`; `globSync` has no `nocase`
- *    option, so the bracket pattern `[mM][dD]` reproduces it exactly
+ *    `full.toLowerCase().endsWith('.md')`; `globSync` has no
+ *    case-insensitive matching option, so the bracket pattern `[mM][dD]`
+ *    reproduces it exactly
  *    (verified against `.MD`/`.Md` fixtures). No non-lowercase `.md` file
  *    exists anywhere in this repo today (this repo's own naming
  *    convention requires lowercase filenames), so this is defensive
