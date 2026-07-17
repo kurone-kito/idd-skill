@@ -14,14 +14,16 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { isCliExecution } from './gh-exec.mts';
+import { ghApiJson, isCliExecution } from './gh-exec.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
+import type { PrCommitPayload } from './protocol-helpers.mts';
 import {
   applyDigestUpsert,
   type DigestUpsertOutcome,
   normalizeTrustedMarkerLogins,
   parsePaginatedGhNdjson,
   planLiveStatusDigestUpsert,
+  resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
   summarizeClaimValidation,
 } from './protocol-helpers.mts';
@@ -161,6 +163,11 @@ function main(): void {
     targetType === 'pr'
       ? {
           expectedLinkedPrs: buildExpectedLinkedPrReferences(
+            owner,
+            repo,
+            targetNumber,
+          ),
+          prFirstCommitAt: resolvePrFirstCommitAtForPr(
             owner,
             repo,
             targetNumber,
@@ -355,7 +362,10 @@ function assertActiveClaim(
   issueNumber: string | undefined,
   agentId: string | undefined,
   claimId: string | undefined,
-  options: { expectedLinkedPrs?: string[] } = {},
+  options: {
+    expectedLinkedPrs?: string[];
+    prFirstCommitAt?: string | null;
+  } = {},
 ): void {
   const active = readActiveClaim(owner, repo, issueNumber, options);
   if (
@@ -374,7 +384,10 @@ function readActiveClaim(
   owner: string,
   repo: string,
   issueNumber: string | undefined,
-  options: { expectedLinkedPrs?: string[] } = {},
+  options: {
+    expectedLinkedPrs?: string[];
+    prFirstCommitAt?: string | null;
+  } = {},
 ) {
   const comments = fetchIssueComments(owner, repo, issueNumber).map(
     (comment) => {
@@ -395,6 +408,7 @@ function readActiveClaim(
     trustedMarkerLogins: resolveTrustedMarkerLogins(owner, repo, comments),
     forcedHandoffEnabled: readForcedHandoffMode() === 'human-gated',
     expectedLinkedPrs: options.expectedLinkedPrs ?? [],
+    prFirstCommitAt: options.prFirstCommitAt ?? null,
     isAuthorizedForcedHandoff: (forcedBy) =>
       isAuthorizedForcedHandoffActor(
         owner,
@@ -435,6 +449,35 @@ function buildExpectedLinkedPrReferences(
     `#${normalized}`,
     `https://github.com/${owner}/${repo}/pull/${normalized}`,
   ];
+}
+
+// The PR's first-commit time backs the Part B forced-handoff rule (#1058): a
+// legitimate issue-only handoff that predates the PR is honored even against
+// a PR-backed claim -- see `buildForcedHandoffEnableGate` in
+// protocol-helpers.mts. Resolve it only when forced handoffs are enabled, and
+// fail closed to `null` (reject) on any lookup/parse error so a transient
+// commits-API failure never widens what the gate accepts. Mirrors
+// `pre-merge-readiness.mts` / `advisory-convergence.mts`'s identical
+// resolution, sharing `resolvePrFirstCommitAt`'s date computation with both.
+function resolvePrFirstCommitAtForPr(
+  owner: string,
+  repo: string,
+  prNumber: number,
+): string | null {
+  if (readForcedHandoffMode() !== 'human-gated') {
+    return null;
+  }
+  try {
+    const prCommits = ghApiJson(
+      `repos/${owner}/${repo}/pulls/${prNumber}/commits`,
+      {
+        paginate: true,
+      },
+    ) as PrCommitPayload[];
+    return resolvePrFirstCommitAt(prCommits);
+  } catch {
+    return null;
+  }
 }
 
 export function isTrustedMarkerAuthor(

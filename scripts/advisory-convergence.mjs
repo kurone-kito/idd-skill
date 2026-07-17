@@ -63,6 +63,7 @@ import {
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   resolveAdvisoryBotLogins,
+  resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
   summarizeClaimValidation,
   summarizeDispositionEvidenceForGate,
@@ -833,35 +834,6 @@ function resolveTrustedCollaboratorMarkerLogins(
       permission === 'write'
     );
   });
-}
-/**
- * Resolve the PR's first-commit time as an ISO string -- mirrors
- * `pre-merge-readiness.mts`'s `resolvePrFirstCommitAt` verbatim (the
- * minimum across all commits of each commit's committer date, falling
- * back to author date). Returns `null` when no commit carries a
- * parseable date, which fails the Part B (#1058) allowance closed
- * (an `issue-only` handoff against a PR-backed claim stays rejected).
- */
-function resolvePrFirstCommitAt(commits) {
-  let earliestMs = null;
-  let earliestIso = null;
-  for (const commit of commits) {
-    const date =
-      String(commit?.commit?.committer?.date ?? '').trim() ||
-      String(commit?.commit?.author?.date ?? '').trim();
-    if (!date) {
-      continue;
-    }
-    const ms = Date.parse(date);
-    if (!Number.isFinite(ms)) {
-      continue;
-    }
-    if (earliestMs === null || ms < earliestMs) {
-      earliestMs = ms;
-      earliestIso = date;
-    }
-  }
-  return earliestIso;
 }
 function ghGraphql(query, variables) {
   const args = ['api', 'graphql', '-f', `query=${query}`];

@@ -12,13 +12,14 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
-import { isCliExecution } from './gh-exec.mjs';
+import { ghApiJson, isCliExecution } from './gh-exec.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   applyDigestUpsert,
   normalizeTrustedMarkerLogins,
   parsePaginatedGhNdjson,
   planLiveStatusDigestUpsert,
+  resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
   summarizeClaimValidation,
 } from './protocol-helpers.mjs';
@@ -77,6 +78,11 @@ function main() {
     targetType === 'pr'
       ? {
           expectedLinkedPrs: buildExpectedLinkedPrReferences(
+            owner,
+            repo,
+            targetNumber,
+          ),
+          prFirstCommitAt: resolvePrFirstCommitAtForPr(
             owner,
             repo,
             targetNumber,
@@ -266,6 +272,7 @@ function readActiveClaim(owner, repo, issueNumber, options = {}) {
     trustedMarkerLogins: resolveTrustedMarkerLogins(owner, repo, comments),
     forcedHandoffEnabled: readForcedHandoffMode() === 'human-gated',
     expectedLinkedPrs: options.expectedLinkedPrs ?? [],
+    prFirstCommitAt: options.prFirstCommitAt ?? null,
     isAuthorizedForcedHandoff: (forcedBy) =>
       isAuthorizedForcedHandoffActor(
         owner,
@@ -295,6 +302,30 @@ function buildExpectedLinkedPrReferences(owner, repo, prNumber) {
     `#${normalized}`,
     `https://github.com/${owner}/${repo}/pull/${normalized}`,
   ];
+}
+// The PR's first-commit time backs the Part B forced-handoff rule (#1058): a
+// legitimate issue-only handoff that predates the PR is honored even against
+// a PR-backed claim -- see `buildForcedHandoffEnableGate` in
+// protocol-helpers.mts. Resolve it only when forced handoffs are enabled, and
+// fail closed to `null` (reject) on any lookup/parse error so a transient
+// commits-API failure never widens what the gate accepts. Mirrors
+// `pre-merge-readiness.mts` / `advisory-convergence.mts`'s identical
+// resolution, sharing `resolvePrFirstCommitAt`'s date computation with both.
+function resolvePrFirstCommitAtForPr(owner, repo, prNumber) {
+  if (readForcedHandoffMode() !== 'human-gated') {
+    return null;
+  }
+  try {
+    const prCommits = ghApiJson(
+      `repos/${owner}/${repo}/pulls/${prNumber}/commits`,
+      {
+        paginate: true,
+      },
+    );
+    return resolvePrFirstCommitAt(prCommits);
+  } catch {
+    return null;
+  }
 }
 export function isTrustedMarkerAuthor(owner, repo, login) {
   if (!login) {
