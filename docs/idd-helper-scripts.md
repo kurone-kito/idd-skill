@@ -228,9 +228,19 @@ default below is unchanged.
     **once** and is never double-counted.
   - **Opt-in leaf annotations** (additive; absent flags leave the leaf shape
     byte-stable and make no extra API call). `--with-claim-state` adds
-    `activeClaim` (always an object: `{ present, stale, claimId, agentId }`,
-    plus `ownedByCurrentSession` when `--current-claim-id` is passed) and
-    `claimEligible: boolean` on each open leaf. `--with-readiness` adds
+    `activeClaim` (always an object: `{ present, stale, claimId, agentId,`
+    `heartbeatOverdue }`, plus `ownedByCurrentSession` when
+    `--current-claim-id` is passed) and `claimEligible: boolean` on each
+    open leaf. Both `discover-roadmap-graph.mjs` and
+    `discover-orphan-filter.mjs` emit this exact shape under
+    `--with-claim-state`. `heartbeatOverdue` (#1433) is `true` when the
+    latest valid `claimed-by`/heartbeat `created_at` is at or past the
+    configured `claimTiming.heartbeatInterval` (default `PT12H`), with no
+    later trusted heartbeat; `false` otherwise, including whenever
+    `present` is `false`. It is **purely diagnostic**: unlike `stale`, it
+    never feeds `claimEligible` or `readiness.startable` below, and it
+    never changes the 24h stale-takeover threshold
+    (`idd-resume-stall.instructions.md` S3). `--with-readiness` adds
     `readiness: { ready: boolean, reasons: string[], authoringHeld: boolean,`
     `startable: boolean }` — the A3 startability of each open leaf (dependency
     resolution across visible `Blocked by #N` / `Depends on #N` / task-list refs
@@ -1267,6 +1277,7 @@ Interpretation rules:
     "mergeStateStatus": "CLEAN",
     "branchState": "clean",
     "syncRecommendation": "none",
+    "baseAdvancedSinceMergeBase": false,
     "readOnly": true,
     "worktreeUnchanged": true,
     "diagnostics": {
@@ -1284,6 +1295,20 @@ Interpretation rules:
 - `syncRecommendation` values: `none`, `merge-main`, `policy-required-update`,
   `force-push-exception`, `recheck`, `hold-unknown` (`recheck` pairs with
   `computing`)
+- `baseAdvancedSinceMergeBase` (boolean): `true` when the base ref has moved
+  past this PR's merge-base, computed independently of `syncRecommendation` so
+  it does not change any existing `syncRecommendation` value. `false` is
+  **overloaded**: it means either a confirmed-unmoved base, or that the
+  check was skipped / the merge-base could not be resolved (e.g. missing
+  local history); the two are distinguished only via `diagnostics.notes`
+  (an "undetermined" entry marks the latter), never by this field alone. A
+  `clean` / `none` verdict is textual conflict-freeness only, not whole-tree
+  CI-invariant freedom (line-count budgets, generated-file drift, lockfile
+  consistency, and similar checks a full test suite enforces against the
+  whole tree); when this field is `true` alongside `syncRecommendation: none`,
+  `diagnostics.notes` also carries an advisory note naming the blind spot. A
+  `pull_request`-triggered CI run is pinned to a merge-ref computed at trigger
+  time, so a bare rerun after base moves can replay that stale state.
 - Stable fields consumed by D/E/F routing: `branchState`,
   `syncRecommendation`, `published`, `readOnly`, `worktreeUnchanged`
 - Read-only boundary: the helper never runs `git merge`, `git rebase`, or
