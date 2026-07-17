@@ -120,6 +120,10 @@ export interface AuditOptions {
    * matches the reference's `owner/repo` always flags it (subject to the
    * existing dependency-marker exclusion), and one that differs always
    * excludes it.
+   *
+   * An empty or whitespace-only value is normalized to `undefined` before
+   * this comparison runs, so it is treated the same as omitting this
+   * option entirely — never as a known, non-matching repo.
    */
   currentRepo?: string;
 }
@@ -206,18 +210,59 @@ const PROSE_DEPENDENCY_KEYWORDS = [
 // `(?<![\w/])` lookbehind so it, too, only starts matching at a natural
 // token boundary rather than mid-path (e.g. inside a 3-segment
 // slash-separated path that happens to end in `#123`).
+//
+// The quoted-title sub-pattern tolerates a backslash-escaped quote
+// matching the title's own delimiter (`\"` inside a `"..."` title, or
+// `\'` inside a `'...'` title) as content instead of letting it close the
+// title early: `(?:\\.|[^"\n])*` (and the single-quote equivalent) tries
+// consuming a backslash plus the character right after it as one unit
+// before falling back to "any non-quote, non-newline character", so an
+// escaped quote is never mistaken for the real closing delimiter. Without
+// this, a title like `"reviewed \"API\""` would close at the first
+// escaped quote, leave the rest of the title as unconsumed content before
+// the link's real closing paren, fail the whole Markdown-link
+// alternative, and re-leak the label's own bare `#N` to the bare-`#`
+// alternative — the same failure mode the trailing-content tolerances
+// above already guard against, just triggered by escaping instead of an
+// unhandled trailing shape.
 const ISSUE_OR_PR_REFERENCE_PATTERN =
-  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:\/)?(?:#[^)\s"']+)?(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b|(?<![\w/])([\w.-]+)\/([\w.-]+)#(\d+)\b/gi;
+  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:\/)?(?:#[^)\s"']+)?(?:\s+(?:"(?:\\.|[^"\n])*"|'(?:\\.|[^'\n])*'))?\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b|(?<![\w/])([\w.-]+)\/([\w.-]+)#(\d+)\b/gi;
 
 // Matches a Markdown list item marker at the start of a line (unordered
 // `-`/`*`/`+`, or ordered `1.`/`1)`), optionally indented and optionally
-// followed by a task-list checkbox. Declared here (before the CLI entry
+// followed by a task-list checkbox. Captures the leading indentation
+// (group 1) so splitIntoListItemBlocks can tell a deeper-indented
+// nested/child marker from a new marker at the same or shallower
+// indentation as the most recently seen one — see that function for how
+// the two are told apart. Declared here (before the CLI entry
 // block below), not next to splitIntoSentences/splitIntoListItemBlocks
 // that use it, because those are hoisted function declarations but this
 // is a module-level `const` — declaring it after the entry block would be
 // a TDZ risk under the CLI path, which calls main() synchronously at this
 // point in module evaluation (see tests/cli-entry-smoke.test.mts).
-const LIST_ITEM_MARKER_PATTERN = /^\s*(?:[-*+]|\d+[.)])\s+/;
+const LIST_ITEM_MARKER_PATTERN = /^(\s*)(?:[-*+]|\d+[.)])\s+/;
+
+// Matches a Markdown reference-style link *usage*: `[text][ref]`, where a
+// separate `[ref]: <target>` definition (matched by
+// LINK_REFERENCE_DEFINITION_PATTERN below) supplies the actual target
+// elsewhere in the document — commonly far from the usage, so this is
+// resolved as a whole-document pre-processing step (see
+// resolveReferenceStyleLinks) rather than as a fifth alternative inside
+// ISSUE_OR_PR_REFERENCE_PATTERN, which cannot look outside its own match
+// to find the target. The ref label must be non-empty — this
+// deliberately excludes the shortcut forms `[text][]` and bare `[text]`
+// (which would resolve the ref from the label text itself); only the
+// explicit-ref shape named in issue #1472 is in scope here. Same
+// TDZ-avoidance placement rationale as LIST_ITEM_MARKER_PATTERN above.
+const REFERENCE_STYLE_LINK_USAGE_PATTERN = /\[([^\]\n]*)\]\[([^\]\n]+)\]/g;
+
+// Matches a Markdown link reference definition line: optionally indented
+// (up to 3 spaces, per CommonMark), `[label]: target`, with the target
+// read up to the first whitespace. An optional title on the same
+// definition line (e.g. `[ref]: <url> "title"`) is intentionally not
+// captured — only the destination matters for resolving a reference-style
+// link to a GitHub issue/PR URL.
+const LINK_REFERENCE_DEFINITION_PATTERN = /^ {0,3}\[([^\]\n]+)\]:\s*(\S+)/gm;
 
 if (import.meta.main) {
   main();
@@ -275,7 +320,7 @@ export function auditAuthoredIssue(
     checkDependencyMarkerRule(text, markerPrefix, shape),
     checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
     checkEffortVisibleLineAgreement(text, markerPrefix),
-    checkProseOnlyDependency(text, options.currentRepo),
+    checkProseOnlyDependency(text, normalizeCurrentRepo(options.currentRepo)),
   ];
 
   return {
@@ -592,6 +637,28 @@ function checkEffortVisibleLineAgreement(
   );
 }
 
+// An empty or whitespace-only currentRepo (reachable via an explicit
+// `--current-repo ''`, or an environment where `$GITHUB_REPOSITORY`
+// resolves to an empty string) must be treated the same as it being
+// unset. Without this, `currentRepo !== undefined` is true for `''`, but
+// `${owner}/${repo}` built from a regex match is never empty, so it can
+// never equal `''` — every full-URL/cross-repo-shorthand match would then
+// be silently treated as "known and different" (cross-repo) and excluded,
+// even when the reference is actually local. Returning the *trimmed*
+// value (not the original) when it is non-empty is a free, strictly more
+// correct bonus: a currentRepo with stray leading/trailing whitespace
+// would otherwise never case-insensitively equal a match's own untrimmed
+// `owner/repo` either.
+function normalizeCurrentRepo(
+  currentRepo: string | undefined,
+): string | undefined {
+  if (currentRepo === undefined) {
+    return undefined;
+  }
+  const trimmed = currentRepo.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
+}
+
 function checkProseOnlyDependency(
   text: string,
   currentRepo: string | undefined,
@@ -612,7 +679,14 @@ function checkProseOnlyDependency(
     'i',
   );
   const flagged = new Set<number>();
-  for (const paragraph of text.split(/\n\s*\n/)) {
+  // Resolve reference-style Markdown links (`[text][ref]` + a separate
+  // `[ref]: target` definition elsewhere in the body) to the equivalent
+  // inline-link shape before splitting into paragraphs/sentences, so the
+  // existing Markdown-link alternative below — and its currentRepo /
+  // trailing-content handling — recognizes it with no duplicated matching
+  // logic. Scoped to this check only; other checks keep using `text`.
+  const resolvedText = resolveReferenceStyleLinks(text);
+  for (const paragraph of resolvedText.split(/\n\s*\n/)) {
     for (const sentence of splitIntoSentences(paragraph)) {
       // Scope proximity to one sentence, not the whole paragraph: a long
       // paragraph can legitimately combine an unrelated coordination word
@@ -710,6 +784,44 @@ function checkProseOnlyDependency(
   };
 }
 
+// CommonMark reference labels are compared case-insensitively after
+// collapsing internal whitespace and trimming, so `[Upstream PR]` and
+// `[upstream  pr]` refer to the same definition.
+function normalizeLinkReferenceLabel(label: string): string {
+  return label.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/**
+ * Resolves every `[text][ref]` reference-style link usage in `text`
+ * against its `[ref]: target` definition — which may appear anywhere else
+ * in the document, commonly far from the usage — by rewriting the usage
+ * to the equivalent inline-link shape `[text](target)`. A usage whose ref
+ * does not resolve to any definition is left unchanged: it falls through
+ * to the bare-`#` alternative like any other unrecognized bracket shape,
+ * the same fallback that already applies today. Duplicate labels keep the
+ * first definition, matching CommonMark's rule for duplicate link
+ * reference definitions.
+ */
+function resolveReferenceStyleLinks(text: string): string {
+  const definitions = new Map<string, string>();
+  for (const match of text.matchAll(LINK_REFERENCE_DEFINITION_PATTERN)) {
+    const key = normalizeLinkReferenceLabel(match[1]);
+    if (!definitions.has(key)) {
+      definitions.set(key, match[2]);
+    }
+  }
+  if (definitions.size === 0) {
+    return text;
+  }
+  return text.replace(
+    REFERENCE_STYLE_LINK_USAGE_PATTERN,
+    (whole: string, label: string, ref: string) => {
+      const target = definitions.get(normalizeLinkReferenceLabel(ref));
+      return target === undefined ? whole : `[${label}](${target})`;
+    },
+  );
+}
+
 /**
  * Split a paragraph into sentences on `.`/`!`/`?` followed by whitespace,
  * after collapsing internal newlines to spaces (so a sentence that wraps
@@ -740,16 +852,45 @@ function splitIntoSentences(paragraph: string): string[] {
  * of its own) onto the item it continues. A paragraph with no list items
  * at all yields exactly one block spanning every line, preserving prior
  * behavior for plain prose.
+ *
+ * A marker line's indentation is compared against the *most recently
+ * seen* marker line's indentation (not the current block's own starting
+ * indentation): a *deeper* indentation is a nested/child item and stays
+ * part of the running block, so a parent bullet's coordination language
+ * and a nested child's reference are scoped together instead of being
+ * split into unrelated blocks (see issue #1472). A marker at the *same or
+ * shallower* indentation as the most recently seen marker still starts a
+ * new block, preserving the original tight-list sentence-conflation fix
+ * this function exists for — separate sibling bullets, at any shared
+ * indentation depth, never merge with each other.
+ *
+ * Known, accepted residual gap: a parent bullet with two or more nested
+ * children only keeps the *first* child merged with the parent's text — a
+ * later same-depth sibling still starts its own new block (indistinguishable
+ * here from a same-depth sibling of the parent itself, without tracking a
+ * full indentation stack). Not a regression: today, every nested child is
+ * already split away from its parent unconditionally, so this is
+ * strictly no worse for the second-and-later children while fixing the
+ * common single-child case.
  */
 function splitIntoListItemBlocks(paragraph: string): string[] {
   const blocks: string[] = [];
   let current: string[] = [];
+  let lastMarkerIndent: number | null = null;
   for (const line of paragraph.split('\n')) {
-    if (LIST_ITEM_MARKER_PATTERN.test(line) && current.length > 0) {
+    const marker = LIST_ITEM_MARKER_PATTERN.exec(line);
+    const startsNewBlock =
+      marker !== null &&
+      current.length > 0 &&
+      (lastMarkerIndent === null || marker[1].length <= lastMarkerIndent);
+    if (startsNewBlock) {
       blocks.push(current.join('\n'));
       current = [line];
     } else {
       current.push(line);
+    }
+    if (marker !== null) {
+      lastMarkerIndent = marker[1].length;
     }
   }
   if (current.length > 0) {
