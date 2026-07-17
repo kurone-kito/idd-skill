@@ -602,8 +602,28 @@ export function selectDesyncedIndex(token: unknown, bandSize: unknown): number {
   return (hash >>> 0) % size;
 }
 
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value));
+/**
+ * Deep-clone helper for this module's own trusted defaults (#1449).
+ *
+ * Exported only so its equivalence can be unit-tested directly; every
+ * production call site stays inside this file. `structuredClone` (global
+ * since Node 17, well below this repo's `^22.22.2 || >=24` floor) replaces
+ * the previous `JSON.parse(JSON.stringify(value))` round-trip.
+ * `structuredClone` differs from a JSON round-trip in three ways: it
+ * throws on functions, and it preserves `Date`/`Map`/`undefined`-valued
+ * keys that JSON would drop or convert. All 8 call sites in this file
+ * were enumerated before making this swap: `normalizePolicyConfig`'s
+ * `clone(POLICY_DEFAULTS)`, plus 7 calls across `parsePositiveIntegerArray`
+ * and `parseCheckSelectors`, which only ever clone `POLICY_DEFAULTS`
+ * itself or one of its own frozen sub-arrays (`discover.legacyRoots`,
+ * `ciGate.externalChecks.advisory`, `.waivable` — all `[]`).
+ * `POLICY_DEFAULTS` (below) is a plain, deeply-frozen literal of strings,
+ * numbers, booleans, and empty arrays — it contains no function, `Date`,
+ * `Map`, or `undefined`-valued property anywhere, so none of the three
+ * divergence axes is ever exercised by a real caller.
+ */
+export function clone<T>(value: T): T {
+  return structuredClone(value);
 }
 
 function _firstString(...values: unknown[]): string {
