@@ -297,6 +297,59 @@ config, and forge state. This guidance is **advisory** — a recommended
 practice with its rationale, not a hard requirement — and
 **runner-agnostic**, since this repository ships no runner.
 
+### Orchestrator fan-out variant
+
+A long-lived orchestrating session may run Discover and Claim itself and
+delegate each claimed issue's B-through-F execution to an isolated
+subagent, instead of a thin external runner re-entering a fresh session
+per issue. This is an **explicitly supported alternative** to the
+one-issue-one-session model above, not a replacement for it — the
+monolithic-loop anti-pattern is about a single session accumulating every
+issue's diff, CI log, and review-thread noise in its own context, and
+the orchestrator avoids exactly that: its own context holds only claim
+tokens, branch names, and each worker's final report, while the
+per-issue noise stays inside each short-lived worker's own throwaway
+context. Cross-issue bookkeeping (the claimed set, a concurrency budget,
+one desync token reused across the run) is also cheaper to keep in one
+orchestrating session than to reconstruct per invocation of a stateless
+external scheduler.
+
+Running this variant safely requires:
+
+- **A small concurrency cap**, sized against CI-minute cost and
+  shared-file contention rather than raised without bound. The optional
+  `discover-shared-file-overlap` helper (see
+  [IDD helper script evaluation](idd-helper-scripts.md#discover-shared-file-overlap-contract))
+  reports high-contention shared-file overlap evidence to inform both
+  the cap and the delegation order.
+- **Full per-issue gating before every delegation.** The orchestrator
+  runs the complete A4.5/A5 suitability and claim gates (and the A4
+  viability gate that precedes them) for each issue before handing it to
+  a worker; claiming several issues concurrently is never a shortcut
+  around those gates.
+- **A delegation brief that restates the background-wait topology
+  warning and the worker's exit boundary.** Each worker's brief must
+  carry the
+  [wake-up discipline](../.github/instructions/idd-ci.instructions.md#wake-up-discipline)
+  topology-safety condition, so a worker never assumes an unconfirmed
+  background wait resumes its own turn. The brief must also state that
+  the worker's B-through-F execution ends at F4-complete: the worker
+  reports its final result back to the orchestrator instead of
+  independently entering F5's Discover step, so Discover/Claim ownership
+  stays with the orchestrator alone.
+- **Serialized worktree/clone lifecycle operations when workers share
+  one clone.** Concurrent `git fetch` / `git worktree add` / `git
+  worktree remove` / local-`main` updates from the same primary clone
+  can collide; serialize these specific operations behind a per-clone
+  lock, or give concurrent workers separate clones, once the
+  concurrency cap allows more than one worker at a time.
+- **Resume-specific recovery when a worker dies mid-turn.** Re-verify
+  claim ownership and worktree state before continuing; treat any
+  uncommitted work found in the worktree as unverified input to check,
+  never as something to trust or silently discard; then delegate a fresh
+  subagent with a resume-specific briefing rather than resuming the dead
+  worker's own context.
+
 ## Live Status Digests
 
 Use the live status digest contract in
