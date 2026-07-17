@@ -120,13 +120,18 @@ function disambiguateSingleDashValues(argv, spec) {
  * ambiguous...."`, `"Option '--assert' does not take an argument"`, and
  * `"Unexpected argument 'stray'. ..."` (no leading dash, for a positional).
  * A flag with a `short` alias adds a sixth shape for the "missing value"
- * case specifically: Node reports the **combined** descriptor `"Option
- * '-p, --pr <value>' argument missing"` regardless of which form the
- * caller actually typed (verified empirically) -- the long form is always
- * preferred when both appear together in the quoted span, matching this
- * repository's established `--flag`-only error idiom. The "ambiguous" /
- * "does not take an argument" messages never combine forms this way; they
- * always echo exactly the single token the caller typed. */
+ * case specifically -- meaning the value is entirely absent (the flag is
+ * the last token in argv, so there is nothing left to even look ambiguous
+ * -- see the distinct "ambiguous" shape below for a present-but-suspect
+ * value): Node reports the **combined** descriptor `"Option '-p, --pr
+ * <value>' argument missing"` regardless of which of the two forms the
+ * caller actually typed (verified empirically for both) -- the long form
+ * is always preferred when both appear together in the quoted span,
+ * matching this repository's established `--flag`-only error idiom. The
+ * "ambiguous" / "does not take an argument" shapes never combine forms
+ * this way; each always echoes exactly the single token the caller typed
+ * (also verified empirically, including for a short-typed ambiguous
+ * value: `-p --assert` reports only `'-p'`, never the combined pair). */
 function extractFlagToken(message) {
   const quoted = /'([^']*)'/.exec(message)?.[1] ?? '';
   if (!quoted.startsWith('-')) {
