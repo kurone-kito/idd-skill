@@ -434,7 +434,12 @@ export function parseGitFetchOrigin(url) {
   // real GHES remote can validly omit it), but no real git host is a
   // single letter, so this is almost always a Windows drive-letter path
   // (`C:\Users\...`, `C:repo.git`) rather than a real host.
-  const scpMatch = trimmed.match(/^(?:[^@\s]+@)?([^:/\s]+):/);
+  //
+  // A bracketed IPv6 literal host (`[2001:db8::1]`) is matched before the
+  // generic host pattern: IPv6 literals contain colons of their own, so
+  // the generic `[^:/\s]+` alternative would otherwise stop at the first
+  // one and capture only a truncated fragment (e.g. `[2001`).
+  const scpMatch = trimmed.match(/^(?:[^@\s]+@)?(\[[^\]\s]+\]|[^:/\s]+):/);
   const host = scpMatch?.[1];
   return host && host.length > 1
     ? { scheme: 'https', host: host.toLowerCase() }

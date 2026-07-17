@@ -482,6 +482,16 @@ test('parseGitFetchOrigin: extracts host from the scp-like SSH shorthand without
   });
 });
 
+test('parseGitFetchOrigin: extracts a bracketed IPv6 host from the scp-like shorthand', () => {
+  // The generic scp-like host pattern stops at the first colon, which
+  // would otherwise truncate an IPv6 literal (`[2001:db8::1]`) to
+  // `[2001`; the bracketed form must be matched before the generic one.
+  assert.deepEqual(parseGitFetchOrigin('git@[2001:db8::1]:owner/repo.git'), {
+    scheme: 'https',
+    host: '[2001:db8::1]',
+  });
+});
+
 test('parseGitFetchOrigin: extracts github.com from the pre-existing HTTPS form, lowercased', () => {
   assert.deepEqual(parseGitFetchOrigin('https://GitHub.com/owner/repo.git'), {
     scheme: 'https',
