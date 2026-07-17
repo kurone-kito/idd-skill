@@ -1693,19 +1693,25 @@ test('prose-dependency bridges a loose-list blank line to a shallower open ances
 
 test('prose-dependency does not bridge a loose-list blank line when the left chunk ends in plain prose, not a marker', () => {
   // Regression test for a Codex review finding on this PR: `- Before
-  // merging\n  - child\nIndependent prose` reads, under CommonMark, as
-  // the nested list having ended before the blank line -- "Independent
-  // prose" is unindented plain text, not a continuation of "child".
-  // lastListItemMarkerIndent previously found "child" as the left
+  // merging\n  - child\nIndependent prose` visually reads as the nested
+  // list having ended before the blank line -- "Independent prose" sits
+  // unindented at column 0, directly under "child"'s own bullet.
+  // (CommonMark's lazy-continuation rule technically still absorbs it
+  // into "child"'s own paragraph rather than ending the list -- verified
+  // against three independent renderers, including GitHub's own
+  // `/markdown` API -- but that is a well-known surprising edge case;
+  // this advisory-only check follows the same reading a human author (and
+  // this PR's own Codex review) would give it, not the stricter spec
+  // rule.) lastListItemMarkerIndent previously found "child" as the left
   // chunk's last MARKER line and used its indentation as "whatever is
-  // still open", ignoring that a later continuation line (attached via
+  // still open", ignoring the trailing continuation line (attached via
   // the ancestry walk, since nothing but a marker line closes a node)
-  // followed it. That let the bridge fire and incorrectly scope
-  // "Before" onto the next chunk's "#1391" -- a reference the source
-  // never associated with it. A trailing continuation line after the
-  // left chunk's last marker now blocks the bridge entirely, matching
-  // the pre-#1476 behavior for this shape (paragraph splitting already
-  // kept the two references apart).
+  // that followed it. That let the bridge fire and scope "Before" onto
+  // the next chunk's "#1391" -- a reference a human author reading this
+  // shape would not expect it to reach. A trailing continuation line
+  // after the left chunk's last marker now blocks the bridge entirely,
+  // matching the pre-#1476 behavior for this shape (paragraph splitting
+  // already kept the two references apart).
   const body = childBody({
     extraMarkers:
       '- Before merging\n' +

@@ -749,13 +749,19 @@ function isSingleBlankLine(separator) {
 // having ended before the blank line, even though the algorithm's stack
 // still shows a node open (the trailing prose is a continuation line
 // attached via the ancestry walk, not a marker, so nothing closes it).
-// Bridging across the blank line in that shape would scope "Before"
-// onto a reference in the next chunk that the source never associated
-// with it. Rather than trying to re-derive CommonMark's real
-// list-termination rule, require the last marker line to *be* the run's
-// last line -- any trailing continuation line makes "is this list still
-// open" ambiguous enough that refusing to bridge (a missed advisory,
-// not a false one) is the safer default, matching the same
+// CommonMark's own lazy-continuation rule technically disagrees --
+// "Independent prose" is absorbed into "child"'s own paragraph rather
+// than ending the list -- but that is a well-known surprising edge case
+// that misleads readers (this PR's own Codex review included) far more
+// often than it helps them, so this heuristic follows the visual
+// reading over the stricter spec rule. Bridging across the blank line
+// in that shape would scope "Before" onto a reference in the next chunk
+// that a human author would not expect it to reach. Rather than trying
+// to fully re-derive CommonMark's real list-termination semantics,
+// require the last marker line to *be* the run's last line -- any
+// trailing continuation line makes "is this list still open" ambiguous
+// enough that refusing to bridge (a missed advisory, not a false one)
+// is the safer default, matching the same
 // prefer-a-miss-over-a-false-positive stance the indentation guard below
 // already takes for a too-deep right-hand marker.
 //
