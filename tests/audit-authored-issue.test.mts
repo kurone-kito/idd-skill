@@ -675,7 +675,8 @@ test('prose-dependency does not warn on a plain breadcrumb reference', () => {
     (entry) => entry.id === 'prose-dependency',
   );
   assert.equal(finding?.result, 'pass');
-  assert.equal(finding?.severity, undefined);
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
 });
 
 test('prose-dependency does not warn on a cross-repo shorthand reference', () => {
@@ -693,7 +694,8 @@ test('prose-dependency does not warn on a cross-repo shorthand reference', () =>
   const finding = report.findings.find(
     (entry) => entry.id === 'prose-dependency',
   );
-  assert.equal(finding?.severity, undefined);
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
 });
 
 test('prose-dependency does not warn when the reference already has a Blocked by encoding', () => {
@@ -704,7 +706,8 @@ test('prose-dependency does not warn when the reference already has a Blocked by
   const finding = report.findings.find(
     (entry) => entry.id === 'prose-dependency',
   );
-  assert.equal(finding?.severity, undefined);
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
 });
 
 test('prose-dependency does not warn when the reference already has a Depends on encoding', () => {
@@ -715,7 +718,8 @@ test('prose-dependency does not warn when the reference already has a Depends on
   const finding = report.findings.find(
     (entry) => entry.id === 'prose-dependency',
   );
-  assert.equal(finding?.severity, undefined);
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
 });
 
 test('prose-dependency does not warn on a roadmap-parent breadcrumb sharing a paragraph with unrelated coordination language', () => {
@@ -734,7 +738,8 @@ test('prose-dependency does not warn on a roadmap-parent breadcrumb sharing a pa
   const finding = report.findings.find(
     (entry) => entry.id === 'prose-dependency',
   );
-  assert.equal(finding?.severity, undefined);
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
 });
 
 test('prose-dependency recognizes a full GitHub issue/PR URL reference', () => {
@@ -778,7 +783,8 @@ test('prose-dependency ignores a coordination word and reference that only appea
   const finding = report.findings.find(
     (entry) => entry.id === 'prose-dependency',
   );
-  assert.equal(finding?.severity, undefined);
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
 });
 
 // --- shape / markerPrefix pass-through ---
