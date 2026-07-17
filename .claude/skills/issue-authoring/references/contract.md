@@ -608,12 +608,16 @@ instead of being scoped away from it, while a sibling bullet at the same
 indentation — nested or top-level — still starts its own separate scope,
 preserving the tight-list sentence-conflation fix mentioned above. This
 holds for every nested child under a given parent, at any depth — not
-only the first. A known, tracked limitation remains for a tight list
-only: a continuation line resuming at an ancestor's own indentation
-after a deeper child has already opened is still attributed to that
-child rather than the ancestor, and a loose list (a blank line between
-sibling items) resets scope at the paragraph boundary before this check
-ever sees it. Unlike every other check above, a
+only the first. A continuation line resuming at an ancestor's own
+indentation, after a deeper child has already opened, is attributed to
+that ancestor rather than the deepest open child. A loose list (a blank
+line between sibling items) preserves the same ancestor scope across
+the blank line, as long as the following item's own marker is no deeper
+than whatever is still open at the end of the preceding item — a
+same-depth sibling, or a resumption at a shallower ancestor's own level;
+a blank line directly followed by a more deeply indented marker is not
+bridged, to avoid grafting an unrelated item onto an open ancestor as a
+false child. Unlike every other check above, a
 `prose-dependency` warning never flips `passed` to `false` and never
 changes the linter's exit code: it prompts the author to either
 convert the prose into a proper dependency marker or consciously
