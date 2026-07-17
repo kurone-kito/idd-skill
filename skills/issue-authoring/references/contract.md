@@ -591,7 +591,23 @@ it is flagged only when `--current-repo` is supplied **and**
 case-insensitively matches `owner/repo`; naming a different repository,
 or omitting `--current-repo`, always excludes it, since this shorthand
 was never recognized at all before and a bare `owner/repo` cannot be
-assumed local without confirmation. Unlike every other check above, a
+assumed local without confirmation. A reference-style Markdown link
+(`[text][ref]` with a separate `[ref]: target` definition elsewhere in
+the body) is recognized the same way as the inline-link form above,
+including the same `currentRepo`-based local/cross-repo comparison; a
+`ref` with no matching definition is left as literal text and falls
+through to the bare-`#` check like any other unrecognized shape. A
+quoted link title may contain a backslash-escaped quote matching its own
+delimiter (`\"` inside a `"..."` title, or `\'` inside a `'...'` title)
+without ending the title early and losing the rest of the link. An empty
+or whitespace-only `--current-repo` (or `$GITHUB_REPOSITORY`) is treated
+the same as omitting it entirely, rather than as a known repository that
+can never match. A nested/child list item's reference is evaluated
+together with its parent bullet's coordination-language text instead of
+being scoped away from it, while a sibling bullet at the same
+indentation — nested or top-level — still starts its own separate scope,
+preserving the tight-list sentence-conflation fix mentioned above. Unlike
+every other check above, a
 `prose-dependency` warning never flips `passed` to `false` and never
 changes the linter's exit code: it prompts the author to either
 convert the prose into a proper dependency marker or consciously

@@ -450,7 +450,19 @@ bare-`#` check. A local `owner/repo#N` shorthand (e.g.
 default from the full-URL case: it is flagged only when
 `--current-repo` is supplied and case-insensitively matches
 `owner/repo`; a different repository, or no `--current-repo` at all,
-always excludes it. A
+always excludes it. A reference-style Markdown link (`[text][ref]` with
+a separate `[ref]: target` definition elsewhere in the body) is
+recognized the same way as the inline-link form, including the same
+`currentRepo` comparison; a `ref` with no matching definition falls
+through to the bare-`#` check like any other unrecognized shape. A
+quoted link title may contain a backslash-escaped quote matching its own
+delimiter without ending the title early. An empty or whitespace-only
+`--current-repo` (or `$GITHUB_REPOSITORY`) is treated the same as
+omitting it, not as a known repository that can never match. A
+nested/child list item's reference is evaluated together with its parent
+bullet's coordination-language text instead of being scoped away from
+it, while a same-depth sibling bullet still starts its own separate
+scope. A
 `prose-dependency` warning never flips `passed` to
 `false` and never changes the linter's exit code; it prompts the author
 to convert the prose into a proper dependency marker or consciously
