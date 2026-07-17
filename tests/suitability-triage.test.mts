@@ -23,9 +23,30 @@ test('parseArgs: parses --issue and applies string defaults', () => {
   assert.equal(args.help, false);
 });
 
-test('parseArgs: an invalid --issue resolves to null (matches the existing CLI-level guard)', () => {
+test('parseArgs: a present-but-invalid --issue resolves to NaN, matching the pre-#1450 contract', () => {
+  // This file's original hand-rolled parser assigned the raw (possibly
+  // NaN) Number.parseInt result directly -- it never coerced an invalid
+  // value to null inside parseArgs itself. The caller's own
+  // `args.issue === null || !Number.isInteger(args.issue) ||
+  // args.issue <= 0` guard (outside parseArgs) treats NaN as invalid the
+  // same way it treats null.
   const args = parseArgs(['--issue', 'not-a-number']);
+  assert.ok(Number.isNaN(args.issue));
+});
+
+test('parseArgs: an absent --issue resolves to null', () => {
+  const args = parseArgs([]);
   assert.equal(args.issue, null);
+});
+
+test('parseArgs: --issue keeps its pre-#1450 permissive Number.parseInt contract', () => {
+  // Regression coverage for a CodeRabbit review finding on #1450: the
+  // wrapper migration must not swap in cli-args.mts's stricter
+  // canonical-pattern integer parser here, which would reject trailing-
+  // garbage and leading-zero tokens the original Number.parseInt-based
+  // parser always accepted.
+  assert.equal(parseArgs(['--issue', '42abc']).issue, 42);
+  assert.equal(parseArgs(['--issue', '007']).issue, 7);
 });
 
 test('parseArgs: a missing --issue value throws', () => {

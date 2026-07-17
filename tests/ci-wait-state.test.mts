@@ -28,6 +28,24 @@ test('parseArgs: an invalid --pr resolves to null (fails closed at the caller)',
   assert.equal(args.prNumber, null);
 });
 
+test('parseArgs: an absent --pr also resolves to null', () => {
+  // CodeRabbit review finding on #1450: only the invalid-value case was
+  // covered; --help doesn't assert prNumber, so the absent-value contract
+  // was unprotected.
+  const args = parseArgs([]);
+  assert.equal(args.prNumber, null);
+});
+
+test('parseArgs: --pr keeps its pre-#1450 permissive Number.parseInt contract', () => {
+  // Regression coverage for a CodeRabbit review finding on #1450: the
+  // wrapper migration must not swap in cli-args.mts's stricter
+  // canonical-pattern integer parser here, which would reject trailing-
+  // garbage and leading-zero tokens the original Number.parseInt-based
+  // parser always accepted.
+  assert.equal(parseArgs(['--pr', '42abc']).prNumber, 42);
+  assert.equal(parseArgs(['--pr', '007']).prNumber, 7);
+});
+
 test('parseArgs: a missing --pr value throws', () => {
   assert.throws(() => parseArgs(['--pr']));
 });

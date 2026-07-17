@@ -7,7 +7,7 @@
 
 import { execFileSync } from 'node:child_process';
 
-import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mts';
+import { parseCliArgs } from './cli-args.mts';
 import { ghText } from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
@@ -216,16 +216,36 @@ function main(): void {
   );
 }
 
+/**
+ * Restores this file's pre-#1450 permissive `Number.parseInt` contract:
+ * `Number.parseInt` accepts trailing-garbage ("42abc" -> 42) and
+ * leading-zero ("007" -> 7) tokens the same way the original hand-rolled
+ * `Number.parseInt(value ?? '', 10)` always did, then the original's own
+ * `!Number.isInteger(...) || (... ?? 0) < 1` post-check collapses an
+ * invalid or absent value to `null`. `cli-args.mts`'s
+ * `parseCanonicalIntegerOrNull` is a poor substitute: its canonical-pattern
+ * regex rejects those same permissive tokens outright, which is a real
+ * contract change a CodeRabbit review on PR #1466 caught -- #1450's
+ * acceptance criteria protect the post-parse integer contract as-is, only
+ * flag *syntax* (missing/flag-shaped values, unknown flags) is meant to
+ * tighten.
+ */
+function parseLenientPositiveIntegerOrNull(
+  token: string | undefined,
+): number | null {
+  const value = Number.parseInt(token ?? '', 10);
+  return Number.isInteger(value) && value >= 1 ? value : null;
+}
+
 export function parseArgs(argv: string[]): ReviewActivitySnapshotArgs {
   const { values, help } = parseCliArgs(
     argv,
     REVIEW_ACTIVITY_SNAPSHOT_FLAG_SPEC,
   );
   return {
-    // Resolves to null on an invalid/absent value (fails closed at the
-    // caller) -- the established contract this migration must preserve;
-    // matches advisory-convergence.mts's --pr.
-    prNumber: parseCanonicalIntegerOrNull(values.pr as string | undefined),
+    prNumber: parseLenientPositiveIntegerOrNull(
+      values.pr as string | undefined,
+    ),
     owner: values.owner as string,
     repo: values.repo as string,
     trustedMarkerLogins: values['trusted-marker-logins'] as string,

@@ -10,7 +10,7 @@ import {
   readAdvisorySecondaryBotLogin,
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mjs';
-import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
+import { parseCliArgs } from './cli-args.mjs';
 import { ghText, safeGhText } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
@@ -150,13 +150,28 @@ function main() {
     )}\n`,
   );
 }
+/**
+ * Restores this file's pre-#1450 permissive `Number.parseInt` contract:
+ * `Number.parseInt` accepts trailing-garbage ("42abc" -> 42) and
+ * leading-zero ("007" -> 7) tokens the same way the original hand-rolled
+ * `Number.parseInt(value ?? '', 10)` always did, then the original's own
+ * `!Number.isInteger(...) || (... ?? 0) < 1` post-check collapses an
+ * invalid or absent value to `null`. `cli-args.mts`'s
+ * `parseCanonicalIntegerOrNull` is a poor substitute: its canonical-pattern
+ * regex rejects those same permissive tokens outright, which is a real
+ * contract change a CodeRabbit review on PR #1466 caught -- #1450's
+ * acceptance criteria protect the post-parse integer contract as-is, only
+ * flag *syntax* (missing/flag-shaped values, unknown flags) is meant to
+ * tighten.
+ */
+function parseLenientPositiveIntegerOrNull(token) {
+  const value = Number.parseInt(token ?? '', 10);
+  return Number.isInteger(value) && value >= 1 ? value : null;
+}
 export function parseArgs(argv) {
   const { values, help } = parseCliArgs(argv, ADVISORY_WAIT_STATE_FLAG_SPEC);
   return {
-    // Resolves to null on an invalid/absent value (fails closed at the
-    // caller) -- the established contract this migration must preserve;
-    // matches advisory-convergence.mts's --pr.
-    prNumber: parseCanonicalIntegerOrNull(values.pr),
+    prNumber: parseLenientPositiveIntegerOrNull(values.pr),
     owner: values.owner,
     repo: values.repo,
     trustedMarkerLogins: values['trusted-marker-logins'],

@@ -7,7 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
+import { parseCliArgs } from './cli-args.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 
@@ -642,15 +642,31 @@ function runCli() {
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
+/**
+ * Restores this file's pre-#1450 permissive `Number.parseInt` contract:
+ * absent resolves to `null` (the original `issue: null` default, never
+ * overwritten when `--issue` is absent); present feeds the raw token
+ * straight to `Number.parseInt`, which accepts trailing-garbage ("42abc"
+ * -> 42) and leading-zero ("007" -> 7) tokens the same way the original
+ * hand-rolled `Number.parseInt(String(value ?? ''), 10)` always did.
+ * `cli-args.mts`'s `parseCanonicalIntegerOrNull` is a poor substitute
+ * here: its canonical-pattern regex rejects those same tokens outright,
+ * which is a real contract change a CodeRabbit review on PR #1466 caught
+ * -- #1450's acceptance criteria protect the post-parse integer contract
+ * as-is, only flag *syntax* (missing/flag-shaped values, unknown flags)
+ * is meant to tighten. This file's own `args.issue === null ||
+ * !Number.isInteger(args.issue) || args.issue <= 0` use-site guard
+ * already treats `NaN` (an invalid parseInt result) the same as `null`,
+ * so this restores the exact original resolved value, not just an
+ * equivalent downstream verdict.
+ */
+function parseLenientIntegerOrNull(token) {
+  return token === undefined ? null : Number.parseInt(token, 10);
+}
 export function parseArgs(argv) {
   const { values, help } = parseCliArgs(argv, SUITABILITY_TRIAGE_FLAG_SPEC);
   return {
-    // Resolves to null on an invalid/absent value, matching this file's
-    // existing CLI-level guard (`args.issue === null || ...`), which
-    // treated a non-numeric --issue the same as an absent one (NaN also
-    // fails `Number.isInteger`) -- so this is a behavior-preserving
-    // simplification, not a contract change.
-    issue: parseCanonicalIntegerOrNull(values.issue),
+    issue: parseLenientIntegerOrNull(values.issue),
     token: values.token,
     owner: values.owner,
     repo: values.repo,

@@ -16,7 +16,7 @@
 // thread with no disposition.
 
 import { execFileSync } from 'node:child_process';
-import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mts';
+import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
   isAuthorizedForcedHandoffActor,
@@ -172,22 +172,38 @@ function splitList(value: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Restores this file's pre-#1450 permissive `Number.parseInt` contract:
+ * absent resolves to `null` (the original `pr: null` / `claimIssue: null`
+ * default, never overwritten when the flag is absent); present feeds the
+ * raw token straight to `Number.parseInt`, which accepts trailing-garbage
+ * ("42abc" -> 42) and leading-zero ("007" -> 7) tokens the same way the
+ * original hand-rolled `Number.parseInt(next(), 10)` always did.
+ * `cli-args.mts`'s `parseCanonicalIntegerOrNull` is a poor substitute here:
+ * its canonical-pattern regex rejects those same tokens outright, which is
+ * a real contract change a CodeRabbit review on PR #1466 caught -- #1450's
+ * acceptance criteria protect the post-parse integer contract as-is, only
+ * flag *syntax* (missing/flag-shaped values, unknown flags) is meant to
+ * tighten. The downstream `!Number.isInteger(...) || (... ?? 0) <= 0`
+ * guards below already treat `NaN` (an invalid parseInt result) the same
+ * as `null`, so this restores the exact original resolved value, not just
+ * an equivalent downstream verdict.
+ */
+function parseLenientIntegerOrNull(token: string | undefined): number | null {
+  return token === undefined ? null : Number.parseInt(token, 10);
+}
+
 export function parseArgs(argv: string[]): CliArgs {
   const { values, help } = parseCliArgs(argv, RESOLVE_REVIEW_THREAD_FLAG_SPEC);
   return {
-    // Resolves to null on an invalid/absent value. The downstream
-    // `!Number.isInteger(...) || (... ?? 0) <= 0` guards treat NaN and
-    // null identically, so this is a behavior-preserving simplification
-    // of the prior Number.parseInt-then-check pattern, not a contract
-    // change.
-    pr: parseCanonicalIntegerOrNull(values.pr as string | undefined),
-    commentId: parseCanonicalIntegerOrNull(
+    pr: parseLenientIntegerOrNull(values.pr as string | undefined),
+    commentId: parseLenientIntegerOrNull(
       values['comment-id'] as string | undefined,
     ),
     body: values.body as string,
     owner: values.owner as string,
     repo: values.repo as string,
-    claimIssue: parseCanonicalIntegerOrNull(
+    claimIssue: parseLenientIntegerOrNull(
       values['claim-issue'] as string | undefined,
     ),
     claimId: values['claim-id'] as string,
