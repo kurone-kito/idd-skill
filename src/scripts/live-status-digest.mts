@@ -159,15 +159,19 @@ function main(): void {
     args.issue ?? args.pr,
     `--${targetType}`,
   );
+  // `expectedLinkedPrs` is a pure, local computation, so building it
+  // eagerly is free. `prFirstCommitAt` is not: resolving it makes a
+  // paginated `gh api pulls/{pr}/commits` call. `claimContext` is only
+  // consumed inside the `assertClaim` callback below, which
+  // `applyDigestUpsert` invokes only for a real `--apply` claim check (never
+  // for a dry-run, a duplicate-plan exit, or `--apply --skip-claim-check`),
+  // so resolve `prFirstCommitAt` lazily at that same call site instead of
+  // paying for it on every invocation regardless of whether anything ends
+  // up consuming it.
   const claimContext =
     targetType === 'pr'
       ? {
           expectedLinkedPrs: buildExpectedLinkedPrReferences(
-            owner,
-            repo,
-            targetNumber,
-          ),
-          prFirstCommitAt: resolvePrFirstCommitAtForPr(
             owner,
             repo,
             targetNumber,
@@ -241,7 +245,13 @@ function main(): void {
             args.claimIssue,
             args.agentId,
             args.claimId,
-            claimContext,
+            {
+              ...claimContext,
+              prFirstCommitAt:
+                targetType === 'pr'
+                  ? resolvePrFirstCommitAtForPr(owner, repo, targetNumber)
+                  : null,
+            },
           ),
         createComment: (body) =>
           createIssueComment(owner, repo, targetNumber, body),
