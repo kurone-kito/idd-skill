@@ -14,10 +14,9 @@
 // function can never drift. The written formula in the instructions remains
 // the canonical spec and fallback; this helper only removes the ad hoc
 // `node -e` hand-transcription error surface that motivated this issue.
-import { isCliExecution } from './gh-exec.mjs';
 import { selectDesyncedIndex } from './policy-helpers.mjs';
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 function runCli() {

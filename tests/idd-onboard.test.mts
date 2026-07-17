@@ -23,8 +23,9 @@ import {
   PROFILE_NAMES,
 } from '../src/scripts/helper-runtime-manifest.mts';
 // Importing the CLI module directly is only possible because its top-level
-// statements are guarded behind isCliExecution() (#1210 pattern); an
-// import-time CLI run would parse process.argv and abort this test process.
+// statements are guarded behind `import.meta.main` (#1210 pattern, migrated
+// from isCliExecution() by #1447); an import-time CLI run would parse
+// process.argv and abort this test process.
 import {
   applyImportPlan,
   applySubstitutionPlan,

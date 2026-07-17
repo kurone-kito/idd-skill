@@ -48,7 +48,6 @@ import {
   GH_TEXT_LOOP_OPTIONS,
   ghApiJson,
   ghText,
-  isCliExecution,
   safeGhText,
 } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
@@ -960,10 +959,9 @@ function fetchThreadCommentPages(threadId, afterCursor) {
   return nodes;
 }
 // CLI: emit the verdict as JSON and set the exit code when invoked directly.
-// Guarded behind isCliExecution(import.meta.url) (shared, see gh-exec.mts)
-// so importing this module (for unit tests) never parses process.argv,
-// prints usage, or makes a `gh` call.
-if (isCliExecution(import.meta.url)) {
+// Guarded behind `import.meta.main` so importing this module (for unit
+// tests) never parses process.argv, prints usage, or makes a `gh` call.
+if (import.meta.main) {
   const { verdict, exitCode, help } = runAdvisoryConvergence(
     process.argv.slice(2),
   );

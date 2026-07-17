@@ -6,11 +6,7 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import {
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-  isCliExecution,
-} from './gh-exec.mjs';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 
 const APPROVAL_POLICIES = new Set([
@@ -18,7 +14,7 @@ const APPROVAL_POLICIES = new Set([
   'all-write-permission-actors',
 ]);
 const APPROVAL_POLICY_DEFAULT = 'owners-and-maintainers-only';
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 export function evaluateClaimApprovalGate(input, options = {}) {

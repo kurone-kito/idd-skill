@@ -8,7 +8,6 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mts';
 import {
@@ -560,7 +559,7 @@ interface ParsedArgs {
 
 type CachedIssue = NormalizedIssue | InaccessibleIssueSentinel | null;
 
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   const hasIssue = Number.isInteger(args.issue) && args.issue > 0;
   // --issue and --all-roadmaps are mutually exclusive: exactly one route
@@ -2891,10 +2890,6 @@ function isNotFoundIssueLookupError(error: unknown): boolean {
   const candidate = error as { stderr?: unknown; message?: unknown };
   const stderr = String(candidate.stderr ?? candidate.message ?? '');
   return stderr.includes('HTTP 404');
-}
-
-function isMainModule(importMetaUrl: string): boolean {
-  return process.argv[1] === fileURLToPath(importMetaUrl);
 }
 
 function buildEdgeKey(edge: RoadmapGraphEdge): string {
