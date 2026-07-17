@@ -79,6 +79,16 @@ test('parseCliArgs: a short alias with a single-dash-prefixed value also avoids 
   assert.equal(values.pr, '-3');
 });
 
+test('parseCliArgs: a short alias -x=value form is normalized (not left as a literal "=value")', () => {
+  // Second Copilot follow-up on #1446: unlike a long option, Node does
+  // NOT special-case `=` splitting for a short option at all, so `-p=5`
+  // (ordinary input, not just a -3-shaped edge case) parsed to the
+  // literal value "=5", not "5", before this fix -- silently wrong, not
+  // merely an ambiguity throw.
+  assert.equal(parseCliArgs(['-p=5'], SAMPLE_SPEC).values.pr, '5');
+  assert.equal(parseCliArgs(['-p=-3'], SAMPLE_SPEC).values.pr, '-3');
+});
+
 test('parseCliArgs: a short alias still rejects a flag-shaped value', () => {
   // The reported token echoes exactly what was typed (-p), not the long
   // form -- Node's own error message names the short token here.

@@ -111,17 +111,31 @@ const NODE_OPTION_KEY_PATTERN = /^--[A-Za-z0-9][A-Za-z0-9-]*$/;
  * untouched, so `['--owner', '--assert']` still reaches `util.parseArgs`
  * unmodified and still throws.
  *
- * A short alias (`short: 'p'`) hits the identical ambiguity for `-p -3`,
- * but `-p=-3` does NOT fix it the way `--pr=-3` does: Node only special-
- * cases `=` splitting for long options, so `-p=-3` parses as the literal
- * value `"=-3"` (verified empirically), not `"-3"`. The short-token case
- * is therefore rewritten onto the long dashed key's `=` form instead of
- * onto its own short form -- `['-p', '-3']` becomes `['--pr=-3']`, not
- * `['-p=-3']`. A short token with no matching long-flag entry in `spec`
- * is left untouched (`util.parseArgs` will report its own unknown-option
- * or missing-value error for it, same as before this preprocessing pass
- * existed for the long-flag case).
+ * A short alias (`short: 'p'`) hits the identical two-token ambiguity for
+ * `-p -3`, rewritten the same way onto the long key's `=` form (`['-p',
+ * '-3']` becomes `['--pr=-3']`, not `['-p=-3']` -- see the next paragraph
+ * for why the short form's own `=` cannot carry it). A short token with no
+ * matching long-flag entry in `spec` is left untouched (`util.parseArgs`
+ * will report its own unknown-option or missing-value error for it, same
+ * as before this preprocessing pass existed for the long-flag case).
+ *
+ * A short alias also needs a SEPARATE, single-token rewrite Node's own
+ * `--flag=value` handling does not cover: unlike a long option, Node does
+ * NOT special-case `=` splitting for a short option at all, so `-p=5` (an
+ * entirely ordinary invocation, not just a `-3`-shaped edge case) parses
+ * to the literal value `"=5"`, not `"5"` (verified empirically) --
+ * silently wrong for common input, not merely an ambiguity throw. Every
+ * `-<short>=<value>` token whose short letter maps to a declared
+ * `string`-type flag is rewritten onto that flag's long `=` form before
+ * `util.parseArgs` ever sees it: `-p=5` becomes `--pr=5`, `-p=-3` becomes
+ * `--pr=-3`. A short letter with no matching flag entry is left untouched.
  */
+// Matches a short option's `=value` form as ONE argv token, e.g. `-p=5`
+// or `-p=-3` -- captures the short letter and everything after `=`
+// (including an embedded `=` or a leading `-`, so `-p=-3` and `-p==` both
+// capture their full intended value).
+const SHORT_FLAG_EQUALS_PATTERN = /^-([A-Za-z])=([\s\S]*)$/;
+
 function disambiguateSingleDashValues(
   argv: readonly string[],
   spec: CliFlagSpecMap,
@@ -139,6 +153,24 @@ function disambiguateSingleDashValues(
   const rewritten: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
+
+    // Single-token case: `-p=VALUE`. Node only special-cases `=` splitting
+    // for LONG options; for a short option it keeps the literal `=` as
+    // part of the value (`-p=5` parses to `"=5"`, not `"5"` -- verified
+    // empirically), which is silently wrong for entirely ordinary input,
+    // not just an ambiguity edge case. Rewrite onto the long key's own
+    // (correctly `=`-splitting) form before Node ever sees it.
+    const shortEquals = SHORT_FLAG_EQUALS_PATTERN.exec(token);
+    if (shortEquals) {
+      const longKey = shortToLong.get(`-${shortEquals[1]}`);
+      if (longKey !== undefined) {
+        rewritten.push(`${longKey}=${shortEquals[2]}`);
+        continue;
+      }
+    }
+
+    // Two-token case: `--flag VALUE` / `-p VALUE` where VALUE starts with
+    // a single dash and could plausibly be another option.
     const next = argv[index + 1];
     const isAmbiguousValue =
       typeof next === 'string' &&
