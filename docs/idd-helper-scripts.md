@@ -97,6 +97,22 @@ In the idd-skill source repository, the following optional helpers were adopted:
   sub-gate (#1340): a deterministic `converged`/`ready` verdict with an
   exit-code contract via `--assert`, claim-independent so it also works
   as a required-check-able CI verdict
+- `scripts/rerun-advisory-convergence.mjs` (#1431) for a read-only
+  rerun-plan diagnosis of stuck `idd-advisory-convergence` check-run
+  rollups: fetches every check-run instance for a PR's current HEAD SHA
+  (paged commit check-runs API), classifies each as `pass` / `pending` /
+  `bot-gated-skip` / `unresolved` / `rerun-eligible`, and prints the
+  ordered, deduplicated `gh run rerun <id>` recovery plan for the
+  rerun-eligible instances (each command includes `-R owner/repo` when
+  the repository is known) — referenced from `idd-ci.instructions.md`
+  §Rerun mechanics as the preferred way to produce that plan. When no
+  instance is rerun-eligible but the rollup is stuck on a bot-gated
+  instance alongside an already-passing non-bot pull_request-family
+  instance, it additionally offers a `recoveryRefreshPlan`: rerunning
+  that already-passing instance is the documented way to force a fresh
+  non-bot evaluation and clear the stale rollup. Never calls
+  `gh run rerun` itself; a mutating `--apply` mode is a deliberate
+  follow-up.
 - `scripts/live-status-digest.mjs` for issue or PR live status digest
   discovery, rendering, dry-run, and claim-checked upsert
 - `scripts/audit-pr-cleanup.mjs` for post-merge comment cleanup auditing
@@ -1051,6 +1067,31 @@ Interpretation rules:
   mistake an unresolvable required-check source for a vacuous pass.
 - it remains read-only; the command performs no reruns and posts no
   GitHub comment
+
+### Rerun-plan diagnosis (stuck advisory-convergence)
+
+- Source repo / vendored-node command:
+  `node scripts/rerun-advisory-convergence.mjs --pr <pr-number>`
+- Package-manager / ephemeral-npx command: use the
+  profile-selected `idd:rerun-advisory-convergence` command from the
+  helper runtime manifest wiring above
+- Read-only rerun-plan diagnosis (#1431) for a stuck `idd-advisory-convergence`
+  required-check rollup: fetches every check-run instance for the PR's
+  current HEAD SHA (paged commit check-runs API, `filter=all`), classifies
+  each as `pass` / `pending` / `bot-gated-skip` / `unresolved` /
+  `rerun-eligible`, and prints the ordered, deduplicated `gh run rerun <id>`
+  recovery plan for the rerun-eligible instances -- referenced from
+  `idd-ci.instructions.md` §Rerun mechanics as the preferred way to produce
+  that plan
+- Also reports a `recoveryRefreshPlan` when no instance is rerun-eligible but
+  the rollup is stuck on a bot-gated instance alongside an already-passing
+  non-bot pull_request-family instance, and honors the resolved
+  `ciWait.rerunPolicy`: a `"hold"` policy, or an instance whose own
+  `runAttempt` already exhausted the `"rerun-once"` budget, withholds the
+  corresponding plan entries with an explanatory `rerunPolicyHoldNotice`
+  instead of silently omitting them
+- it never calls `gh run rerun` (or any other mutating command) itself; a
+  mutating `--apply` mode is a deliberate follow-up (out of scope for #1431)
 
 ### Merge-gate evidence
 
