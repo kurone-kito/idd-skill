@@ -964,6 +964,50 @@ test('prose-dependency does not warn on a cross-repo Markdown link with a traili
   assert.equal(finding.severity, undefined);
 });
 
+test('prose-dependency does not warn on a cross-repo Markdown link whose fragment contains a dot', () => {
+  // Regression test for a review finding on this same PR (#1469): a
+  // fragment charset restricted to [\w-]+ rejects a fragment containing a
+  // `.` (e.g. a heading-anchor-style fragment), which fails the whole
+  // Markdown-link alternative and reintroduces the exact label-leak this
+  // shape exists to prevent -- the same failure mode as an untolerated
+  // fragment at all, just triggered by an overly narrow charset instead.
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      '[PR #12](https://github.com/kurone-kito/other-repo/pull/12#foo.bar) has shipped.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not warn on a cross-repo Markdown link with a non-ASCII fragment', () => {
+  // Regression test for a review finding on this same PR (#1469): a
+  // fragment charset restricted to ASCII \w rejects a non-ASCII fragment
+  // (realistic for this repository, whose docs/issues carry Japanese
+  // content routinely), with the same label-leak failure mode as above.
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/other-repo/pull/1391#背景) has shipped.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
 test('prose-dependency recognizes a Markdown link whose target has a trailing slash', () => {
   const body = childBody({
     extraMarkers:

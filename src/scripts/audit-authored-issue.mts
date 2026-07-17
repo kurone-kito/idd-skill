@@ -207,7 +207,7 @@ const PROSE_DEPENDENCY_KEYWORDS = [
 // token boundary rather than mid-path (e.g. inside a 3-segment
 // slash-separated path that happens to end in `#123`).
 const ISSUE_OR_PR_REFERENCE_PATTERN =
-  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:\/)?(?:#[\w-]+)?(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b|(?<![\w/])([\w.-]+)\/([\w.-]+)#(\d+)\b/gi;
+  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:\/)?(?:#[^)\s"']+)?(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b|(?<![\w/])([\w.-]+)\/([\w.-]+)#(\d+)\b/gi;
 
 // Matches a Markdown list item marker at the start of a line (unordered
 // `-`/`*`/`+`, or ordered `1.`/`1)`), optionally indented and optionally
