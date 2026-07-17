@@ -18,7 +18,9 @@ import {
   extractKeywordReferences,
   extractRoadmapMarkerId,
   extractTaskListReferences,
+  isClaimHeartbeatOverdue,
   normalizeConcurrency,
+  parseClaimHeartbeatIntervalMs,
   parseClaimStaleAgeMs,
   type SearchIssuesQuery,
   warnOnSearchResultCap,
@@ -1809,10 +1811,12 @@ test('open-roadmap-roots loader warns on the 1000-result search cap', () => {
 // ---------------------------------------------------------------------------
 
 const CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
+const CLAIM_HEARTBEAT_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const CLAIM_NOW = '2026-06-25T12:00:00Z';
 
-// A claim posted recently relative to CLAIM_NOW is non-stale; one posted
-// well over the 24h stale age earlier is stale.
+// A claim posted recently relative to CLAIM_NOW is non-stale (and within the
+// heartbeat interval); one posted well over the 24h stale age earlier is
+// both stale AND heartbeat-overdue (24h > 12h, so stale implies overdue).
 const FRESH_CLAIM_AT = '2026-06-25T06:00:00Z';
 const STALE_CLAIM_AT = '2026-06-20T06:00:00Z';
 
@@ -1835,10 +1839,12 @@ function buildClaimState(
     currentClaimId = '',
     trustedActors = ['kurone-kito'],
     staleAgeMs = CLAIM_STALE_AGE_MS,
+    heartbeatIntervalMs = CLAIM_HEARTBEAT_INTERVAL_MS,
   }: {
     currentClaimId?: string;
     trustedActors?: string[];
     staleAgeMs?: number;
+    heartbeatIntervalMs?: number;
   } = {},
 ) {
   const trusted = new Set(trustedActors.map((value) => value.toLowerCase()));
@@ -1853,6 +1859,7 @@ function buildClaimState(
       isTrustedAuthor: (login: string) =>
         trusted.has(String(login ?? '').toLowerCase()),
       staleAgeMs,
+      heartbeatIntervalMs,
       nowIso: CLAIM_NOW,
       currentClaimId,
     },
@@ -1923,6 +1930,7 @@ test('a present non-stale claim marks the leaf claimEligible:false', async () =>
     stale: false,
     claimId: 'claim-701',
     agentId: 'agent-a',
+    heartbeatOverdue: false,
   });
   assert.equal(leaf701?.claimEligible, false);
   // Only the open execution leaves are probed (not the roadmap root 700).
@@ -1951,6 +1959,7 @@ test('a stale claim is takeover-eligible: present:true, stale:true, claimEligibl
     stale: true,
     claimId: 'claim-701',
     agentId: 'agent-a',
+    heartbeatOverdue: true,
   });
   assert.equal(leaf701?.claimEligible, true);
 });
@@ -1975,6 +1984,7 @@ test('an unclaimed leaf is eligible: present:false, claimEligible:true', async (
     stale: false,
     claimId: null,
     agentId: null,
+    heartbeatOverdue: false,
   });
   assert.equal(leaf702?.claimEligible, true);
 });
@@ -2087,6 +2097,7 @@ test('--current-claim-id emits ownedByCurrentSession:false on an unclaimed leaf'
     stale: false,
     claimId: null,
     agentId: null,
+    heartbeatOverdue: false,
     ownedByCurrentSession: false,
   });
 });
@@ -2169,11 +2180,172 @@ test('a PT0S staleAge falls back to the default 24h window, not 0ms', async () =
     // rather than being wrongly treated as stale by a 0ms window.
     assert.deepEqual(
       leaf701?.activeClaim,
-      { present: true, stale: false, claimId: 'claim-701', agentId: 'agent-a' },
+      {
+        present: true,
+        stale: false,
+        claimId: 'claim-701',
+        agentId: 'agent-a',
+        heartbeatOverdue: false,
+      },
       `staleAge ${JSON.stringify(staleAge)} should not mark a fresh claim stale`,
     );
     assert.equal(leaf701?.claimEligible, false);
   }
+});
+
+// ---------------------------------------------------------------------------
+// activeClaim.heartbeatOverdue diagnostic annotation (#1433).
+//
+// Purely additive and purely diagnostic: every case below re-asserts
+// claimEligible unchanged from what the pre-#1433 stale-only rule would have
+// produced, proving heartbeatOverdue never leaks into the takeover gate.
+// ---------------------------------------------------------------------------
+
+// Exactly at the 12h heartbeat-interval boundary, but well inside the 24h
+// stale window.
+const HEARTBEAT_OVERDUE_NOT_STALE_AT = '2026-06-25T00:00:00Z';
+// Just under the 12h boundary.
+const HEARTBEAT_WITHIN_WINDOW_AT = '2026-06-25T00:01:00Z';
+
+test('heartbeatOverdue:true at the 12h boundary while remaining non-stale and claim-eligible unchanged', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [
+      701,
+      [claimComment('agent-a', 'claim-701', HEARTBEAT_OVERDUE_NOT_STALE_AT)],
+    ],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+    701,
+  );
+  assert.deepEqual(leaf701?.activeClaim, {
+    present: true,
+    stale: false,
+    claimId: 'claim-701',
+    agentId: 'agent-a',
+    heartbeatOverdue: true,
+  });
+  // The diagnostic never becomes a gate: still eligible/blocking exactly as
+  // a non-stale claim always was, pre-#1433.
+  assert.equal(leaf701?.claimEligible, false);
+});
+
+test('heartbeatOverdue:false just inside the 12h window', async () => {
+  const issues = claimGraphIssues();
+  const commentsByIssue = new Map<number, unknown[]>([
+    [701, [claimComment('agent-a', 'claim-701', HEARTBEAT_WITHIN_WINDOW_AT)]],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+    701,
+  );
+  assert.equal(leaf701?.activeClaim?.heartbeatOverdue, false);
+  assert.equal(leaf701?.claimEligible, false);
+});
+
+test('heartbeatOverdue:false when no active claim is present', async () => {
+  const issues = claimGraphIssues();
+  // 702 has no comments at all.
+  const { resolution } = buildClaimState(new Map());
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const leaf702 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+    702,
+  );
+  assert.equal(leaf702?.activeClaim?.present, false);
+  assert.equal(leaf702?.activeClaim?.heartbeatOverdue, false);
+  assert.equal(leaf702?.claimEligible, true);
+});
+
+test('heartbeatOverdue:false when a later trusted heartbeat repost refreshes the clock', async () => {
+  const issues = claimGraphIssues();
+  // The ORIGINAL claim is old enough to be both stale and heartbeat-overdue
+  // on its own, but a later, same agent/claim/branch heartbeat repost
+  // (STALE_CLAIM_AT predates it) refreshes resolveActiveClaim's folded
+  // createdAt to a recent instant — the exact same fold the pre-existing
+  // `stale` computation already relies on, reused here with no new scan.
+  const commentsByIssue = new Map<number, unknown[]>([
+    [
+      701,
+      [
+        claimComment('agent-a', 'claim-701', STALE_CLAIM_AT),
+        claimComment('agent-a', 'claim-701', '2026-06-25T09:00:00Z'),
+      ],
+    ],
+  ]);
+  const { resolution } = buildClaimState(commentsByIssue);
+
+  const graph = await enumerateRoadmapGraph(700, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    claimState: resolution,
+  });
+
+  const leaf701 = new Map(graph.nodes.map((node) => [node.number, node])).get(
+    701,
+  );
+  assert.deepEqual(leaf701?.activeClaim, {
+    present: true,
+    stale: false,
+    claimId: 'claim-701',
+    agentId: 'agent-a',
+    heartbeatOverdue: false,
+  });
+  assert.equal(leaf701?.claimEligible, false);
+});
+
+test('parseClaimHeartbeatIntervalMs rejects non-positive and garbage durations', () => {
+  assert.equal(parseClaimHeartbeatIntervalMs('PT0S'), null);
+  assert.equal(parseClaimHeartbeatIntervalMs('PT0H0M0S'), null);
+  assert.equal(parseClaimHeartbeatIntervalMs('P0D'), null);
+  assert.equal(parseClaimHeartbeatIntervalMs('PT'), null);
+  assert.equal(parseClaimHeartbeatIntervalMs('P'), null);
+  assert.equal(parseClaimHeartbeatIntervalMs(''), null);
+  assert.equal(parseClaimHeartbeatIntervalMs('garbage'), null);
+  assert.equal(parseClaimHeartbeatIntervalMs(undefined), null);
+  // A coherent positive duration still parses.
+  assert.equal(
+    parseClaimHeartbeatIntervalMs('PT12H'),
+    CLAIM_HEARTBEAT_INTERVAL_MS,
+  );
+  assert.equal(parseClaimHeartbeatIntervalMs('PT1S'), 1000);
+});
+
+test('isClaimHeartbeatOverdue reuses isClaimStaleByAge duration math verbatim', () => {
+  // Below the interval.
+  assert.equal(
+    isClaimHeartbeatOverdue(
+      HEARTBEAT_WITHIN_WINDOW_AT,
+      CLAIM_NOW,
+      CLAIM_HEARTBEAT_INTERVAL_MS,
+    ),
+    false,
+  );
+  // Exactly at the interval (inclusive boundary).
+  assert.equal(
+    isClaimHeartbeatOverdue(
+      HEARTBEAT_OVERDUE_NOT_STALE_AT,
+      CLAIM_NOW,
+      CLAIM_HEARTBEAT_INTERVAL_MS,
+    ),
+    true,
+  );
 });
 
 // One epic (920) → a ready leaf (921), a leaf blocked by an open roadmap

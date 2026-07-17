@@ -30,6 +30,7 @@
         "stale": false,
         "claimId": "claim-20260625T000000Z-101",
         "agentId": "github-copilot-cli",
+        "heartbeatOverdue": false,
         "ownedByCurrentSession": false
       },
       "claimEligible": false
@@ -48,7 +49,8 @@
         "present": false,
         "stale": false,
         "claimId": null,
-        "agentId": null
+        "agentId": null,
+        "heartbeatOverdue": false
       },
       "claimEligible": true
     }
