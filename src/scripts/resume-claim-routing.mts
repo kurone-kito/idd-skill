@@ -8,6 +8,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mts';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
@@ -108,6 +109,30 @@ const LEGACY_CLAIM_PATTERN =
   /^<!--\s*claimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+([^\s>]+)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 const LEGACY_RELEASE_PATTERN =
   /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --issue spec key
+// below. See cli-args.mts's module header for the full invariant.
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls runCli() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires.
+const RESUME_CLAIM_ROUTING_FLAG_SPEC = {
+  '--issue': { type: 'string' },
+  '--owner': { type: 'string' },
+  '--repo': { type: 'string' },
+  '--token': { type: 'string' },
+  '--claim-id': { type: 'string' },
+  '--now': { type: 'string' },
+  '--policy': { type: 'string' },
+  '--stale-age-ms': { type: 'string' },
+  '--trusted-marker-logins': { type: 'string' },
+  '--fresh-claim-gate': { type: 'boolean', default: false },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
 
 if (import.meta.main) {
   runCli();
@@ -736,84 +761,33 @@ function compareEvents(
 }
 
 function parseArgs(argv: string[]): ResumeClaimRoutingArgs {
-  const parsed: ResumeClaimRoutingArgs = {
-    issue: null,
-    owner: '',
-    repo: '',
-    token: '',
-    claimId: '',
-    now: '',
-    policy: '',
-    staleAgeMs: 0,
-    trustedMarkerLogins: '',
-    freshClaimGate: false,
-    help: false,
+  const { values, help } = parseCliArgs(argv, RESUME_CLAIM_ROUTING_FLAG_SPEC);
+  const issueToken = values.issue as string | undefined;
+  const staleAgeMsToken = values['stale-age-ms'] as string | undefined;
+  return {
+    // Both --issue and --stale-age-ms are kept as lenient Number.parseInt
+    // (not the canonical-integer helper), matching the pre-migration
+    // contract exactly: --issue is re-validated by this file's own
+    // "!Number.isInteger(args.issue) || (args.issue ?? 0) <= 0" post-check
+    // (in runCli, unchanged), and --stale-age-ms already flows through
+    // normalizeStaleAgeMs()'s own fail-safe (falls back to
+    // DEFAULT_STALE_AGE_MS on any non-finite / non-positive value) --
+    // tightening either at this layer would be an untested, out-of-scope
+    // behavior change for this behavior-preserving migration (see #1451).
+    issue: issueToken === undefined ? null : Number.parseInt(issueToken, 10),
+    owner: (values.owner as string | undefined) ?? '',
+    repo: (values.repo as string | undefined) ?? '',
+    token: (values.token as string | undefined) ?? '',
+    claimId: (values['claim-id'] as string | undefined) ?? '',
+    now: (values.now as string | undefined) ?? '',
+    policy: (values.policy as string | undefined) ?? '',
+    staleAgeMs:
+      staleAgeMsToken === undefined ? 0 : Number.parseInt(staleAgeMsToken, 10),
+    trustedMarkerLogins:
+      (values['trusted-marker-logins'] as string | undefined) ?? '',
+    freshClaimGate: values['fresh-claim-gate'] as boolean,
+    help,
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    const requireValue = () => {
-      if (value === undefined || String(value).startsWith('--')) {
-        throw new Error(`missing value for argument: ${token}`);
-      }
-      return value;
-    };
-    if (token === '--issue') {
-      parsed.issue = Number.parseInt(String(requireValue()), 10);
-      index += 1;
-      continue;
-    }
-    if (token === '--owner') {
-      parsed.owner = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--token') {
-      parsed.token = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--claim-id') {
-      parsed.claimId = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--now') {
-      parsed.now = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--policy') {
-      parsed.policy = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--stale-age-ms') {
-      parsed.staleAgeMs = Number.parseInt(String(requireValue()), 10);
-      index += 1;
-      continue;
-    }
-    if (token === '--trusted-marker-logins') {
-      parsed.trustedMarkerLogins = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--fresh-claim-gate') {
-      parsed.freshClaimGate = true;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-  return parsed;
 }
 
 function printHelp(): void {

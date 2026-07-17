@@ -7,6 +7,7 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 
+import { parseCliArgs } from './cli-args.mts';
 import { ghText } from './gh-exec.mts';
 
 interface PrData {
@@ -68,6 +69,17 @@ const BASE_ADVANCED_BLIND_SPOT_NOTE =
   'pinned to a merge-ref computed at an earlier trigger time. Consider ' +
   're-validating against current base before relying on a pre-existing ' +
   'green check.';
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --pr spec key
+// below. See cli-args.mts's module header for the full invariant.
+const BRANCH_CONFLICT_STATE_FLAG_SPEC = {
+  '--pr': { type: 'string' },
+  '--owner': { type: 'string' },
+  '--repo': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
 
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
@@ -571,49 +583,26 @@ export function parseArgs(argv: string[]): {
   owner: string | null;
   repo: string | null;
 } {
-  const args: {
-    help: boolean;
-    prNumber: string | null;
-    owner: string | null;
-    repo: string | null;
-  } = { help: false, prNumber: null, owner: null, repo: null };
-  for (let i = 0; i < argv.length; i++) {
-    const token = argv[i];
-    const value = argv[i + 1];
-    // Reject a missing value (undefined) or a flag-shaped value so that
-    // `--pr --json` fails fast instead of consuming `--json` as the value.
-    const requireValue = (): string => {
-      if (value === undefined || String(value).startsWith('--')) {
-        throw new Error(`missing value for argument: ${token}`);
-      }
-      return value;
-    };
-    if (token === '--help' || token === '-h') {
-      args.help = true;
-      continue;
+  const { values, help } = parseCliArgs(argv, BRANCH_CONFLICT_STATE_FLAG_SPEC);
+  // --pr stays a canonical-positive-integer STRING (not a parsed number):
+  // the caller passes it straight through to classifyBranchConflictState /
+  // gh invocations as text, and tests/branch-conflict-state.test.mts
+  // asserts this exact string-typed contract. Kept as a manual regex check
+  // (not the canonical-integer helper) so the return type stays a string.
+  const rawPr = values.pr as string | undefined;
+  let prNumber: string | null = null;
+  if (rawPr !== undefined) {
+    if (!/^[1-9]\d*$/.test(rawPr)) {
+      throw new Error(`invalid --pr value: ${rawPr}`);
     }
-    if (token === '--pr') {
-      const raw = requireValue();
-      if (!/^[1-9]\d*$/.test(raw)) {
-        throw new Error(`invalid --pr value: ${raw}`);
-      }
-      args.prNumber = raw;
-      i++;
-      continue;
-    }
-    if (token === '--owner') {
-      args.owner = requireValue();
-      i++;
-      continue;
-    }
-    if (token === '--repo') {
-      args.repo = requireValue();
-      i++;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
+    prNumber = rawPr;
   }
-  return args;
+  return {
+    help,
+    prNumber,
+    owner: (values.owner as string | undefined) ?? null,
+    repo: (values.repo as string | undefined) ?? null,
+  };
 }
 
 function printUsage(): void {
