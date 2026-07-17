@@ -25,6 +25,14 @@ Fix all Accepted PATH A items from ReviewItems_snapshot. Run **fix-validate**.
 
 Commit fixes atomically — one logical change per commit.
 
+**Within-round batching.** All of this round's Accepted PATH A fixes
+travel as their own atomic commits, but push together in a single push
+at E12 — do not push after each individual fix. This is already the
+implicit shape of E9-E12; this rule states it explicitly so it is never
+read as license to push per commit. See E12 for the push step itself
+and the bounded cross-round allowance for comments that arrive before
+that push.
+
 These two fix-side rules are the complement of the accept-side
 "Verify before accept" rule in `idd-review-triage.instructions.md` (E5);
 both cut the advisory-review round count:
@@ -99,6 +107,49 @@ Run **post-fix-validate**.
 
 Then push the feature branch normally (E11 uses merge commits, not
 rebase, so no force push is required).
+
+**Bounded cross-round batching allowance.** Before this push, a small
+number of review comments can arrive that fall outside this round's
+scope and have not yet gone through triage. Fold them into this same
+pending push — each as its own atomic commit — instead of pushing
+immediately and letting each arrival start a fresh round, but only when
+**all** of the following hold:
+
+- Every comment that arrived since the last push is advisory-bot-sourced
+  (PATH B — never a PATH A item; source alone decides this, no triage
+  pass required) and is plainly a small, confirmable fix: the kind
+  described by the "Verify before accept" rule in
+  `idd-review-triage.instructions.md` (E5) — a claim checkable against
+  live evidence and, once confirmed, acted on directly.
+- The resulting commit touches only files this round's pending fixes
+  already touch.
+- No CI-wait poll (E15) is currently in flight for this branch.
+
+**Bound**: accumulate at most 3 additional commits this way, and stop
+accumulating once 10 minutes have passed since the first accumulated
+commit — whichever limit is reached first.
+
+**Ends accumulation immediately**, pushing whatever has accumulated so
+far instead of waiting for more: any PATH A item arrives, any item
+falls outside the touched-file scope above, or either bound above is
+reached.
+
+**Explicit non-goals**: this allowance never delays, holds open, or
+interrupts an in-flight CI wait — E15's "mid-wait arrivals fold into the
+next round" rule is unchanged. It never changes PATH B routing or
+triage timing: formal PATH B classification and disposition
+(`idd-review-triage.instructions.md` E4-E7) still happen normally at the
+next E1 pass. This allowance changes only the _push timing_ of the
+commit itself, never how or when it is triaged. It does not relax
+anything else: E14 still requests a re-review from the primary advisory
+bot after every actual push and still consumes the request cap once per
+push; the per-HEAD `review-watermark` in
+`idd-pre-merge.instructions.md` still invalidates on this push because
+it keys on HEAD SHA; each item's disposition reply in
+`idd-review-triage.instructions.md` (E6) stays individual — no combined
+markers; and the
+[claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
+still runs immediately before this push.
 
 ## E13 — Reply to feedback
 
