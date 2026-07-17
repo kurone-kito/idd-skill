@@ -43,7 +43,7 @@ verbatim, rather than inventing a parallel one:
   below derives the in-scope/excluded phase list directly from these
   three bullets.
 
-- **Non-goal: no ~32K byte squeeze.** The roadmap's operator decision
+- **Non-goal: no ~32K-token squeeze.** The roadmap's operator decision
   explicitly puts the qwen2.5-coder-1.5b class (roughly 32K context) out
   of scope — "the practical cutoff example" for **unsupported**, per
   #1415. A lite profile is not an exercise in fitting the whole loop
@@ -249,22 +249,25 @@ generated pair rather than a third _kind_ of surface:
 
 - **Generation mechanism**: `node scripts/sync-docs.mjs --apply`
   regenerates the lite files the same way it regenerates the standard
-  ones today, from a new `fileSets` entry (see
+  ones today. Generation is driven entirely by `syncPairs` —
+  `sync-docs.mjs` reads only that array, never `fileSets` — so what
+  actually produces each `.github/instructions/lite/idd-*.instructions.md`
+  from its `idd-template/` source is one new `syncPairs` entry **per lite
+  file**, each naming its own `mode` (`exact`, `structure`, or
+  `concreted`): one companion entry per matched instruction file, the
+  same pattern the existing dogfood set already follows.
+- **Audit mechanism**: `node scripts/audit-docs.mjs --check` reads both
+  `fileSets` and `syncPairs`. A new `fileSets` entry (see
   [Recommendation](#recommendation-option-a) above) covering
   `idd-template/.github/instructions/lite/idd-*.instructions.md` →
-  `.github/instructions/lite/idd-*.instructions.md`, `match: "basename"`.
-- **Audit mechanism**: `node scripts/audit-docs.mjs --check` fails on
-  drift for the new pair the same way it already does for
-  `idd-instruction-template-dogfood-set`, so an edit to a lite file's
-  canonical source without regenerating the mirror is caught
-  mechanically, not by review discipline. A `fileSets` entry with
-  `requireSyncPairs: true` (the setting the existing dogfood set already
-  uses) additionally requires one explicit `syncPairs` entry per matched
-  file — the existing dogfood set has 18 such companion entries, one per
-  instruction file, each naming its own `mode` (`exact`, `structure`, or
-  `concreted`). A new lite `fileSets` entry needs the same: one
-  `syncPairs` entry per lite file added, not just the `fileSets` entry
-  itself.
+  `.github/instructions/lite/idd-*.instructions.md`, `match: "basename"`,
+  with `requireSyncPairs: true` (the setting the existing dogfood set
+  already uses), is the **coverage** contract: it fails when a
+  glob-matched file has no corresponding `syncPairs` entry, catching an
+  edit that adds a new lite file without also wiring its generation
+  pair — mechanically, not by review discipline. `fileSets` never drives
+  generation itself; it only validates that `syncPairs` coverage is
+  complete.
 - **Budget mechanism**: a new `bundleBudgets` entry (for example
   `bundle-work-lite`) gives the lite variant its own byte ceiling,
   separate from the standard bundle's `limitBytes`. This is deliberately
