@@ -1518,6 +1518,216 @@ test('prose-dependency does not merge plain prose directly followed by a list it
   assert.equal(finding.severity, undefined);
 });
 
+// --- prose-dependency: continuation-line and loose-list ancestor
+// scoping gaps (#1476) ---
+
+test('prose-dependency attributes a continuation line to its true ancestor, not the deepest open child', () => {
+  // Regression test for the exact gap #1476 tracks: a continuation line
+  // (no list marker of its own) resuming at an ancestor's own
+  // indentation -- after a deeper child has already opened -- was
+  // always glued to whatever child happened to be deepest-open at that
+  // point, regardless of the continuation's own indentation. Here
+  // "Before starting, confirm scope" sits at the SAME 2-space
+  // indentation as the two children's own markers, which is also where
+  // continuation text belonging to the (0-indent) parent's own body
+  // would land; the fix walks the ancestry stack to find the deepest
+  // node whose indent is still strictly less than the continuation's
+  // own, so the coordination language lands on the parent -- reaching
+  // the later sibling "PR #1391" -- not on "Gather context" alone.
+  const body = childBody({
+    extraMarkers:
+      '- Parent task\n' +
+      '  - Gather context\n' +
+      '  Before starting, confirm scope\n' +
+      '  - PR #1391 must land',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency preserves ancestor scope across a loose list blank line between sibling items', () => {
+  // Regression test for the second gap #1476 tracks: checkProseOnlyDependency
+  // split text into paragraphs on every blank line, so a loose list
+  // (blank line between sibling items, ordinary valid CommonMark) lost
+  // the earlier paragraph's still-open ancestor ("Before starting:")
+  // the moment splitIntoListItemBlocks ran on the second item's
+  // paragraph independently. splitIntoParagraphs now bridges exactly
+  // one blank line between two loose-list chunks before
+  // splitIntoListItemBlocks ever runs, so this behaves the same as the
+  // already-passing tight-list case above.
+  const body = childBody({
+    extraMarkers:
+      '- Before starting:\n' +
+      '  - Gather context\n' +
+      '\n' +
+      '  - PR #1391 must land',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency preserves ancestor scope across a loose list spanning three sibling items', () => {
+  // Generalizes the loose-list fix to a THIRD sibling (blank line
+  // before both the second and third items), mirroring the existing
+  // tight-list third-child test above -- proves the merge in
+  // splitIntoParagraphs folds left-to-right against the running
+  // accumulator rather than only handling a single pairwise merge.
+  const body = childBody({
+    extraMarkers:
+      '- Before starting this work:\n' +
+      '  - Gather context\n' +
+      '\n' +
+      '  - Draft the plan\n' +
+      '\n' +
+      '  - PR #1391 must land',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency does not graft a deeper-indented unrelated item onto a keyword-bearing item across a loose-list blank line', () => {
+  // Regression guard for a false positive the loose-list merge must
+  // not introduce: bridging is only safe when the right chunk's first
+  // marker is no deeper than whatever is still open at the end of the
+  // left chunk (a genuine sibling/ancestor continuation). Without that
+  // indentation guard, this RIGHT chunk -- indented deeper than the
+  // left chunk's only (0-indent) item -- would be grafted on as a
+  // fresh CHILD instead of staying a wholly separate, unrelated
+  // bullet. Because the left item has no terminal punctuation, the
+  // flattened block would become one "sentence" that spuriously pairs
+  // the left item's own coordination language ("before") with the
+  // right item's unrelated reference.
+  const body = childBody({
+    extraMarkers:
+      '- Before merging confirm CI is green\n' +
+      '\n' +
+      '  - Unrelated aside mentioning PR #1391, no coordination language here',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not bridge two blank lines between list items as one loose list', () => {
+  // Guard: the loose-list merge is scoped to EXACTLY one blank line
+  // (matching the issue's own "a loose list (blank line between
+  // sibling items)" framing) -- two or more blank lines is a harder
+  // paragraph break and is not bridged, keeping today's behavior for
+  // that stronger separator.
+  const body = childBody({
+    extraMarkers:
+      '- Before starting this work:\n' +
+      '  - Gather context\n' +
+      '\n\n' +
+      '  - PR #1391 must land',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not bridge a blank line between plain prose and a following unrelated list item', () => {
+  // Guard: the loose-list merge requires the left chunk to contain a
+  // list-item marker; a chunk of plain prose (no marker at all) is
+  // never a bridge candidate, so a coordination keyword in ordinary
+  // prose does not reach across a blank line into an unrelated
+  // following bullet's reference either.
+  const body = childBody({
+    extraMarkers:
+      'Confirm before merging this section\n' +
+      '\n' +
+      '- PR #1391 is an unrelated bullet',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency bridges a loose-list blank line to a shallower open ancestor, not just the same depth', () => {
+  // Regression test for a CodeRabbit review nitpick on this PR: every
+  // other loose-list positive test above resumes at exactly the same
+  // depth as the left chunk's tail node (rightHeadIndent === leftTailIndent),
+  // never exercising the genuinely-shallower branch of the
+  // `rightHeadIndent <= leftTailIndent` guard in
+  // isBridgeableLooseListBoundary. Here the left chunk ends three levels
+  // deep ("Sub-detail" at indent 4), and the item after the blank line
+  // resumes at "Gather context"'s own (shallower, indent-2) level --
+  // strictly less than 4, not equal to it. The bridge must still fire so
+  // "Before starting:" (the root) reaches "PR #1391".
+  const body = childBody({
+    extraMarkers:
+      '- Before starting:\n' +
+      '  - Gather context\n' +
+      '    - Sub-detail\n' +
+      '\n' +
+      '  - PR #1391 must land',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency does not bridge a loose-list blank line when the left chunk ends in plain prose, not a marker', () => {
+  // Regression test for a Codex review finding on this PR: `- Before
+  // merging\n  - child\nIndependent prose` visually reads as the nested
+  // list having ended before the blank line -- "Independent prose" sits
+  // unindented at column 0, directly under "child"'s own bullet.
+  // (CommonMark's lazy-continuation rule technically still absorbs it
+  // into "child"'s own paragraph rather than ending the list -- verified
+  // against three independent renderers, including GitHub's own
+  // `/markdown` API -- but that is a well-known surprising edge case;
+  // this advisory-only check follows the same reading a human author (and
+  // this PR's own Codex review) would give it, not the stricter spec
+  // rule.) lastListItemMarkerIndent previously found "child" as the left
+  // chunk's last MARKER line and used its indentation as "whatever is
+  // still open", ignoring the trailing continuation line (attached via
+  // the ancestry walk, since nothing but a marker line closes a node)
+  // that followed it. That let the bridge fire and scope "Before" onto
+  // the next chunk's "#1391" -- a reference a human author reading this
+  // shape would not expect it to reach. A trailing continuation line
+  // after the left chunk's last marker now blocks the bridge entirely,
+  // matching the pre-#1476 behavior for this shape (paragraph splitting
+  // already kept the two references apart).
+  const body = childBody({
+    extraMarkers:
+      '- Before merging\n' +
+      '  - child\n' +
+      'Independent prose\n' +
+      '\n' +
+      '  - PR #1391',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
 // --- prose-dependency: empty-string currentRepo (#1472) ---
 
 test('prose-dependency treats an empty-string currentRepo as unknown', () => {

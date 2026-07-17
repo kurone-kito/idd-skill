@@ -169,6 +169,15 @@ const ISSUE_OR_PR_REFERENCE_PATTERN =
 // a TDZ risk under the CLI path, which calls main() synchronously at this
 // point in module evaluation (see tests/cli-entry-smoke.test.mts).
 const LIST_ITEM_MARKER_PATTERN = /^(\s*)(?:[-*+]|\d+[.)])\s+/;
+// A continuation line (no list-item marker of its own) has no
+// LIST_ITEM_MARKER_PATTERN capture group to read an indentation from,
+// unlike a marker line — its own leading whitespace has to be measured
+// directly (see `lineIndentColumn`, used by splitIntoListItemBlocks's
+// continuation-line branch, #1476). Declared here for the same
+// TDZ reason as LIST_ITEM_MARKER_PATTERN immediately above: this is a
+// module-level `const` reached by the same synchronous CLI call path,
+// not a hoisted function declaration.
+const LEADING_WHITESPACE_PATTERN = /^\s*/;
 // Matches a Markdown reference-style link *usage*: `[text][ref]`, where a
 // separate `[ref]: <target>` definition (matched by
 // LINK_REFERENCE_DEFINITION_PATTERN below) supplies the actual target
@@ -568,7 +577,7 @@ function checkProseOnlyDependency(text, currentRepo) {
   // trailing-content handling — recognizes it with no duplicated matching
   // logic. Scoped to this check only; other checks keep using `text`.
   const resolvedText = resolveReferenceStyleLinks(text);
-  for (const paragraph of resolvedText.split(/\n\s*\n/)) {
+  for (const paragraph of splitIntoParagraphs(resolvedText)) {
     for (const sentence of splitIntoSentences(paragraph)) {
       // Scope proximity to one sentence, not the whole paragraph: a long
       // paragraph can legitimately combine an unrelated coordination word
@@ -716,6 +725,126 @@ function resolveReferenceStyleLinks(text) {
     },
   );
 }
+// Exactly one blank line between two lines of content is two newline
+// characters (the left line's own terminator, then the blank line's
+// own terminator). Two or more blank lines means three or more, which
+// splitIntoParagraphs deliberately treats as a harder break -- see its
+// own doc comment.
+function isSingleBlankLine(separator) {
+  return (separator.match(/\n/g)?.length ?? 0) === 2;
+}
+// Once any list-item marker line appears in a blank-line-free run of
+// text, only a *later* marker line can close its node in
+// splitIntoListItemBlocks's own stack bookkeeping (a continuation line
+// never does). So, structurally, the *last* marker line anywhere in such
+// a run is necessarily still open at the run's end, and that marker's
+// own indentation is a cheap proxy for "the indentation of whatever node
+// is still open right before the blank line" -- without re-running the
+// full ancestry-stack simulation just to find out.
+//
+// That structural fact is not the same as the list still being open in
+// the Markdown a human reader sees, though (found on this PR's own
+// review, Codex): a marker followed by unindented plain prose --
+// `- Before merging\n  - child\nIndependent prose` -- reads as the list
+// having ended before the blank line, even though the algorithm's stack
+// still shows a node open (the trailing prose is a continuation line
+// attached via the ancestry walk, not a marker, so nothing closes it).
+// CommonMark's own lazy-continuation rule technically disagrees --
+// "Independent prose" is absorbed into "child"'s own paragraph rather
+// than ending the list -- but that is a well-known surprising edge case
+// that misleads readers (this PR's own Codex review included) far more
+// often than it helps them, so this heuristic follows the visual
+// reading over the stricter spec rule. Bridging across the blank line
+// in that shape would scope "Before" onto a reference in the next chunk
+// that a human author would not expect it to reach. Rather than trying
+// to fully re-derive CommonMark's real list-termination semantics,
+// require the last marker line to *be* the run's last line -- any
+// trailing continuation line makes "is this list still open" ambiguous
+// enough that refusing to bridge (a missed advisory, not a false one)
+// is the safer default, matching the same
+// prefer-a-miss-over-a-false-positive stance the indentation guard below
+// already takes for a too-deep right-hand marker.
+//
+// Returns undefined when `text` has no marker line at all, or when a
+// continuation line follows the last marker line.
+function lastListItemMarkerIndent(text) {
+  const lines = text.split('\n');
+  let lastMarkerIndex = -1;
+  let lastMarkerIndent;
+  for (let index = 0; index < lines.length; index += 1) {
+    const marker = LIST_ITEM_MARKER_PATTERN.exec(lines[index]);
+    if (marker !== null) {
+      lastMarkerIndex = index;
+      lastMarkerIndent = indentColumnWidth(marker[1]);
+    }
+  }
+  return lastMarkerIndex === lines.length - 1 ? lastMarkerIndent : undefined;
+}
+// Two adjacent blank-line-delimited chunks bridge into one loose-list
+// paragraph only when the right chunk's first marker is no deeper than
+// whatever is still open at the end of the left chunk -- a same-depth
+// sibling continuation, or a resumption at a shallower ancestor's own
+// level, both legitimate loose-list shapes that splitIntoListItemBlocks's
+// existing same-or-shallower sibling-closing logic already re-separates
+// correctly when they are not actually related. A *strictly deeper*
+// right-hand marker is refused: bridging it would invent a parent/child
+// relationship across a blank line the source never expressed -- for
+// example a punctuation-free, keyword-bearing checklist item directly
+// followed by an unrelated, more-indented bullet, which would otherwise
+// flatten into one false-positive "sentence" (see #1476).
+function isBridgeableLooseListBoundary(left, separator, right) {
+  if (!isSingleBlankLine(separator)) {
+    return false;
+  }
+  const leftTailIndent = lastListItemMarkerIndent(left);
+  if (leftTailIndent === undefined) {
+    return false;
+  }
+  const rightMarker = LIST_ITEM_MARKER_PATTERN.exec(right.split('\n')[0] ?? '');
+  return (
+    rightMarker !== null && indentColumnWidth(rightMarker[1]) <= leftTailIndent
+  );
+}
+/**
+ * Splits `text` into paragraphs the same way as `text.split(/\n\s*\n/)`,
+ * except that two adjacent blank-line-delimited chunks are re-joined
+ * into one paragraph when the blank line between them sits inside what
+ * reads as a single loose Markdown list (see `isBridgeableLooseListBoundary`
+ * and #1476). Without this, a loose list -- its sibling items separated
+ * by a blank line, which is ordinary, valid CommonMark -- silently loses
+ * every earlier sibling's ancestor-scoped coordination language the
+ * moment `splitIntoListItemBlocks` runs on each paragraph independently.
+ *
+ * The blank line itself is preserved verbatim in the merged text rather
+ * than dropped: `splitIntoListItemBlocks` treats it like any other
+ * continuation line (no marker of its own), which never closes a node,
+ * so it is inert other than contributing a single collapsed space once
+ * `splitIntoSentences` later flattens the block.
+ *
+ * Merge decisions fold left-to-right against the *running accumulator*,
+ * not the original first chunk, so a loose list of three or more sibling
+ * items (blank line before the second, blank line before the third, and
+ * so on) keeps bridging correctly -- each decision re-derives the
+ * accumulator's own trailing indentation from whatever has already been
+ * merged in.
+ */
+function splitIntoParagraphs(text) {
+  const parts = text.split(/(\n\s*\n)/);
+  const paragraphs = [];
+  let current = parts[0] ?? '';
+  for (let index = 1; index < parts.length; index += 2) {
+    const separator = parts[index] ?? '';
+    const next = parts[index + 1] ?? '';
+    if (isBridgeableLooseListBoundary(current, separator, next)) {
+      current += separator + next;
+    } else {
+      paragraphs.push(current);
+      current = next;
+    }
+  }
+  paragraphs.push(current);
+  return paragraphs;
+}
 /**
  * Split a paragraph into sentences on `.`/`!`/`?` followed by whitespace,
  * after collapsing internal newlines to spaces (so a sentence that wraps
@@ -756,6 +885,9 @@ function indentColumnWidth(indent) {
   }
   return column;
 }
+function lineIndentColumn(line) {
+  return indentColumnWidth(LEADING_WHITESPACE_PATTERN.exec(line)?.[0] ?? '');
+}
 /**
  * Split a paragraph into blocks at each Markdown list item boundary, while
  * still joining a soft-wrapped continuation line (one with no list marker
@@ -795,15 +927,16 @@ function indentColumnWidth(indent) {
  * the first list item), or as the paragraph's sole block if no marker
  * ever appears.
  *
- * Known, tracked residual gaps (tracked in #1476, distinct from the
- * marker-ancestry scoping this function fixes): a continuation line
- * resuming at an ancestor's own indentation after a deeper child has
- * already opened is still attributed to that child rather than the
- * ancestor (see the `top.lines.push(line)` continuation-line branch
- * below), and a loose list — sibling items separated by a blank
- * line — resets scope at the paragraph boundary before this function
- * ever runs, since its caller (`checkProseOnlyDependency`) splits on
- * blank lines first.
+ * Two further gaps in the same area, both distinct from the
+ * marker-ancestry scoping above, were closed by #1476: a continuation
+ * line resuming at an ancestor's own indentation after a deeper child
+ * has already opened is now attributed to that ancestor rather than the
+ * deepest open child (see the ancestry walk in the continuation-line
+ * branch below, using `lineIndentColumn`), and a loose list — sibling
+ * items separated by a blank line — no longer resets scope at the
+ * paragraph boundary, because its caller (`checkProseOnlyDependency`)
+ * now bridges a single blank line between two loose-list chunks via
+ * `splitIntoParagraphs` before this function ever runs.
  */
 function splitIntoListItemBlocks(paragraph) {
   const blocks = [];
@@ -820,14 +953,30 @@ function splitIntoListItemBlocks(paragraph) {
     const marker = LIST_ITEM_MARKER_PATTERN.exec(line);
     const indent = marker === null ? null : indentColumnWidth(marker[1]);
     if (indent === null) {
-      // Continuation line: attach to the deepest open node, or to the
-      // pre-first-marker preamble if no node is open yet.
+      // Continuation line: attach to the deepest open node whose own
+      // indentation is strictly less than this line's own indentation --
+      // the innermost node this line still reads as nested inside of. A
+      // continuation at or above an already-open child's own marker
+      // indentation is not deep enough to be that child's content; walk
+      // up the ancestry until a strictly shallower owner is found,
+      // falling back to the shallowest (root) node when none is
+      // strictly shallower (#1476: this is what lets a continuation
+      // that resumes at an ancestor's own indentation, after a deeper
+      // child already opened, land on that ancestor instead of
+      // unconditionally on the deepest open child). A continuation
+      // genuinely deeper than every open node still resolves at the
+      // first (deepest) comparison, so the normal, unambiguous case is
+      // unchanged. When no node is open yet, keep attaching to the
+      // pre-first-marker preamble.
       const top = stack.at(-1);
       if (top === undefined) {
         preamble.push(line);
-      } else {
-        top.lines.push(line);
+        continue;
       }
+      const ownIndent = lineIndentColumn(line);
+      const owner =
+        stack.findLast((node) => node.indent < ownIndent) ?? stack[0];
+      owner.lines.push(line);
       continue;
     }
     // A same-or-shallower marker closes every open node at this depth or
