@@ -526,14 +526,36 @@ function warnDeprecatedFlag(deprecated: string, canonical: string): void {
 }
 
 /**
+ * Find `flag`'s last occurrence in `argv`, recognizing both the
+ * two-token form (`--flag value`) and the single-token `--flag=value`
+ * form `parseCliArgs` also accepts. A plain `argv.lastIndexOf(flag)`
+ * only matches the exact bare token, so `--claim-id=1` would silently
+ * fail to count as an occurrence of `--claim-id` (Copilot review
+ * finding on this PR) -- checked here via an exact match OR a
+ * `${flag}=` prefix match, scanning from the end so the first hit is
+ * the true last occurrence.
+ */
+function findLastFlagOccurrenceIndex(
+  argv: readonly string[],
+  flag: string,
+): number {
+  const equalsPrefix = `${flag}=`;
+  for (let index = argv.length - 1; index >= 0; index -= 1) {
+    if (argv[index] === flag || argv[index].startsWith(equalsPrefix)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+/**
  * Resolve a canonical/deprecated flag pair using the pre-migration
  * token-loop's exact assignment-order semantics: each occurrence
  * overwrote the same field as the loop walked argv left to right, so
  * whichever flag's LAST occurrence comes later in argv wins -- not
  * "canonical always wins" -- when both spellings are given together.
- * `argv.lastIndexOf` finds each flag's last occurrence; `-1` (never
- * given) sorts before any real index, so an absent flag never wins
- * against one that was actually passed.
+ * `-1` (never given) sorts before any real index, so an absent flag
+ * never wins against one that was actually passed.
  */
 function resolveLastGivenAlias(
   argv: readonly string[],
@@ -548,8 +570,8 @@ function resolveLastGivenAlias(
   if (deprecatedValue === undefined) {
     return canonicalValue;
   }
-  const lastCanonicalIndex = argv.lastIndexOf(canonicalFlag);
-  const lastDeprecatedIndex = argv.lastIndexOf(deprecatedFlag);
+  const lastCanonicalIndex = findLastFlagOccurrenceIndex(argv, canonicalFlag);
+  const lastDeprecatedIndex = findLastFlagOccurrenceIndex(argv, deprecatedFlag);
   return lastDeprecatedIndex > lastCanonicalIndex
     ? deprecatedValue
     : canonicalValue;
