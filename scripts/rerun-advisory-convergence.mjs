@@ -443,14 +443,26 @@ function classifyInstance(instance, options) {
  * advisory bot, or membership in the resolved `advisoryBotLogins` list)
  * is a defensive fallback for a payload that omits `type`.
  *
- * The `advisoryBotLogins` fallback compares via
- * {@link advisoryBotIdentityToken} (the same normalization the shared
- * advisory-notice matcher already uses) rather than a raw, un-normalized
- * set lookup: a repository can configure a bare login (`my-bot`) while
- * the Actions payload reports the GitHub-appended `[bot]`-suffixed form
- * (`my-bot[bot]`), or vice versa. An un-normalized comparison would miss
- * that match and let a bot-triggered run fall through as rerun-eligible
- * (#1434 review, Codex P2).
+ * The `advisoryBotLogins` fallback, and the `primaryBotLogin` comparison
+ * below it, both compare via {@link advisoryBotIdentityToken} (the same
+ * normalization the shared advisory-notice matcher already uses) rather
+ * than a raw, un-normalized comparison: a repository can configure a bare
+ * login (`my-bot`) while the Actions payload reports the GitHub-appended
+ * `[bot]`-suffixed form (`my-bot[bot]`), or vice versa. An un-normalized
+ * comparison would miss that match and let a bot-triggered run fall
+ * through as rerun-eligible (#1434 review, Codex P2).
+ *
+ * `isCopilotReviewerLogin` itself only normalizes this way for the
+ * *default* Copilot login (a `copilot`/`copilot-pull-request-reviewer*`
+ * prefix match); once a repository configures a non-default
+ * `primaryBotLogin`, it falls back to an exact `normalized === configured`
+ * comparison with no `[bot]`-suffix handling -- the same gap the
+ * `advisoryBotLogins` fallback already closed for its own set, just on
+ * the separate `primaryBotLogin` path (#1434 review, Codex P2, second
+ * occurrence). Re-normalizing `primaryBotLogin` here (rather than
+ * changing the shared `isCopilotReviewerLogin` itself, which many other
+ * callers rely on for its existing exact-match contract) closes it
+ * locally without widening that shared function's behavior.
  */
 function isBotTriggered(instance, options) {
   if (instance.actorType === 'Bot' || instance.triggeringActorType === 'Bot') {
@@ -470,11 +482,19 @@ function isBotTriggered(instance, options) {
   ) {
     return true;
   }
+  const actorToken = advisoryBotIdentityToken(actorLogin);
+  const triggeringToken = advisoryBotIdentityToken(triggeringLogin);
+  const primaryBotToken = advisoryBotIdentityToken(options.primaryBotLogin);
+  if (
+    primaryBotToken &&
+    ((Boolean(actorToken) && actorToken === primaryBotToken) ||
+      (Boolean(triggeringToken) && triggeringToken === primaryBotToken))
+  ) {
+    return true;
+  }
   const configuredBotTokens = new Set(
     options.advisoryBotLogins.map((login) => advisoryBotIdentityToken(login)),
   );
-  const actorToken = advisoryBotIdentityToken(actorLogin);
-  const triggeringToken = advisoryBotIdentityToken(triggeringLogin);
   return (
     (Boolean(actorToken) && configuredBotTokens.has(actorToken)) ||
     (Boolean(triggeringToken) && configuredBotTokens.has(triggeringToken))

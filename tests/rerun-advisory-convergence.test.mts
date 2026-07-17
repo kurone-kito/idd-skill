@@ -216,6 +216,48 @@ test('classifies a bot-triggered run when the configured login is [bot]-suffixed
   assert.equal(plan.instances[0]?.classification, 'bot-gated-skip');
 });
 
+// Regression (#1434 review, Codex P2, second occurrence): the sibling gap
+// to the advisoryBotLogins normalization above, but on the separate
+// primaryBotLogin path -- isCopilotReviewerLogin's non-default branch does
+// an exact, un-normalized comparison, so a configured custom primary bot
+// login whose [bot]-suffix form doesn't match the actual actor login
+// (or vice versa) would otherwise fall through as rerun-eligible.
+test('classifies a bot-triggered run when a custom primaryBotLogin is bare but the actual actor login is [bot]-suffixed', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          actorLogin: 'my-bot[bot]',
+          actorType: null,
+          triggeringActorLogin: 'my-bot[bot]',
+          triggeringActorType: null,
+        }),
+      ],
+    }),
+    baseOptions({ primaryBotLogin: 'my-bot', advisoryBotLogins: [] }),
+  );
+  assert.equal(plan.instances[0]?.classification, 'bot-gated-skip');
+});
+
+test('classifies a bot-triggered run when a custom primaryBotLogin is [bot]-suffixed but the actual actor login is bare', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          actorLogin: 'my-bot',
+          actorType: null,
+          triggeringActorLogin: 'my-bot',
+          triggeringActorType: null,
+        }),
+      ],
+    }),
+    baseOptions({ primaryBotLogin: 'my-bot[bot]', advisoryBotLogins: [] }),
+  );
+  assert.equal(plan.instances[0]?.classification, 'bot-gated-skip');
+});
+
 test('does not classify a plain human failure as bot-gated-skip', () => {
   const plan = computeRerunPlan(
     baseInput({
