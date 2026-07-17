@@ -93,6 +93,10 @@ function runGhCapture(args) {
 // stale age equals this default the shared `isStaleAt` path is
 // reused verbatim instead of re-deriving the 24h math here.
 const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
+// Policy default claim heartbeat interval (`claimTiming.heartbeatInterval`,
+// `PT12H`), used only for the diagnostic `heartbeatOverdue` annotation
+// (#1433) — it never feeds the 24h stale-takeover gate above.
+const DEFAULT_CLAIM_HEARTBEAT_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
 });
@@ -1026,13 +1030,15 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
     // No present trusted claim → eligible. When `--current-claim-id` is
     // supplied, `ownedByCurrentSession` is still emitted (as `false`) because
     // there is no claim id to match it; it is omitted only when no
-    // `--current-claim-id` was passed.
+    // `--current-claim-id` was passed. `heartbeatOverdue` is always `false`
+    // here (#1433): with no present claim there is nothing to be overdue.
     return {
       activeClaim: {
         present: false,
         stale: false,
         claimId: null,
         agentId: null,
+        heartbeatOverdue: false,
         ...(claimState.currentClaimId ? { ownedByCurrentSession: false } : {}),
       },
       claimEligible: true,
@@ -1046,18 +1052,32 @@ export async function annotateLeafClaimState(issueNumber, claimState) {
     claimState.nowIso,
     claimState.staleAgeMs,
   );
+  // `active.createdAt` already reflects the LATEST valid claimed-by/heartbeat
+  // event (resolveActiveClaim / applyClaimEvent folds every accepted
+  // heartbeat's own createdAt into it), so no separate heartbeat-only scan is
+  // needed to answer "no later trusted heartbeat exists" — this reuses the
+  // exact same timestamp the `stale` computation above already resolved,
+  // just against the shorter, purely-diagnostic heartbeat interval (#1433).
+  const heartbeatOverdue = isClaimHeartbeatOverdue(
+    active.createdAt,
+    claimState.nowIso,
+    claimState.heartbeatIntervalMs,
+  );
   const annotation = {
     present: true,
     stale,
     claimId: active.claimId,
     agentId: active.agentId,
+    heartbeatOverdue,
   };
   if (claimState.currentClaimId) {
     annotation.ownedByCurrentSession =
       active.claimId === claimState.currentClaimId;
   }
   // Eligible only when there is no present, NON-stale, trusted claim. A stale
-  // claim is takeover-eligible, so it does not block.
+  // claim is takeover-eligible, so it does not block. `heartbeatOverdue` NEVER
+  // factors into this: it is purely diagnostic (#1433) and must not change
+  // who is claim-eligible.
   return { activeClaim: annotation, claimEligible: stale };
 }
 /** Coerce a loaded comment payload into the `resolveActiveClaim` event shape. */
@@ -1095,6 +1115,31 @@ export function isClaimStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs) {
   return end - start >= staleAgeMs;
 }
 /**
+ * Whether the latest valid claimed-by/heartbeat `createdAt` is at or past the
+ * configured `claimTiming.heartbeatInterval` relative to `nowIso`, with no
+ * later trusted heartbeat (#1433). The caller already threads every valid
+ * heartbeat's `createdAt` through `resolveActiveClaim` / `applyClaimEvent`
+ * (a heartbeat replaces the active claim's `createdAt` with its own event
+ * timestamp), so `activeCreatedAt` here already IS the latest valid
+ * claimed-by/heartbeat event — no separate heartbeat-only comment scan is
+ * needed.
+ *
+ * Reuses {@link isClaimStaleByAge}'s generic "duration between two ISO
+ * timestamps >= configured age" comparison under a name that matches this
+ * call site's intent: that function's `stale`-specific name describes its
+ * primary caller, not its logic, which is a plain millisecond-difference
+ * check with a same-default-value fast path. This is purely diagnostic: it
+ * never feeds the 24h stale-takeover gate, only the informational
+ * `heartbeatOverdue` annotation.
+ */
+export function isClaimHeartbeatOverdue(
+  activeCreatedAt,
+  nowIso,
+  heartbeatIntervalMs,
+) {
+  return isClaimStaleByAge(activeCreatedAt, nowIso, heartbeatIntervalMs);
+}
+/**
  * Build the CLI-side claim-state resolution: the live comment loader plus the
  * resolved trusted-actor predicate, configured stale age, and "now". Only
  * invoked when `--with-claim-state` is passed, so the live comment fetch is
@@ -1109,10 +1154,14 @@ export function buildClaimStateResolution(owner, repo, policy, currentClaimId) {
   const staleAgeMs =
     parseClaimStaleAgeMs(policy.claimTiming?.staleAge) ??
     DEFAULT_CLAIM_STALE_AGE_MS;
+  const heartbeatIntervalMs =
+    parseClaimHeartbeatIntervalMs(policy.claimTiming?.heartbeatInterval) ??
+    DEFAULT_CLAIM_HEARTBEAT_INTERVAL_MS;
   return {
     loadComments: buildCommentLoader(owner, repo),
     isTrustedAuthor: buildTrustedAuthorPredicate(policy),
     staleAgeMs,
+    heartbeatIntervalMs,
     nowIso: new Date().toISOString(),
     currentClaimId: String(currentClaimId ?? '').trim(),
   };
@@ -1220,6 +1269,17 @@ export function buildCommentLoader(owner, repo) {
  * (the shared parser accepts only strings).
  */
 export function parseClaimStaleAgeMs(value) {
+  return parseIsoDurationToMs(String(value ?? '').trim());
+}
+/**
+ * Parse an ISO8601 duration (`P[nD]T[nH][nM][nS]`) to ms for
+ * `claimTiming.heartbeatInterval` (#1433); `null` on garbage OR a
+ * non-positive total, mirroring {@link parseClaimStaleAgeMs}'s
+ * garbage/non-positive handling so the caller falls back to
+ * `DEFAULT_CLAIM_HEARTBEAT_INTERVAL_MS` the same way a rejected stale age
+ * falls back to `DEFAULT_CLAIM_STALE_AGE_MS`.
+ */
+export function parseClaimHeartbeatIntervalMs(value) {
   return parseIsoDurationToMs(String(value ?? '').trim());
 }
 export function extractRoadmapMarkerId(
@@ -1522,13 +1582,19 @@ function printHelp() {
 
   --with-claim-state (opt-in) annotates each OPEN execution leaf with active-
   claim eligibility: it fetches that issue's comments and resolves the active
-  claim using the configured trustedMarkerActors and claimTiming.staleAge
-  (default PT24H). Each annotated leaf gains (activeClaim is always an object):
-    "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null }
+  claim using the configured trustedMarkerActors, claimTiming.staleAge
+  (default PT24H), and claimTiming.heartbeatInterval (default PT12H). Each
+  annotated leaf gains (activeClaim is always an object):
+    "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null, "heartbeatOverdue": bool }
                    (present:false with claimId/agentId null = no trusted claim)
     "claimEligible": bool   (eligible = no present, non-stale, trusted claim)
   Absent the flag, NO comment API calls are made and no claim fields are
   emitted (the output shape is byte-stable).
+  heartbeatOverdue is true when the latest valid claimed-by/heartbeat
+  created_at is at or past claimTiming.heartbeatInterval with no later
+  trusted heartbeat; false otherwise, including whenever present is false.
+  It is PURELY DIAGNOSTIC: it never feeds claimEligible or any other gate — a
+  heartbeat-overdue claim can still be well inside the 24h stale window.
   --current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
   each activeClaim (true when the active claim's claimId equals <id>).
   NOTE: claimEligible is a best-effort SOFT discovery hint. It resolves only

@@ -632,13 +632,18 @@ as no score: the issue stays in orphans and is never routed out.
 "routed_to_human" with active-claim eligibility, exactly mirroring
 discover-roadmap-graph's flag of the same name: it fetches that issue's
 comments and resolves the active claim using the configured
-trustedMarkerActors and claimTiming.staleAge (default PT24H). Each
-annotated candidate gains (activeClaim is always an object):
-  "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null }
+trustedMarkerActors, claimTiming.staleAge (default PT24H), and
+claimTiming.heartbeatInterval (default PT12H). Each annotated candidate
+gains (activeClaim is always an object):
+  "activeClaim": { "present": bool, "stale": bool, "claimId": str|null, "agentId": str|null, "heartbeatOverdue": bool }
                  (present:false with claimId/agentId null = no trusted claim)
   "claimEligible": bool   (eligible = no present, non-stale, trusted claim)
 Absent the flag, NO comment API calls are made and no claim fields are
 emitted (the output shape is byte-stable).
+heartbeatOverdue is true when the latest valid claimed-by/heartbeat
+created_at is at or past claimTiming.heartbeatInterval with no later trusted
+heartbeat; false otherwise, including whenever present is false. It is
+PURELY DIAGNOSTIC: it never feeds claimEligible or any other gate.
 --current-claim-id <id> additionally sets "ownedByCurrentSession": bool on
 each activeClaim (true when the active claim's claimId equals <id>).
 NOTE: claimEligible is a best-effort SOFT discovery hint (same limitation
@@ -657,7 +662,7 @@ function loadPolicy(policyPath: string) {
   try {
     const config = JSON.parse(readFileSync(targetPath, 'utf8')) as {
       markerPrefix?: unknown;
-      claimTiming?: { staleAge?: unknown };
+      claimTiming?: { staleAge?: unknown; heartbeatInterval?: unknown };
       trustedMarkerActors?: unknown;
     };
     const authoringPolicy = resolveAuthoringGuardPolicy(config);

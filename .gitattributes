@@ -56,6 +56,7 @@ scripts/policy-helpers.mjs linguist-generated=true
 scripts/post-idd-marker.mjs linguist-generated=true
 scripts/pre-merge-readiness.mjs linguist-generated=true
 scripts/protocol-helpers.mjs linguist-generated=true
+scripts/readline-prompt.mjs linguist-generated=true
 scripts/resolve-review-thread.mjs linguist-generated=true
 scripts/resume-claim-routing.mjs linguist-generated=true
 scripts/resume-route-selection.mjs linguist-generated=true
