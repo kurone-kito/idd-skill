@@ -2801,9 +2801,13 @@ if (args[0] === 'api' && args[1] === 'repos/o/r/issues/900') {
   process.exit(0);
 }
 `);
+  // Captured so the finally block can clear it: an uncleared timer keeps
+  // the event loop alive for the rest of the 3s window even after the gh
+  // call already resolved (Copilot review, #1463).
+  let timeoutHandle: NodeJS.Timeout | undefined;
   try {
     const timeout = new Promise((_resolve, reject) => {
-      setTimeout(
+      timeoutHandle = setTimeout(
         () =>
           reject(
             new Error(
@@ -2812,6 +2816,7 @@ if (args[0] === 'api' && args[1] === 'repos/o/r/issues/900') {
           ),
         3000,
       );
+      timeoutHandle.unref();
     });
     const result = await Promise.race([
       buildIssueLoader('o', 'r')(900),
@@ -2820,6 +2825,7 @@ if (args[0] === 'api' && args[1] === 'repos/o/r/issues/900') {
     assert.deepEqual(result, { number: 900, stdinBytesSeen: 0 });
     assert.equal(readCount(), 1);
   } finally {
+    clearTimeout(timeoutHandle);
     restore();
   }
 });
