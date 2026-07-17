@@ -90,7 +90,10 @@ Before any mutating action in F3, apply the
    the active claim still uses your current `{claim-id}`. If it does
    not, the claim was lost — report and stop.
 
-   **Advisory state revalidation (blocking)**: re-fetch the HEAD SHA:
+   **Advisory state revalidation (blocking; the advisory-wait check below
+   backgrounds only if the topology-safety condition holds — confirmed to
+   route completion back to this turn — else waits synchronously)**:
+   re-fetch the HEAD SHA:
 
    ```sh
    PR_HEAD_SHA_F3=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')

@@ -311,3 +311,7 @@ here.
 This trims only the wasteful dimensions (context re-read, CI minutes); it does
 **not** reduce review rounds, which remain valuable and run in full. This same
 discipline applies to the advisory-wait and review-fix wait points.
+
+**Known residual risk**: workers can still stall here — expected and
+budgeted, not broken. Recovery is one message citing live state first (PR
+number, check states, worktree commit state).
