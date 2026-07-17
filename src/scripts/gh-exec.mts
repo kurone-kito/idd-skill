@@ -17,6 +17,7 @@
 
 import type { StdioOptions } from 'node:child_process';
 import { execFileSync } from 'node:child_process';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
 
@@ -170,13 +171,6 @@ export interface BoundedRetryOptions {
 const DEFAULT_BOUNDED_RETRY_ATTEMPTS = 3;
 const DEFAULT_BOUNDED_RETRY_BASE_DELAY_MS = 200;
 
-/** `await`-able delay, used only for the backoff between retry attempts. */
-function delay(ms: number): Promise<void> {
-  return new Promise((resolveDelay) => {
-    setTimeout(resolveDelay, ms);
-  });
-}
-
 /**
  * Run `task`, retrying a bounded number of times on a retryable failure
  * (#1394): a transient `gh`/API hiccup (e.g. truncated captured stdout under
@@ -222,7 +216,7 @@ export async function withBoundedRetry<T>(
       if (attempt >= totalAttempts || !isRetryable(error)) {
         throw error;
       }
-      await delay(
+      await sleep(
         effectiveBaseDelayMs * attempt + Math.random() * effectiveBaseDelayMs,
       );
     }

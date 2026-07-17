@@ -7,7 +7,6 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { createInterface } from 'node:readline';
 
 import { resolveHelperActiveClaim } from './forced-handoff-marker.mts';
 import { ghText, safeGhText } from './gh-exec.mts';
@@ -21,6 +20,8 @@ import {
   parsePaginatedGhNdjson,
   renderExternalCheckWaiverComment,
 } from './protocol-helpers.mts';
+import type { PromptFn } from './readline-prompt.mts';
+import { makeReadlinePrompt } from './readline-prompt.mts';
 
 /** Normalized policy object returned by {@link normalizePolicyConfig}. */
 type NormalizedPolicy = ReturnType<typeof normalizePolicyConfig>;
@@ -220,11 +221,6 @@ interface PostedCommentPayload {
   html_url?: string | null;
   url?: string | null;
 }
-
-/** Interactive prompt function with an optional readline close hook. */
-type PromptFn = ((question: string) => Promise<string>) & {
-  close?: () => void;
-};
 
 /** GitHub API call result with a parsed JSON body and HTTP status. */
 interface GhApiStatusResult {
@@ -1160,16 +1156,6 @@ function renderTextReport(report: ExternalCheckWaiverReport): string {
     report.body || '<none>',
     '',
   ].join('\n');
-}
-
-function makeReadlinePrompt(): PromptFn {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask: PromptFn = (question) =>
-    new Promise((resolve) =>
-      rl.question(question, (answer) => resolve(answer)),
-    );
-  ask.close = () => rl.close();
-  return ask;
 }
 
 function parseArgs(argv: string[]): ExternalCheckWaiverArgs {
