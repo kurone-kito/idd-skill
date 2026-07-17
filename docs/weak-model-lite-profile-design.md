@@ -251,9 +251,8 @@ generated pair rather than a third _kind_ of surface:
   regenerates the lite files the same way it regenerates the standard
   ones today. Generation is driven entirely by `syncPairs` —
   `sync-docs.mjs` reads only that array, never `fileSets` — so one new
-  `syncPairs` entry per lite file (one companion entry per matched
-  instruction file, the same pattern the existing dogfood set already
-  follows) is what actually produces each
+  `syncPairs` entry per lite file (the same pattern the existing
+  dogfood set already follows) is what actually produces each
   `.github/instructions/lite/idd-*.instructions.md` from its
   `idd-template/` source, **provided the entry uses a generatable
   `mode`**: only `exact` and `concreted` write content.
