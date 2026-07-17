@@ -540,8 +540,10 @@ itself.
 current checkout) or omitted together (to auto-detect the current
 checkout's own repository) -- providing only one is rejected.
 
-stdout carries ONLY the JSON plan document (safe to pipe into "jq" or
-similar); the human-readable recovery-plan summary is printed to stderr.
+On a normal (non-help) run, stdout carries ONLY the JSON plan document
+(safe to pipe into "jq" or similar); the human-readable recovery-plan
+summary is printed to stderr. (This --help text itself is the one
+exception: it is plain usage text on stdout, not JSON.)
 `);
 }
 const defaultDeps = { collect: collectFromGitHub };
