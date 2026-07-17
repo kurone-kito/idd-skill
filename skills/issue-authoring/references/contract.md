@@ -552,6 +552,21 @@ roadmap-id/blocked-by dependency-marker rules, and visible/hidden line
 agreement for the suitability and effort footers — so a weak model does
 not have to hold every rule in its head at once while drafting.
 
+The linter also emits one **advisory, warning-severity-only** finding
+(`prose-dependency`): it flags an issue/PR reference (`#<digits>` or a
+full GitHub issue/PR URL) that appears near coordination language (for
+example "before", "after", "once", "until", "predates", "gate"/"gated",
+"requires", "lands first") with no corresponding `Blocked by` /
+`Depends on` / task-list dependency encoding for that reference. This
+catches the pattern this contract's own
+[Hidden human-dependency validation](#hidden-human-dependency-validation)
+check 4 warns about in prose — a hard precondition stated only in
+narrative text, not encoded as a real dependency marker. Unlike every
+other check above, a `prose-dependency` warning never flips `passed` to
+`false` and never changes the linter's exit code: it prompts the author
+to either convert the prose into a proper dependency marker or
+consciously confirm the reference is a mere breadcrumb.
+
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \
   --marker-prefix <resolved-target-prefix> \

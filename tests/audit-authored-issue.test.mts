@@ -651,6 +651,118 @@ test('effort-visible-line-agreement fails when a well-formed marker is accompani
   assert.match(finding?.detail ?? '', /found 2/);
 });
 
+// --- prose-dependency (advisory, warning-severity only) ---
+
+test('prose-dependency warns on coordination language with an unencoded reference', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before merging this, confirm PR #1391 already lands the base change.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+  assert.equal(report.passed, true);
+});
+
+test('prose-dependency does not warn on a plain breadcrumb reference', () => {
+  const body = childBody({ extraMarkers: 'Refs #1391 for background.' });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(finding?.severity, undefined);
+});
+
+test('prose-dependency does not warn when the reference already has a Blocked by encoding', () => {
+  const body = childBody({
+    extraMarkers: 'Blocked by #1391\n\nOnce #1391 merges, this can start.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, undefined);
+});
+
+test('prose-dependency does not warn when the reference already has a Depends on encoding', () => {
+  const body = childBody({
+    extraMarkers: 'Depends on #1391\n\nOnce #1391 merges, this can start.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, undefined);
+});
+
+test('prose-dependency does not warn on a roadmap-parent breadcrumb sharing a paragraph with unrelated coordination language', () => {
+  // Regression test for a real false-positive risk found while designing
+  // this check: "Part of ... roadmap (#N)" is a common breadcrumb phrasing
+  // in this repository's own issues, and the same long paragraph may
+  // separately use a coordination word like "before" for something
+  // unrelated later on. Paragraph-level scoping would conflate the two;
+  // sentence-level scoping must not.
+  const body = childBody({
+    extraMarkers:
+      'Part of the field-report batch-6 roadmap (#1386). The other ' +
+      'session held before confirming the fix, unrelated to this reference.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, undefined);
+});
+
+test('prose-dependency recognizes a full GitHub issue/PR URL reference', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      'https://github.com/kurone-kito/idd-skill/pull/1391 has merged.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency leaves passed and the exit code unchanged even when it warns', () => {
+  const body = childBody({
+    extraMarkers: 'This requires #1391 merged first.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.equal(finding?.result, 'pass');
+  assert.equal(report.passed, true);
+});
+
+test('prose-dependency ignores a coordination word and reference that only appear inside a fenced example', () => {
+  const body = childBody({
+    extraMarkers: [
+      'For reference, phrasing to avoid looks like:',
+      '',
+      '```markdown',
+      'Before doing X, verify PR #1391 already does Y.',
+      '```',
+    ].join('\n'),
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, undefined);
+});
+
 // --- shape / markerPrefix pass-through ---
 
 test('the report echoes the declared shape and resolved markerPrefix', () => {

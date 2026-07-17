@@ -10,8 +10,13 @@
 // marker's exactly-one/coherent-value rule, its cross-field agreement with
 // the configured blocked-by-human label, markerPrefix consistency across
 // every authoring marker, the declared shape's required section headings,
-// the roadmap-id/blocked-by dependency-marker rules, and visible/hidden
-// line agreement for the suitability and effort footers.
+// the roadmap-id/blocked-by dependency-marker rules, visible/hidden line
+// agreement for the suitability and effort footers, and an advisory
+// warning-severity check that flags an issue/PR reference used near
+// coordination language (e.g. "before", "once", "requires") with no
+// corresponding Blocked-by/Depends-on/task-list dependency encoding. The
+// advisory check never fails the report or changes the exit code — see
+// checkProseOnlyDependency.
 //
 // All marker value parsing is delegated to the existing
 // autopilot-suitability.mts / effort.mts / marker-regex.mts /
@@ -21,13 +26,17 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseAutopilotSuitabilityMarker } from './autopilot-suitability.mjs';
-import { extractBlockedByRoadmapMarkers } from './discover-readiness-check.mjs';
+import {
+  extractBlockedByIssueNumbers,
+  extractBlockedByRoadmapMarkers,
+  extractDependencyIssueNumbers,
+} from './discover-readiness-check.mjs';
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mjs';
 import { parseEffortMarker } from './effort.mjs';
 import { isCliExecution } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
-import { createMarkerRegex } from './marker-regex.mjs';
+import { createMarkerRegex, escapeRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
@@ -58,6 +67,27 @@ const SHAPE_HEADING_REQUIREMENTS = {
     { anyOf: ['Acceptance criteria'] },
   ],
 };
+// Coordination-language keywords that, alongside an unencoded issue/PR
+// reference in the same sentence, suggest the reference is being used as a
+// prose-only start-blocking dependency instead of the required `Blocked by`
+// / `Depends on` / task-list encoding. Deliberately broad (an advisory
+// check can tolerate false positives; the author "consciously confirms" per
+// the contract) rather than an exhaustive parse of every possible phrasing.
+const PROSE_DEPENDENCY_KEYWORDS = [
+  'before',
+  'after',
+  'once',
+  'until',
+  'predates',
+  'gate',
+  'gated',
+  'requires',
+  'lands first',
+];
+// Matches a bare `#123` issue/PR reference or a full GitHub issue/PR URL.
+// `#` alone (as in an ATX heading) never matches without trailing digits.
+const ISSUE_OR_PR_REFERENCE_PATTERN =
+  /#(\d+)\b|https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/(\d+)\b/gi;
 if (isCliExecution(import.meta.url)) {
   main();
 }
@@ -65,7 +95,10 @@ if (isCliExecution(import.meta.url)) {
  * Audit a drafted issue body against the issue-authoring contract's
  * structural expectations for the declared shape. Every check runs
  * independently (no short-circuit), so one report surfaces every problem
- * at once instead of stopping at the first failure.
+ * at once instead of stopping at the first failure. One check
+ * (`prose-dependency`) is advisory-only: it always reports `result:
+ * 'pass'` and only ever adds a `severity: 'warning'` marker plus detail,
+ * so it never affects `passed` or the caller's exit code.
  */
 export function auditAuthoredIssue(body, options) {
   const rawText = typeof body === 'string' ? body : String(body ?? '');
@@ -105,6 +138,7 @@ export function auditAuthoredIssue(body, options) {
     checkDependencyMarkerRule(text, markerPrefix, shape),
     checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
     checkEffortVisibleLineAgreement(text, markerPrefix),
+    checkProseOnlyDependency(text),
   ];
   return {
     shape,
@@ -390,6 +424,80 @@ function checkEffortVisibleLineAgreement(text, markerPrefix) {
     `visible line agrees with marker value ${effort.value}`,
   );
 }
+function checkProseOnlyDependency(text) {
+  const id = 'prose-dependency';
+  const name =
+    'Advisory: issue/PR references near coordination language should use a dependency marker';
+  // Numbers already covered by a real machine-readable dependency encoding
+  // (Blocked by / Depends on / task-list) are never flagged, regardless of
+  // nearby prose — the whole point of this check is to catch references
+  // that carry *no* such encoding.
+  const encoded = new Set([
+    ...extractBlockedByIssueNumbers(text),
+    ...extractDependencyIssueNumbers(text),
+  ]);
+  const keywordPattern = new RegExp(
+    `\\b(?:${PROSE_DEPENDENCY_KEYWORDS.map(escapeRegex).join('|')})\\b`,
+    'i',
+  );
+  const flagged = new Set();
+  for (const paragraph of text.split(/\n\s*\n/)) {
+    for (const sentence of splitIntoSentences(paragraph)) {
+      // Scope proximity to one sentence, not the whole paragraph: a long
+      // paragraph can legitimately combine an unrelated coordination word
+      // with a pure breadcrumb reference (e.g. "Part of roadmap (#1386)."
+      // followed by an unrelated "... before it correctly held ..." later
+      // in the same paragraph). Paragraph-level scoping would falsely flag
+      // the breadcrumb; sentence-level scoping does not.
+      if (!keywordPattern.test(sentence)) {
+        continue;
+      }
+      for (const match of sentence.matchAll(ISSUE_OR_PR_REFERENCE_PATTERN)) {
+        const numberText = match[1] ?? match[2];
+        const number = Number.parseInt(numberText, 10);
+        if (!encoded.has(number)) {
+          flagged.add(number);
+        }
+      }
+    }
+  }
+  if (flagged.size === 0) {
+    return pass(
+      id,
+      name,
+      'no unencoded issue/PR reference found near coordination language',
+    );
+  }
+  const refs = [...flagged]
+    .sort((left, right) => left - right)
+    .map((number) => `#${number}`)
+    .join(', ');
+  return {
+    id,
+    name,
+    result: 'pass',
+    severity: 'warning',
+    detail:
+      `possible prose-only dependency on ${refs} — convert to a Blocked ` +
+      'by / Depends on marker, or confirm this is a breadcrumb reference ' +
+      'only',
+  };
+}
+/**
+ * Naively split a paragraph into sentences on `.`/`!`/`?` followed by
+ * whitespace, after collapsing internal newlines to spaces (so a sentence
+ * that wraps across a Markdown soft line break is still scoped as one
+ * sentence). This is intentionally simple — good enough to separate two
+ * independent clauses sharing one paragraph, not a full natural-language
+ * sentence boundary detector.
+ */
+function splitIntoSentences(paragraph) {
+  const flattened = paragraph.replace(/\s+/g, ' ').trim();
+  if (flattened.length === 0) {
+    return [];
+  }
+  return flattened.split(/(?<=[.!?])\s+/);
+}
 function countMarkerOccurrences(text, markerPrefix, suffix) {
   const base = createMarkerRegex(markerPrefix, suffix);
   const global = new RegExp(base.source, `${base.flags}g`);
@@ -529,9 +637,16 @@ function writeReport(report, format) {
     console.log(
       `shape=${report.shape} markerPrefix=${report.markerPrefix} passed=${report.passed}`,
     );
-    console.log(['id', 'result', 'detail'].join('\t'));
+    console.log(['id', 'result', 'severity', 'detail'].join('\t'));
     for (const finding of report.findings) {
-      console.log([finding.id, finding.result, finding.detail].join('\t'));
+      console.log(
+        [
+          finding.id,
+          finding.result,
+          finding.severity ?? '',
+          finding.detail,
+        ].join('\t'),
+      );
     }
     return;
   }
@@ -591,9 +706,12 @@ contract's structural expectations (skills/issue-authoring/references/
 contract.md): the autopilot-suitability marker, its cross-field
 status:blocked-by-human agreement, markerPrefix consistency, required
 section headings for the declared shape, the roadmap-id/blocked-by
-dependency-marker rules, and visible/hidden suitability+effort line
-agreement. Exits 0 when every check passes, 1 when any check fails, 2 on
-a usage error.
+dependency-marker rules, visible/hidden suitability+effort line
+agreement, and an advisory (warning-severity only) check that flags an
+issue/PR reference used near coordination language with no corresponding
+dependency marker. Exits 0 when every check passes, 1 when any check
+fails, 2 on a usage error; the advisory check never affects the exit
+code.
 
 Options:
   --shape <orphan|roadmap|child>   declared issue shape (required)
