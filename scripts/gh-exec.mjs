@@ -122,7 +122,21 @@ export async function withBoundedRetry(task, options = {}) {
     baseDelayMs = DEFAULT_BOUNDED_RETRY_BASE_DELAY_MS,
     isRetryable = () => true,
   } = options;
-  const totalAttempts = Math.max(1, Math.trunc(attempts));
+  // A non-finite `attempts` (`NaN` from a failed parse, or `Infinity`)
+  // would otherwise survive `Math.max`/`Math.trunc` unchanged (both are
+  // no-ops on non-finite input) and make `attempt >= totalAttempts` never
+  // true, defeating the whole bounded-attempt contract with an unbounded
+  // retry loop (Copilot + Codex review, #1394). Fall back to the default
+  // whenever the caller-supplied value is not a finite number. The same
+  // guard applies to `baseDelayMs` for consistency: a non-finite backoff
+  // would not break the bound (attempts still caps the loop), but would
+  // silently skip the intended backoff/jitter delay between attempts.
+  const totalAttempts = Number.isFinite(attempts)
+    ? Math.max(1, Math.trunc(attempts))
+    : DEFAULT_BOUNDED_RETRY_ATTEMPTS;
+  const effectiveBaseDelayMs = Number.isFinite(baseDelayMs)
+    ? baseDelayMs
+    : DEFAULT_BOUNDED_RETRY_BASE_DELAY_MS;
   for (let attempt = 1; ; attempt += 1) {
     try {
       return await task();
@@ -130,7 +144,9 @@ export async function withBoundedRetry(task, options = {}) {
       if (attempt >= totalAttempts || !isRetryable(error)) {
         throw error;
       }
-      await delay(baseDelayMs * attempt + Math.random() * baseDelayMs);
+      await delay(
+        effectiveBaseDelayMs * attempt + Math.random() * effectiveBaseDelayMs,
+      );
     }
   }
 }

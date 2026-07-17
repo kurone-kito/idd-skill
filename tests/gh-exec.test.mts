@@ -347,3 +347,48 @@ test('withBoundedRetry exhausts bounded attempts and rethrows the final error un
   assert.equal(calls, 3);
   assert.equal(caught, lastError);
 });
+
+test('withBoundedRetry falls back to the default attempt bound on a non-finite attempts value (#1394 Copilot + Codex review)', async () => {
+  for (const nonFiniteAttempts of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    let calls = 0;
+    let caught: unknown;
+    try {
+      await withBoundedRetry(
+        async () => {
+          calls += 1;
+          throw new Error(`persistent failure ${calls}`);
+        },
+        { attempts: nonFiniteAttempts, baseDelayMs: 1 },
+      );
+      assert.fail('expected withBoundedRetry to reject');
+    } catch (error) {
+      caught = error;
+    }
+    // Without the Number.isFinite guard, `Math.max(1, Math.trunc(NaN))` is
+    // `NaN` and `Math.max(1, Math.trunc(Infinity))` is `Infinity`; either
+    // way `attempt >= totalAttempts` is never true, so the loop never
+    // terminates. Asserting a bounded call count (the default of 3, not an
+    // unbounded count) is the actual regression check.
+    assert.ok(caught instanceof Error);
+    assert.equal(calls, 3);
+  }
+});
+
+test('withBoundedRetry falls back to the default backoff on a non-finite baseDelayMs value', async () => {
+  let calls = 0;
+  const result = await withBoundedRetry(
+    async () => {
+      calls += 1;
+      if (calls < 2) {
+        throw new Error('transient failure');
+      }
+      return 'ok';
+    },
+    { baseDelayMs: Number.NaN },
+  );
+  // A non-finite baseDelayMs cannot hang the suite (setTimeout would clamp
+  // it), but should not silently disable backoff either; this only proves
+  // the call still completes and resolves normally under the fallback.
+  assert.equal(result, 'ok');
+  assert.equal(calls, 2);
+});
