@@ -47,11 +47,16 @@ const GH_SEARCH_RESULT_CAP = 1000;
 // (or the `concurrency` option) tunes it, and `1` runs the fetches serially
 // (one in flight at a time).
 const DEFAULT_TRAVERSAL_CONCURRENCY = 8;
-// #1449: explicit above the promisified execFile's 1 MiB default. The two
-// hot-path callers (a single GitHub issue's REST JSON — body capped at
-// 64 KiB by GitHub — and a paginated 100-node sub-issue GraphQL page) stay
-// far below this; 10 MiB is a generous ceiling that still bounds worst-case
-// memory instead of accepting the old accumulation's unbounded growth.
+// #1449: explicit above the promisified execFile's 1 MiB default. Applied
+// PER STREAM (confirmed empirically: a 6 MiB stdout plus a 6 MiB stderr,
+// 12 MiB combined, succeeds under this 10 MiB value) — worst-case buffered
+// memory is up to ~2x this bound (stdout and stderr each maxed
+// independently), not this value as a combined total. The two hot-path
+// callers (a single GitHub issue's REST JSON — body capped at 64 KiB by
+// GitHub — and a paginated 100-node sub-issue GraphQL page) stay far below
+// this on either stream; 10 MiB per stream is a generous ceiling that
+// still bounds worst-case memory instead of accepting the old
+// accumulation's unbounded growth (Copilot review, #1463).
 const GH_ASYNC_MAX_BUFFER = 10 * 1024 * 1024;
 const execFileAsync = promisify(execFile);
 /**

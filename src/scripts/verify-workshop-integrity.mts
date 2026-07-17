@@ -762,17 +762,28 @@ export function computeExitCode(report: Report): number {
  *    explicitly — verified byte-identical to the pre-change order for
  *    the real `docs/workshop` tree.
  *
- * Two further points, checked and confirmed non-issues, are recorded here
- * for completeness rather than worked around: a symlinked `.md` **file**
- * sitting directly in the tree is excluded by both the old and the new
- * walk — `Dirent#isFile()` is `lstat`-based (checks the entry itself, not
- * its resolved target) for `globSync`'s `Dirent`s exactly as it was for
- * `readdirSync`'s, so `entry.isFile()` is `false` for a symlink either
- * way, and neither walk traverses *into* a symlinked directory (`**`
- * default `followSymlinks: false`); and `**` does not descend into
- * dot-prefixed files or directories by default. Both are moot for the
- * current tree (zero symlinks or dot-prefixed entries exist anywhere
- * under `docs/workshop`).
+ * Two further points are recorded here for completeness rather than
+ * worked around, but they are **not equally benign** — read them
+ * separately:
+ *
+ * - A symlinked `.md` **file** sitting directly in the tree is a genuine
+ *   **non-issue**: excluded by both the old and the new walk.
+ *   `Dirent#isFile()` is `lstat`-based (checks the entry itself, not its
+ *   resolved target) for `globSync`'s `Dirent`s exactly as it was for
+ *   `readdirSync`'s, so `entry.isFile()` is `false` for a symlink either
+ *   way, and neither walk traverses *into* a symlinked directory (`**`
+ *   default `followSymlinks: false`).
+ * - Dot-prefixed files and directories are a **real, confirmed behavior
+ *   difference**, not a non-issue: the old `readdirSync`-based walk had
+ *   no dot-exclusion of its own and would traverse them, while `**` does
+ *   not descend into a dot-prefixed path by default (`fs.globSync` has no
+ *   dot-inclusion option at all — verified there is nothing equivalent to
+ *   other glob libraries' `dot: true`). This delta is inert *only*
+ *   because `docs/workshop` has zero dot-prefixed entries today; it would
+ *   change scanned output the moment one was added. Deliberately left
+ *   unclosed rather than shipping a partial pattern fix (see the PR #1463
+ *   review-thread disposition for the full reasoning) (Copilot review,
+ *   #1463).
  *
  * One more delta favors the new code: `globSync` on a nonexistent `dir`
  * silently returns no matches, where `readdirSync` would throw `ENOENT`.
