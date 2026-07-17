@@ -2776,3 +2776,50 @@ if (args[0] === 'api' && String(args[1]).startsWith('repos/o/r/issues/900/commen
     restore();
   }
 });
+
+// #1449: the async `gh` runner behind buildIssueLoader/buildSubIssueLoader/
+// buildCommentLoader was swapped from a hand-rolled `spawn` (explicit
+// `stdio: ['ignore', 'pipe', 'pipe']`) to `promisify(execFile)`, which has
+// no `stdio` option and does not close the child's stdin by default. The
+// runner now calls `run.child.stdin?.end()` immediately to reproduce the
+// old ignore behavior. This `gh` stub actively reads stdin to EOF before
+// responding — exactly the shape that hung under plain `execFile` in local
+// verification — so a regression of the stdin-close fix would hang this
+// test. Race against a short timeout so a regression fails fast with a
+// clear message instead of hanging the whole suite.
+test('async gh runner closes the child stdin so a stdin-reading gh stub cannot hang it (#1449)', async () => {
+  const { restore, readCount } = stubGhWithCounter(`
+if (args[0] === 'api' && args[1] === 'repos/o/r/issues/900') {
+  // Synchronous fd-0 read blocks this child process until stdin sees EOF —
+  // instantly if the runner closed it (the fix), indefinitely if not (the
+  // regression this test guards against). A synchronous read is required
+  // here: an async 'data'/'end' listener would return control to the
+  // stub's own top-level script immediately, falling through to this
+  // harness's "unexpected gh invocation" branch before EOF ever arrives.
+  const stdinBytes = require('node:fs').readFileSync(0).length;
+  process.stdout.write(JSON.stringify({ number: 900, stdinBytesSeen: stdinBytes }));
+  process.exit(0);
+}
+`);
+  try {
+    const timeout = new Promise((_resolve, reject) => {
+      setTimeout(
+        () =>
+          reject(
+            new Error(
+              'timed out: gh stub never saw stdin EOF — stdin.end() regression',
+            ),
+          ),
+        3000,
+      );
+    });
+    const result = await Promise.race([
+      buildIssueLoader('o', 'r')(900),
+      timeout,
+    ]);
+    assert.deepEqual(result, { number: 900, stdinBytesSeen: 0 });
+    assert.equal(readCount(), 1);
+  } finally {
+    restore();
+  }
+});
