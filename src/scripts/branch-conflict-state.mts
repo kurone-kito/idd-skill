@@ -23,6 +23,7 @@ interface BranchStateDerivation {
   syncRecommendation: string;
   conflictFiles: string[];
   mergeableSource: string;
+  baseAdvancedSinceMergeBase: boolean;
 }
 
 /**
@@ -40,6 +41,7 @@ export interface BranchConflictResult {
   mergeStateStatus: string | null;
   branchState: string;
   syncRecommendation: string;
+  baseAdvancedSinceMergeBase: boolean;
   readOnly: boolean;
   worktreeUnchanged: boolean;
   diagnostics: {
@@ -55,6 +57,17 @@ interface ClassifyOptions {
   _testPrData?: PrData;
   _skipGitProbe?: boolean;
 }
+
+/** One-line advisory attached to `notes` alongside a `true` result. */
+const BASE_ADVANCED_BLIND_SPOT_NOTE =
+  'Base has advanced since the merge-base for this branch ' +
+  '(baseAdvancedSinceMergeBase); a textually clean/mergeable verdict is ' +
+  'conflict-freeness only, not whole-tree CI-invariant freedom (e.g. ' +
+  'line-count budgets, generated-file drift, lockfile consistency) against ' +
+  'the current base tip, and a pull_request-triggered CI result may be ' +
+  'pinned to a merge-ref computed at an earlier trigger time. Consider ' +
+  're-validating against current base before relying on a pre-existing ' +
+  'green check.';
 
 if (isMainModule(import.meta.url)) {
   const args = parseArgs(process.argv.slice(2));
@@ -106,6 +119,7 @@ export async function classifyBranchConflictState(
       mergeStateStatus: null,
       branchState: 'unknown',
       syncRecommendation: 'hold-unknown',
+      baseAdvancedSinceMergeBase: false,
       readOnly: true,
       worktreeUnchanged: true,
       diagnostics: {
@@ -118,19 +132,24 @@ export async function classifyBranchConflictState(
     };
   }
 
-  const { branchState, syncRecommendation, conflictFiles, mergeableSource } =
-    deriveBranchState({
-      prHeadSha,
-      prBaseSha,
-      prHeadRef,
-      prBaseRef,
-      mergeable,
-      mergeStateStatus,
-      notes,
-      owner,
-      repo,
-      skipGitProbe: Boolean(_skipGitProbe),
-    });
+  const {
+    branchState,
+    syncRecommendation,
+    conflictFiles,
+    mergeableSource,
+    baseAdvancedSinceMergeBase,
+  } = deriveBranchState({
+    prHeadSha,
+    prBaseSha,
+    prHeadRef,
+    prBaseRef,
+    mergeable,
+    mergeStateStatus,
+    notes,
+    owner,
+    repo,
+    skipGitProbe: Boolean(_skipGitProbe),
+  });
 
   return {
     protocolVersion: '1',
@@ -142,6 +161,7 @@ export async function classifyBranchConflictState(
     mergeStateStatus: normalizeNullable(mergeStateStatus),
     branchState,
     syncRecommendation,
+    baseAdvancedSinceMergeBase,
     readOnly: true,
     worktreeUnchanged: true,
     diagnostics: {
@@ -193,6 +213,10 @@ function deriveBranchState({
       syncRecommendation: 'hold-unknown',
       conflictFiles: probeResult ?? [],
       mergeableSource: 'github-mergeable',
+      // A real textual conflict already forces a hold; whether base also
+      // advanced past the merge-base is not an independently useful signal
+      // here, so this is not computed for this branch.
+      baseAdvancedSinceMergeBase: false,
     };
   }
 
@@ -202,25 +226,44 @@ function deriveBranchState({
       syncRecommendation: 'hold-unknown',
       conflictFiles: [],
       mergeableSource: 'github-merge-state',
+      baseAdvancedSinceMergeBase: false,
     };
   }
 
   if (mergeableNorm === 'MERGEABLE' && mergeStateNorm === 'CLEAN') {
+    const baseAdvancedSinceMergeBase = computeBaseAdvanced(
+      prHeadSha,
+      prBaseSha,
+      prBaseRef,
+      owner,
+      repo,
+      notes,
+      skipGitProbe,
+    );
+    if (baseAdvancedSinceMergeBase) {
+      notes.push(BASE_ADVANCED_BLIND_SPOT_NOTE);
+    }
     return {
       branchState: 'clean',
       syncRecommendation: 'none',
       conflictFiles: [],
       mergeableSource: 'github-mergeable',
+      baseAdvancedSinceMergeBase,
     };
   }
 
   if (mergeStateNorm === 'BEHIND') {
+    // GitHub's BEHIND state is definitional: the base has already advanced
+    // past this branch's merge-base (that is what "behind" means), so this
+    // is known for free without an extra git probe, for every return below.
+    const baseAdvancedSinceMergeBase = true;
     if (skipGitProbe) {
       return {
         branchState: 'behind-no-conflict',
         syncRecommendation: 'merge-main',
         conflictFiles: [],
         mergeableSource: 'github-merge-state',
+        baseAdvancedSinceMergeBase,
       };
     }
     const probeResult = probeConflictFilesReadOnly(
@@ -237,6 +280,7 @@ function deriveBranchState({
         syncRecommendation: 'hold-unknown',
         conflictFiles: [],
         mergeableSource: 'git-merge-tree',
+        baseAdvancedSinceMergeBase,
       };
     }
     if (probeResult.length > 0) {
@@ -245,6 +289,7 @@ function deriveBranchState({
         syncRecommendation: 'hold-unknown',
         conflictFiles: probeResult,
         mergeableSource: 'git-merge-tree',
+        baseAdvancedSinceMergeBase,
       };
     }
     return {
@@ -252,15 +297,29 @@ function deriveBranchState({
       syncRecommendation: 'merge-main',
       conflictFiles: [],
       mergeableSource: 'git-merge-tree',
+      baseAdvancedSinceMergeBase,
     };
   }
 
   if (mergeableNorm === 'MERGEABLE') {
+    const baseAdvancedSinceMergeBase = computeBaseAdvanced(
+      prHeadSha,
+      prBaseSha,
+      prBaseRef,
+      owner,
+      repo,
+      notes,
+      skipGitProbe,
+    );
+    if (baseAdvancedSinceMergeBase) {
+      notes.push(BASE_ADVANCED_BLIND_SPOT_NOTE);
+    }
     return {
       branchState: 'clean',
       syncRecommendation: 'none',
       conflictFiles: [],
       mergeableSource: 'github-mergeable',
+      baseAdvancedSinceMergeBase,
     };
   }
 
@@ -273,6 +332,7 @@ function deriveBranchState({
       syncRecommendation: 'recheck',
       conflictFiles: [],
       mergeableSource: 'none',
+      baseAdvancedSinceMergeBase: false,
     };
   }
 
@@ -284,7 +344,75 @@ function deriveBranchState({
     syncRecommendation: 'hold-unknown',
     conflictFiles: [],
     mergeableSource: 'none',
+    baseAdvancedSinceMergeBase: false,
   };
+}
+
+/**
+ * Read-only local `git merge-base` lookup, falling back to a shallow fetch
+ * of the base ref when the base commit is not yet present locally (e.g. a
+ * shallow CI checkout that only has the PR head). Returns `null` when the
+ * merge-base still cannot be resolved after the fallback fetch; callers
+ * decide how to report that indeterminate outcome, since "conflict probe"
+ * and "base-advancement" callers need different diagnostics wording for the
+ * same underlying null.
+ */
+function computeMergeBase(
+  prHeadSha: string,
+  prBaseSha: string,
+  prBaseRef: string,
+  owner: string | undefined,
+  repo: string | undefined,
+  notes: string[],
+): string | null {
+  let mergeBase = gitText(['merge-base', prHeadSha, prBaseSha]);
+  if (!mergeBase) {
+    tryFetchBase(prBaseRef, owner, repo, notes);
+    mergeBase = gitText(['merge-base', prHeadSha, prBaseSha]);
+  }
+  return mergeBase || null;
+}
+
+/**
+ * True when the base ref has moved past this PR's merge-base, independent of
+ * `syncRecommendation` -- the blind spot this field exists to close. Returns
+ * `false` both when base genuinely has not advanced and when the merge-base
+ * could not be resolved at all; the latter, indeterminate case is
+ * distinguished only via a `notes` entry, never silently reported as a
+ * confirmed "no" (see the `computeMergeBase` doc comment above).
+ */
+function computeBaseAdvanced(
+  prHeadSha: string,
+  prBaseSha: string,
+  prBaseRef: string,
+  owner: string | undefined,
+  repo: string | undefined,
+  notes: string[],
+  skipGitProbe: boolean,
+): boolean {
+  if (skipGitProbe) return false;
+  try {
+    const mergeBase = computeMergeBase(
+      prHeadSha,
+      prBaseSha,
+      prBaseRef,
+      owner,
+      repo,
+      notes,
+    );
+    if (!mergeBase) {
+      notes.push(
+        'merge-base not found; base-advancement since merge-base is undetermined (reported as false).',
+      );
+      return false;
+    }
+    return mergeBase !== prBaseSha;
+  } catch {
+    notes.push(
+      'git merge-base unavailable; base-advancement since merge-base is undetermined (reported as false).',
+    );
+    return false;
+  }
 }
 
 function probeConflictFilesReadOnly(
@@ -296,16 +424,19 @@ function probeConflictFilesReadOnly(
   notes: string[],
 ): string[] | null {
   try {
-    let mergeBase = gitText(['merge-base', prHeadSha, prBaseSha]);
+    const mergeBase = computeMergeBase(
+      prHeadSha,
+      prBaseSha,
+      prBaseRef,
+      owner,
+      repo,
+      notes,
+    );
     if (!mergeBase) {
-      tryFetchBase(prBaseRef, owner, repo, notes);
-      mergeBase = gitText(['merge-base', prHeadSha, prBaseSha]);
-      if (!mergeBase) {
-        notes.push(
-          'merge-base not found; cannot prove conflict-free; holding unknown.',
-        );
-        return null;
-      }
+      notes.push(
+        'merge-base not found; cannot prove conflict-free; holding unknown.',
+      );
+      return null;
     }
     const result = spawnSync(
       'git',
