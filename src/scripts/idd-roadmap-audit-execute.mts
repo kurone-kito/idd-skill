@@ -29,7 +29,7 @@ import {
   parseClaimStaleAgeMs,
   type RoadmapGraphReport,
 } from './discover-roadmap-graph.mts';
-import { ghText, safeGhText } from './gh-exec.mts';
+import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import type { ClaimValidationSummary } from './protocol-helpers.mts';
 import {
@@ -109,6 +109,17 @@ export interface IddRoadmapAuditExecuteVerdict {
   closed: boolean;
   claimReleased: boolean;
   result: string;
+  /**
+   * Present (and `true`) only when the production `gh api user` viewer-login
+   * lookup failed (#1396). Absent whenever the lookup succeeded, so the
+   * common healthy-path JSON stays byte-identical to before this field
+   * existed. A silently-failed lookup previously excluded the real claimant
+   * from the trusted-author set with no visible signal, so a `not owned`
+   * verdict could be misread as a genuine claim conflict instead of a
+   * lookup failure; callers should treat any not-owned result alongside
+   * this flag as inconclusive rather than a confirmed claim loss.
+   */
+  viewerLoginUnavailable?: boolean;
 }
 
 /** Outcome of re-validating the roadmap-audit claim before any mutation. */
@@ -539,6 +550,68 @@ export function evaluateRoadmapClaim(
 }
 
 /**
+ * Fallback explanation for a {@link RoadmapClaimVerdict.reason} /
+ * {@link ClaimValidationSummary} `reason` code this map does not (yet)
+ * recognize. Keeps {@link explainRoadmapClaimReason} total instead of
+ * throwing or returning an empty string for a future/unlisted code.
+ */
+const UNKNOWN_CLAIM_REASON_EXPLANATION =
+  'unrecognized claim-verification reason code';
+
+/**
+ * Human-readable explanation for every `reason` code {@link evaluateRoadmapClaim}
+ * (and the `summarizeClaimValidation` it wraps) can produce (#1396). The codes
+ * themselves stay stable, machine-readable strings — several are asserted by
+ * exact equality in tests — so this map is additive: it never replaces
+ * `RoadmapClaimVerdict.reason`, it only makes the CLI's human-facing `result`
+ * messages self-describing, so a policy rejection (e.g. a normal execution
+ * claim rejected for lacking the roadmap-audit coordination branch) is never
+ * misread as an unexplained fetch failure.
+ */
+const CLAIM_REASON_EXPLANATIONS: Record<string, string> = {
+  match:
+    'the claim is owned: claim-id, agent-id, branch, and staleness all match',
+  'missing-active-claim':
+    'no active claim is present on the roadmap issue (no trusted claimed-by comment, or it was released/superseded)',
+  'claim-id-mismatch':
+    "the active claim's claim-id does not match the claim-id this run expected to own",
+  'agent-id-mismatch':
+    "the active claim's agent-id does not match the agent-id this run expected to own",
+  'claim-branch-mismatch':
+    'the audit only accepts roadmap-audit/<n>-* coordination claims; a normal execution claim (e.g. issue/<n>-...) on the roadmap issue does not authorize closure',
+  'claim-stale':
+    'the active claim is older than the configured stale age and is takeover-eligible, so it cannot prove ongoing ownership',
+};
+
+/**
+ * Resolve the human-readable explanation for a claim-verification `reason`
+ * code. Total: an unrecognized code (never emitted by the current
+ * `evaluateRoadmapClaim` / `summarizeClaimValidation` vocabulary, but a safe
+ * default for any future addition) reports
+ * {@link UNKNOWN_CLAIM_REASON_EXPLANATION} instead of throwing or silently
+ * omitting an explanation.
+ */
+export function explainRoadmapClaimReason(reason: string): string {
+  return CLAIM_REASON_EXPLANATIONS[reason] ?? UNKNOWN_CLAIM_REASON_EXPLANATION;
+}
+
+/**
+ * Trailing caveat appended to a claim-not-owned `result` message when the
+ * production viewer-login lookup failed (#1396). Empty string when the
+ * lookup succeeded (or was never attempted, e.g. injected test deps), so the
+ * common-case message is unaffected. Kept as its own function so all three
+ * not-owned call sites in {@link runRoadmapAuditExecute} render the exact
+ * same caveat text.
+ */
+function viewerLoginUnavailableCaveat(
+  viewerLoginUnavailable?: boolean,
+): string {
+  return viewerLoginUnavailable
+    ? ' NOTE: the viewer-login lookup failed for this run, so trusted-author resolution may be incomplete — this not-owned result could stem from that instead of a genuine claim conflict.'
+    : '';
+}
+
+/**
  * Detect the helper's own canonical `IDD roadmap completion audit` evidence
  * comment (the exact heading `buildRoadmapCompletionAuditBody` emits) among
  * `comments`, posted by an author for which `isTrustedAuthor` is true. Used
@@ -633,6 +706,14 @@ export interface RoadmapAuditExecuteDeps {
   blockedByHumanLabelName?: string;
   /** Configured `labels.needsDecisionLabelName` (#1273). */
   needsDecisionLabelName?: string;
+  /**
+   * True when the production viewer-login lookup failed (#1396). Static
+   * context resolved once in {@link createProductionDeps}, mirroring the
+   * `blockedByHumanLabelName` / `needsDecisionLabelName` fields above; copied
+   * onto the verdict's `viewerLoginUnavailable` field so a failed lookup is
+   * never silently indistinguishable from a genuine not-owned claim.
+   */
+  viewerLoginUnavailable?: boolean;
 }
 
 /**
@@ -688,6 +769,11 @@ export async function runRoadmapAuditExecute(
     closed: false,
     claimReleased: false,
     result: '',
+    // Present only when the lookup genuinely failed (#1396): keeps the
+    // common healthy-path JSON byte-identical to before this field existed.
+    ...(resolvedDeps.viewerLoginUnavailable
+      ? { viewerLoginUnavailable: true }
+      : {}),
   };
 
   if (!args.apply) {
@@ -759,7 +845,7 @@ export async function runRoadmapAuditExecute(
       verdict.result = `already-complete: roadmap #${roadmapNumber} is already closed with a trusted IDD roadmap completion audit evidence comment (claim reason="${earlyClaim.reason}"); idempotent no-op, no mutation performed`;
       return { verdict, exitCode: 0 };
     }
-    verdict.result = `claim not owned on re-validation (reason="${earlyClaim.reason}"); no mutation`;
+    verdict.result = `claim not owned on re-validation (reason="${earlyClaim.reason}": ${explainRoadmapClaimReason(earlyClaim.reason)}); no mutation${viewerLoginUnavailableCaveat(resolvedDeps.viewerLoginUnavailable)}`;
     return { verdict, exitCode: 1 };
   }
 
@@ -794,7 +880,7 @@ export async function runRoadmapAuditExecute(
     nowIso,
   });
   if (!claim.owned) {
-    verdict.result = `claim not owned immediately before mutation (reason="${claim.reason}"); no mutation`;
+    verdict.result = `claim not owned immediately before mutation (reason="${claim.reason}": ${explainRoadmapClaimReason(claim.reason)}); no mutation${viewerLoginUnavailableCaveat(resolvedDeps.viewerLoginUnavailable)}`;
     return { verdict, exitCode: 1 };
   }
 
@@ -815,7 +901,7 @@ export async function runRoadmapAuditExecute(
     nowIso,
   });
   if (!preCloseClaim.owned) {
-    verdict.result = `claim lost in the comment→close gap (reason="${preCloseClaim.reason}"); evidence comment posted but roadmap NOT closed`;
+    verdict.result = `claim lost in the comment→close gap (reason="${preCloseClaim.reason}": ${explainRoadmapClaimReason(preCloseClaim.reason)}); evidence comment posted but roadmap NOT closed${viewerLoginUnavailableCaveat(resolvedDeps.viewerLoginUnavailable)}`;
     return { verdict, exitCode: 1 };
   }
 
@@ -872,21 +958,72 @@ function normalizeApplyNow(raw: string): string | null {
 // Production dependency wiring (live gh + roadmap-graph traversal).
 // ---------------------------------------------------------------------------
 
+/**
+ * Fetch the authenticated actor's own GitHub login via `gh api user`, or
+ * `null` on any failure (e.g. an under-scoped or expired token). Uses the
+ * throwing {@link ghText} (not `safeGhText`) wrapped in a local try/catch so
+ * a genuine failure is distinguishable from a merely-empty response — the
+ * distinction {@link resolveViewerLogin} needs to report
+ * `viewerLoginUnavailable` instead of silently treating a failed lookup the
+ * same as an anonymous one (#1396).
+ */
+function fetchViewerLogin(): string | null {
+  try {
+    return ghText(['api', 'user', '--jq', '.login'], GH_TEXT_LOOP_OPTIONS);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the viewer login used to always-trust the current claimant (see
+ * {@link buildTrustedAuthorPredicate}), distinguishing a genuinely failed
+ * lookup from an empty one instead of collapsing both to `''` (#1396). A
+ * previously silent failure here excluded the real claimant from the
+ * trusted-author set with no signal that the LOOKUP, not the claim itself,
+ * was the problem, so a `not owned` verdict could be misread as a genuine
+ * claim conflict.
+ *
+ * `fetchLogin` defaults to the real {@link fetchViewerLogin} network call but
+ * is injectable so both outcomes (success and failure) are unit-testable
+ * without shelling out to `gh`. A successful-but-blank response (`''` or
+ * whitespace-only) is also reported as unavailable: an authenticated `gh api
+ * user` call should never legitimately return an empty login, so a blank
+ * result signals a degraded response rather than a real anonymous viewer.
+ */
+export function resolveViewerLogin(
+  fetchLogin: () => string | null = fetchViewerLogin,
+): { viewerLogin: string; viewerLoginUnavailable: boolean } {
+  const raw = fetchLogin();
+  const normalized = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  if (raw === null || normalized === '') {
+    return { viewerLogin: '', viewerLoginUnavailable: true };
+  }
+  return { viewerLogin: normalized, viewerLoginUnavailable: false };
+}
+
 function createProductionDeps(
   args: RoadmapAuditExecuteArgs,
 ): RoadmapAuditExecuteDeps {
   const owner =
     args.owner ||
-    ghText(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']);
+    ghText(
+      ['repo', 'view', '--json', 'owner', '--jq', '.owner.login'],
+      GH_TEXT_LOOP_OPTIONS,
+    );
   const repo =
-    args.repo || ghText(['repo', 'view', '--json', 'name', '--jq', '.name']);
+    args.repo ||
+    ghText(
+      ['repo', 'view', '--json', 'name', '--jq', '.name'],
+      GH_TEXT_LOOP_OPTIONS,
+    );
   const rawConfig = loadPolicy(args.policy);
   const markerPrefix = normalizeMarkerPrefix(
     (rawConfig as { markerPrefix?: unknown }).markerPrefix,
   );
-  const viewerLogin = String(safeGhText(['api', 'user', '--jq', '.login']))
-    .trim()
-    .toLowerCase();
+  const { viewerLogin, viewerLoginUnavailable } = resolveViewerLogin();
   const isTrustedAuthor = buildTrustedAuthorPredicate({
     owner,
     viewerLogin,
@@ -918,6 +1055,7 @@ function createProductionDeps(
       resolveOpenLinkedPrIssues(owner, repo, issueNumbers),
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    viewerLoginUnavailable,
     revalidateClaim: ({
       issueNumber,
       roadmapNumber,
@@ -943,15 +1081,18 @@ function createProductionDeps(
     postEvidenceComment: (issueNumber, body) =>
       postIssueComment(owner, repo, issueNumber, body),
     closeRoadmap: (issueNumber) =>
-      ghText([
-        'issue',
-        'close',
-        String(issueNumber),
-        '--repo',
-        `${owner}/${repo}`,
-        '--reason',
-        'completed',
-      ]),
+      ghText(
+        [
+          'issue',
+          'close',
+          String(issueNumber),
+          '--repo',
+          `${owner}/${repo}`,
+          '--reason',
+          'completed',
+        ],
+        GH_TEXT_LOOP_OPTIONS,
+      ),
     releaseClaim: (issueNumber, fields) =>
       postIssueComment(
         owner,
@@ -1007,12 +1148,15 @@ function loadIssueComments(
   const comments: unknown[] = [];
   const pageSize = 100;
   for (let page = 1; ; page += 1) {
-    const raw = ghText([
-      'api',
-      `repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=${pageSize}&page=${page}`,
-      '--jq',
-      '.',
-    ]);
+    const raw = ghText(
+      [
+        'api',
+        `repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=${pageSize}&page=${page}`,
+        '--jq',
+        '.',
+      ],
+      GH_TEXT_LOOP_OPTIONS,
+    );
     const pageItems = raw && raw !== 'null' ? JSON.parse(raw) : [];
     if (!Array.isArray(pageItems) || pageItems.length === 0) {
       break;
@@ -1239,7 +1383,14 @@ function hasOpenConnectedPr(
   return reconcileConnectedOpenPrs(events).length > 0;
 }
 
-/** Run one `gh api graphql` page, passing `after` only when set. */
+/**
+ * Run one `gh api graphql` page, passing `after` only when set.
+ *
+ * Stdin-safe (#1396): called from a per-issue pagination loop
+ * (`resolveOpenLinkedPrIssues` → `hasOpenClosingPr` / `hasOpenConnectedPr`),
+ * the exact tight-loop hazard `GH_TEXT_LOOP_OPTIONS` exists for — this call
+ * site was missed by the initial pass over the file's other `ghText` calls.
+ */
 function ghGraphql(
   query: string,
   owner: string,
@@ -1262,7 +1413,7 @@ function ghGraphql(
   if (after) {
     apiArgs.push('-f', `after=${after}`);
   }
-  return JSON.parse(ghText(apiArgs));
+  return JSON.parse(ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
 }
 
 /** Coerce raw CONNECTED/DISCONNECTED timeline nodes into reconcile events. */
@@ -1458,6 +1609,29 @@ function printHelp(): void {
   (branch roadmap-audit/<roadmap>-<slug>) and match --claim-id (required under
   --apply) and, when given, --agent-id. --owner and --repo must be passed
   together or not at all.
+
+  CLAIM REJECTION REASONS: a not-owned result's "reason" code is one of:
+    match                 the claim is owned (not a rejection)
+    missing-active-claim  no active claim is present on the roadmap issue
+    claim-id-mismatch     the active claim's claim-id is not the expected one
+    agent-id-mismatch     the active claim's agent-id is not the expected one
+    claim-branch-mismatch the active claim's branch is not a roadmap-audit
+                           coordination claim (roadmap-audit/<roadmap>-<slug>)
+                           for THIS roadmap -- a normal execution claim on the
+                           roadmap issue does not authorize closure
+    claim-stale           the active claim is older than the configured stale
+                           age and is takeover-eligible, so it cannot prove
+                           ongoing ownership
+  Each not-owned "result" message embeds both the code and this explanation,
+  so a policy rejection (e.g. claim-branch-mismatch) is never misread as an
+  unexplained fetch failure.
+
+  VIEWER-LOGIN LOOKUP: the trusted-author check needs this run's own GitHub
+  login (via "gh api user"). A genuinely FAILED lookup (network/auth error, or
+  an unexpected blank response) is reported as { viewerLoginUnavailable: true }
+  on the verdict, and any not-owned "result" message gets a trailing NOTE, so a
+  failed lookup is never silently indistinguishable from a real not-owned
+  claim. Absent (or false) whenever the lookup succeeded normally.
 
   SCOPE: this helper gates only the MECHANICAL completion preconditions (all
   descendants closed/complete; no open / unresolved / inaccessible / linked-PR
