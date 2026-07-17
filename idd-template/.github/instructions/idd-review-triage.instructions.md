@@ -544,14 +544,15 @@ Copilot findings were all Rejected this pass could reach F2's
 advisory-convergence check with the bot never having reviewed the
 resulting HEAD (#1442). Run this gate **after** any branch-sync merge
 settles — requesting first would let a subsequent merge invalidate the
-review just obtained, reproducing the deadlock downstream.
+review just obtained.
 
 Run E14's **Primary advisory bot** procedure now
 (`idd-review-fix.instructions.md` E14) at this now-stable HEAD — steps
 1-4, plus the active polling loop when it applies; skip E14's Human
 reviewers step and its secondary-bot step 5. Substitute "resume the
-branch-sync check's `clean` exit above (its watermark-refresh clause,
-then F1)" for each of E14's four literal "proceed to E15" exits: step
+branch-sync check's no-sync-required `clean` exit above (its
+watermark-refresh clause, then F1)" for each of E14's four literal
+"proceed to E15" exits: step
 2's `SATISFIED` short-circuit, step 4's AW3 `SATISFIED` row, step 4's
 `CAP_EXHAUSTED` phase-specific default, and the active polling loop's
 `SATISFIED` exit. Leave every other exit unchanged — both "return to
