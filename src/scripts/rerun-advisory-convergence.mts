@@ -95,6 +95,7 @@ import {
   parsePaginatedGhNdjson,
   resolveAdvisoryBotLogins,
 } from './protocol-helpers.mts';
+import { loadJson, validateConfigSection } from './validate-schemas.mts';
 
 /** The check name this helper diagnoses. Matches
  * `ADVISORY_CONVERGENCE_CHECK_SELECTOR` in advisory-convergence.mts;
@@ -103,6 +104,14 @@ import {
  * advisory-convergence.mts pulls in the full claim/waiver/disposition
  * machinery this helper has no use for. */
 export const RERUN_PLAN_CHECK_NAME = 'idd-advisory-convergence';
+
+/** Same schema `readCiWaitPolicy` (ci-wait-policy.mts) and
+ * `readAdvisoryPrimaryBotLogin` (advisory-wait-policy.mts) already
+ * validate their own local-disk config reads against, reused here for
+ * {@link sanitizeRemoteConfig} so a fetched-but-schema-invalid section
+ * fails closed the same way theirs already does (#1434 review, Codex
+ * P2). */
+const POLICY_SCHEMA = loadJson('schemas/policy.schema.json');
 
 /** Check-run `conclusion` values treated as pass-equivalent, matching
  * `idd-ci.instructions.md`'s normalized required-check states. */
@@ -1409,6 +1418,52 @@ function resolveDefaultBranch(owner: string, repo: string): string {
   );
 }
 
+/**
+ * Discard whichever of `ciWait`, `advisoryWait`, and `advisoryBotLogins`
+ * fails schema validation against {@link POLICY_SCHEMA}, treating an
+ * invalid section as absent -- the same fail-closed contract
+ * `readCiWaitPolicy` (ci-wait-policy.mts) and `readAdvisoryPrimaryBotLogin`
+ * (advisory-wait-policy.mts) already give their own local-disk config
+ * reads, applied here to the already-fetched remote config object instead
+ * (those two functions read from a local file path; this helper's config
+ * comes from the Contents API, so their own validation cannot be reused
+ * directly -- only the shared {@link validateConfigSection} check they
+ * both build on can).
+ *
+ * Without this, a `ciWait` section shaped like `{ rerunPolicy: "hold",
+ * unknownProperty: true }` (an otherwise-valid `rerunPolicy` value
+ * alongside a schema violation elsewhere in the same section --
+ * `additionalProperties: false` in policy.schema.json) would still have
+ * this helper's `normalizeCiWaitPolicy` read `rerunPolicy: "hold"`
+ * directly and suppress every recovery command, even though
+ * `readCiWaitPolicy` discards the WHOLE section on that same violation
+ * and falls back to the documented default `"rerun-once"` -- letting
+ * this helper disagree with, and incorrectly override, the established
+ * policy resolution (#1434 review, Codex P2). `advisoryWait`
+ * (`primaryBotLogin`) and the top-level `advisoryBotLogins` array get the
+ * identical treatment for the same reason, on the bot-identity side.
+ *
+ * Every downstream resolver this helper calls (`resolveAdvisoryPrimaryBotLogin`,
+ * `resolveAdvisoryBotLogins`, `normalizeCiWaitPolicy`) already treats an
+ * ABSENT section as "use the default", so discarding an invalid section
+ * here is enough -- no caller-side change needed beyond running the
+ * fetched config through this function once.
+ */
+export function sanitizeRemoteConfig(
+  config: IddConfig | null,
+): IddConfig | null {
+  if (!config || typeof config !== 'object') {
+    return config;
+  }
+  const sanitized: Record<string, unknown> = { ...config };
+  for (const sectionKey of ['ciWait', 'advisoryWait', 'advisoryBotLogins']) {
+    if (validateConfigSection(config, POLICY_SCHEMA, sectionKey).length > 0) {
+      delete sanitized[sectionKey];
+    }
+  }
+  return sanitized as IddConfig;
+}
+
 function collectFromGitHub(args: RerunPlanArgs): {
   input: RerunPlanInput;
   options: RerunPlanOptions;
@@ -1559,7 +1614,13 @@ function collectFromGitHub(args: RerunPlanArgs): {
   // recommendation -- see buildIddConfigContentsArgs's doc comment for
   // the full rationale (#1434 review, Codex P2, second occurrence).
   const configRef = resolveDefaultBranch(owner, repo);
-  const rawConfig = loadRemoteIddConfig(owner, repo, configRef);
+  // Schema-validated the same way readCiWaitPolicy / readAdvisoryPrimaryBotLogin
+  // already validate their own local-disk reads, before ANY resolver below
+  // sees it -- see sanitizeRemoteConfig's own doc comment for the full
+  // rationale (#1434 review, Codex P2).
+  const rawConfig = sanitizeRemoteConfig(
+    loadRemoteIddConfig(owner, repo, configRef),
+  );
   const primaryBotLogin = resolveAdvisoryPrimaryBotLogin(rawConfig);
   // The caller's local IDD_ADVISORY_BOT_LOGINS env var describes the
   // *local* checkout's own advisory bots. resolveAdvisoryBotLogins gives

@@ -15,6 +15,7 @@ import {
   type RerunPlanRawInstance,
   resolveCheckRunUrl,
   runRerunAdvisoryConvergence,
+  sanitizeRemoteConfig,
 } from '../src/scripts/rerun-advisory-convergence.mts';
 
 const HEAD = '1111111111111111111111111111111111111111';
@@ -1226,6 +1227,76 @@ test('buildIddConfigContentsArgs places --method immediately before GET (gh api 
   const methodIndex = args.indexOf('--method');
   assert.notEqual(methodIndex, -1);
   assert.equal(args[methodIndex + 1], 'GET');
+});
+
+// --- sanitizeRemoteConfig (regression: Codex P2, #1434 review) ----------
+//
+// readCiWaitPolicy / readAdvisoryPrimaryBotLogin validate their own
+// local-disk config reads against policy.schema.json's ciWait /
+// advisoryWait sections (additionalProperties: false) and fall back to
+// documented defaults on any violation. Reading a fetched remote config's
+// rerunPolicy/primaryBotLogin directly, without the same validation,
+// could let this helper apply a value from a section that the
+// established resolver would have discarded entirely -- disagreeing
+// with, and incorrectly overriding, the documented policy resolution.
+
+test('sanitizeRemoteConfig discards a ciWait section with an unknown property, even though rerunPolicy itself is a valid enum value', () => {
+  const sanitized = sanitizeRemoteConfig({
+    ciWait: { rerunPolicy: 'hold', unknownProperty: true },
+  });
+  assert.equal(sanitized?.ciWait, undefined);
+});
+
+test('sanitizeRemoteConfig keeps a schema-valid ciWait section', () => {
+  const sanitized = sanitizeRemoteConfig({
+    ciWait: { rerunPolicy: 'hold' },
+  });
+  assert.deepEqual(sanitized?.ciWait, { rerunPolicy: 'hold' });
+});
+
+test('sanitizeRemoteConfig discards an advisoryWait section with an invalid enum value', () => {
+  const sanitized = sanitizeRemoteConfig({
+    advisoryWait: { primaryBotLogin: 'my-bot', capExhaustedRoute: 'bogus' },
+  });
+  assert.equal(sanitized?.advisoryWait, undefined);
+});
+
+test('sanitizeRemoteConfig keeps a schema-valid advisoryWait section', () => {
+  const sanitized = sanitizeRemoteConfig({
+    advisoryWait: { primaryBotLogin: 'my-bot' },
+  });
+  assert.deepEqual(sanitized?.advisoryWait, { primaryBotLogin: 'my-bot' });
+});
+
+test('sanitizeRemoteConfig discards an advisoryBotLogins array containing a non-string item', () => {
+  const sanitized = sanitizeRemoteConfig({
+    advisoryBotLogins: ['coderabbitai', 42],
+  });
+  assert.equal(sanitized?.advisoryBotLogins, undefined);
+});
+
+test('sanitizeRemoteConfig keeps a schema-valid advisoryBotLogins array', () => {
+  const sanitized = sanitizeRemoteConfig({
+    advisoryBotLogins: ['coderabbitai', 'chatgpt-codex-connector'],
+  });
+  assert.deepEqual(sanitized?.advisoryBotLogins, [
+    'coderabbitai',
+    'chatgpt-codex-connector',
+  ]);
+});
+
+test('sanitizeRemoteConfig leaves other fields and an absent section untouched', () => {
+  const sanitized = sanitizeRemoteConfig({
+    ciWait: { rerunPolicy: 'hold' },
+    someUnrelatedTopLevelField: 'kept as-is',
+  });
+  assert.deepEqual(sanitized?.ciWait, { rerunPolicy: 'hold' });
+  assert.equal(sanitized?.someUnrelatedTopLevelField, 'kept as-is');
+  assert.equal(sanitized?.advisoryWait, undefined);
+});
+
+test('sanitizeRemoteConfig passes null through unchanged', () => {
+  assert.equal(sanitizeRemoteConfig(null), null);
 });
 
 // --- CLI argument parsing ----------------------------------------------
