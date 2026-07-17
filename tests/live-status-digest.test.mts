@@ -15,7 +15,9 @@ import {
   LIVE_STATUS_DIGEST_MARKER,
   planLiveStatusDigestUpsert,
   renderLiveStatusDigest,
+  resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
+  summarizeClaimValidation,
 } from '../src/scripts/protocol-helpers.mts';
 
 const fields = {
@@ -350,4 +352,171 @@ test('isTrustedMarkerAuthor matches the seeded current viewer login', () => {
   // Case-insensitive against the normalized viewer login.
   assert.equal(isTrustedMarkerAuthor('o', 'r', 'Me-The-Viewer'), true);
   __resetTrustedMarkerCachesForTest();
+});
+
+// --- #1437: PR-target mode was silently rejecting an issue-only
+// forced-handoff successor's claim, because `prFirstCommitAt` was never
+// computed or threaded into `summarizeClaimValidation` -- the Part B (#1058)
+// allowance defaulted closed. `resolvePrFirstCommitAt` is the shared,
+// extracted date computation (also used by `pre-merge-readiness.mts` and
+// `advisory-convergence.mts`); the scenarios below exercise it directly and
+// then prove the claim-resolution contract this file's `readActiveClaim` now
+// participates in, entirely via injected fixtures -- no live network.
+
+test('resolvePrFirstCommitAt: empty commit list resolves to null', () => {
+  assert.equal(resolvePrFirstCommitAt([]), null);
+});
+
+test('resolvePrFirstCommitAt: a single commit resolves to its committer date', () => {
+  assert.equal(
+    resolvePrFirstCommitAt([
+      { commit: { committer: { date: '2026-06-10T00:00:00Z' } } },
+    ]),
+    '2026-06-10T00:00:00Z',
+  );
+});
+
+test('resolvePrFirstCommitAt: picks the earliest commit regardless of array order', () => {
+  const commits = [
+    { commit: { committer: { date: '2026-06-12T00:00:00Z' } } },
+    { commit: { committer: { date: '2026-06-10T00:00:00Z' } } },
+    { commit: { committer: { date: '2026-06-11T00:00:00Z' } } },
+  ];
+  assert.equal(resolvePrFirstCommitAt(commits), '2026-06-10T00:00:00Z');
+});
+
+test('resolvePrFirstCommitAt: falls back to the author date when committer date is absent', () => {
+  assert.equal(
+    resolvePrFirstCommitAt([
+      { commit: { author: { date: '2026-06-09T00:00:00Z' } } },
+    ]),
+    '2026-06-09T00:00:00Z',
+  );
+});
+
+test('resolvePrFirstCommitAt: skips unparseable dates instead of letting them win the minimum', () => {
+  const commits = [
+    { commit: { committer: { date: 'not-a-date' } } },
+    { commit: { committer: { date: '2026-06-10T00:00:00Z' } } },
+  ];
+  assert.equal(resolvePrFirstCommitAt(commits), '2026-06-10T00:00:00Z');
+});
+
+const PR_TARGET_TRUSTED = 'kurone-kito';
+const PR_TARGET_OLD_AGENT_ID = 'claude-old';
+const PR_TARGET_OLD_CLAIM_ID = 'claim-old';
+const PR_TARGET_NEW_AGENT_ID = 'claude-successor';
+const PR_TARGET_NEW_CLAIM_ID = 'claim-successor';
+const PR_TARGET_PR_FIRST_COMMIT_AT = '2026-06-10T00:00:00Z';
+
+function prTargetClaimComment() {
+  return {
+    author: { login: PR_TARGET_TRUSTED },
+    body: `<!-- claimed-by: ${PR_TARGET_OLD_AGENT_ID} ${PR_TARGET_OLD_CLAIM_ID} supersedes: none 2026-06-01T00:00:00Z branch: issue/1435-test -->\n\n_${PR_TARGET_OLD_AGENT_ID}: issue claim — IDD automation marker. Do not edit._`,
+    createdAt: '2026-06-01T00:00:00Z',
+  };
+}
+
+function prTargetForcedHandoffComment({
+  contextScope = 'issue-only',
+  linkedPr,
+  createdAt = '2026-06-05T00:00:00Z',
+}: {
+  contextScope?: string;
+  linkedPr?: string;
+  createdAt?: string;
+} = {}) {
+  const payload = {
+    'old-agent-id': PR_TARGET_OLD_AGENT_ID,
+    'old-claim-id': PR_TARGET_OLD_CLAIM_ID,
+    'new-agent-id': PR_TARGET_NEW_AGENT_ID,
+    'new-claim-id': PR_TARGET_NEW_CLAIM_ID,
+    branch: 'issue/1435-test',
+    'forced-by': PR_TARGET_TRUSTED,
+    reason: 'operator-approved-recovery',
+    timestamp: createdAt,
+    'context-scope': contextScope,
+    ...(linkedPr ? { 'linked-pr': linkedPr } : {}),
+  };
+  return {
+    author: { login: PR_TARGET_TRUSTED },
+    body: `<!-- forced-handoff: ${JSON.stringify(payload)} -->\n\nForced handoff approved by ${PR_TARGET_TRUSTED}.`,
+    createdAt,
+  };
+}
+
+function summarizePrTargetClaim(options: {
+  handoffComment: ReturnType<typeof prTargetForcedHandoffComment>;
+  expectedLinkedPrs: string[];
+  prFirstCommitAt?: string | null;
+}) {
+  return summarizeClaimValidation(
+    [prTargetClaimComment(), options.handoffComment],
+    {
+      trustedMarkerLogins: [PR_TARGET_TRUSTED],
+      forcedHandoffEnabled: true,
+      expectedLinkedPrs: options.expectedLinkedPrs,
+      prFirstCommitAt: options.prFirstCommitAt ?? null,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === PR_TARGET_TRUSTED,
+    },
+  );
+}
+
+test('PR-target + issue-only handoff predating the PR resolves to the successor', () => {
+  const summary = summarizePrTargetClaim({
+    handoffComment: prTargetForcedHandoffComment(),
+    expectedLinkedPrs: ['1435'],
+    prFirstCommitAt: PR_TARGET_PR_FIRST_COMMIT_AT,
+  });
+  assert.equal(summary.activeClaimPresent, true);
+  assert.equal(summary.activeClaim?.claimId, PR_TARGET_NEW_CLAIM_ID);
+  assert.equal(summary.activeClaim?.agentId, PR_TARGET_NEW_AGENT_ID);
+});
+
+test('PR-target + issue-only handoff NOT predating the PR stays rejected', () => {
+  const summary = summarizePrTargetClaim({
+    // Handoff at 2026-06-11 is AFTER PR_TARGET_PR_FIRST_COMMIT_AT
+    // (2026-06-10), so Part B does not apply -- the pre-handoff claim stays
+    // active, matching today's (pre-fix) behavior for this specific input.
+    handoffComment: prTargetForcedHandoffComment({
+      createdAt: '2026-06-11T00:00:00Z',
+    }),
+    expectedLinkedPrs: ['1435'],
+    prFirstCommitAt: PR_TARGET_PR_FIRST_COMMIT_AT,
+  });
+  assert.equal(summary.activeClaimPresent, true);
+  assert.equal(summary.activeClaim?.claimId, PR_TARGET_OLD_CLAIM_ID);
+  assert.equal(summary.activeClaim?.agentId, PR_TARGET_OLD_AGENT_ID);
+});
+
+test('PR-target + issue-plus-pr handoff resolves via the linked-PR match, unaffected by prFirstCommitAt', () => {
+  const summary = summarizePrTargetClaim({
+    handoffComment: prTargetForcedHandoffComment({
+      contextScope: 'issue-plus-pr',
+      linkedPr: '1435',
+      createdAt: '2026-06-01T12:00:00Z',
+    }),
+    expectedLinkedPrs: ['1435'],
+    // Deliberately null: `issue-plus-pr` accepts via the linked-PR match,
+    // a path independent of the Part B predates-PR rule, so this proves
+    // acceptance here does not come from prFirstCommitAt.
+    prFirstCommitAt: null,
+  });
+  assert.equal(summary.activeClaimPresent, true);
+  assert.equal(summary.activeClaim?.claimId, PR_TARGET_NEW_CLAIM_ID);
+});
+
+test('issue-target mode (no expectedLinkedPrs) honors the handoff unconditionally, unaffected by prFirstCommitAt', () => {
+  const summary = summarizeClaimValidation(
+    [prTargetClaimComment(), prTargetForcedHandoffComment()],
+    {
+      trustedMarkerLogins: [PR_TARGET_TRUSTED],
+      forcedHandoffEnabled: true,
+      expectedLinkedPrs: [],
+      prFirstCommitAt: null,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === PR_TARGET_TRUSTED,
+    },
+  );
+  assert.equal(summary.activeClaimPresent, true);
+  assert.equal(summary.activeClaim?.claimId, PR_TARGET_NEW_CLAIM_ID);
 });

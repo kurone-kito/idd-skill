@@ -27,7 +27,10 @@ import {
   parseIsoDurationToMs,
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mts';
-import type { TrustedMarkerActorResolution } from './protocol-helpers.mts';
+import type {
+  PrCommitPayload,
+  TrustedMarkerActorResolution,
+} from './protocol-helpers.mts';
 import {
   buildPreMergeReadinessSummary,
   DEFAULT_STALE_AGE_MS,
@@ -37,6 +40,7 @@ import {
   parsePaginatedGhNdjson,
   resolveAdvisoryBotLogins,
   resolveCodeownersForFiles,
+  resolvePrFirstCommitAt,
   resolveRulesetDetailPath,
   resolveTrustedMarkerActors,
   selectCodeownersText,
@@ -70,14 +74,6 @@ interface CheckPayload {
   name?: string | null;
   state?: string | null;
   completedAt?: string | null;
-}
-
-/** Commit payload fields consumed by the Part B first-commit-time resolver. */
-interface PrCommitPayload {
-  commit?: {
-    author?: { date?: string | null } | null;
-    committer?: { date?: string | null } | null;
-  } | null;
 }
 
 /** Timeline event payload fields consumed by the Copilot coverage check. */
@@ -1047,36 +1043,6 @@ function ghApiJson(
     return parsePaginatedGhNdjson(raw);
   }
   return JSON.parse(raw);
-}
-
-/**
- * Resolve the PR's first-commit time as an ISO string: the minimum across all
- * commits of each commit's committer date (falling back to author date). The
- * GitHub `pulls/{pr}/commits` listing is chronological, but compute the
- * minimum defensively rather than relying on order. Returns `null` when no
- * commit carries a parseable date, which makes the Part B gate fail closed
- * (issue-only handoffs against a PR-backed claim stay rejected).
- */
-function resolvePrFirstCommitAt(commits: PrCommitPayload[]): string | null {
-  let earliestMs: number | null = null;
-  let earliestIso: string | null = null;
-  for (const commit of commits) {
-    const date =
-      String(commit?.commit?.committer?.date ?? '').trim() ||
-      String(commit?.commit?.author?.date ?? '').trim();
-    if (!date) {
-      continue;
-    }
-    const ms = Date.parse(date);
-    if (!Number.isFinite(ms)) {
-      continue;
-    }
-    if (earliestMs === null || ms < earliestMs) {
-      earliestMs = ms;
-      earliestIso = date;
-    }
-  }
-  return earliestIso;
 }
 
 /**

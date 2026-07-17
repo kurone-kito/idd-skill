@@ -3407,6 +3407,39 @@ export function resolveRulesetDetailPath(owner, repo, rule, rulesetId) {
   return `repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/rulesets/${rulesetId}`;
 }
 /**
+ * Resolve a PR's first-commit time as an ISO string -- the minimum across all
+ * commits of each commit's committer date, falling back to author date. A
+ * GitHub `pulls/{pr}/commits` listing is chronological, but compute the
+ * minimum defensively rather than relying on order. Returns `null` when no
+ * commit carries a parseable date, which makes the Part B gate below fail
+ * closed (an `issue-only` handoff against a PR-backed claim stays rejected).
+ *
+ * Shared by every `prFirstCommitAt` resolver (`pre-merge-readiness.mts`,
+ * `advisory-convergence.mts`, `live-status-digest.mts`) so the Part B
+ * allowance's date computation has one implementation, not three.
+ */
+export function resolvePrFirstCommitAt(commits) {
+  let earliestMs = null;
+  let earliestIso = null;
+  for (const commit of commits) {
+    const date =
+      String(commit?.commit?.committer?.date ?? '').trim() ||
+      String(commit?.commit?.author?.date ?? '').trim();
+    if (!date) {
+      continue;
+    }
+    const ms = Date.parse(date);
+    if (!Number.isFinite(ms)) {
+      continue;
+    }
+    if (earliestMs === null || ms < earliestMs) {
+      earliestMs = ms;
+      earliestIso = date;
+    }
+  }
+  return earliestIso;
+}
+/**
  * Build the `isForcedHandoffEnabled` gate shared by every claim-revalidation
  * path (resume routing, the merge-gate, and the write-side helpers).
  *

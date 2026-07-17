@@ -12,13 +12,14 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
-import { isCliExecution } from './gh-exec.mjs';
+import { ghApiJson, isCliExecution } from './gh-exec.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   applyDigestUpsert,
   normalizeTrustedMarkerLogins,
   parsePaginatedGhNdjson,
   planLiveStatusDigestUpsert,
+  resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
   summarizeClaimValidation,
 } from './protocol-helpers.mjs';
@@ -73,6 +74,15 @@ function main() {
     args.issue ?? args.pr,
     `--${targetType}`,
   );
+  // `expectedLinkedPrs` is a pure, local computation, so building it
+  // eagerly is free. `prFirstCommitAt` is not: resolving it makes a
+  // paginated `gh api pulls/{pr}/commits` call. `claimContext` is only
+  // consumed inside the `assertClaim` callback below, which
+  // `applyDigestUpsert` invokes only for a real `--apply` claim check (never
+  // for a dry-run, a duplicate-plan exit, or `--apply --skip-claim-check`),
+  // so resolve `prFirstCommitAt` lazily at that same call site instead of
+  // paying for it on every invocation regardless of whether anything ends
+  // up consuming it.
   const claimContext =
     targetType === 'pr'
       ? {
@@ -145,7 +155,13 @@ function main() {
             args.claimIssue,
             args.agentId,
             args.claimId,
-            claimContext,
+            {
+              ...claimContext,
+              prFirstCommitAt:
+                targetType === 'pr'
+                  ? resolvePrFirstCommitAtForPr(owner, repo, targetNumber)
+                  : null,
+            },
           ),
         createComment: (body) =>
           createIssueComment(owner, repo, targetNumber, body),
@@ -266,6 +282,7 @@ function readActiveClaim(owner, repo, issueNumber, options = {}) {
     trustedMarkerLogins: resolveTrustedMarkerLogins(owner, repo, comments),
     forcedHandoffEnabled: readForcedHandoffMode() === 'human-gated',
     expectedLinkedPrs: options.expectedLinkedPrs ?? [],
+    prFirstCommitAt: options.prFirstCommitAt ?? null,
     isAuthorizedForcedHandoff: (forcedBy) =>
       isAuthorizedForcedHandoffActor(
         owner,
@@ -295,6 +312,30 @@ function buildExpectedLinkedPrReferences(owner, repo, prNumber) {
     `#${normalized}`,
     `https://github.com/${owner}/${repo}/pull/${normalized}`,
   ];
+}
+// The PR's first-commit time backs the Part B forced-handoff rule (#1058): a
+// legitimate issue-only handoff that predates the PR is honored even against
+// a PR-backed claim -- see `buildForcedHandoffEnableGate` in
+// protocol-helpers.mts. Resolve it only when forced handoffs are enabled, and
+// fail closed to `null` (reject) on any lookup/parse error so a transient
+// commits-API failure never widens what the gate accepts. Mirrors
+// `pre-merge-readiness.mts` / `advisory-convergence.mts`'s identical
+// resolution, sharing `resolvePrFirstCommitAt`'s date computation with both.
+function resolvePrFirstCommitAtForPr(owner, repo, prNumber) {
+  if (readForcedHandoffMode() !== 'human-gated') {
+    return null;
+  }
+  try {
+    const prCommits = ghApiJson(
+      `repos/${owner}/${repo}/pulls/${prNumber}/commits`,
+      {
+        paginate: true,
+      },
+    );
+    return resolvePrFirstCommitAt(prCommits);
+  } catch {
+    return null;
+  }
 }
 export function isTrustedMarkerAuthor(owner, repo, login) {
   if (!login) {

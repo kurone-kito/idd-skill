@@ -60,12 +60,14 @@ import {
   parseIsoDurationToMs,
   resolveCollaboratorMarkerTrust,
 } from './policy-helpers.mts';
+import type { PrCommitPayload } from './protocol-helpers.mts';
 import {
   DEFAULT_STALE_AGE_MS,
   isCopilotReviewerLogin,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   resolveAdvisoryBotLogins,
+  resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
   summarizeClaimValidation,
   summarizeDispositionEvidenceForGate,
@@ -139,16 +141,6 @@ interface ReviewThreadsConnectionPayload {
 /** `gh pr view --json closingIssuesReferences` entry. */
 interface ClosingIssueRefPayload {
   number?: number | null;
-}
-
-/** Commit payload fields consumed by the Part B (#1058) first-commit-time
- * resolver -- mirrors `pre-merge-readiness.mts`'s `PrCommitPayload`
- * verbatim. */
-interface PrCommitPayload {
-  commit?: {
-    author?: { date?: string | null } | null;
-    committer?: { date?: string | null } | null;
-  } | null;
 }
 
 /** Latest-review clause evidence (Clause 1 of the `converged` definition). */
@@ -1139,36 +1131,6 @@ function resolveTrustedCollaboratorMarkerLogins(
       permission === 'write'
     );
   });
-}
-
-/**
- * Resolve the PR's first-commit time as an ISO string -- mirrors
- * `pre-merge-readiness.mts`'s `resolvePrFirstCommitAt` verbatim (the
- * minimum across all commits of each commit's committer date, falling
- * back to author date). Returns `null` when no commit carries a
- * parseable date, which fails the Part B (#1058) allowance closed
- * (an `issue-only` handoff against a PR-backed claim stays rejected).
- */
-function resolvePrFirstCommitAt(commits: PrCommitPayload[]): string | null {
-  let earliestMs: number | null = null;
-  let earliestIso: string | null = null;
-  for (const commit of commits) {
-    const date =
-      String(commit?.commit?.committer?.date ?? '').trim() ||
-      String(commit?.commit?.author?.date ?? '').trim();
-    if (!date) {
-      continue;
-    }
-    const ms = Date.parse(date);
-    if (!Number.isFinite(ms)) {
-      continue;
-    }
-    if (earliestMs === null || ms < earliestMs) {
-      earliestMs = ms;
-      earliestIso = date;
-    }
-  }
-  return earliestIso;
 }
 
 function ghGraphql(

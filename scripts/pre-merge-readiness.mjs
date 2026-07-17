@@ -33,6 +33,7 @@ import {
   parsePaginatedGhNdjson,
   resolveAdvisoryBotLogins,
   resolveCodeownersForFiles,
+  resolvePrFirstCommitAt,
   resolveRulesetDetailPath,
   resolveTrustedMarkerActors,
   selectCodeownersText,
@@ -788,35 +789,6 @@ function ghApiJson(path, paginate = false, extraArgs = [], options = {}) {
     return parsePaginatedGhNdjson(raw);
   }
   return JSON.parse(raw);
-}
-/**
- * Resolve the PR's first-commit time as an ISO string: the minimum across all
- * commits of each commit's committer date (falling back to author date). The
- * GitHub `pulls/{pr}/commits` listing is chronological, but compute the
- * minimum defensively rather than relying on order. Returns `null` when no
- * commit carries a parseable date, which makes the Part B gate fail closed
- * (issue-only handoffs against a PR-backed claim stay rejected).
- */
-function resolvePrFirstCommitAt(commits) {
-  let earliestMs = null;
-  let earliestIso = null;
-  for (const commit of commits) {
-    const date =
-      String(commit?.commit?.committer?.date ?? '').trim() ||
-      String(commit?.commit?.author?.date ?? '').trim();
-    if (!date) {
-      continue;
-    }
-    const ms = Date.parse(date);
-    if (!Number.isFinite(ms)) {
-      continue;
-    }
-    if (earliestMs === null || ms < earliestMs) {
-      earliestMs = ms;
-      earliestIso = date;
-    }
-  }
-  return earliestIso;
 }
 /**
  * Decide how a thrown `gh` failure is tolerated, returning the string result to
