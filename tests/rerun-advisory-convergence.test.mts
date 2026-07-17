@@ -579,6 +579,23 @@ test('parseArgs normalizes an invalid --pr to null', () => {
   assert.equal(args.prNumber, null);
 });
 
+// Regression (#1434 review, Codex P2): Number.parseInt parses only a
+// leading numeric prefix ("1431abc" -> 1431), which would silently run
+// this recovery helper -- and whatever `gh run rerun` plan it prints --
+// against the wrong PR on a typo. The entire value must be digits.
+test('parseArgs rejects a partially-numeric --pr value instead of truncating it', () => {
+  const args = parseArgs(['--pr', '1431abc']);
+  assert.equal(args.prNumber, null);
+});
+
+test('parseArgs rejects a --pr value with trailing whitespace and garbage', () => {
+  assert.equal(parseArgs(['--pr', '1431 abc']).prNumber, null);
+});
+
+test('parseArgs still accepts a plain numeric --pr value', () => {
+  assert.equal(parseArgs(['--pr', '1431']).prNumber, 1431);
+});
+
 test('parseArgs recognizes --help', () => {
   assert.equal(parseArgs(['--help']).help, true);
   assert.equal(parseArgs(['-h']).help, true);

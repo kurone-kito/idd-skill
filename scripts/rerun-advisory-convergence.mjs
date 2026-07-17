@@ -388,7 +388,15 @@ export function parseArgs(argv) {
     const token = argv[index];
     const value = argv[index + 1];
     if (token === '--pr') {
-      parsed.prNumber = Number.parseInt(value ?? '', 10);
+      // Number.parseInt parses only a leading numeric prefix ("1431abc"
+      // -> 1431), which would silently run this recovery helper -- and
+      // whatever `gh run rerun` plan it prints -- against the wrong PR on
+      // a typo. Require the entire value to be digits before parsing
+      // (#1434 review, Codex P2).
+      const rawPr = String(value ?? '').trim();
+      parsed.prNumber = /^\d+$/.test(rawPr)
+        ? Number.parseInt(rawPr, 10)
+        : Number.NaN;
       index += 1;
       continue;
     }
@@ -427,8 +435,10 @@ the PR's current HEAD SHA (commit check-runs API, paged -- not the
 recent-runs list, which can page the target run out of view), classifies
 each as pass / pending / bot-gated-skip / unresolved / rerun-eligible, and
 prints the ordered sequential "gh run rerun <id>" recovery plan for the
-rerun-eligible instances. Never calls "gh run rerun" (or any other
-mutating command) itself.
+rerun-eligible instances (each command includes "-R <owner>/<repo>" when
+the repository is known, so the plan is safe to run outside this
+checkout). Never calls "gh run rerun" (or any other mutating command)
+itself.
 `);
 }
 const defaultDeps = { collect: collectFromGitHub };

@@ -103,7 +103,8 @@ In the idd-skill source repository, the following optional helpers were adopted:
   (paged commit check-runs API), classifies each as `pass` / `pending` /
   `bot-gated-skip` / `unresolved` / `rerun-eligible`, and prints the
   ordered, deduplicated `gh run rerun <id>` recovery plan for the
-  rerun-eligible instances — referenced from `idd-ci.instructions.md`
+  rerun-eligible instances (each command includes `-R owner/repo` when
+  the repository is known) — referenced from `idd-ci.instructions.md`
   §Rerun mechanics as the preferred way to produce that plan. Never
   calls `gh run rerun` itself; a mutating `--apply` mode is a deliberate
   follow-up.
