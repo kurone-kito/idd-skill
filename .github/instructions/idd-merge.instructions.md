@@ -92,7 +92,7 @@ Before any mutating action in F3, apply the
 
    **Advisory state revalidation (blocking; the advisory-wait check below
    backgrounds only if the topology-safety condition holds — confirmed to
-   route completion back to this turn — else waits synchronously)**:
+   route completion back to this turn — otherwise waits synchronously)**:
    re-fetch the HEAD SHA:
 
    ```sh

@@ -48,10 +48,10 @@ then handles the request, pending, stalled, restart, and cap cases.
 
 Keep the wait itself cheap per the
 [wake-up discipline](idd-ci.instructions.md#wake-up-discipline): schedule
-a single wake at the **expected** completion, or — gated by the
-topology-safety condition — background instead only if confirmed to
-route completion back to this turn; otherwise wait synchronously. Batch
-all post-wait actions into one turn.
+a single wake at the **expected** completion, or background only if the
+topology-safety condition holds (confirmed to route completion back to
+this turn); otherwise wait synchronously. Batch all post-wait actions
+into one turn.
 
 ## 1. Canonical path (helper-first)
 
