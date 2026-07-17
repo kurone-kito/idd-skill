@@ -742,6 +742,30 @@ test('prose-dependency does not warn on a roadmap-parent breadcrumb sharing a pa
   assert.equal(finding.severity, undefined);
 });
 
+test('prose-dependency does not warn on a breadcrumb in one list item sharing a tight list with an unrelated coordination-language item', () => {
+  // Regression test for a real false-positive risk: splitIntoSentences()
+  // collapses all internal newlines to spaces before splitting on
+  // terminal punctuation, so a tight Markdown list (items with no blank
+  // line between them) with no periods at all would otherwise be treated
+  // as one giant "sentence" spanning every bullet -- reintroducing the
+  // exact same-paragraph conflation the roadmap-parent-breadcrumb test
+  // above already guards against, just via list items instead of a long
+  // prose paragraph.
+  const body = childBody({
+    extraMarkers:
+      '- Part of roadmap #1386\n' +
+      '- Before starting, confirm PR #1391 already lands the base change',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, 'warning');
+  assert.match(finding.detail, /#1391/);
+  assert.doesNotMatch(finding.detail, /#1386/);
+});
+
 test('prose-dependency recognizes a full GitHub issue/PR URL reference', () => {
   const body = childBody({
     extraMarkers:

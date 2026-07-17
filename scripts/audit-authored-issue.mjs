@@ -96,6 +96,15 @@ const PROSE_DEPENDENCY_KEYWORDS = [
 // here would be misleading rather than actionable.
 const ISSUE_OR_PR_REFERENCE_PATTERN =
   /(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b/gi;
+// Matches a Markdown list item marker at the start of a line (unordered
+// `-`/`*`/`+`, or ordered `1.`/`1)`), optionally indented and optionally
+// followed by a task-list checkbox. Declared here (before the CLI entry
+// block below), not next to splitIntoSentences/splitIntoListItemBlocks
+// that use it, because those are hoisted function declarations but this
+// is a module-level `const` — declaring it after the entry block would be
+// a TDZ risk under the CLI path, which calls main() synchronously at this
+// point in module evaluation (see tests/cli-entry-smoke.test.mts).
+const LIST_ITEM_MARKER_PATTERN = /^\s*(?:[-*+]|\d+[.)])\s+/;
 if (isCliExecution(import.meta.url)) {
   main();
 }
@@ -507,19 +516,50 @@ function checkProseOnlyDependency(text, currentRepo) {
   };
 }
 /**
- * Naively split a paragraph into sentences on `.`/`!`/`?` followed by
- * whitespace, after collapsing internal newlines to spaces (so a sentence
- * that wraps across a Markdown soft line break is still scoped as one
- * sentence). This is intentionally simple — good enough to separate two
- * independent clauses sharing one paragraph, not a full natural-language
- * sentence boundary detector.
+ * Split a paragraph into sentences on `.`/`!`/`?` followed by whitespace,
+ * after collapsing internal newlines to spaces (so a sentence that wraps
+ * across a Markdown soft line break is still scoped as one sentence). This
+ * is intentionally simple — good enough to separate two independent
+ * clauses sharing one paragraph, not a full natural-language sentence
+ * boundary detector.
+ *
+ * Markdown list items are treated as hard sentence boundaries first,
+ * *before* that whitespace-collapsing step: a tight list (items with no
+ * blank line between them) is one `\n\s*\n`-delimited "paragraph" to the
+ * caller, so collapsing every newline to a space would otherwise merge
+ * separate bullets that lack terminal punctuation into a single
+ * "sentence" — reintroducing exactly the false-positive risk this
+ * sentence-level scoping exists to avoid (e.g. a pure breadcrumb bullet
+ * conflated with a sibling bullet's unrelated coordination language).
  */
 function splitIntoSentences(paragraph) {
-  const flattened = paragraph.replace(/\s+/g, ' ').trim();
-  if (flattened.length === 0) {
-    return [];
+  return splitIntoListItemBlocks(paragraph).flatMap((block) => {
+    const flattened = block.replace(/\s+/g, ' ').trim();
+    return flattened.length === 0 ? [] : flattened.split(/(?<=[.!?])\s+/);
+  });
+}
+/**
+ * Split a paragraph into blocks at each Markdown list item boundary, while
+ * still joining a soft-wrapped continuation line (one with no list marker
+ * of its own) onto the item it continues. A paragraph with no list items
+ * at all yields exactly one block spanning every line, preserving prior
+ * behavior for plain prose.
+ */
+function splitIntoListItemBlocks(paragraph) {
+  const blocks = [];
+  let current = [];
+  for (const line of paragraph.split('\n')) {
+    if (LIST_ITEM_MARKER_PATTERN.test(line) && current.length > 0) {
+      blocks.push(current.join('\n'));
+      current = [line];
+    } else {
+      current.push(line);
+    }
   }
-  return flattened.split(/(?<=[.!?])\s+/);
+  if (current.length > 0) {
+    blocks.push(current.join('\n'));
+  }
+  return blocks;
 }
 function countMarkerOccurrences(text, markerPrefix, suffix) {
   const base = createMarkerRegex(markerPrefix, suffix);
