@@ -9,7 +9,9 @@ the shared claim revalidation gate. The active claim must still use your
 current `{claim-id}`.
 
 **Skip condition E8**: if the Accepted PATH A count after verification
-is zero, proceed to the **E-phase branch-sync check** below.
+is zero, proceed to the **E-phase branch-sync check** below (its
+`clean`/`behind-no-conflict` exit applies the **Zero-Accepted-PATH-A
+advisory re-review gate** for this path).
 
 ## E4 — Classify and score ReviewItems_snapshot
 
@@ -322,7 +324,11 @@ ack / error, as defined in E4):
   `advisory-wait` marker for a non-Copilot bot — AW2/AW3 treat any
   trusted same-HEAD `advisory-wait` marker as Copilot evidence, so doing
   so could wrongly satisfy the Copilot advisory gate and consume its
-  request cap.
+  request cap. (The **Zero-Accepted-PATH-A advisory re-review gate**
+  below is a narrow, sanctioned exception to this rule: it never
+  triggers on a notice alone — only on a completed-review disposition —
+  and still defers the actual request decision to this same AW1-AW3
+  protocol.)
 - **Fail-closed honesty**: never cite a non-review notice as evidence
   that the advisory reviewer reviewed the current HEAD — not in the
   disposition reply, the `Authoritative by` line, or the PR live status
@@ -404,20 +410,23 @@ Route based on `branchState` from the helper (or `mergeable` /
 `mergeStateStatus` from `gh pr view`):
 
 - **`clean`** or **`behind-no-conflict`** when branch protection does not
-  require an up-to-date head: proceed to
-  `idd-pre-merge.instructions.md` (F1). **First, only if E6 posted
-  disposition replies** (any `**Accepted**` / `**Rejected**` reply on
-  reviewer feedback, advisory items, or bot non-review notices), refresh
-  the `review-watermark` so it covers them: re-post it for the same
-  `{head-SHA}`, recomputing `{max-activity-updatedAt}` /
-  `{total-item-count}` / `{latest-ci-completed-at}` over the current
-  snapshot, following the E1 Step 2 rules (CI-completion precondition;
-  hide superseded same-claim watermarks). Those replies are the
-  current-claim agent absorbing its own deterministic dispositions, not
-  new reviewer activity; without the refresh F2's review-currency treats
-  them as newer activity and returns to E1 for an avoidable cycle. Do
-  **not** refresh on the sync path (it re-snapshots at E1 after merging
-  `main`) or on a hold (it stops without proceeding to F-phase).
+  require an up-to-date head: **first**, apply the
+  **Zero-Accepted-PATH-A advisory re-review gate** below if it applies
+  (it decides for itself whether it applies; otherwise this step is a
+  no-op). **Then**, only if E6 posted disposition replies (any
+  `**Accepted**` / `**Rejected**` reply on reviewer feedback, advisory
+  items, or bot non-review notices), refresh the `review-watermark` so
+  it covers them: re-post it for the same `{head-SHA}`, recomputing
+  `{max-activity-updatedAt}` / `{total-item-count}` /
+  `{latest-ci-completed-at}` over the current snapshot, following the
+  E1 Step 2 rules (CI-completion precondition; hide superseded
+  same-claim watermarks). Those replies are the current-claim agent
+  absorbing its own deterministic dispositions, not new reviewer
+  activity; without the refresh F2's review-currency treats them as
+  newer activity and returns to E1 for an avoidable cycle. Do **not**
+  refresh on the sync path (it re-snapshots at E1 after merging `main`)
+  or on a hold (it stops without proceeding to F-phase). **Then**
+  proceed to `idd-pre-merge.instructions.md` (F1).
 - **`behind-no-conflict`** when branch protection or recorded repository
   policy requires an up-to-date head: → **sync path** below.
 - **`content-conflict`** (`mergeable` is `CONFLICTING`): → **sync path**
@@ -464,6 +473,51 @@ Route based on `branchState` from the helper (or `mergeable` /
 5. Push the feature branch normally (no force push required for merge
    commits).
 6. Return to `idd-review-snapshot.instructions.md` (E1).
+
+## Zero-Accepted-PATH-A advisory re-review gate
+
+Applies only from the E-phase branch-sync check's `clean` /
+`behind-no-conflict`-not-required exit above, and only when, since
+`ReviewItems_snapshot` was last non-empty in this E-phase episode, the
+Accepted PATH A count was zero **and** at least one PATH B item
+received a _completed-review_ disposition (`**Accepted**` or
+`**Rejected**` on a real advisory review of the current HEAD — never a
+non-review-notice-only rejection; see the E6 non-review-notice rule).
+Otherwise this gate is a no-op, including when zero PATH B items were
+ever dispositioned (E3's empty-list case never reaches it).
+
+Without this gate, E8's zero-count path skips
+`idd-review-fix.instructions.md` (and E14, the only step that requests
+a fresh primary-advisory-bot review) entirely, so a PR whose Copilot
+findings were all Rejected this pass could reach F2's
+advisory-convergence check without the bot ever reviewing the
+resulting HEAD (see #1442). The gate runs **after** any branch-sync
+merge settles, not before requesting: requesting first and syncing
+afterward would let the sync's own merge commit immediately invalidate
+the review this gate just obtained, reproducing the same deadlock one
+step downstream.
+
+Run E14's **Primary advisory bot** procedure now
+(`idd-review-fix.instructions.md` E14) at this now-stable HEAD — steps
+1-4, plus the active polling loop when it applies. Do not run E14's
+Human reviewers step or its optional secondary-bot step 5. Substitute
+"resume the branch-sync check's `clean` exit above (its
+watermark-refresh clause, then F1)" for each of E14's four literal
+"proceed to E15" exits: step 2's `SATISFIED` short-circuit, step 4's
+AW3 `SATISFIED` row, step 4's `CAP_EXHAUSTED` phase-specific default,
+and the active polling loop's `SATISFIED` exit. Leave every "return to
+E1" exit in that procedure unchanged — follow it instead of resuming
+here.
+
+E14's own AW1 check (its step 2, run fresh against this HEAD) already
+makes this gate inert whenever the bot has already reviewed current
+HEAD — including a later re-entry after this gate's own request lands,
+so it never fires a duplicate request — and it never fires a request
+at all for the narrower case where the bot's latest review already
+covers current HEAD but still carries actionable items. That residual
+keeps the same 24h deadline / maintainer-waiver escape hatch as any
+other unconverged state; requesting _another_ review of unchanged code
+is a separate, tracked problem this gate does not attempt to solve.
 
 ## Advisory courtesy-ack convergence
 
