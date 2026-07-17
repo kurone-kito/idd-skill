@@ -99,13 +99,27 @@ export interface AuditOptions {
   /**
    * The repository the drafted body belongs to, as `owner/repo` (matching
    * the `GITHUB_REPOSITORY` env var's own format). Used only by the
-   * advisory `prose-dependency` check to tell a local full-URL issue/PR
-   * reference from a cross-repo one: the encodings it recommends
-   * (`Blocked by #N` / `Depends on #N`) are inherently local, so a
-   * cross-repo URL would otherwise get the same, actively-wrong advice.
-   * When omitted, every full-URL reference is still treated as flaggable
-   * (the pre-#1399-fix default), since a bare `owner/repo` cannot be
-   * inferred from the body text alone.
+   * advisory `prose-dependency` check to tell a local issue/PR reference
+   * from a cross-repo one: the encodings it recommends (`Blocked by #N` /
+   * `Depends on #N`) are inherently local, so a cross-repo reference would
+   * otherwise get the same, actively-wrong advice.
+   *
+   * The two reference forms this option affects default in **opposite**
+   * directions when it is omitted:
+   *
+   * - **Full-URL / Markdown-link-to-a-full-URL** references: every match
+   *   is still treated as flaggable (the pre-#1399-fix default), since a
+   *   bare `owner/repo` cannot be inferred from the body text alone.
+   * - **`owner/repo#N` shorthand** references: every match is excluded
+   *   (never flagged), since this shorthand was never recognized at all
+   *   before this option existed — there is no legacy "flag by default"
+   *   behavior to preserve, and a shorthand naming an unconfirmed repo is
+   *   not assumed local.
+   *
+   * In both forms, an explicit `currentRepo` that case-insensitively
+   * matches the reference's `owner/repo` always flags it (subject to the
+   * existing dependency-marker exclusion), and one that differs always
+   * excludes it.
    */
   currentRepo?: string;
 }
@@ -156,25 +170,44 @@ const PROSE_DEPENDENCY_KEYWORDS = [
 
 // Matches a Markdown link whose target is a full GitHub issue/PR URL (e.g.
 // `[PR #1391](https://github.com/owner/repo/pull/1391)`), a bare `#123`
-// issue/PR reference, or a bare full GitHub issue/PR URL — in that order,
-// capturing each URL alternative's owner and repo so callers can tell a
-// local reference from a cross-repo one (see `currentRepo` handling in
-// checkProseOnlyDependency below). The Markdown-link alternative is tried
-// (and, being anchored at the label's own `[`, wins) first specifically so
-// that a cross-repo link's *label* text — which often repeats the same
-// `#N` the URL already names, e.g. the `#1391` above — is consumed as part
-// of that one link match rather than separately re-matched by the bare-`#`
-// alternative and misread as a local reference once the link's URL itself
-// is correctly filtered out as cross-repo. `#` alone (as in an ATX
-// heading) never matches without trailing digits. The bare-`#` alternative
-// excludes a `#` immediately preceded by a word character or `/` (a
-// negative lookbehind), so cross-repo shorthand like `other/repo#123`
-// does not match on its trailing `#123` — a cross-repo reference cannot be
-// encoded with this repository's local `Blocked by` / `Depends on`
-// markers, so flagging it here would be misleading rather than
-// actionable.
+// issue/PR reference, a bare full GitHub issue/PR URL, or a local
+// `owner/repo#123` shorthand — in that order, capturing each URL/shorthand
+// alternative's owner and repo so callers can tell a local reference from
+// a cross-repo one (see `currentRepo` handling in checkProseOnlyDependency
+// below). The Markdown-link alternative is tried (and, being anchored at
+// the label's own `[`, wins) first specifically so that a cross-repo
+// link's *label* text — which often repeats the same `#N` the URL already
+// names, e.g. the `#1391` above — is consumed as part of that one link
+// match rather than separately re-matched by the bare-`#` alternative and
+// misread as a local reference once the link's URL itself is correctly
+// filtered out as cross-repo. Between the issue/PR number and the link's
+// closing `)`, the Markdown-link alternative also tolerates an optional
+// trailing `/`, an optional URL fragment (`#issuecomment-123`), and an
+// optional quoted title (`"..."` or `'...'`) — each bounded tightly enough
+// (a matching quote character, or a fragment charset that excludes `)`,
+// quotes, and whitespace) that none of them can consume past the link's
+// real closing paren the way a naive `.*\)` would. Without this, any of
+// those three trailing forms would break the Markdown-link match and let
+// the label's own bare `#N` leak through to the bare-`#` alternative
+// below, reintroducing the label-leak false positive the Markdown-link
+// alternative exists to prevent. `#` alone (as in an ATX heading) never
+// matches without trailing digits. The bare-`#` alternative excludes a `#`
+// immediately preceded by a word character or `/` (a negative lookbehind),
+// so cross-repo shorthand like `other/repo#123` does not match on its
+// trailing `#123` — a cross-repo reference cannot be encoded with this
+// repository's local `Blocked by` / `Depends on` markers, so flagging it
+// here would be misleading rather than actionable. The final `owner/repo#N`
+// shorthand alternative recognizes that same shape as a *distinct*,
+// dedicated match (rather than leaving it permanently unmatched) so
+// checkProseOnlyDependency can apply the currentRepo comparison to it —
+// flagging it only when the shorthand names the current repository (see
+// the `currentRepo` JSDoc on `AuditOptions` for the reversed-default-
+// polarity rationale). It reuses the bare-`#` alternative's own
+// `(?<![\w/])` lookbehind so it, too, only starts matching at a natural
+// token boundary rather than mid-path (e.g. inside a 3-segment
+// slash-separated path that happens to end in `#123`).
 const ISSUE_OR_PR_REFERENCE_PATTERN =
-  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b/gi;
+  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)(?:\/)?(?:#[\w-]+)?(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b|(?<![\w/])([\w.-]+)\/([\w.-]+)#(\d+)\b/gi;
 
 // Matches a Markdown list item marker at the start of a line (unordered
 // `-`/`*`/`+`, or ordered `1.`/`1)`), optionally indented and optionally
@@ -600,6 +633,9 @@ function checkProseOnlyDependency(
           urlOwner,
           urlRepo,
           urlNumber,
+          shorthandOwner,
+          shorthandRepo,
+          shorthandNumber,
         ] = match;
         // Whichever of the two URL-bearing alternatives matched (a
         // Markdown-link target or a bare URL) supplies the owner/repo/number
@@ -626,7 +662,24 @@ function checkProseOnlyDependency(
         ) {
           continue;
         }
-        const numberText = bareNumber ?? linkNumber ?? urlNumber;
+        // The owner/repo#N shorthand alternative uses the *opposite*
+        // default from the URL-bearing alternatives above: it is excluded
+        // unless currentRepo is both known and a case-insensitive match.
+        // Unlike a full URL (which was always flaggable pre-#1399), this
+        // shorthand was never recognized at all before this alternative
+        // existed, so there is no prior "flag by default" behavior to
+        // preserve when locality can't be confirmed — see the
+        // `currentRepo` JSDoc on `AuditOptions`.
+        if (
+          shorthandOwner !== undefined &&
+          (currentRepo === undefined ||
+            `${shorthandOwner}/${shorthandRepo}`.toLowerCase() !==
+              currentRepo.toLowerCase())
+        ) {
+          continue;
+        }
+        const numberText =
+          bareNumber ?? linkNumber ?? urlNumber ?? shorthandNumber;
         const number = Number.parseInt(numberText, 10);
         if (!encoded.has(number)) {
           flagged.add(number);
