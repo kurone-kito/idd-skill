@@ -1093,7 +1093,7 @@ test('resolveViewerLogin normalizes a successful login to lowercase', () => {
   });
 });
 
-test('resolveViewerLogin reports unavailable when the lookup throws (caught as null)', () => {
+test('resolveViewerLogin reports unavailable when fetchLogin returns null (production already caught a throw)', () => {
   const result = resolveViewerLogin(() => null);
   assert.deepEqual(result, { viewerLogin: '', viewerLoginUnavailable: true });
 });
