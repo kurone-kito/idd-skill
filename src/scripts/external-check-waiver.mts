@@ -7,7 +7,6 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
 
 import { parseCliArgs } from './cli-args.mts';
 import { resolveHelperActiveClaim } from './forced-handoff-marker.mts';
@@ -1279,10 +1278,7 @@ export async function main(
   process.exit(result.exitCode);
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (import.meta.main) {
   main().catch((error: unknown) => {
     process.stderr.write(`Error: ${(error as Error).message}\n`);
     process.exit(1);

@@ -17,11 +17,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseAutopilotSuitability } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
-import {
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-  isCliExecution,
-} from './gh-exec.mjs';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { parseIsoDurationToMs } from './policy-helpers.mjs';
 import {
   resolveActiveClaim,
@@ -47,7 +43,7 @@ const OPEN_PR_SCAN_LIMIT = 500;
 // the real key is ever renamed -- see #1446's PR description for why
 // that matters.)
 //
-// Declared here, above the isCliExecution trigger below, rather than
+// Declared here, above the import.meta.main trigger below, rather than
 // alongside parseArgs further down: the trigger calls runCli() ->
 // parseArgs() synchronously at module-evaluation time, and a `const`
 // declared after that point is still in the temporal dead zone when the
@@ -64,7 +60,7 @@ const DISCOVER_SHARED_FILE_OVERLAP_FLAG_SPEC = {
   '--now': { type: 'string', default: '' },
   '--help': { type: 'boolean', short: 'h' },
 };
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 /**

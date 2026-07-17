@@ -7,7 +7,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mjs';
-import { isCliExecution } from './gh-exec.mjs';
 import { loadJson, validateConfigSection } from './validate-schemas.mjs';
 
 const DEFAULT_RUNNING_TIMEOUT = 'PT30M';
@@ -32,7 +31,7 @@ export const DEFAULT_CI_WAIT_POLICY = Object.freeze({
 // (Deliberately not written inside matching quote marks in this comment --
 // see advisory-convergence.mts's identical note for why.)
 //
-// Declared here, above the isCliExecution trigger below, rather than
+// Declared here, above the import.meta.main trigger below, rather than
 // alongside parseArgs further down: the trigger calls runCli() ->
 // parseArgs() synchronously at module-evaluation time, and a `const`
 // declared after that point is still in the temporal dead zone when the
@@ -43,7 +42,7 @@ const CI_WAIT_POLICY_FLAG_SPEC = {
   '--rerun-count': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 };
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 export function parseDurationToMs(value) {

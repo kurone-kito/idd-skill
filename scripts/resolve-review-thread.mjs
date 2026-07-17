@@ -363,14 +363,7 @@ function activeOwnedClaim(
   }
   return active;
 }
-function isMainModule(moduleUrl) {
-  const entry = process.argv[1];
-  if (!entry) {
-    return false;
-  }
-  return moduleUrl === `file://${entry}` || moduleUrl.endsWith(entry);
-}
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   if (
     args.help ||

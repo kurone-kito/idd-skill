@@ -69,7 +69,7 @@ const BASE_ADVANCED_BLIND_SPOT_NOTE =
   're-validating against current base before relying on a pre-existing ' +
   'green check.';
 
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printUsage();
@@ -562,17 +562,6 @@ function gitText(args: string[]): string {
     }).trim();
   } catch {
     return '';
-  }
-}
-
-function isMainModule(metaUrl: string): boolean {
-  if (!process.argv[1]) {
-    return false;
-  }
-  try {
-    return metaUrl === new URL(`file://${process.argv[1]}`).href;
-  } catch {
-    return false;
   }
 }
 

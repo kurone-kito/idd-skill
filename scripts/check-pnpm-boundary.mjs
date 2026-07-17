@@ -5,14 +5,13 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parseProjectCommandRows } from './idd-doctor.mjs';
 
 // Resolve the repository root by walking up to the nearest package.json,
 // so the default works whether this module runs as the emitted
 // scripts/check-pnpm-boundary.mjs or directly from src/scripts/.
-function resolveRepoRoot(fromUrl) {
-  let dir = dirname(fileURLToPath(fromUrl));
+function resolveRepoRoot(fromDir) {
+  let dir = fromDir;
   for (let depth = 0; depth < 16; depth += 1) {
     if (existsSync(join(dir, 'package.json'))) {
       return dir;
@@ -25,7 +24,7 @@ function resolveRepoRoot(fromUrl) {
   }
   return dir;
 }
-const ROOT = resolveRepoRoot(import.meta.url);
+const ROOT = resolveRepoRoot(import.meta.dirname);
 const TEMPLATE_OVERVIEW_PATH =
   'idd-template/.github/instructions/idd-overview-core.instructions.md';
 const COMMAND_ROWS = [
@@ -50,7 +49,7 @@ export function checkPnpmBoundary(root = ROOT) {
   const errors = findPnpmCommandLeaks(text);
   return { ok: errors.length === 0, errors };
 }
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   const result = checkPnpmBoundary();
   if (!result.ok) {
     console.error('pnpm boundary check failed:');

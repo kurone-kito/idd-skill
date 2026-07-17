@@ -8,11 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
-import {
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-  isCliExecution,
-} from './gh-exec.mjs';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
@@ -23,7 +19,7 @@ import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 // marks, so it cannot itself satisfy the scan if the real key is ever
 // renamed -- see #1446's PR description for why that matters.)
 //
-// Declared here, above the isCliExecution trigger below, rather than
+// Declared here, above the import.meta.main trigger below, rather than
 // alongside parseArgs further down: the trigger calls runCli() ->
 // parseArgs() synchronously at module-evaluation time, and a `const`
 // declared after that point is still in the temporal dead zone when the
@@ -145,7 +141,7 @@ const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 // across JavaScript regex engines.
 const RESOLVED_DECISION_PATTERN =
   /^#{1,6}\s+Decision\b(?![^\n]*\b(?:not(?:\s+yet)?(?:\s+been)?\s+resolved|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+resolved|never(?:\s+been)?\s+resolved)\b)[^\n]*\bresolved\b/im;
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 export function evaluateSuitability(issue, options = {}) {

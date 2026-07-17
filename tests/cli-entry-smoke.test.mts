@@ -35,13 +35,16 @@ const SRC_SCRIPTS = fileURLToPath(new URL('../src/scripts/', import.meta.url));
 
 /**
  * Matches a top-level CLI entry-guard opener at column 0. Anchored to the
- * three real signatures — an `isMainModule(` call, an `isCliExecution(` call,
- * or a `process.argv[1]` reference — rather than any `import.meta.url`
- * mention, so an unrelated top-level `if` that merely references
- * `import.meta.url` is not mistaken for the entry block.
+ * four real signatures — an `isMainModule(` call, an `isCliExecution(`
+ * call, a `process.argv[1]` reference, or `import.meta.main` (#1447) —
+ * rather than any `import.meta.url` mention, so an unrelated top-level
+ * `if` that merely references `import.meta.url` is not mistaken for the
+ * entry block. `isMainModule(`/`isCliExecution(`/`process.argv[1]` no
+ * longer appear under `src/` after #1447, but stay recognized here so the
+ * guard above (and its own unit tests) still cover the legacy shapes.
  */
 const ENTRY_GUARD =
-  /^if \(.*(?:isMainModule\(|isCliExecution\(|process\.argv\[1\]).*\)\s*\{/;
+  /^if \(.*(?:isMainModule\(|isCliExecution\(|process\.argv\[1\]|import\.meta\.main).*\)\s*\{/;
 
 /**
  * Matches a module-level (column 0) `const`/`let`/`var` binding opener,
@@ -125,6 +128,39 @@ test('module-eval-order guard flags an initialized const after an isCliExecution
   ]);
   assert.equal(violations.length, 1);
   assert.match(violations[0], /sample\.mts:5:.*after the CLI entry block/);
+});
+
+test('module-eval-order guard flags an initialized const after an import.meta.main entry block (#1447)', () => {
+  const violations = findModuleEvalOrderViolations([
+    readModule(
+      'src/scripts/sample.mts',
+      [
+        'if (import.meta.main) {',
+        '  await run(LATE);',
+        '}',
+        'const LATE = new Set([1, 2, 3]);',
+        '',
+      ].join('\n'),
+    ),
+  ]);
+  assert.equal(violations.length, 1);
+  assert.match(violations[0], /sample\.mts:4:.*after the CLI entry block/);
+});
+
+test('module-eval-order guard does NOT flag an unrelated top-level if that merely mentions import.meta.url', () => {
+  const violations = findModuleEvalOrderViolations([
+    readModule(
+      'src/scripts/sample.mts',
+      [
+        'if (someCondition(import.meta.url)) {',
+        '  await run();',
+        '}',
+        'const LATE = new Set([1, 2, 3]);',
+        '',
+      ].join('\n'),
+    ),
+  ]);
+  assert.deepEqual(violations, []);
 });
 
 test('module-eval-order guard flags a multi-line initializer whose line ends in `=`', () => {

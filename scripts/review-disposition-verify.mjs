@@ -4,9 +4,6 @@
 // The scripts/review-disposition-verify.mjs copy is generated from the
 // .mts source named above by `pnpm run build`. Edit the .mts source,
 // never the generated .mjs. See docs/typescript-sources.md.
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
-
 // Tolerate a single interior punctuation char `[.!:]` before the closing `**`
 // (`**Accepted.** — …`) so a punctuated marker still verifies, while keeping the
 // required `\s+—` separator (whitespace before the em-dash; nothing after it is
@@ -17,7 +14,7 @@ const MARKER_REJECTED_RE = /^\*\*Rejected[.!:]?\*\*\s+—/;
 const MARKER_REJECTION_CONFIRMED_RE =
   /^\*\*Rejection confirmed by maintainer\*\*\s+—/;
 const MARKER_AMD_RE = /^\*\*Awaiting maintainer decision\*\*\s+—/;
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -376,10 +373,4 @@ Output schema:
   }]
 }
 `);
-}
-function isMainModule(metaUrl) {
-  if (!metaUrl || !process.argv[1]) {
-    return false;
-  }
-  return metaUrl === pathToFileURL(resolve(process.argv[1])).href;
 }

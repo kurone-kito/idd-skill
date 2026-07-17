@@ -377,13 +377,6 @@ function ghJsonPaginated(args) {
     .filter((line) => line !== '')
     .map((line) => JSON.parse(line));
 }
-function isMainModule(moduleUrl) {
-  const entry = process.argv[1];
-  if (!entry) {
-    return false;
-  }
-  return moduleUrl === `file://${entry}` || moduleUrl.endsWith(entry);
-}
 const USAGE = `usage: node scripts/disposition-non-review-notices.mjs --pr <number> [options]
 
 Detect advisory non-review notices and the CodeRabbit summary walkthrough on a PR
@@ -507,7 +500,7 @@ function recoverPostedDisposition(
   }
   return null;
 }
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || !Number.isInteger(args.pr) || (args.pr ?? 0) <= 0) {
     process.stdout.write(USAGE);

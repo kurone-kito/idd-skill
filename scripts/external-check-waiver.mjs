@@ -6,7 +6,6 @@
 // .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
 import { parseCliArgs } from './cli-args.mjs';
 import { resolveHelperActiveClaim } from './forced-handoff-marker.mjs';
 import { ghText, safeGhText } from './gh-exec.mjs';
@@ -913,10 +912,7 @@ export async function main(argv = process.argv.slice(2)) {
   const result = await runExternalCheckWaiver({ args: parseArgs(argv) });
   process.exit(result.exitCode);
 }
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (import.meta.main) {
   main().catch((error) => {
     process.stderr.write(`Error: ${error.message}\n`);
     process.exit(1);

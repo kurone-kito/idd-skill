@@ -13,7 +13,7 @@ import {
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mts';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mts';
-import { ghText, isCliExecution, safeGhText } from './gh-exec.mts';
+import { ghText, safeGhText } from './gh-exec.mts';
 import { loadIddConfig } from './idd-config.mts';
 import type { TrustedMarkerActorResolution } from './protocol-helpers.mts';
 import {
@@ -80,7 +80,7 @@ export type AdvisoryWaitStateReport = ReturnType<
 // marks, so it cannot itself satisfy the scan if the real key is ever
 // renamed -- see #1446's PR description for why that matters.)
 //
-// Declared here, above the isCliExecution trigger below, rather than
+// Declared here, above the import.meta.main trigger below, rather than
 // alongside parseArgs further down: the trigger calls main() ->
 // parseArgs() synchronously at module-evaluation time, and a `const`
 // declared after that point is still in the temporal dead zone when the
@@ -94,13 +94,13 @@ const ADVISORY_WAIT_STATE_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   main();
 }
 
-// The CLI body. Guarded behind isCliExecution(import.meta.url) (shared,
-// see gh-exec.mts) so importing this module (for unit tests) does not
-// parse process.argv, fail, or make a `gh` call.
+// The CLI body. Guarded behind `import.meta.main` so importing this
+// module (for unit tests) does not parse process.argv, fail, or make a
+// `gh` call.
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {

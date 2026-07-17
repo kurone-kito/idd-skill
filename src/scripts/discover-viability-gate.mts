@@ -5,8 +5,6 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parseCliArgs } from './cli-args.mts';
 import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
@@ -105,7 +103,7 @@ const EXTERNAL_COORDINATION_PATTERN =
 // marks, so it cannot itself satisfy the scan if the real key is ever
 // renamed -- see #1446's PR description for why that matters.)
 //
-// Declared here, above the isMainModule trigger below, rather than
+// Declared here, above the import.meta.main trigger below, rather than
 // alongside parseArgs further down: the trigger block calls parseArgs()
 // synchronously at module-evaluation time, and a `const` declared after
 // that point is still in the temporal dead zone when the trigger fires
@@ -119,7 +117,7 @@ const DISCOVER_VIABILITY_GATE_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -451,13 +449,4 @@ function ghJson(args: string[]): unknown {
     return null;
   }
   return JSON.parse(text);
-}
-
-function isMainModule(metaUrl: string): boolean {
-  if (!metaUrl || !process.argv[1]) {
-    return false;
-  }
-  // Compare filesystem paths instead of building a file:// URL from
-  // argv[1], which mis-parses Windows drive-letter paths.
-  return fileURLToPath(metaUrl) === resolve(process.argv[1]);
 }

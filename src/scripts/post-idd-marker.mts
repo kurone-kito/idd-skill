@@ -18,8 +18,7 @@
 // manual POST path it replaces already requires.
 
 import { execFileSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 
 import { ghText } from './gh-exec.mts';
 import {
@@ -369,10 +368,7 @@ function runReviewActivitySnapshot(
   trustedMarkerLogins: string,
   advisoryBotLogins: string,
 ): unknown {
-  const script = resolve(
-    dirname(fileURLToPath(import.meta.url)),
-    'review-activity-snapshot.mjs',
-  );
+  const script = resolve(import.meta.dirname, 'review-activity-snapshot.mjs');
   const snapshotArgs = [
     script,
     '--pr',
@@ -394,19 +390,7 @@ function runReviewActivitySnapshot(
   return JSON.parse(out);
 }
 
-function isMainModule(moduleUrl: string): boolean {
-  const entry = process.argv[1];
-  if (!entry) {
-    return false;
-  }
-  // Compare decoded filesystem paths (matching the emit-marker / manifest entry
-  // guards). A raw `file://${entry}` string compare fails when the install path
-  // contains spaces: import.meta.url percent-encodes them while process.argv[1]
-  // does not, so the CLI body would silently never run.
-  return fileURLToPath(moduleUrl) === resolve(entry);
-}
-
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   let args: CliArgs;
   try {
     args = parseArgs(process.argv.slice(2));
