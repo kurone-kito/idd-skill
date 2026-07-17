@@ -949,6 +949,16 @@ interface ListItemNode {
  * (preserving the existing behavior that leading prose never merges with
  * the first list item), or as the paragraph's sole block if no marker
  * ever appears.
+ *
+ * Known, tracked residual gaps (tracked in #1476, distinct from the
+ * marker-ancestry scoping this function fixes): a continuation line
+ * resuming at an ancestor's own indentation after a deeper child has
+ * already opened is still attributed to that child rather than the
+ * ancestor (see the `top.lines.push(line)` continuation-line branch
+ * below), and a loose list — sibling items separated by a blank
+ * line — resets scope at the paragraph boundary before this function
+ * ever runs, since its caller (`checkProseOnlyDependency`) splits on
+ * blank lines first.
  */
 function splitIntoListItemBlocks(paragraph: string): string[] {
   const blocks: string[] = [];
