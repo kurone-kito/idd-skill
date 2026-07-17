@@ -405,8 +405,13 @@ test('the emitted plan document never contains a mutation command; only gh run r
     }),
     baseOptions(),
   );
+  // The optional `-R owner/repo` suffix (present whenever `baseInput`
+  // supplies owner/repo -- see the dedicated tests above) is allowed here
+  // too: the real invariant this test expresses is "only a read-only `gh
+  // run rerun` command, never anything else," not "no optional suffix"
+  // (#1434 review, Copilot).
   for (const entry of plan.plan) {
-    assert.match(entry.command, /^gh run rerun \d+$/);
+    assert.match(entry.command, /^gh run rerun \d+( -R \S+\/\S+)?$/);
   }
 });
 

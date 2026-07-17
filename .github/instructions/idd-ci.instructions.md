@@ -258,9 +258,12 @@ not a regular PR comment, since the workflow does not subscribe to
 `issue_comment`.
 
 **Helper-first**: the profile-selected `idd-rerun-advisory-convergence`
-command (source/vendored-node: `node scripts/rerun-advisory-convergence.mjs
---pr <n>`; see `docs/idd-helper-scripts.md`) prints this diagnosis and
-ordered rerun plan, read-only.
+command prints this diagnosis and ordered rerun plan, read-only (see
+`docs/idd-helper-scripts.md`). Source/vendored-node profile:
+
+```sh
+node scripts/rerun-advisory-convergence.mjs --pr <n>
+```
 
 ## Interpretation
 
