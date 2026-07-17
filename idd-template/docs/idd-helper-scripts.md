@@ -1308,6 +1308,7 @@ Interpretation rules:
     "mergeStateStatus": "CLEAN",
     "branchState": "clean",
     "syncRecommendation": "none",
+    "baseAdvancedSinceMergeBase": false,
     "readOnly": true,
     "worktreeUnchanged": true,
     "diagnostics": {
@@ -1325,6 +1326,20 @@ Interpretation rules:
 - `syncRecommendation` values: `none`, `merge-main`, `policy-required-update`,
   `force-push-exception`, `recheck`, `hold-unknown` (`recheck` pairs with
   `computing`)
+- `baseAdvancedSinceMergeBase` (boolean): `true` when the base ref has moved
+  past this PR's merge-base, computed independently of `syncRecommendation` so
+  it does not change any existing `syncRecommendation` value. `false` is
+  **overloaded**: it means either a confirmed-unmoved base, or that the
+  check was skipped / the merge-base could not be resolved (e.g. missing
+  local history); the two are distinguished only via `diagnostics.notes`
+  (an "undetermined" entry marks the latter), never by this field alone. A
+  `clean` / `none` verdict is textual conflict-freeness only, not whole-tree
+  CI-invariant freedom (line-count budgets, generated-file drift, lockfile
+  consistency, and similar checks a full test suite enforces against the
+  whole tree); when this field is `true` alongside `syncRecommendation: none`,
+  `diagnostics.notes` also carries an advisory note naming the blind spot. A
+  `pull_request`-triggered CI run is pinned to a merge-ref computed at trigger
+  time, so a bare rerun after base moves can replay that stale state.
 - Stable fields consumed by D/E/F routing: `branchState`,
   `syncRecommendation`, `published`, `readOnly`, `worktreeUnchanged`
 - Read-only boundary: the helper never runs `git merge`, `git rebase`, or
