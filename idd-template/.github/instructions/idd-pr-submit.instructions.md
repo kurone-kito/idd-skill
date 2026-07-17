@@ -238,3 +238,14 @@ this turn); otherwise wait synchronously. Delegate polling mechanics to
 `idd-ci.instructions.md`.
 
 - **On success** → proceed to `idd-review-snapshot.instructions.md`
+- **`idd-advisory-convergence` is the sole non-pass required check, and
+  its own verdict reports `pending: false` with outstanding
+  review-thread reasons** (see `idd-ci.instructions.md` §Interpretation
+  for how to read this and why) → this is not a CI-wait state: the
+  check turns green only after E-phase disposition, which is downstream
+  of D4, so continued polling and `ciWait.rerunPolicy` reruns cannot
+  resolve it. Exit CI-wait and proceed directly to
+  `idd-review-snapshot.instructions.md` (E1) instead, matching the phase
+  routing table's "PR open, CI running, reviews exist" row. This does
+  not relax the merge gate — the check stays required, and F2
+  re-verifies it independently before merge.
