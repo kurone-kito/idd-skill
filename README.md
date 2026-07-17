@@ -198,6 +198,9 @@ existing tooling and configure the validate commands accordingly. See
 [Tooling boundary](docs/customization.md#tooling-boundary) for
 adopter-facing guidance.
 
+Requires Node.js `^22.22.2 || >=24.2.0` (this repository's `engines`
+floor in `package.json`).
+
 ```sh
 corepack enable
 pnpm install

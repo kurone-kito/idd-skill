@@ -226,19 +226,23 @@ jobs:
           # already known-good for idd-doctor.yml/lint.yml, but assert
           # it explicitly here too, matching lint.yml's own Node-floor
           # guard, so a future stale runner image fails loudly instead
-          # of producing a confusing helper crash. Exact match to
-          # package.json's engines.node (^22.22.2 || >=24), including
-          # the patch digit, so the error message's claimed range is
+          # of producing a confusing helper crash -- including the
+          # silent-no-op crash where a migrated CLI's
+          # `if (import.meta.main)` entry guard is falsy (not an error)
+          # on Node 24.0.x/24.1.x (#1447). Exact match to package.json's
+          # engines.node (^22.22.2 || >=24.2.0), including the
+          # patch/minor digits, so the error message's claimed range is
           # actually what the check enforces.
           node -e '
             const [major, minor, patch] = process.versions.node.split(".").map(Number);
             const ok =
               (major === 22 && (minor > 22 || (minor === 22 && patch >= 2))) ||
-              major >= 24;
+              (major === 24 && minor >= 2) ||
+              major > 24;
             if (!ok) {
               console.error(
                 "Node " + process.version + " does not satisfy this " +
-                "repository'"'"'s engines.node range (^22.22.2 || >=24).",
+                "repository'"'"'s engines.node range (^22.22.2 || >=24.2.0).",
               );
               process.exit(1);
             }

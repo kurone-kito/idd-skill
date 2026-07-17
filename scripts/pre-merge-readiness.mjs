@@ -6,7 +6,6 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import {
   readAdvisoryPrimaryBotLogin,
   readAdvisoryWaitPolicy,
@@ -303,7 +302,7 @@ export function collectPreMergeReadiness(argv) {
   };
 }
 // CLI: emit the readiness report as JSON when invoked directly.
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   process.stdout.write(
     `${JSON.stringify(collectPreMergeReadiness(process.argv.slice(2)), null, 2)}\n`,
   );

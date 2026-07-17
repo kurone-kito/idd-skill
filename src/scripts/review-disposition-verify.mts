@@ -5,9 +5,6 @@
 // .mts source named above by `pnpm run build`. Edit the .mts source,
 // never the generated .mjs. See docs/typescript-sources.md.
 
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
-
 // Tolerate a single interior punctuation char `[.!:]` before the closing `**`
 // (`**Accepted.** — …`) so a punctuated marker still verifies, while keeping the
 // required `\s+—` separator (whitespace before the em-dash; nothing after it is
@@ -52,7 +49,7 @@ interface VerifyResult {
   items: ItemResult[];
 }
 
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -451,11 +448,4 @@ Output schema:
   }]
 }
 `);
-}
-
-function isMainModule(metaUrl: string): boolean {
-  if (!metaUrl || !process.argv[1]) {
-    return false;
-  }
-  return metaUrl === pathToFileURL(resolve(process.argv[1])).href;
 }

@@ -19,7 +19,6 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   buildIssueLoader,
   buildSubIssueLoader,
@@ -1302,14 +1301,7 @@ function printHelp() {
   trusts that review actually happened.
 `);
 }
-function isMainModule(moduleUrl) {
-  const entry = process.argv[1];
-  if (!entry) {
-    return false;
-  }
-  return fileURLToPath(moduleUrl) === resolve(entry);
-}
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   if (process.argv.slice(2).some((arg) => arg === '--help' || arg === '-h')) {
     printHelp();
     process.exit(0);

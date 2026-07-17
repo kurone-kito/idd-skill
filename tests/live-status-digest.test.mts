@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 // Importing the CLI module directly is only possible now that its top-level
-// statements are guarded behind isCliExecution(); previously the import parsed
-// process.argv and called process.exit, aborting the test process.
+// statements are guarded behind `import.meta.main`; previously the import
+// parsed process.argv and called process.exit, aborting the test process.
 import {
   __resetTrustedMarkerCachesForTest,
   configuredTrustedMarkerAuthors,
@@ -230,7 +230,7 @@ test('applyDigestUpsert skips the claim check and mutation on a duplicate plan',
 // the shared resolver, in isolation from the module's real-config read. The
 // module's own configuredTrustedMarkerAuthors() is now exercised directly in the
 // "Direct-import coverage" tests below, which #1120 made possible by guarding the
-// CLI behind isCliExecution().
+// CLI behind `import.meta.main` (originally `isCliExecution()`; see #1447).
 function configuredTrustedMarkerSet(
   envValue: string,
   config: { trustedMarkerActors?: unknown } | null,

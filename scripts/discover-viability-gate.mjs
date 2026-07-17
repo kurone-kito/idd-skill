@@ -4,8 +4,6 @@
 // The scripts/discover-viability-gate.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { GH_TEXT_LOOP_OPTIONS, ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 
@@ -36,7 +34,7 @@ const SUBJECTIVE_VERIFICATION_PATTERN =
   /\b(feels?|looks? good|opinion|judgement?|ux call|maintainer preference|stakeholder preference|subjective)\b/i;
 const EXTERNAL_COORDINATION_PATTERN =
   /\b(external coordination|human decision|maintainer decision|stakeholder sign-?off|manual approval|waiting for (?:maintainer|stakeholder)|external system|third-?party access|credential|production access|cross-repo dependency)\b/i;
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   if (args.issueNumbers.length === 0) {
     throw new Error(
@@ -339,12 +337,4 @@ function ghJson(args) {
     return null;
   }
   return JSON.parse(text);
-}
-function isMainModule(metaUrl) {
-  if (!metaUrl || !process.argv[1]) {
-    return false;
-  }
-  // Compare filesystem paths instead of building a file:// URL from
-  // argv[1], which mis-parses Windows drive-letter paths.
-  return fileURLToPath(metaUrl) === resolve(process.argv[1]);
 }

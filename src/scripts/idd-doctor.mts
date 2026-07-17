@@ -8,7 +8,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitabilityMarker,
@@ -3067,18 +3066,11 @@ function sameMembers(left: string[], right: string[]): boolean {
   return true;
 }
 
-function isMainModule(moduleUrl: string): boolean {
-  if (!process.argv[1]) {
-    return false;
-  }
-  return fileURLToPath(moduleUrl) === resolve(process.argv[1]);
-}
-
 // Run as a CLI only after the whole module (including consts used by the
 // checks above) has finished evaluating. Keeping this block at the end of
 // the file avoids a temporal-dead-zone crash when runDoctor reaches a check
 // that reads a `const` declared later in the file.
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.help) {

@@ -193,6 +193,9 @@ private な業務リポジトリで原型を運用したうえで本リポジト
 validate コマンドを適切に設定してください。採用者向けのガイダンスは
 [Tooling boundary](docs/customization.md#tooling-boundary) を参照してください。
 
+Node.js `^22.22.2 || >=24.2.0`（このリポジトリの `package.json` が定める
+`engines` の下限）が必要です。
+
 ```sh
 corepack enable
 pnpm install

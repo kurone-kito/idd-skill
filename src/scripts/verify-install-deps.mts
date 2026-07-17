@@ -15,7 +15,6 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { isCliExecution } from './gh-exec.mts';
 
 export type VerifyInstallDepsOutcome =
   | { status: 'present-after-install' }
@@ -39,7 +38,7 @@ export function classifyInstallDepsOutcome(
     : { status: 'missing-after-retry' };
 }
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 

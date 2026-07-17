@@ -15,8 +15,8 @@ fails CI (`tests/inventory-ordering.test.mts`).
 ## Why generated `.mjs` are committed
 
 Node.js strips TypeScript types natively (default since 22.18; the
-repository's `engines` floor is `^22.22.2 || >=24`), but it refuses to do
-so for files resolved inside `node_modules`
+repository's `engines` floor is `^22.22.2 || >=24.2.0`), but it refuses to
+do so for files resolved inside `node_modules`
 (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`). The helper bundle is
 consumed through the `package-manager` and `ephemeral-npx` profiles,
 where the files land in `node_modules`, so shipping raw `.mts` would break

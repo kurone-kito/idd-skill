@@ -80,7 +80,7 @@ interface VerifyArgs {
   help: boolean;
 }
 
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   let args: VerifyArgs;
   try {
     args = parseArgs(process.argv.slice(2));
@@ -856,15 +856,4 @@ validated for syntax only (no live HTTP fetch — the check stays
 offline-safe). Targets that resolve outside the repository root via
 path traversal are reported as errors.
 `);
-}
-
-function isMainModule(metaUrl: string): boolean {
-  const entry = process.argv[1];
-  if (!entry) return false;
-  try {
-    const url = new URL(metaUrl);
-    return url.pathname === entry || url.pathname.endsWith(entry);
-  } catch {
-    return false;
-  }
 }

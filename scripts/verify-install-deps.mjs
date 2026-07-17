@@ -14,7 +14,6 @@
 // fail loudly rather than continuing in a silently broken state.
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { isCliExecution } from './gh-exec.mjs';
 /**
  * Pure classification of the two existence checks around the retry.
  * `existsAfterRetry` is only meaningful when `existsAfterInstall` is
@@ -31,7 +30,7 @@ export function classifyInstallDepsOutcome(
     ? { status: 'recovered-after-retry' }
     : { status: 'missing-after-retry' };
 }
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 function runCli() {

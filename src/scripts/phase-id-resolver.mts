@@ -19,8 +19,6 @@
 //     so bare `A` is intentionally non-canonical (it resolves to
 //     `unknown_phase_id`) rather than being added here.
 
-import { isCliExecution } from './gh-exec.mts';
-
 const DEFAULT_CANONICAL_PHASE_IDS = [
   'A0',
   'A0_O',
@@ -97,7 +95,7 @@ interface CreateResolverOptions {
   legacyAliases?: Record<string, string[] | string>;
 }
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 
