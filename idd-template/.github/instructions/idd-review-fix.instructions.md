@@ -363,6 +363,14 @@ proceeding to F — do not skip triage.
   if the route recurs after that rerun, or if the policy is `hold`,
   post a hold comment and stop (do not loop). On success after the
   rerun, **return to E1**.
+- **On failure / `idd-advisory-convergence` alone, verdict `pending: false`
+  with outstanding review reasons** (see `idd-ci.instructions.md`
+  §Interpretation): return to E1, not E11 — neither code-caused nor
+  infra. **Unless** a maintainer has since posted a valid external-check
+  waiver for this HEAD, in which case apply `ciWait.rerunPolicy` instead
+  — the rerun is what makes the check reflect the waiver (see D4's
+  identical carve-out and `idd-pre-merge.instructions.md`'s
+  External-check waivers).
 
 When E15 stops on a CI hold, re-validate the claim and then update the
 digest with `Phase: E15 hold`, the failing or missing checks in

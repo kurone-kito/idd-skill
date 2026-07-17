@@ -238,3 +238,22 @@ this turn); otherwise wait synchronously. Delegate polling mechanics to
 `idd-ci.instructions.md`.
 
 - **On success** → proceed to `idd-review-snapshot.instructions.md`
+- **`idd-advisory-convergence` is the sole non-pass required check, and
+  its own verdict — a JSON object printed in that check's run log, whose
+  `pending` field is distinct from any GitHub check-run status —
+  reports `pending: false` with outstanding review reasons** (thread
+  disposition, actionable item count on the latest review, or
+  both; see `idd-ci.instructions.md` §Interpretation for this shared
+  trigger condition) → this is not a CI-wait state: the
+  check turns green only after E-phase disposition, which is downstream
+  of D4, so continued polling cannot resolve it, and a
+  `ciWait.rerunPolicy` rerun only reproduces the same red **unless a
+  maintainer has since posted a valid external-check waiver for this
+  HEAD** — that case still needs the rerun, to make the check reflect
+  the waiver (a pre-existing F2/F3 concern this branch leaves unchanged;
+  see `idd-pre-merge.instructions.md`'s External-check waivers). Absent
+  a waiver, exit CI-wait and proceed directly to
+  `idd-review-snapshot.instructions.md` (E1) instead, matching the phase
+  routing table's "PR open, CI running, reviews exist" row. This does
+  not relax the merge gate — the check stays required, and F2
+  re-verifies it independently before merge.
