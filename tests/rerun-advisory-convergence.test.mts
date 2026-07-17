@@ -379,6 +379,32 @@ test('orders the plan by earliest startedAt, then numeric run id, and dedupes by
   assert.equal(plan.plan[0]?.startedAt, '2026-07-16T09:00:00Z');
 });
 
+// Regression (#1434 review, Copilot): checkRunIds previously preserved
+// insertion order (the source API/candidate iteration order, not
+// guaranteed stable), which could produce noisy diffs across runs. Sorted
+// (and de-duped) output is deterministic regardless of input order.
+test('sorts checkRunIds for a single run id regardless of contributing-instance order', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'z-run',
+          runId: '3000',
+          conclusion: 'failure',
+        }),
+        baseInstance({
+          checkRunId: 'a-run',
+          runId: '3000',
+          conclusion: 'cancelled',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.plan.length, 1);
+  assert.deepEqual(plan.plan[0]?.checkRunIds, ['a-run', 'z-run']);
+});
+
 // --- Recovery-refresh plan (regression: #1434 review, Codex P1) ---------
 //
 // idd-ci.instructions.md's Rerun mechanics documents that when a required
@@ -755,6 +781,36 @@ test('parseArgs recognizes --help', () => {
 
 test('parseArgs rejects an unknown argument', () => {
   assert.throws(() => parseArgs(['--bogus']), /unknown argument/);
+});
+
+// Regression (#1434 review, Copilot): a value-taking flag with no
+// following token, or followed by another flag (a missing-value typo),
+// previously degraded into a confusing "unknown argument" error pointing
+// at the wrong token instead of the real problem.
+test('parseArgs fails fast when --owner is the last argument (missing value)', () => {
+  assert.throws(
+    () => parseArgs(['--pr', '1431', '--owner']),
+    /missing value for --owner/,
+  );
+});
+
+test('parseArgs fails fast when --owner is immediately followed by another flag', () => {
+  assert.throws(
+    () => parseArgs(['--pr', '1431', '--owner', '--repo', 'idd-skill']),
+    /missing value for --owner/,
+  );
+});
+
+test('parseArgs fails fast when --repo has a missing value', () => {
+  assert.throws(() => parseArgs(['--repo']), /missing value for --repo/);
+});
+
+test('parseArgs fails fast when --now has a missing value', () => {
+  assert.throws(() => parseArgs(['--now']), /missing value for --now/);
+});
+
+test('parseArgs fails fast when --pr has a missing value', () => {
+  assert.throws(() => parseArgs(['--pr']), /missing value for --pr/);
 });
 
 // --- runRerunAdvisoryConvergence (DI) -----------------------------------

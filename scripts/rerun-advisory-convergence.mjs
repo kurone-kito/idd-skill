@@ -382,7 +382,11 @@ function buildOrderedPlan(candidates, owner, repo) {
     return {
       runId,
       command: `gh run rerun ${runId}${repoFlag}`,
-      checkRunIds: items.map((item) => item.checkRunId),
+      // Sorted (not insertion order, which merely reflects the source
+      // API/candidate iteration order and is not guaranteed stable) so
+      // the emitted JSON is deterministic for the same logical plan
+      // (#1434 review, Copilot).
+      checkRunIds: [...new Set(items.map((item) => item.checkRunId))].sort(),
       startedAt: startedAts[0] ?? '',
     };
   });
@@ -420,6 +424,20 @@ export function parseRunIdFromUrl(url) {
   const match = /\/actions\/runs\/(\d+)(?:[/?]|$)/.exec(String(url ?? ''));
   return match ? match[1] : null;
 }
+/**
+ * Require the token following a value-taking flag to be present and to not
+ * itself look like another flag. Without this, a missing value (the flag
+ * is the last argument) or an accidental flag collision (e.g. `--owner
+ * --repo idd-skill`, where `--repo` would silently become `--owner`'s
+ * value) both degrade into a confusing "unknown argument" error pointing
+ * at the wrong token instead of the real problem (#1434 review, Copilot).
+ */
+function requireFlagValue(flag, value) {
+  if (value === undefined || value.startsWith('--')) {
+    throw new Error(`missing value for ${flag}`);
+  }
+  return value;
+}
 export function parseArgs(argv) {
   const parsed = {
     prNumber: null,
@@ -437,7 +455,7 @@ export function parseArgs(argv) {
       // whatever `gh run rerun` plan it prints -- against the wrong PR on
       // a typo. Require the entire value to be digits before parsing
       // (#1434 review, Codex P2).
-      const rawPr = String(value ?? '').trim();
+      const rawPr = requireFlagValue(token, value).trim();
       parsed.prNumber = /^\d+$/.test(rawPr)
         ? Number.parseInt(rawPr, 10)
         : Number.NaN;
@@ -445,17 +463,17 @@ export function parseArgs(argv) {
       continue;
     }
     if (token === '--owner') {
-      parsed.owner = value ?? '';
+      parsed.owner = requireFlagValue(token, value);
       index += 1;
       continue;
     }
     if (token === '--repo') {
-      parsed.repo = value ?? '';
+      parsed.repo = requireFlagValue(token, value);
       index += 1;
       continue;
     }
     if (token === '--now') {
-      parsed.now = value ?? '';
+      parsed.now = requireFlagValue(token, value);
       index += 1;
       continue;
     }
