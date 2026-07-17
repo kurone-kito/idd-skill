@@ -467,7 +467,10 @@ export function parseGitFetchOrigin(url) {
  */
 export function resolveFetchOrigin(env = process.env, readers = {}) {
   const ghHost = env.GH_HOST?.trim();
-  if (ghHost) return { scheme: 'https', host: ghHost };
+  // Lowercased for consistency with the origin-derived path below (DNS/HTTP
+  // hosts are case-insensitive either way, so this does not change fetch
+  // behavior -- only comparison/display consistency).
+  if (ghHost) return { scheme: 'https', host: ghHost.toLowerCase() };
   const readOriginUrl = readers.readOriginUrl ?? readOriginRemoteUrl;
   return (
     parseGitFetchOrigin(readOriginUrl()) ?? {

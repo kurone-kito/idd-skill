@@ -543,6 +543,16 @@ test('resolveFetchOrigin: honors a GH_HOST override to a non-github.com host, al
   );
 });
 
+test('resolveFetchOrigin: lowercases a mixed-case GH_HOST for consistency with the origin-derived path', () => {
+  assert.deepEqual(
+    resolveFetchOrigin(
+      { GH_HOST: 'GHES.Example.COM' },
+      { readOriginUrl: () => '' },
+    ),
+    { scheme: 'https', host: 'ghes.example.com' },
+  );
+});
+
 test('resolveFetchOrigin: falls back to a non-github.com origin remote when GH_HOST is unset', () => {
   assert.deepEqual(
     resolveFetchOrigin(
