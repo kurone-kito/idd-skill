@@ -237,8 +237,9 @@ issue, the regex check above is redundant but still safe to run.
 
 ## D4 — Wait for CI
 
-Background this wait only if the topology-safety condition holds (confirmed
-to route completion back to this turn); otherwise wait synchronously.
-Delegate polling mechanics to `idd-ci.instructions.md`.
+Schedule a wake, or background this wait only if the topology-safety
+condition holds (confirmed to route completion back to this turn);
+otherwise wait synchronously. Delegate polling mechanics to
+`idd-ci.instructions.md`.
 
 - **On success** → proceed to `idd-review-snapshot.instructions.md`

@@ -333,8 +333,9 @@ not advisory; they remain under the hold/escalation path above.
 
 ## E15 — Wait for CI
 
-Background this wait only if the topology-safety condition holds (confirmed
-to route completion back to this turn); otherwise wait synchronously — see
+Schedule a wake, or background this wait only if the topology-safety
+condition holds (confirmed to route completion back to this turn);
+otherwise wait synchronously — see
 [wake-up discipline](idd-ci.instructions.md#wake-up-discipline).
 
 Use `idd-ci.instructions.md` for the polling mechanics and timing. E15
