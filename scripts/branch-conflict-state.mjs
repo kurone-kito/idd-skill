@@ -417,8 +417,11 @@ export function parseGitHostFromUrl(url) {
       return null;
     }
   }
-  // scp-like shorthand: [user@]host:path (no scheme, so URL() can't parse it).
-  const scpMatch = trimmed.match(/^(?:[^@\s]+@)?([^:/\s]+):/);
+  // scp-like shorthand: user@host:path (no scheme, so URL() can't parse
+  // it). The `user@` prefix is required, not just conventional: without
+  // it, a Windows-style local path such as `C:\Users\foo\repo.git` would
+  // otherwise match with `C` misread as a host.
+  const scpMatch = trimmed.match(/^[^@\s]+@([^:/\s]+):/);
   return scpMatch ? scpMatch[1].toLowerCase() : null;
 }
 /**
@@ -431,9 +434,10 @@ export function parseGitHostFromUrl(url) {
  * 1. The `GH_HOST` environment variable — the same override `gh` itself
  *    honors — when set and non-blank.
  * 2. The host parsed from the local checkout's `origin` remote URL. This
- *    assumes the fetch-worthy remote is named `origin`, matching every
- *    other git probe in this file; an unusual multi-remote checkout that
- *    names its GHES remote something else falls through to (3).
+ *    assumes the fetch-worthy remote is named `origin`, the conventional
+ *    default for a single-remote checkout; an unusual multi-remote
+ *    checkout that names its GHES remote something else falls through
+ *    to (3).
  * 3. `github.com`, the pre-existing default, when neither signal
  *    resolves.
  */
@@ -453,6 +457,12 @@ function tryFetchBase(prBaseRef, owner, repo, notes) {
     return;
   }
   try {
+    // resolveFetchHost()'s own branching (GH_HOST / origin-remote / default)
+    // is unit-tested directly; this URL-assembly line and the real `git
+    // fetch` below stay deliberately untested at this call site, matching
+    // this file's existing test-suite convention of never letting a test
+    // reach a live network fetch (see the "unresolvable merge-base" test's
+    // `baseRefName: ''` short-circuit).
     const remote = `https://${resolveFetchHost()}/${owner}/${repo}.git`;
     execFileSync(
       'git',

@@ -464,6 +464,13 @@ test('parseGitHostFromUrl: returns null for an unparseable, scheme-less, colon-l
   assert.equal(parseGitHostFromUrl('not a url'), null);
 });
 
+test('parseGitHostFromUrl: returns null for a Windows-style local path, not the drive letter as a host', () => {
+  // A bare `C:\...` path has no `user@` prefix, unlike real scp-like git
+  // remotes (`git@host:owner/repo.git`); without requiring `@`, the
+  // scp-like regex would otherwise misread the drive letter `C` as a host.
+  assert.equal(parseGitHostFromUrl('C:\\Users\\foo\\repo.git'), null);
+});
+
 test('resolveFetchHost: regression -- returns github.com when GH_HOST is unset and origin does not resolve', () => {
   // Existing github.com-hosted behavior must stay unchanged. Injecting an
   // empty-returning reader exercises the literal `github.com` fallback
