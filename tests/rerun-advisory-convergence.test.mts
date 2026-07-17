@@ -6,6 +6,7 @@ import {
   buildIddConfigContentsArgs,
   computeRerunPlan,
   describeNoActionState,
+  describeOutstandingStates,
   parseArgs,
   parseRunIdFromUrl,
   RERUN_PLAN_CHECK_NAME,
@@ -750,15 +751,44 @@ test('still includes a rerun-eligible instance whose run_attempt is 1 (never rer
   assert.equal(plan.rerunPolicyHoldNotice, '');
 });
 
-test('treats a null run_attempt as attempt 1 (never rerun), not budget-exhausted', () => {
+// Regression (CodeRabbit review, #1434): a null run_attempt previously
+// defaulted to attempt 1 (the most permissive interpretation -- "never
+// rerun") and silently derived rerunCount: 0 from that guess, rather
+// than failing closed on a budget that could not be confirmed. An unresolvable
+// attempt count is withheld the same way a confirmed-exhausted one is,
+// distinguished only by its own reason ('run-attempt-unknown').
+test('withholds a rerun-eligible instance whose run_attempt is null (cannot be confirmed, not "never rerun")', () => {
   const plan = computeRerunPlan(
     baseInput({
       instances: [baseInstance({ conclusion: 'failure', runAttempt: null })],
     }),
     baseOptions(),
   );
-  assert.equal(plan.plan.length, 1);
+  assert.deepEqual(plan.plan, []);
+  assert.equal(plan.counts.rerunEligible, 1);
+  assert.equal(plan.counts.rerunBudgetHeld, 1);
+  assert.equal(plan.instances[0]?.rerunBudgetHeld, true);
+  assert.match(
+    plan.rerunPolicyHoldNotice,
+    /run_attempt could not be confirmed/,
+  );
+});
+
+test('a "hold" policy still holds a null-run_attempt instance via policy-hold, not run-attempt-unknown', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [baseInstance({ conclusion: 'failure', runAttempt: null })],
+    }),
+    baseOptions({ rerunPolicy: 'hold' }),
+  );
+  assert.deepEqual(plan.plan, []);
+  // The policy-level hold notice fires (not the run-attempt-unknown
+  // reason), and the per-instance budget-held flag stays false: this
+  // instance was never actually charged against its own budget --
+  // matches every other instance's fate equally under a blanket hold.
   assert.equal(plan.counts.rerunBudgetHeld, 0);
+  assert.equal(plan.instances[0]?.rerunBudgetHeld, false);
+  assert.match(plan.rerunPolicyHoldNotice, /"hold"/);
 });
 
 test('withholds a recovery-refresh candidate whose run_attempt already shows a prior rerun', () => {
@@ -788,6 +818,56 @@ test('withholds a recovery-refresh candidate whose run_attempt already shows a p
   );
   assert.equal(passingInstance?.rerunBudgetHeld, true);
   assert.match(plan.rerunPolicyHoldNotice, /1 recovery-refresh candidate\(s\)/);
+});
+
+// Regression (CodeRabbit review, #1434): recovery-refresh must NOT
+// activate merely because `plan` ended up empty -- it must only activate
+// when there was never a genuinely rerun-eligible instance to begin with
+// (`eligibleInstances.length === 0`). A budget-held FAILED instance
+// (genuinely rerun-eligible, just out of budget) alongside a bot-gated
+// instance AND an unused, already-passing instance previously fell
+// through to recommending a rerun of the passing instance instead --
+// circumventing the "one rerun, then a human reviews it" boundary the
+// budget hold exists to enforce.
+test('does not fall through to recovery-refresh when the only rerun-eligible instance is budget-held (not genuinely absent)', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'budget-held-failure',
+          runId: '8001',
+          conclusion: 'failure',
+          runAttempt: 2,
+        }),
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '8002',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'unused-passing',
+          runId: '8003',
+          conclusion: 'success',
+          runAttempt: 1,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.counts.rerunEligible, 1);
+  assert.deepEqual(plan.plan, []);
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
+  assert.equal(plan.recoveryRefreshCaveat, '');
+  const unusedPassing = plan.instances.find(
+    (instance) => instance.checkRunId === 'unused-passing',
+  );
+  // The passing instance was never even considered as a refresh
+  // candidate (eligibleInstances.length > 0 short-circuits before
+  // recoveryRefreshCandidates' own decisions are computed), so it is
+  // not itself budget-held -- only the genuinely-eligible failed
+  // instance is.
+  assert.equal(unusedPassing?.rerunBudgetHeld, false);
+  assert.match(plan.rerunPolicyHoldNotice, /1 rerun-eligible instance\(s\)/);
 });
 
 test('a "hold" policy still holds every instance regardless of run_attempt', () => {
@@ -858,6 +938,79 @@ test('describeNoActionState surfaces pending, bot-gated, and unresolved counts i
   assert.match(description, /1 instance\(s\) are bot-gated/);
   assert.match(description, /1 instance\(s\) could not be resolved/);
   assert.doesNotMatch(description, /^Every instance is pass-equivalent/);
+});
+
+// --- describeOutstandingStates (regression: CodeRabbit review, #1434) ---
+//
+// Extracted from describeNoActionState so the CLI can surface pending /
+// bot-gated / unresolved counts INDEPENDENTLY of whether a rerun plan,
+// recovery-refresh plan, or hold notice also exists for a DIFFERENT
+// instance in the same run -- previously the CLI's own exclusive
+// if/else-if chain hid these counts entirely whenever any of those three
+// branches fired first.
+
+test('describeOutstandingStates reports pending, bot-gated, and unresolved counts', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1',
+          status: 'in_progress',
+          conclusion: null,
+          completedAt: null,
+        }),
+        baseInstance({ checkRunId: '2', conclusion: 'action_required' }),
+        baseInstance({
+          checkRunId: '3',
+          conclusion: 'failure',
+          runId: null,
+          runEvent: null,
+          actorLogin: null,
+          actorType: null,
+          triggeringActorLogin: null,
+          triggeringActorType: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  const description = describeOutstandingStates(plan);
+  assert.match(description, /1 instance\(s\) are still running/);
+  assert.match(description, /1 instance\(s\) are bot-gated/);
+  assert.match(description, /1 instance\(s\) could not be resolved/);
+});
+
+test('describeOutstandingStates returns an empty string when nothing is outstanding', () => {
+  const plan = computeRerunPlan(
+    baseInput({ instances: [baseInstance({ conclusion: 'success' })] }),
+    baseOptions(),
+  );
+  assert.equal(describeOutstandingStates(plan), '');
+});
+
+test('describeOutstandingStates reports a pending instance even when a genuine rerun plan also exists for a different instance', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({ checkRunId: 'failed', conclusion: 'failure' }),
+        baseInstance({
+          checkRunId: 'still-running',
+          status: 'in_progress',
+          conclusion: null,
+          completedAt: null,
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  // The rerun-eligible instance still populates plan as before ...
+  assert.equal(plan.plan.length, 1);
+  // ... but the pending instance is no longer silently hidden just
+  // because a plan also exists.
+  assert.match(
+    describeOutstandingStates(plan),
+    /1 instance\(s\) are still running/,
+  );
 });
 
 // --- Empty case -----------------------------------------------------------
@@ -1036,18 +1189,25 @@ test('buildCheckRunsForRefArgs places --method immediately before GET (gh api re
 
 // --- buildIddConfigContentsArgs (regression: #1434 review, Codex P2) ----
 //
-// Fetching .github/idd/config.json without pinning `ref` reads whichever
-// ref `gh` defaults to (the target repository's default branch) instead
-// of the exact commit the diagnosed check-runs ran against, silently
-// applying the wrong primaryBotLogin / advisoryBotLogins /
-// ciWait.rerunPolicy to a PR whose own config differs. Same `--method GET`
-// hazard as buildCheckRunsForRefArgs above: `gh api` defaults to POST as
-// soon as any `-f` value is present, and the Contents API only accepts
-// GET -- confirmed empirically that an unqualified `-f ref=...` 404s on
-// every call, which loadRemoteIddConfig's own catch block would otherwise
-// silently treat as "config genuinely absent, use defaults".
+// This pure args-builder accepts whatever `ref` its caller passes; the
+// production caller (`collectFromGitHub`, via `loadRemoteIddConfig`)
+// pins it to `resolveDefaultBranch(owner, repo)` -- the repository's
+// TRUSTED default branch, matching the `idd-advisory-convergence`
+// workflow's own trusted checkout -- never the PR's own head SHA. Fetching
+// without pinning `ref` at all reads whichever ref `gh` defaults to,
+// which could as easily be the PR-authored config as the trusted one;
+// pinning to the PR's own head specifically would let a PR redefine its
+// own primaryBotLogin / advisoryBotLogins / ciWait.rerunPolicy to
+// influence its own classification and rerun recommendations (see
+// loadRemoteIddConfig's own doc comment for the full rationale). Same
+// `--method GET` hazard as buildCheckRunsForRefArgs above: `gh api`
+// defaults to POST as soon as any `-f` value is present, and the
+// Contents API only accepts GET -- confirmed empirically that an
+// unqualified `-f ref=...` 404s on every call, which loadRemoteIddConfig's
+// own catch block would otherwise silently treat as "config genuinely
+// absent, use defaults".
 
-test('buildIddConfigContentsArgs includes --method GET and pins -f ref to the given SHA', () => {
+test('buildIddConfigContentsArgs includes --method GET and pins -f ref to the given ref value', () => {
   const args = buildIddConfigContentsArgs('kurone-kito', 'idd-skill', HEAD);
   assert.deepEqual(args, [
     'api',
@@ -1110,6 +1270,42 @@ test('parseArgs rejects a --pr value with trailing whitespace and garbage', () =
 
 test('parseArgs still accepts a plain numeric --pr value', () => {
   assert.equal(parseArgs(['--pr', '1431']).prNumber, 1431);
+});
+
+// Regression (self-discovered while evaluating #1446's cli-args.mts,
+// user-directed fix): node:util's own parseArgs (strict: true) throws
+// ERR_PARSE_ARGS_INVALID_OPTION_VALUE for a bare `--pr -5` (a
+// single-dash-prefixed value looks like it could be another option) --
+// verified to throw uncaught before this fix. A negative PR number is
+// never valid, but the failure mode must be the same clean
+// `prNumber: null` every other malformed --pr value already gets, not an
+// uncaught crash.
+test('parseArgs resolves a dash-prefixed --pr value to null instead of throwing', () => {
+  assert.equal(parseArgs(['--pr', '-5']).prNumber, null);
+});
+
+test('parseArgs still resolves a dash-prefixed --pr value to null when --owner/--repo are also given', () => {
+  const args = parseArgs([
+    '--pr',
+    '-5',
+    '--owner',
+    'kurone-kito',
+    '--repo',
+    'idd-skill',
+  ]);
+  assert.equal(args.prNumber, null);
+  assert.equal(args.owner, 'kurone-kito');
+  assert.equal(args.repo, 'idd-skill');
+});
+
+test('parseArgs leaves an ordinary --pr value taking a following flag untouched', () => {
+  // Sanity check that the --pr=-5 rewrite is scoped to genuinely
+  // ambiguous single-dash values: an ordinary --pr value immediately
+  // followed by another flag is unaffected.
+  const args = parseArgs(['--pr', '1431', '--owner', 'o', '--repo', 'r']);
+  assert.equal(args.prNumber, 1431);
+  assert.equal(args.owner, 'o');
+  assert.equal(args.repo, 'r');
 });
 
 test('parseArgs recognizes --help', () => {

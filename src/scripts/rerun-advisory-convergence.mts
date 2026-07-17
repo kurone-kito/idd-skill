@@ -411,12 +411,21 @@ export function computeRerunPlan(
     instances,
     classifyOptions,
   );
-  // Only evaluated (and only meaningful) when `plan` is empty, mirroring
-  // recoveryRefreshPlan's own gating below: a genuine rerun-eligible
-  // instance already triggers the same non-bot refresh, so a refresh
-  // candidate's own budget is irrelevant on top of it.
+  // Gated on `eligibleInstances.length === 0` -- NOT `plan.length === 0`
+  // (this file's own prior bug, CodeRabbit review, #1434): those two are
+  // NOT equivalent. `plan` can be empty either because no instance was
+  // ever rerun-eligible, OR because a genuine rerun-eligible instance
+  // existed but its budget was exhausted/unconfirmed. Gating on
+  // `plan.length === 0` alone let a budget-held instance silently fall
+  // through to recovery-refresh, which would then recommend rerunning a
+  // DIFFERENT, already-passing instance instead -- circumventing the
+  // "one rerun, then a human reviews it" boundary the budget hold exists
+  // to enforce. `eligibleInstances.length === 0` only takes this path
+  // when there was never a real rerun-eligible instance to begin with
+  // (the scenario recoveryRefreshPlan's own doc comment describes:
+  // bot-gated-only, nothing else to trigger a fresh evaluation).
   const refreshDecisions =
-    plan.length === 0
+    eligibleInstances.length === 0
       ? new Map(
           recoveryRefreshCandidates.map(
             (instance) =>
@@ -428,7 +437,7 @@ export function computeRerunPlan(
         )
       : new Map<string, ReturnType<typeof resolveCiRerunDecision>>();
   const recoveryRefreshPlan =
-    plan.length === 0
+    eligibleInstances.length === 0
       ? buildOrderedPlan(
           recoveryRefreshCandidates.filter(
             (instance) =>
@@ -446,16 +455,31 @@ export function computeRerunPlan(
     (decision) => decision.action === 'hold',
   ).length;
   const totalHeldCount = heldEligibleCount + heldRefreshCount;
+  // Per-instance reasons a non-"hold" policy still withheld an instance:
+  // a confirmed-exhausted budget ('rerun-budget-exhausted') and one that
+  // could not be confirmed at all ('run-attempt-unknown', CodeRabbit
+  // review, #1434) are reported distinctly below rather than conflated,
+  // so the notice never claims a budget is "already used" when it was
+  // actually just never confirmed.
+  const allHeldReasons = new Set(
+    [...eligibleDecisions.values(), ...refreshDecisions.values()]
+      .filter((decision) => decision.action === 'hold')
+      .map((decision) => decision.reason),
+  );
   const rerunPolicyHoldNotice =
     totalHeldCount === 0
       ? ''
       : rerunPolicy === 'hold'
         ? `ciWait.rerunPolicy is "hold": ${describeHeldCounts(heldEligibleCount, heldRefreshCount)} found, but auto-rerun is disallowed by this repository's policy -- a maintainer must manually decide (see idd-ci.instructions.md §Rerun mechanics).`
-        : `ciWait.rerunPolicy is "rerun-once" and the one-rerun budget is already used (run_attempt > 1): ${describeHeldCounts(heldEligibleCount, heldRefreshCount)} withheld from the plan -- a maintainer must manually decide (see idd-ci.instructions.md §Rerun mechanics).`;
+        : `ciWait.rerunPolicy is "rerun-once" and ${describeRerunOnceHoldReasons(allHeldReasons)}: ${describeHeldCounts(heldEligibleCount, heldRefreshCount)} withheld from the plan -- a maintainer must manually decide (see idd-ci.instructions.md §Rerun mechanics).`;
 
   const budgetHeldCheckRunIds = new Set(
     [...eligibleDecisions.entries(), ...refreshDecisions.entries()]
-      .filter(([, decision]) => decision.reason === 'rerun-budget-exhausted')
+      .filter(
+        ([, decision]) =>
+          decision.reason === 'rerun-budget-exhausted' ||
+          decision.reason === 'run-attempt-unknown',
+      )
       .map(([checkRunId]) => checkRunId),
   );
   const finalInstances = instances.map((instance) => ({
@@ -506,15 +530,37 @@ export function computeRerunPlan(
  * `idd-ci.instructions.md` §Rerun mechanics documents CI-wait itself
  * applying -- rather than re-deriving the budget rule here, so this
  * helper's recovery recommendations can never drift out of sync with the
- * policy CI-wait already enforces. `Math.max(0, ...)` guards against a
- * `null`/`0` `runAttempt` (an unresolved or not-yet-enriched instance)
- * ever underflowing into a spurious negative rerun count.
+ * policy CI-wait already enforces.
+ *
+ * Fails closed when `runAttempt` is `null` under a non-`"hold"` policy
+ * (an unresolved or not-yet-enriched instance): this previously defaulted
+ * the missing value to `1` (treating it as "never rerun", the single
+ * MOST PERMISSIVE interpretation) and silently derived `rerunCount: 0`
+ * from that guess, rather than withholding an instance whose budget this
+ * helper cannot actually confirm (CodeRabbit review, #1434). Reported
+ * with its own distinct `reason: 'run-attempt-unknown'` (not conflated
+ * with a confirmed-exhausted budget's `'rerun-budget-exhausted'`), so the
+ * operator-facing notice can still tell "known, already used" apart from
+ * "unconfirmed" -- but both withhold the instance the same way. Under a
+ * `"hold"` policy this distinction is moot (every instance is withheld
+ * regardless of its own attempt count, and `resolveCiRerunDecision`
+ * already reports the correct shared `'policy-hold'` reason for it), so
+ * the null-`runAttempt` short-circuit only applies to the non-`"hold"`
+ * path where `rerunCount` would otherwise actually be read.
  */
 function resolveInstanceRerunDecision(
   instance: RerunPlanRawInstance,
   rerunPolicy: string,
 ): ReturnType<typeof resolveCiRerunDecision> {
-  const rerunCount = Math.max(0, (instance.runAttempt ?? 1) - 1);
+  if (instance.runAttempt === null && rerunPolicy !== 'hold') {
+    return {
+      action: 'hold',
+      reason: 'run-attempt-unknown',
+      rerunPolicy,
+      rerunCount: 0,
+    };
+  }
+  const rerunCount = Math.max(0, (instance.runAttempt ?? 0) - 1);
   return resolveCiRerunDecision({ rerunPolicy, rerunCount });
 }
 
@@ -532,6 +578,32 @@ function describeHeldCounts(
     parts.push(`${refreshCount} recovery-refresh candidate(s)`);
   }
   return parts.join(' and ');
+}
+
+/**
+ * Render the reason clause for a `"rerun-once"` policy's
+ * {@link RerunAdvisoryConvergencePlan.rerunPolicyHoldNotice}, distinguishing
+ * a confirmed-exhausted budget from one that could not be confirmed (CodeRabbit
+ * review, #1434) -- joined when a single run produces both reasons across
+ * different instances, so the notice never overstates certainty ("the
+ * budget is already used") for an instance that was actually withheld
+ * because its `run_attempt` could not be confirmed at all.
+ */
+function describeRerunOnceHoldReasons(reasons: ReadonlySet<string>): string {
+  const parts: string[] = [];
+  if (reasons.has('rerun-budget-exhausted')) {
+    parts.push('the one-rerun budget is already used (run_attempt > 1)');
+  }
+  if (reasons.has('run-attempt-unknown')) {
+    parts.push("one or more instances' own run_attempt could not be confirmed");
+  }
+  // Every "hold" decision under a non-"hold" policy carries one of the
+  // two reasons above (resolveCiRerunDecision / resolveInstanceRerunDecision
+  // have no third hold reason on that path) -- this fallback is
+  // defensive, not a reachable case today.
+  return parts.length > 0
+    ? parts.join(', and ')
+    : 'the one-rerun budget is already used (run_attempt > 1)';
 }
 
 /**
@@ -849,6 +921,45 @@ interface RerunPlanArgs {
 }
 
 /**
+ * Rewrite a `--pr VALUE` pair into the single token `--pr=VALUE` whenever
+ * `VALUE` starts with a single dash (not `--`) -- `node:util`'s own
+ * `parseArgs` (`strict: true`) throws `ERR_PARSE_ARGS_INVALID_OPTION_VALUE`
+ * ("... argument is ambiguous") for a bare `--pr -5`, since a
+ * single-dash-prefixed value could plausibly be another short option
+ * instead. Left uncaught, this crashed the CLI with a raw, uncaught Node
+ * stack trace instead of this file's own documented `--pr` contract ("an
+ * invalid --pr resolves to null (fails closed at the caller)") --
+ * verified empirically (`--pr -5` threw before this fix; a negative PR
+ * number is never valid, but the failure mode should be the same clean
+ * `prNumber: null` every other malformed `--pr` value already gets, not
+ * an uncaught crash) (self-discovered while evaluating #1446's shared
+ * `cli-args.mts` wrapper, which solves this same class of gap generically
+ * -- adopting it here is out of scope for #1431; this is the narrow,
+ * `--pr`-only equivalent). Only `--pr` needs this: none of this file's
+ * other flags (`--owner`, `--repo`, `--now`) can realistically take a
+ * dash-prefixed value, and `--help`/`-h` is boolean (no value to
+ * disambiguate).
+ */
+function disambiguateSingleDashPrValue(argv: readonly string[]): string[] {
+  const rewritten: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    const next = argv[index + 1];
+    const isAmbiguousValue =
+      typeof next === 'string' &&
+      next.startsWith('-') &&
+      !next.startsWith('--');
+    if (token === '--pr' && isAmbiguousValue) {
+      rewritten.push(`--pr=${next}`);
+      index += 1;
+      continue;
+    }
+    rewritten.push(token);
+  }
+  return rewritten;
+}
+
+/**
  * Mechanical CLI-argument parsing is delegated to `node:util`'s own
  * stable (since Node 20; this repo's engines floor is `^22.22.2 || >=24`)
  * `parseArgs`, per a maintainer's review suggestion on PR #1434: it
@@ -870,7 +981,7 @@ interface RerunPlanArgs {
  */
 export function parseArgs(argv: string[]): RerunPlanArgs {
   const { values } = nodeParseArgs({
-    args: argv,
+    args: disambiguateSingleDashPrValue(argv),
     options: {
       pr: { type: 'string' },
       owner: { type: 'string' },
@@ -916,20 +1027,19 @@ export function parseArgs(argv: string[]): RerunPlanArgs {
 }
 
 /**
- * Describe the terminal state when neither `plan` nor `recoveryRefreshPlan`
- * has any entries. "Nothing to do" would be accurate only when every
- * instance is `pass` (or there are no instances at all) -- `pending`,
- * `unresolved`, and `bot-gated-skip` all still require an operator action
- * (waiting, manual inspection, approval, or a non-bot trigger, per each
- * instance's own `reason`), so presenting them as no-action risked leaving
- * a genuinely stuck required check unresolved (#1434 review, Codex P2).
+ * Describe outstanding `pending` / `bot-gated-skip` / `unresolved`
+ * instance counts, or `''` when none exist. Extracted from
+ * {@link describeNoActionState} so the CLI can surface these states
+ * independently of whether a rerun plan, recovery-refresh plan, or hold
+ * notice ALSO exists for a different instance in the same run --
+ * previously these were only ever shown when NONE of those three
+ * existed, silently hiding e.g. 2 still-pending instances whenever the
+ * output happened to also have a rerun plan for a different instance
+ * (CodeRabbit review, #1434).
  */
-export function describeNoActionState(
+export function describeOutstandingStates(
   plan: RerunAdvisoryConvergencePlan,
 ): string {
-  if (plan.counts.total === 0) {
-    return `No "${plan.checkName}" check-run instances found for this HEAD; nothing to do.`;
-  }
   const notes: string[] = [];
   if (plan.counts.pending > 0) {
     notes.push(
@@ -946,10 +1056,33 @@ export function describeNoActionState(
       `${plan.counts.unresolved} instance(s) could not be resolved -- inspect each instance's "reason" above manually`,
     );
   }
-  if (notes.length === 0) {
+  return notes.join('; ');
+}
+
+/**
+ * Describe the terminal state when there is truly nothing to report:
+ * no rerun plan, no recovery-refresh plan, no hold notice, AND no
+ * outstanding `pending` / `unresolved` / `bot-gated-skip` instance (see
+ * {@link describeOutstandingStates}, which the CLI now also consults
+ * independently of this function). "Nothing to do" would be accurate
+ * only when every instance is `pass` (or there are no instances at all)
+ * -- `pending`, `unresolved`, and `bot-gated-skip` all still require an
+ * operator action (waiting, manual inspection, approval, or a non-bot
+ * trigger, per each instance's own `reason`), so presenting them as
+ * no-action risked leaving a genuinely stuck required check unresolved
+ * (#1434 review, Codex P2).
+ */
+export function describeNoActionState(
+  plan: RerunAdvisoryConvergencePlan,
+): string {
+  if (plan.counts.total === 0) {
+    return `No "${plan.checkName}" check-run instances found for this HEAD; nothing to do.`;
+  }
+  const notes = describeOutstandingStates(plan);
+  if (!notes) {
     return 'Every instance is pass-equivalent; nothing to do.';
   }
-  return `No rerun-eligible instance and no recovery-refresh option, but this is not a clean "nothing to do": ${notes.join('; ')}.`;
+  return `No rerun-eligible instance and no recovery-refresh option, but this is not a clean "nothing to do": ${notes}.`;
 }
 
 function printHelp(): void {
@@ -1476,7 +1609,24 @@ if (isCliExecution(import.meta.url)) {
       process.stderr.write(`\n${plan.recoveryRefreshCaveat}\n`);
     } else if (plan.rerunPolicyHoldNotice) {
       process.stderr.write(`\n${plan.rerunPolicyHoldNotice}\n`);
-    } else {
+    }
+    // Independent of whichever branch above did (or did not) fire:
+    // outstanding pending / bot-gated / unresolved instances are reported
+    // unconditionally whenever they exist, rather than only when NONE of
+    // the three branches above already had something to say -- those
+    // branches are about a DIFFERENT instance's rerun/refresh/hold
+    // outcome, and previously hid a genuinely-still-outstanding instance
+    // (e.g. 2 pending check-runs) any time a rerun plan also existed for
+    // a separate instance in the same run (CodeRabbit review, #1434).
+    const outstanding = describeOutstandingStates(plan);
+    if (outstanding) {
+      process.stderr.write(`\n${outstanding}\n`);
+    } else if (
+      plan.plan.length === 0 &&
+      plan.recoveryRefreshPlan.length === 0 &&
+      !plan.rerunPolicyHoldNotice
+    ) {
+      // Genuinely nothing to report at all.
       process.stderr.write(`\n${describeNoActionState(plan)}\n`);
     }
   }
