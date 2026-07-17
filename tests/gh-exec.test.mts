@@ -11,6 +11,7 @@ import {
   ghText,
   isCliExecution,
   safeGhText,
+  withBoundedRetry,
 } from '../src/scripts/gh-exec.mts';
 
 // Stub `gh` on PATH (the discover-roadmap-graph.test.mts / post-idd-marker.test.mts
@@ -284,4 +285,110 @@ test('isCliExecution is false for an unrelated moduleUrl or a missing argv[1]', 
   } finally {
     process.argv[1] = originalArgv1;
   }
+});
+
+test('withBoundedRetry succeeds after transient failures within the attempt budget', async () => {
+  let calls = 0;
+  const result = await withBoundedRetry(
+    async () => {
+      calls += 1;
+      if (calls < 3) {
+        throw new Error(`transient failure ${calls}`);
+      }
+      return 'ok';
+    },
+    { baseDelayMs: 1 },
+  );
+  assert.equal(result, 'ok');
+  assert.equal(calls, 3);
+});
+
+test('withBoundedRetry rethrows immediately, without retrying, when isRetryable returns false', async () => {
+  let calls = 0;
+  const thrown = new Error('not retryable');
+  let caught: unknown;
+  try {
+    await withBoundedRetry(
+      async () => {
+        calls += 1;
+        throw thrown;
+      },
+      { baseDelayMs: 1, isRetryable: () => false },
+    );
+    assert.fail('expected withBoundedRetry to reject');
+  } catch (error) {
+    caught = error;
+  }
+  // Same instance, never re-wrapped, and called exactly once (no wasted
+  // attempt or backoff wait once isRetryable says no).
+  assert.equal(caught, thrown);
+  assert.equal(calls, 1);
+});
+
+test('withBoundedRetry exhausts bounded attempts and rethrows the final error unchanged', async () => {
+  let calls = 0;
+  let lastError: Error | undefined;
+  let caught: unknown;
+  try {
+    await withBoundedRetry(
+      async () => {
+        calls += 1;
+        lastError = new Error(`persistent failure ${calls}`);
+        throw lastError;
+      },
+      { attempts: 3, baseDelayMs: 1 },
+    );
+    assert.fail('expected withBoundedRetry to reject');
+  } catch (error) {
+    caught = error;
+  }
+  // Bounded to exactly `attempts` tries, and the rethrown error is the same
+  // instance the final attempt threw (fail-closed, never re-wrapped).
+  assert.equal(calls, 3);
+  assert.equal(caught, lastError);
+});
+
+test('withBoundedRetry falls back to the default attempt bound on a non-finite attempts value (#1394 Copilot + Codex review)', async () => {
+  for (const nonFiniteAttempts of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    let calls = 0;
+    let caught: unknown;
+    try {
+      await withBoundedRetry(
+        async () => {
+          calls += 1;
+          throw new Error(`persistent failure ${calls}`);
+        },
+        { attempts: nonFiniteAttempts, baseDelayMs: 1 },
+      );
+      assert.fail('expected withBoundedRetry to reject');
+    } catch (error) {
+      caught = error;
+    }
+    // Without the Number.isFinite guard, `Math.max(1, Math.trunc(NaN))` is
+    // `NaN` and `Math.max(1, Math.trunc(Infinity))` is `Infinity`; either
+    // way `attempt >= totalAttempts` is never true, so the loop never
+    // terminates. Asserting a bounded call count (the default of 3, not an
+    // unbounded count) is the actual regression check.
+    assert.ok(caught instanceof Error);
+    assert.equal(calls, 3);
+  }
+});
+
+test('withBoundedRetry falls back to the default backoff on a non-finite baseDelayMs value', async () => {
+  let calls = 0;
+  const result = await withBoundedRetry(
+    async () => {
+      calls += 1;
+      if (calls < 2) {
+        throw new Error('transient failure');
+      }
+      return 'ok';
+    },
+    { baseDelayMs: Number.NaN },
+  );
+  // A non-finite baseDelayMs cannot hang the suite (setTimeout would clamp
+  // it), but should not silently disable backoff either; this only proves
+  // the call still completes and resolves normally under the fallback.
+  assert.equal(result, 'ok');
+  assert.equal(calls, 2);
 });

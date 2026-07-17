@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  buildCommentLoader,
+  buildIssueLoader,
   buildOpenRoadmapRootsLoader,
+  buildSubIssueLoader,
   buildTrustedAuthorPredicate,
   classifyIssue,
   enumerateAllRoadmapsGraph,
@@ -20,6 +23,53 @@ import {
   type SearchIssuesQuery,
   warnOnSearchResultCap,
 } from '../src/scripts/discover-roadmap-graph.mts';
+
+/**
+ * Stub `gh` on PATH with a script that counts its own invocations via a
+ * counter file on disk (#1394): each retry attempt in the tests below is a
+ * genuine new `gh` subprocess, so an in-memory JS counter in the test
+ * process cannot observe it — the count must persist across process
+ * boundaries. `scriptBody` receives `count` (this invocation's 1-based
+ * index) as a variable already in scope. Returns `{ restore, readCount }`;
+ * callers must invoke `restore` (ideally in a `finally`) even when the
+ * assertion throws.
+ */
+function stubGhWithCounter(scriptBody: string): {
+  restore: () => void;
+  readCount: () => number;
+} {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-discover-roadmap-graph-retry-'),
+  );
+  const ghPath = join(tempRoot, 'gh');
+  const counterFile = join(tempRoot, 'count');
+  writeFileSync(
+    ghPath,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const counterFile = ${JSON.stringify(counterFile)};
+let count = 0;
+try {
+  count = Number(fs.readFileSync(counterFile, 'utf8').trim()) || 0;
+} catch {}
+count += 1;
+fs.writeFileSync(counterFile, String(count));
+const args = process.argv.slice(2);
+${scriptBody}
+process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
+process.exit(1);
+`,
+  );
+  chmodSync(ghPath, 0o755);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${tempRoot}:${originalPath ?? ''}`;
+  return {
+    restore: () => {
+      process.env.PATH = originalPath;
+    },
+    readCount: () => Number(readFileSync(counterFile, 'utf8').trim()),
+  };
+}
 
 /** Run `body` with `process.stderr.write` captured; return the joined output. */
 function captureStderr(body: () => void): string {
@@ -2413,4 +2463,144 @@ test('normalizeConcurrency keeps integers >= 1 and falls back otherwise (#1136)'
   assert.equal(normalizeConcurrency('2.5'), DEFAULT);
   assert.equal(normalizeConcurrency('3px'), DEFAULT);
   assert.equal(normalizeConcurrency(''), DEFAULT);
+});
+
+test('buildIssueLoader retries once past a truncated-JSON transient failure, then succeeds (#1394)', async () => {
+  const { restore, readCount } = stubGhWithCounter(`
+if (args[0] === 'api' && args[1] === 'repos/o/r/issues/900') {
+  if (count === 1) {
+    // Truncated captured stdout (the field evidence's "unexpected end of
+    // JSON input"): gh itself exits cleanly, but the body is cut short.
+    process.stdout.write('{"number": 900, "tit');
+    process.exit(0);
+  }
+  process.stdout.write(JSON.stringify({ number: 900, title: 'issue 900' }));
+  process.exit(0);
+}
+`);
+  try {
+    const result = await buildIssueLoader('o', 'r')(900);
+    assert.deepEqual(result, { number: 900, title: 'issue 900' });
+    assert.equal(readCount(), 2);
+  } finally {
+    restore();
+  }
+});
+
+test('buildIssueLoader still rethrows after exhausting bounded attempts on a persistent failure (#1394)', async () => {
+  const { restore, readCount } = stubGhWithCounter(`
+process.stderr.write('HTTP 500 (simulated persistent failure)');
+process.exit(1);
+`);
+  try {
+    await assert.rejects(
+      () => buildIssueLoader('o', 'r')(900),
+      (error: unknown) => {
+        // Fail-closed AND unwrapped: still the plain gh-exec failure shape,
+        // not re-wrapped by the retry layer.
+        assert.match((error as Error).message, /HTTP 500/);
+        assert.equal(
+          (error as { stderr?: string }).stderr,
+          'HTTP 500 (simulated persistent failure)',
+        );
+        return true;
+      },
+    );
+    assert.equal(readCount(), 3);
+  } finally {
+    restore();
+  }
+});
+
+test('buildIssueLoader resolves an existing 404 immediately, without any retry (#1394)', async () => {
+  const { restore, readCount } = stubGhWithCounter(`
+process.stderr.write('HTTP 404: Not Found (https://api.github.com/repos/o/r/issues/900)');
+process.exit(1);
+`);
+  try {
+    const result = await buildIssueLoader('o', 'r')(900);
+    assert.equal(result, null);
+    // The 404 classifier short-circuits on the FIRST attempt: byte-identical
+    // to having no retry wrapper at all.
+    assert.equal(readCount(), 1);
+  } finally {
+    restore();
+  }
+});
+
+test('buildSubIssueLoader retries once past a transient GraphQL failure, then succeeds (#1394)', async () => {
+  const { restore, readCount } = stubGhWithCounter(`
+if (args[0] === 'api' && args[1] === 'graphql') {
+  if (count === 1) {
+    // Same transient shape: a truncated stdout body surfaces as a
+    // JSON.parse failure inside runGraphqlQuery.
+    process.stdout.write('{"data": {"repository": {"issue": {"sub');
+    process.exit(0);
+  }
+  process.stdout.write(JSON.stringify({
+    data: {
+      repository: {
+        issue: {
+          subIssues: {
+            nodes: [{ number: 701 }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    },
+  }));
+  process.exit(0);
+}
+`);
+  try {
+    const result = await buildSubIssueLoader('o', 'r')(700);
+    assert.deepEqual(result, [701]);
+    assert.equal(readCount(), 2);
+  } finally {
+    restore();
+  }
+});
+
+test('buildSubIssueLoader still rethrows after exhausting bounded attempts on a persistent failure (#1394)', async () => {
+  const { restore, readCount } = stubGhWithCounter(`
+process.stderr.write('rate limited (simulated persistent failure)');
+process.exit(1);
+`);
+  try {
+    await assert.rejects(
+      () => buildSubIssueLoader('o', 'r')(700),
+      /rate limited/,
+    );
+    assert.equal(readCount(), 3);
+  } finally {
+    restore();
+  }
+});
+
+test('buildCommentLoader retries once past a transient page-fetch failure, then succeeds (#1394)', async () => {
+  const { restore, readCount } = stubGhWithCounter(`
+if (args[0] === 'api' && String(args[1]).startsWith('repos/o/r/issues/900/comments')) {
+  if (count === 1) {
+    process.stdout.write('[{"body": "trunca');
+    process.exit(0);
+  }
+  process.stdout.write(JSON.stringify([
+    { body: 'hello', createdAt: '2026-01-01T00:00:00Z', author: { login: 'kurone-kito' } },
+  ]));
+  process.exit(0);
+}
+`);
+  try {
+    const result = await buildCommentLoader('o', 'r')(900);
+    assert.deepEqual(result, [
+      {
+        body: 'hello',
+        createdAt: '2026-01-01T00:00:00Z',
+        author: { login: 'kurone-kito' },
+      },
+    ]);
+    assert.equal(readCount(), 2);
+  } finally {
+    restore();
+  }
 });
