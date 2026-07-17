@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   buildCheckRunsForRefArgs,
+  buildIddConfigContentsArgs,
   computeRerunPlan,
   describeNoActionState,
   parseArgs,
@@ -1028,6 +1029,40 @@ test('buildCheckRunsForRefArgs requests filter=all so older non-passing instance
 
 test('buildCheckRunsForRefArgs places --method immediately before GET (gh api requires the value to follow its flag)', () => {
   const args = buildCheckRunsForRefArgs('o', 'r', HEAD, 'name');
+  const methodIndex = args.indexOf('--method');
+  assert.notEqual(methodIndex, -1);
+  assert.equal(args[methodIndex + 1], 'GET');
+});
+
+// --- buildIddConfigContentsArgs (regression: #1434 review, Codex P2) ----
+//
+// Fetching .github/idd/config.json without pinning `ref` reads whichever
+// ref `gh` defaults to (the target repository's default branch) instead
+// of the exact commit the diagnosed check-runs ran against, silently
+// applying the wrong primaryBotLogin / advisoryBotLogins /
+// ciWait.rerunPolicy to a PR whose own config differs. Same `--method GET`
+// hazard as buildCheckRunsForRefArgs above: `gh api` defaults to POST as
+// soon as any `-f` value is present, and the Contents API only accepts
+// GET -- confirmed empirically that an unqualified `-f ref=...` 404s on
+// every call, which loadRemoteIddConfig's own catch block would otherwise
+// silently treat as "config genuinely absent, use defaults".
+
+test('buildIddConfigContentsArgs includes --method GET and pins -f ref to the given SHA', () => {
+  const args = buildIddConfigContentsArgs('kurone-kito', 'idd-skill', HEAD);
+  assert.deepEqual(args, [
+    'api',
+    'repos/kurone-kito/idd-skill/contents/.github/idd/config.json',
+    '--method',
+    'GET',
+    '-f',
+    `ref=${HEAD}`,
+    '--jq',
+    '.content',
+  ]);
+});
+
+test('buildIddConfigContentsArgs places --method immediately before GET (gh api requires the value to follow its flag)', () => {
+  const args = buildIddConfigContentsArgs('o', 'r', HEAD);
   const methodIndex = args.indexOf('--method');
   assert.notEqual(methodIndex, -1);
   assert.equal(args[methodIndex + 1], 'GET');

@@ -88,7 +88,6 @@ import {
   isCliExecution,
 } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
-import { loadIddConfig } from './idd-config.mjs';
 import { isValidIsoTimestamp } from './marker-helpers.mjs';
 import {
   advisoryBotIdentityToken,
@@ -804,35 +803,62 @@ function fetchCheckRunsForRef(owner, repo, ref, checkName) {
   return parsePaginatedGhNdjson(raw);
 }
 /**
- * Fetch and parse `.github/idd/config.json` from `owner/repo` via the
- * Contents API, instead of the local working tree. Used only for a true
- * cross-repository invocation (`--owner`/`--repo` explicitly given) --
- * reading the *local* checkout's config while inspecting a *different*
- * repository would resolve bot identity from the wrong repository
- * entirely, misclassifying a bot-triggered run as rerun-eligible (or vice
- * versa) there.
+ * Fetch and parse `.github/idd/config.json` for `owner/repo` **at `ref`**
+ * via the Contents API. Used unconditionally -- both a same-repo and a
+ * true cross-repository invocation -- rather than a local `readFileSync`
+ * fallback for the same-repo case (`loadIddConfig`, idd-config.mts): this
+ * helper diagnoses check-run instances that were evaluated under the PR
+ * HEAD's own committed config, so resolving bot-identity /
+ * `ciWait.rerunPolicy` from anything else -- the local working tree's
+ * checked-out ref (which can be a different branch entirely, or simply
+ * behind the PR's actual remote HEAD by the time this helper runs), or
+ * (for a cross-repository invocation) the target repository's default
+ * branch -- can silently apply the WRONG `primaryBotLogin` /
+ * `advisoryBotLogins` / `ciWait.rerunPolicy` to a PR whose own config
+ * differs, misclassifying bot-triggered runs or mis-honoring the rerun
+ * budget there (#1434 review, Codex P2). Always pass `prHeadSha`, never a
+ * branch name, so the fetched config is pinned to the exact commit the
+ * diagnosed check-runs ran against.
+ *
+ * `--method GET` is required alongside the `-f ref=...` field, for the
+ * same reason `buildCheckRunsForRefArgs` above needs it: `gh api` defaults
+ * to POST as soon as any `-f` value is present, and the Contents API only
+ * accepts GET -- an unqualified `-f ref=...` here would 404 on every call
+ * (confirmed empirically), which this function's own catch block would
+ * silently treat as "config genuinely absent, use defaults" instead of
+ * surfacing the real problem.
  *
  * Returns `null` -- falls back to documented defaults, same as a missing
- * local file -- **only** on a confirmed 404 (the target repository
- * genuinely has no committed config, the same "absent" state
- * `loadIddConfig` treats as "use defaults" locally). Any other failure --
- * a permission error, a transient Contents API failure, or malformed
- * content -- means this helper cannot confirm whether the target
- * repository configures a non-default bot identity, so silently
- * substituting defaults could misclassify a bot-triggered run there as
- * rerun-eligible. Per this repo's own fail-closed default
- * (`idd-overview-core.instructions.md`), that ambiguity throws instead of
- * guessing, rejecting the cross-repo diagnosis outright rather than
- * proceeding on unconfirmed bot identity (#1434 review, Codex P2).
+ * local file -- **only** on a confirmed 404 (`ref` genuinely has no
+ * config committed, the same "absent" state `loadIddConfig` treats as
+ * "use defaults" locally). Any other failure -- a permission error, a
+ * transient Contents API failure, or malformed content -- means this
+ * helper cannot confirm whether `ref` configures a non-default bot
+ * identity, so silently substituting defaults could misclassify a
+ * bot-triggered run there as rerun-eligible. Per this repo's own
+ * fail-closed default (`idd-overview-core.instructions.md`), that
+ * ambiguity throws instead of guessing, rejecting the diagnosis outright
+ * rather than proceeding on unconfirmed bot identity (#1434 review, Codex
+ * P2).
  */
-function loadRemoteIddConfig(owner, repo) {
+export function buildIddConfigContentsArgs(owner, repo, ref) {
+  return [
+    'api',
+    `repos/${owner}/${repo}/contents/.github/idd/config.json`,
+    '--method',
+    'GET',
+    '-f',
+    `ref=${ref}`,
+    '--jq',
+    '.content',
+  ];
+}
+function loadRemoteIddConfig(owner, repo, ref) {
   try {
-    const encoded = ghText([
-      'api',
-      `repos/${owner}/${repo}/contents/.github/idd/config.json`,
-      '--jq',
-      '.content',
-    ]);
+    const encoded = ghText(
+      buildIddConfigContentsArgs(owner, repo, ref),
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    );
     const decoded = Buffer.from(encoded.replace(/\n/g, ''), 'base64').toString(
       'utf8',
     );
@@ -843,7 +869,7 @@ function loadRemoteIddConfig(owner, repo) {
     }
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
-      `cannot confirm .github/idd/config.json for ${owner}/${repo}: bot-identity resolution for a cross-repository diagnosis requires this file to be readable or genuinely absent (404), not merely unreadable -- ${message}`,
+      `cannot confirm .github/idd/config.json for ${owner}/${repo}@${ref}: bot-identity resolution for this diagnosis requires this file to be readable or genuinely absent (404) at this ref, not merely unreadable -- ${message}`,
     );
   }
 }
@@ -942,13 +968,15 @@ function collectFromGitHub(args) {
       runAttempt: meta?.runAttempt ?? null,
     };
   });
-  // Both bot-identity fields resolve from the SAME config source -- the
-  // inspected repo's own config for a cross-repo invocation, the local
-  // checkout's file otherwise -- so they never disagree with each other
-  // about which repository they describe.
-  const rawConfig = isCrossRepo
-    ? loadRemoteIddConfig(owner, repo)
-    : loadIddConfig();
+  // Fetched at prHeadSha unconditionally -- same-repo and cross-repo
+  // alike -- rather than a local `loadIddConfig()` read for the same-repo
+  // case: the check-runs above were evaluated under the PR HEAD's own
+  // committed config, which a local working-tree read cannot guarantee
+  // (a different checked-out branch, or simply a stale fetch of the same
+  // branch) any more than the previous cross-repo-only fix guaranteed it
+  // reads the default branch instead of the PR head (#1434 review, Codex
+  // P2, second occurrence -- see loadRemoteIddConfig's own doc comment).
+  const rawConfig = loadRemoteIddConfig(owner, repo, prHeadSha);
   const primaryBotLogin = resolveAdvisoryPrimaryBotLogin(rawConfig);
   // The caller's local IDD_ADVISORY_BOT_LOGINS env var describes the
   // *local* checkout's own advisory bots. resolveAdvisoryBotLogins gives
@@ -963,8 +991,8 @@ function collectFromGitHub(args) {
     config: rawConfig,
   });
   // Same config source as the bot-identity fields above -- the inspected
-  // repo's own ciWait.rerunPolicy for a cross-repo invocation, never the
-  // caller's local one.
+  // repo's own ciWait.rerunPolicy at prHeadSha, never a stale local read
+  // or (for a cross-repo invocation) the caller's own repo's policy.
   const { rerunPolicy } = normalizeCiWaitPolicy(rawConfig?.ciWait);
   return {
     input: {
