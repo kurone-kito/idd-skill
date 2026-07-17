@@ -68,6 +68,7 @@ import {
   resolveAdvisoryPrimaryBotLogin,
 } from './advisory-wait-policy.mts';
 import { ghApiJson, ghText, isCliExecution } from './gh-exec.mts';
+import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { type IddConfig, loadIddConfig } from './idd-config.mts';
 import { isValidIsoTimestamp } from './marker-helpers.mts';
 import {
@@ -713,7 +714,7 @@ export function describeNoActionState(
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/rerun-advisory-convergence.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--now <ISO8601>] [--help]
+  node scripts/rerun-advisory-convergence.mjs --pr <number> [--owner <owner> --repo <repo>] [--now <ISO8601>] [--help]
 
 Read-only: fetches every "${RERUN_PLAN_CHECK_NAME}" check-run instance for
 the PR's current HEAD SHA (commit check-runs API, paged -- not the
@@ -724,6 +725,10 @@ rerun-eligible instances (each command includes "-R <owner>/<repo>" when
 the repository is known, so the plan is safe to run outside this
 checkout). Never calls "gh run rerun" (or any other mutating command)
 itself.
+
+--owner and --repo must be given together (to inspect a PR outside the
+current checkout) or omitted together (to auto-detect the current
+checkout's own repository) -- providing only one is rejected.
 
 stdout carries ONLY the JSON plan document (safe to pipe into "jq" or
 similar); the human-readable recovery-plan summary is printed to stderr.
@@ -886,11 +891,20 @@ function fetchCheckRunsForRef(
  * reading the *local* checkout's config while inspecting a *different*
  * repository would resolve bot identity from the wrong repository
  * entirely, misclassifying a bot-triggered run as rerun-eligible (or vice
- * versa) there (#1434 review, Codex P2). Returns `null` (falls back to
- * documented defaults, same as a missing local file) on any failure --
- * network, a 404 (no config committed), or invalid content -- never
- * throwing and never silently mixing in local config as a partial
- * fallback.
+ * versa) there.
+ *
+ * Returns `null` -- falls back to documented defaults, same as a missing
+ * local file -- **only** on a confirmed 404 (the target repository
+ * genuinely has no committed config, the same "absent" state
+ * `loadIddConfig` treats as "use defaults" locally). Any other failure --
+ * a permission error, a transient Contents API failure, or malformed
+ * content -- means this helper cannot confirm whether the target
+ * repository configures a non-default bot identity, so silently
+ * substituting defaults could misclassify a bot-triggered run there as
+ * rerun-eligible. Per this repo's own fail-closed default
+ * (`idd-overview-core.instructions.md`), that ambiguity throws instead of
+ * guessing, rejecting the cross-repo diagnosis outright rather than
+ * proceeding on unconfirmed bot identity (#1434 review, Codex P2).
  */
 function loadRemoteIddConfig(owner: string, repo: string): IddConfig | null {
   try {
@@ -904,8 +918,14 @@ function loadRemoteIddConfig(owner: string, repo: string): IddConfig | null {
       'utf8',
     );
     return JSON.parse(decoded) as IddConfig;
-  } catch {
-    return null;
+  } catch (error) {
+    if (deriveGhHttpStatus(error) === 404) {
+      return null;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `cannot confirm .github/idd/config.json for ${owner}/${repo}: bot-identity resolution for a cross-repository diagnosis requires this file to be readable or genuinely absent (404), not merely unreadable -- ${message}`,
+    );
   }
 }
 
