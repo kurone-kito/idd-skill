@@ -6,7 +6,6 @@
 // .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import {
   isAuthorizedForcedHandoffActor,
@@ -16,6 +15,7 @@ import {
 import { planHandoff } from './forced-handoff-marker.mjs';
 import { ghText, safeGhText } from './gh-exec.mjs';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
+import { makeReadlinePrompt } from './readline-prompt.mjs';
 export const NON_TTY_ERROR =
   'operator interaction is required; run idd-force-handoff in an interactive TTY';
 export async function runHandoff(options = {}) {
@@ -175,17 +175,6 @@ export function main() {
     process.stderr.write(`Error: ${err.message}\n`);
     process.exit(1);
   });
-}
-function makeReadlinePrompt() {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (question) =>
-    new Promise((resolve) =>
-      rl.question(question, (answer) => {
-        resolve(answer);
-      }),
-    );
-  ask.close = () => rl.close();
-  return ask;
 }
 function parsePositiveInteger(value, flag) {
   const raw = String(value ?? '').trim();

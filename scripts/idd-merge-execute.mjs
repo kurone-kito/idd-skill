@@ -145,6 +145,14 @@ export function runMergeExecute(argv, deps = defaultDeps) {
   verdict.mergeResult = mergeOutput || 'merge command completed';
   return { verdict, exitCode: 0 };
 }
+// Excluded from the #1446 cli-args.mts wrapper: `passthrough` below
+// collects every unrecognized flag (plus its value, when present) into an
+// array forwarded verbatim to the collector, rather than rejecting it
+// against a fixed declared spec. `util.parseArgs`'s `strict: true` rejects
+// any option not named in its static spec, and `strict: false` would
+// instead coerce every unrecognized flag to `true` -- neither matches this
+// file's "collect and forward whatever the collector itself accepts"
+// contract.
 function parseArgs(argv) {
   const parsed = {
     prNumber: null,
