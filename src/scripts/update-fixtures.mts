@@ -23,7 +23,6 @@
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { buildPreMergeReadinessSummary } from './protocol-helpers.mts';
 
@@ -33,8 +32,8 @@ import { buildPreMergeReadinessSummary } from './protocol-helpers.mts';
 // stripping (two levels deep), or is invoked from any working directory. A fixed
 // cwd-relative path would target the wrong directory when run from a
 // subdirectory; mirrors the resolveRepoRoot pattern in validate-schemas.mts.
-function resolveRepoRoot(fromUrl: string): string {
-  let dir = dirname(fileURLToPath(fromUrl));
+function resolveRepoRoot(fromDir: string): string {
+  let dir = fromDir;
   for (let depth = 0; depth < 16; depth += 1) {
     if (existsSync(join(dir, 'package.json'))) {
       return dir;
@@ -48,7 +47,7 @@ function resolveRepoRoot(fromUrl: string): string {
   return dir;
 }
 
-const REPO_ROOT = resolveRepoRoot(import.meta.url);
+const REPO_ROOT = resolveRepoRoot(import.meta.dirname);
 
 /** One `{ input, options, expected }` fixture case read off disk. */
 export interface FixtureCase {
@@ -156,16 +155,7 @@ function selectedSuites(argv: readonly string[]): readonly FixtureSuite[] {
   return [match];
 }
 
-function isMainModule(metaUrl: string): boolean {
-  if (!metaUrl || !process.argv[1]) {
-    return false;
-  }
-  // Compare filesystem paths instead of building a file:// URL from
-  // argv[1], which mis-parses Windows drive-letter paths.
-  return fileURLToPath(metaUrl) === resolve(process.argv[1]);
-}
-
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   const argv = process.argv.slice(2);
   if (argv.includes('--help') || argv.includes('-h')) {
     process.stdout.write(HELP);

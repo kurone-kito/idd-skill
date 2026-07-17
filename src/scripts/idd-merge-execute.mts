@@ -13,8 +13,6 @@
 // `gh pr merge` issued under `--apply` once every F3 gate holds and the
 // head + claim re-validate immediately before the merge.
 
-import { fileURLToPath } from 'node:url';
-
 import { ghText } from './gh-exec.mts';
 import { collectPreMergeReadiness } from './pre-merge-readiness.mts';
 import { computePreMergeReadinessBlockers } from './protocol-helpers.mts';
@@ -349,7 +347,7 @@ function printHelp(): void {
 }
 
 // CLI: print the verdict as JSON and exit with the gate/merge status.
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   const { verdict, exitCode } = runMergeExecute(process.argv.slice(2));
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
   process.exit(exitCode);

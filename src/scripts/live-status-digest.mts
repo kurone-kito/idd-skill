@@ -14,7 +14,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { ghApiJson, isCliExecution } from './gh-exec.mts';
+import { ghApiJson } from './gh-exec.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
 import type { PrCommitPayload } from './protocol-helpers.mts';
 import {
@@ -110,13 +110,13 @@ const collaboratorPermissionCache: CollaboratorPermissionCache = new Map();
 let cachedConfiguredTrustedMarkerAuthors: Set<string> | null = null;
 let cachedCurrentViewerLogin: string | null = null;
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   main();
 }
 
-// The CLI body. Guarded behind isCliExecution(import.meta.url) (shared,
-// see gh-exec.mts) so importing this module (for unit tests) does not
-// parse process.argv, fail, or process.exit.
+// The CLI body. Guarded behind `import.meta.main` so importing this
+// module (for unit tests) does not parse process.argv, fail, or
+// process.exit.
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
 

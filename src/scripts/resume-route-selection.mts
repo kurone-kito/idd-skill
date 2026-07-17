@@ -7,11 +7,7 @@
 
 import { execFileSync } from 'node:child_process';
 
-import {
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-  isCliExecution,
-} from './gh-exec.mts';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
 
 /** Author reference embedded in GitHub REST payloads. */
@@ -132,7 +128,7 @@ const BRANCH_STATES = new Set([
   'unknown',
 ]);
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 

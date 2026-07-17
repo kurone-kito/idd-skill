@@ -4,10 +4,10 @@
 // The scripts/discover-roadmap-graph.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
-import { execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mjs';
 import {
   isAutopilotSuitabilityScore,
@@ -44,49 +44,56 @@ const GH_SEARCH_RESULT_CAP = 1000;
 // (or the `concurrency` option) tunes it, and `1` runs the fetches serially
 // (one in flight at a time).
 const DEFAULT_TRAVERSAL_CONCURRENCY = 8;
+// #1449: explicit above the promisified execFile's 1 MiB default. Applied
+// PER STREAM (confirmed empirically: a 6 MiB stdout plus a 6 MiB stderr,
+// 12 MiB combined, succeeds under this 10 MiB value) — worst-case buffered
+// memory is up to ~2x this bound (stdout and stderr each maxed
+// independently), not this value as a combined total. The two hot-path
+// callers (a single GitHub issue's REST JSON — body capped at 64 KiB by
+// GitHub — and a paginated 100-node sub-issue GraphQL page) stay far below
+// this on either stream; 10 MiB per stream is a generous ceiling that
+// still bounds worst-case memory instead of accepting the old
+// accumulation's unbounded growth (Copilot review, #1463).
+const GH_ASYNC_MAX_BUFFER = 10 * 1024 * 1024;
+const execFileAsync = promisify(execFile);
 /**
  * Async `gh` invocation used ONLY by the traversal hot-path loaders
  * (`buildIssueLoader` / `buildSubIssueLoader`). Unlike the blocking
  * `execFileSync` runner — which serializes even concurrent `await`s because it
- * holds the event loop — this `spawn`-based runner lets multiple `gh`
+ * holds the event loop — this `execFile`-based runner lets multiple `gh`
  * subprocesses run in parallel; the actual in-flight bound is enforced by the
  * prefetch crawl's `mapPool` using the resolved `concurrency` (default
  * {@link DEFAULT_TRAVERSAL_CONCURRENCY}). The non-hot-path callers (owner/repo
  * resolution, claim-state comments, `--all-roadmaps` search) keep the sync
  * runner, so their behavior is byte-unchanged.
  *
- * Stdio matches the sync runner exactly (`['ignore', 'pipe', 'pipe']`): stdin
- * is ignored so `gh` never blocks on or reads an inherited/open stdin pipe,
- * and stdout/stderr are piped for capture. Resolves with stdout on a zero
- * exit; on a non-zero exit (or spawn error) rejects with an error carrying
- * `.code` (exit status) and `.stderr`, the shape {@link wrapGhFailure} reads.
+ * #1449: replaces a hand-rolled `spawn` + manual stdout/stderr accumulation
+ * (~28 lines). `promisify(execFile)`'s rejection already carries `.code`
+ * (exit status, or the string spawn-error code such as `'ENOENT'`),
+ * `.stderr`, and `.stdout` as own properties — empirically confirmed
+ * byte-identical to the shape the old hand-rolled rejection built, and
+ * exactly what {@link resolveGhExitStatus} / {@link wrapGhFailure} already
+ * read — so no error-shape adapter code is needed.
+ *
+ * `execFile` has no `stdio` option, so its default stdio does not
+ * reproduce the previous `spawn(..., { stdio: ['ignore', 'pipe', 'pipe'] })`
+ * stdin-ignore behavior (confirmed empirically: a stdin-reading child hangs
+ * under plain `execFile` where it exited immediately under the old
+ * `spawn` runner). None of this file's `gh` invocations pass `--input` or
+ * an `@-` field value (the only ways `gh api` reads stdin — see
+ * `gh api --help`), so `gh` itself never blocks here today. Still,
+ * `run.child.stdin?.end()` below closes the child's stdin immediately
+ * (mirroring `stdio: ['ignore', ...]`) so a future caller can't silently
+ * reintroduce a stdin hang — this repo hardened a sibling stdin-hang bug
+ * in #1444.
  */
 function runGhCapture(args) {
-  return new Promise((resolveOutput, rejectOutput) => {
-    const child = spawn('gh', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk;
-    });
-    child.on('error', rejectOutput);
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolveOutput(stdout);
-        return;
-      }
-      const error = new Error(`gh exited with code ${code}`);
-      error.code = code;
-      error.stderr = stderr;
-      error.stdout = stdout;
-      rejectOutput(error);
-    });
+  const run = execFileAsync('gh', args, {
+    encoding: 'utf8',
+    maxBuffer: GH_ASYNC_MAX_BUFFER,
   });
+  run.child.stdin?.end();
+  return run.then(({ stdout }) => stdout);
 }
 // Policy default claim stale age (`claimTiming.staleAge`, `PT24H`). Mirrors
 // the default baked into protocol-helpers' `isStaleAt`, so when the configured
@@ -120,7 +127,7 @@ query($owner:String!, $repo:String!, $number:Int!, $after:String) {
   }
 }
 `;
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   const hasIssue = Number.isInteger(args.issue) && args.issue > 0;
   // --issue and --all-roadmaps are mutually exclusive: exactly one route
@@ -2165,9 +2172,6 @@ function isNotFoundIssueLookupError(error) {
   const candidate = error;
   const stderr = String(candidate.stderr ?? candidate.message ?? '');
   return stderr.includes('HTTP 404');
-}
-function isMainModule(importMetaUrl) {
-  return process.argv[1] === fileURLToPath(importMetaUrl);
 }
 function buildEdgeKey(edge) {
   return `${edge.source}:${edge.target}:${edge.relationship}:${edge.evidence}`;

@@ -33,16 +33,27 @@ jobs:
       - name: Run documentation audit
         run: node scripts/audit-docs.mjs --check
       # The test suite is typed `.mts` executed via Node's native type
-      # stripping (unflagged since 22.18). A stale runner image with an
-      # older Node would mis-parse the files, so fail loudly first.
-      - name: Assert Node.js floor for native .mts type stripping
+      # stripping (unflagged since 22.18), and this lane also invokes
+      # migrated helper CLIs directly (e.g. verify-workshop-integrity.mjs
+      # below), whose `if (import.meta.main)` entry guard is silently
+      # falsy -- not an error -- on Node 24.0.x/24.1.x (#1447). A stale
+      # runner image would therefore either mis-parse the .mts files or
+      # let a CLI step silently no-op, so fail loudly first. Exact match
+      # to package.json's engines.node (^22.22.2 || >=24.2.0), including
+      # the patch/minor digits, so the error message's claimed range is
+      # actually what the check enforces.
+      - name: Assert Node.js floor
         run: |
           node -e '
-            const [major, minor] = process.versions.node.split(".").map(Number);
-            if (major < 22 || (major === 22 && minor < 18)) {
+            const [major, minor, patch] = process.versions.node.split(".").map(Number);
+            const ok =
+              (major === 22 && (minor > 22 || (minor === 22 && patch >= 2))) ||
+              (major === 24 && minor >= 2) ||
+              major > 24;
+            if (!ok) {
               console.error(
-                "Node " + process.version + " cannot run .mts tests via " +
-                "native type stripping; this lane needs Node >= 22.18.",
+                "Node " + process.version + " does not satisfy this " +
+                "repository'"'"'s engines.node range (^22.22.2 || >=24.2.0).",
               );
               process.exit(1);
             }

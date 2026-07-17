@@ -10,11 +10,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mts';
-import {
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-  isCliExecution,
-} from './gh-exec.mts';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import type {
   ParsedClaimMarker,
@@ -113,7 +109,7 @@ const LEGACY_CLAIM_PATTERN =
 const LEGACY_RELEASE_PATTERN =
   /^<!--\s*unclaimed-by:\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 

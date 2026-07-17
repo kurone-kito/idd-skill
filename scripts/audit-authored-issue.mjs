@@ -24,7 +24,6 @@ import { parseAutopilotSuitabilityMarker } from './autopilot-suitability.mjs';
 import { extractBlockedByRoadmapMarkers } from './discover-readiness-check.mjs';
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mjs';
 import { parseEffortMarker } from './effort.mjs';
-import { isCliExecution } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import { createMarkerRegex } from './marker-regex.mjs';
@@ -58,7 +57,7 @@ const SHAPE_HEADING_REQUIREMENTS = {
     { anyOf: ['Acceptance criteria'] },
   ],
 };
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   main();
 }
 /**
