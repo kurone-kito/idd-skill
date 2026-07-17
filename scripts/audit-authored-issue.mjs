@@ -499,8 +499,11 @@ function checkProseOnlyDependency(text, currentRepo) {
         // this also discards any bare `#N` the link's own label repeated,
         // since that label text was consumed as part of this same match and
         // never separately visited by the bare-`#` alternative. When
-        // currentRepo is unknown, keep the prior behavior (flag every
-        // full-URL match) rather than guessing.
+        // currentRepo is unknown, keep the prior behavior of flagging a
+        // full-URL match by default rather than guessing — though, like
+        // any match, it is still suppressed below if its number coincides
+        // with one already captured by a local Blocked-by/Depends-on/
+        // task-list marker elsewhere in the body.
         const owner = linkOwner ?? urlOwner;
         const repo = linkRepo ?? urlRepo;
         if (

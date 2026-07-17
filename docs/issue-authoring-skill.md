@@ -438,7 +438,9 @@ repository is never flagged when the caller supplies the current
 `owner/repo` (`--current-repo`, defaulting to `$GITHUB_REPOSITORY` in
 CI) — a cross-repo dependency cannot be encoded with these
 repository-local markers, so flagging it would recommend an impossible
-fix; without that context every full-URL reference is still flagged. A
+fix; without that context a full-URL reference is still flagged by
+default, unless its number happens to already match a local dependency
+marker elsewhere in the body. A
 `prose-dependency` warning never flips `passed` to
 `false` and never changes the linter's exit code; it prompts the author
 to convert the prose into a proper dependency marker or consciously

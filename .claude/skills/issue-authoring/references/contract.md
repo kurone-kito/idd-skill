@@ -574,8 +574,11 @@ repository-local markers at all — flagging it would recommend an
 impossible fix. When the caller supplies the current `owner/repo`
 (`--current-repo`, defaulting to `$GITHUB_REPOSITORY` in CI), a
 full-URL reference naming a different repository is never flagged;
-without that context, every full-URL reference is still flagged
-(unchanged default behavior). Unlike every other check above, a
+without that context, a full-URL reference is still flagged by
+default (unchanged behavior) — unless its issue/PR number happens to
+already appear as a local `Blocked by` / `Depends on` / task-list
+marker elsewhere in the body, in which case it is treated as already
+encoded like any other match. Unlike every other check above, a
 `prose-dependency` warning never flips `passed` to `false` and never
 changes the linter's exit code: it prompts the author to either
 convert the prose into a proper dependency marker or consciously
