@@ -428,6 +428,19 @@ test('parseGitHostFromUrl: extracts host from an HTTPS GHES remote, preserving a
   );
 });
 
+test('parseGitHostFromUrl: strips embedded credentials from an actions/checkout-style origin, keeping only the host', () => {
+  // actions/checkout writes `origin` as
+  // `https://x-access-token:<token>@host/owner/repo` -- the real-world CI
+  // shape this fix targets. URL() parses the token into userinfo, not the
+  // host, so it never leaks into the constructed fetch URL.
+  assert.equal(
+    parseGitHostFromUrl(
+      'https://x-access-token:ghs_abc123@ghes.example.com/owner/repo',
+    ),
+    'ghes.example.com',
+  );
+});
+
 test('parseGitHostFromUrl: extracts host from an ssh:// GHES remote, dropping the SSH-specific port', () => {
   // The SSH port is frequently unrelated to the HTTPS port behind a
   // reverse proxy, so it must not leak into the https:// fetch URL.
