@@ -1287,8 +1287,12 @@ Interpretation rules:
   `computing`)
 - `baseAdvancedSinceMergeBase` (boolean): `true` when the base ref has moved
   past this PR's merge-base, computed independently of `syncRecommendation` so
-  it does not change any existing `syncRecommendation` value. A `clean` /
-  `none` verdict is textual conflict-freeness only, not whole-tree
+  it does not change any existing `syncRecommendation` value. `false` is
+  **overloaded**: it means either a confirmed-unmoved base, or that the
+  check was skipped / the merge-base could not be resolved (e.g. missing
+  local history); the two are distinguished only via `diagnostics.notes`
+  (an "undetermined" entry marks the latter), never by this field alone. A
+  `clean` / `none` verdict is textual conflict-freeness only, not whole-tree
   CI-invariant freedom (line-count budgets, generated-file drift, lockfile
   consistency, and similar checks a full test suite enforces against the
   whole tree); when this field is `true` alongside `syncRecommendation: none`,

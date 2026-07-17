@@ -377,11 +377,15 @@ test('classifyBranchConflictState: CLEAN with an unresolvable merge-base reports
     owner: 'test-owner',
     repo: 'test-repo',
     // Deliberately no _skipGitProbe: the fixture's placeholder SHAs are not
-    // real git objects, so the merge-base lookup (and its fallback fetch)
-    // both fail. baseAdvancedSinceMergeBase must still read `false`, but
-    // must NOT read the same as a confirmed base-unmoved result -- a
-    // distinguishing note is required (see computeBaseAdvanced doc comment).
-    _testPrData: fixture.prData,
+    // real git objects, so the initial merge-base lookup fails.
+    // baseRefName is overridden to '' so the fallback-fetch guard
+    // (`if (!prBaseRef) return;`) short-circuits before attempting a real
+    // network fetch -- keeping this test hermetic and fast -- while still
+    // exercising the "merge-base not found" path: baseAdvancedSinceMergeBase
+    // must still read `false`, but must NOT read the same as a confirmed
+    // base-unmoved result -- a distinguishing note is required (see the
+    // computeBaseAdvanced doc comment).
+    _testPrData: { ...fixture.prData, baseRefName: '' },
   });
   assert.equal(result.baseAdvancedSinceMergeBase, false);
   assert.ok(

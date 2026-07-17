@@ -475,6 +475,12 @@ function tryFetchBase(
   notes: string[],
 ): void {
   if (!prBaseRef) return;
+  if (!owner || !repo) {
+    notes.push(
+      'Skipped base-ref fetch fallback: owner/repo not provided; merge-base probe may be incomplete.',
+    );
+    return;
+  }
   try {
     const remote = `https://github.com/${owner}/${repo}.git`;
     execFileSync(
