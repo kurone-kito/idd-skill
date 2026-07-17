@@ -255,6 +255,13 @@ test('normalizePolicyConfig falls back to a structural copy of POLICY_DEFAULTS o
   assert.deepEqual(normalizePolicyConfig(null), POLICY_DEFAULTS);
   assert.deepEqual(normalizePolicyConfig([]), POLICY_DEFAULTS);
   assert.deepEqual(normalizePolicyConfig('bogus'), POLICY_DEFAULTS);
+  // Reference inequality is the actual copy-semantics claim in this test's
+  // name: deepEqual alone would also pass if clone() were a no-op identity
+  // function returning POLICY_DEFAULTS itself (Copilot review, #1463). Each
+  // call must also return its own independent object, not the frozen
+  // singleton or a shared instance across calls.
+  assert.notEqual(normalizePolicyConfig(null), POLICY_DEFAULTS);
+  assert.notEqual(normalizePolicyConfig(null), normalizePolicyConfig(null));
 });
 
 test('clone() deep-copies independently of the source, including through undefined-valued keys', () => {
