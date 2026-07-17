@@ -154,18 +154,27 @@ const PROSE_DEPENDENCY_KEYWORDS = [
   'lands first',
 ] as const;
 
-// Matches a bare `#123` issue/PR reference or a full GitHub issue/PR URL,
-// capturing the URL alternative's owner and repo so callers can tell a
+// Matches a Markdown link whose target is a full GitHub issue/PR URL (e.g.
+// `[PR #1391](https://github.com/owner/repo/pull/1391)`), a bare `#123`
+// issue/PR reference, or a bare full GitHub issue/PR URL — in that order,
+// capturing each URL alternative's owner and repo so callers can tell a
 // local reference from a cross-repo one (see `currentRepo` handling in
-// checkProseOnlyDependency below). `#` alone (as in an ATX heading) never
-// matches without trailing digits. The bare-`#` alternative excludes a `#`
-// immediately preceded by a word character or `/` (a negative lookbehind),
-// so cross-repo shorthand like `other/repo#123` does not match on its
-// trailing `#123` — a cross-repo reference cannot be encoded with this
-// repository's local `Blocked by` / `Depends on` markers, so flagging it
-// here would be misleading rather than actionable.
+// checkProseOnlyDependency below). The Markdown-link alternative is tried
+// (and, being anchored at the label's own `[`, wins) first specifically so
+// that a cross-repo link's *label* text — which often repeats the same
+// `#N` the URL already names, e.g. the `#1391` above — is consumed as part
+// of that one link match rather than separately re-matched by the bare-`#`
+// alternative and misread as a local reference once the link's URL itself
+// is correctly filtered out as cross-repo. `#` alone (as in an ATX
+// heading) never matches without trailing digits. The bare-`#` alternative
+// excludes a `#` immediately preceded by a word character or `/` (a
+// negative lookbehind), so cross-repo shorthand like `other/repo#123`
+// does not match on its trailing `#123` — a cross-repo reference cannot be
+// encoded with this repository's local `Blocked by` / `Depends on`
+// markers, so flagging it here would be misleading rather than
+// actionable.
 const ISSUE_OR_PR_REFERENCE_PATTERN =
-  /(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b/gi;
+  /\[[^\]\n]*\]\(https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\)|(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b/gi;
 
 // Matches a Markdown list item marker at the start of a line (unordered
 // `-`/`*`/`+`, or ordered `1.`/`1)`), optionally indented and optionally
@@ -582,22 +591,39 @@ function checkProseOnlyDependency(
         continue;
       }
       for (const match of sentence.matchAll(ISSUE_OR_PR_REFERENCE_PATTERN)) {
-        const [, bareNumber, urlOwner, urlRepo, urlNumber] = match;
-        // A URL match with a known currentRepo that points elsewhere is a
+        const [
+          ,
+          linkOwner,
+          linkRepo,
+          linkNumber,
+          bareNumber,
+          urlOwner,
+          urlRepo,
+          urlNumber,
+        ] = match;
+        // Whichever of the two URL-bearing alternatives matched (a
+        // Markdown-link target or a bare URL) supplies the owner/repo/number
+        // trio; only one of the two can be present for a given match. A URL
+        // match with a known currentRepo that points elsewhere is a
         // cross-repo reference: the Blocked by / Depends on markers this
         // check recommends are inherently local, so flagging it here would
         // be actively misleading rather than merely a nuisance false
-        // positive. Skip it entirely rather than adding its number to
-        // `flagged`. When currentRepo is unknown, keep the prior behavior
-        // (flag every full-URL match) rather than guessing.
+        // positive. Skip it entirely — for the Markdown-link alternative,
+        // this also discards any bare `#N` the link's own label repeated,
+        // since that label text was consumed as part of this same match and
+        // never separately visited by the bare-`#` alternative. When
+        // currentRepo is unknown, keep the prior behavior (flag every
+        // full-URL match) rather than guessing.
+        const owner = linkOwner ?? urlOwner;
+        const repo = linkRepo ?? urlRepo;
         if (
-          urlOwner !== undefined &&
+          owner !== undefined &&
           currentRepo !== undefined &&
-          `${urlOwner}/${urlRepo}`.toLowerCase() !== currentRepo.toLowerCase()
+          `${owner}/${repo}`.toLowerCase() !== currentRepo.toLowerCase()
         ) {
           continue;
         }
-        const numberText = bareNumber ?? urlNumber;
+        const numberText = bareNumber ?? linkNumber ?? urlNumber;
         const number = Number.parseInt(numberText, 10);
         if (!encoded.has(number)) {
           flagged.add(number);

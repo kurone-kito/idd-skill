@@ -797,6 +797,23 @@ test('prose-dependency still recognizes a full GitHub issue/PR URL reference whe
   assert.match(finding?.detail ?? '', /#1391/);
 });
 
+test('prose-dependency still recognizes a local URL wrapped in a Markdown link', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/idd-skill/pull/1391) has merged.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
 test('prose-dependency does not warn on a cross-repo full GitHub issue/PR URL reference when currentRepo is known', () => {
   // Regression test for a real false-positive risk: the encodings this
   // check recommends (`Blocked by #N` / `Depends on #N`) are inherently
@@ -808,6 +825,31 @@ test('prose-dependency does not warn on a cross-repo full GitHub issue/PR URL re
     extraMarkers:
       'Before this can start, confirm ' +
       'https://github.com/kurone-kito/other-repo/pull/1391 has merged.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not warn on a cross-repo URL wrapped in a Markdown link whose label repeats the same #N', () => {
+  // Regression test for a real false-positive risk found by review on this
+  // same PR: a cross-repo reference is often presented as a normal Markdown
+  // link whose label repeats the issue number, e.g.
+  // `[PR #1391](https://github.com/owner/other-repo/pull/1391)`. The URL is
+  // correctly skipped as cross-repo, but without treating the whole link as
+  // one match, the label's own bare `#1391` text would be independently
+  // caught by the bare-# alternative and (wrongly) treated as local,
+  // contradicting the guarantee the sibling test above establishes.
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/other-repo/pull/1391) has shipped.',
   });
   const report = auditAuthoredIssue(body, {
     shape: 'child',
