@@ -154,6 +154,15 @@ takeover is allowed only when the active non-owned claim is stale
   stale threshold.
 - Claim age `>= 24h`: takeover is eligible; continue to S4.
 
+**Heartbeat-overdue is diagnostic only, not a shortcut.** Discovery's
+`activeClaim.heartbeatOverdue` (`claimTiming.heartbeatInterval`, default
+12h) is an expected, human-visible signal worth a glance or a live-status
+digest note — it is not, by itself, evidence for S2 or an alternate S3
+threshold. A heartbeat-overdue claim younger than 24h is still `< 24h`
+above: **hold and stop**, exactly as any other non-stale claim. Do not
+treat a missed heartbeat as shortening the wait or as quiet-window
+evidence.
+
 ### S4 — Race-safe takeover recheck
 
 Immediately before posting takeover:

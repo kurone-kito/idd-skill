@@ -140,6 +140,8 @@ Ownership timing in this workflow uses the policy defaults
   exceed 12 h. The latest **valid** `claimed-by` comment for the same
   `{claim-id}` resets the stale clock. Embed timestamps are ignored;
   only the GitHub `created_at` of the comment itself counts.
+- **Heartbeat-overdue**: diagnostic only; see
+  `idd-resume-stall.instructions.md` S3.
 
 ## Fail-closed default
 
