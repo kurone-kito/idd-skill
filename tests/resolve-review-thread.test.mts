@@ -51,6 +51,35 @@ test('parseArgs reads the apply-mode claim inputs', () => {
   assert.deepEqual(args.trustedMarkerLogins, ['kurone-kito', 'second-user']);
 });
 
+// --- #1450: migration onto the shared cli-args.mts wrapper -----------------
+
+test('parseArgs: an invalid --pr resolves to null (fails closed at the caller)', () => {
+  const args = parseArgs(['--pr', 'not-a-number']);
+  assert.equal(args.pr, null);
+});
+
+test('parseArgs: a missing --comment-id value throws', () => {
+  assert.throws(() => parseArgs(['--pr', '42', '--comment-id']));
+});
+
+test('parseArgs: a flag-shaped value throws instead of being swallowed', () => {
+  // Previously --claim-id would greedily accept '--apply' as its literal
+  // value, silently leaving --apply unset (this file's own flavor of the
+  // #1082 gap the shared wrapper closes structurally).
+  assert.throws(() =>
+    parseArgs(['--pr', '42', '--comment-id', '1', '--claim-id', '--apply']),
+  );
+});
+
+test('parseArgs: rejects an unknown flag instead of silently ignoring it', () => {
+  assert.throws(() => parseArgs(['--bogus']));
+});
+
+test('parseArgs: --help is recognized without requiring --pr', () => {
+  const args = parseArgs(['--help']);
+  assert.equal(args.help, true);
+});
+
 test('findThreadForComment maps a REST comment id to its owning thread and root comment', () => {
   const threads = [
     buildReviewThreadNode('thread-a', false, [900, 901]),

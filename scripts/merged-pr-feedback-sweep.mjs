@@ -16,6 +16,7 @@
 // chosen recovery path from #909 (advisory-wait stays Copilot-only).
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { parseCliArgs } from './cli-args.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   hasFreshDisposition,
@@ -288,89 +289,86 @@ function collectUnaddressedComments(
   }
   return out;
 }
-function parseArgs(argv) {
-  const parsed = {
-    since: null,
-    days: null,
-    prNumbers: [],
-    limit: 100,
-    owner: '',
-    repo: '',
-    trustedMarkerLogins: '',
-    advisoryBotLogins: '',
-    iddAgentLogins: '',
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const next = () => {
-      const value = argv[index + 1];
-      if (value === undefined) {
-        throw new Error(`missing value for ${token}`);
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `since:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --since spec key
+// below. See cli-args.mts's module header for the full invariant. (This
+// comment deliberately avoids writing that key inside matching quote
+// marks, so it cannot itself satisfy the scan if the real key is ever
+// renamed -- see #1446's PR description for why that matters.)
+const MERGED_PR_FEEDBACK_SWEEP_FLAG_SPEC = {
+  '--since': { type: 'string' },
+  '--days': { type: 'string' },
+  '--pr': { type: 'string', multiple: true },
+  '--prs': { type: 'string' },
+  '--limit': { type: 'string', default: '100' },
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--trusted-marker-logins': { type: 'string', default: '' },
+  '--advisory-bot-logins': { type: 'string', default: '' },
+  '--idd-agent-logins': { type: 'string', default: '' },
+  '--help': { type: 'boolean', short: 'h' },
+};
+/**
+ * Validate a canonical positive-integer token, preserving this file's
+ * existing round-trip contract exactly: `Number.parseInt` must reproduce
+ * the trimmed input byte-for-byte (rejects "5.5", leading zeros like
+ * "05", and "5abc" alike) and the value must be >= 1.
+ */
+function parsePositiveIntToken(raw, label) {
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value) || String(value) !== raw.trim() || value < 1) {
+    throw new Error(`${label} expects a positive integer, got "${raw}"`);
+  }
+  return value;
+}
+export function parseArgs(argv) {
+  const { values, help } = parseCliArgs(
+    argv,
+    MERGED_PR_FEEDBACK_SWEEP_FLAG_SPEC,
+  );
+  const prNumbers = (values.pr ?? []).map((token) =>
+    parsePositiveIntToken(token, '--pr'),
+  );
+  if (values.prs !== undefined) {
+    // Distinct error message/validation shape preserved verbatim: each
+    // comma-separated part is compared against its OWN trimmed self (not
+    // the shared --pr/--days label), and the error embeds the untrimmed
+    // part.
+    for (const part of String(values.prs).split(',')) {
+      const trimmed = part.trim();
+      const value = Number.parseInt(trimmed, 10);
+      if (!Number.isFinite(value) || String(value) !== trimmed || value < 1) {
+        throw new Error(
+          `--prs expects comma-separated positive integers, got "${part}"`,
+        );
       }
-      index += 1;
-      return value;
-    };
-    const nextInt = () => {
-      const raw = next();
-      const value = Number.parseInt(raw, 10);
-      if (
-        !Number.isFinite(value) ||
-        String(value) !== raw.trim() ||
-        value < 1
-      ) {
-        throw new Error(`${token} expects a positive integer, got "${raw}"`);
-      }
-      return value;
-    };
-    switch (token) {
-      case '--since':
-        parsed.since = next();
-        break;
-      case '--days':
-        parsed.days = nextInt();
-        break;
-      case '--pr':
-        parsed.prNumbers.push(nextInt());
-        break;
-      case '--prs':
-        for (const part of next().split(',')) {
-          const trimmed = part.trim();
-          const value = Number.parseInt(trimmed, 10);
-          if (
-            !Number.isFinite(value) ||
-            String(value) !== trimmed ||
-            value < 1
-          ) {
-            throw new Error(
-              `--prs expects comma-separated positive integers, got "${part}"`,
-            );
-          }
-          parsed.prNumbers.push(value);
-        }
-        break;
-      case '--limit':
-        parsed.limit = nextInt();
-        break;
-      case '--owner':
-        parsed.owner = next();
-        break;
-      case '--repo':
-        parsed.repo = next();
-        break;
-      case '--trusted-marker-logins':
-        parsed.trustedMarkerLogins = next();
-        break;
-      case '--advisory-bot-logins':
-        parsed.advisoryBotLogins = next();
-        break;
-      case '--idd-agent-logins':
-        parsed.iddAgentLogins = next();
-        break;
-      default:
-        throw new Error(`unknown argument: ${token}`);
+      prNumbers.push(value);
     }
   }
-  return parsed;
+  return {
+    since: values.since === undefined ? null : values.since,
+    days:
+      values.days === undefined
+        ? null
+        : parsePositiveIntToken(values.days, '--days'),
+    prNumbers,
+    limit: parsePositiveIntToken(values.limit, '--limit'),
+    owner: values.owner,
+    repo: values.repo,
+    trustedMarkerLogins: values['trusted-marker-logins'],
+    advisoryBotLogins: values['advisory-bot-logins'],
+    iddAgentLogins: values['idd-agent-logins'],
+    help,
+  };
+}
+function printHelp() {
+  process.stdout.write(`Usage:
+  node scripts/merged-pr-feedback-sweep.mjs [--since <ISO8601-date>] [--days <n>] [--pr <number> ...] [--prs <n1,n2,...>] [--limit <n>] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--help]
+
+Read-only: scans merged PRs for unresolved/unaddressed advisory feedback and
+prints JSON. No minimization, no posting, no issue creation.
+`);
 }
 // Resolve the merged-since cutoff from --since and/or --days. When both are
 // supplied the later (more recent) cutoff wins, narrowing the window to the
@@ -529,6 +527,10 @@ function fetchMergedPr(owner, repo, number) {
 }
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
   const owner =
     args.owner ||
     runGh(['repo', 'view', '--json', 'owner', '--jq', '.owner.login']).trim();

@@ -18,6 +18,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { parseAutopilotSuitability } from './autopilot-suitability.mts';
+import { parseCliArgs } from './cli-args.mts';
 import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
@@ -39,6 +40,33 @@ const DEFAULT_AUTOPILOT_SUITABILITY_FLOOR = 3;
 const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 /** Upper bound on the best-effort open-PR scan (a `gh pr list --limit`). */
 const OPEN_PR_SCAN_LIMIT = 500;
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `candidate:`): tests/flag-name-matrix.test.mts scans this file's
+// *compiled* .mjs source text for quoted flag literals such as the
+// --candidate spec key below. See cli-args.mts's module header for the
+// full invariant. (This comment deliberately avoids writing that key
+// inside matching quote marks, so it cannot itself satisfy the scan if
+// the real key is ever renamed -- see #1446's PR description for why
+// that matters.)
+//
+// Declared here, above the isCliExecution trigger below, rather than
+// alongside parseArgs further down: the trigger calls runCli() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires (see ci-wait-policy.mts's identical note).
+const DISCOVER_SHARED_FILE_OVERLAP_FLAG_SPEC = {
+  '--candidate': { type: 'string', multiple: true },
+  '--candidates': { type: 'string' },
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--policy': { type: 'string', default: '' },
+  '--manifest': { type: 'string', default: DEFAULT_MANIFEST_PATH },
+  '--bundles': { type: 'string' },
+  '--check-overlap': { type: 'boolean', default: false },
+  '--now': { type: 'string', default: '' },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
 
 if (isCliExecution(import.meta.url)) {
   runCli();
@@ -730,80 +758,42 @@ function loadPolicy(policyPath: string): {
   };
 }
 
-function parseArgs(argv: string[]): ParsedArgs {
-  const parsed: ParsedArgs = {
-    candidates: [],
-    owner: '',
-    repo: '',
-    policy: '',
-    manifest: DEFAULT_MANIFEST_PATH,
-    bundles: null,
-    checkOverlap: false,
-    now: '',
-    help: false,
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    if (token === '--candidate') {
-      parsed.candidates.push(parsePositiveInt(value, '--candidate'));
-      index += 1;
-      continue;
-    }
-    if (token === '--candidates') {
-      for (const part of String(value ?? '').split(',')) {
-        const trimmed = part.trim();
-        if (trimmed) {
-          parsed.candidates.push(parsePositiveInt(trimmed, '--candidates'));
-        }
+export function parseArgs(argv: string[]): ParsedArgs {
+  const { values, help } = parseCliArgs(
+    argv,
+    DISCOVER_SHARED_FILE_OVERLAP_FLAG_SPEC,
+  );
+  // parsePositiveInt keeps its existing throw-on-invalid contract and
+  // message shape unchanged; only the flag-syntax parsing around it (a
+  // missing/flag-shaped value, an unknown flag) is now strict.
+  const candidates: number[] = (
+    (values.candidate as string[] | undefined) ?? []
+  ).map((token) => parsePositiveInt(token, '--candidate'));
+  if (values.candidates !== undefined) {
+    for (const part of String(values.candidates as string).split(',')) {
+      const trimmed = part.trim();
+      if (trimmed) {
+        candidates.push(parsePositiveInt(trimmed, '--candidates'));
       }
-      index += 1;
-      continue;
     }
-    if (token === '--owner') {
-      parsed.owner = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--policy') {
-      parsed.policy = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--manifest') {
-      parsed.manifest = value ?? DEFAULT_MANIFEST_PATH;
-      index += 1;
-      continue;
-    }
-    if (token === '--bundles') {
-      parsed.bundles = String(value ?? '')
-        .split(',')
-        .map((part) => part.trim())
-        .filter(Boolean);
-      index += 1;
-      continue;
-    }
-    if (token === '--check-overlap') {
-      parsed.checkOverlap = true;
-      continue;
-    }
-    if (token === '--now') {
-      parsed.now = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
   }
-  return parsed;
+  return {
+    candidates,
+    owner: values.owner as string,
+    repo: values.repo as string,
+    policy: values.policy as string,
+    manifest: values.manifest as string,
+    bundles:
+      values.bundles === undefined
+        ? null
+        : String(values.bundles as string)
+            .split(',')
+            .map((part) => part.trim())
+            .filter(Boolean),
+    checkOverlap: values['check-overlap'] as boolean,
+    now: values.now as string,
+    help,
+  };
 }
 
 function parsePositiveInt(value: string | undefined, flag: string): number {
@@ -816,7 +806,7 @@ function parsePositiveInt(value: string | undefined, flag: string): number {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/discover-shared-file-overlap.mjs --candidate <number> [--candidate <number> ...] [--candidates <n1,n2>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2>] [--check-overlap] [--now <ISO8601>]
+  node scripts/discover-shared-file-overlap.mjs --candidate <number> [--candidate <number> ...] [--candidates <n1,n2>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2>] [--check-overlap] [--now <ISO8601>] [--help]
 
 Reports, per candidate, the high-contention shared files it would touch (from
 its '## Candidate files' section) and — with --check-overlap — whether any

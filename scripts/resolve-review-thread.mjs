@@ -15,6 +15,7 @@
 // first, resolve second — a failed reply never leaves a silently-resolved
 // thread with no disposition.
 import { execFileSync } from 'node:child_process';
+import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
@@ -72,71 +73,52 @@ export function applyResolveReviewThread(deps) {
   deps.resolveThread();
   return { replyId: reply.id };
 }
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --pr spec key
+// below. See cli-args.mts's module header for the full invariant. (This
+// comment deliberately avoids writing that key inside matching quote
+// marks, so it cannot itself satisfy the scan if the real key is ever
+// renamed -- see #1446's PR description for why that matters.)
+const RESOLVE_REVIEW_THREAD_FLAG_SPEC = {
+  '--pr': { type: 'string' },
+  '--comment-id': { type: 'string' },
+  '--body': { type: 'string', default: '' },
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--claim-issue': { type: 'string' },
+  '--claim-id': { type: 'string', default: '' },
+  '--agent-id': { type: 'string', default: '' },
+  '--trusted-marker-logins': { type: 'string', default: '' },
+  '--apply': { type: 'boolean', default: false },
+  '--help': { type: 'boolean', short: 'h' },
+};
+function splitList(value) {
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
 export function parseArgs(argv) {
-  const args = {
-    pr: null,
-    commentId: null,
-    body: '',
-    owner: '',
-    repo: '',
-    claimIssue: null,
-    claimId: '',
-    agentId: '',
-    trustedMarkerLogins: [],
-    apply: false,
-    help: false,
+  const { values, help } = parseCliArgs(argv, RESOLVE_REVIEW_THREAD_FLAG_SPEC);
+  return {
+    // Resolves to null on an invalid/absent value. The downstream
+    // `!Number.isInteger(...) || (... ?? 0) <= 0` guards treat NaN and
+    // null identically, so this is a behavior-preserving simplification
+    // of the prior Number.parseInt-then-check pattern, not a contract
+    // change.
+    pr: parseCanonicalIntegerOrNull(values.pr),
+    commentId: parseCanonicalIntegerOrNull(values['comment-id']),
+    body: values.body,
+    owner: values.owner,
+    repo: values.repo,
+    claimIssue: parseCanonicalIntegerOrNull(values['claim-issue']),
+    claimId: values['claim-id'],
+    agentId: values['agent-id'],
+    trustedMarkerLogins: splitList(values['trusted-marker-logins']),
+    apply: values.apply,
+    help,
   };
-  const splitList = (value) =>
-    value
-      .split(',')
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  for (let index = 0; index < argv.length; index += 1) {
-    const flag = argv[index];
-    const next = () => {
-      index += 1;
-      return argv[index] ?? '';
-    };
-    switch (flag) {
-      case '--pr':
-        args.pr = Number.parseInt(next(), 10);
-        break;
-      case '--comment-id':
-        args.commentId = Number.parseInt(next(), 10);
-        break;
-      case '--body':
-        args.body = next();
-        break;
-      case '--owner':
-        args.owner = next();
-        break;
-      case '--repo':
-        args.repo = next();
-        break;
-      case '--claim-issue':
-        args.claimIssue = Number.parseInt(next(), 10);
-        break;
-      case '--claim-id':
-        args.claimId = next();
-        break;
-      case '--agent-id':
-        args.agentId = next();
-        break;
-      case '--trusted-marker-logins':
-        args.trustedMarkerLogins = splitList(next());
-        break;
-      case '--apply':
-        args.apply = true;
-        break;
-      case '--help':
-      case '-h':
-        args.help = true;
-        break;
-      default:
-        break;
-    }
-  }
-  return args;
 }
 const USAGE = `usage: node scripts/resolve-review-thread.mjs --pr <number> --comment-id <id> [options]
 

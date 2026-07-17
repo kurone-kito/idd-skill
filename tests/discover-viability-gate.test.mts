@@ -4,8 +4,42 @@ import { test } from 'node:test';
 import {
   evaluateA4Viability,
   evaluateDiscoverViability,
+  parseArgs,
   renderCsv,
 } from '../src/scripts/discover-viability-gate.mts';
+
+// --- #1450: migration onto the shared cli-args.mts wrapper -----------------
+
+test('parseArgs: --issue is repeatable and --issues is comma-split', () => {
+  const args = parseArgs(['--issue', '5', '--issues', '9,11', '--csv']);
+  assert.deepEqual(args.issueNumbers, [5, 9, 11]);
+  assert.equal(args.csv, true);
+});
+
+test('parseArgs: a non-numeric --issue token is silently dropped (unchanged contract)', () => {
+  const args = parseArgs(['--issues', '5,bad,9']);
+  assert.deepEqual(args.issueNumbers, [5, 9]);
+});
+
+test('parseArgs: a missing --issue value throws', () => {
+  assert.throws(() => parseArgs(['--issue']));
+});
+
+test('parseArgs: a flag-shaped value throws instead of being swallowed', () => {
+  // Previously --owner would greedily accept '--csv' as its literal
+  // value, silently leaving --csv unset (the #1082 gap this migration
+  // closes structurally for this helper).
+  assert.throws(() => parseArgs(['--issue', '5', '--owner', '--csv']));
+});
+
+test('parseArgs: rejects an unknown flag', () => {
+  assert.throws(() => parseArgs(['--bogus']));
+});
+
+test('parseArgs: --help is recognized without requiring --issue', () => {
+  const args = parseArgs(['--help']);
+  assert.equal(args.help, true);
+});
 
 // Minimal RFC 4180 single-row field splitter: respects quoted fields so a
 // comma inside a quoted title does not start a new column.

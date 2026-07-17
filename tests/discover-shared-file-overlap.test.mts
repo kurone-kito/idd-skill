@@ -8,12 +8,61 @@ import {
   applyOverlapTieBreaker,
   normalizeContentionPath,
   type OverlapCandidateInput,
+  parseArgs,
   parseCandidateFiles,
   type RankableCandidate,
   resolveHighContentionFiles,
   toClaimComment,
 } from '../src/scripts/discover-shared-file-overlap.mts';
 import { resolveActiveClaim } from '../src/scripts/protocol-helpers.mts';
+
+// --- #1450: migration onto the shared cli-args.mts wrapper -----------------
+
+test('parseArgs: --candidate is repeatable and --candidates is comma-split', () => {
+  const args = parseArgs([
+    '--candidate',
+    '5',
+    '--candidates',
+    '9,11',
+    '--check-overlap',
+  ]);
+  assert.deepEqual(args.candidates, [5, 9, 11]);
+  assert.equal(args.checkOverlap, true);
+  assert.equal(args.bundles, null);
+});
+
+test('parseArgs: --candidate keeps its existing throw-on-invalid contract', () => {
+  assert.throws(
+    () => parseArgs(['--candidate', 'abc']),
+    /invalid --candidate value: abc/,
+  );
+  assert.throws(
+    () => parseArgs(['--candidates', '5,abc']),
+    /invalid --candidates value: abc/,
+  );
+});
+
+test('parseArgs: a missing --candidate value throws', () => {
+  assert.throws(() => parseArgs(['--candidate']));
+});
+
+test('parseArgs: a flag-shaped value throws instead of being swallowed', () => {
+  // Previously --owner would greedily accept '--check-overlap' as its
+  // literal value, silently leaving --check-overlap unset (the #1082 gap
+  // this migration closes structurally for this helper).
+  assert.throws(() =>
+    parseArgs(['--candidate', '5', '--owner', '--check-overlap']),
+  );
+});
+
+test('parseArgs: rejects an unknown flag', () => {
+  assert.throws(() => parseArgs(['--bogus']));
+});
+
+test('parseArgs: --help is recognized without requiring --candidate', () => {
+  const args = parseArgs(['--help']);
+  assert.equal(args.help, true);
+});
 
 // Instruction files are keyed by their (repo-wide unique) basename so that
 // the source path, the mirror path, and a bare citation all compare equal.

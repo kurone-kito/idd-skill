@@ -8,10 +8,48 @@ import {
   extractBlockedByRoadmapMarkers,
   extractDependencyIssueNumbers,
   isInaccessibleIssueLookupError,
+  parseArgs,
   parseIssueNumberLines,
   parseSwarmFloorArg,
   summarizeSwarmFloorEligibility,
 } from '../src/scripts/discover-readiness-check.mts';
+
+// --- #1450: migration onto the shared cli-args.mts wrapper -----------------
+
+test('parseArgs: --issue is repeatable and --issues is comma-split', () => {
+  const args = parseArgs(['--issue', '5', '--issues', '9,11']);
+  assert.deepEqual(args.issueNumbers, [5, 9, 11]);
+  assert.equal(args.swarmFloor, null);
+});
+
+test('parseArgs: --swarm-floor keeps its existing throw-on-invalid contract', () => {
+  assert.throws(
+    () => parseArgs(['--swarm-floor', '9']),
+    /--swarm-floor requires an integer 1-5/,
+  );
+  const args = parseArgs(['--swarm-floor', '3']);
+  assert.equal(args.swarmFloor, 3);
+});
+
+test('parseArgs: a missing --issue value throws', () => {
+  assert.throws(() => parseArgs(['--issue']));
+});
+
+test('parseArgs: a flag-shaped value throws instead of being swallowed', () => {
+  // Previously --owner would greedily accept '--csv' as its literal
+  // value, silently leaving --csv unset (the #1082 gap this migration
+  // closes structurally for this helper).
+  assert.throws(() => parseArgs(['--issue', '5', '--owner', '--csv']));
+});
+
+test('parseArgs: rejects an unknown flag', () => {
+  assert.throws(() => parseArgs(['--bogus']));
+});
+
+test('parseArgs: --help is recognized without requiring --issue', () => {
+  const args = parseArgs(['--help']);
+  assert.equal(args.help, true);
+});
 
 // Shape of a wrapped runGh failure: process exit code 1 with the true
 // HTTP status carried in stderr.

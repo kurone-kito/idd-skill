@@ -10,6 +10,7 @@ import {
   readAdvisorySecondaryBotLogin,
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mjs';
+import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import { ghText, isCliExecution, safeGhText } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
@@ -19,6 +20,27 @@ import {
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mjs';
 
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --pr spec key
+// below. See cli-args.mts's module header for the full invariant. (This
+// comment deliberately avoids writing that key inside matching quote
+// marks, so it cannot itself satisfy the scan if the real key is ever
+// renamed -- see #1446's PR description for why that matters.)
+//
+// Declared here, above the isCliExecution trigger below, rather than
+// alongside parseArgs further down: the trigger calls main() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires (see ci-wait-policy.mts's identical note).
+const ADVISORY_WAIT_STATE_FLAG_SPEC = {
+  '--pr': { type: 'string' },
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--trusted-marker-logins': { type: 'string', default: '' },
+  '--now': { type: 'string', default: '' },
+  '--help': { type: 'boolean', short: 'h' },
+};
 if (isCliExecution(import.meta.url)) {
   main();
 }
@@ -27,6 +49,10 @@ if (isCliExecution(import.meta.url)) {
 // parse process.argv, fail, or make a `gh` call.
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
   if (!args.prNumber) {
     throw new Error('missing required --pr <number> argument');
   }
@@ -124,52 +150,19 @@ function main() {
     )}\n`,
   );
 }
-function parseArgs(argv) {
-  const parsed = {
-    prNumber: null,
-    owner: '',
-    repo: '',
-    trustedMarkerLogins: '',
-    now: '',
+export function parseArgs(argv) {
+  const { values, help } = parseCliArgs(argv, ADVISORY_WAIT_STATE_FLAG_SPEC);
+  return {
+    // Resolves to null on an invalid/absent value (fails closed at the
+    // caller) -- the established contract this migration must preserve;
+    // matches advisory-convergence.mts's --pr.
+    prNumber: parseCanonicalIntegerOrNull(values.pr),
+    owner: values.owner,
+    repo: values.repo,
+    trustedMarkerLogins: values['trusted-marker-logins'],
+    now: values.now,
+    help,
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    if (token === '--pr') {
-      parsed.prNumber = Number.parseInt(value ?? '', 10);
-      index += 1;
-      continue;
-    }
-    if (token === '--owner') {
-      parsed.owner = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--trusted-marker-logins') {
-      parsed.trustedMarkerLogins = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--now') {
-      parsed.now = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      printHelp();
-      process.exit(0);
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-  if (!Number.isInteger(parsed.prNumber) || (parsed.prNumber ?? 0) < 1) {
-    parsed.prNumber = null;
-  }
-  return parsed;
 }
 function printHelp() {
   process.stdout.write(`Usage:

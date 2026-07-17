@@ -27,7 +27,7 @@
 // marker are dispositioned; real reviews and review threads are never touched.
 
 import { execFileSync } from 'node:child_process';
-
+import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
   isAuthorizedForcedHandoffActor,
@@ -403,67 +403,57 @@ interface CliArgs {
   help: boolean;
 }
 
-function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = {
-    pr: null,
-    owner: '',
-    repo: '',
-    claimIssue: null,
-    claimId: '',
-    agentId: '',
-    trustedMarkerLogins: [],
-    advisoryBotLogins: [],
-    apply: false,
-    help: false,
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --pr spec key
+// below. See cli-args.mts's module header for the full invariant. (This
+// comment deliberately avoids writing that key inside matching quote
+// marks, so it cannot itself satisfy the scan if the real key is ever
+// renamed -- see #1446's PR description for why that matters.)
+const DISPOSITION_NON_REVIEW_NOTICES_FLAG_SPEC = {
+  '--pr': { type: 'string' },
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--claim-issue': { type: 'string' },
+  '--claim-id': { type: 'string', default: '' },
+  '--agent-id': { type: 'string', default: '' },
+  '--trusted-marker-logins': { type: 'string', default: '' },
+  '--advisory-bot-logins': { type: 'string', default: '' },
+  '--apply': { type: 'boolean', default: false },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
+
+function splitList(value: string): string[] {
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+export function parseArgs(argv: string[]): CliArgs {
+  const { values, help } = parseCliArgs(
+    argv,
+    DISPOSITION_NON_REVIEW_NOTICES_FLAG_SPEC,
+  );
+  return {
+    // Resolves to null on an invalid/absent value. The downstream
+    // `!Number.isInteger(...) || (... ?? 0) <= 0` guards treat NaN and
+    // null identically, so this is a behavior-preserving simplification
+    // of the prior Number.parseInt-then-check pattern, not a contract
+    // change.
+    pr: parseCanonicalIntegerOrNull(values.pr as string | undefined),
+    owner: values.owner as string,
+    repo: values.repo as string,
+    claimIssue: parseCanonicalIntegerOrNull(
+      values['claim-issue'] as string | undefined,
+    ),
+    claimId: values['claim-id'] as string,
+    agentId: values['agent-id'] as string,
+    trustedMarkerLogins: splitList(values['trusted-marker-logins'] as string),
+    advisoryBotLogins: splitList(values['advisory-bot-logins'] as string),
+    apply: values.apply as boolean,
+    help,
   };
-  const splitList = (value: string): string[] =>
-    value
-      .split(',')
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  for (let index = 0; index < argv.length; index += 1) {
-    const flag = argv[index];
-    const next = (): string => {
-      index += 1;
-      return argv[index] ?? '';
-    };
-    switch (flag) {
-      case '--pr':
-        args.pr = Number.parseInt(next(), 10);
-        break;
-      case '--owner':
-        args.owner = next();
-        break;
-      case '--repo':
-        args.repo = next();
-        break;
-      case '--claim-issue':
-        args.claimIssue = Number.parseInt(next(), 10);
-        break;
-      case '--claim-id':
-        args.claimId = next();
-        break;
-      case '--agent-id':
-        args.agentId = next();
-        break;
-      case '--trusted-marker-logins':
-        args.trustedMarkerLogins = splitList(next());
-        break;
-      case '--advisory-bot-logins':
-        args.advisoryBotLogins = splitList(next());
-        break;
-      case '--apply':
-        args.apply = true;
-        break;
-      case '--help':
-      case '-h':
-        args.help = true;
-        break;
-      default:
-        break;
-    }
-  }
-  return args;
 }
 
 function ghJson(args: string[]): unknown {

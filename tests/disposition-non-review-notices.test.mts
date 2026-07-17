@@ -7,6 +7,7 @@ import {
   buildSummaryDispositionBody,
   type NoticeComment,
   noticeReason,
+  parseArgs,
 } from '../src/scripts/disposition-non-review-notices.mts';
 import { summarizeDispositionEvidenceForGate } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
@@ -43,6 +44,33 @@ function notice(
     ? { id, login, body, createdAt }
     : { id, login, body, createdAt, updatedAt };
 }
+
+// --- #1450: migration onto the shared cli-args.mts wrapper -----------------
+
+test('parseArgs: an invalid --pr resolves to null (fails closed at the caller)', () => {
+  const args = parseArgs(['--pr', 'not-a-number']);
+  assert.equal(args.pr, null);
+});
+
+test('parseArgs: a missing --claim-issue value throws', () => {
+  assert.throws(() => parseArgs(['--pr', '42', '--claim-issue']));
+});
+
+test('parseArgs: a flag-shaped value throws instead of being swallowed', () => {
+  // Previously --agent-id would greedily accept '--apply' as its literal
+  // value, silently leaving --apply unset (this file's own flavor of the
+  // #1082 gap the shared wrapper closes structurally).
+  assert.throws(() => parseArgs(['--pr', '42', '--agent-id', '--apply']));
+});
+
+test('parseArgs: rejects an unknown flag instead of silently ignoring it', () => {
+  assert.throws(() => parseArgs(['--bogus']));
+});
+
+test('parseArgs: --help is recognized without requiring --pr', () => {
+  const args = parseArgs(['--help']);
+  assert.equal(args.help, true);
+});
 
 test('buildDispositionBody is marker-first and names the bot login + head sha', () => {
   const body = buildDispositionBody(

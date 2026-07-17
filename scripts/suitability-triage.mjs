@@ -7,6 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
@@ -14,6 +15,28 @@ import {
 } from './gh-exec.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --issue spec key
+// below. See cli-args.mts's module header for the full invariant. (This
+// comment deliberately avoids writing that key inside matching quote
+// marks, so it cannot itself satisfy the scan if the real key is ever
+// renamed -- see #1446's PR description for why that matters.)
+//
+// Declared here, above the isCliExecution trigger below, rather than
+// alongside parseArgs further down: the trigger calls runCli() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires (see ci-wait-policy.mts's identical note).
+const SUITABILITY_TRIAGE_FLAG_SPEC = {
+  '--issue': { type: 'string' },
+  '--token': { type: 'string', default: '' },
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--policy': { type: 'string', default: '' },
+  '--verbose': { type: 'boolean', default: false },
+  '--help': { type: 'boolean', short: 'h' },
+};
 const CHECKS = [
   {
     id: 'repository_fit',
@@ -623,55 +646,22 @@ function runCli() {
   };
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
-function parseArgs(argv) {
-  const parsed = {
-    issue: null,
-    token: '',
-    owner: '',
-    repo: '',
-    policy: '',
-    verbose: false,
-    help: false,
+export function parseArgs(argv) {
+  const { values, help } = parseCliArgs(argv, SUITABILITY_TRIAGE_FLAG_SPEC);
+  return {
+    // Resolves to null on an invalid/absent value, matching this file's
+    // existing CLI-level guard (`args.issue === null || ...`), which
+    // treated a non-numeric --issue the same as an absent one (NaN also
+    // fails `Number.isInteger`) -- so this is a behavior-preserving
+    // simplification, not a contract change.
+    issue: parseCanonicalIntegerOrNull(values.issue),
+    token: values.token,
+    owner: values.owner,
+    repo: values.repo,
+    policy: values.policy,
+    verbose: values.verbose,
+    help,
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    if (token === '--issue') {
-      parsed.issue = Number.parseInt(String(value ?? ''), 10);
-      index += 1;
-      continue;
-    }
-    if (token === '--owner') {
-      parsed.owner = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--token') {
-      parsed.token = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--policy') {
-      parsed.policy = value ?? '';
-      index += 1;
-      continue;
-    }
-    if (token === '--verbose') {
-      parsed.verbose = true;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-  return parsed;
 }
 /**
  * Load and parse `.github/idd/config.json` (or `--policy <path>` when given),
@@ -697,7 +687,7 @@ function loadPolicy(policyPath) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/suitability-triage.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--verbose]
+  node scripts/suitability-triage.mjs --issue <number> [--token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--verbose] [--help]
 
 Output schema:
 {

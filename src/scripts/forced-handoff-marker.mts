@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
   isAuthorizedForcedHandoffActor,
@@ -522,65 +523,61 @@ export function resolveHelperActiveClaim(
   return summary.activeClaimPresent ? summary.activeClaim : null;
 }
 
-function parseArgs(argv: string[]): ForcedHandoffMarkerArgs {
-  const parsed: ForcedHandoffMarkerArgs = {
-    format: 'text',
-    trustedMarkerLogins: '',
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    switch (token) {
-      case '--issue':
-        parsed.issueNumber = parsePositiveInteger(
-          readValue(argv, ++index, token),
-          token,
-        );
-        break;
-      case '--pr':
-        parsed.prNumber = parsePositiveInteger(
-          readValue(argv, ++index, token),
-          token,
-        );
-        break;
-      case '--new-agent-id':
-        parsed.newAgentId = readValue(argv, ++index, token);
-        break;
-      case '--new-claim-id':
-        parsed.newClaimId = readValue(argv, ++index, token);
-        break;
-      case '--forced-by':
-        parsed.forcedBy = readValue(argv, ++index, token);
-        break;
-      case '--reason':
-        parsed.reason = readValue(argv, ++index, token);
-        break;
-      case '--timestamp':
-        parsed.timestamp = readValue(argv, ++index, token);
-        break;
-      case '--trusted-marker-logins':
-        parsed.trustedMarkerLogins = readValue(argv, ++index, token);
-        break;
-      case '--repo':
-        parsed.repo = readValue(argv, ++index, token);
-        break;
-      case '--format':
-        parsed.format = readValue(argv, ++index, token);
-        if (parsed.format !== 'text' && parsed.format !== 'json') {
-          throw new Error(`unsupported --format value: ${parsed.format}`);
-        }
-        break;
-      case '--plan':
-        parsed.plan = true;
-        break;
-      case '--help':
-      case '-h':
-        parsed.help = true;
-        break;
-      default:
-        throw new Error(`unknown argument: ${token}`);
-    }
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --issue spec key
+// below. See cli-args.mts's module header for the full invariant. (This
+// comment deliberately avoids writing that key inside matching quote
+// marks, so it cannot itself satisfy the scan if the real key is ever
+// renamed -- see #1446's PR description for why that matters.)
+const FORCED_HANDOFF_MARKER_FLAG_SPEC = {
+  '--issue': { type: 'string' },
+  '--pr': { type: 'string' },
+  '--new-agent-id': { type: 'string' },
+  '--new-claim-id': { type: 'string' },
+  '--forced-by': { type: 'string' },
+  '--reason': { type: 'string' },
+  '--timestamp': { type: 'string' },
+  '--trusted-marker-logins': { type: 'string', default: '' },
+  '--repo': { type: 'string' },
+  '--format': { type: 'string', default: 'text' },
+  '--plan': { type: 'boolean', default: false },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
+
+export function parseArgs(argv: string[]): ForcedHandoffMarkerArgs {
+  const { values, help } = parseCliArgs(argv, FORCED_HANDOFF_MARKER_FLAG_SPEC);
+
+  const format = values.format as string;
+  if (format !== 'text' && format !== 'json') {
+    throw new Error(`unsupported --format value: ${format}`);
   }
-  return parsed;
+
+  return {
+    format,
+    trustedMarkerLogins: values['trusted-marker-logins'] as string,
+    // parsePositiveInteger keeps its existing throw-on-invalid contract
+    // unchanged; only called when the flag is actually present, so an
+    // absent --issue/--pr still resolves to undefined (this file's own
+    // "not requested" sentinel -- see the `!== undefined` checks
+    // elsewhere in this module) rather than throwing.
+    issueNumber:
+      values.issue === undefined
+        ? undefined
+        : parsePositiveInteger(values.issue as string, '--issue'),
+    prNumber:
+      values.pr === undefined
+        ? undefined
+        : parsePositiveInteger(values.pr as string, '--pr'),
+    newAgentId: values['new-agent-id'] as string | undefined,
+    newClaimId: values['new-claim-id'] as string | undefined,
+    forcedBy: values['forced-by'] as string | undefined,
+    reason: values.reason as string | undefined,
+    timestamp: values.timestamp as string | undefined,
+    repo: values.repo as string | undefined,
+    plan: values.plan as boolean,
+    help,
+  };
 }
 
 function buildTrustedMarkerLogins(
@@ -670,14 +667,6 @@ function splitCsv(value: unknown): string[] {
 
 function isTruthy(value: unknown): boolean {
   return /^(1|true|yes)$/i.test(String(value ?? '').trim());
-}
-
-function readValue(argv: string[], index: number, name: string): string {
-  const value = argv[index];
-  if (value === undefined) {
-    throw new Error(`missing value for ${name}`);
-  }
-  return value;
 }
 
 export function parsePositiveInteger(value: unknown, flag: string): number {
