@@ -434,10 +434,16 @@ export function parseRunIdFromUrl(url) {
  * `requireFlagValue` this replaced only checked for `--`, so `--owner -h`
  * silently consumed `-h` as the owner instead of erroring), and an
  * unknown option, each with Node's own stable `ERR_PARSE_ARGS_*` error
- * codes. This function's own job narrows to the domain-specific
- * validation `parseArgs` cannot express declaratively: the `--pr` value
- * must be all digits (not just numeric-prefixed), and `--owner`/`--repo`
- * must be given together or not at all.
+ * codes. `allowPositionals: false` closes one more gap `strict: true`
+ * alone does not: `strict` governs unknown *options*, not leftover
+ * positional (non-option) tokens, so an invocation like
+ * `--pr 1431 extra` would otherwise silently accept `extra` instead of
+ * failing fast -- risky for a recovery/rerun helper where a typo should
+ * error, not run against unintended, silently-ignored input (#1434
+ * review, Copilot). This function's own job narrows to the
+ * domain-specific validation `parseArgs` cannot express declaratively:
+ * the `--pr` value must be all digits (not just numeric-prefixed), and
+ * `--owner`/`--repo` must be given together or not at all.
  */
 export function parseArgs(argv) {
   const { values } = nodeParseArgs({
@@ -450,6 +456,7 @@ export function parseArgs(argv) {
       help: { type: 'boolean', short: 'h' },
     },
     strict: true,
+    allowPositionals: false,
   });
   if (values.help) {
     return { prNumber: null, owner: '', repo: '', now: '', help: true };

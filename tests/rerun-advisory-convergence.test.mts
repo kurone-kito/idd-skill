@@ -849,6 +849,16 @@ test('parseArgs rejects an unknown argument', () => {
   });
 });
 
+// Regression (#1434 review, Copilot): `strict: true` alone only governs
+// unknown *options*, not leftover positional (non-option) tokens, so
+// `--pr 1431 extra` would otherwise silently accept `extra` instead of
+// failing fast on a likely typo. `allowPositionals: false` closes this.
+test('parseArgs rejects an unexpected positional argument', () => {
+  assert.throws(() => parseArgs(['--pr', '1431', 'extra']), {
+    code: 'ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL',
+  });
+});
+
 // Regression (#1434 review, Copilot + CodeRabbit): a value-taking flag
 // with no following token, or followed by another option -- long
 // (`--repo`) or short (`-h`) alike -- previously degraded into a
