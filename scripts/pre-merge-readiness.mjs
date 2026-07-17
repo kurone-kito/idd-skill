@@ -345,6 +345,35 @@ function warnDeprecatedFlag(deprecated, canonical) {
     `warning: ${deprecated} is deprecated; use ${canonical} instead.\n`,
   );
 }
+/**
+ * Resolve a canonical/deprecated flag pair using the pre-migration
+ * token-loop's exact assignment-order semantics: each occurrence
+ * overwrote the same field as the loop walked argv left to right, so
+ * whichever flag's LAST occurrence comes later in argv wins -- not
+ * "canonical always wins" -- when both spellings are given together.
+ * `argv.lastIndexOf` finds each flag's last occurrence; `-1` (never
+ * given) sorts before any real index, so an absent flag never wins
+ * against one that was actually passed.
+ */
+function resolveLastGivenAlias(
+  argv,
+  canonicalFlag,
+  canonicalValue,
+  deprecatedFlag,
+  deprecatedValue,
+) {
+  if (canonicalValue === undefined) {
+    return deprecatedValue;
+  }
+  if (deprecatedValue === undefined) {
+    return canonicalValue;
+  }
+  const lastCanonicalIndex = argv.lastIndexOf(canonicalFlag);
+  const lastDeprecatedIndex = argv.lastIndexOf(deprecatedFlag);
+  return lastDeprecatedIndex > lastCanonicalIndex
+    ? deprecatedValue
+    : canonicalValue;
+}
 export function parseArgs(argv) {
   const { values, help } = parseCliArgs(argv, PRE_MERGE_READINESS_FLAG_SPEC);
   // Positive-integer guard shared by both numeric flags, preserving each
@@ -365,16 +394,30 @@ export function parseArgs(argv) {
   // present at all, matching the pre-migration per-token loop exactly
   // (which warned unconditionally the moment the deprecated token was
   // seen, regardless of whether the canonical spelling also appeared).
-  // When BOTH spellings are given together -- untested, and not a
-  // realistic invocation for a one-release deprecation alias -- the
-  // canonical value wins; the old argv-order-dependent "last one wins"
-  // behavior left this combination effectively unspecified in practice.
-  const claimId = values['claim-id'];
+  // When BOTH spellings are given together, resolveLastGivenAlias below
+  // replicates the pre-migration token-loop's assignment-order semantics
+  // exactly: whichever flag's token appears LAST in argv wins (Codex
+  // review finding on this PR -- an earlier draft always preferred the
+  // canonical spelling here, which silently diverged from the original
+  // "last write wins" contract for this specific double-flag case).
+  const claimId = resolveLastGivenAlias(
+    argv,
+    '--claim-id',
+    values['claim-id'],
+    '--expected-claim-id',
+    values['expected-claim-id'],
+  );
   const expectedClaimIdToken = values['expected-claim-id'];
   if (expectedClaimIdToken !== undefined) {
     warnDeprecatedFlag('--expected-claim-id', '--claim-id');
   }
-  const agentId = values['agent-id'];
+  const agentId = resolveLastGivenAlias(
+    argv,
+    '--agent-id',
+    values['agent-id'],
+    '--expected-agent-id',
+    values['expected-agent-id'],
+  );
   const expectedAgentIdToken = values['expected-agent-id'];
   if (expectedAgentIdToken !== undefined) {
     warnDeprecatedFlag('--expected-agent-id', '--agent-id');
@@ -390,8 +433,8 @@ export function parseArgs(argv) {
     trustedMarkerLogins: values['trusted-marker-logins'] ?? '',
     iddAgentLogins: values['idd-agent-logins'] ?? '',
     advisoryBotLogins: values['advisory-bot-logins'] ?? '',
-    expectedClaimId: claimId ?? expectedClaimIdToken ?? '',
-    expectedAgentId: agentId ?? expectedAgentIdToken ?? '',
+    expectedClaimId: claimId ?? '',
+    expectedAgentId: agentId ?? '',
     now: values.now ?? '',
     help,
   };
