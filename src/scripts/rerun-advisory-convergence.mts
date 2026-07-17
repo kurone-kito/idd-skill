@@ -724,6 +724,9 @@ rerun-eligible instances (each command includes "-R <owner>/<repo>" when
 the repository is known, so the plan is safe to run outside this
 checkout). Never calls "gh run rerun" (or any other mutating command)
 itself.
+
+stdout carries ONLY the JSON plan document (safe to pipe into "jq" or
+similar); the human-readable recovery-plan summary is printed to stderr.
 `);
 }
 
@@ -1040,25 +1043,32 @@ if (isCliExecution(import.meta.url)) {
   if (help) {
     printHelp();
   } else if (plan) {
+    // stdout carries ONLY the JSON document -- nothing else -- so the
+    // overall stdout stream stays valid, machine-parseable JSON (e.g.
+    // safely pipeable into `jq`). The human-readable recovery-plan
+    // summary below is real, useful output, but it belongs on stderr:
+    // mixing it into stdout after the JSON previously broke piping
+    // despite the stream *starting* with a well-formed document
+    // (#1434 review, Copilot).
     process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
     if (plan.plan.length > 0) {
-      process.stdout.write(
+      process.stderr.write(
         '\nSequential recovery plan (run one at a time; wait for each to finish before the next):\n',
       );
       plan.plan.forEach((entry, index) => {
-        process.stdout.write(`  ${index + 1}. ${entry.command}\n`);
+        process.stderr.write(`  ${index + 1}. ${entry.command}\n`);
       });
-      process.stdout.write(`\n${plan.planCaveat}\n`);
+      process.stderr.write(`\n${plan.planCaveat}\n`);
     } else if (plan.recoveryRefreshPlan.length > 0) {
-      process.stdout.write(
+      process.stderr.write(
         '\nNo rerun-eligible instances, but a recovery-refresh option is available:\n',
       );
       plan.recoveryRefreshPlan.forEach((entry, index) => {
-        process.stdout.write(`  ${index + 1}. ${entry.command}\n`);
+        process.stderr.write(`  ${index + 1}. ${entry.command}\n`);
       });
-      process.stdout.write(`\n${plan.recoveryRefreshCaveat}\n`);
+      process.stderr.write(`\n${plan.recoveryRefreshCaveat}\n`);
     } else {
-      process.stdout.write(`\n${describeNoActionState(plan)}\n`);
+      process.stderr.write(`\n${describeNoActionState(plan)}\n`);
     }
   }
   // Set exitCode and let the process end naturally instead of calling
