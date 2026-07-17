@@ -475,9 +475,9 @@ test('PR-target + issue-only handoff predating the PR resolves to the successor'
 
 test('PR-target + issue-only handoff NOT predating the PR stays rejected', () => {
   const summary = summarizePrTargetClaim({
-    // Handoff at 2026-06-05 is AFTER this prFirstCommitAt, so Part B does
-    // not apply -- the pre-handoff claim stays active, matching today's
-    // (pre-fix) behavior for this specific input.
+    // Handoff at 2026-06-11 is AFTER PR_TARGET_PR_FIRST_COMMIT_AT
+    // (2026-06-10), so Part B does not apply -- the pre-handoff claim stays
+    // active, matching today's (pre-fix) behavior for this specific input.
     handoffComment: prTargetForcedHandoffComment({
       createdAt: '2026-06-11T00:00:00Z',
     }),
@@ -494,11 +494,12 @@ test('PR-target + issue-plus-pr handoff resolves via the linked-PR match, unaffe
     handoffComment: prTargetForcedHandoffComment({
       contextScope: 'issue-plus-pr',
       linkedPr: '1435',
-      // Deliberately AFTER the handoff, proving acceptance here comes from
-      // the linked-PR match, not the Part B predates-PR rule.
       createdAt: '2026-06-01T12:00:00Z',
     }),
     expectedLinkedPrs: ['1435'],
+    // Deliberately null: `issue-plus-pr` accepts via the linked-PR match,
+    // a path independent of the Part B predates-PR rule, so this proves
+    // acceptance here does not come from prFirstCommitAt.
     prFirstCommitAt: null,
   });
   assert.equal(summary.activeClaimPresent, true);
