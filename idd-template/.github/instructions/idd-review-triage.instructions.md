@@ -417,7 +417,9 @@ Route based on `branchState` from the helper (or `mergeable` /
   new reviewer activity; without the refresh F2's review-currency treats
   them as newer activity and returns to E1 for an avoidable cycle. Do
   **not** refresh on the sync path (it re-snapshots at E1 after merging
-  `main`) or on a hold (it stops without proceeding to F-phase).
+  `main`) or on a hold (it stops without proceeding to F-phase). `clean`
+  here is conflict-freeness only — see the `baseAdvancedSinceMergeBase`
+  note under F1 in `idd-pre-merge.instructions.md`.
 - **`behind-no-conflict`** when branch protection or recorded repository
   policy requires an up-to-date head: → **sync path** below.
 - **`content-conflict`** (`mergeable` is `CONFLICTING`): → **sync path**
