@@ -7,14 +7,10 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import {
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-  isCliExecution,
-} from './gh-exec.mjs';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 
 const DEFAULT_QUIET_WINDOW_MS = 30 * 60 * 1000;
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 /**

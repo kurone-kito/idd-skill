@@ -36,7 +36,6 @@ import {
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mts';
 import type { EffortMarkerDetection } from './effort.mts';
 import { parseEffortMarker } from './effort.mts';
-import { isCliExecution } from './gh-exec.mts';
 import type { IddConfig } from './idd-config.mts';
 import { loadIddConfig } from './idd-config.mts';
 import { stripMarkdownCodeRegions } from './markdown-code.mts';
@@ -178,7 +177,7 @@ const ISSUE_OR_PR_REFERENCE_PATTERN =
 // point in module evaluation (see tests/cli-entry-smoke.test.mts).
 const LIST_ITEM_MARKER_PATTERN = /^\s*(?:[-*+]|\d+[.)])\s+/;
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   main();
 }
 

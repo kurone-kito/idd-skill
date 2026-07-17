@@ -21,16 +21,16 @@
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 // Resolve the repository root by walking up to the nearest package.json.
 // This is location-independent, so it returns the same root whether this
 // module runs as the emitted scripts/validate-schemas.mjs (one level
 // deep), the src/scripts/validate-schemas.mts source under Node
 // type-stripping (two levels deep), or is imported by another module —
-// a fixed `..` from import.meta.url would resolve to src/ for the source.
-function resolveRepoRoot(fromUrl: string): string {
-  let dir = dirname(fileURLToPath(fromUrl));
+// a fixed `..` from import.meta.dirname would resolve to src/ for the
+// source.
+function resolveRepoRoot(fromDir: string): string {
+  let dir = fromDir;
   for (let depth = 0; depth < 16; depth += 1) {
     if (existsSync(join(dir, 'package.json'))) {
       return dir;
@@ -44,7 +44,7 @@ function resolveRepoRoot(fromUrl: string): string {
   return dir;
 }
 
-const ROOT = resolveRepoRoot(import.meta.url);
+const ROOT = resolveRepoRoot(import.meta.dirname);
 
 interface SchemaNode {
   type?: string | string[];
@@ -469,7 +469,7 @@ export function discoverSchemaCases(root: string): {
 }
 
 // CLI: run all schemas and fixtures when invoked directly.
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   const { cases, missing } = discoverSchemaCases(ROOT);
   if (missing.length > 0) {
     for (const entry of missing) {

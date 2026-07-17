@@ -18,11 +18,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { parseAutopilotSuitability } from './autopilot-suitability.mts';
-import {
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-  isCliExecution,
-} from './gh-exec.mts';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { parseIsoDurationToMs } from './policy-helpers.mts';
 import {
   resolveActiveClaim,
@@ -40,7 +36,7 @@ const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 /** Upper bound on the best-effort open-PR scan (a `gh pr list --limit`). */
 const OPEN_PR_SCAN_LIMIT = 500;
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 

@@ -15,7 +15,6 @@
 // This is the recurring counterpart of the one-time audit in #910 and the
 // chosen recovery path from #909 (advisory-wait stays Copilot-only).
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 
 import { loadIddConfig } from './idd-config.mts';
 import {
@@ -807,6 +806,6 @@ function main(): void {
   );
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   main();
 }

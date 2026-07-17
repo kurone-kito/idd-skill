@@ -10,10 +10,9 @@
  */
 
 import { spawn } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 
-const currentDir = dirname(fileURLToPath(import.meta.url));
+const currentDir = import.meta.dirname;
 const scriptPath = resolve(
   currentDir,
   '../scripts/review-disposition-verify.mjs',

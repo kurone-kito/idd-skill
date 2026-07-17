@@ -15,7 +15,6 @@
 // fallback; this helper only removes the hand-tracing error surface.
 
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mts';
-import { isCliExecution } from './gh-exec.mts';
 
 // The fixed stop-word set from pre-check (e). Whole-token matches only.
 const STOP_WORDS: ReadonlySet<string> = new Set([
@@ -41,7 +40,7 @@ const FALLBACK_SLUG = 'task';
 // (Deliberately not written inside matching quote marks in this comment --
 // see advisory-convergence.mts's identical note for why.)
 //
-// Declared here, above the isCliExecution trigger below, rather than
+// Declared here, above the import.meta.main trigger below, rather than
 // alongside parseArgs further down: the trigger calls runCli() ->
 // parseArgs() synchronously at module-evaluation time, and a `const`
 // declared after that point is still in the temporal dead zone when the
@@ -53,7 +52,7 @@ const BRANCH_NAME_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 

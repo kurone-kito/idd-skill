@@ -21,7 +21,6 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   injectGeneratedFromBanner,
   isBannerScopedInstructionTarget,
@@ -31,9 +30,9 @@ import {
 // so the source resolves the same root whether it runs as the emitted
 // scripts/sync-docs.mjs (one level deep) or the src/scripts/sync-docs.mts
 // source under Node type-stripping (two levels deep). A fixed `../..` from
-// import.meta.url would resolve to src/ for the source.
-function resolveRepoRoot(fromUrl) {
-  let dir = dirname(fileURLToPath(fromUrl));
+// import.meta.dirname would resolve to src/ for the source.
+function resolveRepoRoot(fromDir) {
+  let dir = fromDir;
   for (let depth = 0; depth < 16; depth += 1) {
     if (existsSync(join(dir, 'package.json'))) {
       return dir;
@@ -46,7 +45,7 @@ function resolveRepoRoot(fromUrl) {
   }
   return dir;
 }
-const root = resolveRepoRoot(import.meta.url);
+const root = resolveRepoRoot(import.meta.dirname);
 const manifestPath = 'audit/sync-manifest.json';
 const args = process.argv.slice(2);
 const apply = args.includes('--apply');

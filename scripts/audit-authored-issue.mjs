@@ -33,7 +33,6 @@ import {
 } from './discover-readiness-check.mjs';
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mjs';
 import { parseEffortMarker } from './effort.mjs';
-import { isCliExecution } from './gh-exec.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import { createMarkerRegex, escapeRegex } from './marker-regex.mjs';
@@ -105,7 +104,7 @@ const ISSUE_OR_PR_REFERENCE_PATTERN =
 // a TDZ risk under the CLI path, which calls main() synchronously at this
 // point in module evaluation (see tests/cli-entry-smoke.test.mts).
 const LIST_ITEM_MARKER_PATTERN = /^\s*(?:[-*+]|\d+[.)])\s+/;
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   main();
 }
 /**
