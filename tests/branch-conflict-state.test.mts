@@ -9,8 +9,8 @@ import {
   classifyBranchConflictState,
   parseArgs,
   parseConflictFiles,
-  parseGitHostFromUrl,
-  resolveFetchHost,
+  parseGitFetchOrigin,
+  resolveFetchOrigin,
 } from '../src/scripts/branch-conflict-state.mts';
 
 type ClassifyOptions = NonNullable<
@@ -418,117 +418,148 @@ test('classifyBranchConflictState: published is false when head SHA is absent', 
 
 // #1454: tryFetchBase hardcoded `https://github.com/...` as the base-ref
 // fetch fallback remote, breaking (or worse, silently mis-targeting) GHES
-// checkouts. parseGitHostFromUrl / resolveFetchHost are the extracted,
-// independently unit-testable pieces of that fix.
+// checkouts. parseGitFetchOrigin / resolveFetchOrigin are the extracted,
+// independently unit-testable pieces of that fix. Both findings below
+// (HTTP-scheme preservation, username-less scp-like remotes) came from an
+// independent Codex review pass on the PR.
 
-test('parseGitHostFromUrl: extracts host from an HTTPS GHES remote, preserving a non-default port', () => {
-  assert.equal(
-    parseGitHostFromUrl('https://ghes.example.com:8443/owner/repo.git'),
-    'ghes.example.com:8443',
+test('parseGitFetchOrigin: extracts scheme+host from an HTTPS GHES remote, preserving a non-default port', () => {
+  assert.deepEqual(
+    parseGitFetchOrigin('https://ghes.example.com:8443/owner/repo.git'),
+    { scheme: 'https', host: 'ghes.example.com:8443' },
   );
 });
 
-test('parseGitHostFromUrl: strips embedded credentials from an actions/checkout-style origin, keeping only the host', () => {
+test('parseGitFetchOrigin: preserves http (not https) for a plain HTTP GHES remote', () => {
+  // An http://-only GHES instance (no TLS) must stay http: silently
+  // upgrading to https on the same port would target a port that is not
+  // serving TLS, and the fetch would fail even though the configured
+  // remote is reachable over plain HTTP.
+  assert.deepEqual(
+    parseGitFetchOrigin('http://ghes.example.com:8080/owner/repo.git'),
+    { scheme: 'http', host: 'ghes.example.com:8080' },
+  );
+});
+
+test('parseGitFetchOrigin: strips embedded credentials from an actions/checkout-style origin, keeping only the host', () => {
   // actions/checkout writes `origin` as
   // `https://x-access-token:<token>@host/owner/repo` -- the real-world CI
   // shape this fix targets. URL() parses the token into userinfo, not the
   // host, so it never leaks into the constructed fetch URL.
-  assert.equal(
-    parseGitHostFromUrl(
+  assert.deepEqual(
+    parseGitFetchOrigin(
       'https://x-access-token:ghs_abc123@ghes.example.com/owner/repo',
     ),
-    'ghes.example.com',
+    { scheme: 'https', host: 'ghes.example.com' },
   );
 });
 
-test('parseGitHostFromUrl: extracts host from an ssh:// GHES remote, dropping the SSH-specific port', () => {
+test('parseGitFetchOrigin: resolves an ssh:// GHES remote to https, dropping the SSH-specific port', () => {
   // The SSH port is frequently unrelated to the HTTPS port behind a
-  // reverse proxy, so it must not leak into the https:// fetch URL.
-  assert.equal(
-    parseGitHostFromUrl('ssh://git@ghes.example.com:2222/owner/repo.git'),
-    'ghes.example.com',
+  // reverse proxy, so it must not leak into the https:// fetch URL; the
+  // ssh:// scheme itself cannot be reused since tryFetchBase's fetch is
+  // always anonymous HTTPS.
+  assert.deepEqual(
+    parseGitFetchOrigin('ssh://git@ghes.example.com:2222/owner/repo.git'),
+    { scheme: 'https', host: 'ghes.example.com' },
   );
 });
 
-test('parseGitHostFromUrl: extracts host from the scp-like SSH shorthand', () => {
-  assert.equal(
-    parseGitHostFromUrl('git@ghes.example.com:owner/repo.git'),
-    'ghes.example.com',
-  );
+test('parseGitFetchOrigin: extracts host from the scp-like SSH shorthand with a username', () => {
+  assert.deepEqual(parseGitFetchOrigin('git@ghes.example.com:owner/repo.git'), {
+    scheme: 'https',
+    host: 'ghes.example.com',
+  });
 });
 
-test('parseGitHostFromUrl: extracts github.com from the pre-existing HTTPS form, lowercased', () => {
-  assert.equal(
-    parseGitHostFromUrl('https://GitHub.com/owner/repo.git'),
-    'github.com',
-  );
+test('parseGitFetchOrigin: extracts host from the scp-like SSH shorthand without a username', () => {
+  // Git's documented scp-like URL form is `[user@]host:path` -- the
+  // username is optional, so a bare `ghes.example.com:owner/repo.git`
+  // (no `user@` prefix) is a valid, real-world GHES remote.
+  assert.deepEqual(parseGitFetchOrigin('ghes.example.com:owner/repo.git'), {
+    scheme: 'https',
+    host: 'ghes.example.com',
+  });
 });
 
-test('parseGitHostFromUrl: returns null for empty or whitespace-only input', () => {
-  assert.equal(parseGitHostFromUrl(''), null);
-  assert.equal(parseGitHostFromUrl('   '), null);
+test('parseGitFetchOrigin: extracts github.com from the pre-existing HTTPS form, lowercased', () => {
+  assert.deepEqual(parseGitFetchOrigin('https://GitHub.com/owner/repo.git'), {
+    scheme: 'https',
+    host: 'github.com',
+  });
 });
 
-test('parseGitHostFromUrl: returns null for a host-less file:// URL', () => {
-  assert.equal(parseGitHostFromUrl('file:///some/local/path.git'), null);
+test('parseGitFetchOrigin: returns null for empty or whitespace-only input', () => {
+  assert.equal(parseGitFetchOrigin(''), null);
+  assert.equal(parseGitFetchOrigin('   '), null);
 });
 
-test('parseGitHostFromUrl: returns null for an unparseable, scheme-less, colon-less string', () => {
-  assert.equal(parseGitHostFromUrl('not a url'), null);
+test('parseGitFetchOrigin: returns null for a host-less file:// URL', () => {
+  assert.equal(parseGitFetchOrigin('file:///some/local/path.git'), null);
 });
 
-test('parseGitHostFromUrl: returns null for a Windows-style local path, not the drive letter as a host', () => {
-  // A bare `C:\...` path has no `user@` prefix, unlike real scp-like git
-  // remotes (`git@host:owner/repo.git`); without requiring `@`, the
-  // scp-like regex would otherwise misread the drive letter `C` as a host.
-  assert.equal(parseGitHostFromUrl('C:\\Users\\foo\\repo.git'), null);
+test('parseGitFetchOrigin: returns null for an unparseable, scheme-less, colon-less string', () => {
+  assert.equal(parseGitFetchOrigin('not a url'), null);
 });
 
-test('resolveFetchHost: regression -- returns github.com when GH_HOST is unset and origin does not resolve', () => {
+test('parseGitFetchOrigin: returns null for a Windows-style local path, not the drive letter as a host', () => {
+  // A single-character "host" (`C:\Users\...`, `C:repo.git`) is almost
+  // certainly a Windows drive letter, never a real git host -- excluded
+  // explicitly rather than by requiring a `user@` prefix, since that
+  // would also reject the valid username-less scp-like form covered
+  // above.
+  assert.equal(parseGitFetchOrigin('C:\\Users\\foo\\repo.git'), null);
+  assert.equal(parseGitFetchOrigin('C:repo.git'), null);
+});
+
+test('resolveFetchOrigin: regression -- resolves to https://github.com when GH_HOST is unset and origin does not resolve', () => {
   // Existing github.com-hosted behavior must stay unchanged. Injecting an
   // empty-returning reader exercises the literal `github.com` fallback
   // constant directly, rather than incidentally depending on whatever
   // this checkout's own real `origin` remote happens to be.
-  assert.equal(resolveFetchHost({}, { readOriginUrl: () => '' }), 'github.com');
+  assert.deepEqual(resolveFetchOrigin({}, { readOriginUrl: () => '' }), {
+    scheme: 'https',
+    host: 'github.com',
+  });
 });
 
-test('resolveFetchHost: honors a GH_HOST override to a non-github.com host', () => {
-  assert.equal(
-    resolveFetchHost(
+test('resolveFetchOrigin: honors a GH_HOST override to a non-github.com host, always as https', () => {
+  assert.deepEqual(
+    resolveFetchOrigin(
       { GH_HOST: 'ghes.example.com' },
       { readOriginUrl: () => '' },
     ),
-    'ghes.example.com',
+    { scheme: 'https', host: 'ghes.example.com' },
   );
 });
 
-test('resolveFetchHost: falls back to a non-github.com origin remote host when GH_HOST is unset', () => {
-  assert.equal(
-    resolveFetchHost(
+test('resolveFetchOrigin: falls back to a non-github.com origin remote when GH_HOST is unset', () => {
+  assert.deepEqual(
+    resolveFetchOrigin(
       {},
-      { readOriginUrl: () => 'https://ghes.example.com/owner/repo.git' },
+      { readOriginUrl: () => 'http://ghes.example.com/owner/repo.git' },
     ),
-    'ghes.example.com',
+    { scheme: 'http', host: 'ghes.example.com' },
   );
 });
 
-test('resolveFetchHost: GH_HOST takes precedence over a resolvable non-github.com origin', () => {
-  assert.equal(
-    resolveFetchHost(
+test('resolveFetchOrigin: GH_HOST takes precedence over a resolvable non-github.com origin', () => {
+  assert.deepEqual(
+    resolveFetchOrigin(
       { GH_HOST: 'override.example.com' },
       { readOriginUrl: () => 'https://ghes.example.com/owner/repo.git' },
     ),
-    'override.example.com',
+    { scheme: 'https', host: 'override.example.com' },
   );
 });
 
-test('resolveFetchHost: a whitespace-only GH_HOST is ignored, falling through to origin resolution', () => {
-  assert.equal(
-    resolveFetchHost(
+test('resolveFetchOrigin: a whitespace-only GH_HOST is ignored, falling through to origin resolution', () => {
+  assert.deepEqual(
+    resolveFetchOrigin(
       { GH_HOST: '   ' },
       { readOriginUrl: () => 'https://ghes.example.com/owner/repo.git' },
     ),
-    'ghes.example.com',
+    { scheme: 'https', host: 'ghes.example.com' },
   );
 });
 
