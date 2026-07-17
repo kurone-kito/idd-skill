@@ -1114,17 +1114,17 @@ function collectFromGitHub(args) {
   // A true cross-repository invocation only when the caller explicitly
   // named both --owner and --repo (parseArgs already rejects naming only
   // one) -- the common case (neither given) auto-detects the local
-  // checkout's own repo below. `isCrossRepo` no longer changes which
-  // config source this function reads from (both paths fetch
-  // .github/idd/config.json from owner/repo's trusted default branch via
-  // resolveDefaultBranch + loadRemoteIddConfig below) -- it still gates
-  // the IDD_ADVISORY_BOT_LOGINS env-var scoping further down, since that
-  // env var describes the *caller's own local context*, not either
-  // config source (#1434 review, Copilot: this comment previously
-  // claimed the same-repo path "must keep reading its own local config",
-  // which stopped being true once config resolution moved off local disk
-  // entirely).
-  const isCrossRepo = Boolean(args.owner) && Boolean(args.repo);
+  // checkout's own repo below. Same-repo and cross-repo are no longer
+  // treated differently anywhere in this function: both fetch
+  // .github/idd/config.json from owner/repo's trusted default branch
+  // (resolveDefaultBranch + loadRemoteIddConfig below), and neither reads
+  // the caller's own IDD_ADVISORY_BOT_LOGINS environment variable (the
+  // idd-advisory-convergence workflow's own verdict step never reads it
+  // either -- see the doc comment on `resolveAdvisoryBotLogins`'s call
+  // site below). A same-repo/cross-repo distinction is no longer needed
+  // (#1434 review, Copilot + Codex P2: this comment, and the
+  // now-unused `isCrossRepo` boolean it used to justify, both went stale
+  // in stages as each remaining local-context special-case was removed).
   // GH_TEXT_LOOP_TIMEOUT_OPTIONS on every `gh` call in this function,
   // including these first three (owner/repo/PR-head resolution) -- same
   // hang hazard as fetchCheckRunsForRef and the per-run lookup loop below:
@@ -1249,16 +1249,23 @@ function collectFromGitHub(args) {
     loadRemoteIddConfig(owner, repo, configRef),
   );
   const primaryBotLogin = resolveAdvisoryPrimaryBotLogin(rawConfig);
-  // The caller's local IDD_ADVISORY_BOT_LOGINS env var describes the
-  // *local* checkout's own advisory bots. resolveAdvisoryBotLogins gives
-  // an env value priority over `config`, so passing it unconditionally
-  // would let a local-context env var silently override the *target*
-  // repository's own configured bot logins during a true cross-repo
-  // diagnosis -- undermining the config-binding fix above. Omit it for a
-  // cross-repo invocation so resolution falls through to the target
-  // repo's own config (#1434 review, Codex P2).
+  // Never read IDD_ADVISORY_BOT_LOGINS from the caller's own local
+  // environment -- for a same-repo invocation any more than a cross-repo
+  // one. The idd-advisory-convergence workflow's own verdict step
+  // supplies only GH_TOKEN (.github/workflows/idd-advisory-convergence.yml);
+  // it never reads this env var, so it describes only the CALLER's own
+  // machine/session, never the trusted config that actually governed the
+  // runs being diagnosed. `resolveAdvisoryBotLogins` gives an env value
+  // priority over `config`, so passing it through at all -- even scoped
+  // to same-repo only, this file's own prior fix -- could still let a
+  // locally-set env var silently override the target repository's own
+  // configured bot logins and disagree with the workflow's real
+  // behavior: if the env var omits a bot the repo's config lists, and
+  // that bot's run happens to omit `actor.type`, the run would be
+  // misclassified as non-bot and rerun-eligible (#1434 review, Codex P2,
+  // third occurrence -- same family as the earlier PR-head-vs-default-
+  // branch config fix).
   const { logins: advisoryBotLogins } = resolveAdvisoryBotLogins({
-    envValue: isCrossRepo ? '' : process.env.IDD_ADVISORY_BOT_LOGINS,
     config: rawConfig,
   });
   // Same config source as the bot-identity fields above -- the trusted
@@ -1317,17 +1324,27 @@ if (import.meta.main) {
         process.stderr.write(`  ${index + 1}. ${entry.command}\n`);
       });
       process.stderr.write(`\n${plan.recoveryRefreshCaveat}\n`);
-    } else if (plan.rerunPolicyHoldNotice) {
+    }
+    // Independent of whichever branch above fired: rerunPolicyHoldNotice
+    // describes a policy-held or budget-held instance, which is a
+    // DIFFERENT instance than whichever one just populated `plan` or
+    // `recoveryRefreshPlan` above -- printing it only in an `else if`
+    // alongside those two hid it whenever any instance ALSO had a plan
+    // entry, even though the JSON output (and a genuinely-held instance)
+    // still carried it (Copilot review, #1434; same family as the
+    // describeOutstandingStates fix immediately below, a distinct
+    // remaining gap in the same exclusive-branching area).
+    if (plan.rerunPolicyHoldNotice) {
       process.stderr.write(`\n${plan.rerunPolicyHoldNotice}\n`);
     }
-    // Independent of whichever branch above did (or did not) fire:
-    // outstanding pending / bot-gated / unresolved instances are reported
-    // unconditionally whenever they exist, rather than only when NONE of
-    // the three branches above already had something to say -- those
-    // branches are about a DIFFERENT instance's rerun/refresh/hold
-    // outcome, and previously hid a genuinely-still-outstanding instance
-    // (e.g. 2 pending check-runs) any time a rerun plan also existed for
-    // a separate instance in the same run (CodeRabbit review, #1434).
+    // Independent of all of the above: outstanding pending / bot-gated /
+    // unresolved instances are reported unconditionally whenever they
+    // exist, rather than only when NONE of the branches above already
+    // had something to say -- those branches are about a DIFFERENT
+    // instance's rerun/refresh/hold outcome, and previously hid a
+    // genuinely-still-outstanding instance (e.g. 2 pending check-runs)
+    // any time a rerun plan also existed for a separate instance in the
+    // same run (CodeRabbit review, #1434).
     const outstanding = describeOutstandingStates(plan);
     if (outstanding) {
       process.stderr.write(`\n${outstanding}\n`);
