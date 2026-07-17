@@ -232,11 +232,13 @@ resolves, and `docs/skills-delivery-investigation.md`'s own
 its "strongest opposing case" paragraph, as the venue pursuing "the same
 underlying worry through content condensation rather than a
 delivery-mechanism change" — i.e., that document already anticipated and
-deferred to this one. Its separate "Revisit conditions" section (recorded
-routing-failure evidence, a runtime shipping a mandatory
-skill-invocation primitive, or explicit adopter demand with a concrete
-unserved use case) is unchanged by this design and remains the correct
-trigger for re-evaluating both documents together.
+deferred to this one. That same section's own "Conditions that would
+change this recommendation" list (recorded routing-failure evidence, a
+runtime shipping a mandatory skill-invocation primitive, or explicit
+adopter demand with a concrete unserved use case) — plus the separate
+`## Revisit conditions` section's own triggers — are unchanged by this
+design and remain the correct trigger for re-evaluating both documents
+together.
 
 ## Drift control
 
