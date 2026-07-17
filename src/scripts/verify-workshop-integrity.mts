@@ -21,6 +21,7 @@ import {
   resolve,
   sep,
 } from 'node:path';
+import { parseCliArgs } from './cli-args.mts';
 
 const WORKSHOP_ROOTS = ['docs/workshop'];
 const WORKSHOP_ASSET_DIRS = ['docs/workshop/assets'];
@@ -79,6 +80,21 @@ interface VerifyArgs {
   format: string;
   help: boolean;
 }
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `repo-root:`): tests/flag-name-matrix.test.mts scans this file's
+// *compiled* .mjs source text for quoted flag literals. See
+// cli-args.mts's module header for the full invariant.
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls parseArgs()
+// synchronously at module-evaluation time, and a `const` declared after
+// that point is still in the temporal dead zone when the trigger fires.
+const VERIFY_WORKSHOP_INTEGRITY_FLAG_SPEC = {
+  '--help': { type: 'boolean', short: 'h', default: false },
+  '--repo-root': { type: 'string' },
+  '--format': { type: 'string', default: 'table' },
+} as const;
 
 if (import.meta.main) {
   let args: VerifyArgs;
@@ -813,32 +829,35 @@ function printTable(report: Report): void {
 }
 
 function parseArgs(argv: string[]): VerifyArgs {
-  const args: VerifyArgs = {
-    root: process.cwd(),
-    format: 'table',
-    help: false,
-  };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--help' || arg === '-h') {
-      args.help = true;
-    } else if (arg === '--repo-root') {
-      const value = argv[i + 1];
-      if (!value) throw new Error('--repo-root requires a value');
-      args.root = value;
-      i += 1;
-    } else if (arg === '--format') {
-      const value = argv[i + 1];
-      if (!value) throw new Error('--format requires a value');
-      if (value !== 'json' && value !== 'table') {
-        throw new Error(`--format must be one of json,table (got "${value}")`);
-      }
-      args.format = value;
-      i += 1;
-    } else {
-      throw new Error(`unknown argument: ${arg}`);
+  const { values, help } = parseCliArgs(
+    argv,
+    VERIFY_WORKSHOP_INTEGRITY_FLAG_SPEC,
+  );
+
+  const args: VerifyArgs = { root: process.cwd(), format: 'table', help };
+
+  // --repo-root rejects an explicit empty string the same as an omitted
+  // flag (pre-migration guard used `!value`).
+  const repoRoot = values['repo-root'] as string | undefined;
+  if (repoRoot !== undefined) {
+    if (!repoRoot) {
+      throw new Error('--repo-root requires a value');
     }
+    args.root = repoRoot;
   }
+
+  // --format rejects an explicit empty string the same way (pre-migration
+  // guard also used `!value`); the enum check stays a manual post-parse
+  // check with its own custom message.
+  const format = values.format as string;
+  if (!format) {
+    throw new Error('--format requires a value');
+  }
+  if (format !== 'json' && format !== 'table') {
+    throw new Error(`--format must be one of json,table (got "${format}")`);
+  }
+  args.format = format;
+
   return args;
 }
 
