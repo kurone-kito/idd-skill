@@ -606,8 +606,11 @@ can never match. A nested/child list item's reference is evaluated
 together with its parent bullet's coordination-language text instead of
 being scoped away from it, while a sibling bullet at the same
 indentation — nested or top-level — still starts its own separate scope,
-preserving the tight-list sentence-conflation fix mentioned above. Unlike
-every other check above, a
+preserving the tight-list sentence-conflation fix mentioned above. This
+holds for the first nested child under a given parent; a parent with two
+or more nested children currently keeps only the first one scoped with
+it — a known, tracked limitation, not a guarantee for every nested
+child. Unlike every other check above, a
 `prose-dependency` warning never flips `passed` to `false` and never
 changes the linter's exit code: it prompts the author to either
 convert the prose into a proper dependency marker or consciously

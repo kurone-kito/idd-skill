@@ -462,7 +462,9 @@ omitting it, not as a known repository that can never match. A
 nested/child list item's reference is evaluated together with its parent
 bullet's coordination-language text instead of being scoped away from
 it, while a same-depth sibling bullet still starts its own separate
-scope. A
+scope. This holds for the first nested child under a given parent; a
+parent with two or more nested children currently keeps only the first
+one scoped with it -- a known, tracked limitation. A
 `prose-dependency` warning never flips `passed` to
 `false` and never changes the linter's exit code; it prompts the author
 to convert the prose into a proper dependency marker or consciously

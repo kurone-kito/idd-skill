@@ -1326,6 +1326,35 @@ test('prose-dependency does not resolve a reference-style link whose ref has no 
   assert.match(finding?.detail ?? '', /#1391/);
 });
 
+test('prose-dependency resolves a reference-style link whose ref label differs in case and whitespace from its definition', () => {
+  // CommonMark compares reference labels case-insensitively after
+  // trimming and collapsing internal whitespace (normalizeLinkReferenceLabel).
+  // Every other reference-style test uses an identical single-word label
+  // on both sides, which would still resolve-and-flag correctly (via the
+  // bare-`#` fallback) even if label normalization were entirely broken --
+  // not a discriminating test. A *cross-repo* definition with currentRepo
+  // known is: if normalization fails to match "Upstream  PR" to "upstream
+  // pr", the usage is left unresolved, falls through to the bare-`#`
+  // alternative (which has no owner/repo of its own and is therefore
+  // always treated as local, unlike the resolved Markdown-link form),
+  // and gets wrongly flagged -- only correct label resolution lets the
+  // cross-repo exclusion apply.
+  const body = childBody({
+    extraMarkers:
+      'Before starting, [PR #1391][Upstream  PR] must land.\n\n' +
+      '[upstream pr]: https://github.com/acme/other-repo/pull/1391',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
 // --- prose-dependency: nested list item parent-scope loss (#1472) ---
 
 test('prose-dependency recognizes a nested list item reference alongside its parent bullet coordination language', () => {
@@ -1403,6 +1432,31 @@ test('prose-dependency treats a whitespace-only currentRepo as unknown', () => {
   const report = auditAuthoredIssue(body, {
     shape: 'child',
     currentRepo: '   ',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency trims a currentRepo with incidental leading/trailing whitespace before comparing', () => {
+  // normalizeCurrentRepo's non-empty branch returns the trimmed value, not
+  // the original string. A *local* URL reference is the discriminating
+  // case: an explicit currentRepo that matches the reference's owner/repo
+  // is still flagged by design (see the AuditOptions.currentRepo JSDoc),
+  // so if trimming were broken -- comparing the padded string as-is --
+  // the padded value would never equal the unpadded local repo, the
+  // reference would be wrongly treated as cross-repo, and this would
+  // silently NOT warn instead.
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      'https://github.com/kurone-kito/idd-skill/pull/1391 has merged.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: '  kurone-kito/idd-skill  ',
   });
   const finding = report.findings.find(
     (entry) => entry.id === 'prose-dependency',
