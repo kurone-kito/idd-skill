@@ -174,6 +174,47 @@ test('classifies a bot-triggered run via configured advisoryBotLogins fallback (
   assert.equal(plan.instances[0]?.classification, 'bot-gated-skip');
 });
 
+// Regression (#1434 review, Codex P2): a repository can configure a bare
+// login (`my-bot`) while the Actions payload reports the GitHub-appended
+// `[bot]`-suffixed form (`my-bot[bot]`), or vice versa. An un-normalized
+// set lookup would miss that match and let a bot-triggered run fall
+// through as rerun-eligible.
+test('classifies a bot-triggered run when the configured login is bare but the actual actor login is [bot]-suffixed', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          actorLogin: 'coderabbitai[bot]',
+          actorType: null,
+          triggeringActorLogin: 'coderabbitai[bot]',
+          triggeringActorType: null,
+        }),
+      ],
+    }),
+    baseOptions({ advisoryBotLogins: ['coderabbitai'] }),
+  );
+  assert.equal(plan.instances[0]?.classification, 'bot-gated-skip');
+});
+
+test('classifies a bot-triggered run when the configured login is [bot]-suffixed but the actual actor login is bare', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          conclusion: 'failure',
+          actorLogin: 'coderabbitai',
+          actorType: null,
+          triggeringActorLogin: 'coderabbitai',
+          triggeringActorType: null,
+        }),
+      ],
+    }),
+    baseOptions({ advisoryBotLogins: ['coderabbitai[bot]'] }),
+  );
+  assert.equal(plan.instances[0]?.classification, 'bot-gated-skip');
+});
+
 test('does not classify a plain human failure as bot-gated-skip', () => {
   const plan = computeRerunPlan(
     baseInput({
@@ -555,6 +596,76 @@ test('embeds -R owner/repo in recovery-refresh plan commands when known', () => 
     plan.recoveryRefreshPlan[0]?.command,
     'gh run rerun 7002 -R kurone-kito/idd-skill',
   );
+});
+
+// --- ciWait.rerunPolicy gating (regression: #1434 review, Codex P1) ------
+//
+// idd-ci.instructions.md §Rerun mechanics makes the advisory-convergence
+// recovery explicitly subject to the resolved ciWait.rerunPolicy: a
+// "hold" policy means the repository has deliberately opted out of
+// automatic reruns, so this helper must not still hand out ready-to-run
+// `gh run rerun` commands.
+
+test('defaults to "rerun-once" and populates the plan when rerunPolicy is omitted', () => {
+  const plan = computeRerunPlan(
+    baseInput({ instances: [baseInstance({ conclusion: 'failure' })] }),
+    baseOptions(),
+  );
+  assert.equal(plan.rerunPolicy, 'rerun-once');
+  assert.equal(plan.plan.length, 1);
+  assert.equal(plan.rerunPolicyHoldNotice, '');
+});
+
+test('suppresses the rerun plan and reports a hold notice when rerunPolicy is "hold"', () => {
+  const plan = computeRerunPlan(
+    baseInput({ instances: [baseInstance({ conclusion: 'failure' })] }),
+    baseOptions({ rerunPolicy: 'hold' }),
+  );
+  assert.equal(plan.rerunPolicy, 'hold');
+  assert.deepEqual(plan.plan, []);
+  assert.equal(plan.counts.rerunEligible, 1);
+  assert.match(plan.rerunPolicyHoldNotice, /1 rerun-eligible instance\(s\)/);
+  assert.match(plan.rerunPolicyHoldNotice, /"hold"/);
+});
+
+test('suppresses the recovery-refresh plan and reports a hold notice when rerunPolicy is "hold"', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions({ rerunPolicy: 'hold' }),
+  );
+  assert.deepEqual(plan.plan, []);
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
+  assert.match(plan.rerunPolicyHoldNotice, /1 recovery-refresh candidate\(s\)/);
+});
+
+test('does not report a hold notice when rerunPolicy is "hold" but nothing was actually suppressed', () => {
+  const plan = computeRerunPlan(
+    baseInput({ instances: [baseInstance({ conclusion: 'success' })] }),
+    baseOptions({ rerunPolicy: 'hold' }),
+  );
+  assert.equal(plan.rerunPolicyHoldNotice, '');
+});
+
+test('normalizes an unrecognized rerunPolicy value to "rerun-once"', () => {
+  const plan = computeRerunPlan(
+    baseInput({ instances: [baseInstance({ conclusion: 'failure' })] }),
+    baseOptions({ rerunPolicy: 'not-a-real-policy' }),
+  );
+  assert.equal(plan.rerunPolicy, 'rerun-once');
+  assert.equal(plan.plan.length, 1);
 });
 
 // --- describeNoActionState (regression: #1434 review, Codex P2) ---------

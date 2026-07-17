@@ -44,9 +44,16 @@
 //     the ordered rerun plan.
 //
 // Reuse map (no duplicated identity/config logic):
-//   - `readAdvisoryPrimaryBotLogin`, `isCopilotReviewerLogin`,
-//     `resolveAdvisoryBotLogins` -- the same bot-identity configuration and
-//     matching every advisory-wait/-convergence helper already uses.
+//   - `resolveAdvisoryPrimaryBotLogin`, `isCopilotReviewerLogin`,
+//     `resolveAdvisoryBotLogins`, `advisoryBotIdentityToken` -- the same
+//     bot-identity configuration and matching (including the `[bot]`-suffix
+//     normalization) every advisory-wait/-convergence helper already uses.
+//   - `normalizeCiWaitPolicy` -- the same ciWait.rerunPolicy resolution
+//     `idd-ci.instructions.md` §Rerun mechanics makes this helper's own
+//     recovery recommendations subject to.
+//   - `deriveGhHttpStatus` -- discriminates a confirmed 404 (genuinely no
+//     remote config) from any other unreadable state, so a cross-repo
+//     config fetch fails closed instead of guessing (gh-http-status.mts).
 //   - `ghText`, `isCliExecution` -- shared `gh` execution + CLI-entry-point
 //     guard (gh-exec.mts).
 //   - `parsePaginatedGhNdjson` -- shared NDJSON pagination parser
@@ -65,11 +72,13 @@ import {
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   resolveAdvisoryPrimaryBotLogin,
 } from './advisory-wait-policy.mjs';
+import { normalizeCiWaitPolicy } from './ci-wait-policy.mjs';
 import { ghApiJson, ghText, isCliExecution } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import { isValidIsoTimestamp } from './marker-helpers.mjs';
 import {
+  advisoryBotIdentityToken,
   isCopilotReviewerLogin,
   parsePaginatedGhNdjson,
   resolveAdvisoryBotLogins,
@@ -159,21 +168,43 @@ export function computeRerunPlan(input, options) {
     else if (instance.classification === 'unresolved') counts.unresolved += 1;
     else counts.rerunEligible += 1;
   }
-  const plan = buildOrderedPlan(
-    instances.filter(
-      (instance) => instance.classification === 'rerun-eligible',
-    ),
-    owner,
-    repo,
+  // idd-ci.instructions.md §Rerun mechanics makes the advisory-convergence
+  // recovery explicitly subject to the resolved ciWait.rerunPolicy ("a
+  // `hold` policy inspects instead"): a `hold` policy means a repository
+  // has deliberately opted out of automatic reruns, so this helper must
+  // not still hand an operator ready-to-run `gh run rerun` commands for
+  // either the normal plan or the recovery-refresh plan -- both are
+  // fundamentally "rerun an existing run" actions (#1434 review, Codex
+  // P1).
+  const rerunPolicy =
+    String(options.rerunPolicy ?? '').trim() === 'hold' ? 'hold' : 'rerun-once';
+  const holdPolicyActive = rerunPolicy === 'hold';
+  const eligibleInstances = instances.filter(
+    (instance) => instance.classification === 'rerun-eligible',
+  );
+  const plan = holdPolicyActive
+    ? []
+    : buildOrderedPlan(eligibleInstances, owner, repo);
+  const recoveryRefreshCandidates = selectRecoveryRefreshCandidates(
+    instances,
+    classifyOptions,
   );
   const recoveryRefreshPlan =
-    plan.length === 0
-      ? buildOrderedPlan(
-          selectRecoveryRefreshCandidates(instances, classifyOptions),
-          owner,
-          repo,
-        )
+    !holdPolicyActive && plan.length === 0
+      ? buildOrderedPlan(recoveryRefreshCandidates, owner, repo)
       : [];
+  const suppressedCount =
+    holdPolicyActive && plan.length === 0 && recoveryRefreshPlan.length === 0
+      ? eligibleInstances.length
+      : 0;
+  const suppressedRefreshCount =
+    holdPolicyActive && recoveryRefreshPlan.length === 0
+      ? recoveryRefreshCandidates.length
+      : 0;
+  const rerunPolicyHoldNotice =
+    holdPolicyActive && (suppressedCount > 0 || suppressedRefreshCount > 0)
+      ? `ciWait.rerunPolicy is "hold": ${suppressedCount} rerun-eligible instance(s)${suppressedRefreshCount > 0 ? ` and ${suppressedRefreshCount} recovery-refresh candidate(s)` : ''} found, but auto-rerun is disallowed by this repository's policy -- a maintainer must manually decide (see idd-ci.instructions.md §Rerun mechanics).`
+      : '';
   return {
     protocolVersion: '1',
     prNumber: Number(input.prNumber),
@@ -187,6 +218,8 @@ export function computeRerunPlan(input, options) {
     recoveryRefreshPlan,
     recoveryRefreshCaveat:
       recoveryRefreshPlan.length > 0 ? RECOVERY_REFRESH_CAVEAT : '',
+    rerunPolicy,
+    rerunPolicyHoldNotice,
   };
 }
 /**
@@ -323,6 +356,15 @@ function classifyInstance(instance, options) {
  * configured-login match (`isCopilotReviewerLogin` for the primary
  * advisory bot, or membership in the resolved `advisoryBotLogins` list)
  * is a defensive fallback for a payload that omits `type`.
+ *
+ * The `advisoryBotLogins` fallback compares via
+ * {@link advisoryBotIdentityToken} (the same normalization the shared
+ * advisory-notice matcher already uses) rather than a raw, un-normalized
+ * set lookup: a repository can configure a bare login (`my-bot`) while
+ * the Actions payload reports the GitHub-appended `[bot]`-suffixed form
+ * (`my-bot[bot]`), or vice versa. An un-normalized comparison would miss
+ * that match and let a bot-triggered run fall through as rerun-eligible
+ * (#1434 review, Codex P2).
  */
 function isBotTriggered(instance, options) {
   if (instance.actorType === 'Bot' || instance.triggeringActorType === 'Bot') {
@@ -342,8 +384,15 @@ function isBotTriggered(instance, options) {
   ) {
     return true;
   }
-  const configuredBots = new Set(options.advisoryBotLogins);
-  return configuredBots.has(actorLogin) || configuredBots.has(triggeringLogin);
+  const configuredBotTokens = new Set(
+    options.advisoryBotLogins.map((login) => advisoryBotIdentityToken(login)),
+  );
+  const actorToken = advisoryBotIdentityToken(actorLogin);
+  const triggeringToken = advisoryBotIdentityToken(triggeringLogin);
+  return (
+    (Boolean(actorToken) && configuredBotTokens.has(actorToken)) ||
+    (Boolean(triggeringToken) && configuredBotTokens.has(triggeringToken))
+  );
 }
 /**
  * Build the ordered, deduplicated-by-run-id rerun plan from an already-
@@ -539,6 +588,11 @@ itself.
 --owner and --repo must be given together (to inspect a PR outside the
 current checkout) or omitted together (to auto-detect the current
 checkout's own repository) -- providing only one is rejected.
+
+Honors the inspected repository's configured ciWait.rerunPolicy: when
+it is "hold", both the rerun plan and the recovery-refresh plan stay
+empty (with a notice explaining why) instead of recommending reruns a
+repository has deliberately opted out of.
 
 On a normal (non-help) run, stdout carries ONLY the JSON plan document
 (safe to pipe into "jq" or similar); the human-readable recovery-plan
@@ -772,6 +826,10 @@ function collectFromGitHub(args) {
     envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
     config: rawConfig,
   });
+  // Same config source as the bot-identity fields above -- the inspected
+  // repo's own ciWait.rerunPolicy for a cross-repo invocation, never the
+  // caller's local one.
+  const { rerunPolicy } = normalizeCiWaitPolicy(rawConfig?.ciWait);
   return {
     input: {
       prNumber: Number(args.prNumber),
@@ -785,6 +843,7 @@ function collectFromGitHub(args) {
       now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
       primaryBotLogin,
       advisoryBotLogins,
+      rerunPolicy,
     },
   };
 }
@@ -821,6 +880,8 @@ if (isCliExecution(import.meta.url)) {
         process.stderr.write(`  ${index + 1}. ${entry.command}\n`);
       });
       process.stderr.write(`\n${plan.recoveryRefreshCaveat}\n`);
+    } else if (plan.rerunPolicyHoldNotice) {
+      process.stderr.write(`\n${plan.rerunPolicyHoldNotice}\n`);
     } else {
       process.stderr.write(`\n${describeNoActionState(plan)}\n`);
     }
