@@ -205,6 +205,13 @@ function parsePositiveIntToken(token: string, label: string): number {
   return parsed;
 }
 
+// Excluded from the #1446 cli-args.mts wrapper: `fields` below collects
+// per-marker-type keys dynamically (each `--type` accepts a different
+// field set) rather than a fixed declared spec. `util.parseArgs`'s
+// `strict: true` rejects any option not named in its static spec, and
+// `strict: false` would instead coerce every unrecognized flag to `true`
+// -- neither matches this file's "accept whatever fields this marker type
+// needs" contract.
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
     type: '',

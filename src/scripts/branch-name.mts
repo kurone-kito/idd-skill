@@ -14,6 +14,8 @@
 // the same issue. The written algorithm remains the canonical spec and
 // fallback; this helper only removes the hand-tracing error surface.
 
+import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mts';
+
 // The fixed stop-word set from pre-check (e). Whole-token matches only.
 const STOP_WORDS: ReadonlySet<string> = new Set([
   'a',
@@ -30,6 +32,25 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
 
 const MAX_SLUG_LENGTH = 40;
 const FALLBACK_SLUG = 'task';
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `number:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --number spec key
+// below. See cli-args.mts's module header for the full invariant.
+// (Deliberately not written inside matching quote marks in this comment --
+// see advisory-convergence.mts's identical note for why.)
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls runCli() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires (see #1177's entry-order TDZ hardening for the same class
+// of bug in this file).
+const BRANCH_NAME_FLAG_SPEC = {
+  '--number': { type: 'string' },
+  '--title': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
 
 if (import.meta.main) {
   runCli();
@@ -112,49 +133,13 @@ function runCli(): void {
   );
 }
 
-/**
- * Parse a canonical positive-integer command-line token (whole-token
- * `^[1-9]\d*$`, e.g. `"42"`) and return the parsed value, or `null` when the
- * token is not a canonical positive integer. `Number.parseInt` alone is too
- * lenient for CLI validation: it silently truncates `"3.5"` to `3` and
- * `"5abc"` to `5` before any positivity check ever runs, so the check must
- * run against the raw string, not the already-parsed (and already-lossy)
- * number.
- */
-function parsePositiveInteger(token: string): number | null {
-  return /^[1-9]\d*$/.test(token) ? Number.parseInt(token, 10) : null;
-}
-
 function parseArgs(argv: string[]): ParsedArgs {
-  const parsed: ParsedArgs = { number: null, title: null, help: false };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    const requireValue = (): string => {
-      if (value === undefined || value.startsWith('--')) {
-        throw new Error(`missing value for argument: ${token}`);
-      }
-      return value;
-    };
-    if (token === '--number') {
-      parsed.number = parsePositiveInteger(requireValue());
-      index += 1;
-      continue;
-    }
-    if (token === '--title') {
-      parsed.title = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-
-  return parsed;
+  const { values, help } = parseCliArgs(argv, BRANCH_NAME_FLAG_SPEC);
+  return {
+    number: parseCanonicalIntegerOrNull(values.number as string | undefined),
+    title: typeof values.title === 'string' ? values.title : null,
+    help,
+  };
 }
 
 function printHelp(): void {

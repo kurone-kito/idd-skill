@@ -275,3 +275,62 @@ test('readCiWaitPolicy falls back to defaults when its own ciWait section is sch
 
   assert.deepEqual(readCiWaitPolicy(configPath), { ...DEFAULT_CI_WAIT_POLICY });
 });
+
+/** Run the built ci-wait-policy CLI expecting a non-zero exit, and return
+ * its stderr. Mirrors tests/branch-name.test.mts's runCliExpectFailure:
+ * asserting against error.stderr directly (rather than pattern-matching
+ * assert.throws() against the thrown error's own .message) is the
+ * established, robust pattern in this repo's CLI end-to-end tests --
+ * execFileSync's thrown error's .message is documented as a
+ * "Command failed: ..." wrapper string and is not guaranteed to embed
+ * the child's stderr text (Copilot review finding on #1446 / PR #1459). */
+function runCliExpectFailure(args: string[]): {
+  status: number;
+  stderr: string;
+} {
+  try {
+    execFileSync(process.execPath, args, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    throw new Error('expected the CLI to exit non-zero, but it succeeded');
+  } catch (error) {
+    const status = (error as { status?: number }).status;
+    const stderr = String((error as { stderr?: unknown }).stderr ?? '');
+    assert.ok(
+      typeof status === 'number' && status !== 0,
+      `expected a non-zero exit status, got ${String(status)}`,
+    );
+    return { status: status as number, stderr };
+  }
+}
+
+// #1446: --rerun-count migrated onto the shared cli-args.mts wrapper's
+// "throw" integer contract (parseCanonicalIntegerOrThrow, min: 0). This
+// exercises the CLI end-to-end to demonstrate the throw survives migration
+// -- no earlier test in this file covered the invalid/negative CLI path.
+test('CLI --rerun-count still throws on a non-negative-integer violation', () => {
+  for (const rerunCount of ['-1', 'not-a-number', '3.5']) {
+    const { stderr } = runCliExpectFailure([
+      join(REPO_ROOT, 'scripts/ci-wait-policy.mjs'),
+      '--rerun-count',
+      rerunCount,
+    ]);
+    assert.match(
+      stderr,
+      /invalid value for argument: --rerun-count/,
+      `expected --rerun-count ${rerunCount} to throw with that message`,
+    );
+  }
+});
+
+test('CLI --rerun-count 0 does not throw (0 is a valid non-negative value)', () => {
+  const output = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [join(REPO_ROOT, 'scripts/ci-wait-policy.mjs'), '--rerun-count', '0'],
+      { encoding: 'utf8' },
+    ),
+  );
+  assert.equal(output.rerunDecision.rerunCount, 0);
+});
