@@ -678,6 +678,24 @@ test('prose-dependency does not warn on a plain breadcrumb reference', () => {
   assert.equal(finding?.severity, undefined);
 });
 
+test('prose-dependency does not warn on a cross-repo shorthand reference', () => {
+  // Regression test for a real false-positive risk: `owner/repo#123` is a
+  // cross-repo reference that cannot be encoded via this repository's local
+  // `Blocked by` / `Depends on` markers, so the bare-`#` alternative must not
+  // match the trailing `#123` merely because it is preceded by a word
+  // character (the repo-name slug) rather than treating it as a local
+  // reference.
+  const body = childBody({
+    extraMarkers:
+      'Before starting this, confirm kurone-kito/other-repo#123 has shipped.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, undefined);
+});
+
 test('prose-dependency does not warn when the reference already has a Blocked by encoding', () => {
   const body = childBody({
     extraMarkers: 'Blocked by #1391\n\nOnce #1391 merges, this can start.',

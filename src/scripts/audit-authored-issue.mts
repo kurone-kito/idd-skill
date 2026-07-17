@@ -145,8 +145,15 @@ const PROSE_DEPENDENCY_KEYWORDS = [
 
 // Matches a bare `#123` issue/PR reference or a full GitHub issue/PR URL.
 // `#` alone (as in an ATX heading) never matches without trailing digits.
+// The bare-`#` alternative excludes a `#` immediately preceded by a word
+// character or `/` (a negative lookbehind), so cross-repo shorthand like
+// `other/repo#123` does not match on its trailing `#123` — a cross-repo
+// reference cannot be encoded with this repository's local `Blocked by` /
+// `Depends on` markers, so flagging it here would be misleading rather than
+// actionable. The full-URL alternative already requires a literal
+// `https://github.com/` prefix, so it is unaffected by this exclusion.
 const ISSUE_OR_PR_REFERENCE_PATTERN =
-  /#(\d+)\b|https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/(\d+)\b/gi;
+  /(?<![\w/])#(\d+)\b|https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/(\d+)\b/gi;
 
 if (isCliExecution(import.meta.url)) {
   main();
