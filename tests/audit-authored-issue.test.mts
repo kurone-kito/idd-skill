@@ -969,7 +969,7 @@ test('prose-dependency does not warn on a cross-repo Markdown link whose fragmen
   // fragment charset restricted to [\w-]+ rejects a fragment containing a
   // `.` (e.g. a heading-anchor-style fragment), which fails the whole
   // Markdown-link alternative and reintroduces the exact label-leak this
-  // shape exists to prevent -- the same failure mode as an untolerated
+  // shape exists to prevent -- the same failure mode as not tolerating a
   // fragment at all, just triggered by an overly narrow charset instead.
   const body = childBody({
     extraMarkers:
