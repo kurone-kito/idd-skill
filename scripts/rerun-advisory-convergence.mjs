@@ -822,8 +822,16 @@ function collectFromGitHub(args) {
     ? loadRemoteIddConfig(owner, repo)
     : loadIddConfig();
   const primaryBotLogin = resolveAdvisoryPrimaryBotLogin(rawConfig);
+  // The caller's local IDD_ADVISORY_BOT_LOGINS env var describes the
+  // *local* checkout's own advisory bots. resolveAdvisoryBotLogins gives
+  // an env value priority over `config`, so passing it unconditionally
+  // would let a local-context env var silently override the *target*
+  // repository's own configured bot logins during a true cross-repo
+  // diagnosis -- undermining the config-binding fix above. Omit it for a
+  // cross-repo invocation so resolution falls through to the target
+  // repo's own config (#1434 review, Codex P2).
   const { logins: advisoryBotLogins } = resolveAdvisoryBotLogins({
-    envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
+    envValue: isCrossRepo ? '' : process.env.IDD_ADVISORY_BOT_LOGINS,
     config: rawConfig,
   });
   // Same config source as the bot-identity fields above -- the inspected
