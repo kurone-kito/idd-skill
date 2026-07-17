@@ -119,7 +119,7 @@ export interface IddRoadmapAuditExecuteVerdict {
    * lookup failure; callers should treat any not-owned result alongside
    * this flag as inconclusive rather than a confirmed claim loss.
    */
-  viewerLoginUnavailable?: boolean;
+  viewerLoginUnavailable?: true;
 }
 
 /** Outcome of re-validating the roadmap-audit claim before any mutation. */
