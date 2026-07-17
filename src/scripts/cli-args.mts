@@ -87,8 +87,14 @@ export interface CliParseResult {
   /** Convenience mirror of `values.help` (present whenever the caller's
    * spec declares a --help entry), defaulting to `false` when absent.
    * Never triggers `process.exit` itself -- the caller decides what to do
-   * with a true value, exactly like the pre-migration parsers, none of
-   * which exit from inside their own parse loop. */
+   * with a true value. This wrapper's own 3 pilot migrations (branch-name,
+   * ci-wait-policy, advisory-convergence) already had this property before
+   * migration -- their exit call was in the outer `runCli()`, never inside
+   * `parseArgs()` itself. Not a claim about every pre-migration parser in
+   * this repository: the issue this wrapper was built for (#1446) names 8
+   * OTHER, not-yet-migrated helpers that do exit from inside their own
+   * parse loop (e.g. `discover-roadmap-graph.mts`) -- exactly the property
+   * a future migration onto this wrapper fixes for them. */
   help: boolean;
 }
 
@@ -99,11 +105,20 @@ const NODE_OPTION_KEY_PATTERN = /^--[A-Za-z0-9][A-Za-z0-9-]*$/;
  * `ERR_PARSE_ARGS_INVALID_OPTION_VALUE` ("... argument is ambiguous") for
  * `--flag VALUE` whenever VALUE starts with a single dash and could
  * plausibly be another option -- even plainly-numeric values like `-3`
- * (Node's own error message suggests the fix: `--flag=-XYZ`). The
- * pre-migration hand-rolled parsers never had this ambiguity:
- * `requireValue()` only ever rejected a value that itself starts with
- * `--` (a long flag), always accepting a single-dash-prefixed token as the
- * literal value. Rewriting `--flag VALUE` to `--flag=VALUE` up front for
+ * (Node's own error message suggests the fix: `--flag=-XYZ`). This
+ * wrapper's own pre-migration pilots (`branch-name.mts`,
+ * `ci-wait-policy.mts`) never had this ambiguity: each had a
+ * `requireValue()`-style helper that only rejected a value starting with
+ * `--` (a long flag), always accepting a single-dash-prefixed token like
+ * `-3` as the literal value -- and `branch-name.test.mts`'s existing
+ * `'0'`/`'-3'` test requires that exact contract to keep working
+ * unchanged after migration. This is not a claim about every hand-rolled
+ * parser in the repository: at least one (`review-disposition-verify.mts`)
+ * rejects any single-dash-prefixed value, not only a `--`-prefixed one, so
+ * a future migration of that file (or a similarly-stricter one) needs its
+ * own contract check, not an assumption that this preprocessing is a
+ * drop-in behavioral match for every existing parser. Rewriting `--flag
+ * VALUE` to `--flag=VALUE` up front for
  * every declared `string`-type flag (whenever VALUE is present and does
  * not itself start with `--`) restores that established contract without
  * weakening the genuine flag-shaped-value guard: a VALUE that starts with
