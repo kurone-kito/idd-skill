@@ -72,7 +72,6 @@
 // This helper never mutates GitHub state: it only reads check-run/run data
 // and prints a diagnosis plus a plan of commands for a human (or a future
 // --apply follow-up) to execute.
-import { execFileSync } from 'node:child_process';
 import { parseArgs as nodeParseArgs } from 'node:util';
 import {
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
@@ -795,10 +794,18 @@ export function resolveCheckRunUrl(run) {
   return String(run.details_url ?? run.html_url ?? '');
 }
 function fetchCheckRunsForRef(owner, repo, ref, checkName) {
-  const raw = execFileSync(
-    'gh',
+  // GH_TEXT_LOOP_TIMEOUT_OPTIONS (stdin ignored, 30s timeout) here too --
+  // sibling gap to the per-run lookup loop's own fix above: this is the
+  // FIRST `gh` call this helper makes, and `--paginate` can mean several
+  // HTTP round-trips within the one `execFileSync` invocation on a busy
+  // PR's check-run history, so a stalled or unexpectedly-interactive `gh`
+  // (rate limiting, network stall, an auth re-prompt) here would hang this
+  // read-only helper before it ever reaches the fail-closed classification
+  // logic below, let alone the per-run loop's own timeout (#1434 review,
+  // Copilot).
+  const raw = ghText(
     buildCheckRunsForRefArgs(owner, repo, ref, checkName),
-    { encoding: 'utf8' },
+    GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   );
   return parsePaginatedGhNdjson(raw);
 }
