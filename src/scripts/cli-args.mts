@@ -110,6 +110,17 @@ const NODE_OPTION_KEY_PATTERN = /^--[A-Za-z0-9][A-Za-z0-9-]*$/;
  * `--` (i.e. looks like another long option) is deliberately left
  * untouched, so `['--owner', '--assert']` still reaches `util.parseArgs`
  * unmodified and still throws.
+ *
+ * A short alias (`short: 'p'`) hits the identical ambiguity for `-p -3`,
+ * but `-p=-3` does NOT fix it the way `--pr=-3` does: Node only special-
+ * cases `=` splitting for long options, so `-p=-3` parses as the literal
+ * value `"=-3"` (verified empirically), not `"-3"`. The short-token case
+ * is therefore rewritten onto the long dashed key's `=` form instead of
+ * onto its own short form -- `['-p', '-3']` becomes `['--pr=-3']`, not
+ * `['-p=-3']`. A short token with no matching long-flag entry in `spec`
+ * is left untouched (`util.parseArgs` will report its own unknown-option
+ * or missing-value error for it, same as before this preprocessing pass
+ * existed for the long-flag case).
  */
 function disambiguateSingleDashValues(
   argv: readonly string[],
@@ -120,17 +131,27 @@ function disambiguateSingleDashValues(
       .filter(([, flagSpec]) => flagSpec.type === 'string')
       .map(([dashedKey]) => dashedKey),
   );
+  const shortToLong = new Map(
+    Object.entries(spec)
+      .filter(([, flagSpec]) => flagSpec.type === 'string' && flagSpec.short)
+      .map(([dashedKey, flagSpec]) => [`-${flagSpec.short}`, dashedKey]),
+  );
   const rewritten: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     const next = argv[index + 1];
-    if (
-      stringFlags.has(token) &&
+    const isAmbiguousValue =
       typeof next === 'string' &&
       next.startsWith('-') &&
-      !next.startsWith('--')
-    ) {
+      !next.startsWith('--');
+    if (stringFlags.has(token) && isAmbiguousValue) {
       rewritten.push(`${token}=${next}`);
+      index += 1;
+      continue;
+    }
+    const longKey = shortToLong.get(token);
+    if (longKey !== undefined && isAmbiguousValue) {
+      rewritten.push(`${longKey}=${next}`);
       index += 1;
       continue;
     }
@@ -145,11 +166,32 @@ function disambiguateSingleDashValues(
  * '--pr <value>' argument missing"`, `"Option '--owner' argument is
  * ambiguous...."`, `"Option '--assert' does not take an argument"`, and
  * `"Unexpected argument 'stray'. ..."` (no leading dash, for a positional).
- * A single quoted-run capture handles all five: for the `--flag <value>`
- * shape it stops at the space before `<value>`, and for the rest it stops
- * at the closing quote. */
+ * A flag with a `short` alias adds a sixth shape for the "missing value"
+ * case specifically: Node reports the **combined** descriptor `"Option
+ * '-p, --pr <value>' argument missing"` regardless of which form the
+ * caller actually typed (verified empirically) -- the long form is always
+ * preferred when both appear together in the quoted span, matching this
+ * repository's established `--flag`-only error idiom. The "ambiguous" /
+ * "does not take an argument" messages never combine forms this way; they
+ * always echo exactly the single token the caller typed. */
 function extractFlagToken(message: string): string {
-  return /'(-{0,2}[\w-]+)/.exec(message)?.[1] ?? '<unknown>';
+  const quoted = /'([^']*)'/.exec(message)?.[1] ?? '';
+  if (!quoted.startsWith('-')) {
+    // Not a flag-shaped quoted span (the positional-argument case) --
+    // take the first whitespace/comma-delimited word verbatim. Checked
+    // before the flag-form searches below, which otherwise risk matching
+    // an embedded hyphen inside an ordinary word (e.g. "stray-positional").
+    return quoted.split(/[\s,]/)[0] || '<unknown>';
+  }
+  // Flag-shaped: prefer a long form found anywhere in the span -- Node's
+  // combined "-p, --pr <value>" missing-value message (a flag declared
+  // with a `short` alias) puts the long form second -- else fall back to
+  // the leading token (a lone short or long form with no combined pair).
+  return (
+    /(--[\w-]+)/.exec(quoted)?.[1] ??
+    /^(-{1,2}[\w-]+)/.exec(quoted)?.[1] ??
+    '<unknown>'
+  );
 }
 
 /**

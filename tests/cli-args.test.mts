@@ -8,7 +8,7 @@ import {
 } from '../src/scripts/cli-args.mts';
 
 const SAMPLE_SPEC = {
-  '--pr': { type: 'string' },
+  '--pr': { type: 'string', short: 'p' },
   '--owner': { type: 'string' },
   '--policy': { type: 'string', default: '.github/idd/config.json' },
   '--list': { type: 'string', multiple: true },
@@ -66,6 +66,25 @@ test('parseCliArgs: accepts a single-dash-prefixed value (e.g. a negative number
   // flows through to the caller's own validation instead of throwing here.
   const { values } = parseCliArgs(['--pr', '-3'], SAMPLE_SPEC);
   assert.equal(values.pr, '-3');
+});
+
+test('parseCliArgs: a short alias with a single-dash-prefixed value also avoids the ambiguity throw', () => {
+  // Copilot review finding on #1446: the short-option case hits the same
+  // Node ambiguity as the long-option case, but `-p=-3` does NOT fix it
+  // the way `--pr=-3` does -- Node only special-cases `=` splitting for
+  // long options, so `-p=-3` would parse as the literal value `"=-3"`.
+  // The preprocessing must rewrite the short-token case onto the long
+  // key's `=` form instead of its own short form.
+  const { values } = parseCliArgs(['-p', '-3'], SAMPLE_SPEC);
+  assert.equal(values.pr, '-3');
+});
+
+test('parseCliArgs: a short alias still rejects a flag-shaped value', () => {
+  // The reported token echoes exactly what was typed (-p), not the long
+  // form -- Node's own error message names the short token here.
+  assert.throws(() => parseCliArgs(['-p', '--assert'], SAMPLE_SPEC), {
+    message: 'missing value for argument: -p',
+  });
 });
 
 test('parseCliArgs: repeated non-multiple flags -- last one wins (Node native behavior)', () => {
