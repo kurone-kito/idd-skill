@@ -7,7 +7,6 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
@@ -18,6 +17,8 @@ import {
 import { planHandoff } from './forced-handoff-marker.mts';
 import { ghText, safeGhText } from './gh-exec.mts';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
+import type { PromptFn } from './readline-prompt.mts';
+import { makeReadlinePrompt } from './readline-prompt.mts';
 
 /** Author reference embedded in GitHub REST payloads. */
 interface GhAuthorPayload {
@@ -43,11 +44,6 @@ interface PostedCommentPayload {
   html_url?: string | null;
   url?: string | null;
 }
-
-/** Interactive prompt function with an optional readline close hook. */
-type PromptFn = ((question: string) => Promise<string>) & {
-  close?: () => void;
-};
 
 /** Options accepted by {@link runHandoff}. */
 interface RunHandoffOptions {
@@ -262,18 +258,6 @@ export function main(): void {
     process.stderr.write(`Error: ${(err as Error).message}\n`);
     process.exit(1);
   });
-}
-
-function makeReadlinePrompt(): PromptFn {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask: PromptFn = (question) =>
-    new Promise((resolve) =>
-      rl.question(question, (answer) => {
-        resolve(answer);
-      }),
-    );
-  ask.close = () => rl.close();
-  return ask;
 }
 
 function parsePositiveInteger(value: unknown, flag: string): number {
