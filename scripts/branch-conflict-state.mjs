@@ -376,6 +376,74 @@ function probeConflictFilesReadOnly(
     return null;
   }
 }
+/** Default `origin` URL reader: `git remote get-url origin` in the current
+ * working directory (this file's other git probes are likewise un-scoped
+ * to a `-C <dir>`, since they always run from inside the target checkout).
+ * `gitText` already swallows any git failure and returns `''`. */
+function readOriginRemoteUrl() {
+  return gitText(['remote', 'get-url', 'origin']);
+}
+/**
+ * Parse the host (hostname, plus `:port` when meaningful) from a git
+ * remote URL. Supports both URL-scheme forms parseable by the WHATWG URL
+ * parser (`https://host[:port]/owner/repo.git`,
+ * `ssh://git@host[:port]/owner/repo.git`) and the scp-like SSH shorthand
+ * (`git@host:owner/repo.git`, which has no `://` scheme and is not
+ * `URL`-parseable).
+ *
+ * Port handling is scheme-aware: an `http(s)://` origin's port is
+ * preserved, since it is directly reusable for the `https://` fetch URL
+ * this resolves for; an `ssh://` origin's port is dropped, since an SSH
+ * port is frequently unrelated to a GHES instance's HTTPS port behind a
+ * reverse proxy, and carrying it over would silently build a wrong URL.
+ * The scp-like shorthand has no port syntax of its own.
+ *
+ * Returns `null` for empty, unparseable, or host-less input (e.g. a
+ * `file://` URL, whose `hostname` is `''`) so callers fall back to
+ * another signal. The host is lowercased for consistent comparison —
+ * DNS/HTTP hosts are case-insensitive.
+ */
+export function parseGitHostFromUrl(url) {
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes('://')) {
+    try {
+      const parsed = new URL(trimmed);
+      if (!parsed.hostname) return null;
+      const isHttp =
+        parsed.protocol === 'http:' || parsed.protocol === 'https:';
+      return (isHttp ? parsed.host : parsed.hostname).toLowerCase();
+    } catch {
+      return null;
+    }
+  }
+  // scp-like shorthand: [user@]host:path (no scheme, so URL() can't parse it).
+  const scpMatch = trimmed.match(/^(?:[^@\s]+@)?([^:/\s]+):/);
+  return scpMatch ? scpMatch[1].toLowerCase() : null;
+}
+/**
+ * Resolve the git host to use for the read-only base-ref fetch fallback in
+ * {@link tryFetchBase}, instead of hardcoding `github.com` (#1454) — a
+ * GitHub Enterprise Server (GHES) checkout must fetch from its own host,
+ * or the fallback silently targets an unrelated github.com repo of the
+ * same owner/repo name (or just fails outright). Preference order:
+ *
+ * 1. The `GH_HOST` environment variable — the same override `gh` itself
+ *    honors — when set and non-blank.
+ * 2. The host parsed from the local checkout's `origin` remote URL. This
+ *    assumes the fetch-worthy remote is named `origin`, matching every
+ *    other git probe in this file; an unusual multi-remote checkout that
+ *    names its GHES remote something else falls through to (3).
+ * 3. `github.com`, the pre-existing default, when neither signal
+ *    resolves.
+ */
+export function resolveFetchHost(env = process.env, readers = {}) {
+  const ghHost = env.GH_HOST?.trim();
+  if (ghHost) return ghHost;
+  const readOriginUrl = readers.readOriginUrl ?? readOriginRemoteUrl;
+  const originHost = parseGitHostFromUrl(readOriginUrl());
+  return originHost || 'github.com';
+}
 function tryFetchBase(prBaseRef, owner, repo, notes) {
   if (!prBaseRef) return;
   if (!owner || !repo) {
@@ -385,7 +453,7 @@ function tryFetchBase(prBaseRef, owner, repo, notes) {
     return;
   }
   try {
-    const remote = `https://github.com/${owner}/${repo}.git`;
+    const remote = `https://${resolveFetchHost()}/${owner}/${repo}.git`;
     execFileSync(
       'git',
       ['fetch', '--no-tags', '--depth=1', remote, prBaseRef],
