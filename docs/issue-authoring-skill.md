@@ -420,7 +420,31 @@ a non-`1` score paired with the label still passes), markerPrefix
 consistency across every authoring marker, the declared shape's
 required section headings, the roadmap-id/blocked-by dependency-marker
 rules, and visible/hidden line agreement for the suitability and effort
-footers:
+footers.
+
+It also emits one **advisory, warning-severity-only** finding
+(`prose-dependency`): it flags an issue/PR reference (`#<digits>` or a
+full GitHub issue/PR URL) used near coordination language (for example
+"before", "after", "once", "until", "predates", "gate"/"gated",
+"requires", "lands first") with no corresponding encoding for that
+reference as one of three recognized forms — a `Blocked by #NNN` line,
+a `Depends on #NNN` line, or a task-list checkbox item (`- [ ] #NNN`,
+which counts regardless of which heading it sits under, so a roadmap's
+own `## Tracks` membership list already satisfies this) — the
+prose-only hard-precondition pattern the
+[Hidden human-dependency validation](#hidden-human-dependency-validation)
+check above warns about. A full-URL reference naming a different
+repository is never flagged when the caller supplies the current
+`owner/repo` (`--current-repo`, defaulting to `$GITHUB_REPOSITORY` in
+CI) — a cross-repo dependency cannot be encoded with these
+repository-local markers, so flagging it would recommend an impossible
+fix; without that context a full-URL reference is still flagged by
+default, unless its number happens to already match a local dependency
+marker elsewhere in the body. A
+`prose-dependency` warning never flips `passed` to
+`false` and never changes the linter's exit code; it prompts the author
+to convert the prose into a proper dependency marker or consciously
+confirm the reference is a mere breadcrumb.
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \

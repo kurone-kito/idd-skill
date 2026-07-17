@@ -651,6 +651,281 @@ test('effort-visible-line-agreement fails when a well-formed marker is accompani
   assert.match(finding?.detail ?? '', /found 2/);
 });
 
+// --- prose-dependency (advisory, warning-severity only) ---
+
+test('prose-dependency warns on coordination language with an unencoded reference', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before merging this, confirm PR #1391 already lands the base change.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+  assert.equal(report.passed, true);
+});
+
+test('prose-dependency does not warn on a plain breadcrumb reference', () => {
+  const body = childBody({ extraMarkers: 'Refs #1391 for background.' });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not warn on a cross-repo shorthand reference', () => {
+  // Regression test for a real false-positive risk: `owner/repo#123` is a
+  // cross-repo reference that cannot be encoded via this repository's local
+  // `Blocked by` / `Depends on` markers, so the bare-`#` alternative must not
+  // match the trailing `#123` merely because it is preceded by a word
+  // character (the repo-name slug) rather than treating it as a local
+  // reference.
+  const body = childBody({
+    extraMarkers:
+      'Before starting this, confirm kurone-kito/other-repo#123 has shipped.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not warn when the reference already has a Blocked by encoding', () => {
+  const body = childBody({
+    extraMarkers: 'Blocked by #1391\n\nOnce #1391 merges, this can start.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not warn when the reference already has a Depends on encoding', () => {
+  const body = childBody({
+    extraMarkers: 'Depends on #1391\n\nOnce #1391 merges, this can start.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not warn on a roadmap-parent breadcrumb sharing a paragraph with unrelated coordination language', () => {
+  // Regression test for a real false-positive risk found while designing
+  // this check: "Part of ... roadmap (#N)" is a common breadcrumb phrasing
+  // in this repository's own issues, and the same long paragraph may
+  // separately use a coordination word like "before" for something
+  // unrelated later on. Paragraph-level scoping would conflate the two;
+  // sentence-level scoping must not.
+  const body = childBody({
+    extraMarkers:
+      'Part of the field-report batch-6 roadmap (#1386). The other ' +
+      'session held before confirming the fix, unrelated to this reference.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not warn on a breadcrumb in one list item sharing a tight list with an unrelated coordination-language item', () => {
+  // Regression test for a real false-positive risk: splitIntoSentences()
+  // collapses all internal newlines to spaces before splitting on
+  // terminal punctuation, so a tight Markdown list (items with no blank
+  // line between them) with no periods at all would otherwise be treated
+  // as one giant "sentence" spanning every bullet -- reintroducing the
+  // exact same-paragraph conflation the roadmap-parent-breadcrumb test
+  // above already guards against, just via list items instead of a long
+  // prose paragraph.
+  const body = childBody({
+    extraMarkers:
+      '- Part of roadmap #1386\n' +
+      '- Before starting, confirm PR #1391 already lands the base change',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, 'warning');
+  assert.match(finding.detail, /#1391/);
+  assert.doesNotMatch(finding.detail, /#1386/);
+});
+
+test('prose-dependency recognizes a full GitHub issue/PR URL reference', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      'https://github.com/kurone-kito/idd-skill/pull/1391 has merged.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency still recognizes a full GitHub issue/PR URL reference when currentRepo matches', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      'https://github.com/kurone-kito/idd-skill/pull/1391 has merged.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency still recognizes a local URL wrapped in a Markdown link', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/idd-skill/pull/1391) has merged.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency does not warn on a cross-repo full GitHub issue/PR URL reference when currentRepo is known', () => {
+  // Regression test for a real false-positive risk: the encodings this
+  // check recommends (`Blocked by #N` / `Depends on #N`) are inherently
+  // local, so flagging a cross-repo URL reference gives actively wrong
+  // advice, not just a nuisance false positive. Filtering requires an
+  // explicit currentRepo (see the sibling "unknown repo" test below for
+  // the unchanged default when it is absent).
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      'https://github.com/kurone-kito/other-repo/pull/1391 has merged.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency does not warn on a cross-repo URL wrapped in a Markdown link whose label repeats the same #N', () => {
+  // Regression test for a real false-positive risk found by review on this
+  // same PR: a cross-repo reference is often presented as a normal Markdown
+  // link whose label repeats the issue number, e.g.
+  // `[PR #1391](https://github.com/owner/other-repo/pull/1391)`. The URL is
+  // correctly skipped as cross-repo, but without treating the whole link as
+  // one match, the label's own bare `#1391` text would be independently
+  // caught by the bare-# alternative and (wrongly) treated as local,
+  // contradicting the guarantee the sibling test above establishes.
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      '[PR #1391](https://github.com/kurone-kito/other-repo/pull/1391) has shipped.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency still warns on a cross-repo URL reference when currentRepo is unknown', () => {
+  // Preserves the pre-#1399-fix default (flag every full-URL reference)
+  // when the caller cannot supply repo context, since a bare owner/repo
+  // cannot be inferred from the body text alone.
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      'https://github.com/kurone-kito/other-repo/pull/1391 has merged.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency currentRepo comparison is case-insensitive', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      'https://github.com/Kurone-Kito/IDD-Skill/pull/1391 has merged.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+});
+
+test('prose-dependency leaves passed and the exit code unchanged even when it warns', () => {
+  const body = childBody({
+    extraMarkers: 'This requires #1391 merged first.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.equal(finding?.result, 'pass');
+  assert.equal(report.passed, true);
+});
+
+test('prose-dependency ignores a coordination word and reference that only appear inside a fenced example', () => {
+  const body = childBody({
+    extraMarkers: [
+      'For reference, phrasing to avoid looks like:',
+      '',
+      '```markdown',
+      'Before doing X, verify PR #1391 already does Y.',
+      '```',
+    ].join('\n'),
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
 // --- shape / markerPrefix pass-through ---
 
 test('the report echoes the declared shape and resolved markerPrefix', () => {
