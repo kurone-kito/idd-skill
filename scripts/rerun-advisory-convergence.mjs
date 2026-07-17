@@ -109,6 +109,8 @@ const PULL_REQUEST_FAMILY_EVENTS = new Set([
 ]);
 const PLAN_CAVEAT =
   'Rerun the rerun-eligible instances ONE AT A TIME, in the order listed below, waiting for each `gh run rerun` to finish before starting the next -- rerunning several concurrently makes them cancel each other via the shared concurrency group.';
+const RECOVERY_REFRESH_CAVEAT =
+  'No rerun-eligible instance exists, but at least one check-run is bot-gated-skip and at least one already-PASSING non-bot pull_request-family instance exists for this SHA. Per idd-ci.instructions.md Rerun mechanics, rerunning that already-passing instance (not the bot-gated one) is the documented way to force a fresh non-bot-triggered evaluation and clear a required-check rollup pinned to the stale bot-gated state -- the instance itself does not need to change its outcome.';
 /**
  * Compute the deterministic rerun-plan verdict from already-fetched and
  * already-enriched check-run instances. Pure (no I/O), so it is directly
@@ -155,6 +157,21 @@ export function computeRerunPlan(input, options) {
     else if (instance.classification === 'unresolved') counts.unresolved += 1;
     else counts.rerunEligible += 1;
   }
+  const plan = buildOrderedPlan(
+    instances.filter(
+      (instance) => instance.classification === 'rerun-eligible',
+    ),
+    owner,
+    repo,
+  );
+  const recoveryRefreshPlan =
+    plan.length === 0
+      ? buildOrderedPlan(
+          selectRecoveryRefreshCandidates(instances, classifyOptions),
+          owner,
+          repo,
+        )
+      : [];
   return {
     protocolVersion: '1',
     prNumber: Number(input.prNumber),
@@ -163,9 +180,36 @@ export function computeRerunPlan(input, options) {
     now,
     instances,
     counts,
-    plan: buildOrderedPlan(instances, owner, repo),
+    plan,
     planCaveat: PLAN_CAVEAT,
+    recoveryRefreshPlan,
+    recoveryRefreshCaveat:
+      recoveryRefreshPlan.length > 0 ? RECOVERY_REFRESH_CAVEAT : '',
   };
+}
+/**
+ * Select already-passing, non-bot, pull_request-family instances eligible
+ * to serve as the recovery-refresh target when no genuine rerun-eligible
+ * instance exists but a bot-gated-skip instance does -- see
+ * {@link RerunAdvisoryConvergencePlan.recoveryRefreshPlan}. Reuses the
+ * exact same bot-detection logic ({@link isBotTriggered}) classification
+ * already applies, so a "passing" instance is never suggested for rerun
+ * if it was itself bot-triggered (rerunning it would not help either).
+ */
+function selectRecoveryRefreshCandidates(instances, options) {
+  const hasBotGatedSkip = instances.some(
+    (instance) => instance.classification === 'bot-gated-skip',
+  );
+  if (!hasBotGatedSkip) return [];
+  return instances.filter((instance) => {
+    if (instance.classification !== 'pass') return false;
+    if (instance.runId === null || instance.runLookupFailed) return false;
+    const runEvent = String(instance.runEvent ?? '')
+      .trim()
+      .toLowerCase();
+    if (!PULL_REQUEST_FAMILY_EVENTS.has(runEvent)) return false;
+    return !isBotTriggered(instance, options);
+  });
 }
 function normalizeLoginList(logins) {
   return logins
@@ -300,13 +344,15 @@ function isBotTriggered(instance, options) {
   return configuredBots.has(actorLogin) || configuredBots.has(triggeringLogin);
 }
 /**
- * Build the ordered, deduplicated-by-run-id rerun plan from already-
- * classified instances. A `gh run rerun <id>` targets a workflow run, not
- * a check-run entry, so two check-run instances that resolved to the same
- * run id collapse into a single plan entry. Ordered by earliest known
- * `startedAt` (empty/unknown sorts first, as the more cautious default),
- * then numeric run id, so the output is deterministic across runs with the
- * same input.
+ * Build the ordered, deduplicated-by-run-id rerun plan from an already-
+ * filtered candidate list (the caller decides which classification(s)
+ * qualify -- `rerun-eligible` for the normal plan,
+ * {@link selectRecoveryRefreshCandidates}'s output for the recovery-refresh
+ * plan). A `gh run rerun <id>` targets a workflow run, not a check-run
+ * entry, so two check-run instances that resolved to the same run id
+ * collapse into a single plan entry. Ordered by earliest known `startedAt`
+ * (empty/unknown sorts first, as the more cautious default), then numeric
+ * run id, so the output is deterministic across runs with the same input.
  *
  * `owner`/`repo` are embedded as `-R owner/repo` on each generated command
  * (when both are non-empty) so the plan is safe to run from outside the
@@ -314,16 +360,14 @@ function isBotTriggered(instance, options) {
  * resolves its target repository from the caller's cwd/`GH_REPO`, not from
  * whatever `--owner`/`--repo` this helper was given.
  */
-function buildOrderedPlan(instances, owner, repo) {
+function buildOrderedPlan(candidates, owner, repo) {
   const repoFlag = owner && repo ? ` -R ${owner}/${repo}` : '';
-  const eligible = instances.filter(
-    (instance) => instance.classification === 'rerun-eligible',
-  );
   const byRunId = new Map();
-  for (const instance of eligible) {
-    // rerun-eligible is only ever reached with a resolved, non-null runId
-    // (see classifyInstance step 4), but guard defensively rather than
-    // trusting that invariant silently.
+  for (const instance of candidates) {
+    // Both candidate sources already guarantee a resolved, non-null runId
+    // (rerun-eligible via classifyInstance step 4; recovery-refresh via
+    // selectRecoveryRefreshCandidates's own filter), but guard defensively
+    // rather than trusting that invariant silently.
     const runId = String(instance.runId ?? '').trim();
     if (!runId) continue;
     const list = byRunId.get(runId) ?? [];
@@ -645,6 +689,14 @@ if (isCliExecution(import.meta.url)) {
         process.stdout.write(`  ${index + 1}. ${entry.command}\n`);
       });
       process.stdout.write(`\n${plan.planCaveat}\n`);
+    } else if (plan.recoveryRefreshPlan.length > 0) {
+      process.stdout.write(
+        '\nNo rerun-eligible instances, but a recovery-refresh option is available:\n',
+      );
+      plan.recoveryRefreshPlan.forEach((entry, index) => {
+        process.stdout.write(`  ${index + 1}. ${entry.command}\n`);
+      });
+      process.stdout.write(`\n${plan.recoveryRefreshCaveat}\n`);
     } else {
       process.stdout.write('\nNo rerun-eligible instances; nothing to do.\n');
     }

@@ -105,8 +105,13 @@ In the idd-skill source repository, the following optional helpers were adopted:
   ordered, deduplicated `gh run rerun <id>` recovery plan for the
   rerun-eligible instances (each command includes `-R owner/repo` when
   the repository is known) — referenced from `idd-ci.instructions.md`
-  §Rerun mechanics as the preferred way to produce that plan. Never
-  calls `gh run rerun` itself; a mutating `--apply` mode is a deliberate
+  §Rerun mechanics as the preferred way to produce that plan. When no
+  instance is rerun-eligible but the rollup is stuck on a bot-gated
+  instance alongside an already-passing non-bot pull_request-family
+  instance, it additionally offers a `recoveryRefreshPlan`: rerunning
+  that already-passing instance is the documented way to force a fresh
+  non-bot evaluation and clear the stale rollup. Never calls
+  `gh run rerun` itself; a mutating `--apply` mode is a deliberate
   follow-up.
 - `scripts/live-status-digest.mjs` for issue or PR live status digest
   discovery, rendering, dry-run, and claim-checked upsert

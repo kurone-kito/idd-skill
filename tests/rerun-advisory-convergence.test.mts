@@ -379,6 +379,157 @@ test('orders the plan by earliest startedAt, then numeric run id, and dedupes by
   assert.equal(plan.plan[0]?.startedAt, '2026-07-16T09:00:00Z');
 });
 
+// --- Recovery-refresh plan (regression: #1434 review, Codex P1) ---------
+//
+// idd-ci.instructions.md's Rerun mechanics documents that when a required
+// check is stuck on a bot-gated `action_required` instance, the recovery
+// is to rerun the EXISTING non-bot pull_request-family run for the same
+// SHA -- even when that run already passed. Without this, a PR whose only
+// instances are one bot-gated-skip entry and one already-passing non-bot
+// entry would get an empty rerun plan, silently leaving the actual
+// documented recovery action off the table.
+
+test('offers a recovery-refresh plan when the only instances are bot-gated-skip and an already-passing non-bot run', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+          startedAt: '2026-07-16T11:00:00Z',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.plan.length, 0);
+  assert.deepEqual(plan.recoveryRefreshPlan, [
+    {
+      runId: '7002',
+      command: 'gh run rerun 7002',
+      checkRunIds: ['passing'],
+      startedAt: '2026-07-16T11:00:00Z',
+    },
+  ]);
+  assert.notEqual(plan.recoveryRefreshCaveat, '');
+});
+
+test('does not offer a recovery-refresh plan when a genuine rerun-eligible instance already exists', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'failed',
+          runId: '7003',
+          conclusion: 'failure',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.plan.length, 1);
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
+  assert.equal(plan.recoveryRefreshCaveat, '');
+});
+
+test('does not offer a recovery-refresh plan without a bot-gated-skip instance present', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [baseInstance({ conclusion: 'success' })],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.plan.length, 0);
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
+});
+
+test('does not offer a recovery-refresh plan when the only passing instance is itself bot-triggered', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'bot-passing',
+          runId: '7002',
+          conclusion: 'success',
+          actorType: 'Bot',
+          triggeringActorType: 'Bot',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
+});
+
+test('does not offer a recovery-refresh plan when the only passing instance is workflow_dispatch-triggered', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'dispatch-passing',
+          runId: '7002',
+          conclusion: 'success',
+          runEvent: 'workflow_dispatch',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
+});
+
+test('embeds -R owner/repo in recovery-refresh plan commands when known', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      owner: 'kurone-kito',
+      repo: 'idd-skill',
+      instances: [
+        baseInstance({
+          checkRunId: 'gated',
+          runId: '7001',
+          conclusion: 'action_required',
+        }),
+        baseInstance({
+          checkRunId: 'passing',
+          runId: '7002',
+          conclusion: 'success',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(
+    plan.recoveryRefreshPlan[0]?.command,
+    'gh run rerun 7002 -R kurone-kito/idd-skill',
+  );
+});
+
 // --- Empty case -----------------------------------------------------------
 
 test('reports zero counts and an empty plan when there are no check-run instances', () => {
@@ -391,6 +542,7 @@ test('reports zero counts and an empty plan when there are no check-run instance
   assert.equal(plan.counts.unresolved, 0);
   assert.equal(plan.counts.rerunEligible, 0);
   assert.deepEqual(plan.plan, []);
+  assert.deepEqual(plan.recoveryRefreshPlan, []);
 });
 
 // --- Read-only / never-mutating shape ------------------------------------
