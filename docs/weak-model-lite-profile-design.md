@@ -249,8 +249,12 @@ generated pair rather than a third _kind_ of surface:
 
 - **Generation mechanism**: `node scripts/sync-docs.mjs --apply`
   regenerates the lite files the same way it regenerates the standard
-  ones today. Generation is driven entirely by `syncPairs` —
-  `sync-docs.mjs` reads only that array, never `fileSets` — so one new
+  ones today. Per-file mirror generation — what a lite instruction file
+  needs — is driven by `syncPairs`. (`sync-docs.mjs` also reads
+  `generatedBlocks` / `shellFileLists` for its separate
+  consolidated-reference-block generation, e.g. `ONBOARDING.md`, but
+  that path is not relevant here; across every generation path,
+  `sync-docs.mjs` never reads `fileSets` at all.) So one new
   `syncPairs` entry per lite file (the same pattern the existing
   dogfood set already follows) is what actually produces each
   `.github/instructions/lite/idd-*.instructions.md` from its
