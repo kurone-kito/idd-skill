@@ -90,7 +90,12 @@ Before any mutating action in F3, apply the
    the active claim still uses your current `{claim-id}`. If it does
    not, the claim was lost — report and stop.
 
-   **Advisory state revalidation (blocking)**: re-fetch the HEAD SHA:
+   **Advisory state revalidation (blocking)**: the AW1 check just below is
+   an instant state read, not itself a wait. If it escalates to a genuine
+   wait, return to the F2 advisory bot wait check, which backgrounds only
+   if the topology-safety condition holds (confirmed to route completion
+   back to this turn) and otherwise waits synchronously. Re-fetch the HEAD
+   SHA:
 
    ```sh
    PR_HEAD_SHA_F3=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')

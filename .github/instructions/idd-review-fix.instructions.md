@@ -333,16 +333,17 @@ not advisory; they remain under the hold/escalation path above.
 
 ## E15 — Wait for CI
 
+Schedule a wake, or background this wait only if the
+topology-safety condition holds (confirmed to route completion back to
+this turn); otherwise wait synchronously — see
+[wake-up discipline](idd-ci.instructions.md#wake-up-discipline).
+
 Use `idd-ci.instructions.md` for the polling mechanics and timing. E15
 reuses the same resolved `ciWait.runningTimeout`,
 `ciWait.generationTimeout`, and `ciWait.rerunPolicy` values; omitted
 keys preserve the distributed defaults. The outcome paths below are
 authoritative and override the shared helper's generic outcomes for this
 phase:
-
-Keep the wait cheap per the
-[wake-up discipline](idd-ci.instructions.md#wake-up-discipline) (no interim
-polling turns; batch post-wait actions into one turn).
 
 **While polling**: if new review threads or comments arrive during the
 CI wait, note them. After CI resolves (any outcome), return to E1 before
