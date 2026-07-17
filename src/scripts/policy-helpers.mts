@@ -602,8 +602,34 @@ export function selectDesyncedIndex(token: unknown, bandSize: unknown): number {
   return (hash >>> 0) % size;
 }
 
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value));
+/**
+ * Deep-clone helper for this module's own trusted defaults (#1449).
+ *
+ * Exported only so its equivalence can be unit-tested directly; every
+ * production call site stays inside this file. `structuredClone` (global
+ * since Node 17, well below this repo's `^22.22.2 || >=24` floor) replaces
+ * the previous `JSON.parse(JSON.stringify(value))` round-trip.
+ * `structuredClone` differs from a JSON round-trip on several axes —
+ * non-exhaustively: it throws on functions; it preserves `Date`, `Map`,
+ * and `undefined`-valued keys that JSON drops or converts; and it also
+ * diverges on `BigInt`, `RegExp`, typed arrays, and `NaN`/`Infinity`/`-0`
+ * normalization. This list is deliberately not treated as exhaustive —
+ * what matters for this swap is not enumerating every divergence axis,
+ * but that `POLICY_DEFAULTS` (below) never contains a value on *any* of
+ * them. All 8 call sites in this file were enumerated before making this
+ * swap: `normalizePolicyConfig`'s `clone(POLICY_DEFAULTS)`, plus 7 calls
+ * across `parsePositiveIntegerArray` and `parseCheckSelectors`, which
+ * only ever clone `POLICY_DEFAULTS` itself or one of its own frozen
+ * sub-arrays (`discover.legacyRoots`, `ciGate.externalChecks.advisory`,
+ * `.waivable` — all `[]`). `POLICY_DEFAULTS` is a plain, deeply-frozen
+ * literal of strings, finite numbers, booleans, and empty arrays only —
+ * no function, `Date`, `Map`, `BigInt`, `RegExp`, typed array, exotic
+ * number, or `undefined`-valued property appears anywhere in it, so none
+ * of `structuredClone`'s divergences from a JSON round-trip is ever
+ * exercised by a real caller (Copilot review, #1463).
+ */
+export function clone<T>(value: T): T {
+  return structuredClone(value);
 }
 
 function _firstString(...values: unknown[]): string {
