@@ -84,6 +84,11 @@
     },
     "result": {
       "type": "string"
+    },
+    "viewerLoginUnavailable": {
+      "type": "boolean",
+      "enum": [true],
+      "description": "Present (and true) only when the production viewer-login lookup (gh api user) failed for this run; absent when it succeeded."
     }
   },
   "additionalProperties": false

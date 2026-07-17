@@ -10,10 +10,12 @@ import {
   type ConnectedPrEvent,
   evaluateRoadmapAuditGates,
   evaluateRoadmapClaim,
+  explainRoadmapClaimReason,
   hasTrustedCompletionEvidenceComment,
   type RoadmapAuditExecuteDeps,
   reconcileConnectedOpenPrs,
   resolveOpenLinkedPrIssues,
+  resolveViewerLogin,
   runRoadmapAuditExecute,
   safeHasTrustedCompletionEvidence,
 } from '../src/scripts/idd-roadmap-audit-execute.mts';
@@ -1000,6 +1002,142 @@ test('--apply fails closed (no close) when the claim is lost / not owned', async
   assert.equal(exitCode, 1);
   assert.deepEqual(calls.closed, []);
   assert.deepEqual(calls.comments, []);
+});
+
+test('a not-owned result explains the reason code inline (#1396)', async () => {
+  const { deps } = makeDeps(readyReport(), {
+    revalidateClaim: () => ({
+      owned: false,
+      reason: 'claim-branch-mismatch',
+      stale: false,
+      activeClaim: {
+        agentId: '',
+        claimId: '',
+        supersedes: '',
+        branch: '',
+        createdAt: '',
+      },
+    }),
+  });
+  const { verdict } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.match(verdict.result, /reason="claim-branch-mismatch"/);
+  assert.equal(
+    verdict.result.includes(explainRoadmapClaimReason('claim-branch-mismatch')),
+    true,
+  );
+  // Explanation names the coordination-branch policy, not a fetch failure.
+  assert.match(verdict.result, /roadmap-audit\/<n>-\*/);
+});
+
+// ---------------------------------------------------------------------------
+// viewerLoginUnavailable — fail-noisy viewer-login lookup surfacing (#1396)
+// ---------------------------------------------------------------------------
+
+test('verdict.viewerLoginUnavailable is absent on the healthy default path', async () => {
+  const { deps } = makeDeps(readyReport());
+  const { verdict } = await runRoadmapAuditExecute(
+    ['--roadmap', String(ROADMAP)],
+    deps,
+  );
+
+  assert.equal(Object.hasOwn(verdict, 'viewerLoginUnavailable'), false);
+});
+
+test('a failed viewer-login lookup surfaces viewerLoginUnavailable and a caveat on a not-owned result', async () => {
+  const { deps } = makeDeps(readyReport(), {
+    viewerLoginUnavailable: true,
+    revalidateClaim: () => ({
+      owned: false,
+      reason: 'missing-active-claim',
+      stale: false,
+      activeClaim: {
+        agentId: '',
+        claimId: '',
+        supersedes: '',
+        branch: '',
+        createdAt: '',
+      },
+    }),
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(verdict.viewerLoginUnavailable, true);
+  assert.equal(exitCode, 1);
+  assert.match(verdict.result, /viewer-login lookup failed/);
+  assert.match(
+    verdict.result,
+    /could stem from that instead of a genuine claim conflict/,
+  );
+});
+
+test('viewerLoginUnavailable: true does not appear when the lookup succeeded', async () => {
+  const { deps } = makeDeps(readyReport(), { viewerLoginUnavailable: false });
+  const { verdict } = await runRoadmapAuditExecute(
+    ['--roadmap', String(ROADMAP)],
+    deps,
+  );
+
+  assert.equal(Object.hasOwn(verdict, 'viewerLoginUnavailable'), false);
+});
+
+// ---------------------------------------------------------------------------
+// resolveViewerLogin (injectable viewer-login lookup, #1396)
+// ---------------------------------------------------------------------------
+
+test('resolveViewerLogin normalizes a successful login to lowercase', () => {
+  const result = resolveViewerLogin(() => 'Some-User');
+  assert.deepEqual(result, {
+    viewerLogin: 'some-user',
+    viewerLoginUnavailable: false,
+  });
+});
+
+test('resolveViewerLogin reports unavailable when fetchLogin returns null (production already caught a throw)', () => {
+  const result = resolveViewerLogin(() => null);
+  assert.deepEqual(result, { viewerLogin: '', viewerLoginUnavailable: true });
+});
+
+test('resolveViewerLogin reports unavailable on a blank-but-successful response', () => {
+  const result = resolveViewerLogin(() => '   ');
+  assert.deepEqual(result, { viewerLogin: '', viewerLoginUnavailable: true });
+});
+
+// ---------------------------------------------------------------------------
+// explainRoadmapClaimReason (#1396)
+// ---------------------------------------------------------------------------
+
+// This list is hand-maintained against evaluateRoadmapClaim / (the
+// summarizeClaimValidation it wraps) as of #1396 — it does NOT introspect
+// the reason-emitting source, so it cannot by itself catch a future reason
+// code added there without a matching CLAIM_REASON_EXPLANATIONS entry (C1
+// review, #1396). explainRoadmapClaimReason() degrades gracefully in that
+// case (UNKNOWN_CLAIM_REASON_EXPLANATION, exercised by the test below), so
+// the gap is cosmetic, not a crash risk; the vocabulary itself stays
+// pinned by the exact-equality reason assertions elsewhere in this file.
+test('explainRoadmapClaimReason maps each of the six currently-known reason codes to a distinct explanation (#1396)', () => {
+  const knownReasons = [
+    'match',
+    'missing-active-claim',
+    'claim-id-mismatch',
+    'agent-id-mismatch',
+    'claim-branch-mismatch',
+    'claim-stale',
+  ];
+  const explanations = knownReasons.map((reason) =>
+    explainRoadmapClaimReason(reason),
+  );
+  // Every known code gets a distinct, non-empty explanation.
+  assert.equal(
+    explanations.every((text) => text.length > 0),
+    true,
+  );
+  assert.equal(new Set(explanations).size, knownReasons.length);
+});
+
+test('explainRoadmapClaimReason falls back to a generic explanation for an unrecognized code', () => {
+  const explanation = explainRoadmapClaimReason('some-future-reason-code');
+  assert.match(explanation, /unrecognized/);
 });
 
 // ---------------------------------------------------------------------------
