@@ -84,17 +84,18 @@ const PROSE_DEPENDENCY_KEYWORDS = [
   'requires',
   'lands first',
 ];
-// Matches a bare `#123` issue/PR reference or a full GitHub issue/PR URL.
-// `#` alone (as in an ATX heading) never matches without trailing digits.
-// The bare-`#` alternative excludes a `#` immediately preceded by a word
-// character or `/` (a negative lookbehind), so cross-repo shorthand like
-// `other/repo#123` does not match on its trailing `#123` — a cross-repo
-// reference cannot be encoded with this repository's local `Blocked by` /
-// `Depends on` markers, so flagging it here would be misleading rather than
-// actionable. The full-URL alternative already requires a literal
-// `https://github.com/` prefix, so it is unaffected by this exclusion.
+// Matches a bare `#123` issue/PR reference or a full GitHub issue/PR URL,
+// capturing the URL alternative's owner and repo so callers can tell a
+// local reference from a cross-repo one (see `currentRepo` handling in
+// checkProseOnlyDependency below). `#` alone (as in an ATX heading) never
+// matches without trailing digits. The bare-`#` alternative excludes a `#`
+// immediately preceded by a word character or `/` (a negative lookbehind),
+// so cross-repo shorthand like `other/repo#123` does not match on its
+// trailing `#123` — a cross-repo reference cannot be encoded with this
+// repository's local `Blocked by` / `Depends on` markers, so flagging it
+// here would be misleading rather than actionable.
 const ISSUE_OR_PR_REFERENCE_PATTERN =
-  /(?<![\w/])#(\d+)\b|https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/(\d+)\b/gi;
+  /(?<![\w/])#(\d+)\b|https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:issues|pull)\/(\d+)\b/gi;
 if (isCliExecution(import.meta.url)) {
   main();
 }
@@ -145,7 +146,7 @@ export function auditAuthoredIssue(body, options) {
     checkDependencyMarkerRule(text, markerPrefix, shape),
     checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
     checkEffortVisibleLineAgreement(text, markerPrefix),
-    checkProseOnlyDependency(text),
+    checkProseOnlyDependency(text, options.currentRepo),
   ];
   return {
     shape,
@@ -431,7 +432,7 @@ function checkEffortVisibleLineAgreement(text, markerPrefix) {
     `visible line agrees with marker value ${effort.value}`,
   );
 }
-function checkProseOnlyDependency(text) {
+function checkProseOnlyDependency(text, currentRepo) {
   const id = 'prose-dependency';
   const name =
     'Advisory: issue/PR references near coordination language should use a dependency marker';
@@ -460,7 +461,22 @@ function checkProseOnlyDependency(text) {
         continue;
       }
       for (const match of sentence.matchAll(ISSUE_OR_PR_REFERENCE_PATTERN)) {
-        const numberText = match[1] ?? match[2];
+        const [, bareNumber, urlOwner, urlRepo, urlNumber] = match;
+        // A URL match with a known currentRepo that points elsewhere is a
+        // cross-repo reference: the Blocked by / Depends on markers this
+        // check recommends are inherently local, so flagging it here would
+        // be actively misleading rather than merely a nuisance false
+        // positive. Skip it entirely rather than adding its number to
+        // `flagged`. When currentRepo is unknown, keep the prior behavior
+        // (flag every full-URL match) rather than guessing.
+        if (
+          urlOwner !== undefined &&
+          currentRepo !== undefined &&
+          `${urlOwner}/${urlRepo}`.toLowerCase() !== currentRepo.toLowerCase()
+        ) {
+          continue;
+        }
+        const numberText = bareNumber ?? urlNumber;
         const number = Number.parseInt(numberText, 10);
         if (!encoded.has(number)) {
           flagged.add(number);
@@ -588,6 +604,12 @@ function main() {
     markerPrefix,
     labels: args.labels,
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
+    // Explicit --current-repo wins; otherwise fall back to the
+    // GITHUB_REPOSITORY env var GitHub Actions sets automatically, so CI
+    // usage narrows cross-repo URL false positives with no extra flag.
+    // undefined (neither present) keeps the pre-#1399-fix default of
+    // flagging every full-URL reference.
+    currentRepo: args.currentRepo ?? process.env.GITHUB_REPOSITORY,
   });
   writeReport(report, args.format);
   process.exit(report.passed ? 0 : 1);
@@ -683,6 +705,9 @@ function parseArgs(argv) {
       case '--config':
         parsed.configPath = readValue(argv, ++index, arg);
         break;
+      case '--current-repo':
+        parsed.currentRepo = readValue(argv, ++index, arg);
+        break;
       case '--label':
         parsed.labels.push(readValue(argv, ++index, arg));
         break;
@@ -729,6 +754,9 @@ Options:
   --label <name>                   a label currently applied/proposed on the issue
                                     (repeatable; used for the suitability=1
                                     cross-field check)
+  --current-repo <owner/repo>      this repository, for the prose-dependency check
+                                    to recognize a full-URL issue/PR reference as
+                                    cross-repo (default: $GITHUB_REPOSITORY)
   --format <json|table>            output format (default: json)
   --help                           show this help
 `);

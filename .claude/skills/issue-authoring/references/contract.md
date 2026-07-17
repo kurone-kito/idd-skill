@@ -556,16 +556,30 @@ The linter also emits one **advisory, warning-severity-only** finding
 (`prose-dependency`): it flags an issue/PR reference (`#<digits>` or a
 full GitHub issue/PR URL) that appears near coordination language (for
 example "before", "after", "once", "until", "predates", "gate"/"gated",
-"requires", "lands first") with no corresponding `Blocked by` /
-`Depends on` / task-list dependency encoding for that reference. This
+"requires", "lands first") with no corresponding encoding for that
+reference as one of the three recognized forms: a `Blocked by #NNN`
+line, a `Depends on #NNN` line, or a task-list checkbox item
+(`- [ ] #NNN`) — the same three forms `extractBlockedByIssueNumbers` /
+`extractDependencyIssueNumbers` already recognize elsewhere in this
+contract. A task-list checkbox counts regardless of which heading it
+sits under, so a roadmap's own `## Tracks` membership list already
+satisfies this — it is not a separate "dependency-only" list. This
 catches the pattern this contract's own
 [Hidden human-dependency validation](#hidden-human-dependency-validation)
 check 4 warns about in prose — a hard precondition stated only in
-narrative text, not encoded as a real dependency marker. Unlike every
-other check above, a `prose-dependency` warning never flips `passed` to
-`false` and never changes the linter's exit code: it prompts the author
-to either convert the prose into a proper dependency marker or
-consciously confirm the reference is a mere breadcrumb.
+narrative text, not encoded as a real dependency marker. A full-URL
+reference is inherently local only when it actually names the current
+repository, since a cross-repo dependency cannot be encoded with these
+repository-local markers at all — flagging it would recommend an
+impossible fix. When the caller supplies the current `owner/repo`
+(`--current-repo`, defaulting to `$GITHUB_REPOSITORY` in CI), a
+full-URL reference naming a different repository is never flagged;
+without that context, every full-URL reference is still flagged
+(unchanged default behavior). Unlike every other check above, a
+`prose-dependency` warning never flips `passed` to `false` and never
+changes the linter's exit code: it prompts the author to either
+convert the prose into a proper dependency marker or consciously
+confirm the reference is a mere breadcrumb.
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \

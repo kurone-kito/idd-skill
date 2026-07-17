@@ -756,6 +756,79 @@ test('prose-dependency recognizes a full GitHub issue/PR URL reference', () => {
   assert.match(finding?.detail ?? '', /#1391/);
 });
 
+test('prose-dependency still recognizes a full GitHub issue/PR URL reference when currentRepo matches', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      'https://github.com/kurone-kito/idd-skill/pull/1391 has merged.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency does not warn on a cross-repo full GitHub issue/PR URL reference when currentRepo is known', () => {
+  // Regression test for a real false-positive risk: the encodings this
+  // check recommends (`Blocked by #N` / `Depends on #N`) are inherently
+  // local, so flagging a cross-repo URL reference gives actively wrong
+  // advice, not just a nuisance false positive. Filtering requires an
+  // explicit currentRepo (see the sibling "unknown repo" test below for
+  // the unchanged default when it is absent).
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      'https://github.com/kurone-kito/other-repo/pull/1391 has merged.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.ok(finding, 'prose-dependency finding should be present');
+  assert.equal(finding.severity, undefined);
+});
+
+test('prose-dependency still warns on a cross-repo URL reference when currentRepo is unknown', () => {
+  // Preserves the pre-#1399-fix default (flag every full-URL reference)
+  // when the caller cannot supply repo context, since a bare owner/repo
+  // cannot be inferred from the body text alone.
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      'https://github.com/kurone-kito/other-repo/pull/1391 has merged.',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
+test('prose-dependency currentRepo comparison is case-insensitive', () => {
+  const body = childBody({
+    extraMarkers:
+      'Before this can start, confirm ' +
+      'https://github.com/Kurone-Kito/IDD-Skill/pull/1391 has merged.',
+  });
+  const report = auditAuthoredIssue(body, {
+    shape: 'child',
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+});
+
 test('prose-dependency leaves passed and the exit code unchanged even when it warns', () => {
   const body = childBody({
     extraMarkers: 'This requires #1391 merged first.',
