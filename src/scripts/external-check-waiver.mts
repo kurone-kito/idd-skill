@@ -8,6 +8,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
+import { parseCliArgs } from './cli-args.mts';
 import { resolveHelperActiveClaim } from './forced-handoff-marker.mts';
 import { ghText, safeGhText } from './gh-exec.mts';
 import {
@@ -1158,79 +1159,63 @@ function renderTextReport(report: ExternalCheckWaiverReport): string {
   ].join('\n');
 }
 
-function parseArgs(argv: string[]): ExternalCheckWaiverArgs {
-  const parsed: ExternalCheckWaiverArgs = {
-    prNumber: 0,
-    issueNumber: 0,
-    claimId: '',
-    checkSelector: '',
-    reason: '',
-    expiresAt: '',
-    expiresIn: '',
-    actor: '',
-    repo: '',
-    apply: false,
-    yes: false,
-    format: 'json',
-    help: false,
-  };
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --pr spec key
+// below. See cli-args.mts's module header for the full invariant. (This
+// comment deliberately avoids writing that key inside matching quote
+// marks, so it cannot itself satisfy the scan if the real key is ever
+// renamed -- see #1446's PR description for why that matters.)
+const EXTERNAL_CHECK_WAIVER_FLAG_SPEC = {
+  '--pr': { type: 'string' },
+  '--issue': { type: 'string' },
+  '--claim-id': { type: 'string', default: '' },
+  '--check': { type: 'string', default: '' },
+  '--reason': { type: 'string', default: '' },
+  '--expires': { type: 'string', default: '' },
+  '--expires-in': { type: 'string', default: '' },
+  '--actor': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--apply': { type: 'boolean', default: false },
+  '--yes': { type: 'boolean', default: false },
+  '--format': { type: 'string', default: 'json' },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    switch (token) {
-      case '--pr':
-        parsed.prNumber = parsePositiveInteger(
-          readValue(argv, ++index, token),
-          token,
-        );
-        break;
-      case '--issue':
-        parsed.issueNumber = parsePositiveInteger(
-          readValue(argv, ++index, token),
-          token,
-        );
-        break;
-      case '--claim-id':
-        parsed.claimId = readValue(argv, ++index, token).trim();
-        break;
-      case '--check':
-        parsed.checkSelector = readValue(argv, ++index, token).trim();
-        break;
-      case '--reason':
-        parsed.reason = readValue(argv, ++index, token).trim();
-        break;
-      case '--expires':
-        parsed.expiresAt = readValue(argv, ++index, token).trim();
-        break;
-      case '--expires-in':
-        parsed.expiresIn = readValue(argv, ++index, token).trim();
-        break;
-      case '--actor':
-        parsed.actor = readValue(argv, ++index, token).trim();
-        break;
-      case '--repo':
-        parsed.repo = readValue(argv, ++index, token).trim();
-        break;
-      case '--apply':
-        parsed.apply = true;
-        break;
-      case '--yes':
-        parsed.yes = true;
-        break;
-      case '--format':
-        parsed.format = readValue(argv, ++index, token).trim();
-        if (parsed.format !== 'json' && parsed.format !== 'text') {
-          throw new Error(`unsupported --format value: ${parsed.format}`);
-        }
-        break;
-      case '--help':
-      case '-h':
-        parsed.help = true;
-        break;
-      default:
-        throw new Error(`unknown argument: ${token}`);
-    }
+export function parseArgs(argv: string[]): ExternalCheckWaiverArgs {
+  const { values, help } = parseCliArgs(argv, EXTERNAL_CHECK_WAIVER_FLAG_SPEC);
+
+  const format = (values.format as string).trim();
+  if (format !== 'json' && format !== 'text') {
+    throw new Error(`unsupported --format value: ${format}`);
   }
+
+  const parsed: ExternalCheckWaiverArgs = {
+    // parsePositiveInteger keeps its existing throw-on-invalid contract
+    // and message shape unchanged; only called when the flag is actually
+    // present, matching the original "absent --pr/--issue stays 0,
+    // untouched" behavior (checked below via the "missing required"
+    // guard, same as before this migration).
+    prNumber:
+      values.pr === undefined
+        ? 0
+        : parsePositiveInteger(values.pr as string, '--pr'),
+    issueNumber:
+      values.issue === undefined
+        ? 0
+        : parsePositiveInteger(values.issue as string, '--issue'),
+    claimId: (values['claim-id'] as string).trim(),
+    checkSelector: (values.check as string).trim(),
+    reason: (values.reason as string).trim(),
+    expiresAt: (values.expires as string).trim(),
+    expiresIn: (values['expires-in'] as string).trim(),
+    actor: (values.actor as string).trim(),
+    repo: (values.repo as string).trim(),
+    apply: values.apply as boolean,
+    yes: values.yes as boolean,
+    format,
+    help,
+  };
 
   if (!parsed.help) {
     if (!parsed.prNumber) {
@@ -1254,14 +1239,6 @@ function parseOwnerRepo(value: unknown): { owner: string; name: string } {
     throw new Error(`invalid --repo value: ${value} (expected owner/name)`);
   }
   return { owner: match[1], name: match[2] };
-}
-
-function readValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index];
-  if (value === undefined) {
-    throw new Error(`missing value for ${flag}`);
-  }
-  return value;
 }
 
 function parsePositiveInteger(value: unknown, flag: string): number {

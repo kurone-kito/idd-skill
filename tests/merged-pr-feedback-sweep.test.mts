@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   buildMergedPrFeedbackSweep,
   type MergedPrInput,
+  parseArgs,
 } from '../src/scripts/merged-pr-feedback-sweep.mts';
 import { buildCommentThread } from './test-utils.mts';
 
@@ -12,6 +13,68 @@ const OPTIONS = {
   advisoryBotLogins: ['coderabbitai[bot]'],
   iddAgentLogins: ['kurone-kito'],
 };
+
+// --- #1450: migration onto the shared cli-args.mts wrapper -----------------
+
+test('parseArgs: parses --pr (repeatable), --days, and --limit', () => {
+  const args = parseArgs(['--pr', '5', '--pr', '9', '--days', '7']);
+  assert.deepEqual(args.prNumbers, [5, 9]);
+  assert.equal(args.days, 7);
+  assert.equal(args.limit, 100);
+  assert.equal(args.since, null);
+  assert.equal(args.help, false);
+});
+
+test('parseArgs: --prs is comma-split and preserves its own error shape', () => {
+  const args = parseArgs(['--prs', '5,9']);
+  assert.deepEqual(args.prNumbers, [5, 9]);
+  assert.throws(
+    () => parseArgs(['--prs', '5,bad']),
+    /--prs expects comma-separated positive integers, got "bad"/,
+  );
+});
+
+test('parseArgs: repeated --prs occurrences all accumulate (not just the last)', () => {
+  // Regression coverage for a Codex review finding on #1450: a
+  // non-multiple parseArgs string flag keeps only the LAST occurrence
+  // when repeated, which would silently drop 1 and 2 here.
+  const args = parseArgs(['--prs', '1,2', '--prs', '3,4']);
+  assert.deepEqual(args.prNumbers, [1, 2, 3, 4]);
+});
+
+test('parseArgs: interleaved --prs/--pr occurrences preserve argv order', () => {
+  // Regression coverage for a second #1450 review finding: grouping every
+  // --pr occurrence before every --prs occurrence silently reordered
+  // interleaved input (plural-before-singular is the case that would have
+  // been missed by only ever putting --pr first, as the test above does).
+  const args = parseArgs(['--prs', '1,2', '--pr', '3']);
+  assert.deepEqual(args.prNumbers, [1, 2, 3]);
+});
+
+test('parseArgs: the --pr=<value> equals-form is recognized in order', () => {
+  const args = parseArgs(['--prs', '1,2', '--pr=3']);
+  assert.deepEqual(args.prNumbers, [1, 2, 3]);
+});
+
+test('parseArgs: a missing --days value throws', () => {
+  assert.throws(() => parseArgs(['--days']));
+});
+
+test('parseArgs: a flag-shaped value throws instead of being swallowed', () => {
+  // Previously --since would greedily accept '--days' as its literal
+  // value, silently leaving --days unset (the #1082 gap this migration
+  // closes structurally for this helper).
+  assert.throws(() => parseArgs(['--since', '--days', '3']));
+});
+
+test('parseArgs: rejects an unknown flag', () => {
+  assert.throws(() => parseArgs(['--bogus']));
+});
+
+test('parseArgs: --help is recognized', () => {
+  const args = parseArgs(['--help']);
+  assert.equal(args.help, true);
+});
 
 test('surfaces an unresolved reviewer thread with no disposition', () => {
   const prs: MergedPrInput[] = [

@@ -4,8 +4,65 @@ import { test } from 'node:test';
 import {
   evaluateA4Viability,
   evaluateDiscoverViability,
+  parseArgs,
   renderCsv,
 } from '../src/scripts/discover-viability-gate.mts';
+
+// --- #1450: migration onto the shared cli-args.mts wrapper -----------------
+
+test('parseArgs: --issue is repeatable and --issues is comma-split', () => {
+  const args = parseArgs(['--issue', '5', '--issues', '9,11', '--csv']);
+  assert.deepEqual(args.issueNumbers, [5, 9, 11]);
+  assert.equal(args.csv, true);
+});
+
+test('parseArgs: a non-numeric --issue token is silently dropped (unchanged contract)', () => {
+  const args = parseArgs(['--issues', '5,bad,9']);
+  assert.deepEqual(args.issueNumbers, [5, 9]);
+});
+
+test('parseArgs: repeated --issues occurrences all accumulate (not just the last)', () => {
+  // Regression coverage for a Codex review finding on #1450: a
+  // non-multiple parseArgs string flag keeps only the LAST occurrence
+  // when repeated, which would silently drop 1 and 2 here.
+  const args = parseArgs(['--issues', '1,2', '--issues', '3,4']);
+  assert.deepEqual(args.issueNumbers, [1, 2, 3, 4]);
+});
+
+test('parseArgs: interleaved --issues/--issue occurrences preserve argv order', () => {
+  // Regression coverage for a second #1450 review finding: grouping every
+  // --issue occurrence before every --issues occurrence silently reordered
+  // interleaved input (plural-before-singular is the case that would have
+  // been missed by only ever putting --issue first, as the test above
+  // does).
+  const args = parseArgs(['--issues', '1,2', '--issue', '3']);
+  assert.deepEqual(args.issueNumbers, [1, 2, 3]);
+});
+
+test('parseArgs: the --issue=<value> equals-form is recognized in order', () => {
+  const args = parseArgs(['--issues', '1,2', '--issue=3']);
+  assert.deepEqual(args.issueNumbers, [1, 2, 3]);
+});
+
+test('parseArgs: a missing --issue value throws', () => {
+  assert.throws(() => parseArgs(['--issue']));
+});
+
+test('parseArgs: a flag-shaped value throws instead of being swallowed', () => {
+  // Previously --owner would greedily accept '--csv' as its literal
+  // value, silently leaving --csv unset (the #1082 gap this migration
+  // closes structurally for this helper).
+  assert.throws(() => parseArgs(['--issue', '5', '--owner', '--csv']));
+});
+
+test('parseArgs: rejects an unknown flag', () => {
+  assert.throws(() => parseArgs(['--bogus']));
+});
+
+test('parseArgs: --help is recognized without requiring --issue', () => {
+  const args = parseArgs(['--help']);
+  assert.equal(args.help, true);
+});
 
 // Minimal RFC 4180 single-row field splitter: respects quoted fields so a
 // comma inside a quoted title does not start a new column.

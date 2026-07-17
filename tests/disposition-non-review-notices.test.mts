@@ -7,6 +7,7 @@ import {
   buildSummaryDispositionBody,
   type NoticeComment,
   noticeReason,
+  parseArgs,
 } from '../src/scripts/disposition-non-review-notices.mts';
 import { summarizeDispositionEvidenceForGate } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
@@ -43,6 +44,54 @@ function notice(
     ? { id, login, body, createdAt }
     : { id, login, body, createdAt, updatedAt };
 }
+
+// --- #1450: migration onto the shared cli-args.mts wrapper -----------------
+
+test('parseArgs: a present-but-invalid --pr resolves to NaN, matching the pre-#1450 contract', () => {
+  // This file's original hand-rolled parser assigned the raw (possibly
+  // NaN) Number.parseInt result directly -- it never coerced an invalid
+  // value to null inside parseArgs itself, unlike advisory-wait-state.mts
+  // / ci-wait-state.mts / review-activity-snapshot.mts. The caller's own
+  // `!Number.isInteger(args.pr) || (args.pr ?? 0) <= 0` guard (outside
+  // parseArgs) treats NaN as invalid the same way it treats null.
+  const args = parseArgs(['--pr', 'not-a-number']);
+  assert.ok(Number.isNaN(args.pr));
+});
+
+test('parseArgs: an absent --pr resolves to null', () => {
+  const args = parseArgs(['--claim-issue', '7']);
+  assert.equal(args.pr, null);
+});
+
+test('parseArgs: --pr keeps its pre-#1450 permissive Number.parseInt contract', () => {
+  // Regression coverage for a CodeRabbit review finding on #1450: the
+  // wrapper migration must not swap in cli-args.mts's stricter
+  // canonical-pattern integer parser here, which would reject trailing-
+  // garbage and leading-zero tokens the original Number.parseInt-based
+  // parser always accepted.
+  assert.equal(parseArgs(['--pr', '42abc']).pr, 42);
+  assert.equal(parseArgs(['--pr', '007']).pr, 7);
+});
+
+test('parseArgs: a missing --claim-issue value throws', () => {
+  assert.throws(() => parseArgs(['--pr', '42', '--claim-issue']));
+});
+
+test('parseArgs: a flag-shaped value throws instead of being swallowed', () => {
+  // Previously --agent-id would greedily accept '--apply' as its literal
+  // value, silently leaving --apply unset (this file's own flavor of the
+  // #1082 gap the shared wrapper closes structurally).
+  assert.throws(() => parseArgs(['--pr', '42', '--agent-id', '--apply']));
+});
+
+test('parseArgs: rejects an unknown flag instead of silently ignoring it', () => {
+  assert.throws(() => parseArgs(['--bogus']));
+});
+
+test('parseArgs: --help is recognized without requiring --pr', () => {
+  const args = parseArgs(['--help']);
+  assert.equal(args.help, true);
+});
 
 test('buildDispositionBody is marker-first and names the bot login + head sha', () => {
   const body = buildDispositionBody(

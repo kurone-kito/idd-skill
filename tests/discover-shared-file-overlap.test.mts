@@ -8,12 +8,84 @@ import {
   applyOverlapTieBreaker,
   normalizeContentionPath,
   type OverlapCandidateInput,
+  parseArgs,
   parseCandidateFiles,
   type RankableCandidate,
   resolveHighContentionFiles,
   toClaimComment,
 } from '../src/scripts/discover-shared-file-overlap.mts';
 import { resolveActiveClaim } from '../src/scripts/protocol-helpers.mts';
+
+// --- #1450: migration onto the shared cli-args.mts wrapper -----------------
+
+test('parseArgs: --candidate is repeatable and --candidates is comma-split', () => {
+  const args = parseArgs([
+    '--candidate',
+    '5',
+    '--candidates',
+    '9,11',
+    '--check-overlap',
+  ]);
+  assert.deepEqual(args.candidates, [5, 9, 11]);
+  assert.equal(args.checkOverlap, true);
+  assert.equal(args.bundles, null);
+});
+
+test('parseArgs: repeated --candidates occurrences all accumulate (not just the last)', () => {
+  // Regression coverage for a Codex review finding on #1450: a
+  // non-multiple parseArgs string flag keeps only the LAST occurrence
+  // when repeated, which would silently drop 1 and 2 here.
+  const args = parseArgs(['--candidates', '1,2', '--candidates', '3,4']);
+  assert.deepEqual(args.candidates, [1, 2, 3, 4]);
+});
+
+test('parseArgs: interleaved --candidates/--candidate occurrences preserve argv order', () => {
+  // Regression coverage for a second #1450 review finding: grouping every
+  // --candidate occurrence before every --candidates occurrence silently
+  // reordered interleaved input (plural-before-singular is the case that
+  // would have been missed by only ever putting --candidate first, as the
+  // test above does).
+  const args = parseArgs(['--candidates', '1,2', '--candidate', '3']);
+  assert.deepEqual(args.candidates, [1, 2, 3]);
+});
+
+test('parseArgs: the --candidate=<value> equals-form is recognized in order', () => {
+  const args = parseArgs(['--candidates', '1,2', '--candidate=3']);
+  assert.deepEqual(args.candidates, [1, 2, 3]);
+});
+
+test('parseArgs: --candidate keeps its existing throw-on-invalid contract', () => {
+  assert.throws(
+    () => parseArgs(['--candidate', 'abc']),
+    /invalid --candidate value: abc/,
+  );
+  assert.throws(
+    () => parseArgs(['--candidates', '5,abc']),
+    /invalid --candidates value: abc/,
+  );
+});
+
+test('parseArgs: a missing --candidate value throws', () => {
+  assert.throws(() => parseArgs(['--candidate']));
+});
+
+test('parseArgs: a flag-shaped value throws instead of being swallowed', () => {
+  // Previously --owner would greedily accept '--check-overlap' as its
+  // literal value, silently leaving --check-overlap unset (the #1082 gap
+  // this migration closes structurally for this helper).
+  assert.throws(() =>
+    parseArgs(['--candidate', '5', '--owner', '--check-overlap']),
+  );
+});
+
+test('parseArgs: rejects an unknown flag', () => {
+  assert.throws(() => parseArgs(['--bogus']));
+});
+
+test('parseArgs: --help is recognized without requiring --candidate', () => {
+  const args = parseArgs(['--help']);
+  assert.equal(args.help, true);
+});
 
 // Instruction files are keyed by their (repo-wide unique) basename so that
 // the source path, the mirror path, and a bare citation all compare equal.

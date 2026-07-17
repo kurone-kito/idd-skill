@@ -1002,6 +1002,14 @@ test('parseArgs: rejects an unknown flag', () => {
   assert.throws(() => parseArgs(['--bogus']));
 });
 
+test('parseArgs: a flag-shaped value throws instead of being swallowed (#1450 acceptance criterion)', () => {
+  // The issue's flagship example: --pr 5 --owner --assert must throw
+  // instead of assigning owner='--assert' and silently leaving
+  // assert=false (the gate would otherwise silently downgrade from
+  // "exit non-zero unless ready" to report-only exit 0).
+  assert.throws(() => parseArgs(['--pr', '5', '--owner', '--assert']));
+});
+
 // --- runAdvisoryConvergence (--assert exit-code contract, DI pattern) -------
 
 function depsFor(

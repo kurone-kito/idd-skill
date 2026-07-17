@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   buildTrustedMarkerLogins,
   extractGhHttpStatus,
+  parseArgs,
   planExternalCheckWaiver,
 } from '../src/scripts/external-check-waiver.mts';
 import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
@@ -11,6 +12,81 @@ import {
   parseExternalCheckWaiverComment,
   renderExternalCheckWaiverComment,
 } from '../src/scripts/protocol-helpers.mts';
+
+// --- #1450: migration onto the shared cli-args.mts wrapper -----------------
+
+test('parseArgs: parses the required flags and applies defaults', () => {
+  const args = parseArgs([
+    '--pr',
+    '5',
+    '--check',
+    'CodeRabbit',
+    '--reason',
+    'flaky',
+  ]);
+  assert.equal(args.prNumber, 5);
+  assert.equal(args.issueNumber, 0);
+  assert.equal(args.checkSelector, 'CodeRabbit');
+  assert.equal(args.reason, 'flaky');
+  assert.equal(args.format, 'json');
+  assert.equal(args.apply, false);
+  assert.equal(args.help, false);
+});
+
+test('parseArgs: --help skips the required-flag checks', () => {
+  const args = parseArgs(['--help']);
+  assert.equal(args.help, true);
+});
+
+test('parseArgs: a missing --pr value throws', () => {
+  assert.throws(() => parseArgs(['--pr']));
+});
+
+test('parseArgs: a flag-shaped value throws instead of being swallowed', () => {
+  // Previously --claim-id would greedily accept '--apply' as its literal
+  // value, silently leaving --apply unset (the #1082 gap this migration
+  // closes structurally for this helper).
+  assert.throws(() =>
+    parseArgs([
+      '--pr',
+      '5',
+      '--check',
+      'x',
+      '--reason',
+      'y',
+      '--claim-id',
+      '--apply',
+    ]),
+  );
+});
+
+test('parseArgs: an invalid positive-integer --pr throws', () => {
+  assert.throws(
+    () => parseArgs(['--pr', 'abc', '--check', 'x', '--reason', 'y']),
+    /invalid --pr value: abc/,
+  );
+});
+
+test('parseArgs: an unsupported --format value throws', () => {
+  assert.throws(
+    () =>
+      parseArgs([
+        '--pr',
+        '5',
+        '--check',
+        'x',
+        '--reason',
+        'y',
+        '--format',
+        'xml',
+      ]),
+    /unsupported --format value: xml/,
+  );
+});
+
+test('parseArgs: rejects an unknown flag', () => {
+  assert.throws(() => parseArgs(['--bogus']));
+});
 
 type PlanInput = Parameters<typeof planExternalCheckWaiver>[0];
 // The base-input builder always supplies these fields, so the test

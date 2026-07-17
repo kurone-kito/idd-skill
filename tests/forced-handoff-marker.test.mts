@@ -8,6 +8,7 @@ import {
   currentIsoTimestamp,
   generateSuccessorIds,
   main,
+  parseArgs,
   parsePositiveInteger,
   planHandoff,
   resolveHelperActiveClaim,
@@ -143,11 +144,33 @@ test('forced handoff helper rejects malformed positive integers', () => {
 });
 
 test('forced handoff helper reports missing numeric flag values clearly', () => {
-  assert.throws(() => main(['--issue']), /missing value for --issue/);
+  // #1450: parseArgs now goes through the shared cli-args.mts wrapper,
+  // which re-wraps Node's native parseArgs error into this repository's
+  // established idiom ("missing value for argument: --x") -- see
+  // cli-args.mts's module header. Same shape the branch-name.mjs /
+  // ci-wait-policy.mjs / advisory-convergence.mjs pilots already use.
+  assert.throws(() => main(['--issue']), /missing value for argument: --issue/);
   assert.throws(
     () => main(['--issue', '337', '--pr']),
-    /missing value for --pr/,
+    /missing value for argument: --pr/,
   );
+});
+
+test('parseArgs: a flag-shaped value throws instead of being swallowed', () => {
+  // Previously --forced-by would greedily accept '--plan' as its literal
+  // value, silently leaving --plan unset (the #1082 gap this migration
+  // closes structurally for this helper).
+  assert.throws(() => parseArgs(['--forced-by', '--plan']));
+});
+
+test('parseArgs: rejects an unknown flag', () => {
+  assert.throws(() => parseArgs(['--bogus']));
+});
+
+test('parseArgs: an absent --issue/--pr stays undefined, not a throw', () => {
+  const args = parseArgs(['--forced-by', 'kurone-kito']);
+  assert.equal(args.issueNumber, undefined);
+  assert.equal(args.prNumber, undefined);
 });
 
 test('forced handoff helper validates --repo format before API calls', () => {
