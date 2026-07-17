@@ -214,10 +214,14 @@ name** and wastes a full advisory-wait cycle. See **Primary advisory
 bot** below for the exact fallback commands and the login each path
 needs.
 
-**Primary advisory bot** (default Copilot): after every push, regardless
-of any reviewer's state, request a re-review from the configured primary
-advisory bot (`.github/idd/config.json` `advisoryWait.primaryBotLogin`,
-which defaults to Copilot) if it has not yet reviewed the current HEAD
+**Primary advisory bot** (default Copilot; also invoked directly by
+`idd-review-triage.instructions.md`'s **Zero-Accepted-PATH-A advisory
+re-review gate**, which reuses steps 1-4 and the active polling loop
+below with its own on-success target instead of E15): after every
+push, regardless of any reviewer's state, request a re-review from the
+configured primary advisory bot (`.github/idd/config.json`
+`advisoryWait.primaryBotLogin`, which defaults to Copilot) if it has
+not yet reviewed the current HEAD
 SHA. Subject to the configured re-review request cap (`REQUEST_CAP` from
 helper output or `.github/idd/config.json` `advisoryWait.requestCap`;
 default 30). This is a process limit, not a GitHub-enforced constraint.
