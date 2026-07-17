@@ -6,6 +6,7 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { parseCliArgs } from './cli-args.mjs';
 import {
   collaboratorPermission,
   isAuthorizedForcedHandoffActor,
@@ -24,6 +25,31 @@ import {
   summarizeClaimValidation,
 } from './protocol-helpers.mjs';
 
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --issue spec key
+// below. See cli-args.mts's module header for the full invariant.
+const LIVE_STATUS_DIGEST_FLAG_SPEC = {
+  '--help': { type: 'boolean', short: 'h', default: false },
+  '--issue': { type: 'string' },
+  '--pr': { type: 'string' },
+  '--repo': { type: 'string' },
+  '--dry-run': { type: 'boolean', default: false },
+  '--apply': { type: 'boolean', default: false },
+  '--phase': { type: 'string' },
+  '--claim': { type: 'string' },
+  '--branch': { type: 'string' },
+  '--last-checked': { type: 'string' },
+  '--open-blockers': { type: 'string' },
+  '--next-action': { type: 'string' },
+  '--authoritative-by': { type: 'string' },
+  '--claim-issue': { type: 'string' },
+  '--claim-id': { type: 'string' },
+  '--agent-id': { type: 'string' },
+  '--skip-claim-check': { type: 'boolean', default: false },
+  '--include-body': { type: 'boolean', default: false },
+  '--format': { type: 'string', default: 'json' },
+};
 const TRUSTED_MARKER_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
 const trustedMarkerAuthorCache = new Map();
 const collaboratorPermissionCache = new Map();
@@ -504,77 +530,58 @@ function writeReport(report, format) {
   }
 }
 function parseArgs(argv) {
-  const parsed = {
-    format: 'json',
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case '--help':
-      case '-h':
-        parsed.help = true;
-        break;
-      case '--issue':
-        parsed.issue = readValue(argv, ++index, arg);
-        break;
-      case '--pr':
-        parsed.pr = readValue(argv, ++index, arg);
-        break;
-      case '--repo':
-        parsed.repo = readValue(argv, ++index, arg);
-        break;
-      case '--dry-run':
-        parsed.dryRun = true;
-        break;
-      case '--apply':
-        parsed.apply = true;
-        break;
-      case '--phase':
-        parsed.phase = readValue(argv, ++index, arg);
-        break;
-      case '--claim':
-        parsed.claim = readValue(argv, ++index, arg);
-        break;
-      case '--branch':
-        parsed.branch = readValue(argv, ++index, arg);
-        break;
-      case '--last-checked':
-        parsed.lastChecked = readValue(argv, ++index, arg);
-        break;
-      case '--open-blockers':
-        parsed.openBlockers = readValue(argv, ++index, arg);
-        break;
-      case '--next-action':
-        parsed.nextAction = readValue(argv, ++index, arg);
-        break;
-      case '--authoritative-by':
-        parsed.authoritativeBy = readValue(argv, ++index, arg);
-        break;
-      case '--claim-issue':
-        parsed.claimIssue = readValue(argv, ++index, arg);
-        break;
-      case '--claim-id':
-        parsed.claimId = readValue(argv, ++index, arg);
-        break;
-      case '--agent-id':
-        parsed.agentId = readValue(argv, ++index, arg);
-        break;
-      case '--skip-claim-check':
-        parsed.skipClaimCheck = true;
-        break;
-      case '--include-body':
-        parsed.includeBody = true;
-        break;
-      case '--format':
-        parsed.format = readValue(argv, ++index, arg);
-        if (!['json', 'table'].includes(parsed.format)) {
-          fail('--format must be json or table');
-        }
-        break;
-      default:
-        fail(`unknown argument ${arg}`);
-    }
+  // No test in this file asserts the pre-migration message text or the
+  // no-colon "unknown argument X" / "X requires a value" spelling (see
+  // #1451's PR description), so a parse failure adopts the wrapper's
+  // uniform message. The exit-code-2 contract IS preserved: catch the
+  // wrapper's thrown Error here and route it through this file's own
+  // fail() exactly as every other malformed-input path already does.
+  let parsed;
+  try {
+    parsed = parseCliArgs(argv, LIVE_STATUS_DIGEST_FLAG_SPEC);
+  } catch (error) {
+    fail(error.message);
   }
+  const { values, help } = parsed;
+  // The pre-migration readValue() used `!value` (not `=== undefined`), so
+  // an explicit empty-string value was rejected the same as an omitted
+  // flag for EVERY flag in this file. parseCliArgs accepts an empty
+  // string (matching bare node:util parseArgs), so this check restores
+  // that exact uniform pre-migration behavior.
+  const requireNonEmpty = (token, flag) => {
+    if (token === '') {
+      fail(`${flag} requires a value`);
+    }
+    return token;
+  };
+  const format = requireNonEmpty(values.format, '--format');
+  if (!['json', 'table'].includes(format)) {
+    fail('--format must be json or table');
+  }
+  const parsedArgs = {
+    format,
+    help,
+    issue: requireNonEmpty(values.issue, '--issue'),
+    pr: requireNonEmpty(values.pr, '--pr'),
+    repo: requireNonEmpty(values.repo, '--repo'),
+    dryRun: values['dry-run'],
+    apply: values.apply,
+    phase: requireNonEmpty(values.phase, '--phase'),
+    claim: requireNonEmpty(values.claim, '--claim'),
+    branch: requireNonEmpty(values.branch, '--branch'),
+    lastChecked: requireNonEmpty(values['last-checked'], '--last-checked'),
+    openBlockers: requireNonEmpty(values['open-blockers'], '--open-blockers'),
+    nextAction: requireNonEmpty(values['next-action'], '--next-action'),
+    authoritativeBy: requireNonEmpty(
+      values['authoritative-by'],
+      '--authoritative-by',
+    ),
+    claimIssue: requireNonEmpty(values['claim-issue'], '--claim-issue'),
+    claimId: requireNonEmpty(values['claim-id'], '--claim-id'),
+    agentId: requireNonEmpty(values['agent-id'], '--agent-id'),
+    skipClaimCheck: values['skip-claim-check'],
+    includeBody: values['include-body'],
+  };
   for (const flag of [
     ['phase', '--phase'],
     ['claim', '--claim'],
@@ -583,20 +590,13 @@ function parseArgs(argv) {
     ['nextAction', '--next-action'],
     ['authoritativeBy', '--authoritative-by'],
   ]) {
-    if (!parsed[flag[0]]) {
-      if (!parsed.help) {
+    if (!parsedArgs[flag[0]]) {
+      if (!parsedArgs.help) {
         fail(`${flag[1]} is required`);
       }
     }
   }
-  return parsed;
-}
-function readValue(argv, index, flag) {
-  const value = argv[index];
-  if (!value || value.startsWith('--')) {
-    fail(`${flag} requires a value`);
-  }
-  return value;
+  return parsedArgs;
 }
 function parsePositiveInteger(value, flag) {
   if (!value || !/^[1-9]\d*$/.test(value)) {

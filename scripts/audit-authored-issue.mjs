@@ -21,6 +21,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseAutopilotSuitabilityMarker } from './autopilot-suitability.mjs';
+import { parseCliArgs } from './cli-args.mjs';
 import { extractBlockedByRoadmapMarkers } from './discover-readiness-check.mjs';
 import { extractRoadmapMarkerId } from './discover-roadmap-graph.mjs';
 import { parseEffortMarker } from './effort.mjs';
@@ -56,6 +57,26 @@ const SHAPE_HEADING_REQUIREMENTS = {
     { anyOf: ['Proposed change'] },
     { anyOf: ['Acceptance criteria'] },
   ],
+};
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `shape:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --shape spec key
+// below. See cli-args.mts's module header for the full invariant.
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls main() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires.
+const AUDIT_AUTHORED_ISSUE_FLAG_SPEC = {
+  '--help': { type: 'boolean', short: 'h', default: false },
+  '--shape': { type: 'string' },
+  '--body-file': { type: 'string' },
+  '--stdin': { type: 'boolean', default: false },
+  '--marker-prefix': { type: 'string' },
+  '--config': { type: 'string' },
+  '--label': { type: 'string', multiple: true },
+  '--format': { type: 'string', default: 'json' },
 };
 if (import.meta.main) {
   main();
@@ -537,50 +558,33 @@ function writeReport(report, format) {
   console.log(`${JSON.stringify(report, null, 2)}\n`);
 }
 function parseArgs(argv) {
-  const parsed = { labels: [], format: 'json' };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case '--help':
-      case '-h':
-        parsed.help = true;
-        break;
-      case '--shape':
-        parsed.shape = readValue(argv, ++index, arg);
-        break;
-      case '--body-file':
-        parsed.bodyFile = readValue(argv, ++index, arg);
-        break;
-      case '--stdin':
-        parsed.stdin = true;
-        break;
-      case '--marker-prefix':
-        parsed.markerPrefix = readValue(argv, ++index, arg);
-        break;
-      case '--config':
-        parsed.configPath = readValue(argv, ++index, arg);
-        break;
-      case '--label':
-        parsed.labels.push(readValue(argv, ++index, arg));
-        break;
-      case '--format':
-        parsed.format = readValue(argv, ++index, arg);
-        if (!['json', 'table'].includes(parsed.format)) {
-          fail_('--format must be json or table');
-        }
-        break;
-      default:
-        fail_(`unknown argument ${arg}`);
-    }
+  // No test in this file asserts the pre-migration message text or the
+  // no-colon "unknown argument X" / "X requires a value" spelling (see
+  // #1451's PR description), so a parse failure adopts the wrapper's
+  // uniform message. The exit-code-2 contract IS preserved: catch the
+  // wrapper's thrown Error here and route it through this file's own
+  // fail_() exactly as every other malformed-input path already does.
+  let parsed;
+  try {
+    parsed = parseCliArgs(argv, AUDIT_AUTHORED_ISSUE_FLAG_SPEC);
+  } catch (error) {
+    fail_(error.message);
   }
-  return parsed;
-}
-function readValue(argv, index, flag) {
-  const value = argv[index];
-  if (value === undefined || value.startsWith('--')) {
-    fail_(`${flag} requires a value`);
+  const { values, help } = parsed;
+  const format = values.format;
+  if (!['json', 'table'].includes(format)) {
+    fail_('--format must be json or table');
   }
-  return value;
+  return {
+    help,
+    shape: values.shape,
+    bodyFile: values['body-file'],
+    stdin: values.stdin,
+    markerPrefix: values['marker-prefix'],
+    configPath: values.config,
+    labels: values.label ?? [],
+    format,
+  };
 }
 function printUsage() {
   console.log(`usage: node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> (--body-file <path> | --stdin) [options]
