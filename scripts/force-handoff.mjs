@@ -7,7 +7,6 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { pathToFileURL } from 'node:url';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
@@ -298,9 +297,6 @@ function splitCsv(value) {
     .map((s) => s.trim())
     .filter(Boolean);
 }
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (import.meta.main) {
   main();
 }

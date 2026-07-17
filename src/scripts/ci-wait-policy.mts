@@ -8,7 +8,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { isCliExecution } from './gh-exec.mts';
 import { loadJson, validateConfigSection } from './validate-schemas.mts';
 
 const DEFAULT_RUNNING_TIMEOUT = 'PT30M';
@@ -43,7 +42,7 @@ export const DEFAULT_CI_WAIT_POLICY = Object.freeze({
   rerunPolicy: DEFAULT_RERUN_POLICY,
 });
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 

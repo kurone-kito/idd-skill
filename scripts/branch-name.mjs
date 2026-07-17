@@ -13,8 +13,6 @@
 // pre-check (e) collision detection can recognize two sessions as working
 // the same issue. The written algorithm remains the canonical spec and
 // fallback; this helper only removes the hand-tracing error surface.
-import { isCliExecution } from './gh-exec.mjs';
-
 // The fixed stop-word set from pre-check (e). Whole-token matches only.
 const STOP_WORDS = new Set([
   'a',
@@ -30,7 +28,7 @@ const STOP_WORDS = new Set([
 ]);
 const MAX_SLUG_LENGTH = 40;
 const FALLBACK_SLUG = 'task';
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 /**

@@ -17,8 +17,6 @@
 
 import type { StdioOptions } from 'node:child_process';
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
 
@@ -229,18 +227,4 @@ export async function withBoundedRetry<T>(
       );
     }
   }
-}
-
-/**
- * True when this module is executing as the invoked CLI entry point
- * (`node <this-file>.mjs ...`), false when it is only imported (e.g. from
- * a test). Callers pass their own `import.meta.url`; the check itself
- * compares against `process.argv[1]`, as every existing per-helper copy
- * already does.
- */
-export function isCliExecution(moduleUrl: string): boolean {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(moduleUrl) === resolve(process.argv[1])
-  );
 }

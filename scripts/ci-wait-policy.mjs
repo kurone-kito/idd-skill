@@ -6,7 +6,6 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { isCliExecution } from './gh-exec.mjs';
 import { loadJson, validateConfigSection } from './validate-schemas.mjs';
 
 const DEFAULT_RUNNING_TIMEOUT = 'PT30M';
@@ -24,7 +23,7 @@ export const DEFAULT_CI_WAIT_POLICY = Object.freeze({
   generationTimeoutMs: 10 * 60 * 1000,
   rerunPolicy: DEFAULT_RERUN_POLICY,
 });
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 export function parseDurationToMs(value) {

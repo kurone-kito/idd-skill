@@ -49,7 +49,6 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { isCliExecution } from './gh-exec.mjs';
 import {
   collectHelperRuntimeEvidence,
   collectVendoredFiles,
@@ -950,7 +949,7 @@ export function runVerify(sourceRoot, targetRoot, profile) {
     blocking,
   };
 }
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   try {
     runCli();
   } catch (error) {

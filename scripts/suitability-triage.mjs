@@ -7,11 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import {
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-  isCliExecution,
-} from './gh-exec.mjs';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 
 const CHECKS = [
@@ -122,7 +118,7 @@ const ACCEPTANCE_CRITERIA_PATTERN = /^#+\s*Acceptance\s+Criteria\s*$/im;
 // across JavaScript regex engines.
 const RESOLVED_DECISION_PATTERN =
   /^#{1,6}\s+Decision\b(?![^\n]*\b(?:not(?:\s+yet)?(?:\s+been)?\s+resolved|(?:to\s+be|yet\s+to\s+be|remains?\s+to\s+be)\s+resolved|never(?:\s+been)?\s+resolved)\b)[^\n]*\bresolved\b/im;
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 export function evaluateSuitability(issue, options = {}) {

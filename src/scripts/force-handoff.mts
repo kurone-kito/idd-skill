@@ -8,7 +8,6 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { pathToFileURL } from 'node:url';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
   isAuthorizedForcedHandoffActor,
@@ -410,9 +409,6 @@ function splitCsv(value: unknown): string[] {
     .filter(Boolean);
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (import.meta.main) {
   main();
 }

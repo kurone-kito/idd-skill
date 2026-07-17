@@ -15,8 +15,6 @@
 // Consumed by the `src/scripts/*.mts` helpers that shell out to `gh` or
 // need the CLI-entry-point guard.
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mjs';
 /**
  * Shared `{ stdio }` override for callers that invoke `gh` in a tight or
@@ -149,17 +147,4 @@ export async function withBoundedRetry(task, options = {}) {
       );
     }
   }
-}
-/**
- * True when this module is executing as the invoked CLI entry point
- * (`node <this-file>.mjs ...`), false when it is only imported (e.g. from
- * a test). Callers pass their own `import.meta.url`; the check itself
- * compares against `process.argv[1]`, as every existing per-helper copy
- * already does.
- */
-export function isCliExecution(moduleUrl) {
-  return (
-    Boolean(process.argv[1]) &&
-    fileURLToPath(moduleUrl) === resolve(process.argv[1])
-  );
 }

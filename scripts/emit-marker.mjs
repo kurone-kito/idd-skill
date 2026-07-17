@@ -10,7 +10,6 @@
 // ready-to-post body string to stdout and performs NO network write; the
 // agent posts it via the documented HTTP path. The render logic lives in
 // protocol-helpers; this is the thin CLI surface.
-import { isCliExecution } from './gh-exec.mjs';
 import {
   renderClaimedByMarker,
   renderReviewBaselineMarker,
@@ -18,7 +17,7 @@ import {
 } from './protocol-helpers.mjs';
 
 const MARKER_TYPES = ['claimed-by', 'review-watermark', 'review-baseline'];
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 function runCli() {

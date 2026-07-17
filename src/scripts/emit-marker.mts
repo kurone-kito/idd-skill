@@ -11,7 +11,6 @@
 // agent posts it via the documented HTTP path. The render logic lives in
 // protocol-helpers; this is the thin CLI surface.
 
-import { isCliExecution } from './gh-exec.mts';
 import {
   renderClaimedByMarker,
   renderReviewBaselineMarker,
@@ -20,7 +19,7 @@ import {
 
 const MARKER_TYPES = ['claimed-by', 'review-watermark', 'review-baseline'];
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   runCli();
 }
 

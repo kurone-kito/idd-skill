@@ -7,7 +7,6 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mjs';
 import {
   isAutopilotSuitabilityScore,
@@ -120,7 +119,7 @@ query($owner:String!, $repo:String!, $number:Int!, $after:String) {
   }
 }
 `;
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   const hasIssue = Number.isInteger(args.issue) && args.issue > 0;
   // --issue and --all-roadmaps are mutually exclusive: exactly one route
@@ -2158,9 +2157,6 @@ function isNotFoundIssueLookupError(error) {
   const candidate = error;
   const stderr = String(candidate.stderr ?? candidate.message ?? '');
   return stderr.includes('HTTP 404');
-}
-function isMainModule(importMetaUrl) {
-  return process.argv[1] === fileURLToPath(importMetaUrl);
 }
 function buildEdgeKey(edge) {
   return `${edge.source}:${edge.target}:${edge.relationship}:${edge.evidence}`;

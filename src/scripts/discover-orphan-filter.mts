@@ -27,11 +27,7 @@ import {
   type LeafActiveClaim,
 } from './discover-roadmap-graph.mts';
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
-import {
-  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghText,
-  isCliExecution,
-} from './gh-exec.mts';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { createMarkerRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 
@@ -152,7 +148,7 @@ interface ParsedArgs {
   currentClaimId: string;
 }
 
-if (isCliExecution(import.meta.url)) {
+if (import.meta.main) {
   await runCli();
 }
 
