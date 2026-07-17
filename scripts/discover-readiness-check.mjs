@@ -476,20 +476,51 @@ export function extractDependencyIssueNumbers(body) {
     ...taskListDependencies.map((match) => Number.parseInt(match[1], 10)),
   ]);
 }
+/**
+ * Walk `argv` and return every occurrence of the given long-flag literals
+ * (e.g. `--issue`, `--issues`) in argv order, tagged with which flag
+ * matched and its literal string value. `parseCliArgs` has already thrown
+ * on anything malformed (a missing value, a flag-shaped value, an unknown
+ * flag) by the time this runs, so this is a pure order-reconstruction pass
+ * over already-validated input, not a second parse/validation pass. Covers
+ * both the `--flag value` and `--flag=value` forms Node's `util.parseArgs`
+ * itself accepts for a long option (#1450 review follow-up: grouping every
+ * `--issue` occurrence before every `--issues` occurrence silently
+ * reordered interleaved input, e.g. `--issues 1,2 --issue 3`).
+ */
+function collectOrderedOccurrences(argv, flagNames) {
+  const occurrences = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    const equalsIndex = token.indexOf('=');
+    const bareFlag = equalsIndex === -1 ? token : token.slice(0, equalsIndex);
+    if (!flagNames.includes(bareFlag)) {
+      continue;
+    }
+    const value =
+      equalsIndex === -1 ? argv[index + 1] : token.slice(equalsIndex + 1);
+    occurrences.push({ flag: bareFlag, value });
+  }
+  return occurrences;
+}
 export function parseArgs(argv) {
   const { values, help } = parseCliArgs(
     argv,
     DISCOVER_READINESS_CHECK_FLAG_SPEC,
   );
   // Preserves the existing "collect every --issue occurrence plus every
-  // comma-split --issues entry, then silently drop non-numeric tokens"
-  // contract (normalizeIssueNumbers), unchanged by this migration -- only
-  // the flag-syntax parsing (missing/flag-shaped values, unknown flags) is
-  // now strict.
-  const issueTokens = [
-    ...(values.issue ?? []),
-    ...(values.issues ?? []).flatMap((token) => token.split(',')),
-  ];
+  // comma-split --issues entry, in argv order, then silently drop
+  // non-numeric tokens" contract (normalizeIssueNumbers) unchanged by this
+  // migration -- only the flag-syntax parsing (missing/flag-shaped values,
+  // unknown flags) is now strict.
+  const issueTokens = collectOrderedOccurrences(argv, [
+    '--issue',
+    '--issues',
+  ]).flatMap((occurrence) =>
+    occurrence.flag === '--issues'
+      ? occurrence.value.split(',')
+      : [occurrence.value],
+  );
   const swarmFloorToken = values['swarm-floor'];
   return {
     issueNumbers: normalizeIssueNumbers(issueTokens),

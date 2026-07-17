@@ -30,6 +30,21 @@ test('parseArgs: repeated --issues occurrences all accumulate (not just the last
   assert.deepEqual(args.issueNumbers, [1, 2, 3, 4]);
 });
 
+test('parseArgs: interleaved --issues/--issue occurrences preserve argv order', () => {
+  // Regression coverage for a second #1450 review finding: grouping every
+  // --issue occurrence before every --issues occurrence silently reordered
+  // interleaved input (plural-before-singular is the case that would have
+  // been missed by only ever putting --issue first, as the test above
+  // does).
+  const args = parseArgs(['--issues', '1,2', '--issue', '3']);
+  assert.deepEqual(args.issueNumbers, [1, 2, 3]);
+});
+
+test('parseArgs: the --issue=<value> equals-form is recognized in order', () => {
+  const args = parseArgs(['--issues', '1,2', '--issue=3']);
+  assert.deepEqual(args.issueNumbers, [1, 2, 3]);
+});
+
 test('parseArgs: --swarm-floor keeps its existing throw-on-invalid contract', () => {
   assert.throws(
     () => parseArgs(['--swarm-floor', '9']),

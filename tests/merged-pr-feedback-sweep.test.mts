@@ -42,6 +42,20 @@ test('parseArgs: repeated --prs occurrences all accumulate (not just the last)',
   assert.deepEqual(args.prNumbers, [1, 2, 3, 4]);
 });
 
+test('parseArgs: interleaved --prs/--pr occurrences preserve argv order', () => {
+  // Regression coverage for a second #1450 review finding: grouping every
+  // --pr occurrence before every --prs occurrence silently reordered
+  // interleaved input (plural-before-singular is the case that would have
+  // been missed by only ever putting --pr first, as the test above does).
+  const args = parseArgs(['--prs', '1,2', '--pr', '3']);
+  assert.deepEqual(args.prNumbers, [1, 2, 3]);
+});
+
+test('parseArgs: the --pr=<value> equals-form is recognized in order', () => {
+  const args = parseArgs(['--prs', '1,2', '--pr=3']);
+  assert.deepEqual(args.prNumbers, [1, 2, 3]);
+});
+
 test('parseArgs: a missing --days value throws', () => {
   assert.throws(() => parseArgs(['--days']));
 });

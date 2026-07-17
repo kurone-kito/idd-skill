@@ -39,6 +39,21 @@ test('parseArgs: repeated --candidates occurrences all accumulate (not just the 
   assert.deepEqual(args.candidates, [1, 2, 3, 4]);
 });
 
+test('parseArgs: interleaved --candidates/--candidate occurrences preserve argv order', () => {
+  // Regression coverage for a second #1450 review finding: grouping every
+  // --candidate occurrence before every --candidates occurrence silently
+  // reordered interleaved input (plural-before-singular is the case that
+  // would have been missed by only ever putting --candidate first, as the
+  // test above does).
+  const args = parseArgs(['--candidates', '1,2', '--candidate', '3']);
+  assert.deepEqual(args.candidates, [1, 2, 3]);
+});
+
+test('parseArgs: the --candidate=<value> equals-form is recognized in order', () => {
+  const args = parseArgs(['--candidates', '1,2', '--candidate=3']);
+  assert.deepEqual(args.candidates, [1, 2, 3]);
+});
+
 test('parseArgs: --candidate keeps its existing throw-on-invalid contract', () => {
   assert.throws(
     () => parseArgs(['--candidate', 'abc']),

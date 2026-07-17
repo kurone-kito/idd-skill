@@ -754,6 +754,38 @@ function loadPolicy(policyPath: string): {
   };
 }
 
+/**
+ * Walk `argv` and return every occurrence of the given long-flag literals
+ * (e.g. `--candidate`, `--candidates`) in argv order, tagged with which
+ * flag matched and its literal string value. `parseCliArgs` has already
+ * thrown on anything malformed (a missing value, a flag-shaped value, an
+ * unknown flag) by the time this runs, so this is a pure
+ * order-reconstruction pass over already-validated input, not a second
+ * parse/validation pass. Covers both the `--flag value` and `--flag=value`
+ * forms Node's `util.parseArgs` itself accepts for a long option (#1450
+ * review follow-up: grouping every `--candidate` occurrence before every
+ * `--candidates` occurrence silently reordered interleaved input, e.g.
+ * `--candidates 1,2 --candidate 3`).
+ */
+function collectOrderedOccurrences(
+  argv: readonly string[],
+  flagNames: readonly string[],
+): { flag: string; value: string }[] {
+  const occurrences: { flag: string; value: string }[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    const equalsIndex = token.indexOf('=');
+    const bareFlag = equalsIndex === -1 ? token : token.slice(0, equalsIndex);
+    if (!flagNames.includes(bareFlag)) {
+      continue;
+    }
+    const value =
+      equalsIndex === -1 ? argv[index + 1] : token.slice(equalsIndex + 1);
+    occurrences.push({ flag: bareFlag, value });
+  }
+  return occurrences;
+}
+
 export function parseArgs(argv: string[]): ParsedArgs {
   const { values, help } = parseCliArgs(
     argv,
@@ -761,18 +793,22 @@ export function parseArgs(argv: string[]): ParsedArgs {
   );
   // parsePositiveInt keeps its existing throw-on-invalid contract and
   // message shape unchanged; only the flag-syntax parsing around it (a
-  // missing/flag-shaped value, an unknown flag) is now strict.
-  const candidates: number[] = (
-    (values.candidate as string[] | undefined) ?? []
-  ).map((token) => parsePositiveInt(token, '--candidate'));
-  for (const occurrence of (values.candidates as string[] | undefined) ?? []) {
-    for (const part of occurrence.split(',')) {
-      const trimmed = part.trim();
-      if (trimmed) {
-        candidates.push(parsePositiveInt(trimmed, '--candidates'));
-      }
+  // missing/flag-shaped value, an unknown flag) is now strict. Every
+  // --candidate/--candidates occurrence is now accumulated in argv order
+  // (not just the last, and not grouped by flag name).
+  const candidates: number[] = collectOrderedOccurrences(argv, [
+    '--candidate',
+    '--candidates',
+  ]).flatMap((occurrence) => {
+    if (occurrence.flag === '--candidate') {
+      return [parsePositiveInt(occurrence.value, '--candidate')];
     }
-  }
+    return occurrence.value
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((trimmed) => parsePositiveInt(trimmed, '--candidates'));
+  });
   return {
     candidates,
     owner: values.owner as string,

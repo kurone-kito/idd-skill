@@ -321,30 +321,60 @@ function parsePositiveIntToken(raw, label) {
   }
   return value;
 }
+/**
+ * Walk `argv` and return every occurrence of the given long-flag literals
+ * (e.g. `--pr`, `--prs`) in argv order, tagged with which flag matched and
+ * its literal string value. `parseCliArgs` has already thrown on anything
+ * malformed (a missing value, a flag-shaped value, an unknown flag) by the
+ * time this runs, so this is a pure order-reconstruction pass over
+ * already-validated input, not a second parse/validation pass. Covers
+ * both the `--flag value` and `--flag=value` forms Node's `util.parseArgs`
+ * itself accepts for a long option (#1450 review follow-up: grouping every
+ * `--pr` occurrence before every `--prs` occurrence silently reordered
+ * interleaved input, e.g. `--prs 1,2 --pr 3`).
+ */
+function collectOrderedOccurrences(argv, flagNames) {
+  const occurrences = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    const equalsIndex = token.indexOf('=');
+    const bareFlag = equalsIndex === -1 ? token : token.slice(0, equalsIndex);
+    if (!flagNames.includes(bareFlag)) {
+      continue;
+    }
+    const value =
+      equalsIndex === -1 ? argv[index + 1] : token.slice(equalsIndex + 1);
+    occurrences.push({ flag: bareFlag, value });
+  }
+  return occurrences;
+}
 export function parseArgs(argv) {
   const { values, help } = parseCliArgs(
     argv,
     MERGED_PR_FEEDBACK_SWEEP_FLAG_SPEC,
   );
-  const prNumbers = (values.pr ?? []).map((token) =>
-    parsePositiveIntToken(token, '--pr'),
-  );
   // Distinct error message/validation shape preserved verbatim: each
   // comma-separated part is compared against its OWN trimmed self (not
   // the shared --pr/--days label), and the error embeds the untrimmed
-  // part. Every --prs occurrence is now accumulated (not just the last).
-  for (const occurrence of values.prs ?? []) {
-    for (const part of occurrence.split(',')) {
-      const trimmed = part.trim();
-      const value = Number.parseInt(trimmed, 10);
-      if (!Number.isFinite(value) || String(value) !== trimmed || value < 1) {
-        throw new Error(
-          `--prs expects comma-separated positive integers, got "${part}"`,
-        );
+  // part. Every --pr/--prs occurrence is now accumulated in argv order
+  // (not just the last, and not grouped by flag name).
+  const prNumbers = collectOrderedOccurrences(argv, ['--pr', '--prs']).flatMap(
+    (occurrence) => {
+      if (occurrence.flag === '--pr') {
+        return [parsePositiveIntToken(occurrence.value, '--pr')];
       }
-      prNumbers.push(value);
-    }
-  }
+      return occurrence.value.split(',').map((part) => {
+        const trimmed = part.trim();
+        const value = Number.parseInt(trimmed, 10);
+        if (!Number.isFinite(value) || String(value) !== trimmed || value < 1) {
+          throw new Error(
+            `--prs expects comma-separated positive integers, got "${part}"`,
+          );
+        }
+        return value;
+      });
+    },
+  );
   return {
     since: values.since === undefined ? null : values.since,
     days:
