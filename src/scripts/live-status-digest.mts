@@ -14,14 +14,16 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { isCliExecution } from './gh-exec.mts';
+import { ghApiJson, isCliExecution } from './gh-exec.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
+import type { PrCommitPayload } from './protocol-helpers.mts';
 import {
   applyDigestUpsert,
   type DigestUpsertOutcome,
   normalizeTrustedMarkerLogins,
   parsePaginatedGhNdjson,
   planLiveStatusDigestUpsert,
+  resolvePrFirstCommitAt,
   resolveTrustedMarkerActors,
   summarizeClaimValidation,
 } from './protocol-helpers.mts';
@@ -157,6 +159,15 @@ function main(): void {
     args.issue ?? args.pr,
     `--${targetType}`,
   );
+  // `expectedLinkedPrs` is a pure, local computation, so building it
+  // eagerly is free. `prFirstCommitAt` is not: resolving it makes a
+  // paginated `gh api pulls/{pr}/commits` call. `claimContext` is only
+  // consumed inside the `assertClaim` callback below, which
+  // `applyDigestUpsert` invokes only for a real `--apply` claim check (never
+  // for a dry-run, a duplicate-plan exit, or `--apply --skip-claim-check`),
+  // so resolve `prFirstCommitAt` lazily at that same call site instead of
+  // paying for it on every invocation regardless of whether anything ends
+  // up consuming it.
   const claimContext =
     targetType === 'pr'
       ? {
@@ -234,7 +245,13 @@ function main(): void {
             args.claimIssue,
             args.agentId,
             args.claimId,
-            claimContext,
+            {
+              ...claimContext,
+              prFirstCommitAt:
+                targetType === 'pr'
+                  ? resolvePrFirstCommitAtForPr(owner, repo, targetNumber)
+                  : null,
+            },
           ),
         createComment: (body) =>
           createIssueComment(owner, repo, targetNumber, body),
@@ -355,7 +372,10 @@ function assertActiveClaim(
   issueNumber: string | undefined,
   agentId: string | undefined,
   claimId: string | undefined,
-  options: { expectedLinkedPrs?: string[] } = {},
+  options: {
+    expectedLinkedPrs?: string[];
+    prFirstCommitAt?: string | null;
+  } = {},
 ): void {
   const active = readActiveClaim(owner, repo, issueNumber, options);
   if (
@@ -374,7 +394,10 @@ function readActiveClaim(
   owner: string,
   repo: string,
   issueNumber: string | undefined,
-  options: { expectedLinkedPrs?: string[] } = {},
+  options: {
+    expectedLinkedPrs?: string[];
+    prFirstCommitAt?: string | null;
+  } = {},
 ) {
   const comments = fetchIssueComments(owner, repo, issueNumber).map(
     (comment) => {
@@ -395,6 +418,7 @@ function readActiveClaim(
     trustedMarkerLogins: resolveTrustedMarkerLogins(owner, repo, comments),
     forcedHandoffEnabled: readForcedHandoffMode() === 'human-gated',
     expectedLinkedPrs: options.expectedLinkedPrs ?? [],
+    prFirstCommitAt: options.prFirstCommitAt ?? null,
     isAuthorizedForcedHandoff: (forcedBy) =>
       isAuthorizedForcedHandoffActor(
         owner,
@@ -435,6 +459,35 @@ function buildExpectedLinkedPrReferences(
     `#${normalized}`,
     `https://github.com/${owner}/${repo}/pull/${normalized}`,
   ];
+}
+
+// The PR's first-commit time backs the Part B forced-handoff rule (#1058): a
+// legitimate issue-only handoff that predates the PR is honored even against
+// a PR-backed claim -- see `buildForcedHandoffEnableGate` in
+// protocol-helpers.mts. Resolve it only when forced handoffs are enabled, and
+// fail closed to `null` (reject) on any lookup/parse error so a transient
+// commits-API failure never widens what the gate accepts. Mirrors
+// `pre-merge-readiness.mts` / `advisory-convergence.mts`'s identical
+// resolution, sharing `resolvePrFirstCommitAt`'s date computation with both.
+function resolvePrFirstCommitAtForPr(
+  owner: string,
+  repo: string,
+  prNumber: number,
+): string | null {
+  if (readForcedHandoffMode() !== 'human-gated') {
+    return null;
+  }
+  try {
+    const prCommits = ghApiJson(
+      `repos/${owner}/${repo}/pulls/${prNumber}/commits`,
+      {
+        paginate: true,
+      },
+    ) as PrCommitPayload[];
+    return resolvePrFirstCommitAt(prCommits);
+  } catch {
+    return null;
+  }
 }
 
 export function isTrustedMarkerAuthor(
