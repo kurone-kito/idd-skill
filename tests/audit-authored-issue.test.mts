@@ -1664,6 +1664,33 @@ test('prose-dependency does not bridge a blank line between plain prose and a fo
   assert.equal(finding.severity, undefined);
 });
 
+test('prose-dependency bridges a loose-list blank line to a shallower open ancestor, not just the same depth', () => {
+  // Regression test for a CodeRabbit review nitpick on this PR: every
+  // other loose-list positive test above resumes at exactly the same
+  // depth as the left chunk's tail node (rightHeadIndent === leftTailIndent),
+  // never exercising the genuinely-shallower branch of the
+  // `rightHeadIndent <= leftTailIndent` guard in
+  // isBridgeableLooseListBoundary. Here the left chunk ends three levels
+  // deep ("Sub-detail" at indent 4), and the item after the blank line
+  // resumes at "Gather context"'s own (shallower, indent-2) level --
+  // strictly less than 4, not equal to it. The bridge must still fire so
+  // "Before starting:" (the root) reaches "PR #1391".
+  const body = childBody({
+    extraMarkers:
+      '- Before starting:\n' +
+      '  - Gather context\n' +
+      '    - Sub-detail\n' +
+      '\n' +
+      '  - PR #1391 must land',
+  });
+  const report = auditAuthoredIssue(body, { shape: 'child' });
+  const finding = report.findings.find(
+    (entry) => entry.id === 'prose-dependency',
+  );
+  assert.equal(finding?.severity, 'warning');
+  assert.match(finding?.detail ?? '', /#1391/);
+});
+
 // --- prose-dependency: empty-string currentRepo (#1472) ---
 
 test('prose-dependency treats an empty-string currentRepo as unknown', () => {
