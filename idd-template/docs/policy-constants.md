@@ -170,10 +170,19 @@ The current policy schema and helper runtime now support
 `.github/idd/config.json` `advisoryWait.requestCap`,
 `advisoryWait.pendingWindow`, `advisoryWait.settledWindow`,
 `advisoryWait.pollInterval`, `advisoryWait.capExhaustedRoute`,
-`advisoryWait.primaryBotLogin`, `advisoryWait.secondaryBotLogin`, and
-`advisoryWait.convergenceDeadline`.
+`advisoryWait.primaryBotLogin`, `advisoryWait.secondaryBotLogin`,
+`advisoryWait.convergenceDeadline`, and `advisoryWait.sameHeadRerollCap`.
 Omitted keys keep the distributed defaults below. The four duration keys
 accept positive whole-minute ISO 8601 durations only.
+`advisoryWait.sameHeadRerollCap` bounds the AW6 same-HEAD advisory
+reroll carve-out (#1465 / #1511, see
+[Helper scripts](idd-helper-scripts.md#bounded-same-head-advisory-reroll-aw6-1511)):
+the maximum number of fresh same-HEAD re-reviews the autonomous loop may
+request, per HEAD, once the primary bot's review already covers current
+HEAD but still carries actionable items that triage has already
+dispositioned. It is scoped by HEAD (a new push resets the count) and
+kept intentionally separate from `advisoryWait.requestCap`, so it can
+neither consume nor be masked by that cap.
 `advisoryWait.primaryBotLogin` selects the advisory bot whose review the
 advisory-wait gate tracks; it defaults to Copilot, so omitting it
 preserves the Copilot-advisory behavior exactly.
@@ -204,6 +213,7 @@ install without a requestable-reviewer event cannot be tracked once per HEAD.
 | Secondary advisory bot supplement                | unset (optional `advisoryWait.secondaryBotLogin`; non-gating, once per HEAD)                                                                                                                                                                                                                                                                                 | [Review fix](../.github/instructions/idd-review-fix.instructions.md), [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md)                                                                     | Leave unset unless the repository wants a non-gating fallback reviewer when the primary is throttled.                                                           |
 | Human re-review response wait                    | 30 min after addressed `CHANGES_REQUESTED` feedback has a re-review request                                                                                                                                                                                                                                                                                  | [Pre-merge](../.github/instructions/idd-pre-merge.instructions.md)                                                                                                                                                   | Keep unless the repository has a different required-reviewer response window.                                                                                   |
 | Advisory-convergence deadline                    | 24 h (`advisoryWait.convergenceDeadline`)                                                                                                                                                                                                                                                                                                                    | [Pre-merge](../.github/instructions/idd-pre-merge.instructions.md), [Helper scripts](idd-helper-scripts.md)                                                                                                          | Keep unless the repository needs a different bound before the maintainer waiver escape hatch applies.                                                           |
+| Same-HEAD advisory reroll cap                    | 2 rerolls per HEAD (`advisoryWait.sameHeadRerollCap`)                                                                                                                                                                                                                                                                                                        | [Advisory wait](../.github/instructions/idd-advisory-wait.instructions.md), [Helper scripts](idd-helper-scripts.md)                                                                                                  | Keep unless the repository needs a different bounded-reroll budget; kept separate from the Copilot re-review request cap by design.                             |
 | Advisory-convergence required-check registration | Not registered by default (hosting the `idd-advisory-convergence` workflow is itself an opt-in step — see [ONBOARDING](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow); once hosted, a required-status-check Ruleset entry is a separate manual step) | [Customizing IDD](customization.md#policy-constants), [Helper scripts](idd-helper-scripts.md)                                                                                                                        | Register `idd-advisory-convergence` as a required status check to make convergence non-bypassable; this is a maintainer GitHub-settings action, not agent work. |
 
 ## CI Wait Defaults
