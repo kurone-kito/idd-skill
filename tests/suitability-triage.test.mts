@@ -92,6 +92,10 @@ Implement helper behavior.
 `,
   labels: ['enhancement'],
   state: 'OPEN',
+  // #1484: NormalizedIssue.createdAt is required; keep this fixture fully
+  // satisfying that type so an `as Context` cast elsewhere in this file
+  // never trips TypeScript's "insufficient overlap" cast-safety check.
+  createdAt: '2026-01-01T00:00:00Z',
   url: 'https://example.com/issues/1',
 };
 
@@ -751,6 +755,10 @@ test('evaluateHighConfidenceDuplicate: closing-PR-reference is checked before th
 });
 
 test('checkDuplicateOrSuperseded: high-confidence tier takes priority over the weak heuristic', () => {
+  // Three supplied Context fields (vs. this file's usual one or two) makes
+  // TypeScript's structural-cast "sufficient overlap" check reject a direct
+  // `as Context`; route through `unknown` first, as the compiler itself
+  // suggests, rather than fabricating the remaining unused Context fields.
   const result = checkDuplicateOrSuperseded({
     issue: BASE_ISSUE,
     duplicateCandidates: [] as Context['duplicateCandidates'],
@@ -760,7 +768,7 @@ test('checkDuplicateOrSuperseded: high-confidence tier takes priority over the w
       highContentionFiles: [],
       mergedPrs: [],
     },
-  } as Context);
+  } as unknown as Context);
   assert.equal(result.pass, false);
   assert.match(result.evidence, /High-confidence duplicate/);
 });
