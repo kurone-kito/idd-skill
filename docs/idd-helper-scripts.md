@@ -1468,6 +1468,42 @@ Interpretation rules:
   `main` (reuse-first / not-already-fixed) and drafts follow-up issues
   bucketed by readiness. The helper does deterministic detection; the
   judgment-heavy re-verification, drafting, and publish stay operator-gated.
+- **Operator runbook**: this helper is a **manual spot-check audit**, not a
+  phase step — its absence from the executable phase instruction files is
+  by design, not an oversight.
+  - **Intent**: it exists as a spot-check for runs where a lightweight
+    model (for example a GPT-5.4-mini or Haiku-class model) has been
+    driving the IDD loop and may have left feedback with **no E-phase
+    disposition at all, or a thread left unresolved**, letting a merge
+    complete — by whichever actor was authorized to run it — with that
+    feedback unaddressed. (Per this project's
+    [Weak-model guardrails](idd-workflow.md#weak-model-guardrails), a
+    lightweight-tier session must not itself run the autonomous merge
+    phases, so the sweep audits the aftermath of that policy, not a
+    weak-model self-merge.) The sweep detects exactly those two gaps —
+    it has **no backstop** for a _false-but-present_ disposition or an
+    already-resolved thread; see the boundary recorded in
+    `idd-design-rationale.md`.
+  - **When to run it** (non-binding trigger guidance, not a policy gate):
+    after a weak-model-driven backlog drain, on a periodic spot-audit
+    cadence, or when a fail-open is suspected on a specific PR (via
+    `--pr` / `--prs`). For a drain larger than the default `--limit`
+    (100), pass the drained PR numbers via `--pr` / `--prs`, or an
+    explicit `--since` with an adequate `--limit`, so older PRs are not
+    silently omitted.
+  - **Reading the output**: prioritize `summary.unresolvedThreadCount` —
+    the higher-value signal — over `summary.unaddressedCommentCount`, and
+    use each finding's `advisoryBot` flag to deprioritize capricious
+    advisory-bot items in favor of human feedback. Triage the output this
+    way before the **Handoff** step above hands it to the issue-authoring
+    skill for re-verification.
+  - **Scope boundary**: per the maintainer decision recorded in
+    [kurone-kito/idd-skill#909](https://github.com/kurone-kito/idd-skill/issues/909)
+    and reaffirmed in
+    [kurone-kito/idd-skill#1352](https://github.com/kurone-kito/idd-skill/issues/1352)
+    — decisions specific to this repository's own configuration, not a
+    universal adopter policy — this sweep is a detection aid only: never
+    an automatic recovery path or a retroactive merge gate.
 
 ## Friction Inventory
 
