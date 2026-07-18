@@ -105,11 +105,22 @@ interface ReviewLike {
   commit_id?: string | null;
 }
 
-/** CI status-check entry. */
+/**
+ * CI status-check entry. `type` and `workflowName` are an optional
+ * producer-identity discriminator (see #1483): `type` distinguishes a
+ * GitHub Actions check-run from a legacy commit-status context (or any
+ * other producer), and `workflowName` further distinguishes two
+ * check-runs of the same name from different Actions workflows. Both are
+ * optional so existing callers/fixtures that predate this discriminator
+ * (only `name`/`state`/`completedAt`) remain valid -- see
+ * `selectLatestCheckPerName` for how an absent discriminator is treated.
+ */
 interface CheckLike {
   name?: string | null;
   state?: string | null;
   completedAt?: string | null;
+  type?: string | null;
+  workflowName?: string | null;
 }
 
 /** PR timeline event as consumed by the Copilot-coverage helpers. */
@@ -1998,11 +2009,12 @@ export function selectLatestCheckInstance<
 }
 
 /**
- * Reduce a check-run list to a single representative instance per check
- * `name`, matching GitHub's own required-status-check semantics: only the
- * latest run for a given context governs, so a stale instance (e.g. a
- * cancelled or failed run superseded by a later successful rerun) can
- * never outvote the current, authoritative one that shares its name.
+ * Reduce a check-run list to a single representative instance per
+ * `(name, type, workflowName)` group, matching GitHub's own
+ * required-status-check semantics: only the latest run for a given
+ * producer governs, so a stale instance (e.g. a cancelled or failed run
+ * superseded by a later successful rerun) can never outvote the current,
+ * authoritative one from the *same* producer.
  *
  * A missing or empty `name` carries no identity to dedupe against, so
  * each such entry gets its own singleton group instead of collapsing
@@ -2010,21 +2022,35 @@ export function selectLatestCheckInstance<
  * could be discarded in favor of an unrelated unnamed success that
  * merely happens to also lack a name.
  *
- * Known limitation (tracked in #1483): `CheckLike` carries no
- * source/producer identity, so two genuinely independent checks that
- * happen to share an identical `name` (e.g. a check-run and a legacy
- * commit-status, or two different GitHub Apps) are indistinguishable
- * from reruns of one another here and will be grouped together. Fixing
- * this needs a source discriminator threaded through from data
- * collection (see `ci-wait-state.mts`'s `type` field) into `CheckLike`
- * itself — a data-collection-layer change out of scope for the
- * same-name-multiple-*rerun*-instances dedup this function performs.
+ * `type` (e.g. `'check-run'` vs. `'status-context'`) and `workflowName`
+ * are an optional producer-identity discriminator (#1483): two entries
+ * that share a `name` but differ on either one are never assumed to be
+ * reruns of each other (e.g. a check-run and a legacy commit-status, or
+ * two check-runs from different Actions workflows, that happen to share
+ * a display name both survive instead of one discarding the other). When
+ * `type`/`workflowName` are absent on every entry sharing a `name` (the
+ * pre-#1483 data shape, still produced by hand-built fixtures and any
+ * caller that predates the discriminator), there is no conflicting
+ * signal to split on, so the group dedupes by `name` alone exactly as
+ * #1471 established -- this keeps every pre-#1483 caller and test
+ * behavior-identical.
+ *
+ * Residual known limitation: two genuinely independent producers that
+ * share both a `name` and a `type` and both lack a `workflowName` (e.g.
+ * two different non-Actions GitHub Apps that each post a check-run
+ * directly, rather than through a workflow) remain indistinguishable
+ * here and will still be grouped together. Closing that fully needs a
+ * stronger producer identity (e.g. the owning GitHub App) than
+ * `gh`/GraphQL's `statusCheckRollup` exposes today; `ci-wait-state.mts`'s
+ * own `(checkName, workflowName)` key has the identical accepted gap.
  */
 function selectLatestCheckPerName<
   T extends {
     name?: string | null;
     state: string;
     completedAt?: string | null;
+    type?: string | null;
+    workflowName?: string | null;
   },
 >(checks: T[]): T[] {
   // A Map already iterates in first-insertion order, so grouping into one
@@ -2033,7 +2059,15 @@ function selectLatestCheckPerName<
   const groups = new Map<string, T[]>();
   let unnamedCount = 0;
   for (const check of checks) {
-    const key = check.name ? String(check.name) : `\0unnamed:${unnamedCount++}`;
+    if (!check.name) {
+      groups.set(`\0unnamed:${unnamedCount++}`, [check]);
+      continue;
+    }
+    const type = check.type ? String(check.type).trim() : '';
+    const workflowName = check.workflowName
+      ? String(check.workflowName).trim()
+      : '';
+    const key = `${String(check.name)}\0${type}\0${workflowName}`;
     const group = groups.get(key);
     if (group) {
       group.push(check);
@@ -2049,6 +2083,8 @@ export function classifyCiChecks(checks: CheckLike[]) {
     name: check.name,
     state: String(check.state ?? '').toUpperCase(),
     completedAt: check.completedAt ?? null,
+    type: check.type ?? null,
+    workflowName: check.workflowName ?? null,
   }));
   // GitHub can report several check-run instances that share the same
   // check `name` (a manual or automatic re-run leaves the earlier instance
@@ -3811,6 +3847,11 @@ export function summarizeRequiredChecks(
       state,
       completedAt: String(check.completedAt ?? ''),
       coveredByWaiver,
+      // Producer-identity discriminator (#1483); see `CheckLike` and
+      // `selectLatestCheckPerName` for how it disambiguates a same-name
+      // rerun from a genuinely independent, differently-sourced check.
+      type: check.type ? String(check.type) : '',
+      workflowName: check.workflowName ? String(check.workflowName).trim() : '',
     };
   });
 
@@ -3883,6 +3924,8 @@ function resolvePresentRunConclusion(
     state: string;
     completedAt: string;
     coveredByWaiver: boolean;
+    type: string;
+    workflowName: string;
   }[],
 ): string {
   if (normalizedChecks.length === 0) {
