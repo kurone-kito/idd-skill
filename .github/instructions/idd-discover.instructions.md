@@ -12,7 +12,8 @@ When helper support is enabled, use helper scripts from
 Written decision tables remain authoritative when helper output is
 missing or disagrees.
 
-**Abort conditions**: A0-T, A1, A3 (default; see decision tree).
+**Abort conditions**: A0-T, A1 (`orphan-first`/`roadmap` scope only —
+see A0), A3 (default; see decision tree).
 **Early stop condition**: A0-T, A4, or A4.5 (no claim made — see below).
 
 ## Authoring label guard
