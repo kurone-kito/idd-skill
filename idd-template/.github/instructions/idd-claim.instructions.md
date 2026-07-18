@@ -464,6 +464,32 @@ sticky pair (and, to be safe, the displaced original pair too) using each
 pair's exact recorded `{agent-id}` / `{claim-id}`, then post a fresh
 `claimed-by supersedes: none` with a self-chosen pair.
 
+### Orchestrator delegation
+
+An orchestrating session that has itself posted and verified a claim's
+`{agent-id}` / `{claim-id}` pair may delegate that pair verbatim to an
+isolated subagent worker as part of the worker's delegation brief. The
+worker adopts both fields verbatim as its own claim token for the rest
+of its run — mirroring adopt-verbatim above — instead of minting a
+fresh claim or being treated as claim-less; see the ownership-proof
+exception in [Claim-state parsing](#claim-state-parsing). No separate
+`claimed-by` post is required for the delegation itself.
+
+**Carry the nonce, don't mint one — and still revalidate it.** The
+brief must also carry the orchestrator's current activation nonce
+verbatim. A worker that mints its own nonce for the same `{claim-id}`
+creates the exact two-nonce collision that step 5 above exists to
+catch, flagging legitimate delegation as a second activation. Carrying
+rather than minting avoids that false collision, but the worker still
+performs the Claim revalidation gate's nonce check
+(`idd-overview-core.instructions.md`) using the carried value in place
+of a self-posted one: before each mutation, recompute the nonce winner
+for the `{claim-id}` and confirm it still equals the carried nonce. A
+different winner (for example, a later forced-handoff adopt-verbatim
+collision the orchestrator never saw) means the worker is no longer
+the winning activation, even though the `{claim-id}` still matches —
+treat that the same as any other lost claim.
+
 ### Hide displaced claim chain on takeover
 
 When the verified new claim was posted with `supersedes: <prior-id>`
@@ -586,7 +612,11 @@ the active `{claim-id}` before this check, continue with that same token
 and use heartbeats; do not post a fresh takeover claim. If the session
 cannot prove ownership of the active `{claim-id}`, the active claim is
 treated as owned by another live session until it is released or stale,
-even when `{agent-id}` matches.
+even when `{agent-id}` matches. **Exception**: a worker that received
+the pair through a documented
+[orchestrator delegation](#orchestrator-delegation) is treated as
+having proven ownership through the orchestrator's own recorded
+verification, not as an unproven "even when `{agent-id}` matches" case.
 Self-signed forced-handoff markers from the same identity never
 transfer ownership: rule 7 rejects them unless the author is itself
 an authorized maintainer.
