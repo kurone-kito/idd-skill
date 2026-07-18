@@ -112,6 +112,29 @@ same-score tie band by a per-session offset instead of every session
 converging on the same lowest-numbered issue, cutting claim races
 under this repository's heavy concurrent-session load.
 
+## Local external-check-waiver policy
+
+This source repository also records a local IDD dogfooding policy:
+`ciGate.externalCheckWaivers.mode: "maintainer-authorized"` with
+`idd-advisory-convergence` registered under
+`ciGate.externalChecks.waivable`. The setting applies only to
+`kurone-kito/idd-skill` and does not change the exported template
+default (`disabled` mode, empty `waivable` list) for adopter
+repositories.
+
+This is the human-maintainer off-ramp for the residual state where the
+autonomous advisory-convergence loop cannot converge on its own (see
+issue #1465): once the configured convergence deadline (default 24h)
+has elapsed since the current PR HEAD's own commit timestamp, a trusted
+maintainer can post a valid external-check waiver for
+`idd-advisory-convergence` to unblock the gate. Treat this the same as
+any other merge-gate bypass — a deliberate, short-lived,
+maintainer-authorized exception for a genuinely stuck check, not a
+routine substitute for a fresh Copilot review. See
+[Customizing IDD](../docs/customization.md) and
+[`docs/idd-helper-scripts.md`](../docs/idd-helper-scripts.md#external-check-waiver-contract)
+for the general mechanism.
+
 ## Commit rules
 
 This project follows

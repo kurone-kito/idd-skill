@@ -44,6 +44,16 @@
     "enabled": true
   },
   "ciGate": {
-    "trustEmptyProtectionReads": true
+    "trustEmptyProtectionReads": true,
+    "externalChecks": {
+      "waivable": [
+        { "selector": "idd-advisory-convergence", "matchMode": "exact" }
+      ]
+    },
+    "externalCheckWaivers": {
+      "mode": "maintainer-authorized",
+      "authorityPolicy": "owners-and-maintainers-only",
+      "maxValidity": "PT24H"
+    }
   }
 }

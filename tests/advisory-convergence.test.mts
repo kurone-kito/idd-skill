@@ -13,6 +13,7 @@ import {
   viewerProbeGhOptions,
 } from '../src/scripts/advisory-convergence.mts';
 import { renderExternalCheckWaiverComment } from '../src/scripts/marker-helpers.mts';
+import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
 const SCHEMA = loadJson('schemas/advisory-convergence.schema.json');
@@ -411,6 +412,49 @@ test('deadline-passed-with-waiver: an otherwise-valid marker does not waive unle
   assert.equal(verdict.waiver.validCount, 0);
   assert.equal(verdict.waived, false);
   assert.equal(verdict.ready, false);
+});
+
+test("#1512: this repository's own .github/idd/config.json wires the maintainer-waiver backstop end to end", () => {
+  // Unlike the tests above (which supply a hand-rolled waiver policy),
+  // this one normalizes the REAL repo-committed config and threads its
+  // `ciGate.externalCheckWaivers.mode` / `ciGate.externalChecks.waivable`
+  // straight into the pure verdict function -- proving the actual
+  // shipped config (not just the mechanism in the abstract) makes a
+  // post-deadline maintainer waiver for `idd-advisory-convergence` flip
+  // `ready` true. See #1512 and #1465.
+  const repoPolicy = normalizePolicyConfig(loadJson('.github/idd/config.json'));
+  assert.equal(
+    repoPolicy.ciGate.externalCheckWaivers.mode,
+    'maintainer-authorized',
+  );
+  const waiverBody = renderExternalCheckWaiverComment({
+    agentId: AGENT_ID,
+    claimId: CLAIM_ID,
+    headSha: HEAD,
+    checkSelector: 'idd-advisory-convergence',
+    reason: 'repo config regression coverage (#1512)',
+    expiresAt: '2026-07-12T00:00:00Z',
+    actor: TRUSTED,
+  });
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        { author: { login: TRUSTED }, body: waiverBody, createdAt: RECENT },
+      ],
+    }),
+    baseOptions({
+      headCommittedAt: OLD,
+      waiverMode: repoPolicy.ciGate.externalCheckWaivers.mode,
+      waivableSelectors: repoPolicy.ciGate.externalChecks.waivable,
+      waiverMaxValidity: repoPolicy.ciGate.externalCheckWaivers.maxValidity,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.deadline.passed, true);
+  assert.equal(verdict.waived, true);
+  assert.equal(verdict.ready, true);
 });
 
 // --- 7. deadline-passed-no-waiver -----------------------------------------
