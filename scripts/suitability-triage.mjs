@@ -1273,6 +1273,31 @@ function loadHighContentionFiles() {
     const manifest = JSON.parse(
       readFileSync(resolve(process.cwd(), DEFAULT_MANIFEST_PATH), 'utf8'),
     );
+    // Codex P2 review finding: a manifest that parses but lacks usable
+    // `bundleBudgets` entries for one or both target bundle IDs (an empty
+    // object, or an older schema) doesn't throw here -- `resolveHighContentionFiles`
+    // degrades gracefully to just `DEFAULT_EXTRA_FILES` for A4 Step 2's own,
+    // lower-stakes de-prioritization use. But for this tier, an incomplete
+    // exclusion set can miss a genuinely high-contention file, so a shared
+    // bundle/instruction file could be misread as specific overlap evidence
+    // -- exactly the false high-confidence flag Check 4 must never produce.
+    // Require both configured bundle IDs to actually resolve before
+    // accepting the set; otherwise treat it the same as an unreadable
+    // manifest (return null, which the caller already records as a
+    // collection warning and degrades to exact-title-only).
+    const bundles = manifest?.bundleBudgets;
+    if (!Array.isArray(bundles)) {
+      return null;
+    }
+    const resolvedBundleIds = new Set(
+      bundles.map((bundle) => String(bundle?.id ?? '')),
+    );
+    const allBundleIdsResolved = DEFAULT_BUNDLE_IDS.every((id) =>
+      resolvedBundleIds.has(id),
+    );
+    if (!allBundleIdsResolved) {
+      return null;
+    }
     return [
       ...resolveHighContentionFiles({
         manifest,
