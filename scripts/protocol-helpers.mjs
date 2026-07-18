@@ -1313,11 +1313,17 @@ function isNewerCheckInstance(candidate, current) {
   return candidate.state !== current.state && candidate.state < current.state;
 }
 /**
- * Reduce a group of same-name check-run instances to the single instance
- * that represents the current truth for that name. See
- * `isNewerCheckInstance` for the selection rule.
+ * Reduce a group of check-run instances that share one grouping key
+ * (typically a check name) to the single instance that represents the
+ * current truth for that key. See `isNewerCheckInstance` for the
+ * selection rule. Exported so other same-name dedup call sites (e.g.
+ * `ci-wait-state.mts`'s `buildCiWaitStateSummary`, #1478) can reuse this
+ * tie-break instead of maintaining an independent copy. `group` is
+ * always non-empty in every current caller (each group comes from
+ * bucketing a non-empty input list by key), so the seedless `reduce`
+ * below never hits its empty-array throw path.
  */
-function selectLatestCheckInstance(group) {
+export function selectLatestCheckInstance(group) {
   return group.reduce((latest, candidate) =>
     isNewerCheckInstance(candidate, latest) ? candidate : latest,
   );

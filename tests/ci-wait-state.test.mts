@@ -156,6 +156,106 @@ test('required-checks rollup: a failing required check reports anyRequiredFailin
   assert.equal(summary.requiredChecks.status, 'failing');
 });
 
+// #1478: buildCiWaitStateSummary had the same multi-instance stale-rollup
+// defect #1471 fixed in classifyCiChecks (protocol-helpers.mts). Timestamps
+// below deliberately mirror required-checks-summary.test.mts's #1471
+// regression tests (strictly increasing, distinct `completedAt` values) so
+// these exercise latest-completedAt selection, not the FAILURE/CANCELLED
+// same-instant tie-break — a tied `completedAt` would pass or fail these
+// scenarios for the wrong reason.
+test('required-checks rollup: a stale cancelled instance superseded by a later success no longer reports failing', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'idd-advisory-convergence',
+          workflowName: 'ci',
+          conclusion: 'CANCELLED',
+          completedAt: '2026-07-17T15:59:36Z',
+        }),
+        checkRun({
+          name: 'idd-advisory-convergence',
+          workflowName: 'ci',
+          conclusion: 'SUCCESS',
+          completedAt: '2026-07-17T16:25:47Z',
+        }),
+      ],
+    },
+    { requiredCheckNames: ['idd-advisory-convergence'] },
+  );
+
+  assert.equal(summary.requiredChecks.anyRequiredFailing, false);
+  assert.equal(summary.requiredChecks.allRequiredPassing, true);
+  assert.equal(summary.requiredChecks.status, 'success');
+});
+
+test('required-checks rollup: a genuinely failing latest instance still reports failing', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'idd-advisory-convergence',
+          workflowName: 'ci',
+          conclusion: 'SUCCESS',
+          completedAt: '2026-07-17T15:59:36Z',
+        }),
+        checkRun({
+          name: 'idd-advisory-convergence',
+          workflowName: 'ci',
+          conclusion: 'FAILURE',
+          completedAt: '2026-07-17T16:25:47Z',
+        }),
+      ],
+    },
+    { requiredCheckNames: ['idd-advisory-convergence'] },
+  );
+
+  assert.equal(summary.requiredChecks.anyRequiredFailing, true);
+  assert.equal(summary.requiredChecks.allRequiredPassing, false);
+  assert.equal(summary.requiredChecks.status, 'failing');
+});
+
+test('required-checks rollup: the PR #1434 real-world shape (2 cancelled, 1 failure, 1 success, same name) reports success', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'idd-advisory-convergence',
+          workflowName: 'ci',
+          conclusion: 'CANCELLED',
+          completedAt: '2026-07-17T15:59:36Z',
+        }),
+        checkRun({
+          name: 'idd-advisory-convergence',
+          workflowName: 'ci',
+          conclusion: 'CANCELLED',
+          completedAt: '2026-07-17T15:59:51Z',
+        }),
+        checkRun({
+          name: 'idd-advisory-convergence',
+          workflowName: 'ci',
+          conclusion: 'FAILURE',
+          completedAt: '2026-07-17T16:00:06Z',
+        }),
+        checkRun({
+          name: 'idd-advisory-convergence',
+          workflowName: 'ci',
+          conclusion: 'SUCCESS',
+          completedAt: '2026-07-17T16:25:47Z',
+        }),
+      ],
+    },
+    { requiredCheckNames: ['idd-advisory-convergence'] },
+  );
+
+  assert.equal(summary.requiredChecks.anyRequiredFailing, false);
+  assert.equal(summary.requiredChecks.allRequiredPassing, true);
+  assert.equal(summary.requiredChecks.status, 'success');
+});
+
 test('required-checks rollup: a not-yet-generated required check reports missing, not vacuously passing', () => {
   const summary = buildCiWaitStateSummary(
     {
