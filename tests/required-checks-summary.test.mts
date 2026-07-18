@@ -132,10 +132,13 @@ test('unprotected: presentRunConclusion reflects the latest instance, not a stal
 });
 
 test('protected branch: requiredChecksPassing is true when the required check’s latest instance succeeded despite older cancelled/failure instances', () => {
-  // This is the exact PR #1434 / issue #1431 real-world reproduction: four
-  // idd-advisory-convergence check-run instances at one HEAD (2 cancelled,
-  // 1 failure, 1 success — the success is latest and authoritative), which
-  // must not report a false CI blocker once GitHub itself has converged.
+  // An end-to-end variant of the PR #1434 / issue #1431 real-world
+  // reproduction, exercised here through summarizeRequiredChecks against
+  // protectedRules' required 'lint' check (see the exact four-instance
+  // idd-advisory-convergence repro, name included, in
+  // advisory-wait.test.mts): a stale cancelled/failure rollup superseded
+  // by the latest success must not report a false CI blocker once GitHub
+  // itself has converged.
   const r = summarize(
     [
       {

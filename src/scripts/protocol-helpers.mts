@@ -1996,6 +1996,16 @@ function selectLatestCheckInstance<
  * every unnamed check together — otherwise an unrelated unnamed failure
  * could be discarded in favor of an unrelated unnamed success that
  * merely happens to also lack a name.
+ *
+ * Known limitation (tracked in #1483): `CheckLike` carries no
+ * source/producer identity, so two genuinely independent checks that
+ * happen to share an identical `name` (e.g. a check-run and a legacy
+ * commit-status, or two different GitHub Apps) are indistinguishable
+ * from reruns of one another here and will be grouped together. Fixing
+ * this needs a source discriminator threaded through from data
+ * collection (see `ci-wait-state.mts`'s `type` field) into `CheckLike`
+ * itself — a data-collection-layer change out of scope for the
+ * same-name-multiple-*rerun*-instances dedup this function performs.
  */
 function selectLatestCheckPerName<
   T extends {
