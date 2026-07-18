@@ -13,8 +13,35 @@
 // `gh pr merge` issued under `--apply` once every F3 gate holds and the
 // head + claim re-validate immediately before the merge.
 import { ghText } from './gh-exec.mjs';
+import { ghErrorText } from './gh-http-status.mjs';
+import { loadIddConfig } from './idd-config.mjs';
+import { normalizePolicyConfig } from './policy-helpers.mjs';
 import { collectPreMergeReadiness } from './pre-merge-readiness.mjs';
 import { computePreMergeReadinessBlockers } from './protocol-helpers.mjs';
+
+/**
+ * GitHub's exact `gh pr merge` failure text for the solo-CODEOWNER
+ * self-approval deadlock (#1494): a configured pull-request-only (or wider)
+ * ruleset bypass actor does not, by itself, make the plain merge command
+ * succeed -- GitHub still rejects it and suggests `--admin`. Matched
+ * case-insensitively against the caught error's stderr/stdout/message so a
+ * harmless wording variation (capitalization) does not silently miss the
+ * one error class this fallback exists for. Any OTHER merge failure (a
+ * real conflict, a CI regression surfaced late, etc.) never matches and
+ * always falls through to the unconditional hold-and-report path.
+ */
+const BASE_BRANCH_POLICY_MERGE_FAILURE_RE =
+  /base branch policy prohibits the merge/i;
+/** `reviewerStates.codeownerSelfApproval.reason` values that mean "review
+ * requirements are unmet ONLY because of an actor-scoped ruleset bypass",
+ * as opposed to `codeowner-approval-satisfied` (real approval already
+ * happened) or `non-author-codeowner-available` (a distinct human/bot
+ * codeowner exists and could review -- never eligible for this fallback).
+ */
+const SOLO_CODEOWNER_BYPASS_REASONS = new Set([
+  'pull-request-bypass-available',
+  'ruleset-bypass-available',
+]);
 /**
  * Evaluate every F3 gate against `report` (the pre-merge-readiness summary),
  * returning one blocker per unmet gate (`ready` is true only when the list is
@@ -32,6 +59,31 @@ export function evaluateMergeGates(report) {
 }
 function asRecord(value) {
   return value && typeof value === 'object' ? value : {};
+}
+/**
+ * #1521: the ONLY safe trigger for the solo-CODEOWNER `--admin` merge
+ * fallback. Deliberately narrower than "the required-reviews gate is not a
+ * blocker" (`codeownerSelfApproval.status === 'clear'` alone): that status
+ * also covers `non-author-codeowner-available` (a distinct, real codeowner
+ * exists) and can be reached via the bypass-detected branch even when such
+ * a non-author codeowner's review is genuinely still outstanding --
+ * `summarizeCodeownerSelfApproval` (protocol-helpers.mts) resolves the
+ * bypass branch before it ever checks for a non-author owner. This
+ * function instead requires the additive `prAuthorIsSoleEligibleCodeowner`
+ * topology fact (no team codeowners, no email codeowners, and every
+ * eligible direct-user codeowner equals the PR author), so a genuinely
+ * outstanding review from any other owner registers as its own unmet
+ * condition and never gets folded into this fallback. See the #1521
+ * multi-CODEOWNER validation tests in tests/pre-merge-readiness.test.mts
+ * and tests/idd-merge-execute.test.mts.
+ */
+export function isEligibleForSoloCodeownerAdminFallback(reviewerStates) {
+  const selfApproval = asRecord(reviewerStates.codeownerSelfApproval);
+  return (
+    String(selfApproval.status ?? '') === 'clear' &&
+    SOLO_CODEOWNER_BYPASS_REASONS.has(String(selfApproval.reason ?? '')) &&
+    selfApproval.prAuthorIsSoleEligibleCodeowner === true
+  );
 }
 // Prepend `-R <repoRef>` to a `gh` argument array only when a repo scope is
 // set; otherwise pass the args verbatim (current-directory repo).
@@ -64,6 +116,20 @@ const defaultDeps = {
         headSha,
       ]),
     ),
+  mergePrAdmin: (prNumber, headSha, repoRef) =>
+    ghText(
+      scopedGhArgs(repoRef, [
+        'pr',
+        'merge',
+        String(prNumber),
+        '--merge',
+        '--match-head-commit',
+        headSha,
+        '--admin',
+      ]),
+    ),
+  resolveSoloCodeownerAdminFallbackMode: () =>
+    normalizePolicyConfig(loadIddConfig()).mergeGate.soloCodeownerAdminFallback,
 };
 /**
  * Build the F3 verdict and, under `--apply`, execute the merge. The
@@ -102,6 +168,7 @@ export function runMergeExecute(argv, deps = defaultDeps) {
     mergeCommand,
     merged: false,
     mergeResult: '',
+    adminFallbackUsed: false,
   };
   if (!args.apply) {
     // Dry-run: read-only. Never merge.
@@ -139,10 +206,58 @@ export function runMergeExecute(argv, deps = defaultDeps) {
     return { verdict, exitCode: 1 };
   }
   // Always a merge commit — never squash/rebase. Bind to the validated head.
-  const mergeOutput = deps.mergePr(args.prNumber, prHeadSha, args.repoRef);
-  verdict.merged = true;
-  verdict.mergeResult = mergeOutput || 'merge command completed';
-  return { verdict, exitCode: 0 };
+  try {
+    const mergeOutput = deps.mergePr(args.prNumber, prHeadSha, args.repoRef);
+    verdict.merged = true;
+    verdict.mergeResult = mergeOutput || 'merge command completed';
+    return { verdict, exitCode: 0 };
+  } catch (mergeError) {
+    // #1521: the plain merge command failed. Every path below stays
+    // fail-closed by default (hold-and-report, unchanged from pre-#1521
+    // behavior); the ONLY escalation is the narrow solo-CODEOWNER `--admin`
+    // retry, gated on ALL of: the exact GitHub error text, the repository
+    // not having opted into `hold-and-report`, and
+    // `isEligibleForSoloCodeownerAdminFallback` against the FRESHLY
+    // re-validated `revalidated` report collected immediately above (not
+    // the earlier, possibly-stale `report`) — the same "immediately before
+    // merging" freshness this file already applies to the head SHA and
+    // claim checks.
+    const mergeErrorText = ghErrorText(mergeError);
+    const revalidatedReviewerStates = asRecord(revalidated.reviewerStates);
+    // Ordered cheapest-first so a merge failure unrelated to the
+    // solo-CODEOWNER deadlock (a real conflict, a late CI regression, an
+    // unrelated ruleset rejection) never pays for the I/O-bound
+    // `resolveSoloCodeownerAdminFallbackMode` config read: both the regex
+    // test and the eligibility check are pure/in-memory and short-circuit
+    // `&&` before that call ever runs.
+    const eligibleForAdminFallback =
+      BASE_BRANCH_POLICY_MERGE_FAILURE_RE.test(mergeErrorText) &&
+      isEligibleForSoloCodeownerAdminFallback(revalidatedReviewerStates) &&
+      deps.resolveSoloCodeownerAdminFallbackMode() !== 'hold-and-report';
+    if (!eligibleForAdminFallback) {
+      verdict.mergeResult = `merge command failed: ${mergeErrorText || 'unknown error'}`;
+      return { verdict, exitCode: 1 };
+    }
+    verdict.adminFallbackUsed = true;
+    try {
+      const adminMergeOutput = deps.mergePrAdmin(
+        args.prNumber,
+        prHeadSha,
+        args.repoRef,
+      );
+      verdict.merged = true;
+      // Keep mergeCommand in sync with the command that actually mutated
+      // the PR: an audit/log consumer reading this field alone (without
+      // also checking adminFallbackUsed) must not see the plain,
+      // non---admin command after an admin-fallback merge succeeded.
+      verdict.mergeCommand = `${verdict.mergeCommand} --admin`;
+      verdict.mergeResult = `admin-fallback (#1521 solo-CODEOWNER deadlock): ${adminMergeOutput || 'merge command completed'}`;
+      return { verdict, exitCode: 0 };
+    } catch (adminMergeError) {
+      verdict.mergeResult = `admin-fallback merge also failed: ${ghErrorText(adminMergeError) || 'unknown error'}`;
+      return { verdict, exitCode: 1 };
+    }
+  }
 }
 // Excluded from the #1446 cli-args.mts wrapper: `passthrough` below
 // collects every unrecognized flag (plus its value, when present) into an
@@ -245,6 +360,16 @@ function printHelp() {
   immediately before merging, then run a merge commit bound to the
   validated head. Fails closed (exit 1, no merge) on head drift or lost
   claim. Never squash/rebase merges. The merge is the only mutation.
+
+  #1521 solo-CODEOWNER --admin fallback: if the plain merge command fails
+  with GitHub's "base branch policy prohibits the merge" error, and the
+  repository has not set mergeGate.soloCodeownerAdminFallback to
+  "hold-and-report" in .github/idd/config.json, this retries ONCE with
+  --admin -- but ONLY when reviewerStates.codeownerSelfApproval proves the
+  PR author is the sole eligible codeowner (status "clear", a bypass-actor
+  reason, and prAuthorIsSoleEligibleCodeowner true). A genuinely
+  outstanding review from any other codeowner never triggers this retry.
+  The verdict's adminFallbackUsed field records whether this path fired.
 `);
 }
 // CLI: print the verdict as JSON and exit with the gate/merge status.

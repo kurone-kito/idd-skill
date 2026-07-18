@@ -4331,6 +4331,35 @@ function summarizeCodeownerSelfApproval({
       ? bypass.mode
       : 'pull_request'
     : 'none';
+  // Hoisted above `base` (moved up from its original position further down,
+  // right before the `deadlock` branch that also consumes it) so the #1521
+  // `prAuthorIsSoleEligibleCodeowner` field below can reuse this exact
+  // expression instead of recomputing an equivalent one. Pure and
+  // side-effect-free, so hoisting it earlier changes nothing about the
+  // later branches that also read it.
+  const allDirectUsersAreAuthor =
+    eligibleDirectCodeownerUserLogins.length > 0 &&
+    eligibleDirectCodeownerUserLogins.every(
+      (login) => login === normalizedAuthor,
+    );
+  // #1521: additive topology fact, computed independently of `status` /
+  // `applicableBypassDetected` below and exposed on every branch (not just
+  // the `deadlock` one). This is the ONLY safe discriminator an F3 caller
+  // may use to gate an automatic `--admin` retry: `status: 'clear'` alone
+  // (whether via `applicableBypassDetected` or `hasNonAuthorDirectUser`
+  // further down) does NOT prove the PR author is the sole codeowner --
+  // `applicableBypassDetected` fires whenever a bypass actor is configured
+  // for the viewer, regardless of whether a genuinely distinct non-author
+  // codeowner's review is separately outstanding. Deliberately NOT folded
+  // into `status`/`reason` themselves (that general gate intentionally
+  // keeps its existing pass/fail shape for every adopter repo -- see the
+  // #1521 review discussion); a caller that needs the narrow self-deadlock
+  // fact must check this field explicitly alongside `status`/`reason`.
+  const prAuthorIsSoleEligibleCodeowner =
+    Boolean(normalizedAuthor) &&
+    normalizedCodeownerTeamSlugs.length === 0 &&
+    normalizedCodeownerEmailAddresses.length === 0 &&
+    allDirectUsersAreAuthor;
   const base = {
     status: 'not_applicable',
     reason: 'codeowner-review-not-required',
@@ -4348,6 +4377,7 @@ function summarizeCodeownerSelfApproval({
     // to `clear` on its own -- but downgrades a would-be certain `deadlock`
     // below to the already-documented `possible_deadlock`.
     rulesetBypassUnreadable: bypass.unreadable,
+    prAuthorIsSoleEligibleCodeowner,
   };
 
   if (!requireCodeOwnerReview) {
@@ -4383,11 +4413,8 @@ function summarizeCodeownerSelfApproval({
     };
   }
 
-  const allDirectUsersAreAuthor =
-    eligibleDirectCodeownerUserLogins.length > 0 &&
-    eligibleDirectCodeownerUserLogins.every(
-      (login) => login === normalizedAuthor,
-    );
+  // `allDirectUsersAreAuthor` is computed above (hoisted next to
+  // `prAuthorIsSoleEligibleCodeowner` in `base`); reused here unchanged.
   const hasNonAuthorDirectUser = eligibleDirectCodeownerUserLogins.some(
     (login) => login !== normalizedAuthor,
   );

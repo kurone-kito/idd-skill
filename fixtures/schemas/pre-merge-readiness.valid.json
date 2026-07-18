@@ -107,7 +107,8 @@
       "bypassDetected": false,
       "bypassMode": "none",
       "currentUserCanBypass": "never",
-      "rulesetBypassUnreadable": false
+      "rulesetBypassUnreadable": false,
+      "prAuthorIsSoleEligibleCodeowner": false
     },
     "humanChangesRequestedCount": 0,
     "blockingChangesRequestedLogins": []

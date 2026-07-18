@@ -94,5 +94,8 @@
     "roadmapLabelName": "roadmap",
     "blockedByHumanLabelName": "status:blocked-by-human",
     "needsDecisionLabelName": "status:needs-decision"
+  },
+  "mergeGate": {
+    "soloCodeownerAdminFallback": "auto-admin-retry"
   }
 }
