@@ -4,6 +4,7 @@ import { join, relative } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { ADVISORY_CONVERGENCE_CHECK_SELECTOR } from '../src/scripts/advisory-convergence.mts';
 import {
   collectDocBudgetDriftViolations,
   collectDuplicateSyncPairTargets,
@@ -1001,6 +1002,27 @@ test('package.json version stays aligned with iddVersion in the shipped and temp
         `(${config.iddVersion}) in ${configPath}`,
     );
   }
+});
+
+test('#1512: this repository opts into the advisory-convergence maintainer-waiver backstop, while the distributed template config stays disabled', () => {
+  const repoPolicy = normalizePolicyConfig(readJson('.github/idd/config.json'));
+  assert.equal(
+    repoPolicy.ciGate.externalCheckWaivers.mode,
+    'maintainer-authorized',
+  );
+  assert.ok(
+    repoPolicy.ciGate.externalChecks.waivable.some(
+      (entry) => entry.selector === ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+    ),
+    `expected ${ADVISORY_CONVERGENCE_CHECK_SELECTOR} to be registered under ` +
+      'ciGate.externalChecks.waivable in .github/idd/config.json',
+  );
+
+  const templatePolicy = normalizePolicyConfig(
+    readJson('idd-template/.github/idd/config.json'),
+  );
+  assert.equal(templatePolicy.ciGate.externalCheckWaivers.mode, 'disabled');
+  assert.deepEqual(templatePolicy.ciGate.externalChecks.waivable, []);
 });
 
 test('collectDuplicateSyncPairTargets flags repeated targets and ignores unique ones', () => {

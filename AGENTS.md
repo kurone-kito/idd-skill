@@ -73,6 +73,15 @@ own interaction model rather than following product terms literally.
   a same-score tie band instead of every session converging on the
   same lowest-numbered issue, to cut claim races under this
   repository's heavy concurrent-session load.
+- **Advisory-convergence waiver backstop**: This source repository
+  also records `ciGate.externalCheckWaivers.mode:
+  "maintainer-authorized"` with `idd-advisory-convergence` registered
+  under `ciGate.externalChecks.waivable` as a local IDD dogfooding
+  policy (applies only to `kurone-kito/idd-skill`), giving a trusted
+  maintainer a human off-ramp when the autonomous advisory-convergence
+  loop cannot converge on its own (Refs #1465). See
+  [`.github/copilot-instructions.md`](.github/copilot-instructions.md#local-external-check-waiver-policy)
+  for the full rationale.
 
 ## For IDD work
 
