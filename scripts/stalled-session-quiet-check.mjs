@@ -7,9 +7,31 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parseCliArgs } from './cli-args.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 
 const DEFAULT_QUIET_WINDOW_MS = 30 * 60 * 1000;
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --pr spec key
+// below. See cli-args.mts's module header for the full invariant.
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls runCli() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires.
+const STALLED_SESSION_QUIET_CHECK_FLAG_SPEC = {
+  '--pr': { type: 'string' },
+  '--owner': { type: 'string' },
+  '--repo': { type: 'string' },
+  '--token': { type: 'string' },
+  '--now': { type: 'string' },
+  '--quiet-window-ms': { type: 'string' },
+  '--claim-created-at': { type: 'string' },
+  '--policy': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+};
 if (import.meta.main) {
   runCli();
 }
@@ -284,73 +306,35 @@ function parseDurationToMs(value) {
   return (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
 }
 function parseArgs(argv) {
-  const parsed = {
-    pr: null,
-    owner: '',
-    repo: '',
-    token: '',
-    now: '',
-    quietWindowMs: 0,
-    claimCreatedAt: '',
-    policy: '',
-    help: false,
+  const { values, help } = parseCliArgs(
+    argv,
+    STALLED_SESSION_QUIET_CHECK_FLAG_SPEC,
+  );
+  const prToken = values.pr;
+  const quietWindowMsToken = values['quiet-window-ms'];
+  return {
+    // Both --pr and --quiet-window-ms are kept as lenient Number.parseInt
+    // (not the canonical-integer helper), matching the pre-migration
+    // contract exactly: --pr is re-validated by this file's own
+    // "!Number.isInteger(args.pr) || args.pr <= 0" post-check (in runCli,
+    // unchanged), and --quiet-window-ms already flows through
+    // resolveQuietWindowMs()'s own fail-safe (falls back to
+    // DEFAULT_QUIET_WINDOW_MS on any non-finite / non-positive value) --
+    // tightening either at this layer would be an untested, out-of-scope
+    // behavior change for this behavior-preserving migration (see #1451).
+    pr: prToken === undefined ? null : Number.parseInt(prToken, 10),
+    owner: values.owner ?? '',
+    repo: values.repo ?? '',
+    token: values.token ?? '',
+    now: values.now ?? '',
+    quietWindowMs:
+      quietWindowMsToken === undefined
+        ? 0
+        : Number.parseInt(quietWindowMsToken, 10),
+    claimCreatedAt: values['claim-created-at'] ?? '',
+    policy: values.policy ?? '',
+    help,
   };
-  for (let i = 0; i < argv.length; i += 1) {
-    const flag = argv[i];
-    const value = argv[i + 1];
-    const requireValue = () => {
-      if (value === undefined || String(value).startsWith('--')) {
-        throw new Error(`missing value for argument: ${flag}`);
-      }
-      return value;
-    };
-    if (flag === '--pr') {
-      parsed.pr = Number.parseInt(String(requireValue()), 10);
-      i += 1;
-      continue;
-    }
-    if (flag === '--owner') {
-      parsed.owner = requireValue();
-      i += 1;
-      continue;
-    }
-    if (flag === '--repo') {
-      parsed.repo = requireValue();
-      i += 1;
-      continue;
-    }
-    if (flag === '--token') {
-      parsed.token = requireValue();
-      i += 1;
-      continue;
-    }
-    if (flag === '--now') {
-      parsed.now = requireValue();
-      i += 1;
-      continue;
-    }
-    if (flag === '--quiet-window-ms') {
-      parsed.quietWindowMs = Number.parseInt(String(requireValue()), 10);
-      i += 1;
-      continue;
-    }
-    if (flag === '--claim-created-at') {
-      parsed.claimCreatedAt = requireValue();
-      i += 1;
-      continue;
-    }
-    if (flag === '--policy') {
-      parsed.policy = requireValue();
-      i += 1;
-      continue;
-    }
-    if (flag === '--help' || flag === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${flag}`);
-  }
-  return parsed;
 }
 function printHelp() {
   process.stdout.write(`Usage:

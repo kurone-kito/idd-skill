@@ -10,6 +10,7 @@ import {
   readAdvisoryPrimaryBotLogin,
   readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mjs';
+import { parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
@@ -37,6 +38,30 @@ import {
   resolveTrustedMarkerActors,
   selectCodeownersText,
 } from './protocol-helpers.mjs';
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --pr spec key
+// below. See cli-args.mts's module header for the full invariant. Both the
+// canonical and deprecated spellings of the claim/agent-id flags are
+// declared as separate spec entries (strict parseArgs requires every
+// accepted flag to be declared) -- flag-name-matrix.test.mts's deprecated-
+// alias tests scan for exactly these quoted literals.
+const PRE_MERGE_READINESS_FLAG_SPEC = {
+  '--pr': { type: 'string' },
+  '--claim-issue': { type: 'string' },
+  '--owner': { type: 'string' },
+  '--repo': { type: 'string' },
+  '--trusted-marker-logins': { type: 'string' },
+  '--idd-agent-logins': { type: 'string' },
+  '--advisory-bot-logins': { type: 'string' },
+  '--claim-id': { type: 'string' },
+  '--expected-claim-id': { type: 'string' },
+  '--agent-id': { type: 'string' },
+  '--expected-agent-id': { type: 'string' },
+  '--now': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+};
 /**
  * Fetch live GitHub state for the PR + claim issue and build the
  * read-only pre-merge readiness report. Shared by this CLI and the
@@ -45,6 +70,14 @@ import {
  */
 export function collectPreMergeReadiness(argv) {
   const args = parseArgs(argv);
+  // --help used to exit from inside the parseArgs token loop; relocated
+  // here (the wrapper's help path) per #1451. Same external contract: the
+  // sole caller (idd-merge-execute.mts) never passes --help, so this is a
+  // pure relocation, not a behavior change.
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
   if (!args.prNumber) {
     throw new Error('missing required --pr <number> argument');
   }
@@ -312,107 +345,117 @@ function warnDeprecatedFlag(deprecated, canonical) {
     `warning: ${deprecated} is deprecated; use ${canonical} instead.\n`,
   );
 }
-export function parseArgs(argv) {
-  const parsed = {
-    prNumber: null,
-    claimIssueNumber: null,
-    owner: '',
-    repo: '',
-    trustedMarkerLogins: '',
-    iddAgentLogins: '',
-    advisoryBotLogins: '',
-    expectedClaimId: '',
-    expectedAgentId: '',
-    now: '',
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    // Reject a missing value (undefined) or a flag-shaped value so that
-    // `--pr --json` fails fast instead of consuming `--json` as the value.
-    const requireValue = () => {
-      if (value === undefined || String(value).startsWith('--')) {
-        throw new Error(`missing value for argument: ${token}`);
-      }
-      return value;
-    };
-    // Positive-integer guard shared by both numeric flags below.
-    const requirePositiveInteger = () => {
-      const raw = requireValue();
-      if (!/^[1-9]\d*$/.test(raw)) {
-        throw new Error(`invalid ${token} value: ${raw}`);
-      }
-      return Number(raw);
-    };
-    if (token === '--pr') {
-      parsed.prNumber = requirePositiveInteger();
-      index += 1;
-      continue;
+/**
+ * Find `flag`'s last occurrence in `argv`, recognizing both the
+ * two-token form (`--flag value`) and the single-token `--flag=value`
+ * form `parseCliArgs` also accepts. A plain `argv.lastIndexOf(flag)`
+ * only matches the exact bare token, so `--claim-id=1` would silently
+ * fail to count as an occurrence of `--claim-id` (Copilot review
+ * finding on this PR) -- checked here via an exact match OR a
+ * `${flag}=` prefix match, scanning from the end so the first hit is
+ * the true last occurrence.
+ */
+function findLastFlagOccurrenceIndex(argv, flag) {
+  const equalsPrefix = `${flag}=`;
+  for (let index = argv.length - 1; index >= 0; index -= 1) {
+    if (argv[index] === flag || argv[index].startsWith(equalsPrefix)) {
+      return index;
     }
-    if (token === '--claim-issue') {
-      parsed.claimIssueNumber = requirePositiveInteger();
-      index += 1;
-      continue;
-    }
-    if (token === '--owner') {
-      parsed.owner = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--trusted-marker-logins') {
-      parsed.trustedMarkerLogins = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--idd-agent-logins') {
-      parsed.iddAgentLogins = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--advisory-bot-logins') {
-      parsed.advisoryBotLogins = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--claim-id') {
-      parsed.expectedClaimId = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--expected-claim-id') {
-      warnDeprecatedFlag('--expected-claim-id', '--claim-id');
-      parsed.expectedClaimId = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--agent-id') {
-      parsed.expectedAgentId = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--expected-agent-id') {
-      warnDeprecatedFlag('--expected-agent-id', '--agent-id');
-      parsed.expectedAgentId = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--now') {
-      parsed.now = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      printHelp();
-      process.exit(0);
-    }
-    throw new Error(`unknown argument: ${token}`);
   }
-  return parsed;
+  return -1;
+}
+/**
+ * Resolve a canonical/deprecated flag pair using the pre-migration
+ * token-loop's exact assignment-order semantics: each occurrence
+ * overwrote the same field as the loop walked argv left to right, so
+ * whichever flag's LAST occurrence comes later in argv wins -- not
+ * "canonical always wins" -- when both spellings are given together.
+ * `-1` (never given) sorts before any real index, so an absent flag
+ * never wins against one that was actually passed.
+ */
+function resolveLastGivenAlias(
+  argv,
+  canonicalFlag,
+  canonicalValue,
+  deprecatedFlag,
+  deprecatedValue,
+) {
+  if (canonicalValue === undefined) {
+    return deprecatedValue;
+  }
+  if (deprecatedValue === undefined) {
+    return canonicalValue;
+  }
+  const lastCanonicalIndex = findLastFlagOccurrenceIndex(argv, canonicalFlag);
+  const lastDeprecatedIndex = findLastFlagOccurrenceIndex(argv, deprecatedFlag);
+  return lastDeprecatedIndex > lastCanonicalIndex
+    ? deprecatedValue
+    : canonicalValue;
+}
+export function parseArgs(argv) {
+  const { values, help } = parseCliArgs(argv, PRE_MERGE_READINESS_FLAG_SPEC);
+  // Positive-integer guard shared by both numeric flags, preserving each
+  // flag's own custom "invalid <flag> value: <raw>" message (test-locked
+  // in tests/pre-merge-readiness.test.mts) rather than the wrapper's
+  // generic message.
+  const requirePositiveInteger = (token, flagName) => {
+    if (token === undefined) {
+      return null;
+    }
+    if (!/^[1-9]\d*$/.test(token)) {
+      throw new Error(`invalid ${flagName} value: ${token}`);
+    }
+    return Number(token);
+  };
+  // Deprecated aliases: both spellings are declared flags (see the spec
+  // above). warnDeprecatedFlag fires whenever the deprecated spelling is
+  // present at all, matching the pre-migration per-token loop exactly
+  // (which warned unconditionally the moment the deprecated token was
+  // seen, regardless of whether the canonical spelling also appeared).
+  // When BOTH spellings are given together, resolveLastGivenAlias below
+  // replicates the pre-migration token-loop's assignment-order semantics
+  // exactly: whichever flag's token appears LAST in argv wins (Codex
+  // review finding on this PR -- an earlier draft always preferred the
+  // canonical spelling here, which silently diverged from the original
+  // "last write wins" contract for this specific double-flag case).
+  const claimId = resolveLastGivenAlias(
+    argv,
+    '--claim-id',
+    values['claim-id'],
+    '--expected-claim-id',
+    values['expected-claim-id'],
+  );
+  const expectedClaimIdToken = values['expected-claim-id'];
+  if (expectedClaimIdToken !== undefined) {
+    warnDeprecatedFlag('--expected-claim-id', '--claim-id');
+  }
+  const agentId = resolveLastGivenAlias(
+    argv,
+    '--agent-id',
+    values['agent-id'],
+    '--expected-agent-id',
+    values['expected-agent-id'],
+  );
+  const expectedAgentIdToken = values['expected-agent-id'];
+  if (expectedAgentIdToken !== undefined) {
+    warnDeprecatedFlag('--expected-agent-id', '--agent-id');
+  }
+  return {
+    prNumber: requirePositiveInteger(values.pr, '--pr'),
+    claimIssueNumber: requirePositiveInteger(
+      values['claim-issue'],
+      '--claim-issue',
+    ),
+    owner: values.owner ?? '',
+    repo: values.repo ?? '',
+    trustedMarkerLogins: values['trusted-marker-logins'] ?? '',
+    iddAgentLogins: values['idd-agent-logins'] ?? '',
+    advisoryBotLogins: values['advisory-bot-logins'] ?? '',
+    expectedClaimId: claimId ?? '',
+    expectedAgentId: agentId ?? '',
+    now: values.now ?? '',
+    help,
+  };
 }
 function printHelp() {
   process.stdout.write(`Usage:

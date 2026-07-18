@@ -19,6 +19,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parseCliArgs } from './cli-args.mjs';
 import {
   buildIssueLoader,
   buildSubIssueLoader,
@@ -1175,77 +1176,60 @@ function normalizeConfiguredLabelName(labelName, fallback) {
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `roadmap:`): tests/flag-name-matrix.test.mts scans this file's
+// *compiled* .mjs source text for quoted flag literals such as the
+// --roadmap spec key below. See cli-args.mts's module header for the full
+// invariant.
+const ROADMAP_AUDIT_EXECUTE_FLAG_SPEC = {
+  '--roadmap': { type: 'string' },
+  '--apply': { type: 'boolean', default: false },
+  '--claim-issue': { type: 'string' },
+  '--claim-id': { type: 'string' },
+  '--agent-id': { type: 'string' },
+  '--owner': { type: 'string' },
+  '--repo': { type: 'string' },
+  '--policy': { type: 'string' },
+  '--now': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+};
 function parseArgs(argv) {
-  const parsed = {
-    roadmapNumber: null,
-    apply: false,
-    claimIssue: null,
-    claimId: '',
-    agentId: '',
-    owner: '',
-    repo: '',
-    policy: '',
-    now: '',
-    help: false,
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    if (token === '--apply') {
-      parsed.apply = true;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    const value = argv[index + 1];
-    if (value === undefined || value.startsWith('--')) {
-      throw new Error(`missing value for argument: ${token}`);
-    }
-    index += 1;
-    switch (token) {
-      case '--roadmap':
-        parsed.roadmapNumber = parsePositiveInteger(value, token);
-        break;
-      case '--claim-issue':
-        parsed.claimIssue = parsePositiveInteger(value, token);
-        break;
-      case '--claim-id':
-        parsed.claimId = value.trim();
-        break;
-      case '--agent-id':
-        parsed.agentId = value.trim();
-        break;
-      case '--owner':
-        parsed.owner = value.trim();
-        break;
-      case '--repo':
-        parsed.repo = value.trim();
-        break;
-      case '--policy':
-        parsed.policy = value.trim();
-        break;
-      case '--now':
-        parsed.now = value.trim();
-        break;
-      default:
-        throw new Error(`unknown argument: ${token}`);
-    }
-  }
+  const { values, help } = parseCliArgs(argv, ROADMAP_AUDIT_EXECUTE_FLAG_SPEC);
+  const roadmapNumber = parsePositiveIntegerOrNull(values.roadmap, '--roadmap');
+  const claimIssue = parsePositiveIntegerOrNull(
+    values['claim-issue'],
+    '--claim-issue',
+  );
+  const owner = (values.owner ?? '').trim();
+  const repo = (values.repo ?? '').trim();
   // Fail closed on exactly one of --owner / --repo: a single flag would
   // validate one repo while the traversal / mutation runs against the
   // current-directory repo. Require both or neither.
-  if ((parsed.owner === '') !== (parsed.repo === '')) {
+  if ((owner === '') !== (repo === '')) {
     throw new Error(
       'idd-roadmap-audit-execute: --owner and --repo must be provided together or not at all',
     );
   }
-  return parsed;
+  return {
+    roadmapNumber,
+    apply: values.apply,
+    claimIssue,
+    claimId: (values['claim-id'] ?? '').trim(),
+    agentId: (values['agent-id'] ?? '').trim(),
+    owner,
+    repo,
+    policy: (values.policy ?? '').trim(),
+    now: (values.now ?? '').trim(),
+    help,
+  };
 }
-function parsePositiveInteger(value, flag) {
-  const raw = String(value ?? '').trim();
+function parsePositiveIntegerOrNull(token, flag) {
+  if (token === undefined) {
+    return null;
+  }
+  const raw = token.trim();
   if (!/^[1-9]\d*$/.test(raw)) {
-    throw new Error(`invalid ${flag} value: ${value}`);
+    throw new Error(`invalid ${flag} value: ${token}`);
   }
   return Number(raw);
 }

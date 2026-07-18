@@ -7,6 +7,7 @@
 
 import { execFileSync } from 'node:child_process';
 
+import { parseCliArgs } from './cli-args.mts';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { parsePaginatedGhNdjson } from './protocol-helpers.mts';
 
@@ -127,6 +128,25 @@ const BRANCH_STATES = new Set([
   'computing',
   'unknown',
 ]);
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --issue spec key
+// below. See cli-args.mts's module header for the full invariant.
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls runCli() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires.
+const RESUME_ROUTE_SELECTION_FLAG_SPEC = {
+  '--issue': { type: 'string' },
+  '--owner': { type: 'string' },
+  '--repo': { type: 'string' },
+  '--token': { type: 'string' },
+  '--table-dump': { type: 'boolean', default: false },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
 
 if (import.meta.main) {
   runCli();
@@ -648,54 +668,19 @@ function fetchReviewThreads({
 }
 
 function parseArgs(argv: string[]): ResumeRouteSelectionArgs {
-  const parsed: ResumeRouteSelectionArgs = {
-    issue: null,
-    owner: '',
-    repo: '',
-    token: '',
-    tableDump: false,
-    help: false,
+  const { values, help } = parseCliArgs(argv, RESUME_ROUTE_SELECTION_FLAG_SPEC);
+  const issueToken = values.issue as string | undefined;
+  return {
+    // Kept as lenient Number.parseInt (not the canonical-integer helper),
+    // matching the pre-migration contract exactly -- see #1451's PR
+    // description for why this is not tightened here.
+    issue: issueToken === undefined ? null : Number.parseInt(issueToken, 10),
+    owner: (values.owner as string | undefined) ?? '',
+    repo: (values.repo as string | undefined) ?? '',
+    token: (values.token as string | undefined) ?? '',
+    tableDump: values['table-dump'] as boolean,
+    help,
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    const requireValue = () => {
-      if (value === undefined || String(value).startsWith('--')) {
-        throw new Error(`missing value for argument: ${token}`);
-      }
-      return value;
-    };
-    if (token === '--issue') {
-      parsed.issue = Number.parseInt(String(requireValue()), 10);
-      index += 1;
-      continue;
-    }
-    if (token === '--owner') {
-      parsed.owner = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--token') {
-      parsed.token = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--table-dump') {
-      parsed.tableDump = true;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-  return parsed;
 }
 
 function printHelp(): void {

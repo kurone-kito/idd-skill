@@ -8,6 +8,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
+import { parseCliArgs } from './cli-args.mts';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 
@@ -84,6 +85,27 @@ interface EvaluateInput {
   policy?: unknown;
   generatedPlanUpdatedAt?: unknown;
 }
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --issue spec key
+// below. See cli-args.mts's module header for the full invariant.
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls runCli() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires.
+const CLAIM_APPROVAL_GATE_FLAG_SPEC = {
+  '--issue': { type: 'string' },
+  '--owner': { type: 'string' },
+  '--repo': { type: 'string' },
+  '--policy': { type: 'string' },
+  '--token': { type: 'string' },
+  '--generated-plan-updated-at': { type: 'string' },
+  '--verbose': { type: 'boolean', default: false },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
 
 if (import.meta.main) {
   runCli();
@@ -367,68 +389,25 @@ interface ParsedArgs {
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
-  const parsed: ParsedArgs = {
-    issue: null,
-    owner: '',
-    repo: '',
-    policy: '',
-    token: '',
-    generatedPlanUpdatedAt: '',
-    verbose: false,
-    help: false,
+  const { values, help } = parseCliArgs(argv, CLAIM_APPROVAL_GATE_FLAG_SPEC);
+  const issueToken = values.issue as string | undefined;
+  return {
+    // Kept as lenient Number.parseInt (not the canonical-integer helper),
+    // matching the pre-migration contract exactly: this file's own
+    // "!Number.isInteger(args.issue) || (args.issue ?? 0) <= 0" post-check
+    // (in runCli, unchanged) already rejects a non-canonical result, so
+    // tightening at this layer would be an untested, out-of-scope
+    // behavior change for this behavior-preserving migration (see #1451).
+    issue: issueToken === undefined ? null : Number.parseInt(issueToken, 10),
+    owner: (values.owner as string | undefined) ?? '',
+    repo: (values.repo as string | undefined) ?? '',
+    policy: (values.policy as string | undefined) ?? '',
+    token: (values.token as string | undefined) ?? '',
+    generatedPlanUpdatedAt:
+      (values['generated-plan-updated-at'] as string | undefined) ?? '',
+    verbose: values.verbose as boolean,
+    help,
   };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    const requireValue = (): string => {
-      if (value === undefined || String(value).startsWith('--')) {
-        throw new Error(`missing value for argument: ${token}`);
-      }
-      return value;
-    };
-    if (token === '--issue') {
-      parsed.issue = Number.parseInt(String(requireValue()), 10);
-      index += 1;
-      continue;
-    }
-    if (token === '--owner') {
-      parsed.owner = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--repo') {
-      parsed.repo = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--policy') {
-      parsed.policy = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--token') {
-      parsed.token = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--generated-plan-updated-at') {
-      parsed.generatedPlanUpdatedAt = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--verbose') {
-      parsed.verbose = true;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-
-  return parsed;
 }
 
 function printHelp(): void {

@@ -17,6 +17,8 @@
 //     this list enumerates the concrete discovery sub-phases `A0..A5` instead,
 //     so bare `A` is intentionally non-canonical (it resolves to
 //     `unknown_phase_id`) rather than being added here.
+import { parseCliArgs } from './cli-args.mjs';
+
 const DEFAULT_CANONICAL_PHASE_IDS = [
   'A0',
   'A0_O',
@@ -73,6 +75,21 @@ const DEFAULT_LEGACY_ALIASES = {
   A3_5: ['A3.5', 'A3-5', 'A35'],
   A4_5: ['A4.5', 'A4-5', 'A45'],
   F2_5: ['F2.5', 'F2-5', 'F25'],
+};
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `phase-id:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --phase-id spec key
+// below. See cli-args.mts's module header for the full invariant.
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls runCli() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires.
+const PHASE_ID_RESOLVER_FLAG_SPEC = {
+  '--phase-id': { type: 'string' },
+  '--verbose': { type: 'boolean', default: false },
+  '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
   runCli();
@@ -242,36 +259,16 @@ function runCli() {
   process.stdout.write(`${JSON.stringify(compactObject(output), null, 2)}\n`);
 }
 function parseArgs(argv) {
-  const parsed = {
-    phaseId: '',
-    verbose: false,
-    help: false,
+  const { values, help } = parseCliArgs(argv, PHASE_ID_RESOLVER_FLAG_SPEC);
+  return {
+    // Defaulting to '' (not left undefined) matches the pre-migration
+    // shape exactly: an omitted --phase-id and an explicit --phase-id ''
+    // both read back as '', and runCli's existing `!args.phaseId` check
+    // already treats both the same way (required-but-missing).
+    phaseId: values['phase-id'] ?? '',
+    verbose: values.verbose,
+    help,
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    const requireValue = () => {
-      if (value === undefined || String(value).startsWith('--')) {
-        throw new Error(`missing value for argument: ${token}`);
-      }
-      return value;
-    };
-    if (token === '--phase-id') {
-      parsed.phaseId = requireValue();
-      index += 1;
-      continue;
-    }
-    if (token === '--verbose') {
-      parsed.verbose = true;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-  return parsed;
 }
 function printHelp() {
   process.stdout.write(

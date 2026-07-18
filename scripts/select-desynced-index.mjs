@@ -14,8 +14,25 @@
 // function can never drift. The written formula in the instructions remains
 // the canonical spec and fallback; this helper only removes the ad hoc
 // `node -e` hand-transcription error surface that motivated this issue.
+import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import { selectDesyncedIndex } from './policy-helpers.mjs';
 
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `token:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --band-size spec
+// key below. See cli-args.mts's module header for the full invariant.
+//
+// Declared here, above the import.meta.main trigger below, rather than
+// alongside parseArgs further down: the trigger calls runCli() ->
+// parseArgs() synchronously at module-evaluation time, and a `const`
+// declared after that point is still in the temporal dead zone when the
+// trigger fires (see #1177's entry-order TDZ hardening for the same class
+// of bug in this file).
+const SELECT_DESYNCED_INDEX_FLAG_SPEC = {
+  '--token': { type: 'string' },
+  '--band-size': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+};
 if (import.meta.main) {
   runCli();
 }
@@ -41,46 +58,13 @@ function runCli() {
   }
   process.stdout.write(`${selectDesyncedIndex(args.token, args.bandSize)}\n`);
 }
-/**
- * Parse a canonical positive-integer command-line token (whole-token
- * `^[1-9]\d*$`, e.g. `"42"`) and return the parsed value, or `null` when the
- * token is not a canonical positive integer. `Number.parseInt` alone is too
- * lenient for CLI validation: it silently truncates `"3.5"` to `3` and
- * `"5abc"` to `5` before any positivity check ever runs, so the check must
- * run against the raw string, not the already-parsed (and already-lossy)
- * number.
- */
-function parsePositiveInteger(token) {
-  return /^[1-9]\d*$/.test(token) ? Number.parseInt(token, 10) : null;
-}
 function parseArgs(argv) {
-  const parsed = { token: null, bandSize: null, help: false };
-  for (let index = 0; index < argv.length; index += 1) {
-    const flag = argv[index];
-    const value = argv[index + 1];
-    const requireValue = () => {
-      if (value === undefined || value.startsWith('--')) {
-        throw new Error(`missing value for argument: ${flag}`);
-      }
-      return value;
-    };
-    if (flag === '--token') {
-      parsed.token = requireValue();
-      index += 1;
-      continue;
-    }
-    if (flag === '--band-size') {
-      parsed.bandSize = parsePositiveInteger(requireValue());
-      index += 1;
-      continue;
-    }
-    if (flag === '--help' || flag === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${flag}`);
-  }
-  return parsed;
+  const { values, help } = parseCliArgs(argv, SELECT_DESYNCED_INDEX_FLAG_SPEC);
+  return {
+    token: values.token ?? null,
+    bandSize: parseCanonicalIntegerOrNull(values['band-size']),
+    help,
+  };
 }
 function printHelp() {
   process.stdout.write(`Usage:

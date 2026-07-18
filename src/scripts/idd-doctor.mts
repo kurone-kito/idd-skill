@@ -12,6 +12,7 @@ import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitabilityMarker,
 } from './autopilot-suitability.mts';
+import { parseCliArgs } from './cli-args.mts';
 import {
   inspectHelperRuntimeConfig,
   POLICY_DEFAULTS,
@@ -2874,85 +2875,91 @@ function runCommand(
   }
 }
 
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `repo-root:`): tests/flag-name-matrix.test.mts scans this file's
+// *compiled* .mjs source text for quoted flag literals. See
+// cli-args.mts's module header for the full invariant.
+const IDD_DOCTOR_FLAG_SPEC = {
+  '--json': { type: 'boolean', default: false },
+  '--help': { type: 'boolean', short: 'h', default: false },
+  '--require-github': { type: 'boolean', default: false },
+  '--strict': { type: 'boolean', default: false },
+  '--repo-root': { type: 'string' },
+  '--cleanup-backlog-window-days': { type: 'string' },
+  '--cleanup-backlog-warn-threshold': { type: 'string' },
+  '--workshop-cross-ref-allow-missing': { type: 'string' },
+} as const;
+
 function parseArgs(argv: string[]): DoctorCliArgs {
+  const { values, help } = parseCliArgs(argv, IDD_DOCTOR_FLAG_SPEC);
+
   const args: DoctorCliArgs = {
     root: process.cwd(),
-    json: false,
-    help: false,
-    requireGithub: false,
-    strict: false,
+    json: values.json as boolean,
+    help,
+    requireGithub: values['require-github'] as boolean,
+    strict: values.strict as boolean,
   };
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === '--json') {
-      args.json = true;
-      continue;
+  // --repo-root rejects an explicit empty string the same as an omitted
+  // flag (pre-migration guard used `!value`).
+  const repoRoot = values['repo-root'] as string | undefined;
+  if (repoRoot !== undefined) {
+    if (!repoRoot) {
+      throw new Error('--repo-root requires a value');
     }
-    if (arg === '--help' || arg === '-h') {
-      args.help = true;
-      continue;
+    args.root = repoRoot;
+  }
+
+  // --cleanup-backlog-window-days rejects an explicit empty string
+  // (pre-migration guard used `!value`); accepts any positive finite
+  // number, including decimals -- kept as Number() + Number.isFinite,
+  // NOT the canonical-integer helper, which would wrongly reject "1.5".
+  const windowDaysToken = values['cleanup-backlog-window-days'] as
+    | string
+    | undefined;
+  if (windowDaysToken !== undefined) {
+    if (!windowDaysToken) {
+      throw new Error('--cleanup-backlog-window-days requires a value');
     }
-    if (arg === '--require-github') {
-      args.requireGithub = true;
-      continue;
+    const numeric = Number(windowDaysToken);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      throw new Error(
+        `--cleanup-backlog-window-days must be a positive finite number (got "${windowDaysToken}")`,
+      );
     }
-    if (arg === '--strict') {
-      args.strict = true;
-      continue;
+    args.cleanupBacklogWindowDays = numeric;
+  }
+
+  // --cleanup-backlog-warn-threshold: pre-migration guard used
+  // `=== undefined` (NOT `!value`), so an explicit empty string was
+  // accepted and Number('') === 0 passed the >= 0 check -- preserved
+  // exactly, including that quirk.
+  const warnThresholdToken = values['cleanup-backlog-warn-threshold'] as
+    | string
+    | undefined;
+  if (warnThresholdToken !== undefined) {
+    const numeric = Number(warnThresholdToken);
+    if (!Number.isFinite(numeric) || numeric < 0) {
+      throw new Error(
+        `--cleanup-backlog-warn-threshold must be a non-negative finite number (got "${warnThresholdToken}")`,
+      );
     }
-    if (arg === '--repo-root') {
-      const value = argv[index + 1];
-      if (!value) {
-        throw new Error('--repo-root requires a value');
-      }
-      args.root = value;
-      index += 1;
-      continue;
-    }
-    if (arg === '--cleanup-backlog-window-days') {
-      const value = argv[index + 1];
-      if (!value) {
-        throw new Error('--cleanup-backlog-window-days requires a value');
-      }
-      const numeric = Number(value);
-      if (!Number.isFinite(numeric) || numeric <= 0) {
-        throw new Error(
-          `--cleanup-backlog-window-days must be a positive finite number (got "${value}")`,
-        );
-      }
-      args.cleanupBacklogWindowDays = numeric;
-      index += 1;
-      continue;
-    }
-    if (arg === '--cleanup-backlog-warn-threshold') {
-      const value = argv[index + 1];
-      if (value === undefined) {
-        throw new Error('--cleanup-backlog-warn-threshold requires a value');
-      }
-      const numeric = Number(value);
-      if (!Number.isFinite(numeric) || numeric < 0) {
-        throw new Error(
-          `--cleanup-backlog-warn-threshold must be a non-negative finite number (got "${value}")`,
-        );
-      }
-      args.cleanupBacklogWarnThreshold = numeric;
-      index += 1;
-      continue;
-    }
-    if (arg === '--workshop-cross-ref-allow-missing') {
-      const value = argv[index + 1];
-      if (value === undefined) {
-        throw new Error('--workshop-cross-ref-allow-missing requires a value');
-      }
-      args.workshopCrossRefAllowMissing = value
-        .split(',')
-        .map((entry) => entry.trim())
-        .filter((entry) => entry.length > 0);
-      index += 1;
-      continue;
-    }
-    throw new Error(`unknown argument: ${arg}`);
+    args.cleanupBacklogWarnThreshold = numeric;
+  }
+
+  // --workshop-cross-ref-allow-missing: pre-migration guard used
+  // `=== undefined` (NOT `!value`), so an explicit empty string was
+  // accepted and resolved to an empty list (''.split(',') -> [''] ->
+  // filtered to []) -- preserved exactly.
+  const allowMissingToken = values['workshop-cross-ref-allow-missing'] as
+    | string
+    | undefined;
+  if (allowMissingToken !== undefined) {
+    args.workshopCrossRefAllowMissing = allowMissingToken
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
   }
 
   return args;
