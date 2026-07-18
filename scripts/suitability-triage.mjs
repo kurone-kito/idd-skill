@@ -818,6 +818,17 @@ function runCli() {
       resolvedHighContentionFiles !== null &&
       issue.createdAt.length > 0;
     highContentionFiles = resolvedHighContentionFiles ?? [];
+    if (candidateFiles.length > 0 && resolvedHighContentionFiles === null) {
+      // Codex P2 review finding: an unreadable/missing high-contention
+      // manifest silently skipped the same-candidate-files scan without
+      // recording a warning -- but from Check 4's perspective this is the
+      // same class of "high-confidence evidence could not be collected" as
+      // a genuine gh/API failure, and must degrade the same way (exact
+      // title match only), not let the full weak heuristic run.
+      collectionWarnings.push(
+        'same-candidate-files scan: high-contention manifest unavailable, skipping the scan',
+      );
+    }
     if (shouldScanMergedPrs) {
       const scanResult = fetchMergedPrFileOverlapEvidence(
         repoRef,
@@ -1247,8 +1258,12 @@ function fetchMergedPrFileOverlapEvidence(repoRef, sinceIso) {
  * scan entirely in that case rather than proceeding with zero exclusions --
  * an empty exclusion set would make that signal MORE permissive, which is
  * the wrong fail direction for "never fail toward a false high-confidence
- * flag". `closedByPullRequestsReferences` is a separate, independent signal
- * and is unaffected by this fallback.
+ * flag". `runCli` also records this as a `collectionWarnings` entry (Codex
+ * P2 review finding on this PR): from Check 4's perspective, "manifest
+ * unavailable" and "gh/API fetch failed" are the same class of "evidence
+ * could not be collected" and must degrade the weak-heuristic fallback the
+ * same way. `closedByPullRequestsReferences` is a separate, independent
+ * signal and is unaffected by either fallback.
  */
 function loadHighContentionFiles() {
   try {
