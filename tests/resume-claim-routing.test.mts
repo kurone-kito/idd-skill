@@ -45,6 +45,139 @@ test('returns already_owned when active claim id matches --claim-id', () => {
   assert.equal(result.reason, 'claim-id-match');
 });
 
+test('activation-nonce: matching local nonce keeps already_owned', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-abc',
+      nonce: 'nonce-mine',
+      now: '2026-05-12T10:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T09:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-abc supersedes: none 2026-05-12T09:00:00Z branch: issue/1-task -->',
+        },
+        {
+          createdAt: '2026-05-12T09:00:05Z',
+          author: { login: 'maintainer' },
+          body: '<!-- activation-nonce: copilot claim-abc nonce-mine 2026-05-12T09:00:05Z -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.action, 'keep');
+  assert.equal(result.reason, 'claim-id-match');
+  assert.equal(result.evidence.activation_nonce_winner, 'nonce-mine');
+});
+
+test('activation-nonce: mismatched local nonce routes to disputed (second-activation collision)', () => {
+  const events = [
+    {
+      createdAt: '2026-05-12T09:00:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: copilot claim-abc supersedes: none 2026-05-12T09:00:00Z branch: issue/1-task -->',
+    },
+    {
+      createdAt: '2026-05-12T09:00:05Z',
+      author: { login: 'maintainer' },
+      body: '<!-- activation-nonce: copilot claim-abc nonce-aaa 2026-05-12T09:00:05Z -->',
+    },
+    {
+      createdAt: '2026-05-12T09:00:07Z',
+      author: { login: 'maintainer' },
+      body: '<!-- activation-nonce: copilot claim-abc nonce-zzz 2026-05-12T09:00:07Z -->',
+    },
+  ];
+
+  // Both colliding sessions observe the identical event set and must compute
+  // the identical winner ("nonce-aaa" sorts first ASCII) -- one sees itself
+  // as sole owner, the other as displaced, so exactly one backs off (no
+  // livelock where both, or neither, defer).
+  const winnerPerspective = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-abc',
+      nonce: 'nonce-aaa',
+      now: '2026-05-12T10:00:00Z',
+      events,
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+  assert.equal(winnerPerspective.state, 'already_owned');
+  assert.equal(winnerPerspective.reason, 'claim-id-match');
+  assert.equal(winnerPerspective.evidence.activation_nonce_winner, 'nonce-aaa');
+
+  const loserPerspective = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-abc',
+      nonce: 'nonce-zzz',
+      now: '2026-05-12T10:00:00Z',
+      events,
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+  assert.equal(loserPerspective.state, 'disputed');
+  assert.equal(loserPerspective.action, 'stop');
+  assert.equal(loserPerspective.reason, 'activation-nonce-mismatch');
+  assert.equal(loserPerspective.evidence.activation_nonce_winner, 'nonce-aaa');
+});
+
+test('activation-nonce: no posted nonce marker skips the comparison (AC3 backward compatibility)', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-abc',
+      nonce: 'nonce-mine',
+      now: '2026-05-12T10:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T09:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-abc supersedes: none 2026-05-12T09:00:00Z branch: issue/1-task -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.reason, 'claim-id-match');
+  assert.equal(result.evidence.activation_nonce_winner, null);
+});
+
+test('activation-nonce: omitting --nonce opts out of the comparison entirely', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-abc',
+      now: '2026-05-12T10:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T09:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-abc supersedes: none 2026-05-12T09:00:00Z branch: issue/1-task -->',
+        },
+        {
+          createdAt: '2026-05-12T09:00:05Z',
+          author: { login: 'maintainer' },
+          body: '<!-- activation-nonce: copilot claim-abc nonce-aaa 2026-05-12T09:00:05Z -->',
+        },
+        {
+          createdAt: '2026-05-12T09:00:07Z',
+          author: { login: 'maintainer' },
+          body: '<!-- activation-nonce: copilot claim-abc nonce-zzz 2026-05-12T09:00:07Z -->',
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+
+  // A real collision exists in the event stream, but this caller never
+  // supplied its own recorded nonce -- pre-#1522 behavior is preserved.
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.reason, 'claim-id-match');
+});
+
 test('returns non_inheritable for non-stale active claim from another session', () => {
   const result = evaluateResumeClaimRouting(
     {
