@@ -312,6 +312,80 @@ test('classifyCiChecks: two check-runs sharing a name from different workflows n
   assert.equal(classifyCiChecks(checks).status, 'failed');
 });
 
+test('classifyCiChecks: same type, one entry with a workflowName and one without, same name -- never dedupe', () => {
+  // A narrower variant of the check-run/commit-status split: both entries
+  // are `type: 'check-run'` here, but only one carries a `workflowName`
+  // (e.g. an Actions-routed job vs. a check-run posted directly by a
+  // non-Actions GitHub App under the same display name). Presence vs.
+  // absence of workflowName is itself a producer-conflict signal, just
+  // like two differing non-empty values.
+  const checks = [
+    {
+      name: 'build',
+      state: 'FAILURE',
+      completedAt: '2026-07-18T03:45:56Z',
+      type: 'check-run',
+      workflowName: '',
+    },
+    {
+      name: 'build',
+      state: 'SUCCESS',
+      completedAt: '2026-07-18T03:47:01Z',
+      type: 'check-run',
+      workflowName: 'Some Workflow',
+    },
+  ];
+  const result = classifyCiChecks(checks);
+  assert.equal(result.status, 'failed');
+  assert.ok(
+    result.failed?.some(
+      (check) => check.workflowName === '' && check.state === 'FAILURE',
+    ),
+    'the workflowName-less FAILURE must be present in the failed list',
+  );
+});
+
+test('classifyCiChecks: the (name, type, workflowName) dedup key is deterministic regardless of input order', () => {
+  const checkRun = {
+    name: 'idd-advisory-convergence',
+    state: 'CANCELLED',
+    completedAt: '2026-07-18T03:45:56Z',
+    type: 'check-run',
+    workflowName: 'IDD advisory-convergence gate',
+  };
+  const rerun = {
+    ...checkRun,
+    state: 'SUCCESS',
+    completedAt: '2026-07-18T03:47:01Z',
+  };
+  const statusContext = {
+    name: 'idd-advisory-convergence',
+    state: 'FAILURE',
+    completedAt: '2026-07-18T03:46:00Z',
+    type: 'status-context',
+    workflowName: '',
+  };
+  const checkRunFirst = [checkRun, rerun, statusContext];
+  const statusContextFirst = [statusContext, rerun, checkRun];
+  const reversed = [statusContext, checkRun, rerun];
+  assert.equal(classifyCiChecks(checkRunFirst).status, 'failed');
+  assert.equal(classifyCiChecks(statusContextFirst).status, 'failed');
+  assert.equal(classifyCiChecks(reversed).status, 'failed');
+  // The check-run pair (same type + workflowName) must still dedupe to its
+  // latest (SUCCESS) instance regardless of order -- only the independent
+  // status-context FAILURE is what makes the overall result 'failed'.
+  for (const input of [checkRunFirst, statusContextFirst, reversed]) {
+    const checkRunEntries = classifyCiChecks(input).failed?.filter(
+      (check) => check.type === 'check-run',
+    );
+    assert.equal(
+      checkRunEntries?.length,
+      0,
+      'the check-run pair must dedupe to its passing latest instance, not appear in failed',
+    );
+  }
+});
+
 test('classifyCiChecks: characterization -- two same-name, same-type entries that both lack a workflowName still dedupe (accepted residual limitation)', () => {
   // Documents the deliberately-accepted residual gap: without a real
   // producer identity (e.g. the owning GitHub App) for two check-runs
