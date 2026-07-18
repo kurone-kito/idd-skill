@@ -208,9 +208,20 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // Purely additive: `converged` above is already final and is never
   // recomputed or referenced below this point -- see the module header and
   // the "sameHeadReroll never affects converged/ready" test.
+  // `dispositionEvidence.missingRegularCommentCount` reuses the SAME
+  // evidence F2's own separate "missingRegularComments.length == 0"
+  // condition already reads -- an ad hoc regular PR comment (not part of
+  // a review thread) can still be an unaddressed, possibly-PATH-A item
+  // even when every Copilot-authored THREAD is resolved/dispositioned.
+  // Without this, `eligible` could fire while genuine triage work is
+  // still outstanding, spending a bounded reroll attempt on a HEAD that
+  // was not actually done yet -- and if the bot does not answer quickly,
+  // that attempt is permanently consumed before the real blocker is even
+  // cleared (PR #1517 review).
   const sameHeadRerollEligible =
     !pending &&
     threadClause.satisfied &&
+    dispositionEvidence.missingRegularCommentCount === 0 &&
     review.itemCount !== null &&
     review.itemCount > 0;
   // Both guards require `> 0` (not merely `Number.isFinite`/`Number.is-

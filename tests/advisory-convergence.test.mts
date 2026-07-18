@@ -1002,6 +1002,32 @@ test('sameHeadReroll: NOT eligible when an unresolved, undispositioned bot threa
   assert.equal(verdict.sameHeadReroll.requestable, false);
 });
 
+test('sameHeadReroll: NOT eligible when an unaddressed regular comment remains, even with every bot thread resolved (PR #1517 review)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2 })],
+      // No review threads at all -- threadClause is vacuously satisfied --
+      // but a regular (non-thread) PR comment from a non-trusted login has
+      // no subsequent disposition-marker reply, so genuine triage work is
+      // still outstanding even though every Copilot-authored thread is
+      // fine. Eligibility must stay false until that is cleared too.
+      comments: [
+        {
+          id: 1,
+          createdAt: OLD,
+          body: 'please double check this edge case',
+          author: { login: 'some-reviewer' },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.threads.satisfied, true);
+  assert.equal(verdict.sameHeadReroll.eligible, false);
+  assert.equal(verdict.sameHeadReroll.requestable, false);
+});
+
 test('sameHeadReroll: NOT eligible when matchesHead is false (bot has not reviewed current HEAD)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
