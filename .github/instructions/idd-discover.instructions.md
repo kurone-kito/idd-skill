@@ -197,8 +197,9 @@ A5 pre-check.
 Use GH CLI or GH MCP to find the roadmap among open issues. Identify it
 by the configured roadmap label (project field) from
 `labels.roadmapLabelName` (default: `roadmap`) or by recognizing it as
-an umbrella issue. If no roadmap issue exists, report and abort, except
-under `roadmap-first` (**trigger (c)**): fall back to **A0-O** instead.
+an umbrella issue. If no roadmap issue exists, report and abort. Under
+`roadmap-first` scope, this is **trigger (c)**: fall back to **A0-O**
+instead of aborting.
 
 **Autopilot cross-roadmap mode (optional, additive).** When several
 roadmaps run in parallel and the active autopilot-suitable work may live
