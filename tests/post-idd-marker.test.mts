@@ -14,6 +14,7 @@ import {
 } from '../src/scripts/post-idd-marker.mts';
 import {
   operationalMarkerPrefix,
+  parseActivationNonceComment,
   parseClaimComment,
   parseReleaseComment,
   parseReviewWatermarkComment,
@@ -56,6 +57,18 @@ test('buildMarkerBody renders the exact unclaim body', () => {
       timestamp: TS,
     }),
     '<!-- unclaimed-by: claude-417b737f c3009f22b5f6 2026-06-17T09:47:08Z -->\n\n_claude-417b737f: issue claim released — IDD automation marker. Do not edit._',
+  );
+});
+
+test('buildMarkerBody renders the exact activation-nonce body (reuses renderActivationNonceMarker)', () => {
+  assert.equal(
+    buildMarkerBody('activation-nonce', {
+      'agent-id': 'claude-417b737f',
+      'claim-id': 'c3009f22b5f6',
+      nonce: 'n-9f6885e3',
+      timestamp: TS,
+    }),
+    '<!-- activation-nonce: claude-417b737f c3009f22b5f6 n-9f6885e3 2026-06-17T09:47:08Z -->\n\n_claude-417b737f: claim activation nonce — IDD automation marker. Do not edit._',
   );
 });
 
@@ -163,6 +176,22 @@ test('unclaim body round-trips through parseReleaseComment', () => {
   });
 });
 
+test('activation-nonce body round-trips through parseActivationNonceComment', () => {
+  const body = buildMarkerBody('activation-nonce', {
+    'agent-id': 'claude-417b737f',
+    'claim-id': 'c3009f22b5f6',
+    nonce: 'n-9f6885e3',
+    timestamp: TS,
+  });
+  assert.equal(operationalMarkerPrefix(body), '<!-- activation-nonce:');
+  assert.deepEqual(parseActivationNonceComment(body, CREATED_AT), {
+    agentId: 'claude-417b737f',
+    claimId: 'c3009f22b5f6',
+    nonce: 'n-9f6885e3',
+    createdAt: CREATED_AT,
+  });
+});
+
 test('watermark body round-trips through parseReviewWatermarkComment (real ISO + non-zero count)', () => {
   const body = buildMarkerBody('watermark', {
     'agent-id': 'claude-417b737f',
@@ -237,6 +266,16 @@ test('buildMarkerBody throws on an invalid field set (renderer validation)', () 
     () => buildMarkerBody('unclaim', { 'agent-id': 'a', 'claim-id': 'c' }),
     /invalid unclaimed-by marker payload/,
   );
+  // Missing nonce for an activation-nonce marker.
+  assert.throws(
+    () =>
+      buildMarkerBody('activation-nonce', {
+        'agent-id': 'a',
+        'claim-id': 'c',
+        timestamp: TS,
+      }),
+    /invalid activation-nonce marker payload/,
+  );
 });
 
 test('MARKER_TYPES lists exactly the seven supported types', () => {
@@ -245,6 +284,7 @@ test('MARKER_TYPES lists exactly the seven supported types', () => {
     [
       'claim',
       'unclaim',
+      'activation-nonce',
       'watermark',
       'baseline',
       'advisory',
