@@ -159,6 +159,81 @@ test('config-only resolution passes the author gate end to end', () => {
   }
 });
 
+// These two tests demonstrate the one deliberate parseArgs-migration
+// asymmetry kurone-kito/idd-skill#1451/#1486 were concerned with: parseArgs
+// itself accepts an explicit empty string for every string flag (only a
+// genuinely missing value throws), so --subject-ids/--classifier/--format
+// need an explicit post-parse check to keep rejecting '', while
+// --trusted-marker-logins deliberately keeps accepting '' as a meaningful
+// value (see resolveTrustedActors()'s flag > env > config ladder).
+test('an explicit empty --subject-ids value is rejected at parse time', () => {
+  const script = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'scripts',
+    'minimize-superseded-markers.mjs',
+  );
+  const result = spawnSync(
+    process.execPath,
+    [script, '--subject-ids', '', '--allow-untrusted'],
+    { encoding: 'utf8' },
+  );
+
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr.trim(), 'error: --subject-ids requires a value');
+});
+
+test('an explicit empty --trusted-marker-logins value is accepted, unlike --subject-ids', () => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'idd-minimize-'));
+  try {
+    // Stub gh to fail deterministically and offline: a per-item failure
+    // (exit 1) proves the empty string reached resolveTrustedActors()
+    // instead of being rejected at parse time (which would be exit 2 with
+    // the "requires a value" message, before any gh call happens at all).
+    const binDir = join(sandbox, 'bin');
+    mkdirSync(binDir);
+    writeFileSync(join(binDir, 'gh'), '#!/bin/sh\nexit 1\n');
+    chmodSync(join(binDir, 'gh'), 0o755);
+
+    const script = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      'scripts',
+      'minimize-superseded-markers.mjs',
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        script,
+        '--subject-ids',
+        'IC_test',
+        '--trusted-marker-logins',
+        '',
+        '--allow-untrusted',
+        '--format',
+        'json',
+      ],
+      {
+        cwd: sandbox,
+        env: {
+          ...process.env,
+          PATH: binDir,
+          IDD_TRUSTED_MARKER_ACTORS: '',
+        },
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 1, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.trustedMarkerActorsSource, 'none');
+    assert.deepEqual(report.trustedMarkerActors, []);
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
 // cspell:ignore Wpaqs
 // Shared by the three "unresolvable node id" tests below, so each test only
 // supplies its --subject-ids value and assertions instead of repeating the
