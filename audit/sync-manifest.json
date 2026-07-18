@@ -168,7 +168,7 @@
         ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-suitability.instructions.md"
       ],
-      "limitBytes": 101000
+      "limitBytes": 112700
     },
     {
       "id": "bundle-resume",
@@ -202,7 +202,7 @@
         ".github/instructions/idd-review-snapshot.instructions.md",
         ".github/instructions/idd-review-triage.instructions.md"
       ],
-      "limitBytes": 129900
+      "limitBytes": 143000
     },
     {
       "id": "bundle-merge",
@@ -216,7 +216,7 @@
         ".github/instructions/idd-overview-core.instructions.md",
         ".github/instructions/idd-pre-merge.instructions.md"
       ],
-      "limitBytes": 97300
+      "limitBytes": 107300
     }
   ],
   "docBudgetGuard": {

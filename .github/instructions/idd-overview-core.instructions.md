@@ -173,6 +173,10 @@ post further operational comments, and report the handoff or race. If
 loss came from handoff, the displaced session must not push,
 comment, resolve reviews, request reviewers, or merge.
 
+If you posted an activation nonce, confirm it still wins for this
+claim-id (`idd-claim.instructions.md`) -- a different winner means a lost
+claim-id.
+
 In addition to the `{claim-id}` check, verify that the mutation is
 about to run from the worktree named in the active claim's `branch:`
 field. This **cwd-vs-claim check** applies only to mutations made
