@@ -38,12 +38,11 @@ Read the current branch state. When helper runtime is enabled, call:
 Otherwise read the state directly:
 
 ```sh
-gh pr view {pr-number} --json mergeable,mergeStateStatus
+gh pr view {pr-number} --json mergeable,mergeStateStatus,headRefOid,baseRefName
 git fetch --no-tags origin {base-branch}
-git merge-base {pr-head-sha} origin/{base-branch}
-# compare vs: gh pr view {pr-number} --json baseRefOid -q .baseRefOid
-# mismatch/unresolvable = baseAdvancedSinceMergeBase: true below
-# (best-effort, no deepen-retry)
+git merge-base {pr-head-sha} FETCH_HEAD
+# vs: git rev-parse FETCH_HEAD; mismatch/unresolvable (undetermined) =
+# baseAdvancedSinceMergeBase: true below (best-effort, no deepen-retry)
 ```
 
 This check is read-only — F1 does not rebase, merge, or push.
