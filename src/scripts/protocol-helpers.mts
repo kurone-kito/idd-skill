@@ -10,6 +10,13 @@ import {
   normalizeAdvisoryWaitRuntimeOptions,
 } from './advisory-wait-policy.mts';
 
+// Re-exported so callers that already import advisory-bot-identity helpers
+// from this façade (merged-pr-feedback-sweep.mts,
+// disposition-non-review-notices.mts) can get the shared default-logins list
+// from the same module instead of reaching into advisory-wait-policy.mts
+// directly.
+export { DEFAULT_ADVISORY_BOT_LOGINS } from './advisory-wait-policy.mts';
+
 // Façade re-export (wave 1 of the protocol-helpers split; see #1209): every
 // marker render/parse primitive now lives in the marker-helpers module.
 // Re-exporting it here keeps every existing call site importing from
