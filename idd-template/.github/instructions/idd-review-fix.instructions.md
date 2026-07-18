@@ -50,8 +50,8 @@ each cuts the advisory-review round count:
 - **Already fixed via batching.** A PATH A item Accepted (E4/E5) may
   already be folded into a prior E12 batching push — do not duplicate
   the fix; confirm the commit addresses it and let E13 cite that SHA.
-  If a later pass Rejects it instead, revert that commit — the only
-  rollback path here.
+  If later Rejected instead, revert that commit — the only rollback
+  path here.
 
 ## E10 — Validate fixes with critique pass
 
@@ -126,12 +126,11 @@ immediately and letting each arrival start a fresh round, but only when
   `copilot-pull-request-reviewer` (see
   `../../docs/idd-advisory-wait-shell-fallback.md`) — never the
   distinct, lowercase `primaryBotLogin` config alias `copilot` (used
-  only for `--add-reviewer`, never a comment author; a non-default
-  bot's `primaryBotLogin` is already the real login) — or a login in
-  `advisoryBotLogins` other than one also configured as
-  `secondaryBotLogin`, **regardless of PATH A/B** (Copilot's inline
-  review-thread comments fall through to PATH A under E4's
-  ambiguous-default rule).
+  only for `--add-reviewer`; a non-default bot's `primaryBotLogin` is
+  already the real login) — or an `advisoryBotLogins` login (excluding
+  any also set as `secondaryBotLogin`), **regardless of PATH A/B**
+  (Copilot's inline review-thread comments fall through to PATH A under
+  E4's ambiguous-default rule).
 - Each such comment is plainly a small, confirmable fix whose claim was
   checked against live evidence (a linter run, actual file content,
   actual runtime behavior) before folding it in — the same
@@ -153,19 +152,16 @@ item requests a substantive code/logic change, not a small textual fix;
 any item falls outside the touched-file scope above; or either bound
 above is reached.
 
-**Explicit non-goals**: this allowance never delays, holds open, or
+**Explicit non-goals**: this allowance never delays, holds, or
 interrupts an in-flight CI wait — E15's "mid-wait arrivals fold into the
 next round" rule is unchanged. It never changes PATH A/B routing or
 triage timing: formal classification and disposition
 (`idd-review-triage.instructions.md` E4-E7) still happen normally at the
-next E1 pass — this allowance changes only push timing, never how or
-when a comment is triaged. It does not relax anything else: E14 still
-requests a re-review from the primary advisory bot after every push,
-still consuming the request cap once per push; the per-HEAD
-`review-watermark` in `idd-pre-merge.instructions.md` still invalidates
-on this push (it keys on HEAD SHA); each item's disposition reply in
-`idd-review-triage.instructions.md` (E6) stays individual — no combined
-markers; and the
+next E1 pass — only push timing changes, not triage. It relaxes nothing
+else: E14 still requests primary-bot re-review after every push,
+consuming its request cap; the per-HEAD `review-watermark` still
+invalidates on this push (keyed on HEAD SHA); each item's E6 disposition
+reply stays individual — no combined markers; and the
 [claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
 still runs immediately before this push.
 
