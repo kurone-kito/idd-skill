@@ -494,18 +494,24 @@ export function computeAdvisoryConvergenceVerdict(
     prHeadSha,
     trustedMarkerLogins,
   );
-  // A fresh primary-bot review submitted AFTER the latest reroll marker's
-  // own GitHub `created_at` means that request has already been answered --
-  // regardless of what the fresh review's itemCount turned out to be (a
-  // "1 -> 3" surprise is still an answer; it is simply not a converging one,
-  // and the normal E1/E4 triage path handles it, never this evidence). A
+  // A fresh primary-bot review submitted AT OR AFTER the latest reroll
+  // marker's own GitHub `created_at` means that request has already been
+  // answered -- regardless of what the fresh review's itemCount turned out
+  // to be (a "1 -> 3" surprise is still an answer; it is simply not a
+  // converging one, and the normal E1/E4 triage path handles it, never this
+  // evidence). `>=`, not `>`: the marker's `created_at` comes from the REST
+  // comments endpoint while the review's `submittedAt` is fetched
+  // separately via GraphQL, so an equal recorded server timestamp (e.g.
+  // both landing in the same second) must still count as answered -- a
+  // strict `>` would otherwise wait out the full pending window on a tie
+  // that already represents a genuine response (PR #1517 review). A
   // missing/invalid `submittedAt` fails closed toward "not yet answered"
   // (never toward a false "landed"), same direction as `isValidIsoTimestamp`
   // guards elsewhere in this file.
   const hasFreshReviewSinceLastReroll =
     rerollMarkers.latestAt !== '' &&
     isValidIsoTimestamp(review.submittedAt) &&
-    Date.parse(review.submittedAt) > Date.parse(rerollMarkers.latestAt);
+    Date.parse(review.submittedAt) >= Date.parse(rerollMarkers.latestAt);
   const rerollElapsedMinutes =
     rerollMarkers.latestAt !== ''
       ? minutesBetween(rerollMarkers.latestAt, now)
@@ -748,8 +754,18 @@ function summarizeSameHeadRerollMarkers(
   // prHeadSha is already validated to `^[0-9a-f]{40}$` by the caller (see
   // the top of computeAdvisoryConvergenceVerdict), so it is safe to embed
   // directly in a RegExp literal with no escaping -- a hex string has no
-  // regex-special characters.
-  const pattern = new RegExp(`^advisory-reroll: [^ ]+ ${prHeadSha}(?: |$)`);
+  // regex-special characters. Requires the FULL canonical marker shape --
+  // a valid trailing ISO-8601 timestamp, end-anchored -- matching the
+  // `advisory-reroll:` entry in `OPERATIONAL_MARKERS` (marker-helpers.mts)
+  // exactly, not merely a loose prefix+SHA check: an accidental or
+  // malformed trusted comment (a typo'd timestamp, or appended prose after
+  // the SHA) must never consume one of the bounded reroll attempts, since
+  // that budget is small (default 2) and a false increment costs much more
+  // proportionally than it would against the much larger REQUEST_CAP
+  // (PR #1517 review).
+  const pattern = new RegExp(
+    `^advisory-reroll:\\s+\\S+\\s+${prHeadSha}\\s+\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z\\s*$`,
+  );
   let count = 0;
   let latestAt = '';
   for (const comment of comments) {

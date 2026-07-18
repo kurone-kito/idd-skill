@@ -1124,6 +1124,40 @@ test('sameHeadReroll: a marker whose embedded HEAD SHA does not match current HE
   assert.equal(verdict.sameHeadReroll.count, 0);
 });
 
+test('regression: a malformed reroll marker (bad timestamp, or trailing prose) is not counted, matching the canonical OPERATIONAL_MARKERS shape (PR #1517 review)', () => {
+  const badTimestamp = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: `advisory-reroll: ${AGENT_ID} ${HEAD} not-a-timestamp`,
+          createdAt: REROLL_AT,
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(badTimestamp);
+  assert.equal(badTimestamp.sameHeadReroll.count, 0);
+
+  const trailingProse = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: `advisory-reroll: ${AGENT_ID} ${HEAD} ${REROLL_AT} please review soon`,
+          createdAt: REROLL_AT,
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(trailingProse);
+  assert.equal(trailingProse.sameHeadReroll.count, 0);
+});
+
 test('sameHeadReroll: latestAt uses the GitHub comment createdAt, never the embedded (agent-supplied) timestamp', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
