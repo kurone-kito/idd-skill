@@ -388,6 +388,18 @@ function bucketState(state: string): CiWaitCheckEntry['status'] {
  * `CiWaitCheckEntry` uses `checkName` where `protocol-helpers.mts`'s
  * `CheckLike` uses `name`.
  *
+ * `selectLatestCheckInstance`'s shared `ciStateTieRank` special-cases only
+ * the two literal strings `'FAILURE'` and `'CANCELLED'`; every other raw
+ * state -- including this file's own wider `FAILURE_STATES` additions
+ * `TIMED_OUT`, `ACTION_REQUIRED`, `STARTUP_FAILURE`, `STALE`, and `ERROR`
+ * -- falls into the shared tie-break's generic rank-1 bucket, where a
+ * same-instant tie against a success-family state resolves by raw
+ * lexicographic string comparison instead of "the failure should win"
+ * (#1504). Rather than widening `ciStateTieRank` itself -- shared,
+ * upstream of `classifyCiChecks`, and out of scope for this fix -- see
+ * `selectLatestCheckEntry` for how each group applies a tie-break-only
+ * state normalization that stays entirely local to this file.
+ *
  * Deliberately keyed by `checkName` alone, not the `(checkName,
  * workflowName)` pair this file otherwise disambiguates entries by (see
  * the module header): GitHub's own required-status-check gate matches by
@@ -407,7 +419,7 @@ function bucketState(state: string): CiWaitCheckEntry['status'] {
  *
  * `entries` itself may be empty (e.g. no required check has been
  * reported yet), in which case `groups` simply ends up with zero
- * entries. What is guaranteed is that every group `selectLatestCheckInstance`
+ * entries. What is guaranteed is that every group `selectLatestCheckEntry`
  * receives has at least one member: a group is only ever created by
  * pushing the entry that introduced its key (see the `Map` construction
  * below), so the seedless `reduce` inside `selectLatestCheckInstance`
@@ -425,7 +437,77 @@ function selectLatestCheckEntryPerName(
       groups.set(entry.checkName, [entry]);
     }
   }
-  return [...groups.values()].map((group) => selectLatestCheckInstance(group));
+  return [...groups.values()].map((group) => selectLatestCheckEntry(group));
+}
+
+/**
+ * Reduce one name-keyed group to its representative instance via the
+ * shared `selectLatestCheckInstance`, using a *tie-break-only* normalized
+ * state (#1504) so this file's wider `FAILURE_STATES` vocabulary still
+ * wins a same-instant tie against a success-family state, the same way a
+ * literal `FAILURE` conclusion already does. `entry.state` itself is never
+ * mutated: each group member is wrapped with `tieBreakState(entry)` for
+ * selection purposes only, and the winning wrapper is unwrapped back to
+ * its original `entry` before returning, so the returned `CiWaitCheckEntry`
+ * always carries its real, unmodified `state`.
+ *
+ * Sorted by the original `entry.state` (ascending) before wrapping, so a
+ * same-instant tie between two *distinct* raw states that both normalize
+ * to the same tie-break state (e.g. `TIMED_OUT` and `STARTUP_FAILURE`,
+ * both normalized to `'FAILURE'`) still resolves deterministically
+ * (Copilot review, PR #1530). Without the sort, `selectLatestCheckInstance`'s
+ * last-resort comparison (`candidate.state !== current.state && ...`) sees
+ * two *equal* normalized states and always keeps whichever entry
+ * `reduce` saw first -- an input-order artifact, not a value-based choice.
+ * Pre-fix, distinct raw states made that same comparison a genuine
+ * lexicographic argmin, independent of input order; sorting restores
+ * exactly that: `reduce` starts from (and keeps) the lexicographically
+ * smallest raw state whenever normalized states tie. This sort changes
+ * nothing else -- the `completedAt`-primary and rank-primary comparisons
+ * in `isNewerCheckInstance` are already order-independent.
+ *
+ * Exported (like `protocol-helpers.mts`'s own `selectLatestCheckInstance`)
+ * so the determinism property above is directly unit-testable: the winning
+ * *raw* instance's identity is not observable through
+ * `buildCiWaitStateSummary`'s public return shape at all -- `checks` there
+ * is the raw, not-deduped list, and `requiredChecks` only exposes aggregate
+ * pass/fail booleans that stay identical regardless of which same-rank
+ * instance wins a tie.
+ */
+export function selectLatestCheckEntry(
+  group: CiWaitCheckEntry[],
+): CiWaitCheckEntry {
+  const sorted = [...group].sort((a, b) =>
+    a.state < b.state ? -1 : a.state > b.state ? 1 : 0,
+  );
+  const winner = selectLatestCheckInstance(
+    sorted.map((entry) => ({
+      entry,
+      state: tieBreakState(entry),
+      completedAt: entry.completedAt,
+    })),
+  );
+  return winner.entry;
+}
+
+/**
+ * The state the shared tie-break in `selectLatestCheckInstance` should
+ * compare for `entry`, which is not always `entry.state` itself (#1504).
+ * `CANCELLED` is left as `CANCELLED`: a cancelled run reached no verdict,
+ * so it must keep losing a same-instant tie exactly as it does today.
+ * Every other entry already bucketed as `status === 'failure'` by
+ * `bucketState` -- the literal `FAILURE` conclusion plus this file's wider
+ * `FAILURE_STATES` additions (`TIMED_OUT`, `ACTION_REQUIRED`,
+ * `STARTUP_FAILURE`, `STALE`, the StatusContext-only `ERROR`) -- normalizes
+ * to the literal `'FAILURE'` so `ciStateTieRank` ranks it 0 (always wins)
+ * instead of falling into its generic rank-1 bucket. Every non-failure
+ * entry (success, pending, unknown) is returned unchanged: the existing
+ * lexicographic fallback within that shared rank is correct as-is and out
+ * of scope for this fix.
+ */
+function tieBreakState(entry: CiWaitCheckEntry): string {
+  if (entry.state === 'CANCELLED') return 'CANCELLED';
+  return entry.status === 'failure' ? 'FAILURE' : entry.state;
 }
 
 function buildRequiredChecksRollup(
