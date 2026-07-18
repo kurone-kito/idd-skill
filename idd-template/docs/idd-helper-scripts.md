@@ -1418,10 +1418,18 @@ Interpretation rules:
     `CHANGES_REQUESTED` review bodies from non-IDD-agent authors that have
     **no later IDD-agent disposition** (`**Accepted**` / `**Rejected**` /
     `**Awaiting maintainer decision**`). Trusted IDD operational markers, IDD
-    disposition comments, and any HTML comment beginning with `<!-- idd-` (for
+    disposition comments, any HTML comment beginning with `<!-- idd-` (for
     example cleanup-evidence, excluded regardless of author — including CI
-    automation such as `github-actions[bot]`) are excluded from the feedback
-    set. Each finding carries an `advisoryBot` flag (`isKnownReviewBot` or a
+    automation such as `github-actions[bot]`), and a CodeRabbit
+    summary-walkthrough comment (recognized via the shared
+    `isReviewSummaryComment` classifier — the same single-sourced predicate
+    E6's `disposition-non-review-notices` uses to auto-`**Accepted**` it) are
+    all excluded from the feedback set unconditionally, regardless of
+    disposition state, so the sweep and E6 classify it identically instead of
+    disagreeing. Advisory non-review notices (rate/usage-limit) are
+    deliberately **not** excluded this way — an undispositioned one left on a
+    merged PR still indicates a skipped E6 disposition and stays a genuine
+    signal. Each finding carries an `advisoryBot` flag (`isKnownReviewBot` or a
     configured `advisoryBotLogins` author) so the operator can prioritize human
     feedback over capricious advisory-bot noise.
 - JSON output keys: `sweepWindow`, `trustedMarkerActors`,

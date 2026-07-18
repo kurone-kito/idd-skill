@@ -22,6 +22,7 @@ import {
   hasFreshDisposition,
   isDispositionComment,
   isKnownReviewBot,
+  isReviewSummaryComment,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   resolveAdvisoryBotLogins,
@@ -384,6 +385,15 @@ function collectUnaddressedComments(
     // or any `<!-- idd-… -->` comment (e.g. cleanup-evidence / plan / digest,
     // which CI automation such as github-actions also posts).
     if (isIddBookkeeping(comment.body, author, isTrusted)) {
+      continue;
+    }
+    // The CodeRabbit summary-walkthrough comment is auto-generated
+    // boilerplate, not reviewer feedback: E6 (disposition-non-review-notices)
+    // already auto-`**Accepted**`s it via this same single-sourced
+    // classifier. Exclude it unconditionally here too — the same tier as IDD
+    // bookkeeping, not gated on `latestDispositionAt` — so the sweep and E6
+    // classify it identically instead of disagreeing (#1488).
+    if (isReviewSummaryComment(comment.body)) {
       continue;
     }
     if (isLaterThan(latestDispositionAt, commentTimestamp(comment))) {

@@ -6,6 +6,7 @@ import {
   type MergedPrInput,
   parseArgs,
 } from '../src/scripts/merged-pr-feedback-sweep.mts';
+import { CODERABBIT_SUMMARY_MARKER } from '../src/scripts/protocol-helpers.mts';
 import { buildCommentThread } from './test-utils.mts';
 
 const OPTIONS = {
@@ -372,6 +373,62 @@ test('excludes an IDD bookkeeping marker even from CI automation', () => {
   ];
   const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
   assert.equal(result.prs.length, 0);
+});
+
+// --- #1488: reuse isReviewSummaryComment so the sweep and E6 agree --------
+
+test('excludes a CodeRabbit summary-walkthrough comment from unaddressedComments', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 18,
+      comments: [
+        {
+          body: `${CODERABBIT_SUMMARY_MARKER}\n\n## Walkthrough\n\nRefactors X.`,
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'coderabbitai[bot]' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 0);
+});
+
+test('the summary exclusion is comment-scoped: a genuine comment and an unresolved thread in the same PR are still surfaced', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 19,
+      threads: [
+        buildCommentThread(false, [
+          {
+            login: 'coderabbitai[bot]',
+            body: 'This loop can deadlock.',
+            createdAt: '2026-06-09T00:00:00Z',
+          },
+        ]),
+      ],
+      comments: [
+        {
+          body: `${CODERABBIT_SUMMARY_MARKER}\n\n## Walkthrough\n\nRefactors X.`,
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'coderabbitai[bot]' },
+        },
+        {
+          body: 'Did you consider X?',
+          createdAt: '2026-06-09T00:05:00Z',
+          author: { login: 'coderabbitai[bot]' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unresolvedThreads.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(
+    result.prs[0].unaddressedComments[0].bodyExcerpt,
+    'Did you consider X?',
+  );
 });
 
 test('surfaces an unaddressed CHANGES_REQUESTED review body', () => {
