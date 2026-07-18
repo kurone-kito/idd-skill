@@ -27,11 +27,14 @@ import {
 } from './protocol-helpers.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
-const DEFAULT_MANIFEST_PATH = 'audit/sync-manifest.json';
+// Exported (#1484) so suitability-triage.mts's high-confidence Check 4 tier
+// can build the identical high-contention set this module uses for A4 Step 2,
+// instead of re-declaring its own copy of these defaults.
+export const DEFAULT_MANIFEST_PATH = 'audit/sync-manifest.json';
 /** F-phase bundles whose member instruction files concentrate concurrent edits. */
-const DEFAULT_BUNDLE_IDS = ['bundle-review', 'bundle-merge'];
+export const DEFAULT_BUNDLE_IDS = ['bundle-review', 'bundle-merge'];
 /** Append-mostly shared surfaces that are not bundle members. */
-const DEFAULT_EXTRA_FILES = [DEFAULT_MANIFEST_PATH];
+export const DEFAULT_EXTRA_FILES = [DEFAULT_MANIFEST_PATH];
 const DEFAULT_AUTOPILOT_SUITABILITY_FLOOR = 3;
 const DEFAULT_CLAIM_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 /** Upper bound on the best-effort open-PR scan (a `gh pr list --limit`). */
@@ -861,7 +864,10 @@ branch is not yet pushed is picked up once it appears remotely.
 `);
 }
 
-function ghJson(args: string[]): unknown[] {
+// Exported (#1484) as the array-safe `gh` JSON parser: suitability-triage.mts
+// reuses it (aliased at the import site to avoid colliding with that file's
+// own object-shaped `ghJson`) instead of re-declaring an equivalent helper.
+export function ghJson(args: string[]): unknown[] {
   const parsed = JSON.parse(runGh(args).trim() || '[]');
   return Array.isArray(parsed) ? parsed : [];
 }

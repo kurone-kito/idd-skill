@@ -37,7 +37,11 @@ In the idd-skill source repository, the following optional helpers were adopted:
   [kurone-kito/idd-skill#1397](https://github.com/kurone-kito/idd-skill/issues/1397))
 - `scripts/suitability-triage.mjs` for A4.5 seven-check suitability
   evaluation (referenced in
-  [kurone-kito/idd-skill#392](https://github.com/kurone-kito/idd-skill/issues/392))
+  [kurone-kito/idd-skill#392](https://github.com/kurone-kito/idd-skill/issues/392)),
+  including Check 4's high-confidence duplicate/superseded tier
+  (closing-PR reference and same-candidate-files overlap, excluding
+  high-contention files) (referenced in
+  [kurone-kito/idd-skill#1484](https://github.com/kurone-kito/idd-skill/issues/1484))
 - `scripts/claim-approval-gate.mjs` for A5(a) issue-author approval
   verification; A5(d) open-PR conflict checks remain manual by design
   (referenced in

@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  buildClosedByMergedPrArgs,
+  buildMergedPrListArgs,
+  buildPrFilesArgs,
   checkActionability,
   checkAutonomy,
   checkCoherence,
@@ -9,6 +12,7 @@ import {
   checkRepositoryFit,
   checkTrustSafety,
   checkVerifiability,
+  evaluateHighConfidenceDuplicate,
   evaluateSuitability,
   parseArgs,
 } from '../src/scripts/suitability-triage.mts';
@@ -88,6 +92,10 @@ Implement helper behavior.
 `,
   labels: ['enhancement'],
   state: 'OPEN',
+  // #1484: NormalizedIssue.createdAt is required; keep this fixture fully
+  // satisfying that type so an `as Context` cast elsewhere in this file
+  // never trips TypeScript's "insufficient overlap" cast-safety check.
+  createdAt: '2026-01-01T00:00:00Z',
   url: 'https://example.com/issues/1',
 };
 
@@ -612,4 +620,344 @@ test('duplicate check detects a URL-form duplicate declaration', () => {
     duplicateCandidates: [] as Context['duplicateCandidates'],
   } as Context);
   assert.equal(result.pass, false);
+});
+
+// --- #1484: high-confidence Check 4 tier ------------------------------------
+
+test('evaluateHighConfidenceDuplicate: undefined input is absent, not a hit', () => {
+  assert.equal(evaluateHighConfidenceDuplicate(undefined), null);
+});
+
+test('evaluateHighConfidenceDuplicate: empty arrays fall through (fail-safe)', () => {
+  const result = evaluateHighConfidenceDuplicate({
+    closedByMergedPrNumbers: [],
+    candidateFiles: [],
+    highContentionFiles: [],
+    mergedPrs: [],
+  });
+  assert.equal(result, null);
+});
+
+test('evaluateHighConfidenceDuplicate: malformed (non-array) fields never crash and never hit', () => {
+  const result = evaluateHighConfidenceDuplicate({
+    closedByMergedPrNumbers: 'not-an-array',
+    candidateFiles: null,
+    highContentionFiles: undefined,
+    mergedPrs: 42,
+  } as unknown as Context['highConfidenceDuplicate']);
+  assert.equal(result, null);
+});
+
+test('evaluateHighConfidenceDuplicate: closing-PR-reference hit cites the PR number', () => {
+  const result = evaluateHighConfidenceDuplicate({
+    closedByMergedPrNumbers: [123],
+    candidateFiles: [],
+    highContentionFiles: [],
+    mergedPrs: [],
+  });
+  assert.equal(result?.pass, false);
+  assert.match(result?.evidence ?? '', /#123/);
+  assert.match(result?.evidence ?? '', /closedByPullRequestsReferences/);
+});
+
+test('evaluateHighConfidenceDuplicate: same-candidate-files hit cites the PR number and file', () => {
+  const result = evaluateHighConfidenceDuplicate({
+    closedByMergedPrNumbers: [],
+    candidateFiles: ['scripts/foo.mjs'],
+    highContentionFiles: [],
+    mergedPrs: [
+      {
+        number: 456,
+        mergedAt: '2026-07-10T00:00:00Z',
+        files: ['scripts/foo.mjs', 'docs/unrelated.md'],
+      },
+    ],
+  });
+  assert.equal(result?.pass, false);
+  assert.match(result?.evidence ?? '', /#456/);
+  assert.match(result?.evidence ?? '', /scripts\/foo\.mjs/);
+  assert.doesNotMatch(result?.evidence ?? '', /unrelated\.md/);
+});
+
+test('evaluateHighConfidenceDuplicate: reuses normalizeContentionPath so mirrored instruction paths still match', () => {
+  // Same basename cited two different ways: the issue's own '## Candidate
+  // files' style (idd-template source path) vs. the merged PR's actual
+  // changed-file path (generated mirror). Proves real reuse of
+  // discover-shared-file-overlap's normalization, not a re-implementation
+  // that only matches identical strings.
+  const result = evaluateHighConfidenceDuplicate({
+    closedByMergedPrNumbers: [],
+    candidateFiles: [
+      'idd-template/.github/instructions/idd-work.instructions.md',
+    ],
+    highContentionFiles: [],
+    mergedPrs: [
+      {
+        number: 789,
+        mergedAt: '2026-07-11T00:00:00Z',
+        files: ['.github/instructions/idd-work.instructions.md'],
+      },
+    ],
+  });
+  assert.equal(result?.pass, false);
+  assert.match(result?.evidence ?? '', /#789/);
+});
+
+test('evaluateHighConfidenceDuplicate: a high-contention-only overlap is not high-confidence evidence', () => {
+  // The only shared file is in the high-contention exclusion set, so this
+  // must fall through (null), not fire -- a coincidental hit on a
+  // broadly-shared file is not evidence THIS issue was superseded.
+  const result = evaluateHighConfidenceDuplicate({
+    closedByMergedPrNumbers: [],
+    candidateFiles: ['audit/sync-manifest.json'],
+    highContentionFiles: ['audit/sync-manifest.json'],
+    mergedPrs: [
+      {
+        number: 999,
+        mergedAt: '2026-07-12T00:00:00Z',
+        files: ['audit/sync-manifest.json'],
+      },
+    ],
+  });
+  assert.equal(result, null);
+});
+
+test('evaluateHighConfidenceDuplicate: a genuine file still hits when a co-listed file is high-contention', () => {
+  // Regression guard for the exclusion filter being too aggressive: a
+  // candidate list with one high-contention file and one genuine file must
+  // still fire on the genuine file's overlap.
+  const result = evaluateHighConfidenceDuplicate({
+    closedByMergedPrNumbers: [],
+    candidateFiles: ['audit/sync-manifest.json', 'scripts/genuine.mjs'],
+    highContentionFiles: ['audit/sync-manifest.json'],
+    mergedPrs: [
+      {
+        number: 1000,
+        mergedAt: '2026-07-13T00:00:00Z',
+        files: ['audit/sync-manifest.json', 'scripts/genuine.mjs'],
+      },
+    ],
+  });
+  assert.equal(result?.pass, false);
+  assert.match(result?.evidence ?? '', /scripts\/genuine\.mjs/);
+  assert.doesNotMatch(result?.evidence ?? '', /sync-manifest\.json/);
+});
+
+test('evaluateHighConfidenceDuplicate: closing-PR-reference is checked before the file-overlap scan', () => {
+  const result = evaluateHighConfidenceDuplicate({
+    closedByMergedPrNumbers: [111],
+    candidateFiles: ['scripts/foo.mjs'],
+    highContentionFiles: [],
+    mergedPrs: [{ number: 222, mergedAt: '', files: ['unrelated.mjs'] }],
+  });
+  assert.match(result?.evidence ?? '', /#111/);
+  assert.doesNotMatch(result?.evidence ?? '', /#222/);
+});
+
+test('checkDuplicateOrSuperseded: high-confidence tier takes priority over the weak heuristic', () => {
+  // Three supplied Context fields (vs. this file's usual one or two) makes
+  // TypeScript's structural-cast "sufficient overlap" check reject a direct
+  // `as Context`; route through `unknown` first, as the compiler itself
+  // suggests, rather than fabricating the remaining unused Context fields.
+  const result = checkDuplicateOrSuperseded({
+    issue: BASE_ISSUE,
+    duplicateCandidates: [] as Context['duplicateCandidates'],
+    highConfidenceDuplicate: {
+      closedByMergedPrNumbers: [42],
+      candidateFiles: [],
+      highContentionFiles: [],
+      mergedPrs: [],
+    },
+  } as unknown as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /High-confidence duplicate/);
+});
+
+test('checkDuplicateOrSuperseded: a real high-confidence hit still fires even when the run is otherwise degraded', () => {
+  // Composition guard (E2 incremental critique on this PR): a genuine
+  // closedByPullRequestsReferences hit collected before the sibling
+  // same-candidate-files signal failed must still fire -- degraded mode
+  // only narrows the WEAK heuristic fallback, never suppresses an
+  // already-established high-confidence mechanical hit.
+  const result = checkDuplicateOrSuperseded({
+    issue: BASE_ISSUE,
+    duplicateCandidates: [] as Context['duplicateCandidates'],
+    highConfidenceDuplicate: {
+      closedByMergedPrNumbers: [99],
+      candidateFiles: [],
+      highContentionFiles: [],
+      mergedPrs: [],
+    },
+    highConfidenceCollectionDegraded: true,
+  } as unknown as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /High-confidence duplicate/);
+  assert.match(result.evidence, /#99/);
+});
+
+test('checkDuplicateOrSuperseded: omitting highConfidenceDuplicate leaves the weak heuristic unchanged', () => {
+  // No new field at all (as every pre-#1484 caller would omit it) must
+  // behave byte-for-byte as before: BASE_ISSUE's own title is not present in
+  // duplicateCandidates here, so this should pass.
+  const result = checkDuplicateOrSuperseded({
+    issue: BASE_ISSUE,
+    duplicateCandidates: [] as Context['duplicateCandidates'],
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('checkDuplicateOrSuperseded: degraded mode skips near-duplicate fuzzy matching', () => {
+  // Regression guard for a Codex P2 review finding: a genuine collector
+  // failure must degrade to exact-title matching only, per the documented
+  // "Timeout on duplicate detection" Edge Case -- a merely SIMILAR title
+  // (>80% Levenshtein, the near-duplicate check) must not read as a false
+  // duplicate just because evidence collection broke.
+  const nearDuplicateTitle = `${BASE_ISSUE.title} extra`;
+  const result = checkDuplicateOrSuperseded({
+    issue: BASE_ISSUE,
+    duplicateCandidates: [
+      { number: 2, title: nearDuplicateTitle, state: 'OPEN' },
+    ] as Context['duplicateCandidates'],
+    highConfidenceCollectionDegraded: true,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('checkDuplicateOrSuperseded: degraded mode still catches an exact-title match', () => {
+  const result = checkDuplicateOrSuperseded({
+    issue: BASE_ISSUE,
+    duplicateCandidates: [
+      { number: 3, title: BASE_ISSUE.title, state: 'OPEN' },
+    ] as Context['duplicateCandidates'],
+    highConfidenceCollectionDegraded: true,
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /Exact-title duplicate found: #3/);
+});
+
+test('checkDuplicateOrSuperseded: degraded mode skips the free-text declaration scan too', () => {
+  const result = checkDuplicateOrSuperseded({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis is a duplicate of #123.`,
+    },
+    duplicateCandidates: [] as Context['duplicateCandidates'],
+    highConfidenceCollectionDegraded: true,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('checkDuplicateOrSuperseded: not degraded still runs the full weak heuristic', () => {
+  const nearDuplicateTitle = `${BASE_ISSUE.title} extra`;
+  const result = checkDuplicateOrSuperseded({
+    issue: BASE_ISSUE,
+    duplicateCandidates: [
+      { number: 2, title: nearDuplicateTitle, state: 'OPEN' },
+    ] as Context['duplicateCandidates'],
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /Near-duplicate found/);
+});
+
+test('evaluateSuitability: a genuine collection failure degrades Check 4 to exact-title only', () => {
+  const nearDuplicateTitle = `${BASE_ISSUE.title} extra`;
+  const result = evaluateSuitability(BASE_ISSUE, {
+    duplicateCandidates: [{ number: 2, title: nearDuplicateTitle }],
+    highConfidenceCollectionDegraded: true,
+  });
+  assert.equal(result.outcome, 'ready');
+});
+
+test('evaluateSuitability: high-confidence duplicate evidence maps to the duplicate outcome', () => {
+  const result = evaluateSuitability(BASE_ISSUE, {
+    highConfidenceDuplicate: {
+      closedByMergedPrNumbers: [42],
+      candidateFiles: [],
+      highContentionFiles: [],
+      mergedPrs: [],
+    },
+  });
+  assert.equal(result.outcome, 'duplicate');
+  assert.equal(result.failedCheck, 'duplicate_or_superseded');
+});
+
+test('evaluateSuitability: a malformed highConfidenceDuplicate option is neutralized, not thrown', () => {
+  assert.doesNotThrow(() => {
+    const result = evaluateSuitability(BASE_ISSUE, {
+      duplicateCandidates: [{ number: 1, title: BASE_ISSUE.title }],
+      highConfidenceDuplicate: 'not-an-object',
+    });
+    assert.equal(result.passed, true);
+  });
+});
+
+// --- #1484: detect-only boundary (argv-builder read-verb assertions) -------
+// A compiled-text grep for mutating verb literals would miss a
+// `gh api ... -X POST`-shaped mutation, since none of this file's own calls
+// use one. Instead, assert directly on the argv each builder produces: the
+// gh subcommand-verb position (index 1) must be an allow-listed read verb,
+// and no mutating flag/verb literal appears anywhere in the argv.
+const READ_VERBS = new Set(['view', 'list']);
+const FORBIDDEN_TOKENS = new Set([
+  'close',
+  'comment',
+  'edit',
+  'merge',
+  'reopen',
+  'delete',
+  '-X',
+  '--method',
+]);
+
+function assertReadOnlyArgv(args: string[]): void {
+  if (args[0] === 'api') {
+    // gh api graphql: the payload must be a `query` operation, never a
+    // `mutation`, so check the actual `-f query=...` value rather than an
+    // allow-listed subcommand-verb position.
+    assert.equal(args[1], 'graphql');
+    const queryArg = args.find((arg) => arg.startsWith('query='));
+    assert.equal(typeof queryArg, 'string');
+    assert.match(queryArg ?? '', /^query=\s*query[\s(]/);
+    assert.doesNotMatch(queryArg ?? '', /\bmutation\b/);
+  } else {
+    assert.equal(args[0] === 'issue' || args[0] === 'pr', true);
+    assert.equal(READ_VERBS.has(args[1]), true);
+  }
+  for (const token of args) {
+    assert.equal(
+      FORBIDDEN_TOKENS.has(token),
+      false,
+      `unexpected mutating token "${token}" in argv: ${JSON.stringify(args)}`,
+    );
+  }
+}
+
+test('buildClosedByMergedPrArgs is read-only', () => {
+  assertReadOnlyArgv(
+    buildClosedByMergedPrArgs('kurone-kito', 'idd-skill', 1484),
+  );
+});
+
+test('buildClosedByMergedPrArgs requests state so callers can filter to MERGED', () => {
+  // Regression guard for a real bug caught by review: the REST-shimmed `gh
+  // issue view --json closedByPullRequestsReferences` carries no per-PR
+  // `state` and includes OPEN (not yet merged) PRs, not only merged ones.
+  // The GraphQL query built here must request `state` explicitly so
+  // fetchClosedByMergedPrNumbers can filter to MERGED before treating a hit
+  // as high-confidence evidence.
+  const args = buildClosedByMergedPrArgs('kurone-kito', 'idd-skill', 1484);
+  const queryArg = args.find((arg) => arg.startsWith('query=')) ?? '';
+  assert.match(queryArg, /closedByPullRequestsReferences/);
+  assert.match(queryArg, /\bstate\b/);
+  assert.match(queryArg, /\bnumber\b/);
+});
+
+test('buildMergedPrListArgs is read-only', () => {
+  assertReadOnlyArgv(
+    buildMergedPrListArgs('kurone-kito/idd-skill', '2026-07-01T00:00:00Z'),
+  );
+});
+
+test('buildPrFilesArgs is read-only', () => {
+  assertReadOnlyArgv(buildPrFilesArgs('kurone-kito/idd-skill', 1492));
 });

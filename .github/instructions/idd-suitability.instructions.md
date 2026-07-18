@@ -97,6 +97,33 @@ or configured needs-decision label from `labels.needsDecisionLabelName`
   progress (including draft PRs)
 - **Outcome on fail**: `duplicate`
 
+#### High-confidence tier (#1484)
+
+Before the weak heuristic above, check two mechanical signals reused
+from B2.0's post-claim re-check (`idd-work.instructions.md`): (1) the
+issue's own `closedByPullRequestsReferences` includes a `MERGED`-state
+PR **and** the issue is `CLOSED` (matches B2.0's gate; a reopened
+issue keeps its old merged PR), or (2) a PR merged at/after the
+issue's own `createdAt` (the pre-claim analogue of B2.0's
+claim-`created_at` anchor) changed a file under its `## Candidate
+files` section — excluding A4 Step 2's high-contention set
+(`discover-shared-file-overlap`'s bundle + manifest files), since a
+broadly-shared file alone isn't evidence _this_ issue shipped.
+
+Either signal is high-confidence: classify as `duplicate` (no new
+outcome value), and the diagnostic comment MUST carry
+**machine-derivable evidence** (PR number(s) and/or overlapping file
+path(s)), not prose alone. With neither signal established, fall back
+to the weak heuristic unchanged — never fail _toward_ a false flag; a
+collection failure follows the "Timeout on duplicate detection" Edge
+Case below.
+
+Same **detect-only** boundary as the rest of A4.5 (label + comment
+only). The acceptance-criteria-hold-on-`main` bullet is deferred to
+the gated-close follow-up.
+
+`suitability-triage.mjs` evaluates both signals as part of Check 4.
+
 ### Check 5: Actionability
 
 Does the issue describe concrete, actionable work?
@@ -247,7 +274,8 @@ can correct the issue.
 
 **Timeout on duplicate detection**: If duplicate detection (Check 4)
 times out or becomes expensive, fall back to exact title match only. If
-exact match is not found, PASS the check and continue.
+exact match is not found, PASS the check and continue. Also covers the
+High-confidence tier's evidence collection (#1484).
 
 **Agent-specific limitations**: All seven checks should be agent-agnostic
 (work for Copilot, Claude, Codex, Antigravity CLI (formerly Gemini CLI)).
