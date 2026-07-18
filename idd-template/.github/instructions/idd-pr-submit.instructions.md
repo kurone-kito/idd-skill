@@ -248,23 +248,30 @@ completion.
    block-quote prefix) and apply the same edit-and-recheck path
    as step 4.
 
-6. **Confirm no unintended extra closes**: GitHub's
+6. **Confirm the closing set matches exactly**: GitHub's
    `closingIssuesReferences` field on the PR
    (`gh pr view <pr-number> --json closingIssuesReferences --jq
    '.closingIssuesReferences[].number'`) lists every issue GitHub plans
    to close when the PR merges. Compare it against the deliberate
    closing set from D3 — normally just the claimed issue `<N>`, or the
-   full deliberate multi-issue set when "Multiple closing issues"
-   above applies. The two sets must be **exactly** equal; the steps
-   above only confirm the claimed issue is present; they do not catch
-   an extra unintended entry. Any `closingIssuesReferences` entry
-   outside the deliberate set is a spurious extra close — most often
-   the negation-blind false-positive documented above, where an
-   unrelated `#M` reference ends up adjacent to a recognized keyword
-   elsewhere in the body. If an unintended entry is found, edit the PR
-   body to separate the keyword from that `#M` reference and repeat
-   this step once. If it still fails, post a hold note on the issue
-   citing the PR URL and stop. Do not proceed to D4.
+   full deliberate multi-issue set when "Multiple closing issues" above
+   applies. The two sets must be **exactly** equal; steps 1-5 above
+   only confirm the claimed issue `<N>` is present, so this step is the
+   only one that catches either direction of mismatch:
+
+   - **An extra entry** (a `closingIssuesReferences` issue outside the
+     deliberate set) is most often the negation-blind false-positive
+     documented above, where an unrelated `#M` reference ends up
+     adjacent to a recognized keyword elsewhere in the body. Edit the
+     PR body to separate the keyword from that `#M` reference.
+   - **A missing entry** (a deliberate multi-issue-close target absent
+     from `closingIssuesReferences`) means its keyword did not
+     register — apply the same edit-and-recheck path as step 4 for
+     that issue number.
+
+   Repeat this step once after either fix. If it still fails, post a
+   hold note on the issue citing the PR URL and stop. Do not proceed to
+   D4.
 
 ## D4 — Wait for CI
 
