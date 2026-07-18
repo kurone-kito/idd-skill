@@ -529,9 +529,9 @@ function findLaterCompetingClaim(events, activeClaim) {
 }
 /**
  * Resolve the winning activation nonce among trusted `activation-nonce`
- * events for `claimId`: the lexicographically earliest nonce (plain
- * ASCII `.sort()`), mirroring how `findSameSecondContenders` above already
- * sorts colliding claim-ids the same way. This is a pure function of the
+ * events for `claimId`: the lexicographically earliest nonce (`.sort()`),
+ * mirroring how `findSameSecondContenders` above already sorts colliding
+ * claim-ids the same way. This is a pure function of the
  * observed nonce *set* (not post order or timestamp), so two sessions that
  * both activated the same claim-id compute the identical winner once each
  * has re-read the same trusted comment stream. Returns `null` when no
