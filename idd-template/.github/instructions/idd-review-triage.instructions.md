@@ -477,7 +477,8 @@ Route based on `branchState` from the helper (or `mergeable` /
   under F1 in `idd-pre-merge.instructions.md`. **Then** proceed to
   `idd-pre-merge.instructions.md` (F1).
 - **`behind-no-conflict`** when branch protection or recorded repository
-  policy requires an up-to-date head: → **sync path** below.
+  policy requires an up-to-date head, or undetermined (fail closed, per
+  F1): → **sync path** below.
 - **`content-conflict`** (`mergeable` is `CONFLICTING`): → **sync path**
   below.
 - **`computing`** (`syncRecommendation` is `recheck`): `mergeable` is

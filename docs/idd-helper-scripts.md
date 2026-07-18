@@ -1156,7 +1156,19 @@ Interpretation rules:
 - Stable sections consumed by the instructions: `reviewCurrency`,
   `threads`, `unrepliedComments`, `reviewerStates`,
   `advisoryWait` (including the effective advisory policy fields), `ci`,
-  `claim`, and optional `dispositionEvidence`
+  `claim`, `branchCurrency`, and optional `dispositionEvidence`
+- `branchCurrency` (#1513) pairs the PR's live `mergeable` /
+  `mergeStateStatus` with whether the base branch's protection or ruleset
+  requires an up-to-date head before merge. `requiresUpToDateHead` is
+  `true` when a readable ruleset or classic-protection rule confirms it,
+  or when the underlying protection/ruleset read is unreadable (fails
+  closed to `true` rather than reporting "no requirement");
+  `requiresUpToDateHeadSource` records which (`ruleset`,
+  `classic-protection`, `unreadable-fail-closed`, or `none`). A live
+  `mergeStateStatus: "BEHIND"` paired with `requiresUpToDateHead: true`
+  is a `branch-currency` merge-gate blocker (see below); `UNKNOWN` is the
+  async-still-computing state F1 and the E-phase branch-sync check
+  already re-poll, not a blocker here.
 - Authoritative phase role: the live `pre-merge-readiness` run on the
   current HEAD is the **authoritative source for the final-merge CI and
   activity fields** at F2/F3. The `review-activity-snapshot` helper builds
@@ -1200,11 +1212,14 @@ Interpretation rules:
   `comparisonRoute == "proceed"`, `threads.actionableCount == 0`,
   advisory `f3Outcome == "SATISFIED"`, CI all-passing (the F2/F3
   no-required-checks fallback included), required/CODEOWNER reviews
-  satisfied, claim ownership matches, and disposition evidence both
+  satisfied, claim ownership matches, disposition evidence both
   routes proceed and is unblocked (`dispositionEvidence.route ==
   "proceed"` **and** `dispositionEvidence.blockingCount == 0`; `route`
-  alone is not sufficient). Each failing gate is listed in `blockers[]`
-  as `{ gate, detail }`.
+  alone is not sufficient), and branch currency does not block (#1513: a
+  live `mergeStateStatus: "BEHIND"` paired with a confirmed-or-assumed
+  `branchCurrency.requiresUpToDateHead: true` fails closed as a
+  `branch-currency` blocker before `--apply` ever calls `gh pr merge`).
+  Each failing gate is listed in `blockers[]` as `{ gate, detail }`.
 - Dry-run (default) is read-only: it prints `ready`, `blockers`, and
   `mergeCommand` (a `gh pr merge <pr> --merge --match-head-commit
   <validated-head>` bound to the freshly fetched head) and never merges.
