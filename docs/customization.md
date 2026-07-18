@@ -1236,5 +1236,31 @@ per-PR multi-arch builds compound it. Levers to control the cost:
   merge-from-`main` freshness model trades CI minutes for merge safety, so tune
   the heavy jobs rather than loosening the freshness gate.
 
+**Attribute the cost before optimizing.** Rank jobs by
+`runs × billed-minutes` over a representative window before changing
+anything — billing rounds each job up to the whole minute, so a
+frequently-triggered workflow with many short jobs can outweigh one
+long job, and a single slow step or test file often dominates a suite.
+Fix the measured hot spot, not the assumed one.
+
+When the heaviest per-PR job is a **test suite**, the same
+integration branch split applies:
+
+- **Coverage/reporting-only work runs on integration branch pushes,
+  not every PR head** — instrumenting every re-sync is pure overhead
+  when no gate (a coverage threshold, a required check) consumes the
+  result.
+- **Affected-only tests on PR heads, full suite on the integration
+  branch**, when the test runner supports change-based selection and
+  catching an out-of-range regression post-merge is acceptable.
+- **Fake or inject time in retry/backoff/polling tests** rather than
+  sleeping in real time — one real-timer test can dominate suite
+  wall-clock, and the fix is behavior-preserving.
+
+**Right-size the runner to the job**: lightweight automation (label
+hygiene, stale sweeps, advisory gates) on the smallest runner class,
+standard or larger runners reserved for genuinely heavyweight build or
+test jobs.
+
 These are repository-local optimizations; they do not change the IDD merge gate
 or the cross-agent workflow.
