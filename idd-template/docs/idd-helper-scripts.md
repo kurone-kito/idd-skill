@@ -956,20 +956,24 @@ Interpretation rules:
 - Package-manager / ephemeral-npx command: use the profile-selected
   `idd:post-idd-marker` command from the helper runtime manifest wiring above
 - Write-side companion to `emit-marker`: it renders the canonical body for
-  each operational marker `<type>` (`claim`, `unclaim`, `watermark`,
-  `baseline`, `advisory`, `advisory-recovery`) by reusing the single-sourced
-  `protocol-helpers` renderers, then POSTs it as a JSON document
-  (`{"body": …}`) via `gh api --method POST .../comments --input -`. The JSON
-  path is mandatory because `gh issue comment` / `gh api -f body=` silently
-  reject the HTML-comment-first claim-family bodies. `-f` also treats a
-  leading `@` as a literal character — only `-F` reads `@file` contents.
-- The `claim` / `unclaim` / `watermark` / `baseline` bodies are
-  HTML-comment-first with a visible "Do not edit" note; `advisory` /
-  `advisory-recovery` are the **plain-text** `advisory-wait:` /
+  each operational marker `<type>` (`claim`, `unclaim`, `activation-nonce`,
+  `watermark`, `baseline`, `advisory`, `advisory-recovery`) by reusing the
+  single-sourced `protocol-helpers` renderers, then POSTs it as a JSON
+  document (`{"body": …}`) via `gh api --method POST .../comments --input -`.
+  The JSON path is mandatory because `gh issue comment` / `gh api -f body=`
+  silently reject the HTML-comment-first claim-family bodies. `-f` also
+  treats a leading `@` as a literal character — only `-F` reads `@file`
+  contents.
+- The `claim` / `unclaim` / `activation-nonce` / `watermark` / `baseline`
+  bodies are HTML-comment-first with a visible "Do not edit" note; `advisory`
+  / `advisory-recovery` are the **plain-text** `advisory-wait:` /
   `advisory-wait-recovery:` forms (no visible note) so the AW2 / shell-fallback
   recognizers still match.
 - Fields per type: `claim` takes `--agent-id --claim-id --supersedes
   --timestamp --branch`; `unclaim` takes `--agent-id --claim-id --timestamp`;
+  `activation-nonce` takes `--agent-id --claim-id --nonce --timestamp` (see
+  `idd-claim.instructions.md`'s Activation-nonce format for when to
+  post it and the collision it detects, kurone-kito/idd-skill#1522);
   `watermark` takes `--agent-id --claim-id --head-sha --max-activity-at
   --total-item-count --ci-completed-at`; `baseline` takes `--agent-id
   --claim-id --sha`; `advisory` / `advisory-recovery` take `--agent-id
@@ -1013,6 +1017,12 @@ Interpretation rules:
   - `state`:
     `unclaimed|already_owned|stale|non_inheritable|disputed`
   - `action`: `re_claim|takeover|keep|stop`
+- Optional `--nonce <token>` (kurone-kito/idd-skill#1522): when `--claim-id`
+  matches the active claim, also requires it to equal the winning trusted
+  `activation-nonce` marker for that claim-id (`evidence.activation_nonce_winner`);
+  a mismatch routes `state`/`reason` to `disputed` /
+  `activation-nonce-mismatch` instead of `already_owned`. Omit it (or leave
+  the claim-id's nonce not posted) to skip the comparison unchanged.
 
 - Step 3 route command:
   `node scripts/resume-route-selection.mjs --issue <issue-number>`

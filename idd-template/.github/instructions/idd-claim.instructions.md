@@ -348,6 +348,33 @@ by the same no-wrapping principle: it must not be wrapped in a code fence
 or other block-level markdown either, or the disposition-evidence gate
 will not recognize it.
 
+**Also post an [activation-nonce marker](#activation-nonce-format)** for
+every fresh `{claim-id}` this section generates (fresh claim, takeover, or
+legacy migration) — not on a plain heartbeat, which reuses the existing
+`{claim-id}`.
+
+## Activation-nonce format
+
+Post this alongside every claim **activation** — fresh claim, takeover,
+legacy migration, or forced-handoff adopt-verbatim (see _Claim
+verification_ below); never skip it for any activation path:
+
+```markdown
+<!-- activation-nonce: {agent-id} {claim-id} {nonce} {ISO8601-timestamp} -->
+
+_{agent-id}: claim activation nonce — IDD automation marker. Do not edit._
+```
+
+`{nonce}` is a fresh opaque token; record it locally alongside `{agent-id}`
+/ `{claim-id}`. When 2+ trusted markers exist for one `{claim-id}` (a
+collision), the winner is the lexicographically earliest `{nonce}`
+(mirrors the `{claim-id}` same-second tie-break in _Claim verification_).
+No marker posted for a `{claim-id}` means no comparison, never a mismatch.
+When helper runtime is enabled, post it with
+`post-idd-marker --type activation-nonce --target issue <number> --apply`
+(agent-id / claim-id / nonce / timestamp fields; see
+`docs/idd-helper-scripts.md`).
+
 ## Heartbeat posting
 
 When posting a heartbeat (i.e., when the issue is already claimed by this current
@@ -381,6 +408,11 @@ race-safe checks below:
 4. Verify no trusted competing `claimed-by` with a different
    `{claim-id}` appears in a strictly later `created_at` second than
    your claim event.
+5. If you posted an [activation-nonce marker](#activation-nonce-format) for
+   this `{claim-id}`, recompute its winner and verify it equals yours. This
+   catches a second session that adopted the identical `{claim-id}` via
+   forced-handoff, where steps 1–4 see nothing to disagree about (both
+   `{claim-id}`s genuinely match). No marker posted: treat as passed.
 
 If any check fails, treat the claim as contested. Return to Discover
 using the same selection mode that produced this target and pick the
@@ -399,7 +431,11 @@ When the new claim came from forced-handoff recovery, the verified
 of the run — including `--agent-id` and `--claim-id` at F2/F3's
 `pre-merge-readiness` — instead of minting a fresh claim-id or keeping your
 own native agent-id; no separate `claimed-by supersedes: none` post is
-required for the transfer itself. `new-agent-id` defaults to the _displaced_
+required for the transfer itself. **Adopt-verbatim is still an
+activation**: post your own [activation-nonce marker](#activation-nonce-format)
+for `new-claim-id` too — the one path where nothing else distinguishes two
+sessions that both silently adopted the same pair (kurone-kito/idd-skill#1480).
+`new-agent-id` defaults to the _displaced_
 claim's own agent-id, not the successor's: Claim-state parsing rule 6 ignores
 a `claimed-by` whose `{claim-id}` matches the active claim but whose
 `{agent-id}` differs, so an invented native agent-id silently fails every

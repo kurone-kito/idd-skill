@@ -156,6 +156,35 @@ legitimate relay use-case. Any future change here must preserve the single
 resolver (do not fork `resolveActiveClaim`) and the resume-side
 self-signed-hijack block.
 
+### Activation-nonce: why a separate marker, and why resume-only for now
+
+kurone-kito/idd-skill#1480 found a verified near-miss: two independent
+sessions can both adopt-verbatim the identical forced-handoff sticky
+successor pair and both pass every `claim-id`-based check identically,
+because nothing is posted at adopt-verbatim time to distinguish "the
+session that legitimately adopted this pair" from "a second session that
+also adopted it." kurone-kito/idd-skill#1522 closes that gap with a
+standalone `activation-nonce` marker (`idd-claim.instructions.md`)
+rather than a new field on `claimed-by`: adopt-verbatim posts no
+`claimed-by` at all, so a field living inside `claimed-by`'s body could
+never appear on the one path that motivates the mechanism. The winner rule
+— lexicographically earliest `{nonce}` among however many trusted markers
+exist for a `{claim-id}` — is a pure function of the observed nonce set
+(mirroring the existing `{claim-id}` same-second tie-break), so two
+colliding sessions compute the identical winner independently, with no
+"both back off" livelock.
+
+**Scope for #1522**: the comparison is wired into `evaluateResumeClaimRouting`
+(`resume-claim-routing.mts`) only — the resume-side revalidation path the
+issue's acceptance criteria name — plus the written Claim revalidation gate
+for manual/merge-time application. It is **not** wired into the merge
+write-gate (`summarizeClaimValidation`) yet. This mirrors the resume-vs-merge
+asymmetry already established above: merge-side wiring is a natural
+fast-follow (the same shared parse/render primitives already support it),
+not a design gap — call it out explicitly rather than silently leaving the
+merge gate unaware of a detected nonce collision if this becomes load-bearing
+before that fast-follow lands.
+
 ## Advisory wait
 
 ### Non-Copilot advisory convergence is intentionally not a merge gate
