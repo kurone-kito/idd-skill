@@ -1171,13 +1171,16 @@ export function buildPrFilesArgs(repoRef, prNumber) {
  * Fetch the candidate issue's own merged closing-PR references. Throws (via
  * `runGh`, no try/catch here) on a `gh` error rather than silently reading a
  * broken fetch as "no evidence" -- the latter would make a real duplicate
- * look clean. The caller (`runCli`) wraps this and its sibling fetches below
- * in one try/catch so a failure here degrades the optional high-confidence
- * tier (Check 4's own documented "Timeout on duplicate detection... fall
- * back to exact title match only" Edge Case) without aborting the other six
- * checks (Codex review finding on this PR: an earlier version let this
- * throw uncaught all the way out of `runCli`, crashing the whole
- * evaluation).
+ * look clean. The caller (`runCli`) wraps this in its own try/catch,
+ * separate from the same-candidate-files scan's try/catch below (Copilot
+ * review finding on this PR: an earlier version described both as sharing
+ * one try/catch, which stopped being accurate once they were split so a
+ * failure in one signal's collection couldn't discard an already-successful
+ * sibling), so a failure here degrades the optional high-confidence tier
+ * (Check 4's own documented "Timeout on duplicate detection... fall back to
+ * exact title match only" Edge Case) without aborting the other six checks
+ * (Codex review finding on this PR: an earlier version let this throw
+ * uncaught all the way out of `runCli`, crashing the whole evaluation).
  */
 function fetchClosedByMergedPrNumbers(owner, repo, issueNumber) {
   const parsed = ghJson(buildClosedByMergedPrArgs(owner, repo, issueNumber));
