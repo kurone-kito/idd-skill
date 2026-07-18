@@ -410,6 +410,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
     contractPaths: ['schemas/pre-merge-readiness.schema.json'],
   },
   {
+    id: 'rerun-advisory-convergence',
+    scriptName: 'idd:rerun-advisory-convergence',
+    binName: 'idd-rerun-advisory-convergence',
+    entryPath: 'scripts/rerun-advisory-convergence.mjs',
+    vendoredCommand: 'node scripts/rerun-advisory-convergence.mjs',
+    description:
+      'Read-only: diagnose every idd-advisory-convergence check-run instance for a PR HEAD and print the ordered gh run rerun recovery plan.',
+  },
+  {
     id: 'resolve-review-thread',
     scriptName: 'idd:resolve-review-thread',
     binName: 'idd-resolve-review-thread',

@@ -420,7 +420,66 @@ a non-`1` score paired with the label still passes), markerPrefix
 consistency across every authoring marker, the declared shape's
 required section headings, the roadmap-id/blocked-by dependency-marker
 rules, and visible/hidden line agreement for the suitability and effort
-footers:
+footers.
+
+It also emits one **advisory, warning-severity-only** finding
+(`prose-dependency`): it flags an issue/PR reference (`#<digits>` or a
+full GitHub issue/PR URL) used near coordination language (for example
+"before", "after", "once", "until", "predates", "gate"/"gated",
+"requires", "lands first") with no corresponding encoding for that
+reference as one of three recognized forms — a `Blocked by #NNN` line,
+a `Depends on #NNN` line, or a task-list checkbox item (`- [ ] #NNN`,
+which counts regardless of which heading it sits under, so a roadmap's
+own `## Tracks` membership list already satisfies this) — the
+prose-only hard-precondition pattern the
+[Hidden human-dependency validation](#hidden-human-dependency-validation)
+check above warns about. A full-URL reference naming a different
+repository is never flagged when the caller supplies the current
+`owner/repo` (`--current-repo`, defaulting to `$GITHUB_REPOSITORY` in
+CI) — a cross-repo dependency cannot be encoded with these
+repository-local markers, so flagging it would recommend an impossible
+fix; without that context a full-URL reference is still flagged by
+default, unless its number happens to already match a local dependency
+marker elsewhere in the body. A Markdown link's target may also carry
+trailing content between the issue/PR number and the link's closing
+paren — a URL fragment (`#issuecomment-123`), a trailing `/`, or a
+quoted link title (`"..."` or `'...'`) — and is still recognized as one
+link match rather than leaking its label's bare `#NNN` through to the
+bare-`#` check. A local `owner/repo#N` shorthand (e.g.
+`kurone-kito/idd-skill#4321`) is recognized too, but with the reverse
+default from the full-URL case: it is flagged only when
+`--current-repo` is supplied and case-insensitively matches
+`owner/repo`; a different repository, or no `--current-repo` at all,
+always excludes it. A reference-style Markdown link (`[text][ref]` with
+a separate `[ref]: target` definition elsewhere in the body) is
+recognized the same way as the inline-link form, including the same
+`currentRepo` comparison; a `ref` with no matching definition falls
+through to the bare-`#` check like any other unrecognized shape. A
+quoted link title may contain a backslash-escaped quote matching its own
+delimiter without ending the title early. An empty or whitespace-only
+`--current-repo` (or `$GITHUB_REPOSITORY`) is treated the same as
+omitting it, not as a known repository that can never match. A
+nested/child list item's reference is evaluated together with its full
+ancestor chain's coordination-language text instead of being scoped away
+from it, while a same-depth sibling bullet still starts its own separate
+scope. This holds for every nested child under a given parent, at any
+depth -- not only the first. A continuation line resuming at an
+ancestor's own indentation, after a deeper child has already opened, is
+attributed to that ancestor rather than the deepest open child. A loose
+list (a blank line between sibling items) preserves the same ancestor
+scope across the blank line, as long as the following item's own marker
+is no deeper than whatever is still open at the end of the preceding
+item -- a same-depth sibling, or a resumption at a shallower ancestor's
+own level -- and the preceding item ends in a list marker rather than
+trailing plain prose (once plain prose follows the last marker, the
+list reads as already having ended, so the blank line is not bridged).
+A blank line directly followed by a more deeply indented marker is also
+not bridged, to avoid grafting an unrelated item onto an open ancestor
+as a false child. A
+`prose-dependency` warning never flips `passed` to
+`false` and never changes the linter's exit code; it prompts the author
+to convert the prose into a proper dependency marker or consciously
+confirm the reference is a mere breadcrumb.
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \

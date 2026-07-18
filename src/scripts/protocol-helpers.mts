@@ -1893,19 +1893,163 @@ function matchTrustedAdvisoryStickyDispositions<
   return dispositionedStickyIndexes;
 }
 
+/**
+ * Parse a check's `completedAt` into epoch milliseconds, or `null` when it
+ * is missing, not a valid ISO 8601 timestamp, or the `0001-01-01T00:00:00Z`
+ * zero-value sentinel some GitHub API surfaces (e.g. `gh pr checks`) report
+ * for a check that has not actually completed — see `isCompletedCiTimestamp`,
+ * this file's existing convention for the same sentinel. A still-running
+ * instance's `completedAt` reads as one of these three "not completed"
+ * shapes until it finishes.
+ */
+function parseCompletedAt(value: string | null | undefined): number | null {
+  const timestamp = String(value ?? '');
+  return isCompletedCiTimestamp(timestamp) ? Date.parse(timestamp) : null;
+}
+
+/**
+ * Tie-break precedence for two check-run instances that complete at the
+ * same (or an equally unusable) instant. `FAILURE` always wins (rank 0):
+ * a same-instant tie must never hide a real failure behind ordering
+ * happenstance (the exact regression `classifyCiChecks`'s unconditional
+ * "any FAILURE anywhere" rule existed to prevent, and not a case a rerun
+ * can plausibly land in — GitHub `completedAt` has only second resolution,
+ * and a rerun must trigger, queue, and execute before it can complete,
+ * which practically never lands in the exact same recorded second as the
+ * run it supersedes). `CANCELLED` always loses (rank 2): a cancelled run
+ * reached no real verdict, so it defers to any conclusion that did.
+ * Every other state — including pending states, which practically never
+ * reach this tie path since they have no completed timestamp to tie on —
+ * shares the middle rank (1).
+ */
+function ciStateTieRank(state: string): number {
+  if (state === 'FAILURE') return 0;
+  if (state === 'CANCELLED') return 2;
+  return 1;
+}
+
+/**
+ * True when `candidate` should replace `current` as the representative
+ * instance for one check name. A still-incomplete instance (per
+ * `parseCompletedAt`) always wins over an already-completed one:
+ * completion can only happen after creation, so a live rerun can never be
+ * older than the finished run it supersedes — this mirrors GitHub's own
+ * latest-per-context semantics, under which an in-progress required check
+ * leaves the branch not-clean rather than falling back to a stale
+ * completed verdict. Once both sides have completed, the most recently
+ * completed one wins.
+ *
+ * A tie (equal completedAt, or both sides missing/unparseable) never
+ * resolves by input order — two independent runs can genuinely complete
+ * within the same recorded second. It resolves by `ciStateTieRank`
+ * instead; a residual tie within the same rank (e.g. `SUCCESS` vs.
+ * `NEUTRAL`, both rank 1) falls back to comparing the state strings
+ * themselves, which depends only on the two values being compared, never
+ * on which one the caller happened to list first — so the whole
+ * selection is fully deterministic regardless of input order.
+ */
+function isNewerCheckInstance<
+  T extends { state: string; completedAt?: string | null },
+>(candidate: T, current: T): boolean {
+  const candidateAt = parseCompletedAt(candidate.completedAt);
+  const currentAt = parseCompletedAt(current.completedAt);
+  if (candidateAt !== null && currentAt !== null && candidateAt !== currentAt) {
+    return candidateAt > currentAt;
+  }
+  if ((candidateAt !== null) !== (currentAt !== null)) {
+    // Exactly one side has a usable timestamp. The side still missing one
+    // is never older than a completed side — a live rerun cannot have
+    // started before the finished run it supersedes — so the incomplete
+    // side always wins here.
+    return candidateAt === null;
+  }
+  const candidateRank = ciStateTieRank(candidate.state);
+  const currentRank = ciStateTieRank(current.state);
+  if (candidateRank !== currentRank) {
+    return candidateRank < currentRank;
+  }
+  return candidate.state !== current.state && candidate.state < current.state;
+}
+
+/**
+ * Reduce a group of same-name check-run instances to the single instance
+ * that represents the current truth for that name. See
+ * `isNewerCheckInstance` for the selection rule.
+ */
+function selectLatestCheckInstance<
+  T extends { state: string; completedAt?: string | null },
+>(group: T[]): T {
+  return group.reduce((latest, candidate) =>
+    isNewerCheckInstance(candidate, latest) ? candidate : latest,
+  );
+}
+
+/**
+ * Reduce a check-run list to a single representative instance per check
+ * `name`, matching GitHub's own required-status-check semantics: only the
+ * latest run for a given context governs, so a stale instance (e.g. a
+ * cancelled or failed run superseded by a later successful rerun) can
+ * never outvote the current, authoritative one that shares its name.
+ *
+ * A missing or empty `name` carries no identity to dedupe against, so
+ * each such entry gets its own singleton group instead of collapsing
+ * every unnamed check together — otherwise an unrelated unnamed failure
+ * could be discarded in favor of an unrelated unnamed success that
+ * merely happens to also lack a name.
+ *
+ * Known limitation (tracked in #1483): `CheckLike` carries no
+ * source/producer identity, so two genuinely independent checks that
+ * happen to share an identical `name` (e.g. a check-run and a legacy
+ * commit-status, or two different GitHub Apps) are indistinguishable
+ * from reruns of one another here and will be grouped together. Fixing
+ * this needs a source discriminator threaded through from data
+ * collection (see `ci-wait-state.mts`'s `type` field) into `CheckLike`
+ * itself — a data-collection-layer change out of scope for the
+ * same-name-multiple-*rerun*-instances dedup this function performs.
+ */
+function selectLatestCheckPerName<
+  T extends {
+    name?: string | null;
+    state: string;
+    completedAt?: string | null;
+  },
+>(checks: T[]): T[] {
+  // A Map already iterates in first-insertion order, so grouping into one
+  // is enough to preserve stable output order with no separate order array
+  // (see the same pattern in `findDuplicateBasenames` in audit-docs.mts).
+  const groups = new Map<string, T[]>();
+  let unnamedCount = 0;
+  for (const check of checks) {
+    const key = check.name ? String(check.name) : `\0unnamed:${unnamedCount++}`;
+    const group = groups.get(key);
+    if (group) {
+      group.push(check);
+    } else {
+      groups.set(key, [check]);
+    }
+  }
+  return [...groups.values()].map((group) => selectLatestCheckInstance(group));
+}
+
 export function classifyCiChecks(checks: CheckLike[]) {
   const normalized = checks.map((check) => ({
     name: check.name,
     state: String(check.state ?? '').toUpperCase(),
     completedAt: check.completedAt ?? null,
   }));
+  // GitHub can report several check-run instances that share the same
+  // check `name` (a manual or automatic re-run leaves the earlier instance
+  // in the fetched list alongside the new one). Reduce to one instance per
+  // name before classifying pass/fail/pending, so a stale instance never
+  // outvotes the current one for the same name (see #1471).
+  const deduped = selectLatestCheckPerName(normalized);
 
-  const failed = normalized.filter((check) => check.state === 'FAILURE');
+  const failed = deduped.filter((check) => check.state === 'FAILURE');
   if (failed.length > 0) {
     return { status: 'failed', failed };
   }
 
-  const pending = normalized.filter((check) => {
+  const pending = deduped.filter((check) => {
     return (
       check.state === 'QUEUED' ||
       check.state === 'IN_PROGRESS' ||
@@ -1916,16 +2060,16 @@ export function classifyCiChecks(checks: CheckLike[]) {
     return { status: 'pending', pending };
   }
 
-  const passing = normalized.filter((check) => {
+  const passing = deduped.filter((check) => {
     return ['SUCCESS', 'SKIPPED', 'NEUTRAL', 'NOT_APPLICABLE'].includes(
       check.state,
     );
   });
 
   return {
-    status: passing.length === normalized.length ? 'success' : 'unknown',
+    status: passing.length === deduped.length ? 'success' : 'unknown',
     passing,
-    unknown: normalized.filter((check) => !passing.includes(check)),
+    unknown: deduped.filter((check) => !passing.includes(check)),
   };
 }
 

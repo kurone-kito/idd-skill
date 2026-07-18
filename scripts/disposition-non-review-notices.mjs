@@ -26,6 +26,7 @@
 // It is fail-closed: only classifier-recognized notices and the exact summary
 // marker are dispositioned; real reviews and review threads are never touched.
 import { execFileSync } from 'node:child_process';
+import { parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
@@ -308,67 +309,68 @@ export function buildDispositionPlan(input, options = {}) {
   }
   return { headSha, planned, skipped };
 }
-function parseArgs(argv) {
-  const args = {
-    pr: null,
-    owner: '',
-    repo: '',
-    claimIssue: null,
-    claimId: '',
-    agentId: '',
-    trustedMarkerLogins: [],
-    advisoryBotLogins: [],
-    apply: false,
-    help: false,
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
+// .mjs source text for quoted flag literals such as the --pr spec key
+// below. See cli-args.mts's module header for the full invariant. (This
+// comment deliberately avoids writing that key inside matching quote
+// marks, so it cannot itself satisfy the scan if the real key is ever
+// renamed -- see #1446's PR description for why that matters.)
+const DISPOSITION_NON_REVIEW_NOTICES_FLAG_SPEC = {
+  '--pr': { type: 'string' },
+  '--owner': { type: 'string', default: '' },
+  '--repo': { type: 'string', default: '' },
+  '--claim-issue': { type: 'string' },
+  '--claim-id': { type: 'string', default: '' },
+  '--agent-id': { type: 'string', default: '' },
+  '--trusted-marker-logins': { type: 'string', default: '' },
+  '--advisory-bot-logins': { type: 'string', default: '' },
+  '--apply': { type: 'boolean', default: false },
+  '--help': { type: 'boolean', short: 'h' },
+};
+function splitList(value) {
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+/**
+ * Restores this file's pre-#1450 permissive `Number.parseInt` contract:
+ * absent resolves to `null` (the original `pr: null` / `claimIssue: null`
+ * default, never overwritten when the flag is absent); present feeds the
+ * raw token straight to `Number.parseInt`, which accepts trailing-garbage
+ * ("42abc" -> 42) and leading-zero ("007" -> 7) tokens the same way the
+ * original hand-rolled `Number.parseInt(next(), 10)` always did.
+ * `cli-args.mts`'s `parseCanonicalIntegerOrNull` is a poor substitute here:
+ * its canonical-pattern regex rejects those same tokens outright, which is
+ * a real contract change a CodeRabbit review on PR #1466 caught -- #1450's
+ * acceptance criteria protect the post-parse integer contract as-is, only
+ * flag *syntax* (missing/flag-shaped values, unknown flags) is meant to
+ * tighten. The downstream `!Number.isInteger(...) || (... ?? 0) <= 0`
+ * guards below already treat `NaN` (an invalid parseInt result) the same
+ * as `null`, so this restores the exact original resolved value, not just
+ * an equivalent downstream verdict.
+ */
+function parseLenientIntegerOrNull(token) {
+  return token === undefined ? null : Number.parseInt(token, 10);
+}
+export function parseArgs(argv) {
+  const { values, help } = parseCliArgs(
+    argv,
+    DISPOSITION_NON_REVIEW_NOTICES_FLAG_SPEC,
+  );
+  return {
+    pr: parseLenientIntegerOrNull(values.pr),
+    owner: values.owner,
+    repo: values.repo,
+    claimIssue: parseLenientIntegerOrNull(values['claim-issue']),
+    claimId: values['claim-id'],
+    agentId: values['agent-id'],
+    trustedMarkerLogins: splitList(values['trusted-marker-logins']),
+    advisoryBotLogins: splitList(values['advisory-bot-logins']),
+    apply: values.apply,
+    help,
   };
-  const splitList = (value) =>
-    value
-      .split(',')
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  for (let index = 0; index < argv.length; index += 1) {
-    const flag = argv[index];
-    const next = () => {
-      index += 1;
-      return argv[index] ?? '';
-    };
-    switch (flag) {
-      case '--pr':
-        args.pr = Number.parseInt(next(), 10);
-        break;
-      case '--owner':
-        args.owner = next();
-        break;
-      case '--repo':
-        args.repo = next();
-        break;
-      case '--claim-issue':
-        args.claimIssue = Number.parseInt(next(), 10);
-        break;
-      case '--claim-id':
-        args.claimId = next();
-        break;
-      case '--agent-id':
-        args.agentId = next();
-        break;
-      case '--trusted-marker-logins':
-        args.trustedMarkerLogins = splitList(next());
-        break;
-      case '--advisory-bot-logins':
-        args.advisoryBotLogins = splitList(next());
-        break;
-      case '--apply':
-        args.apply = true;
-        break;
-      case '--help':
-      case '-h':
-        args.help = true;
-        break;
-      default:
-        break;
-    }
-  }
-  return args;
 }
 function ghJson(args) {
   return JSON.parse(execFileSync('gh', args, { encoding: 'utf8' }));
