@@ -2999,10 +2999,21 @@ export function summarizeBranchCurrency(
   branchProtection = {},
   options = {},
 ) {
+  // #1513 (Copilot/Codex review on PR #1538): GitHub's ruleset docs state
+  // `strict_required_status_checks_policy` "will not take effect unless at
+  // least one status check is enabled" -- confirmed against
+  // https://docs.github.com/en/rest/repos/rules. Treating the flag alone as
+  // authoritative would false-positive block a BEHIND PR under an
+  // empty-required-check ruleset that GitHub itself would allow to merge, so
+  // also require a non-empty required-check list (reusing the same
+  // extraction `summarizeRequiredChecks` already uses for check names).
+  // Classic branch protection's `required_status_checks.strict` carries no
+  // equivalent documented caveat, so it is left unconditional.
   const rulesetRequires = (branchRules ?? []).some(
     (rule) =>
       rule?.type === 'required_status_checks' &&
-      rule.parameters?.strict_required_status_checks_policy === true,
+      rule.parameters?.strict_required_status_checks_policy === true &&
+      summarizeRequiredCheckMetadata(rule.parameters ?? {}).names.length > 0,
   );
   const classicRequires =
     branchProtection.required_status_checks?.strict === true;

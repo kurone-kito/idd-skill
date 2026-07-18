@@ -5158,7 +5158,10 @@ test('summarizeBranchCurrency: a ruleset strict_required_status_checks_policy re
     [
       {
         type: 'required_status_checks',
-        parameters: { strict_required_status_checks_policy: true },
+        parameters: {
+          strict_required_status_checks_policy: true,
+          required_status_checks: [{ context: 'lint' }],
+        },
       },
     ],
     {},
@@ -5169,6 +5172,30 @@ test('summarizeBranchCurrency: a ruleset strict_required_status_checks_policy re
   // Raw GitHub enum values are normalized to uppercase.
   assert.equal(result.mergeStateStatus, 'BEHIND');
   assert.equal(result.mergeable, 'MERGEABLE');
+});
+
+// #1513 (Copilot/Codex review on PR #1538): GitHub's ruleset docs state
+// strict_required_status_checks_policy "will not take effect unless at
+// least one status check is enabled" -- an empty required-check list must
+// not resolve requiresUpToDateHead via the ruleset path even when the
+// strict flag itself is true, or a BEHIND PR under that empty-check
+// ruleset would be falsely blocked when GitHub would actually allow it.
+test('summarizeBranchCurrency: a ruleset strict flag with an EMPTY required-check list does not set requiresUpToDateHead', () => {
+  const result = summarizeBranchCurrency(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          strict_required_status_checks_policy: true,
+          required_status_checks: [],
+        },
+      },
+    ],
+    {},
+    { protectionReadsUnreadable: false },
+  );
+  assert.equal(result.requiresUpToDateHead, false);
+  assert.equal(result.requiresUpToDateHeadSource, 'none');
 });
 
 test('summarizeBranchCurrency: classic protection required_status_checks.strict resolves via "classic-protection"', () => {
