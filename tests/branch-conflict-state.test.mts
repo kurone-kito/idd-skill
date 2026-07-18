@@ -158,8 +158,11 @@ function createUpstreamRepo(): {
  * own doc comment).
  *
  * A plain filesystem path clone silently **ignores** `--depth` ("--depth is
- * ignored in local clones"); the source must be a `file://` URL for a local
- * clone to actually come out shallow.
+ * ignored in local clones; use file:// instead"). `--no-local` is used
+ * instead of a `file://` URL: it forces the same non-optimized transfer
+ * path a real remote would use (so `--depth` takes effect) without
+ * constructing a URL by string interpolation, which could break if
+ * `upstreamDir` contains characters that need URL escaping (e.g. spaces).
  */
 function createFreshShallowClone(upstreamDir: string): string {
   const shallowDir = mkdtempSync(
@@ -167,7 +170,7 @@ function createFreshShallowClone(upstreamDir: string): string {
   );
   execFileSync(
     'git',
-    ['clone', '-q', '--depth=1', `file://${upstreamDir}`, shallowDir],
+    ['clone', '-q', '--depth=1', '--no-local', upstreamDir, shallowDir],
     { encoding: 'utf8' },
   );
   return shallowDir;
