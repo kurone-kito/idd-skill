@@ -1910,26 +1910,35 @@ function parseCompletedAt(value: string | null | undefined): number | null {
  * finished run it supersedes — this mirrors GitHub's own latest-per-context
  * semantics, under which an in-progress required check leaves the branch
  * not-clean rather than falling back to a stale completed verdict. Once
- * both sides have completed, the most recently completed one wins; a tie
- * (including a timestamp missing or unparseable on both sides) prefers a
- * non-`CANCELLED` state, so a stale `CANCELLED` placeholder never outranks
- * a real pass/fail verdict recorded at the same instant.
+ * both sides have completed, the most recently completed one wins.
+ *
+ * A tie (equal completedAt, or both sides missing/unparseable) never
+ * resolves by input order — two independent runs can genuinely complete
+ * within the same recorded second. A tie involving `FAILURE` always
+ * prefers `FAILURE`, so this dedup can never hide a real failure behind
+ * ordering happenstance (the exact regression `classifyCiChecks`'s
+ * unconditional "any FAILURE anywhere" rule existed to prevent). Failing
+ * that, a tie prefers a non-`CANCELLED` state, so a stale `CANCELLED`
+ * placeholder never outranks a real conclusion recorded at the same
+ * instant.
  */
 function isNewerCheckInstance<
   T extends { state: string; completedAt?: string | null },
 >(candidate: T, current: T): boolean {
   const candidateAt = parseCompletedAt(candidate.completedAt);
   const currentAt = parseCompletedAt(current.completedAt);
-  if (candidateAt !== null && currentAt !== null) {
-    if (candidateAt !== currentAt) {
-      return candidateAt > currentAt;
-    }
-  } else if (candidateAt !== null || currentAt !== null) {
+  if (candidateAt !== null && currentAt !== null && candidateAt !== currentAt) {
+    return candidateAt > currentAt;
+  }
+  if ((candidateAt !== null) !== (currentAt !== null)) {
     // Exactly one side has a usable timestamp. The side still missing one
     // is never older than a completed side — a live rerun cannot have
     // started before the finished run it supersedes — so the incomplete
     // side always wins here.
     return candidateAt === null;
+  }
+  if (current.state === 'FAILURE' || candidate.state === 'FAILURE') {
+    return candidate.state === 'FAILURE';
   }
   return current.state === 'CANCELLED' && candidate.state !== 'CANCELLED';
 }
@@ -1961,7 +1970,9 @@ function selectLatestCheckPerName<
     completedAt?: string | null;
   },
 >(checks: T[]): T[] {
-  const order: string[] = [];
+  // A Map already iterates in first-insertion order, so grouping into one
+  // is enough to preserve stable output order with no separate order array
+  // (see the same pattern in `findDuplicateBasenames` in audit-docs.mts).
   const groups = new Map<string, T[]>();
   for (const check of checks) {
     const key = String(check.name ?? '');
@@ -1969,11 +1980,10 @@ function selectLatestCheckPerName<
     if (group) {
       group.push(check);
     } else {
-      order.push(key);
       groups.set(key, [check]);
     }
   }
-  return order.map((key) => selectLatestCheckInstance(groups.get(key) as T[]));
+  return [...groups.values()].map((group) => selectLatestCheckInstance(group));
 }
 
 export function classifyCiChecks(checks: CheckLike[]) {

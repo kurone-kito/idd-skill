@@ -132,6 +132,38 @@ test('classifyCiChecks: an in-progress rerun is not shadowed by an older complet
   assert.equal(classifyCiChecks(checks).status, 'pending');
 });
 
+test('classifyCiChecks: a same-instant failure/success tie for one name still fails, regardless of input order', () => {
+  // A tie must never resolve by raw input array order — two independent
+  // runs can genuinely complete within the same recorded second, and this
+  // dedup must never let ordering happenstance hide a real failure behind
+  // a same-instant success.
+  const tiedAt = '2026-07-17T16:00:06Z';
+  const failureFirst = [
+    { name: 'flaky', state: 'FAILURE', completedAt: tiedAt },
+    { name: 'flaky', state: 'SUCCESS', completedAt: tiedAt },
+  ];
+  const successFirst = [
+    { name: 'flaky', state: 'SUCCESS', completedAt: tiedAt },
+    { name: 'flaky', state: 'FAILURE', completedAt: tiedAt },
+  ];
+  assert.equal(classifyCiChecks(failureFirst).status, 'failed');
+  assert.equal(classifyCiChecks(successFirst).status, 'failed');
+});
+
+test('classifyCiChecks: a same-instant cancelled/success tie for one name prefers success, regardless of input order', () => {
+  const tiedAt = '2026-07-17T16:00:06Z';
+  const cancelledFirst = [
+    { name: 'flaky', state: 'CANCELLED', completedAt: tiedAt },
+    { name: 'flaky', state: 'SUCCESS', completedAt: tiedAt },
+  ];
+  const successFirst = [
+    { name: 'flaky', state: 'SUCCESS', completedAt: tiedAt },
+    { name: 'flaky', state: 'CANCELLED', completedAt: tiedAt },
+  ];
+  assert.equal(classifyCiChecks(cancelledFirst).status, 'success');
+  assert.equal(classifyCiChecks(successFirst).status, 'success');
+});
+
 test('detects operational marker prefixes', () => {
   assert.equal(
     operationalMarkerPrefix(
