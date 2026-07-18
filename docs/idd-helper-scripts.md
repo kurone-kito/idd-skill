@@ -1447,6 +1447,25 @@ Interpretation rules:
   `main` (reuse-first / not-already-fixed) and drafts follow-up issues
   bucketed by readiness. The helper does deterministic detection; the
   judgment-heavy re-verification, drafting, and publish stay operator-gated.
+- **Operator runbook**: this helper is a **manual spot-check audit**, not a
+  phase step — its absence from the executable phase instruction files is
+  by design, not an oversight.
+  - **Intent**: it exists to backstop merges driven by a lightweight model
+    (for example a GPT-5.4-mini or Haiku-class model), where the E-phase
+    disposition net may have fail-opened and let a merge complete with
+    review feedback still unaddressed.
+  - **When to run it** (non-binding trigger guidance, not a policy gate):
+    after a weak-model backlog drain, on a periodic spot-audit cadence, or
+    when a fail-open is suspected on a specific PR (via `--pr` / `--prs`).
+  - **Reading the output**: prioritize `summary.unresolvedThreadCount` —
+    the higher-value signal — over `summary.unaddressedCommentCount`, and
+    use each finding's `advisoryBot` flag to deprioritize capricious
+    advisory-bot items in favor of human feedback. Triage the output this
+    way before the **Handoff** step above hands it to the issue-authoring
+    skill for re-verification.
+  - **Scope boundary**: per the maintainer decision recorded in #909 and
+    reaffirmed in #1352, this sweep is a detection aid only — never an
+    automatic recovery path or a retroactive merge gate.
 
 ## Friction Inventory
 
