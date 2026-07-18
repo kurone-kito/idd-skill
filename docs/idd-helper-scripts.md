@@ -268,8 +268,14 @@ default below is unchanged.
     eligibility is unknown and treated as non-blocking). `authoringHeld`
     reports label **presence** only — `--with-readiness` does not compute the
     stale-authoring warning (it would cost a discarded per-leaf timeline fetch
-    and does not change startability). Both annotations are **soft** discovery
-    hints — the A3/A4/A4.5/A5 gates remain authoritative.
+    and does not change startability). `--with-claim-state` itself is not
+    forced-handoff-aware — it intentionally excludes forced-handoff and
+    legacy markers as a best-effort **soft signal**; a discovery-time survey
+    across many candidates must either loop the single-issue
+    `resume-claim-routing.mjs --fresh-claim-gate` resolver per candidate or
+    apply `idd-claim.instructions.md`'s full parsing rules manually to catch
+    a more-recent forced-handoff transfer. Both annotations are **soft**
+    discovery hints — the A3/A4/A4.5/A5 gates remain authoritative.
   - `diagnostics`: same four buckets as single-root mode, deduped across
     every per-root enumeration.
   - `summary`: `{ rootCount: number, leafCount: number,`
