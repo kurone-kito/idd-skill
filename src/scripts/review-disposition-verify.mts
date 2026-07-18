@@ -5,6 +5,8 @@
 // .mts source named above by `pnpm run build`. Edit the .mts source,
 // never the generated .mjs. See docs/typescript-sources.md.
 
+import { parseCliArgs } from './cli-args.mts';
+
 // Tolerate a single interior punctuation char `[.!:]` before the closing `**`
 // (`**Accepted.** — …`) so a punctuated marker still verifies, while keeping the
 // required `\s+—` separator (whitespace before the em-dash; nothing after it is
@@ -48,6 +50,22 @@ interface VerifyResult {
   failedCount: number;
   items: ItemResult[];
 }
+
+// Flag-spec keys stay the dashed literal on purpose (never bare keys like
+// `items:`), per cli-args.mts's key-shape invariant -- parseCliArgs itself
+// rejects a bare key at runtime via NODE_OPTION_KEY_PATTERN. `--items` is
+// local to this file (not one of tests/flag-name-matrix.test.mts's shared
+// cross-helper flag concepts), so that guard is the only enforcement here.
+// Declared above the import.meta.main trigger below (not alongside
+// parseArgs further down) because the trigger calls parseArgs()
+// synchronously at module-evaluation time, and a `const` declared after
+// that point is still in the temporal dead zone
+// when the trigger fires (see #1177's entry-order TDZ hardening for the
+// same class of bug).
+const REVIEW_DISPOSITION_VERIFY_FLAG_SPEC = {
+  '--items': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
 
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
@@ -387,28 +405,14 @@ function normalizeItem(item: unknown): NormalizedItem {
 }
 
 function parseArgs(argv: string[]): { items: string | null; help: boolean } {
-  const parsed: { items: string | null; help: boolean } = {
-    items: null,
-    help: false,
+  const { values, help } = parseCliArgs(
+    argv,
+    REVIEW_DISPOSITION_VERIFY_FLAG_SPEC,
+  );
+  return {
+    items: (values.items as string | undefined) ?? null,
+    help,
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    const value = argv[index + 1];
-    if (token === '--items') {
-      if (value === undefined || value.startsWith('-')) {
-        throw new Error('--items requires a JSON value');
-      }
-      parsed.items = value;
-      index += 1;
-      continue;
-    }
-    if (token === '--help' || token === '-h') {
-      parsed.help = true;
-      continue;
-    }
-    throw new Error(`unknown argument: ${token}`);
-  }
-  return parsed;
 }
 
 function printHelp(): void {
