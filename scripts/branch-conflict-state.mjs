@@ -28,6 +28,36 @@ const BRANCH_CONFLICT_STATE_FLAG_SPEC = {
   '--repo': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 };
+/**
+ * Bounded fetch-depth escalation steps tried by {@link computeMergeBase}'s
+ * retry loop, in order. The first step (`--depth=1`) matches the
+ * pre-existing single-shallow-fetch behavior byte-for-byte, so a checkout
+ * that already resolves after one shallow fetch performs exactly the same
+ * single extra fetch call as before this retry loop existed (#1519's "no
+ * regression for the common case" requirement). Each later step widens
+ * local history via `git fetch --deepen=<n>` -- relative to the current
+ * shallow boundary, so repeated calls compose instead of re-fetching the
+ * same fixed `--depth=N` -- instead of retrying forever. Three total
+ * attempts mirrors the bounded-retry shape F1's `computing` re-poll budget
+ * already uses elsewhere in this codebase (`idd-pre-merge.instructions.md`).
+ *
+ * Exported so tests can fetch with these exact args against a hermetic
+ * local fixture remote (see `tests/branch-conflict-state.test.mts`'s
+ * shallow-checkout fixture) instead of a hand-copied duplicate that could
+ * silently drift from what `tryFetchBase` actually runs in production.
+ *
+ * Declared here, above the CLI entry block below, rather than next to
+ * {@link computeMergeBase} that actually uses it: the entry block's
+ * top-level `await` parks module evaluation there on the CLI path, so a
+ * module-level `const` declared textually after it would still be in its
+ * temporal dead zone the first time a helper reads it (see
+ * `tests/cli-entry-smoke.test.mts`'s module-eval-order guard, #1447).
+ */
+export const MERGE_BASE_FETCH_STEPS = [
+  ['--depth=1'],
+  ['--deepen=20'],
+  ['--deepen=200'],
+];
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -278,21 +308,50 @@ function deriveBranchState({
   };
 }
 /**
- * Read-only local `git merge-base` lookup, falling back to a shallow fetch
- * of the base ref when the base commit is not yet present locally (e.g. a
- * shallow CI checkout that only has the PR head). Returns `null` when the
- * merge-base still cannot be resolved after the fallback fetch; callers
- * decide how to report that indeterminate outcome, since "conflict probe"
- * and "base-advancement" callers need different diagnostics wording for the
- * same underlying null.
+ * Bounded merge-base resolution retry used by {@link computeMergeBase}: call
+ * `lookupMergeBase()`, and on an empty result, call `widenHistory(stepIndex)`
+ * before each subsequent lookup -- stopping as soon as a merge-base
+ * resolves, `widenHistory` reports it could not widen history (e.g. no
+ * fetchable base ref, or the fetch itself failed, so a deeper attempt would
+ * not plausibly help either), or `stepCount` attempts are exhausted.
+ *
+ * Exported so the retry-loop and attempt-cap shape itself stays directly
+ * unit-testable (both the deepened-success and still-undetermined paths)
+ * independent of `tryFetchBase`'s own remote-URL assembly and real `git
+ * fetch` call, which stay deliberately untested at their call site (see
+ * `tryFetchBase`'s doc comment) -- matching this file's existing
+ * hermetic-test convention of never letting a test reach a live network
+ * fetch.
  */
-function computeMergeBase(prHeadSha, prBaseSha, prBaseRef, owner, repo, notes) {
-  let mergeBase = gitText(['merge-base', prHeadSha, prBaseSha]);
-  if (!mergeBase) {
-    tryFetchBase(prBaseRef, owner, repo, notes);
-    mergeBase = gitText(['merge-base', prHeadSha, prBaseSha]);
+export function resolveMergeBaseWithRetry(
+  lookupMergeBase,
+  widenHistory,
+  stepCount,
+) {
+  let mergeBase = lookupMergeBase();
+  for (let step = 0; !mergeBase && step < stepCount; step += 1) {
+    if (!widenHistory(step)) break;
+    mergeBase = lookupMergeBase();
   }
   return mergeBase || null;
+}
+/**
+ * Read-only local `git merge-base` lookup, falling back to a bounded,
+ * progressively deeper fetch of the base ref when the base commit is not
+ * yet present locally (e.g. a shallow CI checkout that only has the PR
+ * head, or an agent worktree that has not fetched recent base history).
+ * Returns `null` when the merge-base still cannot be resolved after
+ * exhausting {@link MERGE_BASE_FETCH_STEPS}; callers decide how to report
+ * that indeterminate outcome, since "conflict probe" and "base-advancement"
+ * callers need different diagnostics wording for the same underlying null.
+ */
+function computeMergeBase(prHeadSha, prBaseSha, prBaseRef, owner, repo, notes) {
+  return resolveMergeBaseWithRetry(
+    () => gitText(['merge-base', prHeadSha, prBaseSha]),
+    (step) =>
+      tryFetchBase(prBaseRef, owner, repo, notes, MERGE_BASE_FETCH_STEPS[step]),
+    MERGE_BASE_FETCH_STEPS.length,
+  );
 }
 /**
  * True when the base ref has moved past this PR's merge-base, independent of
@@ -499,13 +558,25 @@ export function resolveFetchOrigin(env = process.env, readers = {}) {
     }
   );
 }
-function tryFetchBase(prBaseRef, owner, repo, notes) {
-  if (!prBaseRef) return;
+/**
+ * Attempt one fetch of the base ref at the given depth/deepen args, for
+ * {@link computeMergeBase}'s bounded retry loop (via {@link
+ * resolveMergeBaseWithRetry}). Returns `true` when the `git fetch` call
+ * itself succeeded, so the caller's retry loop knows a deeper next step
+ * could plausibly still help; returns `false` when preconditions
+ * (`prBaseRef`, `owner`, `repo`) are missing, or when the fetch itself
+ * failed (network, auth, unknown ref, etc.) -- in either case a further
+ * attempt against the same unreachable/absent target would not change the
+ * outcome, so the caller should stop immediately rather than repeat the
+ * same failure (and its `notes` entry) across every remaining step.
+ */
+function tryFetchBase(prBaseRef, owner, repo, notes, fetchArgs) {
+  if (!prBaseRef) return false;
   if (!owner || !repo) {
     notes.push(
       'Skipped base-ref fetch fallback: owner/repo not provided; merge-base probe may be incomplete.',
     );
-    return;
+    return false;
   }
   try {
     // resolveFetchOrigin()'s own branching (GH_HOST / origin-remote /
@@ -518,16 +589,18 @@ function tryFetchBase(prBaseRef, owner, repo, notes) {
     const remote = `${scheme}://${host}/${owner}/${repo}.git`;
     execFileSync(
       'git',
-      ['fetch', '--no-tags', '--depth=1', remote, prBaseRef],
+      ['fetch', '--no-tags', ...fetchArgs, remote, prBaseRef],
       {
         stdio: 'ignore',
         encoding: 'utf8',
       },
     );
+    return true;
   } catch {
     notes.push(
-      `Could not fetch base ref ${prBaseRef}; merge-base probe may be incomplete.`,
+      `Could not fetch base ref ${prBaseRef} (git fetch ${fetchArgs.join(' ')}); merge-base probe may be incomplete.`,
     );
+    return false;
   }
 }
 export function parseConflictFiles(mergeTreeOutput) {
