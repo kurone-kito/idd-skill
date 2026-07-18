@@ -47,10 +47,9 @@ each cuts the advisory-review round count:
   name, value, path, or described behavior — to satisfy a reviewer, check
   it against the actual implementation before committing, so the fix does
   not trade one inaccuracy for another and cost an extra round.
-- **Already fixed via batching.** When E4/E5 Accepts a PATH A item
-  already folded into a prior push via E12's batching allowance, do
-  not write a duplicate fix — confirm the existing commit addresses
-  it and let E13 cite that SHA instead.
+- **Already fixed via batching.** A PATH A item Accepted (E4/E5) may
+  already be folded into a prior E12 batching push — do not duplicate
+  the fix; confirm the commit addresses it and let E13 cite that SHA.
 
 ## E10 — Validate fixes with critique pass
 
@@ -120,21 +119,22 @@ immediately and letting each arrival start a fresh round, but only when
 **all** of the following hold:
 
 - Every comment that arrived since the last push is **bot-sourced**:
-  authored by the primary advisory bot's real login (default Copilot:
-  `Copilot` or a login starting with `copilot-pull-request-reviewer`,
-  per `idd-advisory-wait-shell-fallback.md` — never the bare
-  `primaryBotLogin` alias `copilot`; a non-default bot's
-  `primaryBotLogin` is already the real login) or a login in
-  `advisoryBotLogins` — **regardless of whether E4 classifies the item
-  PATH A or PATH B** (Copilot's inline review-thread comments fall
-  through to PATH A under E4's ambiguous-default rule).
-  `secondaryBotLogin`, when set, is out of scope here.
+  authored by the primary bot's actual comment-author login — for
+  default Copilot, exact-case `Copilot` or a login starting with
+  `copilot-pull-request-reviewer` (`idd-advisory-wait-shell-fallback.md`)
+  — never the distinct, lowercase `primaryBotLogin` config alias
+  `copilot` (used only for `--add-reviewer`, never a comment author; a
+  non-default bot's `primaryBotLogin` is already the real login) — or a
+  login in `advisoryBotLogins`, **regardless of PATH A/B** (Copilot's
+  inline review-thread comments fall through to PATH A under E4's
+  ambiguous-default rule). `secondaryBotLogin`, when set, is out of
+  scope here.
 - Each such comment is plainly a small, confirmable fix whose claim was
   checked against live evidence (a linter run, actual file content,
   actual runtime behavior) before folding it in — the same
   **verify-before-accept discipline** E5 codifies for PATH B (#814),
-  now applied to a bot-sourced PATH A finding too. Never fold in a
-  finding trusted only because a bot asserted it.
+  now applied to bot-sourced PATH A too. Never fold in a finding
+  trusted only because a bot asserted it.
 - The resulting commit touches only files this round's pending fixes
   already touch.
 - No CI-wait poll (E15) is currently in flight for this branch.
@@ -145,11 +145,11 @@ commit — whichever limit is reached first.
 
 **Ends accumulation immediately**, pushing whatever has accumulated so
 far instead of waiting for more: a PATH A item from a **human or
-CODEOWNER** reviewer arrives (a bot-sourced PATH A item alone does not);
-any item requests a substantive code/logic change, not a small textual
-fix (a wording nit stays in scope; a behavior change does not); any
-item falls outside the touched-file scope above; or either bound above
-is reached.
+CODEOWNER** reviewer arrives (bot-sourced PATH A alone does not); any
+item requests a substantive code/logic change, not a small textual fix
+(a wording nit stays in scope; a behavior change does not); any item
+falls outside the touched-file scope above; or either bound above is
+reached.
 
 **Explicit non-goals**: this allowance never delays, holds open, or
 interrupts an in-flight CI wait — E15's "mid-wait arrivals fold into the
