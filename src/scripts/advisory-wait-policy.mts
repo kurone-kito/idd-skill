@@ -26,6 +26,12 @@ export const DEFAULT_ADVISORY_BOT_LOGINS = [
 // 24h, matching the `claim-stale-age` and external-check-waiver
 // `maxValidity` defaults so this gate uses a familiar timescale.
 export const DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES = 1440;
+// #1511: bounded same-HEAD advisory reroll budget -- a small, deliberately
+// conservative default. The empirical basis (200 merged PRs, #1511's issue
+// body) shows a fresh same-SHA re-review often drops straight to zero, but
+// K=1 is sometimes insufficient, so 2 balances recovering the common case
+// against not hammering the bot when a residual is genuinely flat.
+export const DEFAULT_ADVISORY_SAME_HEAD_REROLL_CAP = 2;
 export const ADVISORY_CAP_EXHAUSTED_ROUTE_DEFAULT = 'phase-specific';
 export const ADVISORY_CAP_EXHAUSTED_ROUTES = new Set([
   'phase-specific',
@@ -215,6 +221,44 @@ export function readAdvisoryConvergenceDeadlineMinutes(
     return resolveAdvisoryConvergenceDeadlineMinutes(config);
   } catch {
     return DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES;
+  }
+}
+
+/**
+ * Resolve the configured bounded same-HEAD advisory reroll cap (#1511) from
+ * a parsed policy object. Kept separate from {@link resolveAdvisoryWaitPolicy}
+ * for the same reason the deadline/bot-login resolvers are separate: it is
+ * not part of the five-key active-wait timing shape, and it defaults to a
+ * fixed, conservative cap when absent.
+ */
+export function resolveAdvisorySameHeadRerollCap(config: unknown = {}): number {
+  const advisoryWait = ((config as { advisoryWait?: unknown } | null)
+    ?.advisoryWait ?? {}) as Record<string, unknown>;
+  return normalizeConfiguredPositiveInteger(
+    advisoryWait.sameHeadRerollCap,
+    DEFAULT_ADVISORY_SAME_HEAD_REROLL_CAP,
+  );
+}
+
+/**
+ * Read the configured bounded same-HEAD advisory reroll cap from a policy
+ * file, failing closed to the default cap when the file is missing,
+ * unreadable, or schema-invalid.
+ */
+export function readAdvisorySameHeadRerollCap(
+  path: string = '.github/idd/config.json',
+): number {
+  try {
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    // Scoped to the advisoryWait subtree (#1359); see readAdvisoryWaitPolicy.
+    if (
+      validateConfigSection(config, POLICY_SCHEMA, 'advisoryWait').length > 0
+    ) {
+      return DEFAULT_ADVISORY_SAME_HEAD_REROLL_CAP;
+    }
+    return resolveAdvisorySameHeadRerollCap(config);
+  } catch {
+    return DEFAULT_ADVISORY_SAME_HEAD_REROLL_CAP;
   }
 }
 

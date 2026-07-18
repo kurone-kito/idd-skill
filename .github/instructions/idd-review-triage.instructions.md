@@ -570,10 +570,9 @@ E14's own AW1 check (step 2, run fresh here) already makes this gate
 inert once the bot has reviewed current HEAD — including on a later
 re-entry after this gate's own request lands, so it never duplicates a
 request — and it never requests at all when the bot's latest review
-already covers current HEAD but still carries items. That residual
-keeps the same 24h deadline / maintainer-waiver escape hatch as any
-other non-converged state; re-reviewing unchanged code is a separate,
-tracked problem (#1465).
+already covers current HEAD but still carries items. **AW6** now
+handles that residual from F2 (#1511), falling through to the same
+24h deadline / maintainer-waiver hatch once exhausted.
 
 ## Advisory courtesy-ack convergence
 

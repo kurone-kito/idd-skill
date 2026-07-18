@@ -253,6 +253,7 @@ wait, or review-currency checks. Candidate prefixes are:
 - `advisory-wait:`
 - `advisory-wait-recovery:`
 - `<!-- advisory-wait:`
+- `advisory-reroll:`
 
 Always skip candidates when any of these are true:
 

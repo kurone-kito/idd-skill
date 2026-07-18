@@ -270,6 +270,10 @@
         "convergenceDeadline": {
           "type": "string",
           "pattern": "^P(?=(?:\\d+D|T\\d+[HM]))(?=.*(?:[1-9]\\d*[DHM]))(?:\\d+D)?(?:T(?=\\d+[HM])(?:\\d+H)?(?:\\d+M)?)?$"
+        },
+        "sameHeadRerollCap": {
+          "type": "integer",
+          "minimum": 1
         }
       }
     },

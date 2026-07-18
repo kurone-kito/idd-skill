@@ -32,6 +32,15 @@
     "activeClaimId": "",
     "validCount": 0
   },
+  "sameHeadReroll": {
+    "eligible": false,
+    "count": 0,
+    "cap": 2,
+    "exhausted": false,
+    "latestAt": "",
+    "inFlight": false,
+    "requestable": false
+  },
   "converged": false,
   "waived": false,
   "ready": true
