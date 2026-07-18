@@ -542,8 +542,9 @@ in ascending issue-number order:
   shared claim-state rules in `idd-claim.instructions.md` — including
   forced-handoff and legacy markers, not just
   `claimed-by`/`unclaimed-by`. No current bulk helper
-  (`discover-roadmap-graph.mjs` / `discover-orphan-filter.mjs`
-  `--with-claim-state`) is forced-handoff-aware, so a multi-candidate
+  (`discover-roadmap-graph.mjs --with-claim-state` /
+  `discover-orphan-filter.mjs --with-claim-state`) is
+  forced-handoff-aware, so a multi-candidate
   survey here must either loop the single-issue
   `resume-claim-routing.mjs --fresh-claim-gate` resolver per candidate
   or apply `idd-claim.instructions.md`'s full parsing rules manually. A
