@@ -1274,6 +1274,94 @@ Interpretation rules:
   required fields are missing, discard helper output and apply the
   written F2 advisory/disposition sub-gate check manually.
 
+#### Bounded same-HEAD advisory reroll (AW6, #1511)
+
+`converged`'s Clause 1 reads a **static** snapshot of the primary bot's
+review item count, taken once at submission. When that review already
+covers current HEAD but carried N>0 items that triage then legitimately
+**Rejected** and resolved, `converged` stays false permanently for that
+HEAD: rejecting the items and resolving their threads never changes the
+stored count, and nothing else refreshes it without a new push. This is
+exactly the residual AW1's own `SATISFIED` short-circuit cannot escape
+(`commit_id == HEAD` never changes across a same-HEAD reroll), and the
+reason the Zero-Accepted-PATH-A advisory re-review gate
+(`idd-review-triage.instructions.md`) deliberately does not re-request
+in this state.
+
+The verdict's `sameHeadReroll` field group surfaces this residual as
+evidence, purely additively: `converged` / `waived` / `ready` are
+computed with **no reference to it at all**, so it can never let the
+gate pass on anything but the primary bot's own real signal.
+
+| Field         | Meaning                                                                                                                                                                                                                                                                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `eligible`    | `matchesHead: true`, `itemCount > 0`, every Copilot-authored thread resolved or validly dispositioned -- the static count is the ONLY thing keeping `converged` false.                                                                                                                                                               |
+| `count`       | Trusted `advisory-reroll:` marker count matching the current HEAD (resets on a new push, since a new HEAD's markers start over).                                                                                                                                                                                                     |
+| `cap`         | Configured bounded budget, `advisoryWait.sameHeadRerollCap` (default 2, deliberately conservative but > 1: same-SHA re-review is not a guaranteed one-shot off-ramp).                                                                                                                                                                |
+| `exhausted`   | `count >= cap`: stop rerolling, fall through to the existing deadline-plus-maintainer-waiver backstop (#1512) or hold.                                                                                                                                                                                                               |
+| `latestAt`    | GitHub `created_at` of the latest trusted same-HEAD reroll marker, or `''` -- **never** the marker's embedded, agent-supplied timestamp (same anchor rule AW2 already states for `advisory-wait:`).                                                                                                                                  |
+| `inFlight`    | `true` while a reroll marker exists, no primary-bot review has been submitted after it yet, **and** the configured `advisoryWait.pendingWindow` has not yet elapsed since it was posted. Recomputed fresh from GitHub state on every call (never in-session memory), so a crash mid-poll can never cause a duplicate reroll request. |
+| `requestable` | `eligible && !exhausted && !inFlight` -- the exact instant it is safe to request a fresh same-HEAD reroll.                                                                                                                                                                                                                           |
+
+**AW6 procedure** (`idd-advisory-wait.instructions.md`), invoked only
+from F2 on a non-zero `--assert` exit:
+
+1. If `sameHeadReroll.eligible` is `false`, the carve-out does not
+   apply; fall through to F2's normal route-to-E1/E4.
+2. If `requestable` is `true`: request a fresh same-HEAD review from
+   the primary advisory bot using the identical gh-then-REST
+   remove-reviewer→add-reviewer commands as E14 step 4's
+   `REQUEST_NEEDED` path (`idd-review-fix.instructions.md`), then post,
+   as plain text (no HTML comment, matching `advisory-wait:`'s shape):
+
+   ```text
+   advisory-reroll: {agent-id} {head-SHA} {ISO8601-requested-at}
+   ```
+
+   `post-idd-marker --type advisory-reroll --target pr <pr-number>
+   --agent-id <id> --head-sha <PR_HEAD_SHA> --timestamp <ISO8601>
+   --apply` renders and posts this marker when helper runtime is
+   enabled. **Deliberately not** `advisory-wait:` -- this marker is
+   counted separately so it can neither consume nor be masked by the
+   advisory-wait request cap (`REQUEST_CAP`). **Fail closed to a hold**
+   (mirroring AW3-R) if the marker cannot be posted or verified: an
+   untracked request could otherwise silently exceed the bounded
+   budget on the next pass. Then poll (step 4).
+3. If `requestable` is `false` because `inFlight` is `true`: a reroll
+   is already awaiting the bot's response (including on a freshly
+   resumed/restarted session). Do not post another marker; poll
+   directly (step 4).
+4. **Polling** is self-contained -- it deliberately does **not** reuse
+   E14's active polling loop, which is built around AW1's
+   `LAST_COPILOT_COMMIT != PR_HEAD_SHA` distinction. That distinction is
+   always false across a same-HEAD reroll (the commit never changes),
+   so reusing it would exit on the very first tick without the bot
+   doing anything. Instead: every `advisoryWait.pollInterval` minutes
+   (the same constant AW3 already uses), re-run
+   `advisory-convergence.mjs --pr <pr-number>` (report mode is enough)
+   and re-read `sameHeadReroll.inFlight`. `true` → keep polling.
+   `false` → exit polling and return to
+   `idd-review-snapshot.instructions.md` (E1), regardless of _why_ it
+   cleared -- a fresh review landed, or the pending window simply
+   elapsed with no answer at all. E1's normal snapshot re-triages
+   whatever the bot's fresh review actually contains: a flat or worse
+   outcome, or a genuinely new finding, flows through the ordinary
+   E4-E8 path exactly like any other review, never suppressed or
+   auto-accepted by this carve-out. Do not re-assert F2 directly from
+   this step; returning to E1 first is what guarantees a new finding
+   is never skipped.
+5. If `requestable` is `false` because `exhausted` is `true` (or
+   `eligible` is `false`): no reroll. Fall through to F2's existing
+   route-to-E1/E4 -- the same deadline-plus-maintainer-waiver backstop
+   or hold path a permanently non-converged HEAD already falls to
+   today. Same-SHA re-review is not a guaranteed off-ramp, so this
+   bounded carve-out is deliberately paired with, never a replacement
+   for, that backstop.
+
+Fail closed the same way mid-poll or if the verdict JSON is missing or
+unusable: treat the carve-out as not applicable / stop and post a hold,
+same as `AW4`/`AW5`.
+
 ### E7 disposition verification
 
 - Preferred command when helper runtime is enabled:
