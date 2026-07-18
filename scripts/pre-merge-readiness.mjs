@@ -39,6 +39,46 @@ import {
   selectCodeownersText,
 } from './protocol-helpers.mjs';
 
+// GitHub's GraphQL `DateTime` scalar can't be null, so a `CheckRun` that
+// has not completed yet (and a `StatusContext`, which has no completedAt
+// field at all) reports this zero-value sentinel instead -- the same
+// convention `gh pr checks` already surfaces and `isCompletedCiTimestamp`
+// (protocol-helpers.mts) already treats as "not completed".
+const ZERO_SENTINEL_TIMESTAMP = '0001-01-01T00:00:00Z';
+/**
+ * Normalize one raw `statusCheckRollup` entry into the `CheckPayload`
+ * shape `classifyCiChecks` / `summarizeRequiredChecks` expect (#1483).
+ *
+ * `state` is derived to match what `gh pr checks --json state` already
+ * reported for the same underlying data (verified empirically against
+ * this repository's own live PRs across `SUCCESS` / `FAILURE` /
+ * `IN_PROGRESS`): a completed check-run reports its `conclusion`; an
+ * incomplete one reports its raw `status` (`QUEUED` / `IN_PROGRESS` /
+ * `WAITING`); a legacy commit-status reports its `state` unchanged. This
+ * keeps classification behavior identical to before #1483 for every
+ * single-producer case -- only the producer-identity discriminator
+ * (`type` / `workflowName`) is new.
+ */
+export function normalizeStatusCheckRollupEntry(entry) {
+  if (String(entry?.__typename ?? '') === 'StatusContext') {
+    return {
+      name: String(entry?.context ?? ''),
+      state: String(entry?.state ?? '').toUpperCase(),
+      completedAt: String(entry?.completedAt ?? ZERO_SENTINEL_TIMESTAMP),
+      type: 'status-context',
+      workflowName: '',
+    };
+  }
+  const status = String(entry?.status ?? '').toUpperCase();
+  const conclusion = String(entry?.conclusion ?? '').toUpperCase();
+  return {
+    name: String(entry?.name ?? ''),
+    state: status === 'COMPLETED' ? conclusion || 'UNKNOWN' : status,
+    completedAt: String(entry?.completedAt ?? ZERO_SENTINEL_TIMESTAMP),
+    type: 'check-run',
+    workflowName: String(entry?.workflowName ?? '').trim(),
+  };
+}
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --pr spec key
@@ -125,7 +165,7 @@ export function collectPreMergeReadiness(argv) {
     '-R',
     repoRef,
     '--json',
-    'headRefOid,baseRefName,url,author,reviewDecision',
+    'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup',
     '--jq',
     '.',
   ]);
@@ -135,19 +175,18 @@ export function collectPreMergeReadiness(argv) {
   const prAuthorLogin = String(pr.author?.login ?? '').toLowerCase();
   const reviewDecision = String(pr.reviewDecision ?? '');
   const encodedBaseRefName = encodeURIComponent(baseRefName);
-  const checks = ghJson(
-    [
-      'pr',
-      'checks',
-      String(args.prNumber),
-      '-R',
-      repoRef,
-      '--json',
-      'name,state,completedAt',
-      '--jq',
-      '.',
-    ],
-    { allowStatuses: [1, 8] },
+  // #1483: sourced from the same `gh pr view` call above (the
+  // `statusCheckRollup` field), not a separate `gh pr checks` call --
+  // `statusCheckRollup`'s GraphQL union already tags each entry with a
+  // real producer identity (`__typename`: `CheckRun` vs. `StatusContext`,
+  // plus `workflowName` for check-runs), which a flattened `gh pr checks`
+  // read cannot expose. Joining two separately-fetched lists by name would
+  // reintroduce the exact ambiguity this fix removes (confirmed live: two
+  // successive calls a few seconds apart returned different check-run
+  // counts for the same PR), so this is the single source of truth for
+  // both the check identity and its dedup discriminator.
+  const checks = (pr.statusCheckRollup ?? []).map(
+    normalizeStatusCheckRollupEntry,
   );
   const trustEmptyProtectionReads = readTrustEmptyProtectionReads();
   const branchRulesRead = fetchGovernanceJson(

@@ -234,6 +234,112 @@ test('classifyCiChecks: two check-run entries with no name are never collapsed i
   assert.equal(classifyCiChecks(checks).status, 'failed');
 });
 
+// #1483: `classifyCiChecks` must not conflate two independently-sourced
+// checks that happen to share a display `name` -- e.g. a GitHub Actions
+// check-run and a legacy commit-status, or two check-runs from different
+// workflows -- by also grouping on the `type` / `workflowName` producer
+// discriminator (see `selectLatestCheckPerName` in protocol-helpers.mts).
+test('classifyCiChecks: two same-name instances sharing type and workflowName still dedupe to the latest (no #1471 regression)', () => {
+  const checks = [
+    {
+      name: 'idd-advisory-convergence',
+      state: 'CANCELLED',
+      completedAt: '2026-07-18T03:45:56Z',
+      type: 'check-run',
+      workflowName: 'IDD advisory-convergence gate',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'SUCCESS',
+      completedAt: '2026-07-18T03:47:01Z',
+      type: 'check-run',
+      workflowName: 'IDD advisory-convergence gate',
+    },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'success');
+});
+
+test('classifyCiChecks: a check-run and a same-named commit-status never dedupe -- the commit-status FAILURE is never hidden by the check-run SUCCESS', () => {
+  // The issue's own motivating example: a check-run and a legacy commit
+  // status can report under an identical name/context string while being
+  // genuinely independent. `type` differs here ('check-run' vs.
+  // 'status-context'), so both must survive as separate groups.
+  const checks = [
+    {
+      name: 'build',
+      state: 'FAILURE',
+      completedAt: '2026-07-18T03:45:56Z',
+      type: 'status-context',
+      workflowName: '',
+    },
+    {
+      name: 'build',
+      state: 'SUCCESS',
+      completedAt: '2026-07-18T03:47:01Z',
+      type: 'check-run',
+      workflowName: 'Some Workflow',
+    },
+  ];
+  const result = classifyCiChecks(checks);
+  assert.equal(result.status, 'failed');
+  assert.ok(
+    result.failed?.some(
+      (check) => check.type === 'status-context' && check.state === 'FAILURE',
+    ),
+    'the commit-status FAILURE must be present in the failed list',
+  );
+});
+
+test('classifyCiChecks: two check-runs sharing a name from different workflows never dedupe', () => {
+  // Same `type` ('check-run') on both sides, but a different `workflowName`
+  // is just as strong a producer-conflict signal as a different `type`.
+  const checks = [
+    {
+      name: 'build',
+      state: 'FAILURE',
+      completedAt: '2026-07-18T03:45:56Z',
+      type: 'check-run',
+      workflowName: 'Workflow A',
+    },
+    {
+      name: 'build',
+      state: 'SUCCESS',
+      completedAt: '2026-07-18T03:47:01Z',
+      type: 'check-run',
+      workflowName: 'Workflow B',
+    },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'failed');
+});
+
+test('classifyCiChecks: characterization -- two same-name, same-type entries that both lack a workflowName still dedupe (accepted residual limitation)', () => {
+  // Documents the deliberately-accepted residual gap: without a real
+  // producer identity (e.g. the owning GitHub App) for two check-runs
+  // that are not routed through any Actions workflow, they remain
+  // indistinguishable from reruns of one another -- matching
+  // ci-wait-state.mts's own accepted `(checkName, workflowName)` gap. This
+  // is also what keeps every pre-#1483 `classifyCiChecks` caller (which
+  // never sets `type`/`workflowName` at all) behavior-identical: those
+  // callers hit this exact same uniformly-absent path.
+  const checks = [
+    {
+      name: 'legacy-check',
+      state: 'FAILURE',
+      completedAt: '2026-07-18T03:45:56Z',
+      type: 'check-run',
+      workflowName: '',
+    },
+    {
+      name: 'legacy-check',
+      state: 'SUCCESS',
+      completedAt: '2026-07-18T03:47:01Z',
+      type: 'check-run',
+      workflowName: '',
+    },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'success');
+});
+
 test('detects operational marker prefixes', () => {
   assert.equal(
     operationalMarkerPrefix(

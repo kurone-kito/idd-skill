@@ -154,3 +154,31 @@ test('protected branch: requiredChecksPassing is true when the required check’
   assert.equal(r.requiredChecksPassing, true);
   assert.equal(r.status, 'success');
 });
+
+// #1483: summarizeRequiredChecks must inherit classifyCiChecks's producer-
+// identity discriminator, so a required check name is never falsely
+// reported as passing because an independently-sourced entry sharing that
+// name reported success.
+test('protected branch: requiredChecksPassing stays false when a same-named commit-status success cannot supersede the check-run FAILURE (different producers, #1483)', () => {
+  const r = summarize(
+    [
+      {
+        name: 'lint',
+        state: 'FAILURE',
+        completedAt: '2026-07-17T16:00:06Z',
+        type: 'check-run',
+        workflowName: 'Linting workflow',
+      },
+      {
+        name: 'lint',
+        state: 'SUCCESS',
+        completedAt: '2026-07-17T16:25:47Z',
+        type: 'status-context',
+        workflowName: '',
+      },
+    ],
+    protectedRules,
+  );
+  assert.equal(r.requiredChecksPassing, false);
+  assert.equal(r.status, 'failed');
+});

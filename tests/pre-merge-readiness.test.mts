@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   fetchBranchRulesets,
   fetchGovernanceJson,
+  normalizeStatusCheckRollupEntry,
   parseArgs,
   resolveToleratedGhFailure,
 } from '../src/scripts/pre-merge-readiness.mts';
@@ -4734,6 +4735,87 @@ test('resolveToleratedGhFailure ignores non-JSON allowStatuses stdout and falls 
     resolveToleratedGhFailure(error, { allowStatuses: [1] }),
     undefined,
   );
+});
+
+// #1483: normalizeStatusCheckRollupEntry replaced the old `gh pr checks`
+// data source with `statusCheckRollup`, so its output must stay behaviorally
+// identical to what `gh pr checks --json name,state,completedAt` reported
+// for the same underlying data (verified empirically against this
+// repository's own live PRs before this change shipped) while also
+// surfacing the new `type` / `workflowName` producer-identity fields.
+test('normalizeStatusCheckRollupEntry: a completed CheckRun reports its conclusion as state', () => {
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'CheckRun',
+    name: 'idd-advisory-convergence',
+    status: 'COMPLETED',
+    conclusion: 'SUCCESS',
+    completedAt: '2026-07-18T03:47:01Z',
+    workflowName: 'IDD advisory-convergence gate',
+  });
+  assert.deepEqual(result, {
+    name: 'idd-advisory-convergence',
+    state: 'SUCCESS',
+    completedAt: '2026-07-18T03:47:01Z',
+    type: 'check-run',
+    workflowName: 'IDD advisory-convergence gate',
+  });
+});
+
+test('normalizeStatusCheckRollupEntry: an in-progress CheckRun reports its raw status as state, not a stale conclusion', () => {
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'CheckRun',
+    name: 'lint',
+    status: 'IN_PROGRESS',
+    conclusion: '',
+    completedAt: '0001-01-01T00:00:00Z',
+    workflowName: 'Linting workflow',
+  });
+  assert.equal(result.state, 'IN_PROGRESS');
+  assert.equal(result.completedAt, '0001-01-01T00:00:00Z');
+  assert.equal(result.type, 'check-run');
+});
+
+test('normalizeStatusCheckRollupEntry: a StatusContext reports its own state and name from context, with no workflowName', () => {
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'StatusContext',
+    context: 'CodeRabbit',
+    state: 'success',
+  });
+  assert.deepEqual(result, {
+    name: 'CodeRabbit',
+    state: 'SUCCESS',
+    completedAt: '0001-01-01T00:00:00Z',
+    type: 'status-context',
+    workflowName: '',
+  });
+});
+
+test('normalizeStatusCheckRollupEntry: a StatusContext with no completedAt field defaults to the zero-value sentinel', () => {
+  // StatusContext has no completedAt in the GraphQL schema at all (only
+  // CheckRun does); the entry omits the field entirely rather than sending
+  // an empty string, so this covers the `?? ZERO_SENTINEL_TIMESTAMP`
+  // fallback path distinctly from an entry that sends `completedAt: ''`.
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'StatusContext',
+    context: 'some-legacy-status',
+    state: 'PENDING',
+  });
+  assert.equal(result.completedAt, '0001-01-01T00:00:00Z');
+});
+
+test('normalizeStatusCheckRollupEntry: an unrecognized __typename falls back to the CheckRun shape', () => {
+  // Mirrors ci-wait-state.mts's own "StatusContext, else check-run" branch
+  // structure: any future GraphQL union member normalizes as a check-run
+  // rather than being silently dropped.
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'SomeFutureUnionMember',
+    name: 'future-check',
+    status: 'COMPLETED',
+    conclusion: 'NEUTRAL',
+    completedAt: '2026-07-18T00:00:00Z',
+  });
+  assert.equal(result.type, 'check-run');
+  assert.equal(result.state, 'NEUTRAL');
 });
 
 test('parseArgs: valid --pr / --claim-issue parse to positive integers', () => {
