@@ -1020,6 +1020,39 @@ test('sameHeadReroll: configurable cap (sameHeadRerollCap: 1) exhausts after a s
   assert.equal(verdict.sameHeadReroll.requestable, false);
 });
 
+test('regression: sameHeadRerollCap: 0 or negative fails closed to the default cap instead of silently exhausting immediately (PR #1517 review)', () => {
+  const zero = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ itemCount: 2 })] }),
+    baseOptions({ sameHeadRerollCap: 0 }),
+  );
+  assertValidVerdict(zero);
+  assert.equal(zero.sameHeadReroll.cap, 2); // default, not 0
+  assert.equal(zero.sameHeadReroll.exhausted, false);
+
+  const negative = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ itemCount: 2 })] }),
+    baseOptions({ sameHeadRerollCap: -1 }),
+  );
+  assertValidVerdict(negative);
+  assert.equal(negative.sameHeadReroll.cap, 2); // default, not -1
+  assert.equal(negative.sameHeadReroll.exhausted, false);
+});
+
+test('regression: pendingWindowMinutes: 0 or negative fails closed to the default window instead of breaking inFlight (PR #1517 review)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
+      comments: [rerollMarkerComment(REROLL_JUST_NOW)],
+    }),
+    baseOptions({ pendingWindowMinutes: 0 }),
+  );
+  assertValidVerdict(verdict);
+  // With the default 30-min window (not the invalid 0), a marker posted 10
+  // min ago is still inFlight -- proving the invalid value was rejected,
+  // not merely tolerated by coincidence.
+  assert.equal(verdict.sameHeadReroll.inFlight, true);
+});
+
 test('sameHeadReroll: inFlight while a recent marker exists and no fresher review has landed yet', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({

@@ -213,14 +213,24 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     threadClause.satisfied &&
     review.itemCount !== null &&
     review.itemCount > 0;
-  const sameHeadRerollCap = Number.isFinite(options.sameHeadRerollCap)
-    ? Number(options.sameHeadRerollCap)
-    : DEFAULT_ADVISORY_SAME_HEAD_REROLL_CAP;
-  const pendingWindowMinutesForReroll = Number.isFinite(
-    options.pendingWindowMinutes,
-  )
-    ? Number(options.pendingWindowMinutes)
-    : DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES;
+  // Both guards require `> 0` (not merely `Number.isFinite`/`Number.is-
+  // Integer`), matching `normalizePositiveInteger` / `normalizePositiveNumber`
+  // (advisory-wait-policy.mts) exactly: this function is exported and pure,
+  // so a direct caller (a test, or future code bypassing the CLI's own
+  // schema-validated config read) could otherwise pass `0` or a negative
+  // value and silently corrupt behavior -- `cap: 0` makes `exhausted`
+  // trivially true (`count >= 0`), and `pendingWindowMinutes <= 0` breaks
+  // the `inFlight` elapsed-time comparison (PR #1517 review).
+  const sameHeadRerollCap =
+    Number.isInteger(options.sameHeadRerollCap) &&
+    Number(options.sameHeadRerollCap) > 0
+      ? Number(options.sameHeadRerollCap)
+      : DEFAULT_ADVISORY_SAME_HEAD_REROLL_CAP;
+  const pendingWindowMinutesForReroll =
+    Number.isFinite(options.pendingWindowMinutes) &&
+    Number(options.pendingWindowMinutes) > 0
+      ? Number(options.pendingWindowMinutes)
+      : DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES;
   const rerollMarkers = summarizeSameHeadRerollMarkers(
     comments,
     prHeadSha,
