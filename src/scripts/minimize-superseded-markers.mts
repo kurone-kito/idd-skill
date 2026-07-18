@@ -609,6 +609,12 @@ function runGh(argv: string[]): GhResult {
 //     `unknown argument: --subject-ids=<value>`. The empty-string form
 //     (`--subject-ids=`) is unaffected either way -- it still hits the
 //     post-parse check below exactly like `--subject-ids ''` does.
+//   - A bare trailing `--` (the POSIX end-of-options marker) is now
+//     silently accepted as a no-op, where the old loop's exact-match
+//     fallthrough rejected it as `unknown argument: --`. Not expected to
+//     matter in practice: this helper is only ever invoked from fixed,
+//     known argument lists (CI workflows, documented manual commands),
+//     never arbitrary/untrusted argv.
 function parseMinimizeArgs(argv: string[]): MinimizeArgs {
   const { values } = parseArgs({
     args: argv,
