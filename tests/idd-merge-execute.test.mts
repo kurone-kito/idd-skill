@@ -32,6 +32,12 @@ function readyReport(): Record<string, unknown> {
     },
     claim: { matchesExpectedClaim: true, reason: 'match' },
     dispositionEvidence: { route: 'proceed', blockingCount: 0 },
+    branchCurrency: {
+      mergeStateStatus: 'CLEAN',
+      mergeable: 'MERGEABLE',
+      requiresUpToDateHead: false,
+      requiresUpToDateHeadSource: 'none',
+    },
   };
 }
 
@@ -175,6 +181,16 @@ test('every F3 gate maps to its own blocker', () => {
         (r.dispositionEvidence = {
           route: 'return-to-e1',
           blockingCount: 1,
+        }),
+    ],
+    [
+      'branch-currency',
+      (r) =>
+        (r.branchCurrency = {
+          mergeStateStatus: 'BEHIND',
+          mergeable: 'MERGEABLE',
+          requiresUpToDateHead: true,
+          requiresUpToDateHeadSource: 'ruleset',
         }),
     ],
   ];
@@ -399,6 +415,36 @@ test('--apply fails closed when a new blocker appears at re-validation', () => {
   assert.deepEqual(calls.merged, []);
   assert.equal(verdict.ready, false);
   assert.match(verdict.mergeResult, /new blockers/);
+  assert.equal(exitCode, 1);
+});
+
+// #1513: the exact field-evidence scenario -- `pre-merge-readiness` reported
+// `ready: true` for a PR GitHub itself already reported as
+// `mergeStateStatus: BEHIND`. `--apply` must fail closed with a structured
+// blocker BEFORE ever calling `deps.mergePr`, not attempt the merge and
+// crash on GitHub's rejection.
+test('--apply fails closed on a BEHIND head that requires an up-to-date head, without attempting the merge', () => {
+  const report = readyReport();
+  report.branchCurrency = {
+    mergeStateStatus: 'BEHIND',
+    mergeable: 'MERGEABLE',
+    requiresUpToDateHead: true,
+    requiresUpToDateHeadSource: 'ruleset',
+  };
+  const { deps, calls } = depsFor(report);
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.ready, false);
+  assert.deepEqual(
+    verdict.blockers.map((b) => b.gate),
+    ['branch-currency'],
+  );
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.merged, [], 'gh pr merge must never be invoked');
+  assert.match(verdict.mergeResult, /not-ready/);
   assert.equal(exitCode, 1);
 });
 

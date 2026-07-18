@@ -2967,6 +2967,67 @@ export function summarizeBranchReviewRequirements(
     requiredCheckNames: [...requiredCheckNames].sort(),
   };
 }
+/**
+ * #1513: resolve whether the base branch's protection or ruleset requires
+ * an up-to-date head before merge, and pair that with the PR's live
+ * `mergeStateStatus` / `mergeable`. Neither `pre-merge-readiness.mts` nor
+ * `idd-merge-execute.mts` previously read this at all -- a live `BEHIND`
+ * PR could report `ready: true` right up to the uncaught `gh pr merge`
+ * rejection (the field incident this issue documents).
+ *
+ * Resolution order mirrors `summarizeRequiredChecks`'s existing
+ * ruleset-then-classic precedence: a ruleset's `required_status_checks`
+ * rule carries `strict_required_status_checks_policy` (confirmed
+ * empirically against this repository's own `main`: classic protection
+ * returns a genuine 404 "Branch not protected", while
+ * `rules/branches/main` returns this field as `true`); classic
+ * protection's equivalent field is `required_status_checks.strict`. When
+ * neither source resolves `true` AND the branch-protection/ruleset reads
+ * were unreadable (a masked 403-as-404, see `protectionReadsUnreadable`
+ * in `pre-merge-readiness.mts`), fail closed per
+ * `idd-overview-core.instructions.md`'s fail-closed default: assume the
+ * requirement is present rather than silently reporting "no requirement."
+ * Only a genuinely readable "no rule found" resolves to `none`.
+ *
+ * Strict `=== true` checks throughout (not `Boolean(...)` coercion) per
+ * the write-side mutation-helper critique lens
+ * (`idd-overview-appendix.instructions.md`): a non-boolean or missing
+ * value must never be silently coerced into "requirement satisfied."
+ */
+export function summarizeBranchCurrency(
+  branchRules = [],
+  branchProtection = {},
+  options = {},
+) {
+  const rulesetRequires = (branchRules ?? []).some(
+    (rule) =>
+      rule?.type === 'required_status_checks' &&
+      rule.parameters?.strict_required_status_checks_policy === true,
+  );
+  const classicRequires =
+    branchProtection.required_status_checks?.strict === true;
+  let requiresUpToDateHead;
+  let requiresUpToDateHeadSource;
+  if (rulesetRequires) {
+    requiresUpToDateHead = true;
+    requiresUpToDateHeadSource = 'ruleset';
+  } else if (classicRequires) {
+    requiresUpToDateHead = true;
+    requiresUpToDateHeadSource = 'classic-protection';
+  } else if (options.protectionReadsUnreadable === true) {
+    requiresUpToDateHead = true;
+    requiresUpToDateHeadSource = 'unreadable-fail-closed';
+  } else {
+    requiresUpToDateHead = false;
+    requiresUpToDateHeadSource = 'none';
+  }
+  return {
+    mergeStateStatus: String(options.mergeStateStatus ?? '').toUpperCase(),
+    mergeable: String(options.mergeable ?? '').toUpperCase(),
+    requiresUpToDateHead,
+    requiresUpToDateHeadSource,
+  };
+}
 export function summarizeRequiredChecks(
   checks = [],
   branchRules = [],
@@ -3950,6 +4011,26 @@ export function computePreMergeReadinessBlockers(report) {
       detail: `dispositionEvidence.route is "${dispositionRoute || 'missing'}" (expected "proceed"), blockingCount=${dispositionBlockingCount} (expected 0)`,
     });
   }
+  // #1513: fail closed on a missing/garbled `requiresUpToDateHead` -- only
+  // an explicit `false` counts as "not required" (matching every gate
+  // above's fail-closed promise); an absent/non-boolean value defaults to
+  // "required." Scoped to the literal `BEHIND` value only: `UNKNOWN`/null
+  // is the async-still-computing state that `idd-pre-merge.instructions.md`
+  // F1 and `idd-review-triage.instructions.md`'s E-phase branch-sync check
+  // already re-poll as transient, not terminal -- out of this gate's scope.
+  // Every other non-BEHIND `gh pr merge` rejection is caught by
+  // `idd-merge-execute.mts`'s `deps.mergePr` try/catch instead.
+  const branchCurrency = preMergeAsRecord(report.branchCurrency);
+  const requiresUpToDateHead = branchCurrency.requiresUpToDateHead !== false;
+  const mergeStateStatus = String(
+    branchCurrency.mergeStateStatus ?? '',
+  ).toUpperCase();
+  if (requiresUpToDateHead && mergeStateStatus === 'BEHIND') {
+    blockers.push({
+      gate: 'branch-currency',
+      detail: `mergeStateStatus is "BEHIND" and the base branch requires an up-to-date head before merge (requiresUpToDateHeadSource="${String(branchCurrency.requiresUpToDateHeadSource ?? 'unknown')}")`,
+    });
+  }
   return blockers;
 }
 export function buildPreMergeReadinessSummary(
@@ -3971,6 +4052,8 @@ export function buildPreMergeReadinessSummary(
     codeownersText = '',
     eligibleCodeownerUserLogins = null,
     reviewDecision = '',
+    mergeStateStatus = '',
+    mergeable = '',
   },
   options = {},
 ) {
@@ -3996,6 +4079,15 @@ export function buildPreMergeReadinessSummary(
   const branchReviewRequirements = summarizeBranchReviewRequirements(
     branchRules,
     branchProtection,
+  );
+  const branchCurrency = summarizeBranchCurrency(
+    branchRules,
+    branchProtection,
+    {
+      mergeStateStatus,
+      mergeable,
+      protectionReadsUnreadable,
+    },
   );
   const liveSnapshot = buildActivitySnapshotSummary(
     {
@@ -4179,6 +4271,7 @@ export function buildPreMergeReadinessSummary(
     ci,
     claim,
     waiverEvidence,
+    branchCurrency,
   };
   if (dispositionEvidence) {
     summary.dispositionEvidence = dispositionEvidence;
