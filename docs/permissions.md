@@ -80,7 +80,15 @@ merges:
   audit trail and should be used only after IDD's branch freshness, CI,
   review, advisory, unresolved-thread, and claim gates pass. Prefer this
   over broad `always` or `exempt` bypass unless a maintainer explicitly
-  accepts the wider risk.
+  accepts the wider risk. In observed practice, this scoped bypass alone
+  may not make a plain `gh pr merge` call succeed for a solo-maintainer
+  repository's self-approval deadlock: GitHub can still reject the merge
+  with "the base branch policy prohibits the merge" and suggest
+  `--admin`, a stronger repository-admin privilege escalation than this
+  bypass mode grants. See `idd-merge.instructions.md` F3 for the
+  required hold-and-report response, and kurone-kito/idd-skill#1493 —
+  the idd-skill source repository's own tracked decision — for whether
+  autonomous `--admin` use is ever authorized.
 - **Deliberate CODEOWNERS policy change**: narrow CODEOWNERS coverage,
   add another eligible owner, or move a repository to `human_merge` when
   human review is the intended gate. Treat this as a repository policy

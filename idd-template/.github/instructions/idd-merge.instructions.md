@@ -184,6 +184,14 @@ Before any mutating action in F3, apply the
    SHA. This post-merge digest update is not a merge gate and must not
    happen before the successful merge command.
 5. If merge fails:
+   - `gh pr merge --merge` fails with "the base branch policy
+     prohibits the merge" despite a passing Gate checklist and a
+     configured pull-request-only bypass actor → that scoped bypass
+     alone may not clear a solo-maintainer self-approval deadlock (see
+     `docs/permissions.md`'s "Pull-request-only ruleset bypass"). Do
+     not retry the plain command or add `--admin` automatically; post
+     a hold comment with the GitHub error text and stop for a
+     maintainer decision (kurone-kito/idd-skill#1493).
    - Base branch updated or conflict → return to
      `idd-pre-merge.instructions.md` F1
    - CI condition no longer met → return to
