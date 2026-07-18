@@ -334,14 +334,14 @@ ack / error, as defined in E4):
   re-request, no wait.** The notice item itself is **always rejected**,
   because it carries no advisory result — never record `**Accepted**` on
   the notice: `**Rejected** — {bot} did not review HEAD {sha}
-  ({reason}); this is not a completed review`. Write `{bot}` as the bot's
-  **GitHub login** (e.g. `coderabbitai[bot]`, `chatgpt-codex-connector[bot]`)
-  so the carry-forward below can attribute the rejection to exactly that bot
-  when several advisory bots are configured. A separate _completed_
-  review of the current HEAD, if one is present, is a **distinct**
+  ({reason}); this is not a completed review (source: #issuecomment-{id})`.
+  Write `{bot}` as the bot's GitHub login (e.g. `coderabbitai[bot]`,
+  `chatgpt-codex-connector[bot]`) so the carry-forward below can attribute
+  the rejection to that bot when several bots are configured. A separate
+  _completed_ review of the current HEAD, if one is present, is a distinct
   ReviewItems_snapshot item dispositioned `**Accepted**` under the
   completed-review rules above — accept that review, not the notice.
-  **Re-validate just before posting the rejection**: a completed review
+  **Re-validate before posting the rejection**: a completed review
   can race in after the E1 snapshot but before this rejection. If one
   has, disposition that review (Accepted) and take a fresh E1 snapshot,
   so the rejection's later timestamp does not filter the completed
