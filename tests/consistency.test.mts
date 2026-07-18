@@ -1012,10 +1012,13 @@ test('#1512: this repository opts into the advisory-convergence maintainer-waive
   );
   assert.ok(
     repoPolicy.ciGate.externalChecks.waivable.some(
-      (entry) => entry.selector === ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+      (entry) =>
+        entry.selector === ADVISORY_CONVERGENCE_CHECK_SELECTOR &&
+        entry.matchMode === 'exact',
     ),
     `expected ${ADVISORY_CONVERGENCE_CHECK_SELECTOR} to be registered under ` +
-      'ciGate.externalChecks.waivable in .github/idd/config.json',
+      'ciGate.externalChecks.waivable with matchMode "exact" (not a ' +
+      'broader glob) in .github/idd/config.json',
   );
 
   const templatePolicy = normalizePolicyConfig(

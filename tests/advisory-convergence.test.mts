@@ -448,6 +448,7 @@ test("#1512: this repository's own .github/idd/config.json wires the maintainer-
       headCommittedAt: OLD,
       waiverMode: repoPolicy.ciGate.externalCheckWaivers.mode,
       waivableSelectors: repoPolicy.ciGate.externalChecks.waivable,
+      waiverMaxValidity: repoPolicy.ciGate.externalCheckWaivers.maxValidity,
     }),
   );
   assertValidVerdict(verdict);
