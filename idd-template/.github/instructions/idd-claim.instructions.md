@@ -475,19 +475,20 @@ fresh claim or being treated as claim-less; see the ownership-proof
 exception in [Claim-state parsing](#claim-state-parsing). No separate
 `claimed-by` post is required for the delegation itself.
 
-**Carry the nonce, don't mint one.** The brief must also carry the
-orchestrator's current activation nonce verbatim. A worker that mints
-its own nonce for the same `{claim-id}` creates the exact two-nonce
-collision step 5 above exists to catch, flagging legitimate delegation
-as a second activation. Carrying the same nonce means the worker holds
-the identical winner the orchestrator already verified — no new marker
-to post, no new check to add. The Claim revalidation gate
-(`idd-overview-core.instructions.md`) already covers this correctly
-unchanged: its nonce comparison only applies when a session posted its
-own marker, and a worker that carries rather than posts falls through
-to "no marker posted: treat as passed" — the primary `{claim-id}` match
-in the same gate is what actually protects a delegated worker's
-mutations.
+**Carry the nonce, don't mint one — and still revalidate it.** The
+brief must also carry the orchestrator's current activation nonce
+verbatim. A worker that mints its own nonce for the same `{claim-id}`
+creates the exact two-nonce collision that step 5 above exists to
+catch, flagging legitimate delegation as a second activation. Carrying
+rather than minting avoids that false collision, but the worker still
+performs the Claim revalidation gate's nonce check
+(`idd-overview-core.instructions.md`) using the carried value in place
+of a self-posted one: before each mutation, recompute the nonce winner
+for the `{claim-id}` and confirm it still equals the carried nonce. A
+different winner (for example, a later forced-handoff adopt-verbatim
+collision the orchestrator never saw) means the worker is no longer
+the winning activation, even though the `{claim-id}` still matches —
+treat that the same as any other lost claim.
 
 ### Hide displaced claim chain on takeover
 
