@@ -8,12 +8,17 @@
 // Auto-disposition advisory non-review notices on a PR (E6 PATH B). Every
 // autopilot PR draws advisory-bot rate-limit / usage-limit notices that are
 // dispositioned deterministically as `**Rejected** — {bot} did not review HEAD
-// {sha} ({reason}); this is not a completed review` — marker-first (#1038), one
-// per notice (the F2/F3 gate pairs 1:1 by count), naming the bot's login so the
-// #1018 author-scoped carry-forward attributes it. This helper detects those
-// notices with the single-sourced `isAdvisoryNonReviewNotice` classifier and
-// emits (dry-run) or posts (`--apply`) the canonical disposition, skipping
-// notices already dispositioned so a re-run is idempotent.
+// {sha} ({reason}); this is not a completed review (source: #issuecomment-{id})`
+// — marker-first (#1038), one per notice (the F2/F3 gate pairs 1:1 by count),
+// naming the bot's login so the #1018 author-scoped carry-forward attributes
+// it. The trailing `(source: #issuecomment-{id})` names the source notice's
+// own comment id, so repeat notices from the same bot at the same HEAD (which
+// otherwise render byte-identical) stay distinguishable in the PR history
+// (#1482); it is a human-readable disambiguator only, never a pairing key.
+// This helper detects those notices with the single-sourced
+// `isAdvisoryNonReviewNotice` classifier and emits (dry-run) or posts
+// (`--apply`) the canonical disposition, skipping notices already
+// dispositioned so a re-run is idempotent.
 //
 // It also auto-dispositions the CodeRabbit summary walkthrough (#1122): a
 // completed-review regular comment that recurs on every autopilot PR and the
@@ -122,15 +127,24 @@ export function noticeReason(body: unknown): string {
 
 /**
  * Build the canonical E6 non-review-notice disposition body: marker-first,
- * naming the bot's GitHub login (for the #1018 author-scoped carry-forward) and
- * the current head SHA.
+ * naming the bot's GitHub login (for the #1018 author-scoped carry-forward),
+ * the current head SHA, and the source notice's own comment id (#1482) so
+ * repeat notices from the same bot at the same HEAD and reason category still
+ * produce byte-distinguishable replies. The `(source: #issuecomment-{id})`
+ * suffix is a human-readable disambiguator only: recognition
+ * (`isDispositionComment` / `isNonReviewNoticeDisposition` /
+ * `dispositionNamesAdvisoryBot`) matches on the leading marker and the bot
+ * login substring, never on exact body equality, so this addition cannot
+ * break gate recognition; it also never becomes a machine-readable pairing
+ * key for `summarizeDispositionEvidenceForGate`'s count-based carry-forward.
  */
 export function buildDispositionBody(
   botLogin: string,
   headSha: string,
   reason: string,
+  noticeId: number,
 ): string {
-  return `**Rejected** — ${botLogin} did not review HEAD ${headSha} (${reason}); this is not a completed review`;
+  return `**Rejected** — ${botLogin} did not review HEAD ${headSha} (${reason}); this is not a completed review (source: #issuecomment-${noticeId})`;
 }
 
 /**
@@ -282,7 +296,7 @@ export function buildDispositionPlan(
       noticeId: comment.id,
       botLogin: comment.login,
       reason,
-      body: buildDispositionBody(comment.login, headSha, reason),
+      body: buildDispositionBody(comment.login, headSha, reason, comment.id),
     });
   }
 
@@ -603,11 +617,15 @@ function viewerCommentIds(
 
 /**
  * After a failed create, find a viewer-authored comment with this exact body
- * whose id is NOT in `knownIds` — i.e., one created since posting began. Two
- * notices from the same bot on the same HEAD share an identical canonical body,
- * so keying recovery on a NEW comment id (not body uniqueness) is what stops the
- * helper from mistaking an earlier notice's marker for a failed create, which
- * would under-count the markers the F2/F3 1:1 pairing needs.
+ * whose id is NOT in `knownIds` — i.e., one created since posting began. Before
+ * #1482, two notices from the same bot on the same HEAD shared an identical
+ * canonical body, which is why this keys on a NEW comment id rather than body
+ * uniqueness. Since #1482 each body also embeds its own source notice's
+ * comment id, so bodies are now unique per notice too — but the NEW-id guard
+ * still matters: it stops the helper from matching some other pre-existing
+ * viewer comment that happens to carry this exact text instead of the create
+ * that just ran, which would under-count the markers the F2/F3 1:1 pairing
+ * needs.
  */
 function recoverPostedDisposition(
   owner: string,
@@ -784,7 +802,8 @@ if (import.meta.main) {
   const failed: FailedDisposition[] = [];
   // Track every viewer-authored comment id we know about (pre-existing plus the
   // ones we post), so a post-failure recovery attributes a NEW comment to the
-  // current notice instead of an earlier notice with an identical body.
+  // current notice's own post instead of some other pre-existing comment that
+  // happens to carry the identical (now per-notice-unique, #1482) body text.
   const knownViewerCommentIds = viewerCommentIds(owner, repo, pr, viewerLogin);
   let claimLost = false;
   for (let index = 0; index < plan.planned.length; index += 1) {
