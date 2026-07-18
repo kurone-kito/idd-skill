@@ -858,6 +858,307 @@ test('staleAgeMs: a configured shorter stale window allows a takeover the hardco
   assert.equal(underConfiguredWindow.waiver.activeClaimId, SUCCESSOR_CLAIM_ID);
 });
 
+// --- 9. sameHeadReroll (#1511) -----------------------------------------------
+// --- Bounded same-HEAD advisory reroll evidence: `itemCount` (Clause 1) is
+// --- a STATIC submission-time snapshot, so rejecting/resolving every item
+// --- in triage never clears it -- `converged` can stay false PERMANENTLY on
+// --- a HEAD the bot has already reviewed. This section proves the trigger
+// --- condition, the bounded counter (incl. K-exhaustion fall-through), the
+// --- inFlight/requestable state machine (resume-safe: derived fresh from
+// --- GitHub state, never in-session memory), separateness from
+// --- REQUEST_CAP, and that converged/waived/ready never reference this
+// --- field group at all.
+
+// 1h before NOW, 1h after RECENT -- old enough that the default 30-min
+// advisoryWait.pendingWindow has elapsed by NOW, so a marker at this time is
+// never "inFlight" purely from staleness (isolates count/cap assertions from
+// the inFlight state machine).
+const REROLL_AT = '2026-07-11T11:00:00Z';
+// A second, earlier reroll timestamp for the two-marker K-exhaustion case.
+const EARLIER_REROLL_AT = '2026-07-11T09:00:00Z';
+// 10 min before NOW -- within the default 30-min pendingWindow, so a marker
+// at this time (with no fresher review) IS "inFlight".
+const REROLL_JUST_NOW = '2026-07-11T11:50:00Z';
+
+/** `advisory-reroll:` marker comment. `createdAt` is the GitHub server
+ * timestamp the code must use; `embeddedAt` (defaults to the same value) is
+ * the marker body's own agent-supplied timestamp, which several tests below
+ * deliberately set to a DIFFERENT (even bogus) value to prove the code never
+ * reads it. */
+function rerollMarkerComment(
+  createdAt: string,
+  overrides: {
+    login?: string;
+    headSha?: string;
+    embeddedAt?: string;
+  } = {},
+) {
+  const headSha = overrides.headSha ?? HEAD;
+  const embeddedAt = overrides.embeddedAt ?? createdAt;
+  return {
+    author: { login: overrides.login ?? TRUSTED },
+    body: `advisory-reroll: ${AGENT_ID} ${headSha} ${embeddedAt}`,
+    createdAt,
+  };
+}
+
+test('sameHeadReroll: eligible when matchesHead, itemCount > 0, and no blocking thread -- the exact permanent-block residual', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ itemCount: 2 })] }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.converged, false); // the permanent-block bug itself
+  assert.equal(verdict.sameHeadReroll.eligible, true);
+  assert.equal(verdict.sameHeadReroll.count, 0);
+  assert.equal(verdict.sameHeadReroll.cap, 2); // DEFAULT_ADVISORY_SAME_HEAD_REROLL_CAP
+  assert.equal(verdict.sameHeadReroll.exhausted, false);
+  assert.equal(verdict.sameHeadReroll.latestAt, '');
+  assert.equal(verdict.sameHeadReroll.inFlight, false);
+  assert.equal(verdict.sameHeadReroll.requestable, true);
+});
+
+test('sameHeadReroll: NOT eligible when itemCount is already 0 (already converged, nothing to reroll)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview()] }), // itemCount: 0 default
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.sameHeadReroll.eligible, false);
+  assert.equal(verdict.sameHeadReroll.requestable, false);
+});
+
+test('sameHeadReroll: NOT eligible when an unresolved, undispositioned bot thread remains (PATH A work still outstanding)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2 })],
+      threads: [
+        {
+          id: 'PRT_1',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'nit: consider extracting this into a helper',
+                createdAt: OLD,
+                updatedAt: OLD,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.threads.satisfied, false);
+  assert.equal(verdict.sameHeadReroll.eligible, false);
+  assert.equal(verdict.sameHeadReroll.requestable, false);
+});
+
+test('sameHeadReroll: NOT eligible when matchesHead is false (bot has not reviewed current HEAD)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ commitId: OTHER_SHA, itemCount: 2 })],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.pending, true);
+  assert.equal(verdict.sameHeadReroll.eligible, false);
+  assert.equal(verdict.sameHeadReroll.requestable, false);
+});
+
+test('sameHeadReroll: a trusted same-HEAD marker counts and is not yet exhausted under the default cap', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
+      comments: [rerollMarkerComment(REROLL_AT)],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.sameHeadReroll.count, 1);
+  assert.equal(verdict.sameHeadReroll.exhausted, false);
+  assert.equal(verdict.sameHeadReroll.latestAt, REROLL_AT);
+  assert.equal(verdict.sameHeadReroll.requestable, true);
+});
+
+test('sameHeadReroll: K-exhaustion -- two trusted same-HEAD markers hit the default cap of 2, blocking a further reroll', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
+      comments: [
+        rerollMarkerComment(EARLIER_REROLL_AT),
+        rerollMarkerComment(REROLL_AT),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.sameHeadReroll.eligible, true); // still eligible in principle
+  assert.equal(verdict.sameHeadReroll.count, 2);
+  assert.equal(verdict.sameHeadReroll.exhausted, true);
+  assert.equal(verdict.sameHeadReroll.requestable, false); // but budget is spent
+  assert.equal(verdict.sameHeadReroll.latestAt, REROLL_AT); // the LATER of the two
+});
+
+test('sameHeadReroll: configurable cap (sameHeadRerollCap: 1) exhausts after a single reroll', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
+      comments: [rerollMarkerComment(REROLL_AT)],
+    }),
+    baseOptions({ sameHeadRerollCap: 1 }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.sameHeadReroll.cap, 1);
+  assert.equal(verdict.sameHeadReroll.count, 1);
+  assert.equal(verdict.sameHeadReroll.exhausted, true);
+  assert.equal(verdict.sameHeadReroll.requestable, false);
+});
+
+test('sameHeadReroll: inFlight while a recent marker exists and no fresher review has landed yet', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
+      comments: [rerollMarkerComment(REROLL_JUST_NOW)],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.sameHeadReroll.count, 1);
+  assert.equal(verdict.sameHeadReroll.exhausted, false);
+  assert.equal(verdict.sameHeadReroll.inFlight, true);
+  assert.equal(verdict.sameHeadReroll.requestable, false); // in flight -- do not repost
+});
+
+test('sameHeadReroll: inFlight clears once the bot submits a review AFTER the reroll marker, even if itemCount is still non-zero (routed to E1, never suppressed)', () => {
+  const laterReview = '2026-07-11T11:55:00Z'; // after REROLL_JUST_NOW, within the pending window
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 3, submittedAt: laterReview })],
+      comments: [rerollMarkerComment(REROLL_JUST_NOW)],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.itemCount, 3); // a flat/worse re-review -- not converged
+  assert.equal(verdict.sameHeadReroll.inFlight, false); // but the request WAS answered
+  assert.equal(verdict.sameHeadReroll.requestable, true); // free to try again (or fall through)
+});
+
+test('sameHeadReroll: inFlight clears once the pending window elapses even with no fresher review at all (do not wait forever)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      // The review PREDATES the reroll marker (no answer has arrived), yet
+      // REROLL_AT is over 30 minutes before NOW -- the default
+      // advisoryWait.pendingWindow has elapsed, so waiting is abandoned.
+      reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
+      comments: [rerollMarkerComment(REROLL_AT)],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.sameHeadReroll.inFlight, false);
+  assert.equal(verdict.sameHeadReroll.requestable, true);
+});
+
+test('sameHeadReroll: an untrusted marker author is not counted', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
+      comments: [rerollMarkerComment(REROLL_AT, { login: 'random-passerby' })],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.sameHeadReroll.count, 0);
+  assert.equal(verdict.sameHeadReroll.latestAt, '');
+});
+
+test('sameHeadReroll: a marker whose embedded HEAD SHA does not match current HEAD is not counted', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
+      comments: [rerollMarkerComment(REROLL_AT, { headSha: OTHER_SHA })],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.sameHeadReroll.count, 0);
+});
+
+test('sameHeadReroll: latestAt uses the GitHub comment createdAt, never the embedded (agent-supplied) timestamp', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
+      comments: [
+        rerollMarkerComment(REROLL_AT, { embeddedAt: '1999-01-01T00:00:00Z' }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.sameHeadReroll.latestAt, REROLL_AT);
+});
+
+test('sameHeadReroll: separateness from REQUEST_CAP -- an advisory-wait: marker (distinct prefix) is never counted as a reroll', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
+      comments: [
+        {
+          author: { login: TRUSTED },
+          body: `advisory-wait: ${AGENT_ID} ${HEAD} ${REROLL_AT}`,
+          createdAt: REROLL_AT,
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.sameHeadReroll.count, 0);
+  assert.equal(verdict.sameHeadReroll.requestable, true);
+});
+
+test('regression: converged/waived/ready are identical with and without advisory-reroll: markers present -- sameHeadReroll never affects the gate exit code', () => {
+  const inputsWithoutMarker = baseInputs({
+    reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
+  });
+  const inputsWithMarkers = baseInputs({
+    reviews: [copilotReview({ itemCount: 2, submittedAt: RECENT })],
+    comments: [
+      rerollMarkerComment(EARLIER_REROLL_AT),
+      rerollMarkerComment(REROLL_AT),
+    ],
+  });
+  const without = computeAdvisoryConvergenceVerdict(
+    inputsWithoutMarker,
+    baseOptions(),
+  );
+  const with_ = computeAdvisoryConvergenceVerdict(
+    inputsWithMarkers,
+    baseOptions(),
+  );
+  assertValidVerdict(without);
+  assertValidVerdict(with_);
+  // The only field group allowed to differ is sameHeadReroll itself (count/
+  // exhausted/latestAt/requestable move; eligible does not, since it never
+  // looks at markers at all).
+  assert.equal(without.sameHeadReroll.count, 0);
+  assert.equal(with_.sameHeadReroll.count, 2);
+  assert.equal(with_.sameHeadReroll.exhausted, true);
+  assert.equal(without.converged, with_.converged);
+  assert.equal(without.waived, with_.waived);
+  assert.equal(without.ready, with_.ready);
+  assert.equal(without.pending, with_.pending);
+  assert.deepEqual(without.review, with_.review);
+  assert.deepEqual(without.threads, with_.threads);
+});
+
 // --- pickResolvingClaimEvents (pure helper; #1347 regression) ---------------
 // --- #1347: the collaborator-marker-trust fix in #1344 threaded
 // --- `trustedMarkerLogins` into claim-issue disambiguation using a set

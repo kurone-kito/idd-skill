@@ -1289,6 +1289,25 @@ test('mixed-precision timestamps compare by time instead of string order', () =>
   );
 });
 
+test('summarizeAdvisoryWaitMarkers: an advisory-reroll: marker (#1511) is never counted -- separate marker family, distinct from REQUEST_CAP', () => {
+  const headSha = 'a'.repeat(40);
+  const summary = summarizeAdvisoryWaitMarkers(
+    [
+      {
+        body: `advisory-reroll: kurone-kito ${headSha} 2026-05-12T00:00:00Z`,
+        createdAt: '2026-05-12T00:00:00Z',
+        author: { login: 'kurone-kito' },
+      },
+    ],
+    headSha,
+    ['kurone-kito'],
+  );
+  assert.equal(summary.sameHeadMarkerCount, 0);
+  assert.equal(summary.sameHeadMarkerPresent, false);
+  assert.equal(summary.requestMarkerCount, 0);
+  assert.equal(summary.earliestSameHeadAt, '');
+});
+
 test('latest gating reviews compare timestamps by parsed time', () => {
   const latest = indexLatestGatingReviewsByAuthor([
     {
