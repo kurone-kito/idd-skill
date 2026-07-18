@@ -45,26 +45,32 @@ import {
 // convention `gh pr checks` already surfaces and `isCompletedCiTimestamp`
 // (protocol-helpers.mts) already treats as "not completed".
 const ZERO_SENTINEL_TIMESTAMP = '0001-01-01T00:00:00Z';
-// Legacy commit-status `state` uses its own 4-value vocabulary (`error`,
-// `failure`, `pending`, `success`) that only partly overlaps the check-run
-// vocabulary `classifyCiChecks` understands (`FAILURE`, `CANCELLED`,
-// `QUEUED`, `IN_PROGRESS`, `WAITING`, `SUCCESS`, `SKIPPED`, `NEUTRAL`,
-// `NOT_APPLICABLE`, ...). `SUCCESS` and `FAILURE` already coincide, but
-// `ERROR` (a distinct "reporting error" state, not `FAILURE`) and
-// `PENDING` (a distinct "still running" state, not one of the check-run
-// pending tokens) have no direct match -- left unmapped, both would
-// silently fall into `classifyCiChecks`'s `unknown` bucket instead of the
-// `failed` / `pending` bucket a caller actually needs (PR review finding,
-// #1483: `gh pr checks`'s prior flattened read normalized both vocabularies
-// into one `state` field; this data-source swap makes normalizing them
-// this module's own responsibility). Map the two divergent tokens onto
-// their check-run equivalents before classification ever sees them; this
-// is a "still failing" / "still running" outcome, never a false pass, so
-// even an unmapped future commit-status token would only ever fail closed
-// into `unknown`, not `success`.
+// The commit-status `state` GraphQL enum (`StatusState`) has its own
+// 5-value vocabulary (`EXPECTED`, `ERROR`, `FAILURE`, `PENDING`,
+// `SUCCESS`; confirmed via schema introspection -- an earlier version of
+// this comment underclaimed 4, missing `EXPECTED`) that only partly
+// overlaps the check-run vocabulary `classifyCiChecks` understands
+// (`FAILURE`, `CANCELLED`, `QUEUED`, `IN_PROGRESS`, `WAITING`, `SUCCESS`,
+// `SKIPPED`, `NEUTRAL`, `NOT_APPLICABLE`, ...). `SUCCESS` and `FAILURE`
+// already coincide, but the other three have no direct match -- left
+// unmapped, each would silently fall into `classifyCiChecks`'s `unknown`
+// bucket instead of the `failed` / `pending` bucket a caller actually
+// needs (PR review finding, #1483: `gh pr checks`'s prior flattened read
+// normalized both vocabularies into one `state` field; this
+// data-source swap makes normalizing them this module's own
+// responsibility). Map every divergent token onto its check-run
+// equivalent before classification ever sees it: `ERROR` (a distinct
+// "reporting error" state, not `FAILURE`) maps to `FAILURE`; `PENDING`
+// (still running) and `EXPECTED` (a required status check configured for
+// this ref but not yet reported at all -- also still "not done", not a
+// failure) both map to `IN_PROGRESS`. This is always a "still failing" /
+// "still running" outcome, never a false pass, so even an unmapped
+// future commit-status token would only ever fail closed into `unknown`,
+// not `success`.
 const STATUS_CONTEXT_STATE_ALIASES = {
   ERROR: 'FAILURE',
   PENDING: 'IN_PROGRESS',
+  EXPECTED: 'IN_PROGRESS',
 };
 /**
  * Normalize one raw `statusCheckRollup` entry into the `CheckPayload`
@@ -79,7 +85,7 @@ const STATUS_CONTEXT_STATE_ALIASES = {
  * absent -- a missing status is never silently coerced to an empty
  * string, which `classifyCiChecks` would not recognize as any known
  * bucket); a legacy commit-status reports its `state`, translated through
- * `STATUS_CONTEXT_STATE_ALIASES` for the two tokens with no direct
+ * `STATUS_CONTEXT_STATE_ALIASES` for the three tokens with no direct
  * check-run equivalent. This keeps classification behavior identical to
  * before #1483 for every single-producer case that existed pre-#1483 --
  * only the producer-identity discriminator (`type` / `workflowName`) and

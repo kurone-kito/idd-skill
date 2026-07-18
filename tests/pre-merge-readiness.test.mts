@@ -4828,6 +4828,20 @@ test('normalizeStatusCheckRollupEntry: a StatusContext PENDING normalizes to IN_
   assert.equal(result.state, 'IN_PROGRESS');
 });
 
+// E10 follow-up (this PR's own critique pass): the commit-status `state`
+// GraphQL enum (`StatusState`) actually has 5 members, not the 4 the
+// original fix accounted for -- `EXPECTED` (a required status check
+// configured for this ref but not yet reported at all) is also still
+// "not done", not a failure, so it maps the same way PENDING does.
+test('normalizeStatusCheckRollupEntry: a StatusContext EXPECTED normalizes to IN_PROGRESS, not an unrecognized state', () => {
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'StatusContext',
+    context: 'legacy-ci',
+    state: 'expected',
+  });
+  assert.equal(result.state, 'IN_PROGRESS');
+});
+
 test('normalizeStatusCheckRollupEntry: a StatusContext ERROR reaches classifyCiChecks as a genuine failure, end to end', () => {
   // The isolated mapping test above only proves the translation table
   // works; this proves the translated value actually makes
