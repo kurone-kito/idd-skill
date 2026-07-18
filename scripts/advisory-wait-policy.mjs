@@ -10,6 +10,16 @@ export const DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES = 30;
 export const DEFAULT_ADVISORY_SETTLED_WINDOW_MINUTES = 10;
 export const DEFAULT_ADVISORY_POLL_INTERVAL_MINUTES = 2;
 export const DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN = 'copilot';
+// Shared last-resort fallback for the plural `advisoryBotLogins` config key
+// (distinct from the singular primary-bot-login default above): used by both
+// `merged-pr-feedback-sweep.mts` and `disposition-non-review-notices.mts` so
+// the two stay aligned on which identities count as advisory bots when
+// `.github/idd/config.json` configures none. A single source avoids the
+// drift risk of two independently-maintained literals (see PR #1490 review).
+export const DEFAULT_ADVISORY_BOT_LOGINS = [
+  'coderabbitai[bot]',
+  'chatgpt-codex-connector[bot]',
+];
 // 24h, matching the `claim-stale-age` and external-check-waiver
 // `maxValidity` defaults so this gate uses a familiar timescale.
 export const DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES = 1440;

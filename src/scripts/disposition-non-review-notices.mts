@@ -39,6 +39,7 @@ import { loadIddConfig } from './idd-config.mts';
 import {
   advisoryBotIdentityToken,
   compareIsoTimestamps,
+  DEFAULT_ADVISORY_BOT_LOGINS,
   dispositionNamesAdvisoryBot,
   effectiveRegularCommentActivityAt,
   isAdvisoryNonReviewNotice,
@@ -49,11 +50,6 @@ import {
   resolveActiveClaimForWriteGate,
   resolveAdvisoryBotLogins,
 } from './protocol-helpers.mts';
-
-const DEFAULT_ADVISORY_BOT_LOGINS = [
-  'coderabbitai[bot]',
-  'chatgpt-codex-connector[bot]',
-];
 
 export interface NoticeComment {
   id: number;

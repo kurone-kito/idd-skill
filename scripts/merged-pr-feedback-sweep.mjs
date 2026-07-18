@@ -19,6 +19,7 @@ import { parseCliArgs } from './cli-args.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
   advisoryBotIdentityToken,
+  DEFAULT_ADVISORY_BOT_LOGINS,
   hasFreshDisposition,
   isAdvisoryNonReviewNotice,
   isDispositionComment,
@@ -341,20 +342,6 @@ function collectUnaddressedComments(
   }
   return out;
 }
-// ---------------------------------------------------------------------------
-// CLI / I/O (not unit-tested; the detection lives in the pure builder above)
-// ---------------------------------------------------------------------------
-// Mirrors disposition-non-review-notices.mts (E6)'s own default exactly: a
-// repo with no --advisory-bot-logins flag, no IDD_ADVISORY_BOT_LOGINS env,
-// and no advisoryBotLogins in .github/idd/config.json still recognizes
-// CodeRabbit/Codex as advisory-bot identities for the summary-walkthrough
-// exclusion, matching what E6 falls back to by default -- instead of that
-// exclusion (gated on `isConfiguredAdvisoryBotIdentity`) silently never
-// firing when resolution yields an empty list.
-const DEFAULT_ADVISORY_BOT_LOGINS = [
-  'coderabbitai[bot]',
-  'chatgpt-codex-connector[bot]',
-];
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `since:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --since spec key

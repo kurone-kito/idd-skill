@@ -20,6 +20,7 @@ import { parseCliArgs } from './cli-args.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
   advisoryBotIdentityToken,
+  DEFAULT_ADVISORY_BOT_LOGINS,
   hasFreshDisposition,
   isAdvisoryNonReviewNotice,
   isDispositionComment,
@@ -479,18 +480,6 @@ function collectUnaddressedComments(
 // ---------------------------------------------------------------------------
 // CLI / I/O (not unit-tested; the detection lives in the pure builder above)
 // ---------------------------------------------------------------------------
-
-// Mirrors disposition-non-review-notices.mts (E6)'s own default exactly: a
-// repo with no --advisory-bot-logins flag, no IDD_ADVISORY_BOT_LOGINS env,
-// and no advisoryBotLogins in .github/idd/config.json still recognizes
-// CodeRabbit/Codex as advisory-bot identities for the summary-walkthrough
-// exclusion, matching what E6 falls back to by default -- instead of that
-// exclusion (gated on `isConfiguredAdvisoryBotIdentity`) silently never
-// firing when resolution yields an empty list.
-const DEFAULT_ADVISORY_BOT_LOGINS = [
-  'coderabbitai[bot]',
-  'chatgpt-codex-connector[bot]',
-];
 
 interface SweepArgs {
   since: string | null;
