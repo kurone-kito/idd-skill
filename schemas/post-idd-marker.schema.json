@@ -15,6 +15,7 @@
       "enum": [
         "claim",
         "unclaim",
+        "activation-nonce",
         "watermark",
         "baseline",
         "advisory",
