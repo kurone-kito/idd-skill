@@ -450,10 +450,38 @@ function selectLatestCheckEntryPerName(
  * selection purposes only, and the winning wrapper is unwrapped back to
  * its original `entry` before returning, so the returned `CiWaitCheckEntry`
  * always carries its real, unmodified `state`.
+ *
+ * Sorted by the original `entry.state` (ascending) before wrapping, so a
+ * same-instant tie between two *distinct* raw states that both normalize
+ * to the same tie-break state (e.g. `TIMED_OUT` and `STARTUP_FAILURE`,
+ * both normalized to `'FAILURE'`) still resolves deterministically
+ * (Copilot review, PR #1530). Without the sort, `selectLatestCheckInstance`'s
+ * last-resort comparison (`candidate.state !== current.state && ...`) sees
+ * two *equal* normalized states and always keeps whichever entry
+ * `reduce` saw first -- an input-order artifact, not a value-based choice.
+ * Pre-fix, distinct raw states made that same comparison a genuine
+ * lexicographic argmin, independent of input order; sorting restores
+ * exactly that: `reduce` starts from (and keeps) the lexicographically
+ * smallest raw state whenever normalized states tie. This sort changes
+ * nothing else -- the `completedAt`-primary and rank-primary comparisons
+ * in `isNewerCheckInstance` are already order-independent.
+ *
+ * Exported (like `protocol-helpers.mts`'s own `selectLatestCheckInstance`)
+ * so the determinism property above is directly unit-testable: the winning
+ * *raw* instance's identity is not observable through
+ * `buildCiWaitStateSummary`'s public return shape at all -- `checks` there
+ * is the raw, not-deduped list, and `requiredChecks` only exposes aggregate
+ * pass/fail booleans that stay identical regardless of which same-rank
+ * instance wins a tie.
  */
-function selectLatestCheckEntry(group: CiWaitCheckEntry[]): CiWaitCheckEntry {
+export function selectLatestCheckEntry(
+  group: CiWaitCheckEntry[],
+): CiWaitCheckEntry {
+  const sorted = [...group].sort((a, b) =>
+    a.state < b.state ? -1 : a.state > b.state ? 1 : 0,
+  );
   const winner = selectLatestCheckInstance(
-    group.map((entry) => ({
+    sorted.map((entry) => ({
       entry,
       state: tieBreakState(entry),
       completedAt: entry.completedAt,

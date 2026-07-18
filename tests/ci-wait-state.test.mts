@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   buildCiWaitStateSummary,
   parseArgs,
+  selectLatestCheckEntry,
 } from '../src/scripts/ci-wait-state.mts';
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
@@ -338,50 +339,155 @@ test('required-checks rollup: a same-instant STARTUP_FAILURE/STALE vs success-fa
   }
 });
 
-test('required-checks rollup: a same-instant ACTION_REQUIRED/ERROR vs success-family tie still reports failing', () => {
-  // The issue's own hand analysis found ACTION_REQUIRED and the
-  // StatusContext-only ERROR already won a same-instant tie against every
-  // success-family state before this fix, by lexicographic happenstance
-  // (both start with a letter earlier than every success state's first
-  // letter). Covered here too for completeness/symmetry with the other
-  // FAILURE_STATES members above, and as a regression guard in case a
-  // future success-family addition ever breaks that happenstance.
-  for (const failureConclusion of ['ACTION_REQUIRED', 'ERROR']) {
-    for (const successConclusion of [
-      'SUCCESS',
-      'NEUTRAL',
-      'SKIPPED',
-      'NOT_APPLICABLE',
-    ]) {
-      const summary = buildCiWaitStateSummary(
-        {
-          headRefOid: HEAD_SHA,
-          statusCheckRollup: [
-            checkRun({
-              name: 'idd-advisory-convergence',
-              workflowName: 'ci',
-              conclusion: failureConclusion,
-              completedAt: '2026-07-17T16:25:47Z',
-            }),
-            checkRun({
-              name: 'idd-advisory-convergence',
-              workflowName: 'ci',
-              conclusion: successConclusion,
-              completedAt: '2026-07-17T16:25:47Z',
-            }),
-          ],
-        },
-        { requiredCheckNames: ['idd-advisory-convergence'] },
-      );
+test('required-checks rollup: a same-instant ACTION_REQUIRED vs success-family tie still reports failing', () => {
+  // The issue's own hand analysis found ACTION_REQUIRED already won a
+  // same-instant tie against every success-family state before this fix,
+  // by lexicographic happenstance (it starts with a letter earlier than
+  // every success state's first letter). Covered here too for
+  // completeness/symmetry with the other FAILURE_STATES members above,
+  // and as a regression guard in case a future success-family addition
+  // ever breaks that happenstance.
+  for (const successConclusion of [
+    'SUCCESS',
+    'NEUTRAL',
+    'SKIPPED',
+    'NOT_APPLICABLE',
+  ]) {
+    const summary = buildCiWaitStateSummary(
+      {
+        headRefOid: HEAD_SHA,
+        statusCheckRollup: [
+          checkRun({
+            name: 'idd-advisory-convergence',
+            workflowName: 'ci',
+            conclusion: 'ACTION_REQUIRED',
+            completedAt: '2026-07-17T16:25:47Z',
+          }),
+          checkRun({
+            name: 'idd-advisory-convergence',
+            workflowName: 'ci',
+            conclusion: successConclusion,
+            completedAt: '2026-07-17T16:25:47Z',
+          }),
+        ],
+      },
+      { requiredCheckNames: ['idd-advisory-convergence'] },
+    );
 
-      assert.equal(
-        summary.requiredChecks.anyRequiredFailing,
-        true,
-        `expected a same-instant ${failureConclusion} vs ${successConclusion} tie to report failing`,
-      );
-      assert.equal(summary.requiredChecks.status, 'failing');
-    }
+    assert.equal(
+      summary.requiredChecks.anyRequiredFailing,
+      true,
+      `expected a same-instant ACTION_REQUIRED vs ${successConclusion} tie to report failing`,
+    );
+    assert.equal(summary.requiredChecks.status, 'failing');
   }
+});
+
+test('required-checks rollup: a same-instant StatusContext ERROR vs (CheckRun) success-family tie still reports failing', () => {
+  // ERROR is StatusContext-only (a CheckRun never reports it as a
+  // conclusion), so this exercises the actual StatusContext normalization
+  // path -- and, since the paired success entry is a CheckRun, a genuine
+  // cross-type tie under the same checkName (Copilot review, PR #1530;
+  // the original version of this test fed ERROR through the generic
+  // checkRun() CheckRun fixture, which never exercises the StatusContext
+  // branch at all). completedAt must be set explicitly and identically on
+  // both entries: normalizeCheckEntry defaults a StatusContext's
+  // completedAt to '' when absent, which parses to a *missing* timestamp
+  // -- isNewerCheckInstance's incomplete-always-wins branch would then
+  // make ERROR win for the wrong reason (treated as still-running, never
+  // reaching the #1504 tie-break rank comparison this test means to
+  // cover) regardless of whether the tie-break fix works at all.
+  for (const successConclusion of [
+    'SUCCESS',
+    'NEUTRAL',
+    'SKIPPED',
+    'NOT_APPLICABLE',
+  ]) {
+    const summary = buildCiWaitStateSummary(
+      {
+        headRefOid: HEAD_SHA,
+        statusCheckRollup: [
+          {
+            __typename: 'StatusContext',
+            context: 'idd-advisory-convergence',
+            state: 'ERROR',
+            targetUrl: '',
+            completedAt: '2026-07-17T16:25:47Z',
+          },
+          checkRun({
+            name: 'idd-advisory-convergence',
+            workflowName: 'ci',
+            conclusion: successConclusion,
+            completedAt: '2026-07-17T16:25:47Z',
+          }),
+        ],
+      },
+      { requiredCheckNames: ['idd-advisory-convergence'] },
+    );
+
+    assert.equal(
+      summary.requiredChecks.anyRequiredFailing,
+      true,
+      `expected a same-instant ERROR vs ${successConclusion} tie to report failing`,
+    );
+    assert.equal(summary.requiredChecks.status, 'failing');
+    // Note: `summary.checks` is the raw, *not-deduped* list (dedup happens
+    // only inside buildRequiredChecksRollup's internal
+    // selectLatestCheckEntryPerName call), so it always has both entries
+    // here regardless of which one wins the tie -- not a signal of which
+    // instance was selected. The completedAt values above are explicit
+    // and identical on both entries by construction, which is what
+    // guarantees this exercises the rank-based tie-break rather than the
+    // incomplete-always-wins path (see the comment at the top of this
+    // test), independent of anything observable at runtime here.
+  }
+});
+
+test('selectLatestCheckEntry: a same-instant tie between two distinct FAILURE_STATES members resolves deterministically regardless of input order', () => {
+  // Copilot review, PR #1530: tieBreakState() normalizes every failure-
+  // bucketed entry to the same literal 'FAILURE' for tie-break purposes,
+  // so two *different* raw failure states (e.g. TIMED_OUT and
+  // STARTUP_FAILURE) now tie on both completedAt and normalized state.
+  // selectLatestCheckEntry sorts the group by the original entry.state
+  // before reducing so this still resolves to a fixed winner (the
+  // lexicographically smallest raw state, matching this tie-break's
+  // pre-#1504 argmin-by-value behavior for two non-'FAILURE' failure
+  // states) regardless of which order the two instances arrive in. The
+  // winning instance's identity is not observable through
+  // buildCiWaitStateSummary's public shape (see the note on the ERROR
+  // test above), so this calls the exported reducer directly instead.
+  const timedOut = {
+    checkName: 'idd-advisory-convergence',
+    workflowName: 'ci',
+    type: 'check-run' as const,
+    state: 'TIMED_OUT',
+    status: 'failure' as const,
+    required: true,
+    url: 'https://example/timed-out',
+    startedAt: '2026-07-17T16:00:00Z',
+    completedAt: '2026-07-17T16:25:47Z',
+  };
+  const startupFailure = {
+    checkName: 'idd-advisory-convergence',
+    workflowName: 'ci',
+    type: 'check-run' as const,
+    state: 'STARTUP_FAILURE',
+    status: 'failure' as const,
+    required: true,
+    url: 'https://example/startup-failure',
+    startedAt: '2026-07-17T16:00:00Z',
+    completedAt: '2026-07-17T16:25:47Z',
+  };
+
+  // 'STARTUP_FAILURE' < 'TIMED_OUT' lexicographically ('S' < 'T').
+  assert.equal(
+    selectLatestCheckEntry([timedOut, startupFailure]).state,
+    'STARTUP_FAILURE',
+  );
+  assert.equal(
+    selectLatestCheckEntry([startupFailure, timedOut]).state,
+    'STARTUP_FAILURE',
+  );
 });
 
 test('required-checks rollup: a same-instant CANCELLED vs SUCCESS tie still resolves to success (unchanged)', () => {
