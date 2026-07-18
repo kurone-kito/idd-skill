@@ -162,6 +162,20 @@ interface Context {
   needsDecisionLabelName?: string;
   /** #1484: high-confidence duplicate/superseded mechanical evidence. */
   highConfidenceDuplicate?: HighConfidenceDuplicateInput;
+  /**
+   * #1484 (Codex P2 review finding): `true` when a high-confidence evidence
+   * collector genuinely failed (recorded in `collectionWarnings` by
+   * `runCli`), as opposed to running cleanly and finding nothing. Before
+   * this tier existed, any Check 4 collector failure crashed the whole
+   * evaluation; this tier's own try/catch introduced the first scenario
+   * where a collector can fail yet Check 4 still runs -- which must
+   * degrade to the documented "Timeout on duplicate detection... fall back
+   * to exact title match only" Edge Case, not the full weak heuristic
+   * (specifically, not the near-duplicate fuzzy match, which could
+   * otherwise flag a merely similarly-titled but genuinely distinct issue
+   * as a false duplicate precisely because evidence collection broke).
+   */
+  highConfidenceCollectionDegraded?: boolean;
 }
 
 interface CheckOutcome {
@@ -191,6 +205,8 @@ interface SuitabilityOptions {
   needsDecisionLabelName?: unknown;
   /** #1484 */
   highConfidenceDuplicate?: unknown;
+  /** #1484 */
+  highConfidenceCollectionDegraded?: unknown;
 }
 
 const CHECKS: {
@@ -336,6 +352,9 @@ export function evaluateSuitability(
     ),
     highConfidenceDuplicate: normalizeHighConfidenceDuplicateInput(
       options.highConfidenceDuplicate,
+    ),
+    highConfidenceCollectionDegraded: Boolean(
+      options.highConfidenceCollectionDegraded,
     ),
   };
 
@@ -630,6 +649,35 @@ export function checkDuplicateOrSuperseded(context: Context): CheckOutcome {
   }
 
   const { issue, duplicateCandidates } = context;
+
+  // #1484 (Codex P2 review finding): a genuine high-confidence
+  // evidence-collection failure -- not "checked, found nothing" -- degrades
+  // to exact-title matching ONLY, per the documented "Timeout on duplicate
+  // detection... fall back to exact title match only" Edge Case. Skips the
+  // free-text declaration scan and the near-duplicate fuzzy (>80%
+  // Levenshtein) check entirely: a merely similarly-titled but genuinely
+  // distinct issue must never read as a false duplicate just because
+  // evidence collection broke.
+  if (context.highConfidenceCollectionDegraded) {
+    const degradedExactTitle = normalizeText(issue.title);
+    const degradedExactMatch = duplicateCandidates.find(
+      (candidate) =>
+        candidate.number !== issue.number &&
+        normalizeText(candidate.title) === degradedExactTitle,
+    );
+    if (degradedExactMatch) {
+      return {
+        pass: false,
+        evidence: `Exact-title duplicate found: #${degradedExactMatch.number}`,
+      };
+    }
+    return {
+      pass: true,
+      evidence:
+        'High-confidence evidence collection failed; degraded to exact-title match only per the documented "Timeout on duplicate detection" Edge Case. No exact-title duplicate found.',
+    };
+  }
+
   const body = issue.body;
 
   const declarations = [...body.matchAll(DUPLICATE_DECLARATION_PATTERN)];
@@ -996,6 +1044,7 @@ function runCli(): void {
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
     highConfidenceDuplicate,
+    highConfidenceCollectionDegraded: collectionWarnings.length > 0,
   });
 
   const output = {

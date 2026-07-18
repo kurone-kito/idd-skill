@@ -784,6 +784,68 @@ test('checkDuplicateOrSuperseded: omitting highConfidenceDuplicate leaves the we
   assert.equal(result.pass, true);
 });
 
+test('checkDuplicateOrSuperseded: degraded mode skips near-duplicate fuzzy matching', () => {
+  // Regression guard for a Codex P2 review finding: a genuine collector
+  // failure must degrade to exact-title matching only, per the documented
+  // "Timeout on duplicate detection" Edge Case -- a merely SIMILAR title
+  // (>80% Levenshtein, the near-duplicate check) must not read as a false
+  // duplicate just because evidence collection broke.
+  const nearDuplicateTitle = `${BASE_ISSUE.title} extra`;
+  const result = checkDuplicateOrSuperseded({
+    issue: BASE_ISSUE,
+    duplicateCandidates: [
+      { number: 2, title: nearDuplicateTitle, state: 'OPEN' },
+    ] as Context['duplicateCandidates'],
+    highConfidenceCollectionDegraded: true,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('checkDuplicateOrSuperseded: degraded mode still catches an exact-title match', () => {
+  const result = checkDuplicateOrSuperseded({
+    issue: BASE_ISSUE,
+    duplicateCandidates: [
+      { number: 3, title: BASE_ISSUE.title, state: 'OPEN' },
+    ] as Context['duplicateCandidates'],
+    highConfidenceCollectionDegraded: true,
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /Exact-title duplicate found: #3/);
+});
+
+test('checkDuplicateOrSuperseded: degraded mode skips the free-text declaration scan too', () => {
+  const result = checkDuplicateOrSuperseded({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThis is a duplicate of #123.`,
+    },
+    duplicateCandidates: [] as Context['duplicateCandidates'],
+    highConfidenceCollectionDegraded: true,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('checkDuplicateOrSuperseded: not degraded still runs the full weak heuristic', () => {
+  const nearDuplicateTitle = `${BASE_ISSUE.title} extra`;
+  const result = checkDuplicateOrSuperseded({
+    issue: BASE_ISSUE,
+    duplicateCandidates: [
+      { number: 2, title: nearDuplicateTitle, state: 'OPEN' },
+    ] as Context['duplicateCandidates'],
+  } as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /Near-duplicate found/);
+});
+
+test('evaluateSuitability: a genuine collection failure degrades Check 4 to exact-title only', () => {
+  const nearDuplicateTitle = `${BASE_ISSUE.title} extra`;
+  const result = evaluateSuitability(BASE_ISSUE, {
+    duplicateCandidates: [{ number: 2, title: nearDuplicateTitle }],
+    highConfidenceCollectionDegraded: true,
+  });
+  assert.equal(result.outcome, 'ready');
+});
+
 test('evaluateSuitability: high-confidence duplicate evidence maps to the duplicate outcome', () => {
   const result = evaluateSuitability(BASE_ISSUE, {
     highConfidenceDuplicate: {
