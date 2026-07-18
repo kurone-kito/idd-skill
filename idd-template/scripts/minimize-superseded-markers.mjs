@@ -457,8 +457,9 @@ function runGh(argv) {
 // and docs/idd-helper-scripts.md does not name any of their exact wording —
 // the same class of accepted delta already shipped for this file's
 // if (!value)-cohort siblings idd-doctor.mts / verify-workshop-integrity.mts
-// in kurone-kito/idd-skill#1467). All still exit 2 via the unchanged outer
-// try/catch below, same as the behavior they replace:
+// in kurone-kito/idd-skill#1467). All still exit 2 via the unchanged
+// try/catch in the import.meta.main entrypoint above (which calls this
+// function), same as the behavior they replace:
 //   - A value-taking flag with genuinely nothing after it (end of argv)
 //     now throws parseArgs' own "Option '--x <value>' argument missing"
 //     instead of this file's old per-flag `--x requires a value` text.
