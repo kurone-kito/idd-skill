@@ -512,7 +512,15 @@ in ascending issue-number order:
   where `N` is `.github/idd/config.json`
   `discover.activeClaimPreScanBatchSize` (distributed default: `10`).
 - For each candidate, fetch the issue and parse comments per the
-  shared claim-state rules in `idd-claim.instructions.md`. A
+  shared claim-state rules in `idd-claim.instructions.md` — including
+  forced-handoff and legacy markers, not just
+  `claimed-by`/`unclaimed-by`. No current bulk helper
+  (`discover-roadmap-graph.mjs --with-claim-state` /
+  `discover-orphan-filter.mjs --with-claim-state`) is
+  forced-handoff-aware, so a multi-candidate
+  survey here must either loop the single-issue
+  `resume-claim-routing.mjs --fresh-claim-gate` resolver per candidate
+  or apply `idd-claim.instructions.md`'s full parsing rules manually. A
   candidate is **ineligible** when parsing yields an **active claim**
   whose latest valid `claimed-by` comment (matching the documented
   format, authored by a trusted marker actor) has GitHub `created_at`
