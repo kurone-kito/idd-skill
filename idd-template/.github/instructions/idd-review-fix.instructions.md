@@ -29,13 +29,12 @@ Commit fixes atomically — one logical change per commit.
 travel as their own atomic commits, but push together in a single push
 at E12 — do not push after each individual fix. This is already the
 implicit shape of E9-E12; this rule states it explicitly so it is never
-read as a license to push per commit. See E12 for the push step itself
-and the bounded cross-round allowance for comments that arrive before
-that push.
+read as a license to push per commit. See E12 for the push step and the
+bounded cross-round allowance for comments arriving before that push.
 
-These two fix-side rules are the complement of the accept-side
+These fix-side rules are the complement of the accept-side
 "Verify before accept" rule in `idd-review-triage.instructions.md` (E5);
-both cut the advisory-review round count:
+each cuts the advisory-review round count:
 
 - **Fix the whole class, not just the flagged line.** When an accepted
   finding is one instance of a systemic class, sweep the current diff
@@ -47,6 +46,9 @@ both cut the advisory-review round count:
   name, value, path, or described behavior — to satisfy a reviewer, check
   it against the actual implementation before committing, so the fix does
   not trade one inaccuracy for another and cost an extra round.
+- **Already fixed via batching.** A PATH A item Accepted (E4/E5) may
+  already be folded into a prior E12 batching push — do not duplicate
+  the fix; confirm the commit addresses it and let E13 cite that SHA.
 
 ## E10 — Validate fixes with critique pass
 
@@ -115,41 +117,50 @@ pending push — each as its own atomic commit — instead of pushing
 immediately and letting each arrival start a fresh round, but only when
 **all** of the following hold:
 
-- Every comment that arrived since the last push is advisory-bot-sourced
-  (PATH B — never a PATH A item; source alone decides this, no triage
-  pass required) and is plainly a small, confirmable fix: the kind
-  described by the "Verify before accept" rule in
-  `idd-review-triage.instructions.md` (E5) — a claim checkable against
-  live evidence and, once confirmed, acted on directly.
+- Every comment that arrived since the last push is **bot-sourced**:
+  authored by a login identifying the primary advisory bot — for
+  default Copilot, `copilot` or `copilot-pull-request-reviewer*`,
+  matched case-insensitively per `isCopilotReviewerLogin`
+  (`scripts/protocol-helpers.mjs`; a non-default bot's `primaryBotLogin`
+  is already the real login) — or an `advisoryBotLogins` login,
+  **regardless of PATH A/B** (Copilot's inline review-thread comments
+  fall through to PATH A under E4's ambiguous-default rule). A login
+  also set as `secondaryBotLogin` still qualifies — no helper excludes
+  that overlap.
+- Each such comment is plainly a small, confirmable fix whose claim was
+  checked against live evidence (a linter run, actual file content,
+  actual runtime behavior) before folding it in — the same
+  **verify-before-accept discipline** E5 codifies for PATH B (#814), now
+  applied to bot-sourced PATH A. Never fold in a bot-asserted-only
+  finding.
 - The resulting commit touches only files this round's pending fixes
-  already touch.
+  already touch, and re-runs **post-fix-validate** first — E12's own
+  run already happened and misses a later fold-in.
 - No CI-wait poll (E15) is currently in flight for this branch.
 
-**Bound**: accumulate at most 3 additional commits this way, and stop
-accumulating once 10 minutes have passed since the first accumulated
-commit — whichever limit is reached first.
+**Bound**: accumulate at most 3 additional commits, and stop once 10
+minutes have passed since the first accumulated commit — whichever
+limit is reached first.
 
 **Ends accumulation immediately**, pushing whatever has accumulated so
-far instead of waiting for more: any PATH A item arrives, any item
-falls outside the touched-file scope above, or either bound above is
+far instead of waiting for more: a PATH A item from a **human or
+CODEOWNER** reviewer arrives (bot-sourced PATH A alone does not); any
+item requests a substantive code/logic change, not a small textual fix;
+any item falls outside the touched-file scope above; or either bound is
 reached.
 
-**Explicit non-goals**: this allowance never delays, holds open, or
+**Explicit non-goals**: this allowance never delays, holds, or
 interrupts an in-flight CI wait — E15's "mid-wait arrivals fold into the
-next round" rule is unchanged. It never changes PATH B routing or
-triage timing: formal PATH B classification and disposition
+next round" rule is unchanged. It never changes PATH A/B routing or
+triage timing: formal classification and disposition
 (`idd-review-triage.instructions.md` E4-E7) still happen normally at the
-next E1 pass. This allowance changes only the _push timing_ of the
-commit itself, never how or when it is triaged. It does not relax
-anything else: E14 still requests a re-review from the primary advisory
-bot after every actual push and still consumes the request cap once per
-push; the per-HEAD `review-watermark` in
-`idd-pre-merge.instructions.md` still invalidates on this push because
-it keys on HEAD SHA; each item's disposition reply in
-`idd-review-triage.instructions.md` (E6) stays individual — no combined
-markers; and the
+next E1 pass — only push timing changes, not triage. It relaxes nothing
+else: E14 still requests primary-bot re-review after every push,
+consuming its request cap; the per-HEAD `review-watermark` still
+invalidates on this push (keyed on HEAD SHA); each item's E6 disposition
+reply stays individual — no combined markers; and the
 [claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
-still runs immediately before this push.
+still runs immediately before push.
 
 ## E13 — Reply to feedback
 
