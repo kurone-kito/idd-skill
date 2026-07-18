@@ -1244,9 +1244,9 @@ long job, and a single slow step or test file often dominates a suite.
 Fix the measured hot spot, not the assumed one.
 
 When the heaviest per-PR job is a **test suite**, the same
-integration-branch split applies:
+integration branch split applies:
 
-- **Coverage/reporting-only work runs on integration-branch pushes,
+- **Coverage/reporting-only work runs on integration branch pushes,
   not every PR head** — instrumenting every re-sync is pure overhead
   when no gate (a coverage threshold, a required check) consumes the
   result.
