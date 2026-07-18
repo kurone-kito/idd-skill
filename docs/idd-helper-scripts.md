@@ -1420,13 +1420,21 @@ Interpretation rules:
     `**Awaiting maintainer decision**`). Trusted IDD operational markers, IDD
     disposition comments, any HTML comment beginning with `<!-- idd-` (for
     example cleanup-evidence, excluded regardless of author — including CI
-    automation such as `github-actions[bot]`), and a CodeRabbit
-    summary-walkthrough comment (recognized via the shared
-    `isReviewSummaryComment` classifier — the same single-sourced predicate
-    E6's `disposition-non-review-notices` uses to auto-`**Accepted**` it) are
-    all excluded from the feedback set unconditionally, regardless of
-    disposition state, so the sweep and E6 classify it identically instead of
-    disagreeing. Advisory non-review notices (rate/usage-limit) are
+    automation such as `github-actions[bot]`), and a genuine CodeRabbit
+    summary-walkthrough comment are all excluded from the feedback set
+    unconditionally, regardless of disposition state, so the sweep and E6
+    classify a CodeRabbit summary-walkthrough comment identically instead of
+    disagreeing. The summary-walkthrough exclusion requires **all three** of:
+    `isCodeRabbitLogin(author)` (the marker string is body-only with no author
+    check baked in, so gating on the actual CodeRabbit login keeps a
+    non-CodeRabbit comment that merely starts with the same literal text from
+    being wrongly dropped), the shared `isReviewSummaryComment` classifier —
+    the same single-sourced predicate E6's `disposition-non-review-notices`
+    uses to auto-`**Accepted**` a summary — and `!isAdvisoryNonReviewNotice`
+    (a CodeRabbit comment can carry both the summary marker and a
+    rate/usage-limit notice; E6 classifies that combination as a non-review
+    notice, never a summary acceptance, so the sweep must not exclude it
+    either). Advisory non-review notices (rate/usage-limit) are
     deliberately **not** excluded this way — an undispositioned one left on a
     merged PR still indicates a skipped E6 disposition and stays a genuine
     signal. Each finding carries an `advisoryBot` flag (`isKnownReviewBot` or a

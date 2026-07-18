@@ -20,6 +20,8 @@ import { parseCliArgs } from './cli-args.mts';
 import { loadIddConfig } from './idd-config.mts';
 import {
   hasFreshDisposition,
+  isAdvisoryNonReviewNotice,
+  isCodeRabbitLogin,
   isDispositionComment,
   isKnownReviewBot,
   isReviewSummaryComment,
@@ -390,10 +392,27 @@ function collectUnaddressedComments(
     // The CodeRabbit summary-walkthrough comment is auto-generated
     // boilerplate, not reviewer feedback: E6 (disposition-non-review-notices)
     // already auto-`**Accepted**`s it via this same single-sourced
-    // classifier. Exclude it unconditionally here too — the same tier as IDD
-    // bookkeeping, not gated on `latestDispositionAt` — so the sweep and E6
-    // classify it identically instead of disagreeing (#1488).
-    if (isReviewSummaryComment(comment.body)) {
+    // `isReviewSummaryComment` classifier. Exclude it unconditionally here
+    // too — the same tier as IDD bookkeeping, not gated on
+    // `latestDispositionAt` — so the sweep and E6 classify it identically
+    // instead of disagreeing (#1488). Two guards keep this narrow, matching
+    // E6's own gate exactly (`disposition-non-review-notices.mts`):
+    // - `isCodeRabbitLogin(author)`: the marker is body-only (no author
+    //   check baked in), so without this a non-CodeRabbit author whose
+    //   comment happens to start with the same literal HTML-comment text
+    //   would be wrongly treated as inert boilerplate and dropped.
+    // - `!isAdvisoryNonReviewNotice(comment.body)`: a CodeRabbit comment can
+    //   carry both this summary marker and a rate/usage-limit notice; E6
+    //   classifies that combination as a non-review notice (a `**Rejected**`
+    //   disposition), never as a summary acceptance. Excluding it here
+    //   before that classification would hide an undispositioned notice
+    //   from the sweep, contrary to advisory non-review notices staying a
+    //   genuine signal.
+    if (
+      isCodeRabbitLogin(author) &&
+      isReviewSummaryComment(comment.body) &&
+      !isAdvisoryNonReviewNotice(comment.body)
+    ) {
       continue;
     }
     if (isLaterThan(latestDispositionAt, commentTimestamp(comment))) {

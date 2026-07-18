@@ -431,6 +431,56 @@ test('the summary exclusion is comment-scoped: a genuine comment and an unresolv
   );
 });
 
+test('a non-CodeRabbit author whose comment starts with the summary marker is still surfaced', () => {
+  // Codex review finding on #1488's own PR: isReviewSummaryComment matches by
+  // body prefix alone, so without an author gate a human (or any other bot)
+  // could evade the sweep by starting a comment with CodeRabbit's literal
+  // marker text. Only coderabbitai[bot] gets the exclusion.
+  const prs: MergedPrInput[] = [
+    {
+      number: 20,
+      comments: [
+        {
+          body: `${CODERABBIT_SUMMARY_MARKER}\n\nNot actually CodeRabbit.`,
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'a-human' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(result.prs[0].unaddressedComments[0].author, 'a-human');
+});
+
+test('a CodeRabbit comment carrying both the summary marker and a rate-limit notice is still surfaced', () => {
+  // Second Codex finding: E6 (disposition-non-review-notices) classifies a
+  // combined summary+rate-limit comment as a non-review notice -- rejected,
+  // never accepted as a summary -- so the sweep must not silently drop it
+  // via the summary exclusion either (it would otherwise hide an
+  // undispositioned notice, contrary to notices staying a genuine signal).
+  const prs: MergedPrInput[] = [
+    {
+      number: 21,
+      comments: [
+        {
+          body: `${CODERABBIT_SUMMARY_MARKER}\n\n> ## Review limit reached`,
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'coderabbitai[bot]' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(
+    result.prs[0].unaddressedComments[0].author,
+    'coderabbitai[bot]',
+  );
+});
+
 test('surfaces an unaddressed CHANGES_REQUESTED review body', () => {
   const prs: MergedPrInput[] = [
     {
