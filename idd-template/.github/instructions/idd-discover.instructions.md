@@ -103,14 +103,14 @@ Read the **issue-scope** value from the Project commands table in
   normal. Fall back to **A0-O** before entering the A3 decision tree when
   the roadmap path yields **no viable, startable, unclaimed candidate** —
   via **trigger (a)** (zero candidates reach A3.5 — A2 enumerated no open
-  execution leaves, or A3 filtered them all out as blocked) or **trigger
+  execution leaves, or A3 filtered them all out as blocked), **trigger
   (b)** (candidates reach A3.5 but none is workable — A4 Step 1 viability
   discards every A3.5-startable candidate, or A4 Step 1.5 eliminates the
-  last one). Run A0-O **at most once** as this fallback per Discover pass;
-  once spent, a later A4 exhaustion reports and stops per A4 Step 1 / Step
-  1.5 (not an abort) without re-entering A0-O. This reuses A0-O **only** as
-  a post-roadmap fallback;
-  the roadmap path stays primary (unlike `orphan-first`). If candidates
+  last one), or **trigger (c)** (A1 finds no roadmap). Run A0-O **at most
+  once** as this fallback per Discover pass; once spent, a later A4
+  exhaustion reports and stops per A4 Step 1 / Step 1.5 (not an abort)
+  without re-entering A0-O. This reuses A0-O **only** as a post-roadmap
+  fallback; the roadmap path stays primary (unlike `orphan-first`). If candidates
   reach A3.5 but it holds them all as approval-needed, do **not** fall
   back: the approval hold governs and a non-empty approval-needed bucket
   is not a true zero. See
@@ -126,8 +126,8 @@ search.
 When A0-O runs as the `roadmap-first` fallback (not the `orphan-first`
 primary path), every exit below that would re-enter **A1** or reach the
 **A3 decision tree** is redirected by the invoking trigger — trigger (a)
-to the A3 decision tree, trigger (b) (A4 exhaustion) to the A4 **"report
-and stop (not an abort)"** terminal — because the roadmap path already ran
+or (c) to the A3 decision tree, trigger (b) (A4 exhaustion) to the A4
+**"report and stop (not an abort)"** terminal — because A1 already ran
 and must not be re-entered (no A1 ↔ A0-O or A4 ↔ A0-O loop).
 
 - If `orphan-first-policy` is `public-disabled`, first determine the
@@ -199,7 +199,8 @@ A5 pre-check.
 Use GH CLI or GH MCP to find the roadmap among open issues. Identify it
 by the configured roadmap label (project field) from
 `labels.roadmapLabelName` (default: `roadmap`) or by recognizing it as
-an umbrella issue. If no roadmap issue exists, report and abort.
+an umbrella issue. If no roadmap issue exists, report and abort, except
+under `roadmap-first` (**trigger (c)**): fall back to **A0-O** instead.
 
 **Autopilot cross-roadmap mode (optional, additive).** When several
 roadmaps run in parallel and the active autopilot-suitable work may live
