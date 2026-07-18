@@ -50,6 +50,8 @@ each cuts the advisory-review round count:
 - **Already fixed via batching.** A PATH A item Accepted (E4/E5) may
   already be folded into a prior E12 batching push — do not duplicate
   the fix; confirm the commit addresses it and let E13 cite that SHA.
+  If a later pass Rejects it instead, revert that commit — the only
+  rollback path here.
 
 ## E10 — Validate fixes with critique pass
 
@@ -121,20 +123,21 @@ immediately and letting each arrival start a fresh round, but only when
 - Every comment that arrived since the last push is **bot-sourced**:
   authored by the primary bot's actual comment-author login — for
   default Copilot, exact-case `Copilot` or a login starting with
-  `copilot-pull-request-reviewer` (`idd-advisory-wait-shell-fallback.md`)
-  — never the distinct, lowercase `primaryBotLogin` config alias
-  `copilot` (used only for `--add-reviewer`, never a comment author; a
-  non-default bot's `primaryBotLogin` is already the real login) — or a
-  login in `advisoryBotLogins`, **regardless of PATH A/B** (Copilot's
-  inline review-thread comments fall through to PATH A under E4's
-  ambiguous-default rule). `secondaryBotLogin`, when set, is out of
-  scope here.
+  `copilot-pull-request-reviewer` (see
+  `../../docs/idd-advisory-wait-shell-fallback.md`) — never the
+  distinct, lowercase `primaryBotLogin` config alias `copilot` (used
+  only for `--add-reviewer`, never a comment author; a non-default
+  bot's `primaryBotLogin` is already the real login) — or a login in
+  `advisoryBotLogins` other than one also configured as
+  `secondaryBotLogin`, **regardless of PATH A/B** (Copilot's inline
+  review-thread comments fall through to PATH A under E4's
+  ambiguous-default rule).
 - Each such comment is plainly a small, confirmable fix whose claim was
   checked against live evidence (a linter run, actual file content,
   actual runtime behavior) before folding it in — the same
-  **verify-before-accept discipline** E5 codifies for PATH B (#814),
-  now applied to bot-sourced PATH A too. Never fold in a finding
-  trusted only because a bot asserted it.
+  **verify-before-accept discipline** E5 codifies for PATH B (#814), now
+  applied to bot-sourced PATH A too. Never fold in a bot-asserted-only
+  finding.
 - The resulting commit touches only files this round's pending fixes
   already touch.
 - No CI-wait poll (E15) is currently in flight for this branch.
@@ -146,23 +149,21 @@ commit — whichever limit is reached first.
 **Ends accumulation immediately**, pushing whatever has accumulated so
 far instead of waiting for more: a PATH A item from a **human or
 CODEOWNER** reviewer arrives (bot-sourced PATH A alone does not); any
-item requests a substantive code/logic change, not a small textual fix
-(a wording nit stays in scope; a behavior change does not); any item
-falls outside the touched-file scope above; or either bound above is
-reached.
+item requests a substantive code/logic change, not a small textual fix;
+any item falls outside the touched-file scope above; or either bound
+above is reached.
 
 **Explicit non-goals**: this allowance never delays, holds open, or
 interrupts an in-flight CI wait — E15's "mid-wait arrivals fold into the
 next round" rule is unchanged. It never changes PATH A/B routing or
 triage timing: formal classification and disposition
 (`idd-review-triage.instructions.md` E4-E7) still happen normally at the
-next E1 pass. This allowance changes only the _push timing_ of the
-commit itself, never how or when it is triaged. It does not relax
-anything else: E14 still requests a re-review from the primary
-advisory bot after every actual push and still consumes the request cap
-once per push; the per-HEAD `review-watermark` in
-`idd-pre-merge.instructions.md` still invalidates on this push because
-it keys on HEAD SHA; each item's disposition reply in
+next E1 pass — this allowance changes only push timing, never how or
+when a comment is triaged. It does not relax anything else: E14 still
+requests a re-review from the primary advisory bot after every push,
+still consuming the request cap once per push; the per-HEAD
+`review-watermark` in `idd-pre-merge.instructions.md` still invalidates
+on this push (it keys on HEAD SHA); each item's disposition reply in
 `idd-review-triage.instructions.md` (E6) stays individual — no combined
 markers; and the
 [claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
