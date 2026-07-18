@@ -338,6 +338,6 @@ this hold and stop:
 ## AW6 — Same-HEAD advisory reroll
 
 F2-only (`#1511`) on `sameHeadReroll.eligible`; see
-`idd-helper-scripts.md`. `requestable`: request+post
+`idd-helper-scripts.md`. `requestable`: post+request
 `advisory-reroll:`, poll (not E14's loop). `inFlight`: poll only.
 Else F2's route; `!inFlight`: E1.

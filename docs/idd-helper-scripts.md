@@ -1308,11 +1308,9 @@ from F2 on a non-zero `--assert` exit:
 
 1. If `sameHeadReroll.eligible` is `false`, the carve-out does not
    apply; fall through to F2's normal route-to-E1/E4.
-2. If `requestable` is `true`: request a fresh same-HEAD review from
-   the primary advisory bot using the identical gh-then-REST
-   remove-reviewer→add-reviewer commands as E14 step 4's
-   `REQUEST_NEEDED` path (`idd-review-fix.instructions.md`), then post,
-   as plain text (no HTML comment, matching `advisory-wait:`'s shape):
+2. If `requestable` is `true`: **post the marker before requesting the
+   review**, as plain text (no HTML comment, matching `advisory-wait:`'s
+   shape):
 
    ```text
    advisory-reroll: {agent-id} {head-SHA} {ISO8601-requested-at}
@@ -1326,7 +1324,25 @@ from F2 on a non-zero `--assert` exit:
    advisory-wait request cap (`REQUEST_CAP`). **Fail closed to a hold**
    (mirroring AW3-R) if the marker cannot be posted or verified: an
    untracked request could otherwise silently exceed the bounded
-   budget on the next pass. Then poll (step 4).
+   budget on the next pass.
+
+   **Only after** the marker is verified posted, request a fresh
+   same-HEAD review from the primary advisory bot using the identical
+   gh-then-REST remove-reviewer→add-reviewer commands as E14 step 4's
+   `REQUEST_NEEDED` path (`idd-review-fix.instructions.md`). This order
+   is load-bearing, not incidental: `inFlight` (below) anchors on the
+   marker's GitHub `created_at`, so posting the marker **first**
+   guarantees it predates any review the bot submits in response. Doing
+   it in the other order opens a race -- a bot fast enough to respond
+   between the request and the marker post would submit a review whose
+   `submittedAt` is _earlier_ than `latestAt`, so `hasFreshReviewSince-
+   LastReroll` would never see it as an answer and `inFlight` would
+   stay `true` for the full pending window despite already being
+   answered (PR #1517 review). If the request itself then fails after
+   the marker already posted, treat that the same as a failed request
+   elsewhere in this protocol: fail closed to a hold rather than
+   silently leaving a marker with no matching request behind. Then poll
+   (step 4).
 3. If `requestable` is `false` because `inFlight` is `true`: a reroll
    is already awaiting the bot's response (including on a freshly
    resumed/restarted session). Do not post another marker; poll
