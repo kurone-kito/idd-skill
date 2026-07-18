@@ -18,9 +18,9 @@ import { execFileSync } from 'node:child_process';
 import { parseCliArgs } from './cli-args.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
+  advisoryBotIdentityToken,
   hasFreshDisposition,
   isAdvisoryNonReviewNotice,
-  isCodeRabbitLogin,
   isDispositionComment,
   isKnownReviewBot,
   isReviewSummaryComment,
@@ -123,10 +123,26 @@ export function buildMergedPrFeedbackSweep(prs, options) {
   const advisory = new Set(
     options.advisoryBotLogins.map((login) => login.toLowerCase()),
   );
+  // Distinct from `advisory` above: E6 (disposition-non-review-notices.mts)
+  // gates its summary-walkthrough auto-acceptance on membership in the
+  // *configured* `advisoryBotLogins` set alone (identity-token compared, so
+  // `coderabbitai` and `coderabbitai[bot]` collapse to the same entry) --
+  // never on the broader `isKnownReviewBot` recognition `advisory` folds in
+  // here. A repo that deliberately configures advisoryBotLogins to omit
+  // CodeRabbit (e.g. a Codex-only advisory policy) makes E6 leave a
+  // CodeRabbit summary undispositioned; matching that exactly (not
+  // `isKnownReviewBot`, which would keep recognizing CodeRabbit regardless of
+  // that config) is what keeps the sweep's summary exclusion from disagreeing
+  // with E6 in that configuration.
+  const advisoryIdentities = new Set(
+    options.advisoryBotLogins.map(advisoryBotIdentityToken),
+  );
   const isIdd = (login) => idd.has(login);
   const isTrusted = (login) => trusted.has(login);
   const isAdvisoryBot = (login) =>
     isKnownReviewBot(login) || advisory.has(login);
+  const isConfiguredAdvisoryBotIdentity = (login) =>
+    advisoryIdentities.has(advisoryBotIdentityToken(login));
   const findings = [];
   for (const pr of prs) {
     const unresolvedThreads = collectUnresolvedThreads(
@@ -141,6 +157,7 @@ export function buildMergedPrFeedbackSweep(prs, options) {
       isIdd,
       isTrusted,
       isAdvisoryBot,
+      isConfiguredAdvisoryBotIdentity,
     );
     if (unresolvedThreads.length === 0 && unaddressedComments.length === 0) {
       continue;
@@ -217,6 +234,7 @@ function collectUnaddressedComments(
   isIdd,
   isTrusted,
   isAdvisoryBot,
+  isConfiguredAdvisoryBotIdentity,
 ) {
   // A non-IDD item counts as addressed only when a later IDD-agent
   // *disposition* (Accepted / Rejected / Awaiting maintainer decision)
@@ -265,10 +283,16 @@ function collectUnaddressedComments(
     // `latestDispositionAt` — so the sweep and E6 classify it identically
     // instead of disagreeing (#1488). Two guards keep this narrow, matching
     // E6's own gate exactly (`disposition-non-review-notices.mts`):
-    // - `isCodeRabbitLogin(author)`: the marker is body-only (no author
-    //   check baked in), so without this a non-CodeRabbit author whose
-    //   comment happens to start with the same literal HTML-comment text
-    //   would be wrongly treated as inert boilerplate and dropped.
+    // - `isConfiguredAdvisoryBotIdentity(author)`: the marker is body-only
+    //   (no author check baked in), so without this a non-advisory-bot
+    //   author whose comment happens to start with the same literal
+    //   HTML-comment text would be wrongly treated as inert boilerplate and
+    //   dropped. Gated on the *configured* advisory-bot set specifically
+    //   (not the broader `isAdvisoryBot` / `isKnownReviewBot` recognition)
+    //   because that is what E6 itself gates on: a repo that configures
+    //   `advisoryBotLogins` to omit CodeRabbit makes E6 leave a CodeRabbit
+    //   summary undispositioned, and this exclusion must agree rather than
+    //   still silently dropping it.
     // - `!isAdvisoryNonReviewNotice(comment.body)`: a CodeRabbit comment can
     //   carry both this summary marker and a rate/usage-limit notice; E6
     //   classifies that combination as a non-review notice (a `**Rejected**`
@@ -277,7 +301,7 @@ function collectUnaddressedComments(
     //   from the sweep, contrary to advisory non-review notices staying a
     //   genuine signal.
     if (
-      isCodeRabbitLogin(author) &&
+      isConfiguredAdvisoryBotIdentity(author) &&
       isReviewSummaryComment(comment.body) &&
       !isAdvisoryNonReviewNotice(comment.body)
     ) {
@@ -317,6 +341,20 @@ function collectUnaddressedComments(
   }
   return out;
 }
+// ---------------------------------------------------------------------------
+// CLI / I/O (not unit-tested; the detection lives in the pure builder above)
+// ---------------------------------------------------------------------------
+// Mirrors disposition-non-review-notices.mts (E6)'s own default exactly: a
+// repo with no --advisory-bot-logins flag, no IDD_ADVISORY_BOT_LOGINS env,
+// and no advisoryBotLogins in .github/idd/config.json still recognizes
+// CodeRabbit/Codex as advisory-bot identities for the summary-walkthrough
+// exclusion, matching what E6 falls back to by default -- instead of that
+// exclusion (gated on `isConfiguredAdvisoryBotIdentity`) silently never
+// firing when resolution yields an empty list.
+const DEFAULT_ADVISORY_BOT_LOGINS = [
+  'coderabbitai[bot]',
+  'chatgpt-codex-connector[bot]',
+];
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `since:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --since spec key
@@ -602,11 +640,15 @@ function main() {
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
     config: iddConfig,
   });
-  const { logins: advisoryBotLogins } = resolveAdvisoryBotLogins({
+  const resolvedAdvisoryBotLogins = resolveAdvisoryBotLogins({
     flagValue: args.advisoryBotLogins,
     envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
     config: iddConfig,
-  });
+  }).logins;
+  const advisoryBotLogins =
+    resolvedAdvisoryBotLogins.length > 0
+      ? resolvedAdvisoryBotLogins
+      : DEFAULT_ADVISORY_BOT_LOGINS;
   // The IDD agent accounts whose comments are treated as dispositions and
   // whose own comments are not feedback. Distinct from trusted-marker actors:
   // a human maintainer can be a trusted-marker actor whose review feedback we

@@ -481,6 +481,39 @@ test('a CodeRabbit comment carrying both the summary marker and a rate-limit not
   );
 });
 
+test('a CodeRabbit summary is still surfaced when advisoryBotLogins is configured to omit CodeRabbit', () => {
+  // Third Codex finding (raised on this PR's own second review round): the
+  // exclusion gates on the *configured* advisoryBotLogins set, not the
+  // broader isKnownReviewBot recognition -- matching E6, which requires the
+  // author to be in its own configured advisory-bot identities. A Codex-only
+  // advisory policy (CodeRabbit deliberately not configured) makes E6 leave a
+  // CodeRabbit summary undispositioned, so the sweep must surface it too
+  // instead of still excluding it via a hardcoded/broader bot recognition.
+  const codexOnlyOptions = {
+    ...OPTIONS,
+    advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+  };
+  const prs: MergedPrInput[] = [
+    {
+      number: 22,
+      comments: [
+        {
+          body: `${CODERABBIT_SUMMARY_MARKER}\n\n## Walkthrough\n\nRefactors X.`,
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'coderabbitai[bot]' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, codexOnlyOptions);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(
+    result.prs[0].unaddressedComments[0].author,
+    'coderabbitai[bot]',
+  );
+});
+
 test('surfaces an unaddressed CHANGES_REQUESTED review body', () => {
   const prs: MergedPrInput[] = [
     {

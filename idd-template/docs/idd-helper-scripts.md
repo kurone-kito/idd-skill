@@ -1425,16 +1425,21 @@ Interpretation rules:
     unconditionally, regardless of disposition state, so the sweep and E6
     classify a CodeRabbit summary-walkthrough comment identically instead of
     disagreeing. The summary-walkthrough exclusion requires **all three** of:
-    `isCodeRabbitLogin(author)` (the marker string is body-only with no author
-    check baked in, so gating on the actual CodeRabbit login keeps a
-    non-CodeRabbit comment that merely starts with the same literal text from
-    being wrongly dropped), the shared `isReviewSummaryComment` classifier —
-    the same single-sourced predicate E6's `disposition-non-review-notices`
-    uses to auto-`**Accepted**` a summary — and `!isAdvisoryNonReviewNotice`
-    (a CodeRabbit comment can carry both the summary marker and a
-    rate/usage-limit notice; E6 classifies that combination as a non-review
-    notice, never a summary acceptance, so the sweep must not exclude it
-    either). Advisory non-review notices (rate/usage-limit) are
+    the author matching the _configured_ advisory-bot identity set (the same
+    `--advisory-bot-logins` / `IDD_ADVISORY_BOT_LOGINS` / config resolution as
+    above, falling back to the CodeRabbit/Codex defaults when nothing is
+    configured — the same fallback E6 itself applies, and deliberately
+    narrower than the broader `isKnownReviewBot` recognition used for the
+    `advisoryBot` flag below, so a repo that configures `advisoryBotLogins` to
+    omit CodeRabbit makes both the sweep and E6 leave a CodeRabbit summary
+    undispositioned rather than only E6), the shared `isReviewSummaryComment`
+    classifier — the same single-sourced predicate E6's
+    `disposition-non-review-notices` uses to auto-`**Accepted**` a summary —
+    and `!isAdvisoryNonReviewNotice` (a CodeRabbit comment can carry both the
+    summary marker and a rate/usage-limit notice; E6 classifies that
+    combination as a non-review notice, never a summary acceptance, so the
+    sweep must not exclude it either). Advisory non-review notices
+    (rate/usage-limit) are
     deliberately **not** excluded this way — an undispositioned one left on a
     merged PR still indicates a skipped E6 disposition and stays a genuine
     signal. Each finding carries an `advisoryBot` flag (`isKnownReviewBot` or a
