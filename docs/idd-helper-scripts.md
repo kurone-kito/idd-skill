@@ -1452,13 +1452,17 @@ Interpretation rules:
   by design, not an oversight.
   - **Intent**: it exists as a spot-check for runs where a lightweight
     model (for example a GPT-5.4-mini or Haiku-class model) has been
-    driving the IDD loop and may have fail-opened the E-phase disposition
-    net, letting a merge complete — by whichever actor was authorized to
-    run it — with review feedback still unaddressed. (Per this project's
+    driving the IDD loop and may have left feedback with **no E-phase
+    disposition at all, or a thread left unresolved**, letting a merge
+    complete — by whichever actor was authorized to run it — with that
+    feedback unaddressed. (Per this project's
     [Weak-model guardrails](idd-workflow.md#weak-model-guardrails), a
     lightweight-tier session must not itself run the autonomous merge
     phases, so the sweep audits the aftermath of that policy, not a
-    weak-model self-merge.)
+    weak-model self-merge.) The sweep detects exactly those two gaps —
+    it has **no backstop** for a _false-but-present_ disposition or an
+    already-resolved thread; see the boundary recorded in
+    `idd-design-rationale.md`.
   - **When to run it** (non-binding trigger guidance, not a policy gate):
     after a weak-model-driven backlog drain, on a periodic spot-audit
     cadence, or when a fail-open is suspected on a specific PR (via
