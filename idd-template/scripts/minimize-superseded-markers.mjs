@@ -478,6 +478,13 @@ function runGh(argv) {
 //   - `--apply=<value>` (or any other boolean flag with `=`) now throws
 //     "does not take an argument" instead of falling through to
 //     `unknown argument: --apply=<value>`.
+//   - Conversely, `--subject-ids=<value>` (or `=` on any other string
+//     flag) is now silently *accepted* as an alternate value syntax; the
+//     old loop's exact `arg === '--subject-ids'` comparison never matched
+//     the `=`-joined form, so it fell through to
+//     `unknown argument: --subject-ids=<value>`. The empty-string form
+//     (`--subject-ids=`) is unaffected either way -- it still hits the
+//     post-parse check below exactly like `--subject-ids ''` does.
 function parseMinimizeArgs(argv) {
   const { values } = parseArgs({
     args: argv,
