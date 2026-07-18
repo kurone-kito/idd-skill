@@ -728,43 +728,63 @@ function runCli() {
   const duplicateCandidates = fetchDuplicateCandidates(repoRef, issue);
   const labelsPolicy = normalizePolicyConfig(loadPolicy(args.policy)).labels;
   // #1484: high-confidence Check 4 tier evidence. closedByPullRequestsReferences
-  // is always attempted -- cheap, independent of '## Candidate files', and
-  // fails loud on a gh error like every other fetch in this file (a broken
-  // fetch must surface, not silently read as "no evidence"; see
-  // fetchClosedByMergedPrNumbers's doc comment). The same-candidate-files scan
-  // only runs when the issue declares '## Candidate files' AND the
-  // high-contention exclusion set actually resolved -- see
-  // loadHighContentionFiles's doc comment for why an unresolved manifest
-  // skips the scan rather than proceeding with zero exclusions.
-  const closedByMergedPrNumbers = fetchClosedByMergedPrNumbers(
-    owner,
-    repo,
-    args.issue,
-  );
-  const candidateFiles = parseCandidateFiles(issue.body);
-  // Only resolve the high-contention exclusion set (a file read + JSON parse)
-  // when there is a '## Candidate files' section to check it against --
-  // most issues have none, and the result would otherwise be discarded.
-  const highContentionFiles =
-    candidateFiles.length > 0 ? loadHighContentionFiles() : null;
-  const shouldScanMergedPrs =
-    candidateFiles.length > 0 &&
-    highContentionFiles !== null &&
-    issue.createdAt.length > 0;
-  const mergedPrs = shouldScanMergedPrs
-    ? fetchMergedPrFileOverlapEvidence(repoRef, issue.createdAt)
-    : [];
+  // is always attempted -- cheap, independent of '## Candidate files'. The
+  // same-candidate-files scan only runs when the issue declares
+  // '## Candidate files' AND the high-contention exclusion set actually
+  // resolved -- see loadHighContentionFiles's doc comment for why an
+  // unresolved manifest skips the scan rather than proceeding with zero
+  // exclusions.
+  //
+  // The whole block is wrapped in one try/catch (Codex review finding on
+  // this PR): an uncaught `gh` failure here previously aborted the entire
+  // 7-check evaluation, contradicting Check 4's own documented Edge Case
+  // ("Timeout on duplicate detection... fall back to exact title match
+  // only") -- this tier is an optional enhancement layered onto Check 4, and
+  // its collection failing must not take down Checks 1-3 and 5-7 too. A
+  // collection failure is never silently reported as "no evidence" (that
+  // would mask a genuinely broken collector as a clean pass) -- it is
+  // surfaced explicitly via `highConfidenceDuplicateCollectionError` in the
+  // JSON output below, while `highConfidenceDuplicate` itself is left
+  // `undefined` so Check 4 falls through to the weak heuristic exactly as if
+  // no evidence had been collected.
+  let highConfidenceDuplicate;
+  let highConfidenceDuplicateCollectionError = null;
+  try {
+    const closedByMergedPrNumbers = fetchClosedByMergedPrNumbers(
+      owner,
+      repo,
+      args.issue,
+    );
+    const candidateFiles = parseCandidateFiles(issue.body);
+    // Only resolve the high-contention exclusion set (a file read + JSON
+    // parse) when there is a '## Candidate files' section to check it
+    // against -- most issues have none, and the result would otherwise be
+    // discarded.
+    const highContentionFiles =
+      candidateFiles.length > 0 ? loadHighContentionFiles() : null;
+    const shouldScanMergedPrs =
+      candidateFiles.length > 0 &&
+      highContentionFiles !== null &&
+      issue.createdAt.length > 0;
+    const mergedPrs = shouldScanMergedPrs
+      ? fetchMergedPrFileOverlapEvidence(repoRef, issue.createdAt)
+      : [];
+    highConfidenceDuplicate = {
+      closedByMergedPrNumbers,
+      candidateFiles,
+      highContentionFiles: highContentionFiles ?? [],
+      mergedPrs,
+    };
+  } catch (error) {
+    highConfidenceDuplicateCollectionError =
+      error instanceof Error ? error.message : String(error);
+  }
   const result = evaluateSuitability(issue, {
     repository: { owner, repo },
     duplicateCandidates,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
-    highConfidenceDuplicate: {
-      closedByMergedPrNumbers,
-      candidateFiles,
-      highContentionFiles: highContentionFiles ?? [],
-      mergedPrs,
-    },
+    highConfidenceDuplicate,
   });
   const output = {
     repository: { owner, repo },
@@ -777,6 +797,9 @@ function runCli() {
     passed: result.passed,
     outcome: result.outcome,
     failedCheck: result.failedCheck,
+    ...(highConfidenceDuplicateCollectionError
+      ? { highConfidenceDuplicateCollectionError }
+      : {}),
     checks: args.verbose
       ? result.checks
       : result.checks.map((check) => ({
@@ -1063,14 +1086,16 @@ export function buildPrFilesArgs(repoRef, prNumber) {
   ];
 }
 /**
- * Fetch the candidate issue's own merged closing-PR references. Fails loud
- * (via `runGh`, no try/catch here) on a `gh` error, matching this file's
- * existing `fetchIssue` / `fetchDuplicateCandidates` convention: a broken
- * fetch must surface as an error, not silently read as "no evidence" -- the
- * latter would be a much worse failure mode than a thrown error, since it
- * would make a real duplicate look clean. A CLI-level failure is already
- * covered by Check 4's documented Edge Case ("Timeout on duplicate
- * detection... fall back to exact title match only").
+ * Fetch the candidate issue's own merged closing-PR references. Throws (via
+ * `runGh`, no try/catch here) on a `gh` error rather than silently reading a
+ * broken fetch as "no evidence" -- the latter would make a real duplicate
+ * look clean. The caller (`runCli`) wraps this and its sibling fetches below
+ * in one try/catch so a failure here degrades the optional high-confidence
+ * tier (Check 4's own documented "Timeout on duplicate detection... fall
+ * back to exact title match only" Edge Case) without aborting the other six
+ * checks (Codex review finding on this PR: an earlier version let this
+ * throw uncaught all the way out of `runCli`, crashing the whole
+ * evaluation).
  */
 function fetchClosedByMergedPrNumbers(owner, repo, issueNumber) {
   const parsed = ghJson(buildClosedByMergedPrArgs(owner, repo, issueNumber));
@@ -1084,22 +1109,32 @@ function fetchClosedByMergedPrNumbers(owner, repo, issueNumber) {
 /**
  * Bounded two-step merged-PR file-overlap scan (list, then per-PR file
  * list), mirroring B2.0's own documented commands exactly rather than a new
- * query shape. Fails loud like `fetchClosedByMergedPrNumbers` above -- once
- * the caller has decided to run this scan (see `shouldScanMergedPrs` in
- * `runCli`), a mid-scan `gh` error surfaces rather than degrading to "no
- * overlap found".
+ * query shape. A malformed list entry (non-positive-integer or absent
+ * `number`) is skipped rather than shelled out to `gh pr view` (Copilot
+ * review finding on this PR: `ghJsonArray` intentionally returns
+ * `unknown[]`, so an unexpected API shape should degrade this one entry,
+ * not become a hard `gh pr view NaN`/`gh pr view 0` failure). A genuine `gh`
+ * error on a well-formed entry still throws -- the caller (`runCli`) wraps
+ * this and its sibling fetch above in one try/catch so that surfaces as the
+ * documented Check 4 Edge Case fallback rather than crashing the whole
+ * evaluation.
  */
 function fetchMergedPrFileOverlapEvidence(repoRef, sinceIso) {
   const list = ghJsonArray(buildMergedPrListArgs(repoRef, sinceIso));
-  return list.map((entry) => {
+  const results = [];
+  for (const entry of list) {
     const pr = entry ?? {};
     const number = Number.parseInt(String(pr.number ?? ''), 10);
+    if (!Number.isInteger(number) || number <= 0) {
+      continue;
+    }
     const files = runGh(buildPrFilesArgs(repoRef, number))
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean);
-    return { number, mergedAt: String(pr.mergedAt ?? ''), files };
-  });
+    results.push({ number, mergedAt: String(pr.mergedAt ?? ''), files });
+  }
+  return results;
 }
 /**
  * Resolve the high-contention exclusion set the same way A4 Step 2's
