@@ -40,6 +40,98 @@ test('classifies CI check states for advisory wait decisions', () => {
   assert.equal(classifyCiChecks(ciSkippedNeutral).status, 'success');
 });
 
+// #1471: `classifyCiChecks` must dedupe multiple check-run instances that
+// share the same `name` down to the latest one before classifying, instead
+// of letting a stale instance for that name outvote the current one.
+test('classifyCiChecks: a stale cancelled-only instance is superseded by a later success for the same name', () => {
+  // Without dedup this shape misclassifies as 'unknown' (the stale
+  // CANCELLED instance is neither failing nor passing on its own), not
+  // 'failed' — a distinct branch from the FAILURE-triggered repro below.
+  const checks = [
+    {
+      name: 'idd-advisory-convergence',
+      state: 'CANCELLED',
+      completedAt: '2026-07-17T15:59:36Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'SUCCESS',
+      completedAt: '2026-07-17T16:25:47Z',
+    },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'success');
+});
+
+test('classifyCiChecks: a genuinely failing latest instance still fails despite older passing instances', () => {
+  // Guards against an over-broad fix that ignores any failure anywhere in
+  // the list — this must stay 'failed' because the latest instance for the
+  // name is the one that failed.
+  const checks = [
+    {
+      name: 'idd-advisory-convergence',
+      state: 'SUCCESS',
+      completedAt: '2026-07-17T15:00:00Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'SUCCESS',
+      completedAt: '2026-07-17T15:30:00Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'FAILURE',
+      completedAt: '2026-07-17T16:00:00Z',
+    },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'failed');
+});
+
+test('classifyCiChecks: PR #1434 four-instance repro (2 cancelled, 1 failure, 1 success) classifies success', () => {
+  const checks = [
+    {
+      name: 'idd-advisory-convergence',
+      state: 'CANCELLED',
+      completedAt: '2026-07-17T15:59:36Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'CANCELLED',
+      completedAt: '2026-07-17T15:59:51Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'FAILURE',
+      completedAt: '2026-07-17T16:00:06Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'SUCCESS',
+      completedAt: '2026-07-17T16:25:47Z',
+    },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'success');
+});
+
+test('classifyCiChecks: an in-progress rerun is not shadowed by an older completed success for the same name', () => {
+  // The mirror-image failure mode: a live rerun (no completedAt yet) must
+  // win over a stale completed SUCCESS for the same name, matching
+  // GitHub's own semantics where an in-progress required check leaves the
+  // branch not-clean rather than falling back to an old passing verdict.
+  const checks = [
+    {
+      name: 'idd-advisory-convergence',
+      state: 'SUCCESS',
+      completedAt: '2026-07-17T16:00:06Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'IN_PROGRESS',
+      completedAt: null,
+    },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'pending');
+});
+
 test('detects operational marker prefixes', () => {
   assert.equal(
     operationalMarkerPrefix(
