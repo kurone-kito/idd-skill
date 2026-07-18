@@ -20,6 +20,7 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { ghText } from './gh-exec.mjs';
 import {
+  renderAdvisoryRerollMarker,
   renderAdvisoryWaitMarker,
   renderAdvisoryWaitRecoveryMarker,
   renderClaimedByMarker,
@@ -34,6 +35,7 @@ export const MARKER_TYPES = [
   'baseline',
   'advisory',
   'advisory-recovery',
+  'advisory-reroll',
 ];
 export const TARGET_KINDS = ['issue', 'pr'];
 /**
@@ -82,6 +84,12 @@ export function buildMarkerBody(type, fields) {
       });
     case 'advisory-recovery':
       return renderAdvisoryWaitRecoveryMarker({
+        agentId: fields['agent-id'],
+        headSha: fields['head-sha'],
+        timestamp: fields.timestamp,
+      });
+    case 'advisory-reroll':
+      return renderAdvisoryRerollMarker({
         agentId: fields['agent-id'],
         headSha: fields['head-sha'],
         timestamp: fields.timestamp,
@@ -255,6 +263,7 @@ Per-type field flags:
   baseline           --agent-id --claim-id --sha
   advisory           --agent-id --head-sha --timestamp
   advisory-recovery  --agent-id --head-sha --timestamp
+  advisory-reroll    --agent-id --head-sha --timestamp
 
 --from-pr forwards optional --trusted-marker-logins / --advisory-bot-logins to
 the snapshot child so its counts match the manual review-activity-snapshot path.

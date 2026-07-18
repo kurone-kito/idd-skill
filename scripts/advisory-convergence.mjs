@@ -36,11 +36,33 @@
 //
 // This helper never mutates GitHub state: it only reads PR/review/thread/
 // comment data and prints a verdict.
+//
+// #1511: bounded same-HEAD advisory reroll evidence. `itemCount` (Clause 1
+// above) is a STATIC snapshot of the primary bot's review comment count at
+// submission time -- rejecting/resolving those items in triage never
+// changes it, so `converged` can stay false PERMANENTLY on a HEAD the bot
+// has already reviewed, even once every one of its findings has a valid
+// disposition. The `sameHeadReroll` field group below surfaces exactly
+// when that residual is the ONLY thing blocking convergence, plus a
+// bounded counter (backed by a distinct `advisory-reroll:` marker, kept
+// separate from the advisory-wait `REQUEST_CAP`) so instructions (AW6 in
+// idd-advisory-wait.instructions.md, invoked only from F2) can request a
+// few fresh same-HEAD re-reviews before falling through to the existing
+// deadline+waiver/hold backstop. This is PURELY ADDITIVE evidence:
+// `converged`/`waived`/`ready` below are computed with ZERO reference to
+// `sameHeadReroll.*` (see the tests asserting this), so the carve-out can
+// never let the gate pass on anything other than the primary bot's own
+// real signal -- it only tells a caller when requesting a reroll is safe
+// and how much budget remains.
 import {
   DEFAULT_ADVISORY_CONVERGENCE_DEADLINE_MINUTES,
+  DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES,
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+  DEFAULT_ADVISORY_SAME_HEAD_REROLL_CAP,
   readAdvisoryConvergenceDeadlineMinutes,
   readAdvisoryPrimaryBotLogin,
+  readAdvisorySameHeadRerollCap,
+  readAdvisoryWaitPolicy,
 } from './advisory-wait-policy.mjs';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
@@ -182,6 +204,66 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     );
   }
   const converged = !pending && review.satisfied && threadClause.satisfied;
+  // --- Same-HEAD advisory reroll evidence (#1511) ------------------------
+  // Purely additive: `converged` above is already final and is never
+  // recomputed or referenced below this point -- see the module header and
+  // the "sameHeadReroll never affects converged/ready" test.
+  const sameHeadRerollEligible =
+    !pending &&
+    threadClause.satisfied &&
+    review.itemCount !== null &&
+    review.itemCount > 0;
+  const sameHeadRerollCap = Number.isFinite(options.sameHeadRerollCap)
+    ? Number(options.sameHeadRerollCap)
+    : DEFAULT_ADVISORY_SAME_HEAD_REROLL_CAP;
+  const pendingWindowMinutesForReroll = Number.isFinite(
+    options.pendingWindowMinutes,
+  )
+    ? Number(options.pendingWindowMinutes)
+    : DEFAULT_ADVISORY_PENDING_WINDOW_MINUTES;
+  const rerollMarkers = summarizeSameHeadRerollMarkers(
+    comments,
+    prHeadSha,
+    trustedMarkerLogins,
+  );
+  // A fresh primary-bot review submitted AFTER the latest reroll marker's
+  // own GitHub `created_at` means that request has already been answered --
+  // regardless of what the fresh review's itemCount turned out to be (a
+  // "1 -> 3" surprise is still an answer; it is simply not a converging one,
+  // and the normal E1/E4 triage path handles it, never this evidence). A
+  // missing/invalid `submittedAt` fails closed toward "not yet answered"
+  // (never toward a false "landed"), same direction as `isValidIsoTimestamp`
+  // guards elsewhere in this file.
+  const hasFreshReviewSinceLastReroll =
+    rerollMarkers.latestAt !== '' &&
+    isValidIsoTimestamp(review.submittedAt) &&
+    Date.parse(review.submittedAt) > Date.parse(rerollMarkers.latestAt);
+  const rerollElapsedMinutes =
+    rerollMarkers.latestAt !== ''
+      ? minutesBetween(rerollMarkers.latestAt, now)
+      : 0;
+  // Bounding "in flight" by the same advisoryWait.pendingWindow the AW3
+  // decision table already uses for "bot is pending a re-request" (no new
+  // duration knob) is what makes resume/restart exact: an old, never-
+  // answered reroll self-describes as no-longer-in-flight once the window
+  // elapses, instead of blocking a retry forever if the bot goes silent.
+  const sameHeadRerollInFlight =
+    rerollMarkers.latestAt !== '' &&
+    !hasFreshReviewSinceLastReroll &&
+    rerollElapsedMinutes < pendingWindowMinutesForReroll;
+  const sameHeadRerollExhausted = rerollMarkers.count >= sameHeadRerollCap;
+  const sameHeadReroll = {
+    eligible: sameHeadRerollEligible,
+    count: rerollMarkers.count,
+    cap: sameHeadRerollCap,
+    exhausted: sameHeadRerollExhausted,
+    latestAt: rerollMarkers.latestAt,
+    inFlight: sameHeadRerollInFlight,
+    requestable:
+      sameHeadRerollEligible &&
+      !sameHeadRerollExhausted &&
+      !sameHeadRerollInFlight,
+  };
   // --- Deadline clock, anchored on the current HEAD commit's own --------
   // --- timestamp (not an IDD marker -- see module header for why) -------
   const deadlineMinutes = Number.isFinite(options.deadlineMinutes)
@@ -269,6 +351,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     pending,
     deadline,
     waiver,
+    sameHeadReroll,
     converged,
     waived,
     ready,
@@ -361,6 +444,54 @@ export function classifyCopilotAuthoredThreadIds(threads, primaryBotLogin) {
     }
   });
   return ids;
+}
+/**
+ * Same-HEAD advisory reroll marker evidence (#1511): count and latest
+ * GitHub `created_at` of trusted `advisory-reroll:` comments whose embedded
+ * HEAD SHA matches the current HEAD. Mirrors `summarizeAdvisoryWaitMarkers`
+ * (protocol-helpers.mts)'s same-head-scoped half, but kept local to this
+ * file rather than added there -- matching the `classifyCopilotAuthored-
+ * ThreadIds` precedent above (new, gate-specific logic that no other
+ * helper needs). Deliberately does NOT feed `advisory-wait:`'s unscoped
+ * REQUEST_CAP counting: separateness from that cap is a named #1511
+ * acceptance criterion, achieved simply by using a distinct marker prefix
+ * that `summarizeAdvisoryWaitMarkers`'s own regexes never match.
+ */
+function summarizeSameHeadRerollMarkers(
+  comments,
+  prHeadSha,
+  trustedMarkerLogins,
+) {
+  const trusted = new Set(trustedMarkerLogins);
+  // prHeadSha is already validated to `^[0-9a-f]{40}$` by the caller (see
+  // the top of computeAdvisoryConvergenceVerdict), so it is safe to embed
+  // directly in a RegExp literal with no escaping -- a hex string has no
+  // regex-special characters.
+  const pattern = new RegExp(`^advisory-reroll: [^ ]+ ${prHeadSha}(?: |$)`);
+  let count = 0;
+  let latestAt = '';
+  for (const comment of comments) {
+    const body = String(comment.body ?? '').trimEnd();
+    if (!pattern.test(body)) continue;
+    const login = String(comment.author?.login ?? comment.user?.login ?? '')
+      .trim()
+      .toLowerCase();
+    if (!trusted.has(login)) continue;
+    count += 1;
+    // GitHub server `createdAt`/`created_at` ONLY -- never an embedded,
+    // agent-supplied timestamp. Same "clock anchor is marker created_at,
+    // not embedded text" invariant AW2 already states for advisory-wait:,
+    // load-bearing here since `inFlight` compares this against
+    // `review.submittedAt`, another GitHub server timestamp.
+    const createdAt = String(comment.createdAt ?? comment.created_at ?? '');
+    if (
+      isValidIsoTimestamp(createdAt) &&
+      (!latestAt || Date.parse(createdAt) > Date.parse(latestAt))
+    ) {
+      latestAt = createdAt;
+    }
+  }
+  return { count, latestAt };
 }
 /** Whole minutes elapsed from `start` to `end`, clamped to 0 and floored --
  * matching `minutesBetweenIso` (protocol-helpers.mts) exactly, so a clock-
@@ -589,6 +720,11 @@ function collectFromGitHub(args) {
   );
   const primaryBotLogin = readAdvisoryPrimaryBotLogin();
   const deadlineMinutes = readAdvisoryConvergenceDeadlineMinutes();
+  // #1511: bounded same-HEAD reroll cap, plus the existing pendingWindow
+  // (reused, not a new duration knob) that bounds how long a reroll can
+  // stay "in flight" before a caller may safely retry.
+  const sameHeadRerollCap = readAdvisorySameHeadRerollCap();
+  const { pendingWindowMinutes } = readAdvisoryWaitPolicy();
   // No manual cast: `normalizePolicyConfig`'s inferred return type already
   // carries `ciGate.externalCheckWaivers.{mode,maxValidity}` precisely (see
   // `external-check-waiver.mts`'s `NormalizedPolicy` alias for the same
@@ -650,6 +786,8 @@ function collectFromGitHub(args) {
       ),
       waiverCheckSelector: ADVISORY_CONVERGENCE_CHECK_SELECTOR,
       waivableSelectors: policy?.ciGate?.externalChecks?.waivable ?? [],
+      sameHeadRerollCap,
+      pendingWindowMinutes,
       forcedHandoffEnabled,
       isAuthorizedForcedHandoff: (forcedBy) =>
         isAuthorizedForcedHandoffActor(
