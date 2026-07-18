@@ -24,6 +24,18 @@ import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
  * documented `gh pr list --limit 50`). */
 const MERGED_PR_SCAN_LIMIT = 50;
 /**
+ * Wall-clock budget for the #1484 merged-PR file-overlap scan (CodeRabbit
+ * review finding on this PR): up to MERGED_PR_SCAN_LIMIT sequential
+ * `gh pr view` calls at 30s each could otherwise take ~25 minutes in the
+ * worst case (a degraded/rate-limited GitHub API). Stop early and return
+ * whatever has been collected once this budget elapses, rather than
+ * blocking the whole A4.5 evaluation on a slow scan. Referenced from inside
+ * `fetchMergedPrFileOverlapEvidence`, which the `import.meta.main` trigger
+ * below can reach synchronously, so this must stay declared above that
+ * trigger for the same temporal-dead-zone reason as `CLOSED_BY_MERGED_PR_QUERY`.
+ */
+const MERGED_PR_SCAN_DEADLINE_MS = 2 * 60 * 1000;
+/**
  * GraphQL query for the closed-by-merged-PR read (#1484), bounded to the
  * first 50 closing-PR references. A later page could theoretically hold an
  * additional MERGED reference this misses, but that only makes the tier
@@ -727,58 +739,71 @@ function runCli() {
   const issue = fetchIssue(repoRef, args.issue);
   const duplicateCandidates = fetchDuplicateCandidates(repoRef, issue);
   const labelsPolicy = normalizePolicyConfig(loadPolicy(args.policy)).labels;
-  // #1484: high-confidence Check 4 tier evidence. closedByPullRequestsReferences
-  // is always attempted -- cheap, independent of '## Candidate files'. The
-  // same-candidate-files scan only runs when the issue declares
-  // '## Candidate files' AND the high-contention exclusion set actually
-  // resolved -- see loadHighContentionFiles's doc comment for why an
-  // unresolved manifest skips the scan rather than proceeding with zero
-  // exclusions.
-  //
-  // The whole block is wrapped in one try/catch (Codex review finding on
-  // this PR): an uncaught `gh` failure here previously aborted the entire
-  // 7-check evaluation, contradicting Check 4's own documented Edge Case
-  // ("Timeout on duplicate detection... fall back to exact title match
-  // only") -- this tier is an optional enhancement layered onto Check 4, and
-  // its collection failing must not take down Checks 1-3 and 5-7 too. A
-  // collection failure is never silently reported as "no evidence" (that
-  // would mask a genuinely broken collector as a clean pass) -- it is
-  // surfaced explicitly via `highConfidenceDuplicateCollectionError` in the
-  // JSON output below, while `highConfidenceDuplicate` itself is left
-  // `undefined` so Check 4 falls through to the weak heuristic exactly as if
-  // no evidence had been collected.
-  let highConfidenceDuplicate;
-  let highConfidenceDuplicateCollectionError = null;
+  // #1484: high-confidence Check 4 tier evidence. The two mechanical signals
+  // (closedByPullRequestsReferences, and the same-candidate-files merged-PR
+  // scan) are collected in two SEPARATE try/catch blocks (CodeRabbit review
+  // finding on this PR): an earlier version wrapped both in one block, so a
+  // failure collecting the second signal discarded an already-successful
+  // first signal too. Each block's own failure is recorded independently in
+  // `collectionWarnings` and degrades only that one signal to empty/absent
+  // -- never silently reported as "no evidence" (that would mask a
+  // genuinely broken collector as a clean pass), and never discarding a
+  // sibling signal that already collected cleanly. `gh`/API fetch failures
+  // in either block are always recorded here; a manifest-unavailable
+  // same-candidate-files skip is a distinct, deliberate degradation
+  // documented on `loadHighContentionFiles` itself, not a fetch failure, so
+  // it is not added to this list (Copilot review finding on this PR: an
+  // earlier comment overclaimed that every degradation path surfaces here).
+  // This is also why an uncaught failure no longer aborts the entire
+  // 7-check evaluation (Codex review finding on this PR) -- this tier is an
+  // optional enhancement layered onto Check 4, and Check 4's own documented
+  // Edge Case ("Timeout on duplicate detection... fall back to exact title
+  // match only") already anticipates exactly this degradation.
+  const collectionWarnings = [];
+  let closedByMergedPrNumbers = [];
   try {
-    const closedByMergedPrNumbers = fetchClosedByMergedPrNumbers(
+    closedByMergedPrNumbers = fetchClosedByMergedPrNumbers(
       owner,
       repo,
       args.issue,
     );
-    const candidateFiles = parseCandidateFiles(issue.body);
+  } catch (error) {
+    collectionWarnings.push(
+      `closedByPullRequestsReferences: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  let candidateFiles = [];
+  let highContentionFiles = [];
+  let mergedPrs = [];
+  try {
+    candidateFiles = parseCandidateFiles(issue.body);
     // Only resolve the high-contention exclusion set (a file read + JSON
     // parse) when there is a '## Candidate files' section to check it
     // against -- most issues have none, and the result would otherwise be
     // discarded.
-    const highContentionFiles =
+    const resolvedHighContentionFiles =
       candidateFiles.length > 0 ? loadHighContentionFiles() : null;
     const shouldScanMergedPrs =
       candidateFiles.length > 0 &&
-      highContentionFiles !== null &&
+      resolvedHighContentionFiles !== null &&
       issue.createdAt.length > 0;
-    const mergedPrs = shouldScanMergedPrs
+    highContentionFiles = resolvedHighContentionFiles ?? [];
+    mergedPrs = shouldScanMergedPrs
       ? fetchMergedPrFileOverlapEvidence(repoRef, issue.createdAt)
       : [];
-    highConfidenceDuplicate = {
-      closedByMergedPrNumbers,
-      candidateFiles,
-      highContentionFiles: highContentionFiles ?? [],
-      mergedPrs,
-    };
   } catch (error) {
-    highConfidenceDuplicateCollectionError =
-      error instanceof Error ? error.message : String(error);
+    collectionWarnings.push(
+      `same-candidate-files scan: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    candidateFiles = [];
+    mergedPrs = [];
   }
+  const highConfidenceDuplicate = {
+    closedByMergedPrNumbers,
+    candidateFiles,
+    highContentionFiles,
+    mergedPrs,
+  };
   const result = evaluateSuitability(issue, {
     repository: { owner, repo },
     duplicateCandidates,
@@ -797,8 +822,8 @@ function runCli() {
     passed: result.passed,
     outcome: result.outcome,
     failedCheck: result.failedCheck,
-    ...(highConfidenceDuplicateCollectionError
-      ? { highConfidenceDuplicateCollectionError }
+    ...(collectionWarnings.length > 0
+      ? { highConfidenceDuplicateCollectionWarnings: collectionWarnings }
       : {}),
     checks: args.verbose
       ? result.checks
@@ -1113,16 +1138,24 @@ function fetchClosedByMergedPrNumbers(owner, repo, issueNumber) {
  * `number`) is skipped rather than shelled out to `gh pr view` (Copilot
  * review finding on this PR: `ghJsonArray` intentionally returns
  * `unknown[]`, so an unexpected API shape should degrade this one entry,
- * not become a hard `gh pr view NaN`/`gh pr view 0` failure). A genuine `gh`
- * error on a well-formed entry still throws -- the caller (`runCli`) wraps
- * this and its sibling fetch above in one try/catch so that surfaces as the
- * documented Check 4 Edge Case fallback rather than crashing the whole
- * evaluation.
+ * not become a hard `gh pr view NaN`/`gh pr view 0` failure). Also stops
+ * early, returning whatever has been collected so far, once
+ * `MERGED_PR_SCAN_DEADLINE_MS` elapses (CodeRabbit review finding on this
+ * PR: up to `MERGED_PR_SCAN_LIMIT` sequential `gh pr view` calls with no
+ * overall cap could otherwise run for tens of minutes under a
+ * degraded/rate-limited GitHub API). A genuine `gh` error on a well-formed
+ * entry still throws -- the caller (`runCli`) wraps this and its sibling
+ * fetch in a separate try/catch so that surfaces as the documented Check 4
+ * Edge Case fallback for just this signal, without discarding the other.
  */
 function fetchMergedPrFileOverlapEvidence(repoRef, sinceIso) {
   const list = ghJsonArray(buildMergedPrListArgs(repoRef, sinceIso));
   const results = [];
+  const deadline = Date.now() + MERGED_PR_SCAN_DEADLINE_MS;
   for (const entry of list) {
+    if (Date.now() >= deadline) {
+      break;
+    }
     const pr = entry ?? {};
     const number = Number.parseInt(String(pr.number ?? ''), 10);
     if (!Number.isInteger(number) || number <= 0) {

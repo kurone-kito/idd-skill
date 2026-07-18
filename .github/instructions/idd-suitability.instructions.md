@@ -101,9 +101,10 @@ or configured needs-decision label from `labels.needsDecisionLabelName`
 
 Before the weak heuristic above, check two mechanical signals reused
 from B2.0's post-claim re-check (`idd-work.instructions.md`): (1) the
-issue's own `closedByPullRequestsReferences` is non-empty (a merged PR
-already references it via a closing keyword), or (2) a PR merged
-at/after the issue's own `createdAt` (the pre-claim analogue of B2.0's
+issue's own `closedByPullRequestsReferences` includes a `MERGED`-state
+PR (this connection can include OPEN PRs too, so state is the signal,
+not non-emptiness alone), or (2) a PR merged at/after the issue's own
+`createdAt` (the pre-claim analogue of B2.0's
 claim-`created_at` anchor) changed a file under its `## Candidate
 files` section — excluding A4 Step 2's high-contention set
 (`discover-shared-file-overlap`'s bundle + manifest files), since a
@@ -119,8 +120,7 @@ Case below.
 
 Same **detect-only** boundary as the rest of A4.5 (label + comment
 only). The acceptance-criteria-hold-on-`main` bullet is deferred to
-the gated-close follow-up (pairs with a close decision this gate
-never takes).
+the gated-close follow-up.
 
 `suitability-triage.mjs` evaluates both signals as part of Check 4.
 
