@@ -156,7 +156,7 @@ legitimate relay use-case. Any future change here must preserve the single
 resolver (do not fork `resolveActiveClaim`) and the resume-side
 self-signed-hijack block.
 
-### Activation-nonce: why a separate marker, and why resume-only for now
+### Activation-nonce: why a separate marker, and what stays deferred
 
 kurone-kito/idd-skill#1480 found a verified near-miss: two independent
 sessions can both adopt-verbatim the identical forced-handoff sticky
