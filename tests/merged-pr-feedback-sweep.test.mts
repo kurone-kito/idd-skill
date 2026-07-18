@@ -435,7 +435,9 @@ test('a non-CodeRabbit author whose comment starts with the summary marker is st
   // Codex review finding on #1488's own PR: isReviewSummaryComment matches by
   // body prefix alone, so without an author gate a human (or any other bot)
   // could evade the sweep by starting a comment with CodeRabbit's literal
-  // marker text. Only coderabbitai[bot] gets the exclusion.
+  // marker text. Only a login in the configured advisory-bot identity set
+  // (default: CodeRabbit/Codex) gets the exclusion -- a human posting the
+  // same marker text does not qualify.
   const prs: MergedPrInput[] = [
     {
       number: 20,
