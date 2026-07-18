@@ -1019,9 +1019,24 @@ function runCli(): void {
       resolvedHighContentionFiles !== null &&
       issue.createdAt.length > 0;
     highContentionFiles = resolvedHighContentionFiles ?? [];
-    mergedPrs = shouldScanMergedPrs
-      ? fetchMergedPrFileOverlapEvidence(repoRef, issue.createdAt)
-      : [];
+    if (shouldScanMergedPrs) {
+      const scanResult = fetchMergedPrFileOverlapEvidence(
+        repoRef,
+        issue.createdAt,
+      );
+      mergedPrs = scanResult.mergedPrs;
+      if (scanResult.truncatedByDeadline) {
+        // Codex P2 review finding: a deadline-truncated scan returns
+        // normally (not a throw), so it must record its own warning here --
+        // otherwise Check 4 would run the full weak heuristic on
+        // incomplete evidence instead of degrading to exact-title-only.
+        collectionWarnings.push(
+          'same-candidate-files scan: truncated by MERGED_PR_SCAN_DEADLINE_MS before scanning every merged PR in the window',
+        );
+      }
+    } else {
+      mergedPrs = [];
+    }
   } catch (error) {
     collectionWarnings.push(
       `same-candidate-files scan: ${error instanceof Error ? error.message : String(error)}`,
@@ -1467,6 +1482,14 @@ function fetchClosedByMergedPrNumbers(
     .filter((n) => Number.isInteger(n) && n > 0);
 }
 
+/** Return shape for {@link fetchMergedPrFileOverlapEvidence} (#1484): pairs
+ * the collected evidence with whether the scan was cut short by
+ * `MERGED_PR_SCAN_DEADLINE_MS` before finishing. */
+interface MergedPrFileOverlapScanResult {
+  mergedPrs: HighConfidenceMergedPr[];
+  truncatedByDeadline: boolean;
+}
+
 /**
  * Bounded two-step merged-PR file-overlap scan (list, then per-PR file
  * list), mirroring B2.0's own documented commands exactly rather than a new
@@ -1475,24 +1498,34 @@ function fetchClosedByMergedPrNumbers(
  * review finding on this PR: `ghJsonArray` intentionally returns
  * `unknown[]`, so an unexpected API shape should degrade this one entry,
  * not become a hard `gh pr view NaN`/`gh pr view 0` failure). Also stops
- * early, returning whatever has been collected so far, once
- * `MERGED_PR_SCAN_DEADLINE_MS` elapses (CodeRabbit review finding on this
- * PR: up to `MERGED_PR_SCAN_LIMIT` sequential `gh pr view` calls with no
- * overall cap could otherwise run for tens of minutes under a
- * degraded/rate-limited GitHub API). A genuine `gh` error on a well-formed
- * entry still throws -- the caller (`runCli`) wraps this and its sibling
- * fetch in a separate try/catch so that surfaces as the documented Check 4
- * Edge Case fallback for just this signal, without discarding the other.
+ * early, returning whatever has been collected so far plus
+ * `truncatedByDeadline: true`, once `MERGED_PR_SCAN_DEADLINE_MS` elapses
+ * (CodeRabbit review finding on this PR: up to `MERGED_PR_SCAN_LIMIT`
+ * sequential `gh pr view` calls with no overall cap could otherwise run for
+ * tens of minutes under a degraded/rate-limited GitHub API). The
+ * `truncatedByDeadline` flag matters because this early exit returns
+ * normally rather than throwing (Codex P2 review finding on this PR): an
+ * earlier version left the caller unable to distinguish "scanned
+ * everything, found nothing" from "gave up partway through", so a
+ * deadline-truncated scan silently ran the FULL weak heuristic (including
+ * the near-duplicate fuzzy match) on incomplete evidence instead of
+ * degrading to the documented exact-title-only fallback the way a thrown
+ * `gh` error already does. A genuine `gh` error on a well-formed entry
+ * still throws -- the caller (`runCli`) wraps this and its sibling fetch in
+ * a separate try/catch so that surfaces as the same documented Check 4 Edge
+ * Case fallback for just this signal, without discarding the other.
  */
 function fetchMergedPrFileOverlapEvidence(
   repoRef: string,
   sinceIso: string,
-): HighConfidenceMergedPr[] {
+): MergedPrFileOverlapScanResult {
   const list = ghJsonArray(buildMergedPrListArgs(repoRef, sinceIso));
-  const results: HighConfidenceMergedPr[] = [];
+  const mergedPrs: HighConfidenceMergedPr[] = [];
   const deadline = Date.now() + MERGED_PR_SCAN_DEADLINE_MS;
+  let truncatedByDeadline = false;
   for (const entry of list) {
     if (Date.now() >= deadline) {
+      truncatedByDeadline = true;
       break;
     }
     const pr = (entry ?? {}) as { number?: unknown; mergedAt?: unknown };
@@ -1504,9 +1537,9 @@ function fetchMergedPrFileOverlapEvidence(
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean);
-    results.push({ number, mergedAt: String(pr.mergedAt ?? ''), files });
+    mergedPrs.push({ number, mergedAt: String(pr.mergedAt ?? ''), files });
   }
-  return results;
+  return { mergedPrs, truncatedByDeadline };
 }
 
 /**
