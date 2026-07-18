@@ -54,8 +54,6 @@ each cuts the advisory-review round count:
 - **Already fixed via batching.** A PATH A item Accepted (E4/E5) may
   already be folded into a prior E12 batching push — do not duplicate
   the fix; confirm the commit addresses it and let E13 cite that SHA.
-  If later Rejected instead, revert that commit — the only rollback
-  path here.
 
 ## E10 — Validate fixes with critique pass
 
@@ -141,8 +139,8 @@ immediately and letting each arrival start a fresh round, but only when
   applied to bot-sourced PATH A. Never fold in a bot-asserted-only
   finding.
 - The resulting commit touches only files this round's pending fixes
-  already touch, and re-runs **fix-validate** first — E12's
-  **post-fix-validate** already ran and misses a later fold-in.
+  already touch, and re-runs **post-fix-validate** first — E12's own
+  run already happened and misses a later fold-in.
 - No CI-wait poll (E15) is currently in flight for this branch.
 
 **Bound**: accumulate at most 3 additional commits, and stop once 10
