@@ -301,6 +301,17 @@ test('a dry-run envelope validates against the schema', () => {
   assert.deepEqual(validate(envelope, schema), []);
 });
 
+test('an advisory-reroll envelope validates against the schema (PR #1517 review)', () => {
+  const envelope = {
+    mode: 'dry-run',
+    type: 'advisory-reroll',
+    target: 'pr',
+    number: 1047,
+    body: `advisory-reroll: a ${SHA} ${TS}`,
+  };
+  assert.deepEqual(validate(envelope, schema), []);
+});
+
 test('an apply envelope validates against the schema', () => {
   const envelope = {
     mode: 'apply',
