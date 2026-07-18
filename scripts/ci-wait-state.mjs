@@ -27,6 +27,7 @@ import { ghText } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
   parsePaginatedGhNdjson,
+  selectLatestCheckInstance,
   summarizeBranchReviewRequirements,
 } from './protocol-helpers.mjs';
 
@@ -216,6 +217,59 @@ function bucketState(state) {
   if (SUCCESS_STATES.has(state)) return 'success';
   return 'unknown';
 }
+/**
+ * Reduce `entries` to one representative per `checkName`, matching the
+ * per-name dedup #1471 added to `classifyCiChecks` in
+ * `protocol-helpers.mts`: GitHub can report several check-run instances
+ * sharing one required check name (a manual or automatic rerun leaves the
+ * earlier instance in the fetched rollup alongside the new one), and only
+ * the latest instance per name should govern pass/fail/pending (#1478).
+ * Reuses the exported `selectLatestCheckInstance` for the actual
+ * same-name reduction (still-incomplete wins over completed; else latest
+ * `completedAt` wins; a same-instant tie prefers `FAILURE`, then
+ * non-`CANCELLED`) so this file does not maintain a second,
+ * independently-drifting copy of that tie-break logic. Only the
+ * name-keyed grouping below is local to this file, because
+ * `CiWaitCheckEntry` uses `checkName` where `protocol-helpers.mts`'s
+ * `CheckLike` uses `name`.
+ *
+ * Deliberately keyed by `checkName` alone, not the `(checkName,
+ * workflowName)` pair this file otherwise disambiguates entries by (see
+ * the module header): GitHub's own required-status-check gate matches by
+ * check name alone, independent of which workflow produced a given
+ * instance, so any rerun whose `workflowName` happens to differ from the
+ * instance it supersedes would not be deduped under a workflow-qualified
+ * key, leaving the defect only partially fixed. (The live PR #1434
+ * reproduction this fix targets happens to share one `workflowName`
+ * across every instance, so a composite key would also fix that specific
+ * case -- but not the general one, and not as directly as matching
+ * GitHub's own name-only semantics.) `required` itself is already
+ * computed by `checkName` alone (see `normalizeCheckEntry`), so this
+ * does not newly conflate anything the required-checks rollup did not
+ * already conflate. Two genuinely independent, same-named required
+ * checks that happen to complete in the same instant remain an accepted
+ * limitation shared with `classifyCiChecks` (tracked in #1483).
+ *
+ * `entries` itself may be empty (e.g. no required check has been
+ * reported yet), in which case `groups` simply ends up with zero
+ * entries. What is guaranteed is that every group `selectLatestCheckInstance`
+ * receives has at least one member: a group is only ever created by
+ * pushing the entry that introduced its key (see the `Map` construction
+ * below), so the seedless `reduce` inside `selectLatestCheckInstance`
+ * never runs on an empty array.
+ */
+function selectLatestCheckEntryPerName(entries) {
+  const groups = new Map();
+  for (const entry of entries) {
+    const group = groups.get(entry.checkName);
+    if (group) {
+      group.push(entry);
+    } else {
+      groups.set(entry.checkName, [entry]);
+    }
+  }
+  return [...groups.values()].map((group) => selectLatestCheckInstance(group));
+}
 function buildRequiredChecksRollup(
   checks,
   requiredCheckNameSet,
@@ -246,18 +300,26 @@ function buildRequiredChecksRollup(
   const presentNames = new Set(requiredEntries.map((check) => check.checkName));
   const missingNames = names.filter((name) => !presentNames.has(name));
   const allRequiredPresent = missingNames.length === 0;
-  const anyRequiredFailing = requiredEntries.some(
+  // #1478: dedupe multiple check-run instances sharing one required check
+  // name down to the latest instance before classifying, so a stale
+  // CANCELLED/FAILURE instance never outvotes a later SUCCESS for the
+  // same name (the identical defect shape #1471 fixed in
+  // classifyCiChecks). presentNames/missingNames/allRequiredPresent above
+  // are unaffected: they only test *presence* by name via a Set, which is
+  // already naturally deduped.
+  const dedupedRequiredEntries = selectLatestCheckEntryPerName(requiredEntries);
+  const anyRequiredFailing = dedupedRequiredEntries.some(
     (check) => check.status === 'failure',
   );
-  const anyRequiredPending = requiredEntries.some(
+  const anyRequiredPending = dedupedRequiredEntries.some(
     (check) => check.status === 'pending',
   );
-  const anyRequiredUnknown = requiredEntries.some(
+  const anyRequiredUnknown = dedupedRequiredEntries.some(
     (check) => check.status === 'unknown',
   );
   const namedChecksPassing =
     allRequiredPresent &&
-    requiredEntries.every((check) => check.status === 'success');
+    dedupedRequiredEntries.every((check) => check.status === 'success');
   let status;
   if (!allRequiredPresent) {
     status = 'missing';
