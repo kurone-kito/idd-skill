@@ -1219,7 +1219,8 @@ Interpretation rules:
   live `mergeStateStatus: "BEHIND"` paired with a confirmed-or-assumed
   `branchCurrency.requiresUpToDateHead: true` fails closed as a
   `branch-currency` blocker before `--apply` ever calls `gh pr merge`).
-  Each failing gate is listed in `blockers[]` as `{ gate, detail }`.
+  Each failing gate is listed in `blockers[]`
+  as `{ gate, detail }`.
 - Dry-run (default) is read-only: it prints `ready`, `blockers`, and
   `mergeCommand` (a `gh pr merge <pr> --merge --match-head-commit
   <validated-head>` bound to the freshly fetched head) and never merges.
