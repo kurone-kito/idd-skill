@@ -1251,7 +1251,7 @@ integration branch split applies:
   when no gate (a coverage threshold, a required check) consumes the
   result.
 - **Affected-only tests on PR heads, full suite on the integration
-  branch**, when the runner supports change-based selection and
+  branch**, when the test runner supports change-based selection and
   catching an out-of-range regression post-merge is acceptable.
 - **Fake or inject time in retry/backoff/polling tests** rather than
   sleeping in real time — one real-timer test can dominate suite
