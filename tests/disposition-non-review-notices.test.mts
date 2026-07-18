@@ -9,7 +9,11 @@ import {
   noticeReason,
   parseArgs,
 } from '../src/scripts/disposition-non-review-notices.mts';
-import { summarizeDispositionEvidenceForGate } from '../src/scripts/protocol-helpers.mts';
+import {
+  dispositionNamesAdvisoryBot,
+  isDispositionComment,
+  summarizeDispositionEvidenceForGate,
+} from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
 const planSchema = loadJson(
@@ -98,14 +102,115 @@ test('buildDispositionBody is marker-first and names the bot login + head sha', 
     CODERABBIT,
     'abc1234',
     'review limit reached',
+    501,
   );
   assert.ok(body.startsWith('**Rejected**'), 'marker must be first bytes');
   assert.match(body, /coderabbitai\[bot\] did not review HEAD abc1234/);
-  // Canonical E6 text ends at "completed review" with no trailing punctuation.
+  // #1482: the canonical E6 text is followed by a trailing human-readable
+  // disambiguator naming the source notice's own comment id.
   assert.match(
     body,
-    /\(review limit reached\); this is not a completed review$/,
+    /\(review limit reached\); this is not a completed review \(source: #issuecomment-501\)$/,
   );
+});
+
+test('buildDispositionPlan produces distinguishable bodies for two same-bot, same-HEAD, same-reason notices', () => {
+  // #1482 regression: before this fix, two notices from the same bot at the
+  // same HEAD with the same noticeReason() category rendered byte-identical
+  // **Rejected** replies -- the false "duplicate bug" alarm this issue
+  // describes. The actual fix is the call-site wiring (comment.id threaded
+  // into buildDispositionBody's new 4th arg), so exercise it through
+  // buildDispositionPlan rather than calling buildDispositionBody directly.
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(101, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:01Z'),
+        notice(102, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:02Z'),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 2);
+  const [first, second] = plan.planned;
+  assert.notEqual(first?.body, second?.body);
+  assert.match(first?.body ?? '', /\(source: #issuecomment-101\)$/);
+  assert.match(second?.body ?? '', /\(source: #issuecomment-102\)$/);
+});
+
+test('isDispositionComment and dispositionNamesAdvisoryBot recognize the extended body', () => {
+  // #1482: confirm the F2/F3 gate's underlying recognition predicates -- both
+  // prefix/substring-based, never exact-body equality -- still accept a body
+  // carrying the new trailing source-notice disambiguator.
+  const body = buildDispositionBody(
+    CODERABBIT,
+    'abc1234',
+    'review limit reached',
+    999,
+  );
+  assert.ok(isDispositionComment({ body }));
+  assert.ok(dispositionNamesAdvisoryBot(body, CODERABBIT));
+});
+
+test('gate agreement: the extended **Rejected** body still clears a notice from missingRegularComments', () => {
+  // #1482: the embedded source-notice id must not break the F2/F3 gate's real
+  // recognition path (isNonReviewNoticeDisposition + dispositionNamesAdvisoryBot,
+  // both exercised inside summarizeDispositionEvidenceForGate's #1018
+  // carry-forward), mirroring the existing summary-path gate-agreement tests
+  // below.
+  const noticeComment = {
+    id: 201,
+    author: { login: CODERABBIT },
+    body: CODERABBIT_NOTICE,
+    createdAt: '2026-05-12T00:00:00Z',
+    updatedAt: '2026-05-12T00:00:00Z',
+  };
+  const gateOptions = {
+    iddAgentLogins: ['kurone-kito'],
+    advisoryBotLogins: [CODERABBIT, CODEX],
+  };
+  // Before: the gate flags the undispositioned notice.
+  const before = summarizeDispositionEvidenceForGate(
+    { comments: [noticeComment], threads: [] },
+    gateOptions,
+  );
+  assert.equal(before.missingRegularCommentCount, 1);
+
+  // The helper plans the extended **Rejected** body (with the embedded source
+  // comment id); post it as an IDD-agent disposition, matching the existing
+  // tests' `kurone-kito` iddAgentLogins setup so this exercises the #1018
+  // carry-forward path specifically (not the separate sticky-matching path).
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(
+          201,
+          CODERABBIT,
+          CODERABBIT_NOTICE,
+          '2026-05-12T00:00:00Z',
+          '2026-05-12T00:00:00Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 1);
+  assert.match(plan.planned[0]?.body ?? '', /\(source: #issuecomment-201\)$/);
+  const disposition = {
+    id: 202,
+    author: { login: 'kurone-kito' },
+    body: plan.planned[0]?.body ?? '',
+    createdAt: '2026-05-12T01:00:00Z',
+    updatedAt: '2026-05-12T01:00:00Z',
+  };
+  // After: the gate no longer flags the notice, proving the extended body is
+  // still recognized as a valid, bot-attributed disposition.
+  const after = summarizeDispositionEvidenceForGate(
+    { comments: [noticeComment, disposition], threads: [] },
+    gateOptions,
+  );
+  assert.equal(after.missingRegularCommentCount, 0);
 });
 
 test('noticeReason derives the category-specific reason', () => {

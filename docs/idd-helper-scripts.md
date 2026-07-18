@@ -662,8 +662,13 @@ The adopted helper boundaries are intentionally narrow:
   `isAdvisoryNonReviewNotice` classifier (`protocol-helpers`) recognizes
   (rate-limit / usage-limit), and emits / posts the canonical
   `**Rejected** — {bot-login} did not review HEAD {sha} ({reason}); this
-  is not a completed review` — marker-first, one comment per notice,
-  naming the bot login so the carry-forward attributes it author-scoped.
+  is not a completed review (source: #issuecomment-{notice-comment-id})` —
+  marker-first, one comment per notice, naming the bot login so the
+  carry-forward attributes it author-scoped. The trailing
+  `(source: #issuecomment-{id})` names the source notice's own comment id
+  so repeat notices from the same bot at the same HEAD stay
+  byte-distinguishable (#1482); it is a human-readable disambiguator only
+  and plays no part in gate recognition or pairing.
 - **Idempotent**: per advisory bot, existing trusted
   `isNonReviewNoticeDisposition` comments naming that bot already cover
   that many of its notices, so a re-run posts nothing new.
