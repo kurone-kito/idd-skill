@@ -174,16 +174,23 @@ exist for a `{claim-id}` — is a pure function of the observed nonce set
 colliding sessions compute the identical winner independently, with no
 "both back off" livelock.
 
-**Scope for #1522**: the comparison is wired into `evaluateResumeClaimRouting`
-(`resume-claim-routing.mts`) only — the resume-side revalidation path the
-issue's acceptance criteria name — plus the written Claim revalidation gate
-for manual/merge-time application. It is **not** wired into the merge
-write-gate (`summarizeClaimValidation`) yet. This mirrors the resume-vs-merge
-asymmetry already established above: merge-side wiring is a natural
-fast-follow (the same shared parse/render primitives already support it),
-not a design gap — call it out explicitly rather than silently leaving the
-merge gate unaware of a detected nonce collision if this becomes load-bearing
-before that fast-follow lands.
+**Scope for #1522**: the issue's acceptance criteria name the **Claim
+revalidation gate** (`idd-overview-core.instructions.md`) as the enforcement
+point, and that gate is fully wired: it fires before any mutating step for a
+live session holding its own posted nonce, and — since adopt-verbatim posts
+no `claimed-by` and so never enters _Claim verification_ at all — the
+adopt-verbatim paragraph in `idd-claim.instructions.md` carries its own
+inline verify-then-compare instruction, the one path #1480 actually
+exercises. Beyond the AC's letter, `evaluateResumeClaimRouting`
+(`resume-claim-routing.mts`) also accepts `--claim-id`/`--nonce` and is
+unit-tested, anticipating Resume Step 1 wiring — but the documented Resume
+Step 1 invocation (`idd-resume.instructions.md`) never threads either flag
+through, and a resumed process has no local memory of which nonce was its
+own to compare against in the first place. That cold-recovery design
+(kurone-kito/idd-skill#1529), plus the still-unwired merge write-gate
+(`summarizeClaimValidation`, kurone-kito/idd-skill#1528), are natural
+fast-follows (the same shared parse/render primitives already support them)
+— not silent design gaps.
 
 ## Advisory wait
 

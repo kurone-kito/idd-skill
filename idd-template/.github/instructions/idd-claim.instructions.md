@@ -435,6 +435,12 @@ required for the transfer itself. **Adopt-verbatim is still an
 activation**: post your own [activation-nonce marker](#activation-nonce-format)
 for `new-claim-id` too — the one path where nothing else distinguishes two
 sessions that both silently adopted the same pair (kurone-kito/idd-skill#1480).
+Then verify it the same way step 5 above does: wait `claim.verifySettleDelay`,
+recompute the nonce winner for `new-claim-id`, and confirm it is yours — the
+only nonce check that actually fires here, since posting no `claimed-by`
+means this path never enters _Claim verification_ above. On mismatch, treat
+the claim as contested and return to Discover, exactly as the "If any check
+fails" clause above.
 `new-agent-id` defaults to the _displaced_
 claim's own agent-id, not the successor's: Claim-state parsing rule 6 ignores
 a `claimed-by` whose `{claim-id}` matches the active claim but whose
