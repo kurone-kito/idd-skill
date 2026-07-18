@@ -45,6 +45,27 @@ import {
 // convention `gh pr checks` already surfaces and `isCompletedCiTimestamp`
 // (protocol-helpers.mts) already treats as "not completed".
 const ZERO_SENTINEL_TIMESTAMP = '0001-01-01T00:00:00Z';
+// Legacy commit-status `state` uses its own 4-value vocabulary (`error`,
+// `failure`, `pending`, `success`) that only partly overlaps the check-run
+// vocabulary `classifyCiChecks` understands (`FAILURE`, `CANCELLED`,
+// `QUEUED`, `IN_PROGRESS`, `WAITING`, `SUCCESS`, `SKIPPED`, `NEUTRAL`,
+// `NOT_APPLICABLE`, ...). `SUCCESS` and `FAILURE` already coincide, but
+// `ERROR` (a distinct "reporting error" state, not `FAILURE`) and
+// `PENDING` (a distinct "still running" state, not one of the check-run
+// pending tokens) have no direct match -- left unmapped, both would
+// silently fall into `classifyCiChecks`'s `unknown` bucket instead of the
+// `failed` / `pending` bucket a caller actually needs (PR review finding,
+// #1483: `gh pr checks`'s prior flattened read normalized both vocabularies
+// into one `state` field; this data-source swap makes normalizing them
+// this module's own responsibility). Map the two divergent tokens onto
+// their check-run equivalents before classification ever sees them; this
+// is a "still failing" / "still running" outcome, never a false pass, so
+// even an unmapped future commit-status token would only ever fail closed
+// into `unknown`, not `success`.
+const STATUS_CONTEXT_STATE_ALIASES = {
+  ERROR: 'FAILURE',
+  PENDING: 'IN_PROGRESS',
+};
 /**
  * Normalize one raw `statusCheckRollup` entry into the `CheckPayload`
  * shape `classifyCiChecks` / `summarizeRequiredChecks` expect (#1483).
@@ -52,28 +73,41 @@ const ZERO_SENTINEL_TIMESTAMP = '0001-01-01T00:00:00Z';
  * `state` is derived to match what `gh pr checks --json state` already
  * reported for the same underlying data (verified empirically against
  * this repository's own live PRs across `SUCCESS` / `FAILURE` /
- * `IN_PROGRESS`): a completed check-run reports its `conclusion`; an
- * incomplete one reports its raw `status` (`QUEUED` / `IN_PROGRESS` /
- * `WAITING`); a legacy commit-status reports its `state` unchanged. This
- * keeps classification behavior identical to before #1483 for every
- * single-producer case -- only the producer-identity discriminator
- * (`type` / `workflowName`) is new.
+ * `IN_PROGRESS`): a completed check-run reports its `conclusion` (falling
+ * back to `UNKNOWN` if absent); an incomplete one reports its raw `status`
+ * (`QUEUED` / `IN_PROGRESS` / `WAITING`, also falling back to `UNKNOWN` if
+ * absent -- a missing status is never silently coerced to an empty
+ * string, which `classifyCiChecks` would not recognize as any known
+ * bucket); a legacy commit-status reports its `state`, translated through
+ * `STATUS_CONTEXT_STATE_ALIASES` for the two tokens with no direct
+ * check-run equivalent. This keeps classification behavior identical to
+ * before #1483 for every single-producer case that existed pre-#1483 --
+ * only the producer-identity discriminator (`type` / `workflowName`) and
+ * the commit-status vocabulary mapping are new.
  */
 export function normalizeStatusCheckRollupEntry(entry) {
-  if (String(entry?.__typename ?? '') === 'StatusContext') {
+  if (String(entry?.__typename ?? '').trim() === 'StatusContext') {
+    const rawState = String(entry?.state ?? '')
+      .trim()
+      .toUpperCase();
     return {
-      name: String(entry?.context ?? ''),
-      state: String(entry?.state ?? '').toUpperCase(),
+      name: String(entry?.context ?? '').trim(),
+      state: STATUS_CONTEXT_STATE_ALIASES[rawState] ?? rawState,
       completedAt: String(entry?.completedAt ?? ZERO_SENTINEL_TIMESTAMP),
       type: 'status-context',
       workflowName: '',
     };
   }
-  const status = String(entry?.status ?? '').toUpperCase();
-  const conclusion = String(entry?.conclusion ?? '').toUpperCase();
+  const status = String(entry?.status ?? '')
+    .trim()
+    .toUpperCase();
+  const conclusion = String(entry?.conclusion ?? '')
+    .trim()
+    .toUpperCase();
   return {
-    name: String(entry?.name ?? ''),
-    state: status === 'COMPLETED' ? conclusion || 'UNKNOWN' : status,
+    name: String(entry?.name ?? '').trim(),
+    state:
+      status === 'COMPLETED' ? conclusion || 'UNKNOWN' : status || 'UNKNOWN',
     completedAt: String(entry?.completedAt ?? ZERO_SENTINEL_TIMESTAMP),
     type: 'check-run',
     workflowName: String(entry?.workflowName ?? '').trim(),

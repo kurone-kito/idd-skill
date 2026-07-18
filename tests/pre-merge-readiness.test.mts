@@ -13,6 +13,7 @@ import {
   buildAdvisoryWaitSummary,
   buildPreMergeReadinessSummary,
   CODERABBIT_SUMMARY_MARKER,
+  classifyCiChecks,
   classifyRegularBotComment,
   computePreMergeReadinessBlockers,
   deriveIddAgentLogins,
@@ -4801,6 +4802,78 @@ test('normalizeStatusCheckRollupEntry: a StatusContext with no completedAt field
     state: 'PENDING',
   });
   assert.equal(result.completedAt, '0001-01-01T00:00:00Z');
+});
+
+// PR #1506 review findings (Copilot, on #1483's implementation): the
+// commit-status vocabulary (`error`/`failure`/`pending`/`success`) only
+// partly overlaps the check-run vocabulary `classifyCiChecks` understands.
+// `gh pr checks`'s prior flattened read normalized both vocabularies into
+// one `state` field; this data-source swap makes that this module's own
+// responsibility, so cover the two divergent tokens explicitly.
+test('normalizeStatusCheckRollupEntry: a StatusContext ERROR normalizes to FAILURE, not an unrecognized state', () => {
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'StatusContext',
+    context: 'legacy-ci',
+    state: 'error',
+  });
+  assert.equal(result.state, 'FAILURE');
+});
+
+test('normalizeStatusCheckRollupEntry: a StatusContext PENDING normalizes to IN_PROGRESS, not an unrecognized state', () => {
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'StatusContext',
+    context: 'legacy-ci',
+    state: 'pending',
+  });
+  assert.equal(result.state, 'IN_PROGRESS');
+});
+
+test('normalizeStatusCheckRollupEntry: a StatusContext ERROR reaches classifyCiChecks as a genuine failure, end to end', () => {
+  // The isolated mapping test above only proves the translation table
+  // works; this proves the translated value actually makes
+  // classifyCiChecks treat it as failing rather than silently landing in
+  // its 'unknown' bucket (unrecognized state literals fall through every
+  // bucket check).
+  const normalized = normalizeStatusCheckRollupEntry({
+    __typename: 'StatusContext',
+    context: 'legacy-ci',
+    state: 'error',
+  });
+  assert.equal(classifyCiChecks([normalized]).status, 'failed');
+});
+
+test('normalizeStatusCheckRollupEntry: a CheckRun with no status field at all defaults to UNKNOWN, not an empty string', () => {
+  // Distinct from the existing "in-progress" test: this entry omits
+  // `status` entirely (a malformed/unexpected entry), which previously
+  // fell through to state: '' -- a value classifyCiChecks does not
+  // recognize as any bucket, unlike the explicit 'UNKNOWN' fallback the
+  // completed-with-no-conclusion branch already had.
+  const result = normalizeStatusCheckRollupEntry({
+    __typename: 'CheckRun',
+    name: 'malformed-entry',
+  });
+  assert.equal(result.state, 'UNKNOWN');
+});
+
+test('normalizeStatusCheckRollupEntry: whitespace-padded fields are trimmed consistently', () => {
+  const checkRun = normalizeStatusCheckRollupEntry({
+    __typename: 'CheckRun',
+    name: '  padded-name  ',
+    status: '  COMPLETED  ',
+    conclusion: '  SUCCESS  ',
+    workflowName: '  Some Workflow  ',
+  });
+  assert.equal(checkRun.name, 'padded-name');
+  assert.equal(checkRun.state, 'SUCCESS');
+  assert.equal(checkRun.workflowName, 'Some Workflow');
+
+  const statusContext = normalizeStatusCheckRollupEntry({
+    __typename: 'StatusContext',
+    context: '  padded-context  ',
+    state: '  success  ',
+  });
+  assert.equal(statusContext.name, 'padded-context');
+  assert.equal(statusContext.state, 'SUCCESS');
 });
 
 test('normalizeStatusCheckRollupEntry: an unrecognized __typename falls back to the CheckRun shape', () => {
