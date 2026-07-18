@@ -67,8 +67,8 @@ original text still hard-aborted immediately, even though
 roadmap work runs dry. This surfaces naturally whenever a repository
 drains its last open roadmap: the final tracked issue ships, the
 roadmap closes, and the next Discover pass finds zero open roadmaps —
-Discover correctly identifies A1's documented abort condition and
-stops, a harder stop than (a)/(b) impose for what is, from an
+Discover correctly identifies A1's documented abort condition and would
+stop, a harder stop than (a)/(b) impose for what is, from an
 operator's perspective, the same underlying situation (no roadmap work
 available right now).
 
