@@ -97,9 +97,9 @@ or configured needs-decision label from `labels.needsDecisionLabelName`
 Before the weak heuristic above, check two mechanical signals reused
 from B2.0's post-claim re-check (`idd-work.instructions.md`): (1) the
 issue's own `closedByPullRequestsReferences` includes a `MERGED`-state
-PR (this connection can include OPEN PRs too, so state is the signal,
-not non-emptiness alone), or (2) a PR merged at/after the issue's own
-`createdAt` (the pre-claim analogue of B2.0's
+PR **and** the issue is `CLOSED` (matches B2.0's gate; a reopened
+issue keeps its old merged PR), or (2) a PR merged at/after the
+issue's own `createdAt` (the pre-claim analogue of B2.0's
 claim-`created_at` anchor) changed a file under its `## Candidate
 files` section — excluding A4 Step 2's high-contention set
 (`discover-shared-file-overlap`'s bundle + manifest files), since a

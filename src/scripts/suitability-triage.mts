@@ -57,6 +57,7 @@ const MERGED_PR_SCAN_DEADLINE_MS = 2 * 60 * 1000;
 const CLOSED_BY_MERGED_PR_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
   repository(owner:$owner,name:$repo){
     issue(number:$number){
+      state
       closedByPullRequestsReferences(first:50){
         nodes { number state }
       }
@@ -1455,6 +1456,14 @@ export function buildPrFilesArgs(repoRef: string, prNumber: number): string[] {
  * exact title match only" Edge Case) without aborting the other six checks
  * (Codex review finding on this PR: an earlier version let this throw
  * uncaught all the way out of `runCli`, crashing the whole evaluation).
+ *
+ * Also requires the candidate issue's own current `state` to be `CLOSED`,
+ * mirroring B2.0's identical gate on this same signal
+ * (`idd-work.instructions.md`'s "Closed-by-a-merged-PR signal": `select(.state
+ * == "CLOSED")`). `closedByPullRequestsReferences` is not cleared when an
+ * issue is reopened, so without this gate a reopened issue with genuine
+ * remaining work would still show its old merged closing PR and get
+ * misclassified as a completed duplicate (Codex review finding on this PR).
  */
 function fetchClosedByMergedPrNumbers(
   owner: string,
@@ -1467,6 +1476,7 @@ function fetchClosedByMergedPrNumbers(
     data?: {
       repository?: {
         issue?: {
+          state?: unknown;
           closedByPullRequestsReferences?: {
             nodes?: { number?: unknown; state?: unknown }[] | null;
           } | null;
@@ -1487,6 +1497,9 @@ function fetchClosedByMergedPrNumbers(
     throw new Error(
       `closedByPullRequestsReferences GraphQL response returned errors: ${JSON.stringify(parsed.errors)}`,
     );
+  }
+  if (String(parsed.data?.repository?.issue?.state ?? '') !== 'CLOSED') {
+    return [];
   }
   const nodes =
     parsed.data?.repository?.issue?.closedByPullRequestsReferences?.nodes ?? [];
@@ -1594,11 +1607,21 @@ function loadHighContentionFiles(): string[] | null {
     if (!Array.isArray(bundles)) {
       return null;
     }
-    const resolvedBundleIds = new Set(
-      bundles.map((bundle) => String((bundle as { id?: unknown })?.id ?? '')),
+    const nonEmptyFilesBundleIds = new Set(
+      bundles
+        .filter((bundle) => {
+          const files = (bundle as { files?: unknown } | null)?.files;
+          return Array.isArray(files) && files.length > 0;
+        })
+        .map((bundle) => String((bundle as { id?: unknown })?.id ?? '')),
     );
+    // Codex P2 review finding: a bundle entry whose id matched but whose
+    // `files` was missing, non-array, or empty passed the id-only check
+    // above yet still let `resolveHighContentionFiles` silently omit that
+    // bundle's real shared files -- the same false-flag risk as a missing
+    // bundle id entirely, so it must degrade the same way.
     const allBundleIdsResolved = DEFAULT_BUNDLE_IDS.every((id) =>
-      resolvedBundleIds.has(id),
+      nonEmptyFilesBundleIds.has(id),
     );
     if (!allBundleIdsResolved) {
       return null;
