@@ -264,6 +264,15 @@ hold split, while `hold` is a stricter override that also stops E14 on
 cap exhaustion. Do not introduce an override that weakens the F2/F3
 merge hold.
 
+`advisoryWait.sameHeadRerollCap` (default 2) bounds AW6's same-HEAD
+advisory reroll carve-out (#1465 / #1511) — the number of fresh
+same-HEAD re-reviews the autonomous loop may request once the primary
+bot's review already covers current HEAD but still carries items every
+one of which triage has already dispositioned. It is scoped per HEAD
+(a new push resets it) and kept deliberately separate from
+`advisoryWait.requestCap`, so raising or lowering one never affects the
+other.
+
 Repositories that need a maintainer-authorized recovery path for stuck
 repo-external checks may record `ciGate.externalChecks.advisory`,
 `ciGate.externalChecks.waivable`, and `ciGate.externalCheckWaivers` in

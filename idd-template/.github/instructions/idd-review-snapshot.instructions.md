@@ -39,6 +39,7 @@ prefixes and whose GitHub author is a trusted marker actor per
 - `advisory-wait:`
 - `advisory-wait-recovery:`
 - `<!-- advisory-wait:`
+- `advisory-reroll:`
 
 Do not exclude marker-shaped comments from untrusted authors. Keep them
 in the snapshot/ReviewItems_snapshot and report them as suspicious

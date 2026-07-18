@@ -102,6 +102,18 @@ test('buildMarkerBody renders advisory markers as plain text with no visible not
     `advisory-wait-recovery: claude-417b737f ${SHA} ${TS}`,
   );
   assert.doesNotMatch(recovery, /<!--/);
+
+  // #1511: bounded same-HEAD advisory reroll marker -- same plain-text
+  // shape, distinct prefix (never counted toward advisory-wait's
+  // REQUEST_CAP).
+  const reroll = buildMarkerBody('advisory-reroll', {
+    'agent-id': 'claude-417b737f',
+    'head-sha': SHA,
+    timestamp: TS,
+  });
+  assert.equal(reroll, `advisory-reroll: claude-417b737f ${SHA} ${TS}`);
+  assert.doesNotMatch(reroll, /<!--/);
+  assert.doesNotMatch(reroll, /\n/);
 });
 
 test('buildMarkerBody normalizes an upper-case head SHA for advisory markers', () => {
@@ -227,7 +239,7 @@ test('buildMarkerBody throws on an invalid field set (renderer validation)', () 
   );
 });
 
-test('MARKER_TYPES lists exactly the six supported types', () => {
+test('MARKER_TYPES lists exactly the seven supported types', () => {
   assert.deepEqual(
     [...MARKER_TYPES],
     [
@@ -237,6 +249,7 @@ test('MARKER_TYPES lists exactly the six supported types', () => {
       'baseline',
       'advisory',
       'advisory-recovery',
+      'advisory-reroll',
     ],
   );
 });
@@ -284,6 +297,17 @@ test('a dry-run envelope validates against the schema', () => {
     target: 'pr',
     number: 1047,
     body: `advisory-wait: a ${SHA} ${TS}`,
+  };
+  assert.deepEqual(validate(envelope, schema), []);
+});
+
+test('an advisory-reroll envelope validates against the schema (PR #1517 review)', () => {
+  const envelope = {
+    mode: 'dry-run',
+    type: 'advisory-reroll',
+    target: 'pr',
+    number: 1047,
+    body: `advisory-reroll: a ${SHA} ${TS}`,
   };
   assert.deepEqual(validate(envelope, schema), []);
 });

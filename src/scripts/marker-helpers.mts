@@ -155,6 +155,20 @@ const OPERATIONAL_MARKERS: OperationalMarker[] = [
     pattern: /^<!--\s*advisory-wait:\s+\S+\s+[0-9a-f]{40}\s+\S+\s*-->\s*$/,
   },
   {
+    // #1511: bounded same-HEAD advisory reroll request marker. PLAIN-TEXT,
+    // same shape as advisory-wait: (no visible note), so it is excluded from
+    // activity/currency/watermark computations exactly like advisory-wait /
+    // advisory-wait-recovery already are -- otherwise the agent's own
+    // reroll-request comment would pollute review-currency logic the same
+    // way a stray bot ack would (see the ack-only-convergence rationale).
+    // Deliberately a DISTINCT prefix from advisory-wait: so it never counts
+    // toward REQUEST_CAP / REQUEST_MARKER_COUNT (separateness is a named
+    // acceptance criterion of #1511).
+    label: 'advisory-reroll:',
+    pattern:
+      /^advisory-reroll:\s+\S+\s+[0-9a-f]{40}\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*$/,
+  },
+  {
     label: '<!-- forced-handoff:',
     pattern: /^\s*<!--\s*forced-handoff:\s*\{[\s\S]*\}\s*-->[\s\S]*$/i,
     startPattern: /^<!--\s*forced-handoff:/i,
@@ -175,6 +189,7 @@ export const IDD_AGENT_DERIVED_MARKERS: ReadonlySet<string> = new Set([
   'advisory-wait:',
   'advisory-wait-recovery:',
   '<!-- advisory-wait:',
+  'advisory-reroll:',
 ]);
 
 const FORCED_HANDOFF_CONTEXT_SCOPES = new Set(['issue-only', 'issue-plus-pr']);
@@ -665,6 +680,26 @@ export function renderAdvisoryWaitRecoveryMarker(payload: {
     throw new Error('invalid advisory-wait-recovery marker payload');
   }
   return `advisory-wait-recovery: ${agentId} ${headSha} ${timestamp}`;
+}
+
+// #1511: advisory-reroll is ALSO a PLAIN-TEXT marker (no visible note), same
+// reasoning as advisory-wait/advisory-wait-recovery above -- AW6's recognizer
+// anchors on `\s*$` with no trailing note. It carries the PR HEAD SHA (not a
+// claim id), matching the advisory-wait family's shape exactly, since it is
+// the same "which HEAD is this about" question, just for a distinct bounded
+// budget kept separate from REQUEST_CAP.
+export function renderAdvisoryRerollMarker(payload: {
+  agentId?: unknown;
+  headSha?: unknown;
+  timestamp?: unknown;
+}): string {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
+  const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
+  if (!agentId || !/^[0-9a-f]{40}$/.test(headSha) || !timestamp) {
+    throw new Error('invalid advisory-reroll marker payload');
+  }
+  return `advisory-reroll: ${agentId} ${headSha} ${timestamp}`;
 }
 
 export function parseExternalCheckWaiverComment(
