@@ -34,9 +34,8 @@ Commit fixes atomically — one logical change per commit.
 travel as their own atomic commits, but push together in a single push
 at E12 — do not push after each individual fix. This is already the
 implicit shape of E9-E12; this rule states it explicitly so it is never
-read as a license to push per commit. See E12 for the push step itself
-and the bounded cross-round allowance for comments that arrive before
-that push.
+read as a license to push per commit. See E12 for the push step and the
+bounded cross-round allowance for comments arriving before that push.
 
 These fix-side rules are the complement of the accept-side
 "Verify before accept" rule in `idd-review-triage.instructions.md` (E5);
@@ -127,34 +126,35 @@ immediately and letting each arrival start a fresh round, but only when
 
 - Every comment that arrived since the last push is **bot-sourced**:
   authored by a login identifying the primary advisory bot — for
-  default Copilot, `copilot` or `copilot-pull-request-reviewer*`
-  matched case-insensitively, the same dual match `isCopilotReviewerLogin`
-  (`scripts/protocol-helpers.mjs`) uses (a non-default bot's
-  `primaryBotLogin` is already the real login) — or an
-  `advisoryBotLogins` login (excluding any also set as
-  `secondaryBotLogin`), **regardless of PATH A/B** (Copilot's inline
-  review-thread comments fall through to PATH A under
-  E4's ambiguous-default rule).
+  default Copilot, `copilot` or `copilot-pull-request-reviewer*`,
+  matched case-insensitively per `isCopilotReviewerLogin`
+  (`scripts/protocol-helpers.mjs`; a non-default bot's `primaryBotLogin`
+  is already the real login) — or an `advisoryBotLogins` login,
+  **regardless of PATH A/B** (Copilot's inline review-thread comments
+  fall through to PATH A under E4's ambiguous-default rule). A login
+  also set as `secondaryBotLogin` still qualifies — no helper excludes
+  that overlap.
 - Each such comment is plainly a small, confirmable fix whose claim was
   checked against live evidence (a linter run, actual file content,
   actual runtime behavior) before folding it in — the same
   **verify-before-accept discipline** E5 codifies for PATH B (#814), now
-  applied to bot-sourced PATH A too. Never fold in a bot-asserted-only
+  applied to bot-sourced PATH A. Never fold in a bot-asserted-only
   finding.
 - The resulting commit touches only files this round's pending fixes
-  already touch.
+  already touch, and re-runs **fix-validate** first — E12's
+  **post-fix-validate** already ran and misses a later fold-in.
 - No CI-wait poll (E15) is currently in flight for this branch.
 
-**Bound**: accumulate at most 3 additional commits this way, and stop
-accumulating once 10 minutes have passed since the first accumulated
-commit — whichever limit is reached first.
+**Bound**: accumulate at most 3 additional commits, and stop once 10
+minutes have passed since the first accumulated commit — whichever
+limit is reached first.
 
 **Ends accumulation immediately**, pushing whatever has accumulated so
 far instead of waiting for more: a PATH A item from a **human or
 CODEOWNER** reviewer arrives (bot-sourced PATH A alone does not); any
 item requests a substantive code/logic change, not a small textual fix;
-any item falls outside the touched-file scope above; or either bound
-above is reached.
+any item falls outside the touched-file scope above; or either bound is
+reached.
 
 **Explicit non-goals**: this allowance never delays, holds, or
 interrupts an in-flight CI wait — E15's "mid-wait arrivals fold into the
@@ -167,7 +167,7 @@ consuming its request cap; the per-HEAD `review-watermark` still
 invalidates on this push (keyed on HEAD SHA); each item's E6 disposition
 reply stays individual — no combined markers; and the
 [claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
-still runs immediately before this push.
+still runs immediately before push.
 
 ## E13 — Reply to feedback
 
