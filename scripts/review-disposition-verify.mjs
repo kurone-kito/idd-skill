@@ -17,12 +17,14 @@ const MARKER_REJECTION_CONFIRMED_RE =
   /^\*\*Rejection confirmed by maintainer\*\*\s+—/;
 const MARKER_AMD_RE = /^\*\*Awaiting maintainer decision\*\*\s+—/;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
-// `items:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
-// .mjs source text for quoted flag literals. See cli-args.mts's module
-// header for the full invariant. Declared above the import.meta.main
-// trigger below (not alongside parseArgs further down) because the
-// trigger calls parseArgs() synchronously at module-evaluation time, and a
-// `const` declared after that point is still in the temporal dead zone
+// `items:`), per cli-args.mts's key-shape invariant -- parseCliArgs itself
+// rejects a bare key at runtime via NODE_OPTION_KEY_PATTERN. `--items` is
+// local to this file (not one of tests/flag-name-matrix.test.mts's shared
+// cross-helper flag concepts), so that guard is the only enforcement here.
+// Declared above the import.meta.main trigger below (not alongside
+// parseArgs further down) because the trigger calls parseArgs()
+// synchronously at module-evaluation time, and a `const` declared after
+// that point is still in the temporal dead zone
 // when the trigger fires (see #1177's entry-order TDZ hardening for the
 // same class of bug).
 const REVIEW_DISPOSITION_VERIFY_FLAG_SPEC = {
