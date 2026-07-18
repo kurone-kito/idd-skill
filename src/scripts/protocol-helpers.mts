@@ -1782,10 +1782,13 @@ export function advisoryBotIdentityToken(login: unknown): string {
 // marker (tolerating the same single interior-punctuation variant as
 // `DISPOSITION_REJECTED_PREFIX_RE` / `DISPOSITION_ACCEPTED_PREFIX_RE`) and the
 // phrase that names the template. Non-greedy so a body with the phrase
-// appearing once still captures the shortest, correct span. Anchored to the
-// first bytes (`^`, matching the marker-first-bytes contract every other
-// disposition predicate in this file enforces), so this never matches a
-// marker quoted mid-prose.
+// appearing once still captures the shortest, correct span. The `^` anchor
+// applies after the caller's `trimStart()` below, so it tolerates leading
+// whitespace the same way `isNonReviewNoticeDisposition` /
+// `isReviewSummaryDisposition` already do -- not the stricter, untrimmed
+// marker-first-bytes contract `isDispositionComment` enforces -- so this
+// never matches a marker quoted mid-prose, but a leading blank line or space
+// before the marker does not defeat it either.
 const REJECTED_NOTICE_LOGIN_SPAN_RE =
   /^\*\*Rejected[.!:]?\*\*\s+—\s+([\s\S]*?)\s+did not review HEAD\b/i;
 const ACCEPTED_SUMMARY_LOGIN_SPAN_RE =
