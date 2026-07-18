@@ -337,6 +337,14 @@ Running this variant safely requires:
   reports its final result back to the orchestrator instead of
   independently entering F5's Discover step, so Discover/Claim ownership
   stays with the orchestrator alone.
+- **The delegation brief carries the claim token verbatim, nonce
+  included.** The worker adopts the orchestrator's already-verified
+  `{agent-id}` / `{claim-id}` pair as its own for the run (mirroring
+  forced-handoff adopt-verbatim), carrying the orchestrator's current
+  activation nonce rather than minting a new one — a minted nonce would
+  collide with the orchestrator's for the same `{claim-id}` and flag
+  legitimate delegation as a second activation. See
+  [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation).
 - **Serialized worktree/clone lifecycle operations when workers share
   one clone.** Concurrent `git fetch` / `git worktree add` / `git
   worktree remove` / local-`main` updates from the same primary clone
