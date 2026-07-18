@@ -18,7 +18,8 @@
         "watermark",
         "baseline",
         "advisory",
-        "advisory-recovery"
+        "advisory-recovery",
+        "advisory-reroll"
       ]
     },
     "target": {

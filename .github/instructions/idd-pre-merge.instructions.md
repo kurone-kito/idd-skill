@@ -285,8 +285,9 @@ returns the workflow to E1 instead of merging over it.
   review threads, not a judgment call): run `node
   scripts/advisory-convergence.mjs --pr {pr-number} --assert` (or the
   profile-selected `idd-advisory-convergence` command). A non-zero exit
-  is a hard merge block — route to E1/E4 using the printed `reasons`; a
-  zero exit (`ready: true`) satisfies this condition.
+  is a hard merge block — route to E1/E4 (check **AW6** first when
+  `sameHeadReroll.eligible`) using the `reasons`; a zero exit
+  (`ready: true`) satisfies this condition.
   Separately, require `dispositionEvidence.missingRegularComments.length
   == 0` (ad hoc advisory-bot or reviewer comments outside a review
   thread, which the helper above does not cover); treat absent,
