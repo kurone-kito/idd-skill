@@ -55,9 +55,10 @@ In the idd-skill source repository, the following optional helpers were adopted:
   network write; referenced in
   [kurone-kito/idd-skill#900](https://github.com/kurone-kito/idd-skill/issues/900))
 - `scripts/post-idd-marker.mjs` for rendering and POSTing any operational
-  marker (`claim` / `unclaim` / `watermark` / `baseline` / `advisory` /
-  `advisory-recovery`) via the reliable JSON path that HTML-comment-first
-  bodies require (referenced in
+  marker (`claim` / `unclaim` / `activation-nonce` / `watermark` /
+  `baseline` / `advisory` / `advisory-recovery` / `advisory-reroll`) via
+  the reliable JSON path that HTML-comment-first bodies require
+  (referenced in
   [kurone-kito/idd-skill#1047](https://github.com/kurone-kito/idd-skill/issues/1047))
 - `scripts/resume-claim-routing.mjs` for Resume Step 1 claim-state
   evaluation and takeover routing (referenced in
@@ -957,17 +958,18 @@ Interpretation rules:
   `idd:post-idd-marker` command from the helper runtime manifest wiring above
 - Write-side companion to `emit-marker`: it renders the canonical body for
   each operational marker `<type>` (`claim`, `unclaim`, `activation-nonce`,
-  `watermark`, `baseline`, `advisory`, `advisory-recovery`) by reusing the
-  single-sourced `protocol-helpers` renderers, then POSTs it as a JSON
-  document (`{"body": …}`) via `gh api --method POST .../comments --input -`.
-  The JSON path is mandatory because `gh issue comment` / `gh api -f body=`
-  silently reject the HTML-comment-first claim-family bodies. `-f` also
-  treats a leading `@` as a literal character — only `-F` reads `@file`
-  contents.
+  `watermark`, `baseline`, `advisory`, `advisory-recovery`,
+  `advisory-reroll`) by reusing the single-sourced `protocol-helpers`
+  renderers, then POSTs it as a JSON document (`{"body": …}`) via
+  `gh api --method POST .../comments --input -`. The JSON path is
+  mandatory because `gh issue comment` / `gh api -f body=` silently
+  reject the HTML-comment-first claim-family bodies. `-f` also treats a
+  leading `@` as a literal character — only `-F` reads `@file` contents.
 - The `claim` / `unclaim` / `activation-nonce` / `watermark` / `baseline`
-  bodies are HTML-comment-first with a visible "Do not edit" note; `advisory`
-  / `advisory-recovery` are the **plain-text** `advisory-wait:` /
-  `advisory-wait-recovery:` forms (no visible note) so the AW2 / shell-fallback
+  bodies are HTML-comment-first with a visible "Do not edit" note;
+  `advisory` / `advisory-recovery` / `advisory-reroll` are the
+  **plain-text** `advisory-wait:` / `advisory-wait-recovery:` /
+  `advisory-reroll:` forms (no visible note) so the AW2 / shell-fallback
   recognizers still match.
 - Fields per type: `claim` takes `--agent-id --claim-id --supersedes
   --timestamp --branch`; `unclaim` takes `--agent-id --claim-id --timestamp`;
@@ -976,8 +978,8 @@ Interpretation rules:
   post it and the collision it detects, kurone-kito/idd-skill#1522);
   `watermark` takes `--agent-id --claim-id --head-sha --max-activity-at
   --total-item-count --ci-completed-at`; `baseline` takes `--agent-id
-  --claim-id --sha`; `advisory` / `advisory-recovery` take `--agent-id
-  --head-sha --timestamp`.
+  --claim-id --sha`; `advisory` / `advisory-recovery` / `advisory-reroll`
+  take `--agent-id --head-sha --timestamp`.
 - One-command watermark (`watermark` only): `--from-pr <n>` derives
   `--head-sha` / `--max-activity-at` / `--total-item-count` /
   `--ci-completed-at` from a fresh `review-activity-snapshot` of PR `<n>` and

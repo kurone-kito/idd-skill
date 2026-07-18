@@ -278,7 +278,7 @@ test('buildMarkerBody throws on an invalid field set (renderer validation)', () 
   );
 });
 
-test('MARKER_TYPES lists exactly the seven supported types', () => {
+test('MARKER_TYPES lists exactly the eight supported types', () => {
   assert.deepEqual(
     [...MARKER_TYPES],
     [

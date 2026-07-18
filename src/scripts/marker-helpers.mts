@@ -889,9 +889,10 @@ export function operationalMarkerPrefixByStart(body: string): string | null {
 }
 
 /**
- * Detects a `claimed-by` / `unclaimed-by` / `review-watermark` /
- * `review-baseline` comment whose body starts with a structurally valid
- * marker token but whose whole body does not match the canonical, strict
+ * Detects a `claimed-by` / `unclaimed-by` / `activation-nonce` /
+ * `review-watermark` / `review-baseline` comment whose body starts with a
+ * structurally valid marker token but whose whole body does not match the
+ * canonical, strict
  * `pattern` -- for **any** reason: content appended directly after the
  * token with no note, a well-intentioned human rationale appended after an
  * otherwise-canonical token + note (the motivating case), a note that does
