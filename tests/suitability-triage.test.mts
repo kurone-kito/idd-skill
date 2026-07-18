@@ -773,6 +773,28 @@ test('checkDuplicateOrSuperseded: high-confidence tier takes priority over the w
   assert.match(result.evidence, /High-confidence duplicate/);
 });
 
+test('checkDuplicateOrSuperseded: a real high-confidence hit still fires even when the run is otherwise degraded', () => {
+  // Composition guard (E2 incremental critique on this PR): a genuine
+  // closedByPullRequestsReferences hit collected before the sibling
+  // same-candidate-files signal failed must still fire -- degraded mode
+  // only narrows the WEAK heuristic fallback, never suppresses an
+  // already-established high-confidence mechanical hit.
+  const result = checkDuplicateOrSuperseded({
+    issue: BASE_ISSUE,
+    duplicateCandidates: [] as Context['duplicateCandidates'],
+    highConfidenceDuplicate: {
+      closedByMergedPrNumbers: [99],
+      candidateFiles: [],
+      highContentionFiles: [],
+      mergedPrs: [],
+    },
+    highConfidenceCollectionDegraded: true,
+  } as unknown as Context);
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /High-confidence duplicate/);
+  assert.match(result.evidence, /#99/);
+});
+
 test('checkDuplicateOrSuperseded: omitting highConfidenceDuplicate leaves the weak heuristic unchanged', () => {
   // No new field at all (as every pre-#1484 caller would omit it) must
   // behave byte-for-byte as before: BASE_ISSUE's own title is not present in
