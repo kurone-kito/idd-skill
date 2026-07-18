@@ -6,6 +6,7 @@ import {
   type MergedPrInput,
   parseArgs,
 } from '../src/scripts/merged-pr-feedback-sweep.mts';
+import { CODERABBIT_SUMMARY_MARKER } from '../src/scripts/protocol-helpers.mts';
 import { buildCommentThread } from './test-utils.mts';
 
 const OPTIONS = {
@@ -372,6 +373,147 @@ test('excludes an IDD bookkeeping marker even from CI automation', () => {
   ];
   const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
   assert.equal(result.prs.length, 0);
+});
+
+// --- #1488: reuse isReviewSummaryComment so the sweep and E6 agree --------
+
+test('excludes a CodeRabbit summary-walkthrough comment from unaddressedComments', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 18,
+      comments: [
+        {
+          body: `${CODERABBIT_SUMMARY_MARKER}\n\n## Walkthrough\n\nRefactors X.`,
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'coderabbitai[bot]' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 0);
+});
+
+test('the summary exclusion is comment-scoped: a genuine comment and an unresolved thread in the same PR are still surfaced', () => {
+  const prs: MergedPrInput[] = [
+    {
+      number: 19,
+      threads: [
+        buildCommentThread(false, [
+          {
+            login: 'coderabbitai[bot]',
+            body: 'This loop can deadlock.',
+            createdAt: '2026-06-09T00:00:00Z',
+          },
+        ]),
+      ],
+      comments: [
+        {
+          body: `${CODERABBIT_SUMMARY_MARKER}\n\n## Walkthrough\n\nRefactors X.`,
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'coderabbitai[bot]' },
+        },
+        {
+          body: 'Did you consider X?',
+          createdAt: '2026-06-09T00:05:00Z',
+          author: { login: 'coderabbitai[bot]' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unresolvedThreads.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(
+    result.prs[0].unaddressedComments[0].bodyExcerpt,
+    'Did you consider X?',
+  );
+});
+
+test('a non-CodeRabbit author whose comment starts with the summary marker is still surfaced', () => {
+  // Codex review finding on #1488's own PR: isReviewSummaryComment matches by
+  // body prefix alone, so without an author gate a human (or any other bot)
+  // could evade the sweep by starting a comment with CodeRabbit's literal
+  // marker text. Only a login in the configured advisory-bot identity set
+  // (default: CodeRabbit/Codex) gets the exclusion -- a human posting the
+  // same marker text does not qualify.
+  const prs: MergedPrInput[] = [
+    {
+      number: 20,
+      comments: [
+        {
+          body: `${CODERABBIT_SUMMARY_MARKER}\n\nNot actually CodeRabbit.`,
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'a-human' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(result.prs[0].unaddressedComments[0].author, 'a-human');
+});
+
+test('a CodeRabbit comment carrying both the summary marker and a rate-limit notice is still surfaced', () => {
+  // Second Codex finding: E6 (disposition-non-review-notices) classifies a
+  // combined summary+rate-limit comment as a non-review notice -- rejected,
+  // never accepted as a summary -- so the sweep must not silently drop it
+  // via the summary exclusion either (it would otherwise hide an
+  // undispositioned notice, contrary to notices staying a genuine signal).
+  const prs: MergedPrInput[] = [
+    {
+      number: 21,
+      comments: [
+        {
+          body: `${CODERABBIT_SUMMARY_MARKER}\n\n> ## Review limit reached`,
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'coderabbitai[bot]' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, OPTIONS);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(
+    result.prs[0].unaddressedComments[0].author,
+    'coderabbitai[bot]',
+  );
+});
+
+test('a CodeRabbit summary is still surfaced when advisoryBotLogins is configured to omit CodeRabbit', () => {
+  // Third Codex finding (raised on this PR's own second review round): the
+  // exclusion gates on the *configured* advisoryBotLogins set, not the
+  // broader isKnownReviewBot recognition -- matching E6, which requires the
+  // author to be in its own configured advisory-bot identities. A Codex-only
+  // advisory policy (CodeRabbit deliberately not configured) makes E6 leave a
+  // CodeRabbit summary undispositioned, so the sweep must surface it too
+  // instead of still excluding it via a hardcoded/broader bot recognition.
+  const codexOnlyOptions = {
+    ...OPTIONS,
+    advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+  };
+  const prs: MergedPrInput[] = [
+    {
+      number: 22,
+      comments: [
+        {
+          body: `${CODERABBIT_SUMMARY_MARKER}\n\n## Walkthrough\n\nRefactors X.`,
+          createdAt: '2026-06-09T00:00:00Z',
+          author: { login: 'coderabbitai[bot]' },
+        },
+      ],
+    },
+  ];
+  const result = buildMergedPrFeedbackSweep(prs, codexOnlyOptions);
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(
+    result.prs[0].unaddressedComments[0].author,
+    'coderabbitai[bot]',
+  );
 });
 
 test('surfaces an unaddressed CHANGES_REQUESTED review body', () => {

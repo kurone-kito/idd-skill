@@ -42,6 +42,7 @@ import { loadIddConfig } from './idd-config.mjs';
 import {
   advisoryBotIdentityToken,
   compareIsoTimestamps,
+  DEFAULT_ADVISORY_BOT_LOGINS,
   dispositionNamesAdvisoryBot,
   effectiveRegularCommentActivityAt,
   isAdvisoryNonReviewNotice,
@@ -52,11 +53,6 @@ import {
   resolveActiveClaimForWriteGate,
   resolveAdvisoryBotLogins,
 } from './protocol-helpers.mjs';
-
-const DEFAULT_ADVISORY_BOT_LOGINS = [
-  'coderabbitai[bot]',
-  'chatgpt-codex-connector[bot]',
-];
 /**
  * Derive the short `({reason})` clause for a non-review notice from its body.
  * Tightly tied to the categories `isAdvisoryNonReviewNotice` recognizes; falls
