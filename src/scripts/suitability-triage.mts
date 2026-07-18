@@ -1395,7 +1395,21 @@ function fetchClosedByMergedPrNumbers(
         } | null;
       } | null;
     };
+    errors?: unknown;
   };
+  // `gh api graphql` exits non-zero (throwing via runGh) on a schema-level
+  // query error, but a GraphQL response can also return HTTP 200 with a
+  // non-empty top-level `errors` array alongside partial/null `data` (a
+  // resolver-level failure on a nullable field) -- verified empirically
+  // that gh's own exit code does not always catch this shape. Treating that
+  // silently as "no evidence" would suppress a real collection failure
+  // (Copilot review finding on this PR); throw explicitly so the caller's
+  // try/catch records it in `collectionWarnings` instead.
+  if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
+    throw new Error(
+      `closedByPullRequestsReferences GraphQL response returned errors: ${JSON.stringify(parsed.errors)}`,
+    );
+  }
   const nodes =
     parsed.data?.repository?.issue?.closedByPullRequestsReferences?.nodes ?? [];
   return nodes
