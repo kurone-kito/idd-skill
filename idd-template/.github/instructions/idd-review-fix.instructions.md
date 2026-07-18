@@ -121,15 +121,14 @@ immediately and letting each arrival start a fresh round, but only when
 **all** of the following hold:
 
 - Every comment that arrived since the last push is **bot-sourced**:
-  authored by the primary bot's actual comment-author login — for
-  default Copilot, exact-case `Copilot` or a login starting with
-  `copilot-pull-request-reviewer` (see
-  `../../docs/idd-advisory-wait-shell-fallback.md`) — never the
-  distinct, lowercase `primaryBotLogin` config alias `copilot` (used
-  only for `--add-reviewer`; a non-default bot's `primaryBotLogin` is
-  already the real login) — or an `advisoryBotLogins` login (excluding
-  any also set as `secondaryBotLogin`), **regardless of PATH A/B**
-  (Copilot's inline review-thread comments fall through to PATH A under
+  authored by a login identifying the primary advisory bot — for
+  default Copilot, `copilot` or `copilot-pull-request-reviewer*`
+  matched case-insensitively, the same dual match `isCopilotReviewerLogin`
+  (`scripts/protocol-helpers.mjs`) uses (a non-default bot's
+  `primaryBotLogin` is already the real login) — or an
+  `advisoryBotLogins` login (excluding any also set as
+  `secondaryBotLogin`), **regardless of PATH A/B** (Copilot's inline
+  review-thread comments fall through to PATH A under
   E4's ambiguous-default rule).
 - Each such comment is plainly a small, confirmable fix whose claim was
   checked against live evidence (a linter run, actual file content,
