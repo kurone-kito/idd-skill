@@ -29,7 +29,10 @@ _{agent-id}: issue claim — IDD automation marker. Do not edit._
 **Important**: operational marker bodies are HTML comments. Some tools
 (e.g., `gh issue comment`, `gh api -f body=`) silently reject
 HTML-only bodies — always include the visible note and post via direct
-HTTP `POST` with a JSON body for reliability. When helper runtime is enabled,
+HTTP `POST` with a JSON body for reliability. `-f` also treats a leading
+`@` as a literal character — only `-F` reads `@file` contents, so
+`gh api -f body=@file` never posts the file's contents either. When
+helper runtime is enabled,
 the `post-idd-marker` helper (`--type claim --target issue <number> --apply`
 plus the claim fields; see `docs/idd-helper-scripts.md`) posts this marker
 through that JSON path (dry-run, posting nothing, without `--apply`); the direct
