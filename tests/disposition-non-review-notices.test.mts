@@ -152,6 +152,76 @@ test('isDispositionComment and dispositionNamesAdvisoryBot recognize the extende
   assert.ok(dispositionNamesAdvisoryBot(body, CODERABBIT));
 });
 
+test('dispositionNamesAdvisoryBot does not falsely match a bot identity equal to a fixed template word', () => {
+  // A bot whose identity token equals a word from the notice template's own
+  // fixed text ("review", "head") must not falsely match a disposition that
+  // actually names a different bot -- the whole-body substring search this
+  // replaced would incorrectly return true for both.
+  const body = buildDispositionBody(
+    CODERABBIT,
+    'abc1234',
+    'review limit reached',
+    999,
+  );
+  assert.equal(dispositionNamesAdvisoryBot(body, 'review[bot]'), false);
+  assert.equal(dispositionNamesAdvisoryBot(body, 'head[bot]'), false);
+  // The real bot the body actually names still matches.
+  assert.equal(dispositionNamesAdvisoryBot(body, CODERABBIT), true);
+});
+
+test('dispositionNamesAdvisoryBot does not falsely match the #1482 source-notice-id suffix', () => {
+  // #1482 appends "(source: #issuecomment-{id})" to every notice disposition.
+  // A bot configured with an identity token equal to "issuecomment" must not
+  // falsely match on that suffix, which lives outside the anchored
+  // bot-login span.
+  const body = buildDispositionBody(
+    CODERABBIT,
+    'abc1234',
+    'review limit reached',
+    999,
+  );
+  assert.match(body, /\(source: #issuecomment-999\)$/);
+  assert.equal(dispositionNamesAdvisoryBot(body, 'issuecomment[bot]'), false);
+});
+
+test('dispositionNamesAdvisoryBot does not falsely match a fixed template word in the summary-walkthrough shape', () => {
+  const body = buildSummaryDispositionBody(CODERABBIT, 'abc1234');
+  assert.equal(dispositionNamesAdvisoryBot(body, 'walkthrough[bot]'), false);
+  assert.equal(dispositionNamesAdvisoryBot(body, 'head[bot]'), false);
+  assert.equal(dispositionNamesAdvisoryBot(body, CODERABBIT), true);
+});
+
+test('dispositionNamesAdvisoryBot matches the canonical template case-insensitively', () => {
+  // isNonReviewNoticeDisposition/isReviewSummaryDisposition match the "did
+  // not review HEAD"/"summary walkthrough" phrase case-insensitively; the
+  // anchored span regexes must do the same, or a mixed-case body that
+  // passes the shape gate would silently fail to name its bot here.
+  const body = buildDispositionBody(
+    CODERABBIT,
+    'abc1234',
+    'review limit reached',
+    999,
+  ).replace('did not review HEAD', 'Did Not Review HEAD');
+  assert.equal(dispositionNamesAdvisoryBot(body, CODERABBIT), true);
+});
+
+test('dispositionNamesAdvisoryBot returns false for a body matching neither canonical template', () => {
+  // An ordinary rejection of reviewer feedback that happens to mention a
+  // bot's login in prose is not a structured notice/summary disposition, so
+  // it must not be attributed to that bot -- callers gate on
+  // isNonReviewNoticeDisposition/isReviewSummaryDisposition first, but this
+  // function must independently fail closed too.
+  assert.equal(
+    dispositionNamesAdvisoryBot(
+      `**Rejected** — as ${CODERABBIT} noted, this needs a fix`,
+      CODERABBIT,
+    ),
+    false,
+  );
+  assert.equal(dispositionNamesAdvisoryBot('', CODERABBIT), false);
+  assert.equal(dispositionNamesAdvisoryBot(null, CODERABBIT), false);
+});
+
 test('gate agreement: the extended **Rejected** body still clears a notice from missingRegularComments', () => {
   // #1482: the embedded source-notice id must not break the F2/F3 gate's real
   // recognition path (isNonReviewNoticeDisposition + dispositionNamesAdvisoryBot,

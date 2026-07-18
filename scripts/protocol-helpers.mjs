@@ -1114,10 +1114,35 @@ export function advisoryBotIdentityToken(login) {
     .toLowerCase()
     .replace(/\[bot\]$/, '');
 }
-// True when a non-review-notice disposition body names the given advisory bot's
-// GitHub login, so the gate can attribute a carry-forward to exactly one bot
-// even when several advisory bots are configured. Fail-closed: an empty token or
-// a disposition that does not contain the login carries nothing forward.
+// Captures the span where a bot login structurally appears in each canonical
+// disposition template `dispositionNamesAdvisoryBot` recognizes -- between the
+// marker (tolerating the same single interior-punctuation variant as
+// `DISPOSITION_REJECTED_PREFIX_RE` / `DISPOSITION_ACCEPTED_PREFIX_RE`) and the
+// phrase that names the template. Non-greedy so a body with the phrase
+// appearing once still captures the shortest, correct span. The `^` anchor
+// applies after the caller's `trimStart()` below, so it tolerates leading
+// whitespace the same way `isNonReviewNoticeDisposition` /
+// `isReviewSummaryDisposition` already do -- not the stricter, untrimmed
+// marker-first-bytes contract `isDispositionComment` enforces -- so this
+// never matches a marker quoted mid-prose, but a leading blank line or space
+// before the marker does not defeat it either.
+const REJECTED_NOTICE_LOGIN_SPAN_RE =
+  /^\*\*Rejected[.!:]?\*\*\s+—\s+([\s\S]*?)\s+did not review HEAD\b/i;
+const ACCEPTED_SUMMARY_LOGIN_SPAN_RE =
+  /^\*\*Accepted[.!:]?\*\*\s+—\s+([\s\S]*?)\s+summary walkthrough\b/i;
+// True when a non-review-notice or summary-walkthrough disposition body names
+// the given advisory bot's GitHub login, so the gate can attribute a
+// carry-forward to exactly one bot even when several advisory bots are
+// configured. Matches only within the anchored span where a canonical
+// template places the bot login -- never a whole-body substring search --
+// so a bot whose identity token equals a word from the template's own fixed
+// text (e.g. "review", "head", or the #1482 "issuecomment" suffix) cannot
+// falsely match a disposition naming a different bot. A body naming several
+// bots in one span (a disposition that improperly covers more than one
+// notice) still matches each of them, matching the existing 1:1 consumption
+// contract at the call sites. Fail-closed: an empty token, or a disposition
+// body that does not structurally match either canonical template, names no
+// bot.
 export function dispositionNamesAdvisoryBot(
   dispositionBody,
   noticeAuthorLogin,
@@ -1126,9 +1151,14 @@ export function dispositionNamesAdvisoryBot(
   if (!token) {
     return false;
   }
-  return String(dispositionBody ?? '')
-    .toLowerCase()
-    .includes(token);
+  const body = String(dispositionBody ?? '').trimStart();
+  const span =
+    REJECTED_NOTICE_LOGIN_SPAN_RE.exec(body)?.[1] ??
+    ACCEPTED_SUMMARY_LOGIN_SPAN_RE.exec(body)?.[1];
+  if (span === undefined) {
+    return false;
+  }
+  return span.toLowerCase().includes(token);
 }
 // #1182 Match trusted machine advisory dispositions to the advisory-bot stickies
 // they address, so a disposition posted by a trusted-marker actor who is NOT a
