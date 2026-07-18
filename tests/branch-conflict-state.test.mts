@@ -7,10 +7,12 @@ import { test } from 'node:test';
 
 import {
   classifyBranchConflictState,
+  MERGE_BASE_FETCH_STEPS,
   parseArgs,
   parseConflictFiles,
   parseGitFetchOrigin,
   resolveFetchOrigin,
+  resolveMergeBaseWithRetry,
 } from '../src/scripts/branch-conflict-state.mts';
 
 type ClassifyOptions = NonNullable<
@@ -87,6 +89,130 @@ function createTwoCommitRepo(): { dir: string; older: string; newer: string } {
   const newer = git(['rev-parse', 'HEAD']);
   sharedTwoCommitRepo = { dir, older, newer };
   return sharedTwoCommitRepo;
+}
+
+/** Runs a git command with signing forced off. These fixture repos are
+ * throwaway temp directories, not real project history, so there is
+ * nothing to sign -- and this repository's own ambient global
+ * `commit.gpgsign=true` would otherwise make every fixture commit attempt a
+ * real GPG signature, which can hang or fail on pinentry/gpg-agent
+ * contention under concurrent local sessions (observed directly: a first
+ * attempt at this fixture failed with `gpg: signing failed: timeout` from
+ * exactly this cause). `-c commit.gpgsign=false` overrides the ambient
+ * config for this invocation only, without touching any real repository or
+ * user config. */
+function gitNoSign(dir: string, args: string[]): string {
+  return execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], {
+    cwd: dir,
+    encoding: 'utf8',
+  }).trim();
+}
+
+let sharedUpstreamRepo: {
+  dir: string;
+  branch: string;
+  commits: string[];
+} | null = null;
+
+/**
+ * Builds (once, memoized) a real "upstream" repo with several sequential
+ * commits -- oldest first in the returned `commits` array. Immutable after
+ * creation (nothing below ever fetches into or otherwise mutates this
+ * directory), so sharing one instance across tests is safe.
+ */
+function createUpstreamRepo(): {
+  dir: string;
+  branch: string;
+  commits: string[];
+} {
+  if (sharedUpstreamRepo) return sharedUpstreamRepo;
+  const dir = mkdtempSync(join(tmpdir(), 'idd-branch-conflict-upstream-'));
+  gitNoSign(dir, ['init', '-q']);
+  gitNoSign(dir, ['config', 'user.email', 'test@example.invalid']);
+  gitNoSign(dir, ['config', 'user.name', 'Test']);
+  const commits: string[] = [];
+  for (let i = 0; i < 6; i += 1) {
+    writeFileSync(join(dir, `f${i}.txt`), `${i}\n`);
+    gitNoSign(dir, ['add', `f${i}.txt`]);
+    gitNoSign(dir, ['commit', '-q', '-m', `commit ${i}`]);
+    commits.push(gitNoSign(dir, ['rev-parse', 'HEAD']));
+  }
+  const branch = gitNoSign(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  sharedUpstreamRepo = { dir, branch, commits };
+  return sharedUpstreamRepo;
+}
+
+/**
+ * Creates a **fresh** (never memoized/shared) genuine `--depth=1` shallow
+ * clone of the upstream repo, so each caller can deepen its own clone
+ * without order-coupling to any other test. `git clone` wires the clone's
+ * `origin` remote to the upstream directory automatically, so
+ * `fetchShallowFixtureStep` can fetch progressively more history straight
+ * from that local path -- exercising real shallow-git `--deepen` semantics
+ * with the exact {@link MERGE_BASE_FETCH_STEPS} args `tryFetchBase` uses in
+ * production, with no network access. Only `tryFetchBase`'s own HTTPS
+ * remote-URL resolution is bypassed (a local path is not a resolvable host
+ * per `resolveFetchOrigin`), matching this file's existing convention of
+ * never letting a test reach a live network fetch (see the "unresolvable
+ * merge-base" test's `baseRefName: ''` short-circuit, and `tryFetchBase`'s
+ * own doc comment).
+ *
+ * A plain filesystem path clone silently **ignores** `--depth` ("--depth is
+ * ignored in local clones; use file:// instead"). `--no-local` is used
+ * instead of a `file://` URL: it forces the same non-optimized transfer
+ * path a real remote would use (so `--depth` takes effect) without
+ * constructing a URL by string interpolation, which could break if
+ * `upstreamDir` contains characters that need URL escaping (e.g. spaces).
+ */
+function createFreshShallowClone(upstreamDir: string): string {
+  const shallowDir = mkdtempSync(
+    join(tmpdir(), 'idd-branch-conflict-shallow-'),
+  );
+  execFileSync(
+    'git',
+    ['clone', '-q', '--depth=1', '--no-local', upstreamDir, shallowDir],
+    { encoding: 'utf8' },
+  );
+  return shallowDir;
+}
+
+/** Real `git fetch --no-tags <fetchArgs> origin <branch>` against the
+ * shallow clone's own `origin` remote (the local upstream directory) --
+ * the same invocation shape as `tryFetchBase`, minus its HTTPS remote-URL
+ * resolution. Returns whether the fetch itself succeeded, mirroring
+ * `tryFetchBase`'s own return contract for {@link resolveMergeBaseWithRetry}. */
+function fetchShallowFixtureStep(
+  shallowDir: string,
+  branch: string,
+  fetchArgs: readonly string[],
+): boolean {
+  try {
+    execFileSync(
+      'git',
+      ['fetch', '--no-tags', ...fetchArgs, 'origin', branch],
+      { cwd: shallowDir, encoding: 'utf8', stdio: 'ignore' },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Read-only local `git merge-base` lookup mirroring the production
+ * `gitText` helper's contract exactly: swallow any git failure (missing
+ * object, unrelated history, etc.) and return `''` rather than throwing, so
+ * `resolveMergeBaseWithRetry`'s `lookupMergeBase` callback never needs its
+ * own try/catch at each call site. */
+function mergeBaseText(dir: string, a: string, b: string): string {
+  try {
+    return execFileSync('git', ['merge-base', a, b], {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch {
+    return '';
+  }
 }
 
 test('classifyBranchConflictState: clean PR returns clean state', async () => {
@@ -394,6 +520,115 @@ test('classifyBranchConflictState: CLEAN with an unresolvable merge-base reports
     result.diagnostics.notes.some((note) => note.includes('undetermined')),
     'expected a note distinguishing "undetermined" from a confirmed unmoved base',
   );
+});
+
+// #1519: tryFetchBase's single --depth=1 fetch could not expose a common
+// ancestor from a genuinely shallow checkout or missing base history.
+// resolveMergeBaseWithRetry is the extracted, directly-testable bounded
+// retry loop that now backs computeMergeBase; the "deepened-success" test
+// below exercises it against a *real* shallow git clone (fresh, not shared,
+// so it can be safely deepened) so that path is proven with genuine
+// shallow-git semantics, not just callback call-counts.
+
+test('resolveMergeBaseWithRetry: a genuinely shallow checkout resolves after a deepening fetch', () => {
+  const { dir: upstreamDir, branch, commits } = createUpstreamRepo();
+  const shallowDir = createFreshShallowClone(upstreamDir);
+  assert.equal(
+    execFileSync('git', ['rev-parse', '--is-shallow-repository'], {
+      cwd: shallowDir,
+      encoding: 'utf8',
+    }).trim(),
+    'true',
+    'fixture setup bug: the clone must genuinely be shallow for this test to mean anything',
+  );
+  // commits[0] is the oldest (root) commit -- several generations behind the
+  // shallow clone's sole local commit (the tip, commits[commits.length - 1]).
+  // A depth=1 clone cannot see it yet, so the initial local merge-base
+  // lookup (and the first --depth=1 step, already satisfied by the clone)
+  // both fail; a later --deepen step must widen far enough to expose it.
+  const headSha = commits[commits.length - 1];
+  const baseSha = commits[0];
+  const widenedSteps: number[] = [];
+  const result = resolveMergeBaseWithRetry(
+    () => mergeBaseText(shallowDir, headSha, baseSha),
+    (step) => {
+      widenedSteps.push(step);
+      return fetchShallowFixtureStep(
+        shallowDir,
+        branch,
+        MERGE_BASE_FETCH_STEPS[step],
+      );
+    },
+    MERGE_BASE_FETCH_STEPS.length,
+  );
+  assert.equal(result, baseSha);
+  assert.ok(
+    widenedSteps.length >= 1 &&
+      widenedSteps.length < MERGE_BASE_FETCH_STEPS.length,
+    `expected resolution after a deepening step and before exhausting the cap, got ${JSON.stringify(widenedSteps)}`,
+  );
+});
+
+test('resolveMergeBaseWithRetry: still reports undetermined (null) after exhausting the bounded retry', () => {
+  const { dir: upstreamDir, commits } = createUpstreamRepo();
+  const headSha = commits[commits.length - 1];
+  // A syntactically valid but nonexistent object: never resolvable no
+  // matter how much history is available, so this deterministically covers
+  // the true "exhausted the cap" path -- every bounded attempt reports a
+  // successful widen, yet the lookup never resolves -- distinct from the
+  // pre-existing baseRefName: '' short-circuit test above (which breaks on
+  // the very first step instead of exhausting all of them). `widenHistory`
+  // is a trivial stub here (always succeeds) because the scenario under
+  // test is retry-cap exhaustion, not deepening mechanics -- that is
+  // already covered by the real-clone test above.
+  const unreachableSha = 'f'.repeat(40);
+  const widenedSteps: number[] = [];
+  const result = resolveMergeBaseWithRetry(
+    () => mergeBaseText(upstreamDir, headSha, unreachableSha),
+    (step) => {
+      widenedSteps.push(step);
+      return true;
+    },
+    MERGE_BASE_FETCH_STEPS.length,
+  );
+  assert.equal(result, null);
+  assert.deepEqual(
+    widenedSteps,
+    MERGE_BASE_FETCH_STEPS.map((_, i) => i),
+    'expected every bounded step to be attempted before giving up',
+  );
+});
+
+test('resolveMergeBaseWithRetry: stops immediately when widenHistory cannot help, without exhausting the cap', () => {
+  // Pure control-flow coverage (no git involved): mirrors tryFetchBase
+  // returning false for a structurally-impossible fetch (missing base ref,
+  // or missing owner/repo) -- retrying further would just repeat the same
+  // no-op, so the loop must not call widenHistory again after a false.
+  let widenCalls = 0;
+  const result = resolveMergeBaseWithRetry(
+    () => '',
+    () => {
+      widenCalls += 1;
+      return false;
+    },
+    3,
+  );
+  assert.equal(result, null);
+  assert.equal(widenCalls, 1);
+});
+
+test('resolveMergeBaseWithRetry: never calls widenHistory when the first lookup already resolves', () => {
+  let widenCalls = 0;
+  const result = resolveMergeBaseWithRetry(
+    () => 'already-resolved-sha',
+    () => {
+      widenCalls += 1;
+      return true;
+    },
+    3,
+  );
+  assert.equal(result, 'already-resolved-sha');
+  assert.equal(widenCalls, 0);
 });
 
 test('classifyBranchConflictState: published is true when head SHA is present', async () => {
