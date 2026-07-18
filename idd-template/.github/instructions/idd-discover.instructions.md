@@ -106,11 +106,12 @@ Read the **issue-scope** value from the Project commands table in
   execution leaves, or A3 filtered them all out as blocked), **trigger
   (b)** (candidates reach A3.5 but none is workable — A4 Step 1 viability
   discards every A3.5-startable candidate, or A4 Step 1.5 eliminates the
-  last one), or **trigger (c)** (A1 finds no roadmap). Run A0-O **at most
-  once** as this fallback per Discover pass; once spent, a later A4
-  exhaustion reports and stops per A4 Step 1 / Step 1.5 (not an abort)
-  without re-entering A0-O. This reuses A0-O **only** as a post-roadmap
-  fallback; the roadmap path stays primary (unlike `orphan-first`). If candidates
+  last one), or **trigger (c)** (A1 finds no roadmap issues). Run A0-O
+  **at most once** as this fallback per Discover pass; once spent, a
+  later A4 exhaustion reports and stops per A4 Step 1 / Step 1.5 (not an
+  abort) without re-entering A0-O. This reuses A0-O **only** as a
+  `roadmap-first` fallback; the roadmap path stays primary (unlike
+  `orphan-first`). If candidates
   reach A3.5 but it holds them all as approval-needed, do **not** fall
   back: the approval hold governs and a non-empty approval-needed bucket
   is not a true zero. See

@@ -72,15 +72,15 @@ operator's perspective, the same underlying situation (no roadmap work
 available right now).
 
 Trigger (c) fires at A1, before A1.5/A2/A3 ever run. Like trigger (a),
-an A0-O run it invokes that finds no orphan candidates either routes to
+an A0-O run it invokes that finds no orphan candidates routes to
 the A3 decision tree — the **true zero** and **at most once** guards
 above apply unchanged. The **approval hold precedence** guard does not
 apply to trigger (c): A3.5 never runs when A1 finds no roadmap to
 traverse, so there is no approval-needed bucket to protect. Because
-(a)/(b) require A1 to have found a roadmap and (c) requires it found
-none, the three triggers are mutually exclusive within one Discover
-pass — so "at most once per pass" holds automatically across all
-three, not only within the (a)/(b) pair.
+(a)/(b) require A1 to have found a roadmap and (c) requires it to have
+found none, the three triggers are mutually exclusive within one
+Discover pass — so "at most once per pass" holds automatically across
+all three, not only within the (a)/(b) pair.
 
 The `orphan-first` symmetric case — orphan candidates all failing A4,
 which would fall back to the roadmap path — is a separate concern and
