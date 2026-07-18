@@ -247,6 +247,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Evaluate the A5(a) issue-author approval gate against issue state.',
   },
   {
+    id: 'claim-lock',
+    scriptName: 'idd:claim-lock',
+    binName: 'idd-claim-lock',
+    entryPath: 'scripts/claim-lock.mjs',
+    vendoredCommand: 'node scripts/claim-lock.mjs',
+    description:
+      'Acquire, reacquire, or inspect a worktree-local same-machine claim lock.',
+  },
+  {
     id: 'discover-orphan-filter',
     scriptName: 'idd:discover-orphan-filter',
     binName: 'idd-discover-orphan-filter',

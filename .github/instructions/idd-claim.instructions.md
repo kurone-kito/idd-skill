@@ -478,6 +478,28 @@ for the full algorithm (stop and report if a mutation would run from
 the primary worktree while the active claim names a non-`main`
 implementation branch).
 
+### Worktree-local lock file (same-machine collision)
+
+A same-machine fast path complementing the cross-machine claim check
+above. Acquire once the B1 worktree exists (before the first mutation),
+then re-run alongside every later pre-mutation check:
+`node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id
+{agent-id} --claim-id {claim-id}`.
+
+A matching `{claim-id}` re-acquires locally (no GitHub round-trip). A
+different `{claim-id}` is always a collision, regardless of lock age —
+run `resume-claim-routing.mjs --issue <n> --fresh-claim-gate`:
+`already-claimed` stops (claim lost); `claimable`/`stale-reclaimable`
+retries with `--takeover`. If that helper is unavailable or its output
+is malformed, fall back to this file's written Claim-state parsing rules
+below to determine the same verdict before retrying. No release step:
+`git worktree remove` at F4
+deletes the lock with the worktree, so a crashed session's leftover lock
+resolves the same way (collision, then an authorized takeover once
+GitHub confirms it stale). Same-machine complement only — see
+`docs/idd-helper-scripts.md`'s Worktree-local claim lock entry for
+detail.
+
 Then continue to `idd-work.instructions.md`.
 
 ## Claim-state parsing

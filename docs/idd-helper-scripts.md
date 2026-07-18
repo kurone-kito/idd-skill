@@ -896,6 +896,36 @@ Interpretation rules:
   and linked-issue exceptions do not yet have a supported helper
   contract
 
+### Worktree-local claim lock
+
+- Source repo / vendored-node commands:
+  `node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id <id>
+  --claim-id <id> [--takeover]`
+  and `node scripts/claim-lock.mjs --check --worktree <path>`
+- Package-manager / ephemeral-npx command: use the profile-selected
+  `idd:claim-lock` command from the helper runtime manifest wiring above
+- Same-machine fast path complementing the cross-machine claim check (see
+  the [worktree-local lock file](../.github/instructions/idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
+  subsection of `idd-claim.instructions.md` for the full protocol)
+- Stable `--acquire` `mode` values: `acquired` (fresh create, idempotent
+  same-`claim-id` reacquire, or an authorized `--takeover` override —
+  disambiguated by the optional `reacquired` / `forcedTakeover` boolean
+  fields plus a `holder` snapshot on takeover), `collision` (a different
+  `claim-id` already holds the lock — retry with `--takeover` only after
+  `resume-claim-routing.mjs --fresh-claim-gate` authorizes it), or
+  `contended` (lost a bounded number of concurrent-overwrite races — retry
+  the whole command)
+- `--check` reports `{ path, present, holder? }` read-only, never
+  creating, mutating, or deleting the lock
+- Deliberately has no local staleness judgment (no PID-liveness check):
+  the process invoking this CLI exits the moment the call returns, so a
+  recorded PID would never usefully represent a live competing session.
+  GitHub's `claim-stale-age` stays the sole staleness authority; this
+  lock only ever reports `collision` or acquires
+- No explicit release verb: the lock lives inside the worktree's own
+  private git-admin directory (`git rev-parse --absolute-git-dir`), so
+  `git worktree remove` at F4 deletes it together with the worktree
+
 ### Canonical branch name
 
 - Source repo / vendored-node command:

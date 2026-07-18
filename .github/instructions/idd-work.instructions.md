@@ -155,6 +155,10 @@ by removing the misplaced branch from the primary worktree (after
 confirming no work is lost) and recreating the sibling worktree
 through the Worktree creation steps above.
 
+Once the self-check passes, acquire the
+[worktree-local lock file](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
+before the first mutation in this worktree.
+
 ## B2 — Create and refine plan
 
 ### B2.0 — Supersession re-check (before planning)
