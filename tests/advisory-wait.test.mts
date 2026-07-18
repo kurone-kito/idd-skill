@@ -164,6 +164,76 @@ test('classifyCiChecks: a same-instant cancelled/success tie for one name prefer
   assert.equal(classifyCiChecks(successFirst).status, 'success');
 });
 
+test('classifyCiChecks: a same-instant tie between two non-failure/non-cancelled states is deterministic regardless of input order', () => {
+  // PR review finding: the reducer previously kept whichever instance
+  // was listed first for any tie not involving FAILURE or CANCELLED
+  // (e.g. SUCCESS vs NEUTRAL), so input order still mattered even
+  // though it never flipped `.status` for this particular pairing (both
+  // are pass-equivalent). Assert full order-independence anyway, since
+  // a future passing-vs-non-passing tie (e.g. SUCCESS vs ACTION_REQUIRED)
+  // would otherwise inherit the same order dependence and could flip
+  // `.status`.
+  const tiedAt = '2026-07-17T16:00:06Z';
+  const successFirst = [
+    { name: 'flaky', state: 'SUCCESS', completedAt: tiedAt },
+    { name: 'flaky', state: 'NEUTRAL', completedAt: tiedAt },
+  ];
+  const neutralFirst = [
+    { name: 'flaky', state: 'NEUTRAL', completedAt: tiedAt },
+    { name: 'flaky', state: 'SUCCESS', completedAt: tiedAt },
+  ];
+  assert.equal(classifyCiChecks(successFirst).status, 'success');
+  assert.equal(classifyCiChecks(neutralFirst).status, 'success');
+  const successAndActionRequiredFirst = [
+    { name: 'gated', state: 'SUCCESS', completedAt: tiedAt },
+    { name: 'gated', state: 'ACTION_REQUIRED', completedAt: tiedAt },
+  ];
+  const actionRequiredFirst = [
+    { name: 'gated', state: 'ACTION_REQUIRED', completedAt: tiedAt },
+    { name: 'gated', state: 'SUCCESS', completedAt: tiedAt },
+  ];
+  assert.equal(
+    classifyCiChecks(successAndActionRequiredFirst).status,
+    classifyCiChecks(actionRequiredFirst).status,
+  );
+});
+
+test('classifyCiChecks: a pending rerun carrying the zero-value completedAt sentinel is not shadowed by a stale success', () => {
+  // PR review finding (P1): gh pr checks (and similar API surfaces)
+  // report `0001-01-01T00:00:00Z` -- Go's zero Time value -- as
+  // `completedAt` for a check that has not actually completed, rather
+  // than omitting the field. That string is a syntactically valid ISO
+  // timestamp, so treating validity alone as "has this check completed"
+  // let a stale completed SUCCESS outrank a currently-pending rerun
+  // carrying the sentinel, silently discarding the fact that a new run
+  // is in flight for that same check name.
+  const checks = [
+    {
+      name: 'idd-advisory-convergence',
+      state: 'SUCCESS',
+      completedAt: '2026-07-17T16:00:06Z',
+    },
+    {
+      name: 'idd-advisory-convergence',
+      state: 'IN_PROGRESS',
+      completedAt: '0001-01-01T00:00:00Z',
+    },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'pending');
+});
+
+test('classifyCiChecks: two check-run entries with no name are never collapsed into one group', () => {
+  // PR review finding: grouping by `String(check.name ?? '')` collapses
+  // every missing/empty-name entry into a single bucket, so an unrelated
+  // unnamed failure could be discarded in favor of an unrelated unnamed
+  // success sharing no real identity with it.
+  const checks = [
+    { name: '', state: 'FAILURE', completedAt: '2026-07-17T16:00:06Z' },
+    { name: '', state: 'SUCCESS', completedAt: '2026-07-17T16:25:47Z' },
+  ];
+  assert.equal(classifyCiChecks(checks).status, 'failed');
+});
+
 test('detects operational marker prefixes', () => {
   assert.equal(
     operationalMarkerPrefix(
