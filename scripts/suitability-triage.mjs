@@ -8,9 +8,45 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
+import {
+  DEFAULT_BUNDLE_IDS,
+  DEFAULT_EXTRA_FILES,
+  DEFAULT_MANIFEST_PATH,
+  ghJson as ghJsonArray,
+  normalizeContentionPath,
+  parseCandidateFiles,
+  resolveHighContentionFiles,
+} from './discover-shared-file-overlap.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 
+/** Upper bound on the #1484 bounded merged-PR scan (mirrors B2.0's own
+ * documented `gh pr list --limit 50`). */
+const MERGED_PR_SCAN_LIMIT = 50;
+/**
+ * GraphQL query for the closed-by-merged-PR read (#1484), bounded to the
+ * first 50 closing-PR references. A later page could theoretically hold an
+ * additional MERGED reference this misses, but that only makes the tier
+ * under-detect (fall back to the weak heuristic) rather than over-detect --
+ * the safe fail direction for a check that must never fail TOWARD a false
+ * positive, so a full pagination loop (as `idd-roadmap-audit-execute.mts`'s
+ * `hasOpenClosingPr` implements for its own different, block-a-close use
+ * case) is not required here. Declared here, above the `import.meta.main`
+ * trigger below, rather than alongside the other #1484 CLI glue further
+ * down: the trigger calls `runCli()` synchronously at module-evaluation
+ * time, and a `const` declared after that point is still in the temporal
+ * dead zone when the trigger fires (see `discover-shared-file-overlap.mts`'s
+ * identical note on its own flag-spec constant).
+ */
+const CLOSED_BY_MERGED_PR_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    issue(number:$number){
+      closedByPullRequestsReferences(first:50){
+        nodes { number state }
+      }
+    }
+  }
+}`;
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --issue spec key
@@ -160,6 +196,9 @@ export function evaluateSuitability(issue, options = {}) {
     needsDecisionLabelName: normalizeConfiguredLabelName(
       options.needsDecisionLabelName,
       POLICY_DEFAULTS.labels.needsDecisionLabelName,
+    ),
+    highConfidenceDuplicate: normalizeHighConfidenceDuplicateInput(
+      options.highConfidenceDuplicate,
     ),
   };
   const checks = [];
@@ -350,7 +389,80 @@ export function checkTrustSafety(context) {
     evidence: 'No trust/safety blockers detected.',
   };
 }
+/**
+ * High-confidence Check 4 tier (#1484): evaluate the mechanical B2.0-style
+ * signals -- a merged closing-PR reference on the candidate issue itself, or
+ * a merged PR that already changed one of the issue's own declared
+ * `## Candidate files` (excluding high-contention/shared files, which many
+ * unrelated issues touch and so are not on their own high-confidence
+ * evidence that THIS issue was superseded). Returns `null` -- never a
+ * synthesized verdict of its own -- whenever no strong signal fires, so the
+ * caller falls through to the existing weak title/declaration heuristic
+ * unchanged. This is the fail-safe contract the issue requires: never fail
+ * TOWARD a false high-confidence flag. `input` may be `undefined` (evidence
+ * not collected by the caller) or a partially malformed shape; both degrade
+ * to "no verdict" rather than a crash or a false hit.
+ */
+export function evaluateHighConfidenceDuplicate(input) {
+  if (!input) {
+    return null;
+  }
+  const closedByMergedPrNumbers = (
+    Array.isArray(input.closedByMergedPrNumbers)
+      ? input.closedByMergedPrNumbers
+      : []
+  ).filter((n) => Number.isInteger(n) && n > 0);
+  if (closedByMergedPrNumbers.length > 0) {
+    return {
+      pass: false,
+      evidence: `High-confidence duplicate: issue is already referenced by merged closing PR(s) #${closedByMergedPrNumbers.join(', #')} (closedByPullRequestsReferences).`,
+    };
+  }
+  const highContention = new Set(
+    (Array.isArray(input.highContentionFiles)
+      ? input.highContentionFiles
+      : []
+    ).map((file) => normalizeContentionPath(file)),
+  );
+  const candidateFiles = [
+    ...new Set(
+      (Array.isArray(input.candidateFiles) ? input.candidateFiles : [])
+        .map((file) => normalizeContentionPath(file))
+        .filter((file) => file.length > 0 && !highContention.has(file)),
+    ),
+  ];
+  if (candidateFiles.length === 0) {
+    return null;
+  }
+  const candidateSet = new Set(candidateFiles);
+  const mergedPrs = Array.isArray(input.mergedPrs) ? input.mergedPrs : [];
+  for (const raw of mergedPrs) {
+    const pr = raw ?? {};
+    const number = Number(pr.number);
+    if (!Number.isInteger(number) || number <= 0) {
+      continue;
+    }
+    const files = Array.isArray(pr.files) ? pr.files : [];
+    const overlap = [
+      ...new Set(files.map((file) => normalizeContentionPath(file))),
+    ].filter((file) => candidateSet.has(file));
+    if (overlap.length > 0) {
+      const mergedAt = String(pr.mergedAt ?? '');
+      return {
+        pass: false,
+        evidence: `High-confidence duplicate: merged PR #${number}${mergedAt ? ` (merged ${mergedAt})` : ''} already changed candidate file(s): ${overlap.sort().join(', ')}.`,
+      };
+    }
+  }
+  return null;
+}
 export function checkDuplicateOrSuperseded(context) {
+  const highConfidence = evaluateHighConfidenceDuplicate(
+    context.highConfidenceDuplicate,
+  );
+  if (highConfidence) {
+    return highConfidence;
+  }
   const { issue, duplicateCandidates } = context;
   const body = issue.body;
   const declarations = [...body.matchAll(DUPLICATE_DECLARATION_PATTERN)];
@@ -615,11 +727,44 @@ function runCli() {
   const issue = fetchIssue(repoRef, args.issue);
   const duplicateCandidates = fetchDuplicateCandidates(repoRef, issue);
   const labelsPolicy = normalizePolicyConfig(loadPolicy(args.policy)).labels;
+  // #1484: high-confidence Check 4 tier evidence. closedByPullRequestsReferences
+  // is always attempted -- cheap, independent of '## Candidate files', and
+  // fails loud on a gh error like every other fetch in this file (a broken
+  // fetch must surface, not silently read as "no evidence"; see
+  // fetchClosedByMergedPrNumbers's doc comment). The same-candidate-files scan
+  // only runs when the issue declares '## Candidate files' AND the
+  // high-contention exclusion set actually resolved -- see
+  // loadHighContentionFiles's doc comment for why an unresolved manifest
+  // skips the scan rather than proceeding with zero exclusions.
+  const closedByMergedPrNumbers = fetchClosedByMergedPrNumbers(
+    owner,
+    repo,
+    args.issue,
+  );
+  const candidateFiles = parseCandidateFiles(issue.body);
+  // Only resolve the high-contention exclusion set (a file read + JSON parse)
+  // when there is a '## Candidate files' section to check it against --
+  // most issues have none, and the result would otherwise be discarded.
+  const highContentionFiles =
+    candidateFiles.length > 0 ? loadHighContentionFiles() : null;
+  const shouldScanMergedPrs =
+    candidateFiles.length > 0 &&
+    highContentionFiles !== null &&
+    issue.createdAt.length > 0;
+  const mergedPrs = shouldScanMergedPrs
+    ? fetchMergedPrFileOverlapEvidence(repoRef, issue.createdAt)
+    : [];
   const result = evaluateSuitability(issue, {
     repository: { owner, repo },
     duplicateCandidates,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    highConfidenceDuplicate: {
+      closedByMergedPrNumbers,
+      candidateFiles,
+      highContentionFiles: highContentionFiles ?? [],
+      mergedPrs,
+    },
   });
   const output = {
     repository: { owner, repo },
@@ -721,7 +866,61 @@ function normalizeIssue(issue) {
     state: String(i.state ?? ''),
     labels: normalizeLabels(i.labels),
     url: String(i.url ?? i.html_url ?? ''),
+    createdAt: String(i.created_at ?? ''),
   };
+}
+/**
+ * Normalize the `evaluateSuitability` options-boundary input for #1484's
+ * high-confidence tier. Returns `undefined` for anything that isn't a
+ * plausible object (existing callers that don't know about this field never
+ * pass it, which must resolve to "absent", not an empty-but-present shape --
+ * `evaluateHighConfidenceDuplicate` special-cases `undefined` for exactly
+ * this reason). Every array field defaults to `[]` on a malformed shape.
+ */
+function normalizeHighConfidenceDuplicateInput(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return undefined;
+  }
+  const r = raw;
+  return {
+    closedByMergedPrNumbers: normalizePositiveIntArray(
+      r.closedByMergedPrNumbers,
+    ),
+    candidateFiles: normalizeStringArray(r.candidateFiles),
+    highContentionFiles: normalizeStringArray(r.highContentionFiles),
+    mergedPrs: normalizeHighConfidenceMergedPrs(r.mergedPrs),
+  };
+}
+function normalizePositiveIntArray(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => Number(entry))
+    .filter((entry) => Number.isInteger(entry) && entry > 0);
+}
+function normalizeStringArray(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => String(entry ?? ''))
+    .filter((entry) => entry.length > 0);
+}
+function normalizeHighConfidenceMergedPrs(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => {
+      const e = entry ?? {};
+      return {
+        number: Number(e.number),
+        mergedAt: String(e.mergedAt ?? ''),
+        files: normalizeStringArray(e.files),
+      };
+    })
+    .filter((entry) => Number.isInteger(entry.number) && entry.number > 0);
 }
 /**
  * Resolve one configured `labels.*` name (#1273), falling back to the given
@@ -793,6 +992,142 @@ function fetchDuplicateCandidates(repoRef, issue) {
     `search/issues?q=${encodeURIComponent(query)}&per_page=50`,
   ]);
   return normalizeDuplicateCandidates(payload.items ?? []);
+}
+// --- #1484: high-confidence Check 4 tier CLI glue ---------------------------
+// Read-only: every function below only ever calls `gh api graphql` (with a
+// `query` operation, never `mutation`), `gh pr list`, or `gh pr view` (no
+// -X/--method, no issue/PR mutation subcommand).
+// #1484 is detect-only by design; do not add a mutating gh call here -- a
+// later gated-close follow-up (#1485) is a separate, human-gated change.
+// The argv-builders are exported so tests can assert the exact read-only
+// verb without shelling out (a compiled-text grep for mutating verb
+// literals would miss a `gh api ... -X POST`-shaped mutation, since none of
+// this file's own calls use one).
+/**
+ * Argv for the closed-by-merged-PR read. Uses `gh api graphql` rather than
+ * `gh issue view --json closedByPullRequestsReferences`: the latter's
+ * REST-shimmed shape carries no per-PR `state`, and the connection includes
+ * OPEN (not yet merged) PRs, not only merged ones -- confirmed empirically
+ * against this repo's own issue #1489 (OPEN) / PR #1497 (OPEN), and matches
+ * `idd-roadmap-audit-execute.mts`'s documented note that the field "returns
+ * merged PRs even with `includeClosedPrs:false`" (i.e. state alone
+ * determines relevance, not that flag). Filtering to `state === 'MERGED'`
+ * happens in `fetchClosedByMergedPrNumbers` below, after this fetch --
+ * without it, an issue with only an in-progress unmerged closing PR would
+ * wrongly read as "already referenced by a merged closing PR".
+ */
+export function buildClosedByMergedPrArgs(owner, repo, issueNumber) {
+  return [
+    'api',
+    'graphql',
+    '-f',
+    `query=${CLOSED_BY_MERGED_PR_QUERY}`,
+    '-f',
+    `owner=${owner}`,
+    '-f',
+    `repo=${repo}`,
+    '-F',
+    `number=${issueNumber}`,
+  ];
+}
+/** Argv for the bounded merged-PR list scan (mirrors B2.0's own documented
+ * `gh pr list --search "merged:>=<since>"` shape). */
+export function buildMergedPrListArgs(repoRef, sinceIso) {
+  return [
+    'pr',
+    'list',
+    '--repo',
+    repoRef,
+    '--state',
+    'merged',
+    '--search',
+    `merged:>=${sinceIso}`,
+    '--json',
+    'number,mergedAt',
+    '--limit',
+    String(MERGED_PR_SCAN_LIMIT),
+  ];
+}
+/** Argv for one merged PR's changed-file list. */
+export function buildPrFilesArgs(repoRef, prNumber) {
+  return [
+    'pr',
+    'view',
+    String(prNumber),
+    '--repo',
+    repoRef,
+    '--json',
+    'files',
+    '--jq',
+    '.files[].path',
+  ];
+}
+/**
+ * Fetch the candidate issue's own merged closing-PR references. Fails loud
+ * (via `runGh`, no try/catch here) on a `gh` error, matching this file's
+ * existing `fetchIssue` / `fetchDuplicateCandidates` convention: a broken
+ * fetch must surface as an error, not silently read as "no evidence" -- the
+ * latter would be a much worse failure mode than a thrown error, since it
+ * would make a real duplicate look clean. A CLI-level failure is already
+ * covered by Check 4's documented Edge Case ("Timeout on duplicate
+ * detection... fall back to exact title match only").
+ */
+function fetchClosedByMergedPrNumbers(owner, repo, issueNumber) {
+  const parsed = ghJson(buildClosedByMergedPrArgs(owner, repo, issueNumber));
+  const nodes =
+    parsed.data?.repository?.issue?.closedByPullRequestsReferences?.nodes ?? [];
+  return nodes
+    .filter((node) => String(node?.state ?? '') === 'MERGED')
+    .map((node) => Number.parseInt(String(node?.number ?? ''), 10))
+    .filter((n) => Number.isInteger(n) && n > 0);
+}
+/**
+ * Bounded two-step merged-PR file-overlap scan (list, then per-PR file
+ * list), mirroring B2.0's own documented commands exactly rather than a new
+ * query shape. Fails loud like `fetchClosedByMergedPrNumbers` above -- once
+ * the caller has decided to run this scan (see `shouldScanMergedPrs` in
+ * `runCli`), a mid-scan `gh` error surfaces rather than degrading to "no
+ * overlap found".
+ */
+function fetchMergedPrFileOverlapEvidence(repoRef, sinceIso) {
+  const list = ghJsonArray(buildMergedPrListArgs(repoRef, sinceIso));
+  return list.map((entry) => {
+    const pr = entry ?? {};
+    const number = Number.parseInt(String(pr.number ?? ''), 10);
+    const files = runGh(buildPrFilesArgs(repoRef, number))
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    return { number, mergedAt: String(pr.mergedAt ?? ''), files };
+  });
+}
+/**
+ * Resolve the high-contention exclusion set the same way A4 Step 2's
+ * `discover-shared-file-overlap` does, so the #1484 same-candidate-files
+ * signal never treats a broadly-shared bundle/manifest file as
+ * high-confidence evidence on its own. Returns `null` (not `[]`) when the
+ * manifest cannot be loaded, so `runCli` can skip the same-candidate-files
+ * scan entirely in that case rather than proceeding with zero exclusions --
+ * an empty exclusion set would make that signal MORE permissive, which is
+ * the wrong fail direction for "never fail toward a false high-confidence
+ * flag". `closedByPullRequestsReferences` is a separate, independent signal
+ * and is unaffected by this fallback.
+ */
+function loadHighContentionFiles() {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(resolve(process.cwd(), DEFAULT_MANIFEST_PATH), 'utf8'),
+    );
+    return [
+      ...resolveHighContentionFiles({
+        manifest,
+        bundleIds: DEFAULT_BUNDLE_IDS,
+        extraFiles: DEFAULT_EXTRA_FILES,
+      }),
+    ];
+  } catch {
+    return null;
+  }
 }
 function ghJson(args) {
   return JSON.parse(runGh(args).trim() || '{}');
