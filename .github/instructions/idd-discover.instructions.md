@@ -146,9 +146,9 @@ satisfies **all** of the following:
   label.
 - Does NOT have the configured authoring label.
 - Does NOT have open dependent issues, except parent epics or
-  aggregate issues that are acceptable under A3 (apply the same
-  fail-safe as A3: if a dependent-issue reference cannot be resolved,
-  treat as blocked).
+  aggregate issues that are acceptable under A3. If a dependent-issue
+  reference cannot be resolved (issue not found or inaccessible),
+  treat as blocked (fail-safe).
 - Does NOT contain visible `Blocked by #NNN` lines where the referenced
   issue is open (apply the same fail-safe as A3: if a reference cannot
   be resolved, treat as blocked).
