@@ -162,6 +162,30 @@ When detection fails, GitHub will not auto-close the linked issue on
 merge and the issue↔PR linking surfaces (sidebar, timeline) will not
 populate.
 
+**Mirror false-positive — negation-blind detection**: the same literal
+matching runs in the other direction too. GitHub's detector matches a
+recognized keyword form immediately adjacent to a `#N` reference and
+has no concept of negation — wrapping the keyword in surrounding
+"not" / "deliberately" / "isn't" wording does not stop detection when
+the keyword itself still sits next to the `#N` it must not close. Keep
+every recognized keyword form (`close`, `closes`, `closed`, `fix`,
+`fixes`, `fixed`, `resolve`, `resolves`, `resolved`) structurally apart
+from any reference it must not close:
+
+- Risky — a keyword sits directly before the reference, even inside a
+  negation clause: "this PR does not close #42" (`close` is
+  immediately adjacent to `#42`; GitHub cannot see the "not").
+- Safe — reorder so no recognized keyword is adjacent to the
+  reference: "Refs #42 (deliberately not a closing keyword — see the
+  discussion there for why this PR does not resolve it directly)".
+  Here `resolve` is followed by "it", not a `#N` token, so nothing
+  adjacent to `#42` matches.
+
+Do not rely on careful phrasing alone as the only safeguard — the
+strengthened check in D3.5 below verifies `closingIssuesReferences`
+against the deliberate closing set exactly, catching a spurious extra
+close even if phrasing slips.
+
 #### Multiple closing issues
 
 When the PR closes more than one issue, repeat the keyword for each
@@ -224,11 +248,23 @@ completion.
    block-quote prefix) and apply the same edit-and-recheck path
    as step 4.
 
-GitHub's `closingIssuesReferences` field on the PR
-(`gh pr view <pr-number> --json closingIssuesReferences`) can also
-confirm detection: it lists every issue GitHub plans to close when
-the PR merges. If that list is non-empty and contains the claimed
-issue, the regex check above is redundant but still safe to run.
+6. **Confirm no unintended extra closes**: GitHub's
+   `closingIssuesReferences` field on the PR
+   (`gh pr view <pr-number> --json closingIssuesReferences --jq
+   '.closingIssuesReferences[].number'`) lists every issue GitHub plans
+   to close when the PR merges. Compare it against the deliberate
+   closing set from D3 — normally just the claimed issue `<N>`, or the
+   full deliberate multi-issue set when "Multiple closing issues"
+   above applies. The two sets must be **exactly** equal; the steps
+   above only confirm the claimed issue is present; they do not catch
+   an extra unintended entry. Any `closingIssuesReferences` entry
+   outside the deliberate set is a spurious extra close — most often
+   the negation-blind false-positive documented above, where an
+   unrelated `#M` reference ends up adjacent to a recognized keyword
+   elsewhere in the body. If an unintended entry is found, edit the PR
+   body to separate the keyword from that `#M` reference and repeat
+   this step once. If it still fails, post a hold note on the issue
+   citing the PR URL and stop. Do not proceed to D4.
 
 ## D4 — Wait for CI
 
