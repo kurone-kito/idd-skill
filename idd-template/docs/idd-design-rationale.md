@@ -64,11 +64,11 @@ traverse. When A1 itself finds **zero open roadmap issues** — not "the
 roadmap's graph is exhausted" but "no roadmap exists at all" — the
 original text still hard-aborted immediately, even though
 `roadmap-first`'s whole purpose is to fall back to orphan work when
-roadmap work runs dry. This surfaces naturally whenever a repository
-drains its last open roadmap: the final tracked issue ships, the
-roadmap closes, and the next Discover pass finds zero open roadmaps —
-Discover correctly identifies A1's documented abort condition and would
-stop, a harder stop than (a)/(b) impose for what is, from an
+roadmap work runs dry. Before trigger (c), this surfaced naturally whenever
+a repository drained its last open roadmap: the final tracked issue shipped,
+the roadmap closed, and the next Discover pass found zero open roadmaps —
+Discover correctly identified A1's documented abort condition and stopped,
+a harder stop than (a)/(b) impose for what was, from an
 operator's perspective, the same underlying situation (no roadmap work
 available right now).
 
