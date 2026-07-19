@@ -171,6 +171,8 @@ const defaultDeps = {
         scopedGhArgs(repoRef, [
           'api',
           `repos/${repoRef}/contents/.github/idd/config.json`,
+          '--method',
+          'GET',
           '--field',
           `ref=${headSha}`,
           '--jq',
