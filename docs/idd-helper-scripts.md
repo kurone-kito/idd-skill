@@ -1189,6 +1189,14 @@ Interpretation rules:
   genuinely outstanding review from a different, non-author codeowner
   reports this as `false` even when `status` is `"clear"` via the
   bypass-actor carve-out.
+- `codeownerEligibilityUnreadable` (#1521) is `true` when at least one
+  direct-user codeowner's collaborator-permission lookup failed for a
+  reason OTHER than "not a collaborator" (403/5xx/network/timeout).
+  `prAuthorIsSoleEligibleCodeowner` is forced to `false` whenever this
+  is `true`, regardless of how narrow the (possibly incomplete)
+  eligible set otherwise looks: a transient lookup failure for a
+  genuinely eligible non-author codeowner must never be silently
+  treated the same as that codeowner having no write access at all.
 - `reviewCurrency.comparisonRoute` remains advisory evidence only. Agents
   must still apply written instruction checks against live GitHub state.
 - Fail closed: if helper execution fails, output is invalid JSON,
@@ -1238,16 +1246,30 @@ Interpretation rules:
   report's `reviewerStates.codeownerSelfApproval` has `status: "clear"`
   with `reason` `"pull-request-bypass-available"` or
   `"ruleset-bypass-available"` **and**
-  `prAuthorIsSoleEligibleCodeowner: true`. That last field is the
-  multi-CODEOWNER safety property: it is additive to `status`/`reason`
-  and proves the PR author is the sole eligible codeowner (no team or
+  `prAuthorIsSoleEligibleCodeowner: true` **and**
+  `codeownerEligibilityUnreadable: false`. Those last two fields are
+  the multi-CODEOWNER safety property: additive to `status`/`reason`,
+  they prove the PR author is the sole eligible codeowner (no team or
   email codeowners, every eligible direct-user codeowner is the
-  author). A genuinely outstanding review from a different, non-author
-  codeowner reports `prAuthorIsSoleEligibleCodeowner: false` even when
-  `status` is still `"clear"` via the bypass-actor carve-out (that
-  carve-out resolves before the non-author-owner check runs in
-  `summarizeCodeownerSelfApproval`), so it registers as its own unmet
-  condition and never triggers this retry. The verdict's
+  author, and every direct-user codeowner's permission lookup actually
+  succeeded). A genuinely outstanding review from a different,
+  non-author codeowner reports `prAuthorIsSoleEligibleCodeowner: false`
+  even when `status` is still `"clear"` via the bypass-actor carve-out
+  (that carve-out resolves before the non-author-owner check runs in
+  `summarizeCodeownerSelfApproval`), and a transient/auth/rate-limit
+  permission-lookup failure reports `codeownerEligibilityUnreadable:
+  true` rather than silently narrowing the eligible set — both
+  register as their own unmet condition and never trigger this retry.
+  The helper also re-validates the SAME gate and eligibility fact a
+  SECOND time, immediately before the `--admin` call itself: real time
+  passes between the plain merge's failure and the retry, and
+  `--admin` bypasses the entire ruleset (not just the CODEOWNER rule),
+  so a blocker that appeared in that interval must still abort the
+  fallback rather than being silently bypassed. Immediately before the
+  retry it also requires live GitHub merge state
+  `mergeable: "MERGEABLE"` and `mergeStateStatus: "CLEAN"` or
+  `"BEHIND"`; blocked, unknown, or unreadable state aborts the fallback
+  rather than allowing a generic policy error to trigger `--admin`. The verdict's
   `adminFallbackUsed` field records whether the fallback fired
   (`true`) whenever it was attempted, regardless of whether the
   `--admin` retry itself ultimately succeeded. Any merge failure that

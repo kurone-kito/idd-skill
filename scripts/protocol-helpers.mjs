@@ -3157,6 +3157,7 @@ export function summarizeReviewerStates(
     codeownersText = '',
     changedFiles = [],
     eligibleCodeownerUserLogins = null,
+    eligibleCodeownerUserLoginsUnreadable = false,
     advisoryBotLogins = [],
     prAuthorLogin = '',
     viewerLogin = '',
@@ -3265,6 +3266,7 @@ export function summarizeReviewerStates(
       eligibleCodeownerUserLogins === null
         ? null
         : [...eligibleCodeownerUsers].sort(),
+    eligibleCodeownerUserLoginsUnreadable,
     codeownerTeamSlugs: codeowners.codeownerTeamSlugs,
     codeownerEmailAddresses: codeowners.codeownerEmailAddresses,
     prAuthorLogin,
@@ -3320,6 +3322,7 @@ function summarizeCodeownerSelfApproval({
   hasExplicitCodeownerMatches,
   codeownerUserLogins = [],
   eligibleCodeownerUserLogins = null,
+  eligibleCodeownerUserLoginsUnreadable = false,
   codeownerTeamSlugs = [],
   codeownerEmailAddresses = [],
   prAuthorLogin = '',
@@ -3416,10 +3419,19 @@ function summarizeCodeownerSelfApproval({
   // keeps its existing pass/fail shape for every adopter repo -- see the
   // #1521 review discussion); a caller that needs the narrow self-deadlock
   // fact must check this field explicitly alongside `status`/`reason`.
+  //
+  // Requires `!eligibleCodeownerUserLoginsUnreadable` (Codex review, #1521):
+  // `eligibleDirectCodeownerUserLogins` can be silently NARROWED by a
+  // transient permission-lookup failure for some OTHER direct codeowner
+  // (see `resolveEligibleCodeownerUserLogins` in pre-merge-readiness.mts),
+  // which would make the author look like the sole eligible codeowner even
+  // though a real co-owner's eligibility simply could not be confirmed.
+  // Fail closed rather than trust a possibly-incomplete narrowed set.
   const prAuthorIsSoleEligibleCodeowner =
     Boolean(normalizedAuthor) &&
     normalizedCodeownerTeamSlugs.length === 0 &&
     normalizedCodeownerEmailAddresses.length === 0 &&
+    !eligibleCodeownerUserLoginsUnreadable &&
     allDirectUsersAreAuthor;
   const base = {
     status: 'not_applicable',
@@ -3439,6 +3451,13 @@ function summarizeCodeownerSelfApproval({
     // below to the already-documented `possible_deadlock`.
     rulesetBypassUnreadable: bypass.unreadable,
     prAuthorIsSoleEligibleCodeowner,
+    // #1521: true when at least one direct-user codeowner's
+    // collaborator-permission lookup was unreadable (see
+    // `prAuthorIsSoleEligibleCodeowner` above). Diagnostic only, mirroring
+    // `rulesetBypassUnreadable`'s shape -- never flips `status` on its own.
+    codeownerEligibilityUnreadable: Boolean(
+      eligibleCodeownerUserLoginsUnreadable,
+    ),
   };
   if (!requireCodeOwnerReview) {
     return base;
@@ -3997,6 +4016,7 @@ export function buildPreMergeReadinessSummary(
     changedFiles = [],
     codeownersText = '',
     eligibleCodeownerUserLogins = null,
+    eligibleCodeownerUserLoginsUnreadable = false,
     reviewDecision = '',
   },
   options = {},
@@ -4082,6 +4102,7 @@ export function buildPreMergeReadinessSummary(
     codeownersText,
     changedFiles,
     eligibleCodeownerUserLogins,
+    eligibleCodeownerUserLoginsUnreadable,
     advisoryBotLogins,
     prAuthorLogin,
     viewerLogin: options.viewerLogin,

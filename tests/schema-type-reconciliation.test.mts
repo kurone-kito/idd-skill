@@ -950,6 +950,7 @@ const preMergeReadinessFixture = {
       currentUserCanBypass: 'never',
       rulesetBypassUnreadable: false,
       prAuthorIsSoleEligibleCodeowner: false,
+      codeownerEligibilityUnreadable: false,
     },
     humanChangesRequestedCount: 0,
     blockingChangesRequestedLogins: [],

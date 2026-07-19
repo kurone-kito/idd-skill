@@ -146,6 +146,24 @@ export function isEligibleForSoloCodeownerAdminFallback(
 }
 
 /**
+ * A generic "base branch policy prohibits the merge" error can also cover
+ * merge-queue, deployment, or other branch-policy blockers that the
+ * readiness report does not model. Require GitHub's live merge state to be
+ * settled and mergeable before an administrator retry; unknown or blocked
+ * state must never be bypassed by `--admin`.
+ */
+export function isSafeSoloCodeownerAdminMergeState(
+  mergeState: Record<string, unknown>,
+): boolean {
+  const mergeable = String(mergeState.mergeable ?? '');
+  const mergeStateStatus = String(mergeState.mergeStateStatus ?? '');
+  return (
+    mergeable === 'MERGEABLE' &&
+    (mergeStateStatus === 'CLEAN' || mergeStateStatus === 'BEHIND')
+  );
+}
+
+/**
  * Injectable side-effecting dependencies. Tests substitute these to drive
  * the dry-run / apply / fail-closed paths without faking the full live
  * GitHub state; production uses the real readiness collector and `gh`.
@@ -158,6 +176,11 @@ export interface MergeExecuteDeps {
    * `repoRef` (`<owner>/<repo>`) when set, else the current-directory repo.
    */
   fetchHeadSha: (prNumber: number, repoRef: string | null) => string;
+  /** Fetch the live GitHub mergeability state before an admin retry. */
+  fetchMergeState: (
+    prNumber: number,
+    repoRef: string | null,
+  ) => Record<string, unknown>;
   /**
    * Execute the bound merge commit and return gh's stdout, scoped to
    * `repoRef` (`<owner>/<repo>`) when set, else the current-directory repo.
@@ -210,6 +233,20 @@ const defaultDeps: MergeExecuteDeps = {
         '.headRefOid',
       ]),
     ),
+  fetchMergeState: (prNumber, repoRef) =>
+    JSON.parse(
+      ghText(
+        scopedGhArgs(repoRef, [
+          'pr',
+          'view',
+          String(prNumber),
+          '--json',
+          'mergeable,mergeStateStatus',
+          '--jq',
+          '.',
+        ]),
+      ),
+    ) as Record<string, unknown>,
   mergePr: (prNumber, headSha, repoRef) =>
     ghText(
       scopedGhArgs(repoRef, [
@@ -300,34 +337,22 @@ export function runMergeExecute(
 
   // Ready under --apply: re-fetch the head and re-validate the claim
   // immediately before merging, then fail closed on any drift.
-  const liveHeadSha = deps.fetchHeadSha(args.prNumber, args.repoRef);
-  if (liveHeadSha !== prHeadSha) {
-    verdict.mergeResult = `head drift: validated ${prHeadSha} but live head is ${liveHeadSha}; no merge`;
+  const revalidation = revalidateImmediatelyBeforeMerge(
+    deps,
+    args.prNumber,
+    args.repoRef,
+    args.passthrough,
+    prHeadSha,
+  );
+  if (!revalidation.ok) {
+    if (revalidation.blockers) {
+      verdict.blockers = revalidation.blockers;
+      verdict.ready = false;
+    }
+    verdict.mergeResult = revalidation.failure;
     return { verdict, exitCode: 1 };
   }
-
-  const revalidated = deps.collect(args.passthrough);
-  if (String(revalidated.prHeadSha ?? '') !== prHeadSha) {
-    verdict.mergeResult = `head drift on re-validation: ${String(
-      revalidated.prHeadSha ?? '',
-    )} != ${prHeadSha}; no merge`;
-    return { verdict, exitCode: 1 };
-  }
-  const revalidatedClaim = asRecord(revalidated.claim);
-  if (revalidatedClaim.matchesExpectedClaim !== true) {
-    verdict.mergeResult = `claim lost on re-validation (reason="${String(
-      revalidatedClaim.reason ?? 'unknown',
-    )}"); no merge`;
-    return { verdict, exitCode: 1 };
-  }
-  const revalidatedBlockers = evaluateMergeGates(revalidated);
-  if (revalidatedBlockers.length > 0) {
-    verdict.blockers = revalidatedBlockers;
-    verdict.ready = false;
-    verdict.mergeResult =
-      're-validation found new blockers immediately before merge; no merge';
-    return { verdict, exitCode: 1 };
-  }
+  const revalidated = revalidation.report;
 
   // Always a merge commit — never squash/rebase. Bind to the validated head.
   try {
@@ -366,6 +391,56 @@ export function runMergeExecute(
       return { verdict, exitCode: 1 };
     }
 
+    // #1521 (Codex review on PR #1537): re-validate a SECOND time,
+    // immediately before the --admin call, rather than trusting the
+    // `revalidated` snapshot collected above. Real time has passed since
+    // then — at minimum the failed plain-merge round trip — during which
+    // a required check could flip red, a review could be dismissed, or
+    // another blocker could appear. `--admin` bypasses the ENTIRE
+    // ruleset, not just the CODEOWNER rule, so retrying on a stale
+    // snapshot could silently merge a PR that is no longer green. Also
+    // re-confirm the solo-CODEOWNER eligibility fact itself (not only the
+    // general gate), since a non-author codeowner's review could have
+    // arrived in the interim.
+    const adminRevalidation = revalidateImmediatelyBeforeMerge(
+      deps,
+      args.prNumber,
+      args.repoRef,
+      args.passthrough,
+      prHeadSha,
+    );
+    if (!adminRevalidation.ok) {
+      if (adminRevalidation.blockers) {
+        verdict.blockers = adminRevalidation.blockers;
+        verdict.ready = false;
+      }
+      verdict.mergeResult = `admin-fallback aborted: ${adminRevalidation.failure}`;
+      return { verdict, exitCode: 1 };
+    }
+    const adminReviewerStates = asRecord(
+      adminRevalidation.report.reviewerStates,
+    );
+    if (!isEligibleForSoloCodeownerAdminFallback(adminReviewerStates)) {
+      verdict.mergeResult =
+        'admin-fallback aborted: solo-CODEOWNER eligibility no longer holds on re-validation; no merge';
+      return { verdict, exitCode: 1 };
+    }
+
+    let mergeState: Record<string, unknown>;
+    try {
+      mergeState = deps.fetchMergeState(args.prNumber, args.repoRef);
+    } catch (mergeStateError) {
+      verdict.mergeResult = `admin-fallback aborted: live merge state unreadable: ${
+        ghErrorText(mergeStateError) || 'unknown error'
+      }`;
+      return { verdict, exitCode: 1 };
+    }
+    if (!isSafeSoloCodeownerAdminMergeState(mergeState)) {
+      verdict.mergeResult =
+        'admin-fallback aborted: live merge state is not settled and mergeable; no merge';
+      return { verdict, exitCode: 1 };
+    }
+
     verdict.adminFallbackUsed = true;
     try {
       const adminMergeOutput = deps.mergePrAdmin(
@@ -377,7 +452,7 @@ export function runMergeExecute(
       // Keep mergeCommand in sync with the command that actually mutated
       // the PR: an audit/log consumer reading this field alone (without
       // also checking adminFallbackUsed) must not see the plain,
-      // non---admin command after an admin-fallback merge succeeded.
+      // non-`--admin` command after an admin-fallback merge succeeded.
       verdict.mergeCommand = `${verdict.mergeCommand} --admin`;
       verdict.mergeResult = `admin-fallback (#1521 solo-CODEOWNER deadlock): ${
         adminMergeOutput || 'merge command completed'
@@ -390,6 +465,63 @@ export function runMergeExecute(
       return { verdict, exitCode: 1 };
     }
   }
+}
+
+/**
+ * Fetch the live head SHA and a fresh readiness report, then validate
+ * head-match, claim-match, and zero blockers — the fail-closed check
+ * this file applies "immediately before merging". Factored out (#1521,
+ * Codex review) so the SAME check can run a second time immediately
+ * before the `--admin` retry, not just once before the plain merge
+ * attempt: real time passes between the two (at minimum the failed
+ * plain merge's own round trip), and `--admin` bypasses the entire
+ * ruleset, so it must never act on a stale snapshot.
+ */
+function revalidateImmediatelyBeforeMerge(
+  deps: MergeExecuteDeps,
+  prNumber: number,
+  repoRef: string | null,
+  passthrough: string[],
+  prHeadSha: string,
+):
+  | { ok: true; report: Record<string, unknown> }
+  | { ok: false; failure: string; blockers?: MergeBlocker[] } {
+  const liveHeadSha = deps.fetchHeadSha(prNumber, repoRef);
+  if (liveHeadSha !== prHeadSha) {
+    return {
+      ok: false,
+      failure: `head drift: validated ${prHeadSha} but live head is ${liveHeadSha}; no merge`,
+    };
+  }
+
+  const report = deps.collect(passthrough);
+  if (String(report.prHeadSha ?? '') !== prHeadSha) {
+    return {
+      ok: false,
+      failure: `head drift on re-validation: ${String(
+        report.prHeadSha ?? '',
+      )} != ${prHeadSha}; no merge`,
+    };
+  }
+  const claim = asRecord(report.claim);
+  if (claim.matchesExpectedClaim !== true) {
+    return {
+      ok: false,
+      failure: `claim lost on re-validation (reason="${String(
+        claim.reason ?? 'unknown',
+      )}"); no merge`,
+    };
+  }
+  const blockers = evaluateMergeGates(report);
+  if (blockers.length > 0) {
+    return {
+      ok: false,
+      failure:
+        're-validation found new blockers immediately before merge; no merge',
+      blockers,
+    };
+  }
+  return { ok: true, report };
 }
 
 // Excluded from the #1446 cli-args.mts wrapper: `passthrough` below

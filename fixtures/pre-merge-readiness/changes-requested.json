@@ -199,7 +199,8 @@
         "bypassMode": "none",
         "currentUserCanBypass": "unknown",
         "rulesetBypassUnreadable": false,
-        "prAuthorIsSoleEligibleCodeowner": false
+        "prAuthorIsSoleEligibleCodeowner": false,
+        "codeownerEligibilityUnreadable": false
       },
       "humanChangesRequestedCount": 1,
       "blockingChangesRequestedLogins": [

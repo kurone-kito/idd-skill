@@ -6,6 +6,7 @@ import {
   fetchGovernanceJson,
   normalizeStatusCheckRollupEntry,
   parseArgs,
+  resolveEligibleCodeownerUserLogins,
   resolveToleratedGhFailure,
 } from '../src/scripts/pre-merge-readiness.mts';
 import {
@@ -542,6 +543,7 @@ test('self-CODEOWNER diagnostic reports deadlock without bypass', () => {
     currentUserCanBypass: 'never',
     rulesetBypassUnreadable: false,
     prAuthorIsSoleEligibleCodeowner: true,
+    codeownerEligibilityUnreadable: false,
   });
 });
 
@@ -582,6 +584,7 @@ test('self-CODEOWNER diagnostic downgrades a certain deadlock to possible_deadlo
     currentUserCanBypass: 'unknown',
     rulesetBypassUnreadable: true,
     prAuthorIsSoleEligibleCodeowner: true,
+    codeownerEligibilityUnreadable: false,
   });
 });
 
@@ -969,6 +972,182 @@ test('#1521: the sole-eligible-codeowner topology fact is exposed regardless of 
   });
 
   assert.equal(summary.codeownerSelfApproval.status, 'deadlock');
+  assert.equal(
+    summary.codeownerSelfApproval.prAuthorIsSoleEligibleCodeowner,
+    true,
+  );
+});
+
+// #1521 (Codex review on PR #1537): a transient/auth/rate-limit failure
+// while reading a non-author codeowner's collaborator permission must
+// never silently narrow the eligible set the same way a genuine 404
+// ("not a collaborator") does -- doing so would make the PR author look
+// like the sole eligible codeowner while a real co-owner's eligibility
+// simply could not be confirmed.
+test('resolveEligibleCodeownerUserLogins excludes a login on a genuine 404 (not a collaborator)', () => {
+  const result = resolveEligibleCodeownerUserLogins(
+    'o',
+    'r',
+    ['author', 'reviewer'],
+    (login) => {
+      if (login === 'author') {
+        return 'write';
+      }
+      throw Object.assign(new Error('Command failed'), {
+        stderr: 'gh: Not Found (HTTP 404)',
+      });
+    },
+  );
+  assert.deepEqual(result.eligible, ['author']);
+  assert.equal(result.unreadable, false);
+});
+
+test('resolveEligibleCodeownerUserLogins flags unreadable on a transient failure instead of silently excluding the login', () => {
+  const result = resolveEligibleCodeownerUserLogins(
+    'o',
+    'r',
+    ['author', 'reviewer'],
+    (login) => {
+      if (login === 'author') {
+        return 'write';
+      }
+      // 403 (rate limit / permission), not 404 -- cannot be told apart
+      // from "genuinely not a collaborator" by the caller.
+      throw Object.assign(new Error('Command failed'), {
+        stderr: 'gh: API rate limit exceeded (HTTP 403)',
+      });
+    },
+  );
+  // 'reviewer' is still excluded from the eligible list (the caller has
+  // no proof it IS eligible), but `unreadable: true` distinguishes this
+  // from the genuine-404 case above.
+  assert.deepEqual(result.eligible, ['author']);
+  assert.equal(result.unreadable, true);
+});
+
+test('resolveEligibleCodeownerUserLogins flags unreadable on a network/timeout failure with no HTTP status at all', () => {
+  const result = resolveEligibleCodeownerUserLogins(
+    'o',
+    'r',
+    ['author', 'reviewer'],
+    (login) => {
+      if (login === 'author') {
+        return 'write';
+      }
+      throw Object.assign(new Error('Command failed'), {
+        stderr: 'connect ETIMEDOUT 140.82.0.0:443',
+      });
+    },
+  );
+  assert.deepEqual(result.eligible, ['author']);
+  assert.equal(result.unreadable, true);
+});
+
+test('resolveEligibleCodeownerUserLogins is readable (unreadable: false) when every lookup succeeds or 404s', () => {
+  const result = resolveEligibleCodeownerUserLogins(
+    'o',
+    'r',
+    ['author', 'former-owner'],
+    (login) => {
+      if (login === 'author') {
+        return 'write';
+      }
+      throw Object.assign(new Error('Command failed'), {
+        stderr: 'gh: Not Found (HTTP 404)',
+      });
+    },
+  );
+  assert.deepEqual(result.eligible, ['author']);
+  assert.equal(result.unreadable, false);
+});
+
+// #1521 crux: even though a narrowed eligible set makes the author LOOK
+// like the sole eligible codeowner (exactly the shape the earlier
+// solo-owner test asserts `true` for), `eligibleCodeownerUserLoginsUnreadable`
+// must force `prAuthorIsSoleEligibleCodeowner` to `false` -- the multi-
+// CODEOWNER safety property must hold even when the reason a co-owner
+// looks absent is an unreadable lookup, not a genuine absence.
+test('#1521: prAuthorIsSoleEligibleCodeowner is false when eligibility narrowing was unreadable, even with an otherwise-solo-looking set', () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [
+      {
+        type: 'pull_request',
+        ruleset_id: 1,
+        parameters: { require_code_owner_review: true },
+      },
+    ],
+    branchRulesets: [
+      {
+        id: 1,
+        current_user_can_bypass: 'pull_requests_only',
+        bypass_actors: [
+          {
+            actor_id: 44661432,
+            actor_type: 'User',
+            bypass_mode: 'pull_request',
+          },
+        ],
+      },
+    ],
+    codeownersText: '* @author @reviewer\n',
+    changedFiles: ['README.md'],
+    // As far as the (incomplete) eligible set can tell, only 'author' is
+    // eligible -- this is the exact shape that otherwise reads as the
+    // genuine solo-owner deadlock.
+    eligibleCodeownerUserLogins: ['author'],
+    eligibleCodeownerUserLoginsUnreadable: true,
+    prAuthorLogin: 'author',
+  });
+
+  // The general gate is unaffected -- still 'clear' via the bypass actor,
+  // matching every adopter repo's existing behavior.
+  assert.equal(summary.codeownerSelfApproval.status, 'clear');
+  assert.equal(
+    summary.codeownerSelfApproval.reason,
+    'pull-request-bypass-available',
+  );
+  // The safety-critical discriminator fails closed on the unreadable flag.
+  assert.equal(
+    summary.codeownerSelfApproval.prAuthorIsSoleEligibleCodeowner,
+    false,
+  );
+  assert.equal(
+    summary.codeownerSelfApproval.codeownerEligibilityUnreadable,
+    true,
+  );
+});
+
+test('#1521: codeownerEligibilityUnreadable defaults to false and does not affect the true solo-owner case', () => {
+  const summary = summarizeReviewerStates([], {
+    branchRules: [
+      {
+        type: 'pull_request',
+        ruleset_id: 1,
+        parameters: { require_code_owner_review: true },
+      },
+    ],
+    branchRulesets: [
+      {
+        id: 1,
+        current_user_can_bypass: 'pull_requests_only',
+        bypass_actors: [
+          {
+            actor_id: 44661432,
+            actor_type: 'User',
+            bypass_mode: 'pull_request',
+          },
+        ],
+      },
+    ],
+    codeownersText: '* @author\n',
+    changedFiles: ['README.md'],
+    prAuthorLogin: 'author',
+  });
+
+  assert.equal(
+    summary.codeownerSelfApproval.codeownerEligibilityUnreadable,
+    false,
+  );
   assert.equal(
     summary.codeownerSelfApproval.prAuthorIsSoleEligibleCodeowner,
     true,

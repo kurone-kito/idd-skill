@@ -504,7 +504,10 @@ export function collectPreMergeReadiness(
     .map((file) => String(file.filename ?? ''))
     .filter(Boolean);
   const codeownersText = fetchCodeownersText(owner, repo, baseRefName);
-  const eligibleCodeownerUserLogins = resolveEligibleCodeownerUserLogins(
+  const {
+    eligible: eligibleCodeownerUserLogins,
+    unreadable: eligibleCodeownerUserLoginsUnreadable,
+  } = resolveEligibleCodeownerUserLogins(
     owner,
     repo,
     resolveCodeownersForFiles(codeownersText, changedFiles).codeownerUserLogins,
@@ -581,6 +584,7 @@ export function collectPreMergeReadiness(
       changedFiles,
       codeownersText,
       eligibleCodeownerUserLogins,
+      eligibleCodeownerUserLoginsUnreadable,
       reviewDecision,
     },
     {
@@ -867,13 +871,39 @@ function resolveTrustedCollaboratorMarkerLogins(
   });
 }
 
-function resolveEligibleCodeownerUserLogins(
+/** Result of {@link resolveEligibleCodeownerUserLogins}. */
+export interface EligibleCodeownerResolution {
+  eligible: string[];
+  /**
+   * #1521 (Codex review on PR #1537): true when at least one login's
+   * collaborator-permission lookup failed for a reason OTHER than "not a
+   * collaborator" (403/5xx/network/timeout). The prior `safeGhText`-based
+   * implementation swallowed every failure into an empty string, making a
+   * transient lookup failure for a genuinely eligible non-author codeowner
+   * (e.g. `@reviewer` in `* @author @reviewer`) indistinguishable from that
+   * codeowner never having write access at all -- silently narrowing the
+   * eligible set and making the PR author look like the sole eligible
+   * codeowner. Threaded through to
+   * `codeownerSelfApproval.prAuthorIsSoleEligibleCodeowner` (protocol-helpers.mts),
+   * which fails closed (`false`) whenever this is `true`, regardless of
+   * what the (possibly incomplete) `eligible` list below contains.
+   */
+  unreadable: boolean;
+}
+
+/**
+ * Exported for direct unit testing (matching this file's established
+ * `fetchBranchRulesets`/`fetchGovernanceJson` injectable-fetch pattern) --
+ * `fetchPermission` defaults to the real live `gh api .../permission` call
+ * and is overridden in tests to simulate a 404 vs. a transient failure
+ * without mocking `execFileSync`.
+ */
+export function resolveEligibleCodeownerUserLogins(
   owner: string,
   repo: string,
   logins: unknown[],
-): string[] {
-  return normalizeTrustedMarkerLogins(logins).filter((login) => {
-    const permission = safeGhText(
+  fetchPermission: (login: string) => string = (login) =>
+    ghText(
       [
         'api',
         `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
@@ -881,14 +911,34 @@ function resolveEligibleCodeownerUserLogins(
         '.permission',
       ],
       GH_TEXT_LOOP_OPTIONS,
-    ).toLowerCase();
-
+    ),
+): EligibleCodeownerResolution {
+  let unreadable = false;
+  const eligible = normalizeTrustedMarkerLogins(logins).filter((login) => {
+    let permission: string;
+    try {
+      permission = fetchPermission(login).toLowerCase();
+    } catch (error) {
+      // A 404 means this login genuinely has no collaborator record on
+      // this repository (e.g. a stale CODEOWNERS entry for someone who
+      // was removed) -- the pre-#1521 behavior of excluding it is correct
+      // and unchanged. Any OTHER failure (403 permission denial, 5xx,
+      // timeout, network) cannot be told apart from "genuinely not a
+      // collaborator" by the caller, so it must not silently narrow the
+      // eligible set the same way -- flag `unreadable` instead.
+      if (deriveGhHttpStatus(error) === 404) {
+        return false;
+      }
+      unreadable = true;
+      return false;
+    }
     return (
       permission === 'admin' ||
       permission === 'maintain' ||
       permission === 'write'
     );
   });
+  return { eligible, unreadable };
 }
 
 function fetchCodeownersText(owner: string, repo: string, ref: string): string {

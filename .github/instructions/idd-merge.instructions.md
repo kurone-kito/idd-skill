@@ -214,17 +214,30 @@ Before any mutating action in F3, apply the
        `reviewerStates.codeownerSelfApproval` has `status: "clear"`
        with `reason` `"pull-request-bypass-available"` or
        `"ruleset-bypass-available"` **and**
-       `prAuthorIsSoleEligibleCodeowner: true` — proving the PR author
+       `prAuthorIsSoleEligibleCodeowner: true` **and**
+       `codeownerEligibilityUnreadable: false` — proving the PR author
        is the sole eligible codeowner (no team or email codeowners,
-       every eligible direct-user codeowner is the author). A
-       genuinely outstanding review from any other codeowner reports
-       `prAuthorIsSoleEligibleCodeowner: false` even when `status` is
-       still `"clear"` via the bypass-actor carve-out, so it registers
-       as its own unmet condition and never triggers this retry. See
+       every eligible direct-user codeowner is the author, and every
+       direct-user codeowner's collaborator-permission lookup actually
+       succeeded). A genuinely outstanding review from any other
+       codeowner reports `prAuthorIsSoleEligibleCodeowner: false` even
+       when `status` is still `"clear"` via the bypass-actor carve-out,
+       and a transient/auth/rate-limit failure while reading a
+       non-author codeowner's permission reports
+       `codeownerEligibilityUnreadable: true` rather than silently
+       narrowing the eligible set — both register as their own unmet
+       condition and never trigger this retry. See
        [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#merge-execution-f3)
        for the field contract; `idd-merge-execute.mjs --apply` applies
-       this check automatically and records the outcome in the
-       verdict's `adminFallbackUsed` field.
+       this check automatically, re-validates the SAME gate and
+       eligibility fact a second time immediately before the `--admin`
+       call itself (not just once beforehand — `--admin` bypasses the
+       entire ruleset, so a blocker that appeared in the interim must
+       still abort it). It also requires a fresh GitHub merge state of
+       `mergeable: "MERGEABLE"` with `mergeStateStatus` settled to
+       `"CLEAN"` or `"BEHIND"`; blocked, unknown, or unreadable merge
+       state never qualifies for an administrator bypass. The helper
+       records the outcome in the verdict's `adminFallbackUsed` field.
 
        ```sh
        gh pr merge {pr-number} --merge --match-head-commit "${PR_HEAD_SHA_F3}" --admin
