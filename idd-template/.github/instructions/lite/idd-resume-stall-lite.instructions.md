@@ -38,11 +38,11 @@ before S4; do not reuse the S2 value.
 
 ## S1 — Is this a stall case?
 
-| Condition                                                       | Action                                    |
-| --------------------------------------------------------------- | ----------------------------------------- |
-| No active claim, or active claim is this session's `{claim-id}` | Return to resume lite                     |
-| Valid forced-handoff matches active/inheritable state           | Return to resume lite forced-handoff path |
-| Active claim is another `{claim-id}`                            | Continue to S2                            |
+| Condition                                                                                  | Action                                    |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------- |
+| No active claim, or active claim is this session's `{claim-id}`                            | Return to resume lite                     |
+| Valid forced-handoff matches the active claim or an inheritable released branch / PR state | Return to resume lite forced-handoff path |
+| Active claim is another `{claim-id}`                                                       | Continue to S2                            |
 
 ## S2 — Quiet window (30 min, evidence only)
 
