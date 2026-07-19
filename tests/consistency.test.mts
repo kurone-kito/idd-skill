@@ -337,11 +337,7 @@ test('doc budget guard flags a value that drifted from every manifest budget', (
   assert.equal(result.errors.length, 1);
   assert.match(
     result.errors[0],
-<<<<<<< HEAD
-    /doc-budget-drift: README\.md states 30,000 bytes, which is not a current sync-manifest budget value \(valid: 20000, 32200, 43300, 101000\)/,
-=======
     /doc-budget-drift: README\.md states 30,000 bytes, which is not a current sync-manifest budget value \(valid: 20000, 35500, 45000, 112700\)/,
->>>>>>> origin/main
   );
 });
 
