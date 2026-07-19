@@ -392,6 +392,26 @@ test('--apply fails closed when the head drifts before merge', () => {
   assert.equal(exitCode, 1);
 });
 
+test('--apply returns a structured verdict when head re-validation fails', () => {
+  const { deps, calls } = depsFor(readyReport(), {
+    fetchHeadSha: () => {
+      throw Object.assign(new Error('Command failed'), {
+        stderr: 'gh: API rate limit exceeded\n',
+      });
+    },
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.merged, []);
+  assert.match(verdict.mergeResult, /head re-validation failed/);
+  assert.match(verdict.mergeResult, /API rate limit exceeded/);
+  assert.equal(exitCode, 1);
+});
+
 test('--apply fails closed when re-validation finds head drift', () => {
   // Head re-fetch agrees, but the re-validation collect reports a moved head.
   let collectCount = 0;
@@ -413,6 +433,31 @@ test('--apply fails closed when re-validation finds head drift', () => {
   assert.equal(verdict.merged, false);
   assert.deepEqual(calls.merged, []);
   assert.match(verdict.mergeResult, /head drift on re-validation/);
+  assert.equal(exitCode, 1);
+});
+
+test('--apply returns a structured verdict when readiness re-validation fails', () => {
+  let collectCount = 0;
+  const { deps, calls } = depsFor(readyReport(), {
+    collect: () => {
+      collectCount += 1;
+      if (collectCount >= 2) {
+        throw Object.assign(new Error('Command failed'), {
+          stderr: 'gh: authentication required\n',
+        });
+      }
+      return readyReport();
+    },
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.merged, []);
+  assert.match(verdict.mergeResult, /readiness re-validation failed/);
+  assert.match(verdict.mergeResult, /authentication required/);
   assert.equal(exitCode, 1);
 });
 

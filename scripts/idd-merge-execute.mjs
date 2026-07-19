@@ -344,14 +344,30 @@ function revalidateImmediatelyBeforeMerge(
   passthrough,
   prHeadSha,
 ) {
-  const liveHeadSha = deps.fetchHeadSha(prNumber, repoRef);
+  let liveHeadSha;
+  try {
+    liveHeadSha = deps.fetchHeadSha(prNumber, repoRef);
+  } catch (error) {
+    return {
+      ok: false,
+      failure: `head re-validation failed: ${ghErrorText(error) || 'unknown error'}; no merge`,
+    };
+  }
   if (liveHeadSha !== prHeadSha) {
     return {
       ok: false,
       failure: `head drift: validated ${prHeadSha} but live head is ${liveHeadSha}; no merge`,
     };
   }
-  const report = deps.collect(passthrough);
+  let report;
+  try {
+    report = deps.collect(passthrough);
+  } catch (error) {
+    return {
+      ok: false,
+      failure: `readiness re-validation failed: ${ghErrorText(error) || 'unknown error'}; no merge`,
+    };
+  }
   if (String(report.prHeadSha ?? '') !== prHeadSha) {
     return {
       ok: false,

@@ -486,7 +486,17 @@ function revalidateImmediatelyBeforeMerge(
 ):
   | { ok: true; report: Record<string, unknown> }
   | { ok: false; failure: string; blockers?: MergeBlocker[] } {
-  const liveHeadSha = deps.fetchHeadSha(prNumber, repoRef);
+  let liveHeadSha: string;
+  try {
+    liveHeadSha = deps.fetchHeadSha(prNumber, repoRef);
+  } catch (error) {
+    return {
+      ok: false,
+      failure: `head re-validation failed: ${
+        ghErrorText(error) || 'unknown error'
+      }; no merge`,
+    };
+  }
   if (liveHeadSha !== prHeadSha) {
     return {
       ok: false,
@@ -494,7 +504,17 @@ function revalidateImmediatelyBeforeMerge(
     };
   }
 
-  const report = deps.collect(passthrough);
+  let report: Record<string, unknown>;
+  try {
+    report = deps.collect(passthrough);
+  } catch (error) {
+    return {
+      ok: false,
+      failure: `readiness re-validation failed: ${
+        ghErrorText(error) || 'unknown error'
+      }; no merge`,
+    };
+  }
   if (String(report.prHeadSha ?? '') !== prHeadSha) {
     return {
       ok: false,
