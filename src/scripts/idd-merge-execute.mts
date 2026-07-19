@@ -14,8 +14,36 @@
 // head + claim re-validate immediately before the merge.
 
 import { ghText } from './gh-exec.mts';
+import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mts';
+import { type IddConfig, loadIddConfig } from './idd-config.mts';
+import { normalizePolicyConfig } from './policy-helpers.mts';
 import { collectPreMergeReadiness } from './pre-merge-readiness.mts';
 import { computePreMergeReadinessBlockers } from './protocol-helpers.mts';
+
+/**
+ * GitHub's exact `gh pr merge` failure text for the solo-CODEOWNER
+ * self-approval deadlock (#1494): a configured pull-request-only (or wider)
+ * ruleset bypass actor does not, by itself, make the plain merge command
+ * succeed -- GitHub still rejects it and suggests `--admin`. Matched
+ * case-insensitively against the caught error's stderr/stdout/message so a
+ * harmless wording variation (capitalization) does not silently miss the
+ * one error class this fallback exists for. Any OTHER merge failure (a
+ * real conflict, a CI regression surfaced late, etc.) never matches and
+ * always falls through to the unconditional hold-and-report path.
+ */
+const BASE_BRANCH_POLICY_MERGE_FAILURE_RE =
+  /base branch policy prohibits the merge/i;
+
+/** `reviewerStates.codeownerSelfApproval.reason` values that mean "review
+ * requirements are unmet ONLY because of an actor-scoped ruleset bypass",
+ * as opposed to `codeowner-approval-satisfied` (real approval already
+ * happened) or `non-author-codeowner-available` (a distinct human/bot
+ * codeowner exists and could review -- never eligible for this fallback).
+ */
+const SOLO_CODEOWNER_BYPASS_REASONS = new Set([
+  'pull-request-bypass-available',
+  'ruleset-bypass-available',
+]);
 
 /** One failing F3 gate, keyed by the gate name plus a human detail. */
 export interface MergeBlocker {
@@ -39,6 +67,14 @@ export interface IddMergeExecuteVerdict {
   mergeCommand: string;
   merged: boolean;
   mergeResult: string;
+  /**
+   * #1521: true only when the plain merge command failed with the
+   * self-CODEOWNER "base branch policy prohibits the merge" error and this
+   * run retried with `--admin` (successfully or not). `false` on every
+   * other path, including a successful plain merge and a merge failure not
+   * eligible for the fallback.
+   */
+  adminFallbackUsed: boolean;
 }
 
 /** Parsed CLI arguments mirroring pre-merge-readiness, plus `--apply`. */
@@ -82,6 +118,55 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 /**
+ * #1521: the ONLY safe trigger for the solo-CODEOWNER `--admin` merge
+ * fallback. Deliberately narrower than "the required-reviews gate is not a
+ * blocker" (`codeownerSelfApproval.status === 'clear'` alone): that status
+ * also covers `non-author-codeowner-available` (a distinct, real codeowner
+ * exists) and can be reached via the bypass-detected branch even when such
+ * a non-author codeowner's review is genuinely still outstanding --
+ * `summarizeCodeownerSelfApproval` (protocol-helpers.mts) resolves the
+ * bypass branch before it ever checks for a non-author owner. This
+ * function instead requires the additive `prAuthorIsSoleEligibleCodeowner`
+ * topology fact (no team codeowners, no email codeowners, and every
+ * eligible direct-user codeowner equals the PR author), so a genuinely
+ * outstanding review from any other owner registers as its own unmet
+ * condition and never gets folded into this fallback. See the #1521
+ * multi-CODEOWNER validation tests in tests/pre-merge-readiness.test.mts
+ * and tests/idd-merge-execute.test.mts.
+ */
+export function isEligibleForSoloCodeownerAdminFallback(
+  reviewerStates: Record<string, unknown>,
+): boolean {
+  const selfApproval = asRecord(reviewerStates.codeownerSelfApproval);
+  return (
+    String(selfApproval.status ?? '') === 'clear' &&
+    SOLO_CODEOWNER_BYPASS_REASONS.has(String(selfApproval.reason ?? '')) &&
+    selfApproval.prAuthorIsSoleEligibleCodeowner === true
+  );
+}
+
+/**
+ * A generic "base branch policy prohibits the merge" error can also cover
+ * merge-queue, deployment, or other branch-policy blockers that the
+ * readiness report does not model. Require GitHub's live merge state to be
+ * settled and mergeable before an administrator retry; unknown or blocked
+ * state must never be bypassed by `--admin`.
+ */
+export function isSafeSoloCodeownerAdminMergeState(
+  mergeState: Record<string, unknown>,
+  branchCurrency: Record<string, unknown> = {},
+): boolean {
+  const mergeable = String(mergeState.mergeable ?? '');
+  const mergeStateStatus = String(mergeState.mergeStateStatus ?? '');
+  return (
+    mergeable === 'MERGEABLE' &&
+    (mergeStateStatus === 'CLEAN' ||
+      (mergeStateStatus === 'BEHIND' &&
+        branchCurrency.requiresUpToDateHead === false))
+  );
+}
+
+/**
  * Injectable side-effecting dependencies. Tests substitute these to drive
  * the dry-run / apply / fail-closed paths without faking the full live
  * GitHub state; production uses the real readiness collector and `gh`.
@@ -94,6 +179,11 @@ export interface MergeExecuteDeps {
    * `repoRef` (`<owner>/<repo>`) when set, else the current-directory repo.
    */
   fetchHeadSha: (prNumber: number, repoRef: string | null) => string;
+  /** Fetch the live GitHub mergeability state before an admin retry. */
+  fetchMergeState: (
+    prNumber: number,
+    repoRef: string | null,
+  ) => Record<string, unknown>;
   /**
    * Execute the bound merge commit and return gh's stdout, scoped to
    * `repoRef` (`<owner>/<repo>`) when set, else the current-directory repo.
@@ -102,6 +192,30 @@ export interface MergeExecuteDeps {
     prNumber: number,
     headSha: string,
     repoRef: string | null,
+  ) => string;
+  /**
+   * #1521: retry the bound merge commit with repository-admin privileges
+   * (`--admin`). Called ONLY after `mergePr` fails with the specific
+   * self-CODEOWNER "base branch policy prohibits the merge" error AND
+   * {@link isEligibleForSoloCodeownerAdminFallback} holds AND the
+   * repository has not opted into `hold-and-report`. Same scoping as
+   * `mergePr`.
+   */
+  mergePrAdmin: (
+    prNumber: number,
+    headSha: string,
+    repoRef: string | null,
+  ) => string;
+  /**
+   * Resolve the repository-local `mergeGate.soloCodeownerAdminFallback`
+   * policy (`.github/idd/config.json`). Distributed default
+   * `'auto-admin-retry'`; `'hold-and-report'` opts into the pre-#1521
+   * unconditional hold behavior instead.
+   */
+  resolveSoloCodeownerAdminFallbackMode: (
+    prNumber: number,
+    repoRef: string | null,
+    headSha: string,
   ) => string;
 }
 
@@ -126,6 +240,20 @@ const defaultDeps: MergeExecuteDeps = {
         '.headRefOid',
       ]),
     ),
+  fetchMergeState: (prNumber, repoRef) =>
+    JSON.parse(
+      ghText(
+        scopedGhArgs(repoRef, [
+          'pr',
+          'view',
+          String(prNumber),
+          '--json',
+          'mergeable,mergeStateStatus',
+          '--jq',
+          '.',
+        ]),
+      ),
+    ) as Record<string, unknown>,
   mergePr: (prNumber, headSha, repoRef) =>
     ghText(
       scopedGhArgs(repoRef, [
@@ -138,6 +266,59 @@ const defaultDeps: MergeExecuteDeps = {
         headSha,
       ]),
     ),
+  mergePrAdmin: (prNumber, headSha, repoRef) =>
+    ghText(
+      scopedGhArgs(repoRef, [
+        'pr',
+        'merge',
+        String(prNumber),
+        '--merge',
+        '--match-head-commit',
+        headSha,
+        '--admin',
+      ]),
+    ),
+  resolveSoloCodeownerAdminFallbackMode: (prNumber, repoRef, headSha) => {
+    let config: IddConfig | null;
+    if (!repoRef) {
+      config = loadIddConfig();
+    } else {
+      try {
+        const encodedConfig = ghText(
+          scopedGhArgs(repoRef, [
+            'api',
+            `repos/${repoRef}/contents/.github/idd/config.json`,
+            '--method',
+            'GET',
+            '--field',
+            `ref=${headSha}`,
+            '--jq',
+            '.content',
+          ]),
+        );
+        if (!encodedConfig) {
+          throw new Error(
+            `target repository policy is empty for PR #${prNumber} at ${headSha}`,
+          );
+        }
+        config = JSON.parse(
+          Buffer.from(encodedConfig.replace(/\n/g, ''), 'base64').toString(
+            'utf8',
+          ),
+        ) as IddConfig;
+      } catch (error) {
+        // The config file is optional. A confirmed Contents-API 404 means
+        // this target ref has no policy file, so use the distributed
+        // defaults just as local loadIddConfig() does. Any other failure is
+        // ambiguous or malformed and must remain fail-closed.
+        if (deriveGhHttpStatus(error) !== 404) {
+          throw error;
+        }
+        config = null;
+      }
+    }
+    return normalizePolicyConfig(config).mergeGate.soloCodeownerAdminFallback;
+  },
 };
 
 /**
@@ -185,6 +366,7 @@ export function runMergeExecute(
     mergeCommand,
     merged: false,
     mergeResult: '',
+    adminFallbackUsed: false,
   };
 
   if (!args.apply) {
@@ -201,58 +383,235 @@ export function runMergeExecute(
 
   // Ready under --apply: re-fetch the head and re-validate the claim
   // immediately before merging, then fail closed on any drift.
-  const liveHeadSha = deps.fetchHeadSha(args.prNumber, args.repoRef);
-  if (liveHeadSha !== prHeadSha) {
-    verdict.mergeResult = `head drift: validated ${prHeadSha} but live head is ${liveHeadSha}; no merge`;
+  const revalidation = revalidateImmediatelyBeforeMerge(
+    deps,
+    args.prNumber,
+    args.repoRef,
+    args.passthrough,
+    prHeadSha,
+  );
+  if (!revalidation.ok) {
+    if (revalidation.blockers) {
+      verdict.blockers = revalidation.blockers;
+      verdict.ready = false;
+    }
+    verdict.mergeResult = revalidation.failure;
     return { verdict, exitCode: 1 };
   }
-
-  const revalidated = deps.collect(args.passthrough);
-  if (String(revalidated.prHeadSha ?? '') !== prHeadSha) {
-    verdict.mergeResult = `head drift on re-validation: ${String(
-      revalidated.prHeadSha ?? '',
-    )} != ${prHeadSha}; no merge`;
-    return { verdict, exitCode: 1 };
-  }
-  const revalidatedClaim = asRecord(revalidated.claim);
-  if (revalidatedClaim.matchesExpectedClaim !== true) {
-    verdict.mergeResult = `claim lost on re-validation (reason="${String(
-      revalidatedClaim.reason ?? 'unknown',
-    )}"); no merge`;
-    return { verdict, exitCode: 1 };
-  }
-  const revalidatedBlockers = evaluateMergeGates(revalidated);
-  if (revalidatedBlockers.length > 0) {
-    verdict.blockers = revalidatedBlockers;
-    verdict.ready = false;
-    verdict.mergeResult =
-      're-validation found new blockers immediately before merge; no merge';
-    return { verdict, exitCode: 1 };
-  }
+  const revalidated = revalidation.report;
 
   // Always a merge commit — never squash/rebase. Bind to the validated head.
-  // #1513: every other failure path in this function returns the same
-  // `{ verdict, exitCode: 1 }` shape; this call is the sole exception --
-  // `gh pr merge` rejecting (for example a BEHIND head, a stale
-  // `--match-head-commit` binding, or any other transient GitHub-side
-  // refusal) previously propagated as an uncaught exception instead of a
-  // structured verdict. Catch it and report the same way every sibling
-  // gate already does.
   try {
     const mergeOutput = deps.mergePr(args.prNumber, prHeadSha, args.repoRef);
     verdict.merged = true;
     verdict.mergeResult = mergeOutput || 'merge command completed';
     return { verdict, exitCode: 0 };
-  } catch (error) {
-    const stderr =
-      error && typeof error === 'object' && 'stderr' in error
-        ? String((error as { stderr?: unknown }).stderr ?? '').trim()
-        : '';
-    const message =
-      stderr || (error instanceof Error ? error.message : String(error));
-    verdict.mergeResult = `merge command failed: ${message}`;
-    return { verdict, exitCode: 1 };
+  } catch (mergeError) {
+    // #1521: the plain merge command failed. Every path below stays
+    // fail-closed by default (hold-and-report, unchanged from pre-#1521
+    // behavior); the ONLY escalation is the narrow solo-CODEOWNER `--admin`
+    // retry, gated on ALL of: the exact GitHub error text, the repository
+    // not having opted into `hold-and-report`, and
+    // `isEligibleForSoloCodeownerAdminFallback` against the FRESHLY
+    // re-validated `revalidated` report collected immediately above (not
+    // the earlier, possibly-stale `report`) — the same "immediately before
+    // merging" freshness this file already applies to the head SHA and
+    // claim checks.
+    const mergeErrorText = ghErrorText(mergeError);
+    const revalidatedReviewerStates = asRecord(revalidated.reviewerStates);
+    // Ordered cheapest-first so a merge failure unrelated to the
+    // solo-CODEOWNER deadlock (a real conflict, a late CI regression, an
+    // unrelated ruleset rejection) never pays for the I/O-bound
+    // `resolveSoloCodeownerAdminFallbackMode` config read: both the regex
+    // test and the eligibility check are pure/in-memory and short-circuit
+    // `&&` before that call ever runs.
+    const eligibleByMergeEvidence =
+      BASE_BRANCH_POLICY_MERGE_FAILURE_RE.test(mergeErrorText) &&
+      isEligibleForSoloCodeownerAdminFallback(revalidatedReviewerStates);
+
+    if (!eligibleByMergeEvidence) {
+      verdict.mergeResult = `merge command failed: ${
+        mergeErrorText || 'unknown error'
+      }`;
+      return { verdict, exitCode: 1 };
+    }
+
+    let fallbackMode: string;
+    try {
+      fallbackMode = deps.resolveSoloCodeownerAdminFallbackMode(
+        args.prNumber,
+        args.repoRef,
+        prHeadSha,
+      );
+    } catch (policyError) {
+      verdict.mergeResult = `admin-fallback aborted: target repository policy unreadable: ${
+        ghErrorText(policyError) || 'unknown error'
+      }; no merge`;
+      return { verdict, exitCode: 1 };
+    }
+    if (fallbackMode === 'hold-and-report') {
+      verdict.mergeResult = `merge command failed: ${
+        mergeErrorText || 'unknown error'
+      }`;
+      return { verdict, exitCode: 1 };
+    }
+
+    // #1521 (Codex review on PR #1537): re-validate a SECOND time,
+    // immediately before the --admin call, rather than trusting the
+    // `revalidated` snapshot collected above. Real time has passed since
+    // then — at minimum the failed plain-merge round trip — during which
+    // a required check could flip red, a review could be dismissed, or
+    // another blocker could appear. `--admin` bypasses the ENTIRE
+    // ruleset, not just the CODEOWNER rule, so retrying on a stale
+    // snapshot could silently merge a PR that is no longer green. Also
+    // re-confirm the solo-CODEOWNER eligibility fact itself (not only the
+    // general gate), since a non-author codeowner's review could have
+    // arrived in the interim.
+    const adminRevalidation = revalidateImmediatelyBeforeMerge(
+      deps,
+      args.prNumber,
+      args.repoRef,
+      args.passthrough,
+      prHeadSha,
+    );
+    if (!adminRevalidation.ok) {
+      if (adminRevalidation.blockers) {
+        verdict.blockers = adminRevalidation.blockers;
+        verdict.ready = false;
+      }
+      verdict.mergeResult = `admin-fallback aborted: ${adminRevalidation.failure}`;
+      return { verdict, exitCode: 1 };
+    }
+    const adminReviewerStates = asRecord(
+      adminRevalidation.report.reviewerStates,
+    );
+    if (!isEligibleForSoloCodeownerAdminFallback(adminReviewerStates)) {
+      verdict.mergeResult =
+        'admin-fallback aborted: solo-CODEOWNER eligibility no longer holds on re-validation; no merge';
+      return { verdict, exitCode: 1 };
+    }
+
+    let mergeState: Record<string, unknown>;
+    try {
+      mergeState = deps.fetchMergeState(args.prNumber, args.repoRef);
+    } catch (mergeStateError) {
+      verdict.mergeResult = `admin-fallback aborted: live merge state unreadable: ${
+        ghErrorText(mergeStateError) || 'unknown error'
+      }`;
+      return { verdict, exitCode: 1 };
+    }
+    if (
+      !isSafeSoloCodeownerAdminMergeState(
+        mergeState,
+        asRecord(adminRevalidation.report.branchCurrency),
+      )
+    ) {
+      verdict.mergeResult =
+        'admin-fallback aborted: live merge state is not settled and mergeable; no merge';
+      return { verdict, exitCode: 1 };
+    }
+
+    verdict.adminFallbackUsed = true;
+    try {
+      const adminMergeOutput = deps.mergePrAdmin(
+        args.prNumber,
+        prHeadSha,
+        args.repoRef,
+      );
+      verdict.merged = true;
+      // Keep mergeCommand in sync with the command that actually mutated
+      // the PR: an audit/log consumer reading this field alone (without
+      // also checking adminFallbackUsed) must not see the plain,
+      // non-`--admin` command after an admin-fallback merge succeeded.
+      verdict.mergeCommand = `${verdict.mergeCommand} --admin`;
+      verdict.mergeResult = `admin-fallback (#1521 solo-CODEOWNER deadlock): ${
+        adminMergeOutput || 'merge command completed'
+      }`;
+      return { verdict, exitCode: 0 };
+    } catch (adminMergeError) {
+      verdict.mergeResult = `admin-fallback merge also failed: ${
+        ghErrorText(adminMergeError) || 'unknown error'
+      }`;
+      return { verdict, exitCode: 1 };
+    }
   }
+}
+
+/**
+ * Fetch the live head SHA and a fresh readiness report, then validate
+ * head-match, claim-match, and zero blockers — the fail-closed check
+ * this file applies "immediately before merging". Factored out (#1521,
+ * Codex review) so the SAME check can run a second time immediately
+ * before the `--admin` retry, not just once before the plain merge
+ * attempt: real time passes between the two (at minimum the failed
+ * plain merge's own round trip), and `--admin` bypasses the entire
+ * ruleset, so it must never act on a stale snapshot.
+ */
+function revalidateImmediatelyBeforeMerge(
+  deps: MergeExecuteDeps,
+  prNumber: number,
+  repoRef: string | null,
+  passthrough: string[],
+  prHeadSha: string,
+):
+  | { ok: true; report: Record<string, unknown> }
+  | { ok: false; failure: string; blockers?: MergeBlocker[] } {
+  let liveHeadSha: string;
+  try {
+    liveHeadSha = deps.fetchHeadSha(prNumber, repoRef);
+  } catch (error) {
+    return {
+      ok: false,
+      failure: `head re-validation failed: ${
+        ghErrorText(error) || 'unknown error'
+      }; no merge`,
+    };
+  }
+  if (liveHeadSha !== prHeadSha) {
+    return {
+      ok: false,
+      failure: `head drift: validated ${prHeadSha} but live head is ${liveHeadSha}; no merge`,
+    };
+  }
+
+  let report: Record<string, unknown>;
+  try {
+    report = deps.collect(passthrough);
+  } catch (error) {
+    return {
+      ok: false,
+      failure: `readiness re-validation failed: ${
+        ghErrorText(error) || 'unknown error'
+      }; no merge`,
+    };
+  }
+  if (String(report.prHeadSha ?? '') !== prHeadSha) {
+    return {
+      ok: false,
+      failure: `head drift on re-validation: ${String(
+        report.prHeadSha ?? '',
+      )} != ${prHeadSha}; no merge`,
+    };
+  }
+  const claim = asRecord(report.claim);
+  if (claim.matchesExpectedClaim !== true) {
+    return {
+      ok: false,
+      failure: `claim lost on re-validation (reason="${String(
+        claim.reason ?? 'unknown',
+      )}"); no merge`,
+    };
+  }
+  const blockers = evaluateMergeGates(report);
+  if (blockers.length > 0) {
+    return {
+      ok: false,
+      failure:
+        're-validation found new blockers immediately before merge; no merge',
+      blockers,
+    };
+  }
+  return { ok: true, report };
 }
 
 // Excluded from the #1446 cli-args.mts wrapper: `passthrough` below
@@ -361,6 +720,20 @@ function printHelp(): void {
   immediately before merging, then run a merge commit bound to the
   validated head. Fails closed (exit 1, no merge) on head drift or lost
   claim. Never squash/rebase merges. The merge is the only mutation.
+
+  #1521 solo-CODEOWNER --admin fallback: if the plain merge command fails
+  with GitHub's "base branch policy prohibits the merge" error, and the
+  repository has not set mergeGate.soloCodeownerAdminFallback to
+  "hold-and-report" in .github/idd/config.json, this retries ONCE with
+  --admin -- but ONLY when reviewerStates.codeownerSelfApproval proves the
+  PR author is the sole eligible codeowner (status "clear", a bypass-actor
+  reason, and prAuthorIsSoleEligibleCodeowner true). A genuinely
+  outstanding review from any other codeowner never triggers this retry.
+  The retry also requires a second immediate head/claim/readiness
+  re-validation and a live MERGEABLE state; a BEHIND state is accepted only
+  when the fresh branch-currency evidence says an up-to-date head is not
+  required. Unreadable or unsafe live state aborts the retry.
+  The verdict's adminFallbackUsed field records whether this path fired.
 `);
 }
 

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { deriveGhHttpStatus } from '../src/scripts/gh-http-status.mts';
+import {
+  deriveGhHttpStatus,
+  ghErrorText,
+} from '../src/scripts/gh-http-status.mts';
 
 // Shape of a real execFileSync('gh', ...) failure: process exit code 1
 // regardless of the HTTP status, with the true status in stderr/stdout.
@@ -67,4 +70,44 @@ test('returns null when no status can be determined (fail closed)', () => {
   assert.equal(deriveGhHttpStatus(null), null);
   assert.equal(deriveGhHttpStatus(undefined), null);
   assert.equal(deriveGhHttpStatus('a bare string'), null);
+});
+
+// #1521: ghErrorText was promoted from a private helper of this file to a
+// shared export (reused by idd-merge-execute.mts's solo-CODEOWNER --admin
+// fallback) instead of that caller hand-rolling a second, slightly
+// different copy. Direct coverage locks in its exported contract.
+test('ghErrorText joins stderr, stdout, and message, skipping empty parts', () => {
+  // ghError's Error(parts.message ?? 'Command failed') always sets a
+  // non-empty .message, so all three parts join here.
+  assert.equal(
+    ghErrorText(ghError({ stderr: 'stderr text', stdout: 'stdout text' })),
+    'stderr text\nstdout text\nCommand failed',
+  );
+  // A plain object (not a real Error) has no .message at all, isolating
+  // the stderr/stdout-only join.
+  assert.equal(
+    ghErrorText({ stderr: 'stderr text', stdout: 'stdout text' }),
+    'stderr text\nstdout text',
+  );
+  assert.equal(
+    ghErrorText(ghError({ message: 'only the message' })),
+    'only the message',
+  );
+});
+
+test('ghErrorText coerces a non-string field via String(...) instead of dropping it', () => {
+  // A Buffer stderr (e.g. execFileSync called without { encoding: 'utf8' })
+  // must still surface as readable text, not silently disappear.
+  assert.equal(
+    ghErrorText({ stderr: Buffer.from('buffered stderr') }),
+    'buffered stderr',
+  );
+  assert.equal(ghErrorText({ stdout: 410 }), '410');
+});
+
+test('ghErrorText returns empty string for null/undefined/non-object input', () => {
+  assert.equal(ghErrorText(null), '');
+  assert.equal(ghErrorText(undefined), '');
+  assert.equal(ghErrorText('a bare string'), '');
+  assert.equal(ghErrorText({}), '');
 });

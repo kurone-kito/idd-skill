@@ -1187,7 +1187,28 @@ Interpretation rules:
   appears satisfiable for the current actor; it is still evidence for
   the written F2/F3 gates, not an IDD policy override or permission to
   skip review, CI, freshness, advisory, unresolved-thread, or claim
-  checks.
+  checks. Note that `clear` alone does not distinguish the genuine
+  solo-CODEOWNER self-approval deadlock from a topology where a
+  distinct non-author codeowner simply has not reviewed yet (both can
+  report `status: "clear"`) — see `prAuthorIsSoleEligibleCodeowner`
+  below for the field that does distinguish them.
+- `prAuthorIsSoleEligibleCodeowner` (#1521) is an additive topology
+  fact, independent of `status`/`reason`: `true` only when the PR
+  author is the sole eligible codeowner (no team codeowners, no email
+  codeowners, at least one eligible direct-user codeowner, and every
+  eligible direct-user codeowner equals the author). This is the only
+  field the F3 solo-CODEOWNER `--admin` fallback (below) may key on; a
+  genuinely outstanding review from a different, non-author codeowner
+  reports this as `false` even when `status` is `"clear"` via the
+  bypass-actor carve-out.
+- `codeownerEligibilityUnreadable` (#1521) is `true` when at least one
+  direct-user codeowner's collaborator-permission lookup failed for a
+  reason OTHER than "not a collaborator" (403/5xx/network/timeout).
+  `prAuthorIsSoleEligibleCodeowner` is forced to `false` whenever this
+  is `true`, regardless of how narrow the (possibly incomplete)
+  eligible set otherwise looks: a transient lookup failure for a
+  genuinely eligible non-author codeowner must never be silently
+  treated the same as that codeowner having no write access at all.
 - `reviewCurrency.comparisonRoute` remains advisory evidence only. Agents
   must still apply written instruction checks against live GitHub state.
 - Fail closed: if helper execution fails, output is invalid JSON,
@@ -1231,6 +1252,46 @@ Interpretation rules:
   non-zero, no merge, clear message) on any head drift or lost claim.
   Otherwise it runs the merge commit bound to the validated head and
   reports the result. It never squash- or rebase-merges.
+- **Solo-CODEOWNER `--admin` fallback (#1521).** If the plain merge
+  command fails with GitHub's "base branch policy prohibits the merge"
+  error, the helper checks `mergeGate.soloCodeownerAdminFallback` in
+  `.github/idd/config.json` (distributed default `auto-admin-retry`;
+  absent behaves the same). Unless the repository has set it to
+  `hold-and-report`, it retries exactly once with `--admin`, bound to
+  the same validated head, but ONLY when the freshly re-validated
+  report's `reviewerStates.codeownerSelfApproval` has `status: "clear"`
+  with `reason` `"pull-request-bypass-available"` or
+  `"ruleset-bypass-available"` **and**
+  `prAuthorIsSoleEligibleCodeowner: true` **and**
+  `codeownerEligibilityUnreadable: false`. Those last two fields are
+  the multi-CODEOWNER safety property: additive to `status`/`reason`,
+  they prove the PR author is the sole eligible codeowner (no team or
+  email codeowners, every eligible direct-user codeowner is the
+  author, and every direct-user codeowner's permission lookup actually
+  succeeded). A genuinely outstanding review from a different,
+  non-author codeowner reports `prAuthorIsSoleEligibleCodeowner: false`
+  even when `status` is still `"clear"` via the bypass-actor carve-out
+  (that carve-out resolves before the non-author-owner check runs in
+  `summarizeCodeownerSelfApproval`), and a transient/auth/rate-limit
+  permission-lookup failure reports `codeownerEligibilityUnreadable:
+  true` rather than silently narrowing the eligible set — both
+  register as their own unmet condition and never trigger this retry.
+  The helper also re-validates the SAME gate and eligibility fact a
+  SECOND time, immediately before the `--admin` call itself: real time
+  passes between the plain merge's failure and the retry, and
+  `--admin` bypasses the entire ruleset (not just the CODEOWNER rule),
+  so a blocker that appeared in that interval must still abort the
+  fallback rather than being silently bypassed. Immediately before the
+  retry it also requires live GitHub merge state
+  `mergeable: "MERGEABLE"` and `mergeStateStatus: "CLEAN"` or
+  `"BEHIND"`; blocked, unknown, or unreadable state aborts the fallback
+  rather than allowing a generic policy error to trigger `--admin`. The verdict's
+  `adminFallbackUsed` field records whether the fallback fired
+  (`true`) whenever it was attempted, regardless of whether the
+  `--admin` retry itself ultimately succeeded. Any merge failure that
+  does not match this exact shape — a different error, an ineligible
+  topology, or the opt-in `hold-and-report` policy — falls through
+  unchanged to the pre-#1521 hold-and-report path.
 - Fail closed: if helper execution fails, output is invalid JSON,
   required fields are missing, or helper evidence conflicts with live
   GitHub state, discard helper output and run the manual F3 gate +

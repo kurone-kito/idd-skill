@@ -38,6 +38,16 @@ const LEGACY_ADVISORY_CAP_ROUTE_ALIASES = new Map([
 // of normalizePolicyConfig(...).ciWait (see #1359).
 const CI_RERUN_POLICIES = new Set(['rerun-once', 'hold']);
 const LABEL_FRESHNESS_MODES = new Set(['presence-only', 'event-freshness']);
+// #1521: `auto-admin-retry` is the distributed default (F3 retries once with
+// `--admin` when the Gate checklist is fully green, the only merge-command
+// failure is the self-CODEOWNER "base branch policy prohibits the merge"
+// error, and the topology fact proves the PR author is the sole eligible
+// codeowner). `hold-and-report` opts a repository into the pre-#1521
+// unconditional hold-and-report behavior instead.
+const MERGE_GATE_SOLO_CODEOWNER_ADMIN_FALLBACK_MODES = new Set([
+  'auto-admin-retry',
+  'hold-and-report',
+]);
 const ISO_DURATION_RE =
   /^P(?=\d|T\d)(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$/;
 const ADVISORY_WHOLE_MINUTE_DURATION_RE =
@@ -129,6 +139,10 @@ export const POLICY_DEFAULTS = Object.freeze({
     roadmapLabelName: 'roadmap',
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
+  }),
+  // Added in #1521 (solo-CODEOWNER autonomous `--admin` merge fallback).
+  mergeGate: Object.freeze({
+    soloCodeownerAdminFallback: 'auto-admin-retry',
   }),
 });
 export function parseProjectCommandRows(text) {
@@ -402,6 +416,13 @@ export function normalizePolicyConfig(config) {
       needsDecisionLabelName: parseNonEmptyString(
         c?.labels?.needsDecisionLabelName,
         POLICY_DEFAULTS.labels.needsDecisionLabelName,
+      ),
+    },
+    mergeGate: {
+      soloCodeownerAdminFallback: parseEnum(
+        c?.mergeGate?.soloCodeownerAdminFallback,
+        MERGE_GATE_SOLO_CODEOWNER_ADMIN_FALLBACK_MODES,
+        POLICY_DEFAULTS.mergeGate.soloCodeownerAdminFallback,
       ),
     },
   };

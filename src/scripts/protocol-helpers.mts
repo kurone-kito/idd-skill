@@ -4158,6 +4158,7 @@ export function summarizeReviewerStates(
     codeownersText = '',
     changedFiles = [],
     eligibleCodeownerUserLogins = null,
+    eligibleCodeownerUserLoginsUnreadable = false,
     advisoryBotLogins = [],
     prAuthorLogin = '',
     viewerLogin = '',
@@ -4173,6 +4174,8 @@ export function summarizeReviewerStates(
     codeownersText?: string;
     changedFiles?: unknown[];
     eligibleCodeownerUserLogins?: unknown[] | null;
+    // #1521: see `buildPreMergeReadinessSummary`'s option of the same name.
+    eligibleCodeownerUserLoginsUnreadable?: boolean;
     advisoryBotLogins?: unknown[];
     prAuthorLogin?: string | null;
     viewerLogin?: string | null;
@@ -4284,6 +4287,7 @@ export function summarizeReviewerStates(
       eligibleCodeownerUserLogins === null
         ? null
         : [...eligibleCodeownerUsers].sort(),
+    eligibleCodeownerUserLoginsUnreadable,
     codeownerTeamSlugs: codeowners.codeownerTeamSlugs,
     codeownerEmailAddresses: codeowners.codeownerEmailAddresses,
     prAuthorLogin,
@@ -4341,6 +4345,7 @@ function summarizeCodeownerSelfApproval({
   hasExplicitCodeownerMatches,
   codeownerUserLogins = [],
   eligibleCodeownerUserLogins = null,
+  eligibleCodeownerUserLoginsUnreadable = false,
   codeownerTeamSlugs = [],
   codeownerEmailAddresses = [],
   prAuthorLogin = '',
@@ -4360,6 +4365,13 @@ function summarizeCodeownerSelfApproval({
   hasExplicitCodeownerMatches: boolean;
   codeownerUserLogins?: unknown[];
   eligibleCodeownerUserLogins?: unknown[] | null;
+  // #1521 (Codex review): true when at least one direct-user codeowner's
+  // collaborator-permission lookup failed for a reason OTHER than "not a
+  // collaborator" (403/5xx/network/timeout). A narrowed
+  // `eligibleCodeownerUserLogins` built while this is true cannot be
+  // trusted to prove the PR author is the sole eligible codeowner --
+  // forces `prAuthorIsSoleEligibleCodeowner` to `false` below.
+  eligibleCodeownerUserLoginsUnreadable?: boolean;
   codeownerTeamSlugs?: unknown[];
   codeownerEmailAddresses?: unknown[];
   prAuthorLogin?: string | null;
@@ -4433,6 +4445,44 @@ function summarizeCodeownerSelfApproval({
       ? bypass.mode
       : 'pull_request'
     : 'none';
+  // Hoisted above `base` (moved up from its original position further down,
+  // right before the `deadlock` branch that also consumes it) so the #1521
+  // `prAuthorIsSoleEligibleCodeowner` field below can reuse this exact
+  // expression instead of recomputing an equivalent one. Pure and
+  // side-effect-free, so hoisting it earlier changes nothing about the
+  // later branches that also read it.
+  const allDirectUsersAreAuthor =
+    eligibleDirectCodeownerUserLogins.length > 0 &&
+    eligibleDirectCodeownerUserLogins.every(
+      (login) => login === normalizedAuthor,
+    );
+  // #1521: additive topology fact, computed independently of `status` /
+  // `applicableBypassDetected` below and exposed on every branch (not just
+  // the `deadlock` one). This is the ONLY safe discriminator an F3 caller
+  // may use to gate an automatic `--admin` retry: `status: 'clear'` alone
+  // (whether via `applicableBypassDetected` or `hasNonAuthorDirectUser`
+  // further down) does NOT prove the PR author is the sole codeowner --
+  // `applicableBypassDetected` fires whenever a bypass actor is configured
+  // for the viewer, regardless of whether a genuinely distinct non-author
+  // codeowner's review is separately outstanding. Deliberately NOT folded
+  // into `status`/`reason` themselves (that general gate intentionally
+  // keeps its existing pass/fail shape for every adopter repo -- see the
+  // #1521 review discussion); a caller that needs the narrow self-deadlock
+  // fact must check this field explicitly alongside `status`/`reason`.
+  //
+  // Requires `!eligibleCodeownerUserLoginsUnreadable` (Codex review, #1521):
+  // `eligibleDirectCodeownerUserLogins` can be silently NARROWED by a
+  // transient permission-lookup failure for some OTHER direct codeowner
+  // (see `resolveEligibleCodeownerUserLogins` in pre-merge-readiness.mts),
+  // which would make the author look like the sole eligible codeowner even
+  // though a real co-owner's eligibility simply could not be confirmed.
+  // Fail closed rather than trust a possibly-incomplete narrowed set.
+  const prAuthorIsSoleEligibleCodeowner =
+    Boolean(normalizedAuthor) &&
+    normalizedCodeownerTeamSlugs.length === 0 &&
+    normalizedCodeownerEmailAddresses.length === 0 &&
+    !eligibleCodeownerUserLoginsUnreadable &&
+    allDirectUsersAreAuthor;
   const base = {
     status: 'not_applicable',
     reason: 'codeowner-review-not-required',
@@ -4450,6 +4500,14 @@ function summarizeCodeownerSelfApproval({
     // to `clear` on its own -- but downgrades a would-be certain `deadlock`
     // below to the already-documented `possible_deadlock`.
     rulesetBypassUnreadable: bypass.unreadable,
+    prAuthorIsSoleEligibleCodeowner,
+    // #1521: true when at least one direct-user codeowner's
+    // collaborator-permission lookup was unreadable (see
+    // `prAuthorIsSoleEligibleCodeowner` above). Diagnostic only, mirroring
+    // `rulesetBypassUnreadable`'s shape -- never flips `status` on its own.
+    codeownerEligibilityUnreadable: Boolean(
+      eligibleCodeownerUserLoginsUnreadable,
+    ),
   };
 
   if (!requireCodeOwnerReview) {
@@ -4485,11 +4543,8 @@ function summarizeCodeownerSelfApproval({
     };
   }
 
-  const allDirectUsersAreAuthor =
-    eligibleDirectCodeownerUserLogins.length > 0 &&
-    eligibleDirectCodeownerUserLogins.every(
-      (login) => login === normalizedAuthor,
-    );
+  // `allDirectUsersAreAuthor` is computed above (hoisted next to
+  // `prAuthorIsSoleEligibleCodeowner` in `base`); reused here unchanged.
   const hasNonAuthorDirectUser = eligibleDirectCodeownerUserLogins.some(
     (login) => login !== normalizedAuthor,
   );
@@ -5144,6 +5199,7 @@ export function buildPreMergeReadinessSummary(
     changedFiles = [],
     codeownersText = '',
     eligibleCodeownerUserLogins = null,
+    eligibleCodeownerUserLoginsUnreadable = false,
     reviewDecision = '',
     mergeStateStatus = '',
     mergeable = '',
@@ -5178,6 +5234,16 @@ export function buildPreMergeReadinessSummary(
     changedFiles?: unknown[];
     codeownersText?: string;
     eligibleCodeownerUserLogins?: unknown[] | null;
+    // #1521: true when at least one direct-user codeowner's
+    // collaborator-permission lookup failed for a reason other than "not a
+    // collaborator" (see `resolveEligibleCodeownerUserLogins` in
+    // pre-merge-readiness.mts). Forces
+    // `codeownerSelfApproval.prAuthorIsSoleEligibleCodeowner` to `false`
+    // regardless of what the (possibly narrowed) eligible set below
+    // computed, so the F3 solo-CODEOWNER `--admin` fallback cannot
+    // vacuously fire on an unread co-owner. Omitted by unit callers
+    // (default `false`, unchanged pre-`#1521` behavior).
+    eligibleCodeownerUserLoginsUnreadable?: boolean;
     reviewDecision?: string | null;
     // #1513: live `gh pr view --json mergeable,mergeStateStatus` values for
     // the PR HEAD, paired with `branchRules`/`branchProtection` above to
@@ -5328,6 +5394,7 @@ export function buildPreMergeReadinessSummary(
     codeownersText,
     changedFiles,
     eligibleCodeownerUserLogins,
+    eligibleCodeownerUserLoginsUnreadable,
     advisoryBotLogins,
     prAuthorLogin,
     viewerLogin: options.viewerLogin,
