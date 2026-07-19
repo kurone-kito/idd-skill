@@ -11,6 +11,7 @@
     "prHeadSha",
     "now",
     "primaryBotLogin",
+    "applicability",
     "review",
     "threads",
     "pending",
@@ -48,6 +49,25 @@
     "primaryBotLogin": {
       "type": "string",
       "minLength": 1
+    },
+    "applicability": {
+      "type": "object",
+      "required": ["scope", "status", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": ["all-prs", "idd-claimed"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["applicable", "not_applicable"]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
     },
     "review": {
       "type": "object",

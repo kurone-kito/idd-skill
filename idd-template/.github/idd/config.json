@@ -24,6 +24,9 @@
   },
   "issueScope": "roadmap-first",
   "orphanFirstPolicy": "none",
+  "advisoryWait": {
+    "convergenceScope": "all-prs"
+  },
   "autopilotSuitability": {
     "floor": 3
   }

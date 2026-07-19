@@ -179,6 +179,7 @@ interface PolicyConfigFile {
   markerTrustAllowCollaboratorMarkers?: boolean;
   allowCollaboratorMarkers?: boolean;
   advisoryWait?: {
+    convergenceScope?: 'all-prs' | 'idd-claimed';
     requestCap?: number;
     pendingWindow?: string;
     settledWindow?: string;
@@ -248,6 +249,7 @@ export const advisoryConvergenceKeys = [
   'prHeadSha',
   'now',
   'primaryBotLogin',
+  'applicability',
   'review',
   'threads',
   'pending',
@@ -544,6 +546,11 @@ const advisoryConvergenceFixture = {
   prHeadSha: '0123456789abcdef0123456789abcdef01234567',
   now: '2026-07-11T12:00:00Z',
   primaryBotLogin: 'copilot',
+  applicability: {
+    scope: 'all-prs',
+    status: 'applicable',
+    reason: 'all-prs',
+  },
   review: {
     found: true,
     commitId: '0123456789abcdef0123456789abcdef01234567',
@@ -800,6 +807,7 @@ const policyConfigFixture = {
   },
   markerTrust: { allowCollaboratorMarkers: false },
   advisoryWait: {
+    convergenceScope: 'all-prs',
     requestCap: 30,
     pendingWindow: 'PT30M',
     settledWindow: 'PT10M',

@@ -246,6 +246,12 @@ contracts and any instruction text that references the effective wait
 values. The three duration keys accept positive whole-minute ISO 8601
 durations only; zero-length values and second-based values are invalid.
 
+Repositories may also customize `advisoryWait.convergenceScope` in
+`.github/idd/config.json`. The default `all-prs` keeps convergence on
+every PR. `idd-claimed` is opt-in and limits convergence to verified
+IDD-owned PRs; invalid values are rejected by schema, and runtime
+normalization falls back to `all-prs` for untrusted config reads.
+
 `advisoryWait.primaryBotLogin` selects the advisory bot whose review the
 advisory-wait gate tracks (default Copilot), and
 `advisoryWait.secondaryBotLogin` names an **optional, non-gating** secondary
