@@ -172,9 +172,10 @@ The current policy schema and helper runtime now support
 `advisoryWait.pendingWindow`, `advisoryWait.settledWindow`,
 `advisoryWait.pollInterval`, `advisoryWait.capExhaustedRoute`,
 `advisoryWait.primaryBotLogin`, `advisoryWait.secondaryBotLogin`,
-`advisoryWait.convergenceDeadline`, and `advisoryWait.sameHeadRerollCap`.
-Omitted keys keep the distributed defaults below. The four duration keys
-accept positive whole-minute ISO 8601 durations only.
+`advisoryWait.convergenceDeadline`, `advisoryWait.sameHeadRerollCap`, and
+`advisoryWait.convergenceScope`. Omitted keys keep the distributed defaults
+below. The four duration keys accept positive whole-minute ISO 8601
+durations only.
 `advisoryWait.sameHeadRerollCap` bounds the AW6 same-HEAD advisory
 reroll carve-out (#1465 / #1511, see
 [Helper scripts](idd-helper-scripts.md#bounded-same-head-advisory-reroll-aw6-1511)):

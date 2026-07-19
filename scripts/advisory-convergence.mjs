@@ -146,17 +146,17 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   const activeClaimBranch = String(claim.activeClaim?.branch ?? '').trim();
   const applicability =
     convergenceScope === 'idd-claimed'
-      ? !prHeadRefName
+      ? !claim.activeClaimPresent
         ? {
             scope: convergenceScope,
-            status: 'applicable',
-            reason: 'idd-claimed-head-branch-unavailable',
+            status: 'not_applicable',
+            reason: 'idd-claimed-no-verified-linked-issue-claim',
           }
-        : !claim.activeClaimPresent
+        : !prHeadRefName
           ? {
               scope: convergenceScope,
-              status: 'not_applicable',
-              reason: 'idd-claimed-no-verified-linked-issue-claim',
+              status: 'applicable',
+              reason: 'idd-claimed-head-branch-unavailable',
             }
           : !activeClaimBranch
             ? {
