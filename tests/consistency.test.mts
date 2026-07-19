@@ -308,7 +308,7 @@ const DOC_BUDGET_SIZE = {
   phaseLimitBytes: 35_500,
 };
 // Keep representative of live audit/sync-manifest.json bundleBudgets
-// (includes independent lite work budget from #1541).
+// (standard + lite independent ceilings currently on main).
 const DOC_BUDGET_BUNDLES = [
   { limitBytes: 112_700 },
   { limitBytes: 45_000 },
