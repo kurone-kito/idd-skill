@@ -30,10 +30,12 @@
 // this lock exists to catch. Making reacquire read-only removes that window
 // entirely on the common fast path. The only path that still writes over an
 // existing lock is an authorized `--takeover`, and it replaces the file via
-// a same-directory temp-write + `renameSync` rather than unlink-then-create,
-// so the lock path is never briefly absent for that path either. A malformed
-// directory at the lock path is the one recovery exception: an authorized
-// takeover removes that exact directory before installing the replacement.
+// a same-directory temp-write + `renameSync` rather than unlink-then-create.
+// POSIX replaces an existing regular file atomically; Windows requires that
+// regular file to be removed before the rename, so that platform-specific
+// fallback necessarily leaves a brief gap. A malformed directory at the lock
+// path is the other recovery exception: an authorized takeover removes that
+// exact directory before installing the replacement.
 //
 // This lock intentionally does not try to perfectly serialize two
 // concurrent authorized takeovers of the same worktree -- that is a much
@@ -183,15 +185,14 @@ function renderLockBody(agentId: string, claimId: string): string {
 }
 
 /**
- * Replace `path` with a freshly-rendered lock body without ever leaving it
- * absent: write to a same-directory temp file, then `renameSync` it onto
- * `path`. POSIX `rename` onto an existing target is atomic — readers always
- * see the old or the new content, never a missing file or a partial write —
- * so an unrelated session's fresh `wx` create can never slip through the
- * gap the earlier unlink-then-create design left open. The temp file must
- * live in the same directory as `path` (a cross-filesystem rename is not
- * atomic and can silently fall back to copy+delete); the `finally` cleans it
- * up if `renameSync` itself throws, so a failed replace never leaks it.
+ * Replace `path` with a freshly-rendered lock body. The temp file is written
+ * in the same directory as `path` (a cross-filesystem rename is not atomic),
+ * then renamed into place. POSIX `rename` onto an existing regular file is
+ * atomic, but Windows does not replace an existing destination, so a regular
+ * file must be removed before retrying the rename on that platform. A
+ * directory target is handled the same way for malformed-lock recovery.
+ * The `finally` cleans up the temp file if `renameSync` throws, so a failed
+ * replace never leaks it.
  */
 function overwriteLockAtomically(
   path: string,
@@ -204,15 +205,24 @@ function overwriteLockAtomically(
     try {
       renameSync(tmpPath, path);
     } catch (error) {
-      let targetIsDirectory = false;
+      let targetKind: 'directory' | 'other' | 'unavailable' = 'unavailable';
       try {
-        targetIsDirectory = statSync(path).isDirectory();
+        targetKind = statSync(path).isDirectory() ? 'directory' : 'other';
       } catch {
         // Preserve the original rename error when the target disappeared or
         // cannot be inspected safely.
       }
-      if (!targetIsDirectory) {
+      if (targetKind === 'unavailable') {
         throw error;
+      }
+      if (targetKind === 'other') {
+        // Windows does not let rename replace an existing regular file. Keep
+        // the operation scoped to the exact target and retry the
+        // same-directory rename. The brief absence is unavoidable on that
+        // platform; the caller's GitHub claim gate remains authoritative.
+        rmSync(path, { force: true });
+        renameSync(tmpPath, path);
+        return;
       }
       rmSync(path, { recursive: true, force: true });
       renameSync(tmpPath, path);
