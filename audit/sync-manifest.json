@@ -413,9 +413,21 @@
       "mode": "exact"
     },
     {
+      "id": "idd-resume-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-resume-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-resume-lite.instructions.md",
+      "mode": "exact"
+    },
+    {
       "id": "idd-resume-stall-instructions",
       "source": "idd-template/.github/instructions/idd-resume-stall.instructions.md",
       "target": ".github/instructions/idd-resume-stall.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-resume-stall-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-resume-stall-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-resume-stall-lite.instructions.md",
       "mode": "exact"
     },
     {
@@ -544,18 +556,6 @@
         "Roadmap-audit claims are coordination-only.",
         "heartbeat, release, or take over rather than holding the claim open."
       ]
-    },
-    {
-      "id": "idd-resume-lite-instructions",
-      "source": "idd-template/.github/instructions/lite/idd-resume-lite.instructions.md",
-      "target": ".github/instructions/lite/idd-resume-lite.instructions.md",
-      "mode": "exact"
-    },
-    {
-      "id": "idd-resume-stall-lite-instructions",
-      "source": "idd-template/.github/instructions/lite/idd-resume-stall-lite.instructions.md",
-      "target": ".github/instructions/lite/idd-resume-stall-lite.instructions.md",
-      "mode": "exact"
     }
   ],
   "forbiddenPatterns": [
