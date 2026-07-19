@@ -45,10 +45,16 @@ Map helper fields to actions below.
 
 1. Active claim: `{claim-id}`, agent, branch, latest trusted `claimed-by`
    `created_at` — or unclaimed. Ignore untrusted marker authors.
-2. Open PR number + HEAD SHA, or `none`.
-3. Latest activity `updatedAt` on issue/PR (comments, reviews, threads).
-4. CI states for PR HEAD (or `none`).
-5. `git worktree list`, local branch existence, worktree `git status`,
+2. Forced-handoff evidence (when present): approving human actor,
+   displaced `{claim-id}`, branch, linked PR, evidence URL — only if
+   `forced-handoff: human-gated` is recorded and authored by a trusted
+   actor. When an open PR exists, require issue-plus-PR approval naming
+   that PR. Record mismatches against live claim/branch/PR as Step 0
+   STOP. Never invent or post forced-handoff markers from this session.
+3. Open PR number + HEAD SHA, or `none`.
+4. Latest activity `updatedAt` on issue/PR (comments, reviews, threads).
+5. CI states for PR HEAD (or `none`).
+6. `git worktree list`, local branch existence, worktree `git status`,
    unpushed commits, local HEAD SHA.
 
 Use GitHub **server** timestamps only. Stale age default: **24 h**
