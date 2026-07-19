@@ -126,20 +126,75 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   const comments = inputs.comments ?? [];
   const claimEvents = inputs.claimEvents ?? [];
   const reasons = [];
+  const claim = summarizeClaimValidation(claimEvents, {
+    trustedMarkerLogins,
+    // #1344: parity with `pre-merge-readiness.mts`'s own
+    // `summarizeClaimValidation` call -- see `AdvisoryConvergenceOptions`
+    // for why each field is a no-op when the caller omits it.
+    forcedHandoffEnabled: options.forcedHandoffEnabled === true,
+    isAuthorizedForcedHandoff: options.isAuthorizedForcedHandoff,
+    expectedLinkedPrs: options.expectedLinkedPrs ?? [],
+    prFirstCommitAt: options.prFirstCommitAt ?? null,
+    staleAgeMs: options.staleAgeMs,
+  });
+  const activeClaimId = claim.activeClaim?.claimId ?? '';
+  // `idd-claimed` narrows this gate to verified IDD-owned PRs; the default
+  // `all-prs` behavior keeps the gate applicable everywhere else.
+  const convergenceScope =
+    options.convergenceScope === 'idd-claimed' ? 'idd-claimed' : 'all-prs';
+  const prHeadRefName = String(options.prHeadRefName ?? '').trim();
+  const activeClaimBranch = String(claim.activeClaim?.branch ?? '').trim();
+  const applicability =
+    convergenceScope === 'idd-claimed'
+      ? !prHeadRefName
+        ? {
+            scope: convergenceScope,
+            status: 'applicable',
+            reason: 'idd-claimed-head-branch-unavailable',
+          }
+        : !claim.activeClaimPresent
+          ? {
+              scope: convergenceScope,
+              status: 'not_applicable',
+              reason: 'idd-claimed-no-verified-linked-issue-claim',
+            }
+          : !activeClaimBranch
+            ? {
+                scope: convergenceScope,
+                status: 'applicable',
+                reason: 'idd-claimed-linked-claim-branch-unavailable',
+              }
+            : activeClaimBranch !== prHeadRefName
+              ? {
+                  scope: convergenceScope,
+                  status: 'not_applicable',
+                  reason: 'idd-claimed-branch-mismatch',
+                }
+              : {
+                  scope: convergenceScope,
+                  status: 'applicable',
+                  reason: 'idd-claimed-branch-matched',
+                }
+      : {
+          scope: convergenceScope,
+          status: 'applicable',
+          reason: 'all-prs',
+        };
+  const scopeNotApplicable = applicability.status === 'not_applicable';
   // --- Clause 1: latest Copilot review is clean on the current HEAD -----
   const review = resolveLatestCopilotReviewClause(
     reviews,
     prHeadSha,
     primaryBotLogin,
   );
-  const pending = !review.matchesHead;
-  if (pending) {
+  const pending = scopeNotApplicable ? false : !review.matchesHead;
+  if (!scopeNotApplicable && pending) {
     reasons.push(
       review.found
         ? `latest ${primaryBotLogin} review (commit ${review.commitId || '<unknown>'}) does not cover current HEAD ${prHeadSha}`
         : `${primaryBotLogin} has not reviewed this pull request yet`,
     );
-  } else if (!review.satisfied) {
+  } else if (!scopeNotApplicable && !review.satisfied) {
     reasons.push(
       review.itemCount === null
         ? `latest ${primaryBotLogin} review on current HEAD carries an unknown number of actionable items (comment count unavailable)`
@@ -198,12 +253,16 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     blockingCount: copilotBlocking.length,
     satisfied: copilotBlocking.length === 0,
   };
-  if (!threadClause.satisfied) {
+  if (!scopeNotApplicable && !threadClause.satisfied) {
     reasons.push(
       `${threadClause.blockingCount} ${primaryBotLogin}-authored review thread(s) are neither resolved nor validly dispositioned: ${threadClause.blockingIds.join(', ')}`,
     );
   }
-  const converged = !pending && review.satisfied && threadClause.satisfied;
+  const converged =
+    !scopeNotApplicable &&
+    !pending &&
+    review.satisfied &&
+    threadClause.satisfied;
   // --- Same-HEAD advisory reroll evidence (#1511) ------------------------
   // Purely additive: `converged` above is already final and is never
   // recomputed or referenced below this point -- see the module header and
@@ -219,6 +278,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // that attempt is permanently consumed before the real blocker is even
   // cleared (PR #1517 review).
   const sameHeadRerollEligible =
+    !scopeNotApplicable &&
     !pending &&
     threadClause.satisfied &&
     dispositionEvidence.missingRegularCommentCount === 0 &&
@@ -275,6 +335,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   // answered reroll self-describes as no-longer-in-flight once the window
   // elapses, instead of blocking a retry forever if the bot goes silent.
   const sameHeadRerollInFlight =
+    !scopeNotApplicable &&
     rerollMarkers.latestAt !== '' &&
     !hasFreshReviewSinceLastReroll &&
     rerollElapsedMinutes < pendingWindowMinutesForReroll;
@@ -313,18 +374,6 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   const waiverCheckSelector =
     String(options.waiverCheckSelector ?? '').trim() ||
     ADVISORY_CONVERGENCE_CHECK_SELECTOR;
-  const claim = summarizeClaimValidation(claimEvents, {
-    trustedMarkerLogins,
-    // #1344: parity with `pre-merge-readiness.mts`'s own
-    // `summarizeClaimValidation` call -- see `AdvisoryConvergenceOptions`
-    // for why each field is a no-op when the caller omits it.
-    forcedHandoffEnabled: options.forcedHandoffEnabled === true,
-    isAuthorizedForcedHandoff: options.isAuthorizedForcedHandoff,
-    expectedLinkedPrs: options.expectedLinkedPrs ?? [],
-    prFirstCommitAt: options.prFirstCommitAt ?? null,
-    staleAgeMs: options.staleAgeMs,
-  });
-  const activeClaimId = claim.activeClaim?.claimId ?? '';
   let validWaiverCount = 0;
   if (!converged && deadlinePassed && waiverMode === 'maintainer-authorized') {
     const waiverEvidence = summarizeExternalCheckWaivers(comments, {
@@ -357,15 +406,15 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     activeClaimId,
     validCount: validWaiverCount,
   };
-  const waived = validWaiverCount > 0;
-  if (!converged && deadlinePassed && !waived) {
+  const waived = !scopeNotApplicable && validWaiverCount > 0;
+  if (!scopeNotApplicable && !converged && deadlinePassed && !waived) {
     reasons.push(
       waiverMode === 'maintainer-authorized'
         ? `deadline (${deadlineMinutes}m) passed with no valid maintainer external-check waiver for selector "${waiverCheckSelector}" on current HEAD`
         : `deadline (${deadlineMinutes}m) passed and no waiver is available (ciGate.externalCheckWaivers.mode is "${waiverMode}", not "maintainer-authorized")`,
     );
   }
-  const ready = converged || (deadlinePassed && waived);
+  const ready = scopeNotApplicable || converged || (deadlinePassed && waived);
   return {
     protocolVersion: '1',
     decisionAuthority: 'instructions',
@@ -373,6 +422,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     prHeadSha,
     now,
     primaryBotLogin,
+    applicability,
     review,
     threads: threadClause,
     pending,
@@ -672,10 +722,11 @@ function collectFromGitHub(args) {
       '-R',
       repoRef,
       '--json',
-      'headRefOid,closingIssuesReferences,author,url',
+      'headRefOid,headRefName,closingIssuesReferences,author,url',
     ]),
   );
   const prHeadSha = String(pr.headRefOid ?? '').toLowerCase();
+  const prHeadRefName = String(pr.headRefName ?? '').trim();
   const prAuthorLogin = String(pr.author?.login ?? '').toLowerCase();
   const prUrl = String(pr.url ?? '');
   // Fetched here (ahead of `trustedMarkerLogins` below) so a collaborator's
@@ -812,6 +863,11 @@ function collectFromGitHub(args) {
       primaryBotLogin,
       trustedMarkerLogins,
       advisoryBotLogins,
+      convergenceScope:
+        policy?.advisoryWait?.convergenceScope === 'idd-claimed'
+          ? 'idd-claimed'
+          : 'all-prs',
+      prHeadRefName,
       prAuthorLogin,
       headCommittedAt,
       deadlineMinutes,

@@ -30,7 +30,9 @@ const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 // parsed documents to probe schema acceptance, so these casts stay
 // deliberately loose — the schema, not the type system, is under test.
 type JsonRecord = Record<string, unknown>;
-type PolicyFixture = JsonRecord & { advisoryWait: { requestCap?: unknown } };
+type PolicyFixture = JsonRecord & {
+  advisoryWait: { requestCap?: unknown; convergenceScope?: unknown };
+};
 
 // ---------------------------------------------------------------------------
 // Schema keyword hygiene — no unsupported keywords allowed
@@ -472,6 +474,35 @@ test('policy schema rejects an unknown issueScope value', () => {
   const errors = validate(instance, schema);
   assert.ok(
     errors.some((error) => error.includes('$.issueScope')),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema accepts advisoryWait.convergenceScope values', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const convergenceScope of ['all-prs', 'idd-claimed']) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    ) as PolicyFixture;
+    instance.advisoryWait.convergenceScope = convergenceScope;
+    const errors = validate(instance, schema);
+    assert.deepEqual(
+      errors,
+      [],
+      `${convergenceScope}: ${JSON.stringify(errors)}`,
+    );
+  }
+});
+
+test('policy schema rejects an unknown advisoryWait.convergenceScope value', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  ) as PolicyFixture;
+  instance.advisoryWait.convergenceScope = 'linked-issues';
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes('$.advisoryWait.convergenceScope')),
     errors.join('\n'),
   );
 });

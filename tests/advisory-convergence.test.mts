@@ -98,6 +98,11 @@ test('converged: clean primary-bot review on HEAD, no blocking threads', () => {
     baseOptions(),
   );
   assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'all-prs',
+    status: 'applicable',
+    reason: 'all-prs',
+  });
   assert.equal(verdict.pending, false);
   assert.equal(verdict.review.satisfied, true);
   assert.equal(verdict.threads.satisfied, true);
@@ -183,6 +188,68 @@ test('pending: the latest bot review targets an older commit than current HEAD',
   assert.equal(verdict.review.found, true);
   assert.equal(verdict.review.matchesHead, false);
   assert.equal(verdict.converged, false);
+});
+
+test('idd-claimed scope: matching linked-claim branch keeps the gate applicable', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      claimEvents: [claimComment()],
+    }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'issue/1234-test',
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'idd-claimed',
+    status: 'applicable',
+    reason: 'idd-claimed-branch-matched',
+  });
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('idd-claimed scope: a branch mismatch short-circuits the gate as not applicable', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      claimEvents: [claimComment()],
+    }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'issue/1234-different',
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'idd-claimed',
+    status: 'not_applicable',
+    reason: 'idd-claimed-branch-mismatch',
+  });
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.reasons, []);
+});
+
+test('idd-claimed scope: a PR without a verified linked claim is not applicable', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [], claimEvents: [] }),
+    baseOptions({
+      convergenceScope: 'idd-claimed',
+      prHeadRefName: 'feature/no-claim',
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.applicability, {
+    scope: 'idd-claimed',
+    status: 'not_applicable',
+    reason: 'idd-claimed-no-verified-linked-issue-claim',
+  });
+  assert.equal(verdict.pending, false);
+  assert.equal(verdict.ready, true);
+  assert.deepEqual(verdict.reasons, []);
 });
 
 test('regression: a re-request without a new push supersedes an earlier dirty on-HEAD review', () => {

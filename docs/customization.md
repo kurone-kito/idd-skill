@@ -249,8 +249,8 @@ durations only; zero-length values and second-based values are invalid.
 Repositories may also customize `advisoryWait.convergenceScope` in
 `.github/idd/config.json`. The default `all-prs` keeps convergence on
 every PR. `idd-claimed` is opt-in and limits convergence to verified
-IDD-owned PRs; invalid values are rejected by schema and normalize back
-to `all-prs`.
+IDD-owned PRs; invalid values are rejected by schema, and runtime
+normalization falls back to `all-prs` for untrusted config reads.
 
 `advisoryWait.primaryBotLogin` selects the advisory bot whose review the
 advisory-wait gate tracks (default Copilot), and
