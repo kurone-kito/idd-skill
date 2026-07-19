@@ -204,6 +204,15 @@
       "limitBytes": 24000
     },
     {
+      "id": "bundle-resume-lite",
+      "description": "Lite resume path: idd-resume-lite + idd-resume-stall-lite (helper-first, self-contained).",
+      "files": [
+        ".github/instructions/lite/idd-resume-lite.instructions.md",
+        ".github/instructions/lite/idd-resume-stall-lite.instructions.md"
+      ],
+      "limitBytes": 16000
+    },
+    {
       "id": "bundle-review",
       "description": "Review path: idd-overview-core + idd-overview-appendix + idd-review-snapshot + idd-review-triage + idd-review-fix + idd-advisory-wait + idd-ci",
       "files": [
@@ -404,9 +413,21 @@
       "mode": "exact"
     },
     {
+      "id": "idd-resume-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-resume-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-resume-lite.instructions.md",
+      "mode": "exact"
+    },
+    {
       "id": "idd-resume-stall-instructions",
       "source": "idd-template/.github/instructions/idd-resume-stall.instructions.md",
       "target": ".github/instructions/idd-resume-stall.instructions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "idd-resume-stall-lite-instructions",
+      "source": "idd-template/.github/instructions/lite/idd-resume-stall-lite.instructions.md",
+      "target": ".github/instructions/lite/idd-resume-stall-lite.instructions.md",
       "mode": "exact"
     },
     {
