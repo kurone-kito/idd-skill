@@ -108,8 +108,9 @@ Any failure → STOP and restart. Do not post takeover on stale evidence.
 On S2/S3 hold: **do not** post hold comments on the issue/PR (that can
 reset quiet-window evidence). Log evidence in the session only and stop.
 
-## Stop-and-ask
+## Hold-and-stop (no issue/PR hold comment)
 
-Stop and ask when helper runtime is expected but unavailable, when
-timestamps cannot be server-anchored, or when claim/forced-handoff state
-is ambiguous. Never invent forced-handoff consent.
+**Hold and stop** (session log only — same rule as Hold behavior above)
+when helper runtime is expected but unavailable, when timestamps cannot
+be server-anchored, or when claim/forced-handoff state is ambiguous.
+Never invent forced-handoff consent.
