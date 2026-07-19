@@ -37,6 +37,13 @@
       "requireSyncPairs": true
     },
     {
+      "id": "idd-lite-instruction-template-set",
+      "sourceGlob": "idd-template/.github/instructions/lite/idd-*.instructions.md",
+      "targetGlob": ".github/instructions/lite/idd-*.instructions.md",
+      "match": "basename",
+      "requireSyncPairs": true
+    },
+    {
       "id": "idd-template-docs-set",
       "sourceGlob": "idd-template/docs/idd-*.md",
       "targetGlob": "docs/idd-*.md",
@@ -189,6 +196,12 @@
         ".github/instructions/idd-work.instructions.md"
       ],
       "limitBytes": 45000
+    },
+    {
+      "id": "bundle-work-lite",
+      "description": "Lite work path (weak-model condensed profile): .github/instructions/lite/idd-work-lite.instructions.md only — self-contained; no overview/appendix. Scaffolding for #1541; files filled when #1542 lands.",
+      "files": [],
+      "limitBytes": 24000
     },
     {
       "id": "bundle-review",

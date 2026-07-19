@@ -314,6 +314,26 @@ generated pair rather than a third _kind_ of surface:
   proposes; a future follow-up could investigate a mechanical
   semantic-parity check, but this design does not assume one exists.
 
+**Status (scaffolding live).** [#1541](https://github.com/kurone-kito/idd-skill/issues/1541)
+wired the audit surface before any lite content exists:
+
+- `fileSets` entry `idd-lite-instruction-template-set` —
+  `idd-template/.github/instructions/lite/idd-*.instructions.md` →
+  `.github/instructions/lite/idd-*.instructions.md`, `match: "basename"`,
+  `requireSyncPairs: true`. Zero matching files is fine; a later track
+  that adds a lite file without a generatable `syncPairs` row fails
+  `audit-docs.mjs --check`.
+- `bundleBudgets` entry `bundle-work-lite` with an independent
+  `limitBytes` of **24000** and an empty `files` list until the work-phase
+  pilot (#1542) lands the path
+  `.github/instructions/lite/idd-work-lite.instructions.md`. Later lite
+  content tracks should append their paths (and raise the ceiling only
+  when measured content needs it) — do not treat 24000 as a fraction of
+  the standard `bundle-work` budget.
+
+Per-file `syncPairs` rows still arrive with each content issue; this
+scaffolding does not invent them in advance.
+
 ## Decomposition proposal
 
 The following follow-up issues are proposed scope for a later authoring
