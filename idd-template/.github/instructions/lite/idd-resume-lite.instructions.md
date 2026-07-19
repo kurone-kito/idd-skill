@@ -72,26 +72,32 @@ Quiet-window evidence never bypasses the 24 h stale threshold.
 On helper-enabled profiles, run `resume-claim-routing.mjs --issue <N>`
 (and stop-and-ask on failure — do not use the written table). Map:
 
-| Helper `state` / `action`  | Action                                             |
-| -------------------------- | -------------------------------------------------- |
-| `already_owned` / `keep`   | Keep same `{claim-id}` → Step 2                    |
-| `unclaimed` / `re_claim`   | Fresh A5 claim → Step 2                            |
-| `stale` / `takeover`       | A5 takeover with `supersedes: <prior-id>` → Step 2 |
-| `non_inheritable` / `stop` | STOP — live competitor claim                       |
-| `disputed` / `stop`        | STOP — contested claim                             |
+| Helper `state` / `action`  | Action                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------ |
+| `already_owned` / `keep`   | Keep same `{claim-id}` → Step 2 (if branch is `roadmap-audit/*`, A1.5 only → STOP)               |
+| `unclaimed` / `re_claim`   | Fresh A5 claim → Step 2                                                                          |
+| `stale` / `takeover`       | A5 takeover `supersedes: <prior-id>` → Step 2 (if branch is `roadmap-audit/*`, A1.5 only → STOP) |
+| `non_inheritable` / `stop` | STOP — live competitor claim                                                                     |
+| `disputed` / `stop`        | STOP — contested claim                                                                           |
+
+After any helper map, still apply the `roadmap-audit/*` special case when
+the active claim branch field starts with `roadmap-audit/`: coordination
+only — re-run A1.5, skip worktree creation, STOP after roadmap-side
+effects. Child-issue execution is not locked by that claim.
 
 Written table (`instructions-only` profile only): first matching row.
 
-| Claim state                                                                                 | Action                                          |
-| ------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| Closed / PR merged                                                                          | Remove local worktree/branch → STOP             |
-| Active claim = this session's verified `{claim-id}` and branch starts with `roadmap-audit/` | Re-run A1.5 only → STOP                         |
-| Active claim = this session's verified `{claim-id}`                                         | → Step 2                                        |
-| Forced-handoff names this session's verified `{claim-id}` as displaced                      | STOP — displaced; no push/comment/resolve/merge |
-| Forced-handoff recovery confirmed for this session                                          | A5 re-claim after GitHub shows handoff → Step 2 |
-| No active claim                                                                             | A5 re-claim → Step 2                            |
-| Active non-stale claim (other session, < 24 h)                                              | STOP                                            |
-| Active stale claim (other session, ≥ 24 h)                                                  | A5 takeover `supersedes: <prior-id>` → Step 2   |
+| Claim state                                                                                 | Action                                                        |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Closed / PR merged                                                                          | Remove local worktree/branch → STOP                           |
+| Active claim = this session's verified `{claim-id}` and branch starts with `roadmap-audit/` | Re-run A1.5 only → STOP                                       |
+| Active claim = this session's verified `{claim-id}`                                         | → Step 2                                                      |
+| Forced-handoff names this session's verified `{claim-id}` as displaced                      | STOP — displaced; no push/comment/resolve/merge               |
+| Forced-handoff recovery confirmed for this session                                          | A5 re-claim after GitHub shows handoff → Step 2               |
+| No active claim                                                                             | A5 re-claim → Step 2                                          |
+| Active non-stale claim (other session, < 24 h)                                              | STOP                                                          |
+| Active stale claim (other session, ≥ 24 h) and branch starts with `roadmap-audit/`          | A5 takeover `supersedes: <prior-id>`; re-run A1.5 only → STOP |
+| Active stale claim (other session, ≥ 24 h)                                                  | A5 takeover `supersedes: <prior-id>` → Step 2                 |
 
 All claim writes use A5 post-and-verify (`post-idd-marker` / claim helper
 settle delay). Same-agent non-stale claims are **not** inheritable by
