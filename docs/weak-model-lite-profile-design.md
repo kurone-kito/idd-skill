@@ -23,14 +23,27 @@ below for the evidence.
 
 This design reuses the model-capability taxonomy published by
 [#1415](https://github.com/kurone-kito/idd-skill/issues/1415) in
-[Model capability expectations](idd-workflow.md#model-capability-expectations)
-verbatim, rather than inventing a parallel one:
+[Model capability expectations](idd-workflow.md#model-capability-expectations),
+rather than inventing a parallel one. That taxonomy was later refined
+by [#1549](https://github.com/kurone-kito/idd-skill/issues/1549) into
+**two independent axes** — **context sufficiency** and
+**self-direction capability** — so a large context window alone no
+longer admits a model into the supported lightweight tier. This design
+still targets only the **supported lightweight local or compact cloud**
+tier under that refined taxonomy (models that clear **both** axes but
+remain weak on long multi-file instruction adherence). The named
+**large-context, non-self-directing** class is intentionally out of
+scope here; that class points at a harness-orchestrated execution-mode
+investigation rather than a condensed self-directed instruction
+profile.
 
-- **Target tier**: **lightweight local or compact cloud** — large-context,
-  low-reasoning models such as the phi-4-mini class (roughly 128K
-  context, tool calling supported, but weak adherence to long
-  multi-file instruction sets). #1415 already confines this tier to
-  narrowly-scoped roles under operator supervision:
+- **Target tier**: **lightweight local or compact cloud** — models with
+  **both** sufficient context **and** demonstrated self-direction for
+  contained tasks, that still show weak adherence to long multi-file
+  instruction sets (the phi-4-mini class — roughly 128K context, tool
+  calling supported — remains the reference example). The workflow
+  guide already confines this tier to narrowly-scoped roles under
+  operator supervision:
   - executing a single, fully-specified `idd:ready` issue rather than
     Discover's open-ended candidate selection;
   - preferring a deterministic helper command over prose judgment
@@ -45,9 +58,15 @@ verbatim, rather than inventing a parallel one:
 
 - **Non-goal: no ~32K-token squeeze.** The roadmap's operator decision
   explicitly puts the qwen2.5-coder-1.5b class (roughly 32K context) out
-  of scope — "the practical cutoff example" for **unsupported**, per
-  #1415. A lite profile is not an exercise in fitting the whole loop
-  into a tiny window; the target tier already has ample context.
+  of scope — "the practical cutoff example" for **unsupported (context
+  floor)**, per the workflow taxonomy. A lite profile is not an
+  exercise in fitting the whole loop into a tiny window; the target
+  tier already has ample context.
+- **Non-goal: no large-context, non-self-directing coverage.** Models
+  that clear the context bar but cannot self-direct a multi-turn loop
+  are a separate named class in the workflow taxonomy; they need
+  harness orchestration, not a condensed self-directed profile. See
+  [#1555](https://github.com/kurone-kito/idd-skill/issues/1555).
 - **Non-goal: no semantic changes to the standard profile.** A lite
   profile changes instruction **shape** only — how the same rules are
   packaged and phrased — never the underlying claim, gate, or merge
