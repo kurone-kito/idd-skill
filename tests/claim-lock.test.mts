@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -66,7 +66,7 @@ function setupLinkedWorktree(): { primary: string; worktree: string } {
   git(primary, ['add', 'seed.txt']);
   git(primary, ['commit', '-m', 'seed']);
 
-  const worktree = join(primary, '..', `${primary.split('/').pop()}-wt`);
+  const worktree = join(primary, '..', `${basename(primary)}-wt`);
   git(primary, ['worktree', 'add', worktree, '-b', 'issue/1-test', 'main']);
   return { primary, worktree };
 }
