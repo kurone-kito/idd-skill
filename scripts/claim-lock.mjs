@@ -31,7 +31,9 @@
 // entirely on the common fast path. The only path that still writes over an
 // existing lock is an authorized `--takeover`, and it replaces the file via
 // a same-directory temp-write + `renameSync` rather than unlink-then-create,
-// so the lock path is never briefly absent for that path either.
+// so the lock path is never briefly absent for that path either. A malformed
+// directory at the lock path is the one recovery exception: an authorized
+// takeover removes that exact directory before installing the replacement.
 //
 // This lock intentionally does not try to perfectly serialize two
 // concurrent authorized takeovers of the same worktree -- that is a much
@@ -41,7 +43,14 @@
 // so only one concurrent takeover's claim-id can actually be the active one,
 // regardless of what this local lock file happens to contain.
 import { execFileSync } from 'node:child_process';
-import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 
@@ -154,7 +163,22 @@ function overwriteLockAtomically(path, agentId, claimId) {
   const tmpPath = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
   writeFileSync(tmpPath, renderLockBody(agentId, claimId), { flag: 'wx' });
   try {
-    renameSync(tmpPath, path);
+    try {
+      renameSync(tmpPath, path);
+    } catch (error) {
+      let targetIsDirectory = false;
+      try {
+        targetIsDirectory = statSync(path).isDirectory();
+      } catch {
+        // Preserve the original rename error when the target disappeared or
+        // cannot be inspected safely.
+      }
+      if (!targetIsDirectory) {
+        throw error;
+      }
+      rmSync(path, { recursive: true, force: true });
+      renameSync(tmpPath, path);
+    }
   } finally {
     // Best-effort cleanup only: a successful rename already moved tmpPath
     // away (this is a no-op ENOENT), and a failed rename's own error is
@@ -218,6 +242,9 @@ export function acquireClaimLock(worktree, agentId, claimId, takeover) {
   // the winner disappeared before this read, make one last create attempt so
   // a transiently absent lock is not reported as a false collision.
   const finalRead = readLock(path);
+  if (finalRead.status === 'present' && finalRead.lock.claimId === claimId) {
+    return { mode: 'acquired', path, reacquired: true };
+  }
   if (finalRead.status === 'absent') {
     try {
       writeFileSync(path, renderLockBody(agentId, claimId), { flag: 'wx' });
@@ -227,6 +254,12 @@ export function acquireClaimLock(worktree, agentId, claimId, takeover) {
         throw error;
       }
       const racedRead = readLock(path);
+      if (
+        racedRead.status === 'present' &&
+        racedRead.lock.claimId === claimId
+      ) {
+        return { mode: 'acquired', path, reacquired: true };
+      }
       return {
         mode: 'collision',
         path,

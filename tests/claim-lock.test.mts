@@ -386,6 +386,28 @@ test('check/acquire: an unreadable lock path is a malformed collision', () => {
   }
 });
 
+test('acquire: authorized takeover replaces a malformed lock directory', () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const path = resolveClaimLockPath(fixture.worktree);
+    mkdirSync(path);
+    writeFileSync(join(path, 'unexpected-entry'), 'not a lock');
+
+    const takeover = acquireClaimLock(
+      fixture.worktree,
+      'agent-b',
+      'claim-b',
+      true,
+    );
+    assert.equal(takeover.mode, 'acquired');
+    assert.equal(takeover.forcedTakeover, true);
+    assert.equal(existsSync(join(path, 'unexpected-entry')), false);
+    assert.equal(JSON.parse(readFileSync(path, 'utf8')).claimId, 'claim-b');
+  } finally {
+    teardown(fixture);
+  }
+});
+
 test('acquire/check: a nonexistent or non-git --worktree path fails loudly rather than silently no-op', () => {
   const missing = join(tmpdir(), `idd-claim-lock-missing-${process.pid}`);
   assert.throws(() => checkClaimLock(missing));

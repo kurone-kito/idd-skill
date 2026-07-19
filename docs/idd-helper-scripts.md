@@ -913,8 +913,12 @@ Interpretation rules:
   removed while another claim still holds its lock.
 - WorkTrunk pre-start install hooks run before `wt switch --create` returns;
   configure the hook to acquire the lock as its first command, before the
-  install. If the hook cannot do that, disable its automatic install and
-  acquire the lock immediately after worktree creation.
+  install. Under `package-manager`, the new worktree's bin may not exist
+  until that install completes, so invoke a pre-install-available helper
+  from the primary worktree with the new path as its explicit target, or
+  use the helper-free exclusive file-create fallback. If neither is
+  available, disable the automatic install and acquire the lock immediately
+  after worktree creation.
 - Stable `--acquire` `mode` values: `acquired` (fresh create, a read-only
   same-`claim-id` reacquire that writes nothing, or an authorized
   `--takeover` override — disambiguated by the optional `reacquired` /

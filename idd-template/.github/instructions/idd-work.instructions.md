@@ -139,10 +139,15 @@ self-check below) would leave that install unprotected.
 WorkTrunk runs a configured pre-start hook before the create command
 returns. If that hook installs dependencies, its **first** command must
 acquire the lock for the new worktree with the current `{agent-id}` /
-`{claim-id}`, and only then run the install command. Acquiring the lock
-after `wt switch --create` returns is too late for that hook. If the
-pre-start hook cannot be changed to acquire the lock first, do not use
-the automatic install hook; create the worktree without it and follow the
+`{claim-id}`, and only then run the install command. In the
+`package-manager` profile, do not assume the new worktree's
+`idd:claim-lock` bin is available before that install: invoke a
+pre-install-available helper from the primary worktree with the new path
+as its explicit `--worktree` target, or use the helper-free exclusive
+file-create fallback below. Acquiring the lock after `wt switch --create`
+returns is too late for that hook. If the pre-start hook cannot acquire
+the lock from an already-available helper or fallback, do not use the
+automatic install hook; create the worktree without it and follow the
 manual lock-then-install path above.
 
 For the `instructions-only` profile, which has no helper runtime, use
