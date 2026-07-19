@@ -314,19 +314,39 @@ generated pair rather than a third _kind_ of surface:
   proposes; a future follow-up could investigate a mechanical
   semantic-parity check, but this design does not assume one exists.
 
+**Status (scaffolding live).**
+[#1541](https://github.com/kurone-kito/idd-skill/issues/1541)
+wired the audit surface before any lite content exists:
+
+- `fileSets` entry `idd-lite-instruction-template-set` —
+  `idd-template/.github/instructions/lite/idd-*.instructions.md` →
+  `.github/instructions/lite/idd-*.instructions.md`, `match: "basename"`,
+  `requireSyncPairs: true`. Zero matching files is fine; a later track
+  that adds a lite file without a generatable `syncPairs` row fails
+  `audit-docs.mjs --check`.
+- `bundleBudgets` entry `bundle-work-lite` with an independent
+  `limitBytes` of **24000** and an empty `files` list until the work-phase
+  pilot (#1542) lands the path
+  `.github/instructions/lite/idd-work-lite.instructions.md`. Later lite
+  content tracks should append their paths (and raise the ceiling only
+  when measured content needs it) — do not treat 24000 as a fraction of
+  the standard `bundle-work` budget.
+
+Per-file `syncPairs` rows still arrive with each content issue; this
+scaffolding does not invent them in advance.
+
 ## Decomposition proposal
 
 The following follow-up issues are proposed scope for a later authoring
 pass. Titles and one-line scopes only — filing them is out of scope for
 this design issue.
 
-- **Wire sync-manifest drift control for lite instruction files** — add
-  the `fileSets` entry, its required per-file `syncPairs` entries, and a
-  new `bundleBudgets` entry, all described in
-  [Drift control](#drift-control), so `audit-docs.mjs --check` enforces
-  parity for the new surface before any lite content lands; sequence
-  this first so every subsequent lite file is drift-checked from its
-  first commit.
+- **~~Wire sync-manifest drift control for lite instruction files~~** —
+  **done in**
+  [#1541](https://github.com/kurone-kito/idd-skill/issues/1541)
+  (see [Drift control](#drift-control) status note). The `fileSets` and
+  `bundle-work-lite` scaffolding is live; per-file `syncPairs` still
+  arrive with each later content track.
 - **Author the lite instruction set for the work phase (B1-C6) —
   narrowest pilot** — condense `idd-work.instructions.md` into a
   self-contained lite file following all five content principles; the
