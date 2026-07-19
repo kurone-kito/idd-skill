@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readFileSync,
@@ -191,6 +192,7 @@ test('acquire: a same-claim-id reacquire performs no destructive write — the l
     assert.equal(first.mode, 'acquired');
 
     const path = resolveClaimLockPath(fixture.worktree);
+    chmodSync(path, 0o444);
     const before = statSync(path);
     const bodyBefore = readFileSync(path, 'utf8');
 
@@ -204,12 +206,12 @@ test('acquire: a same-claim-id reacquire performs no destructive write — the l
     assert.equal(second.reacquired, true);
 
     const after = statSync(path);
-    // Same inode means the file was never unlinked/recreated -- a
-    // destructive reacquire would allocate a new inode. If the file had
-    // been deleted and recreated, a competing session's fresh `wx` create
-    // could have raced into the gap; an unchanged inode proves that gap
-    // never opened.
-    assert.equal(after.ino, before.ino);
+    // Read-only reacquisition must not rewrite or recreate the file. The
+    // mode, mtime, and ctime remain unchanged across platforms; a
+    // destructive unlink/recreate would reset at least the mode and ctime.
+    assert.equal(after.mode & 0o777, before.mode & 0o777);
+    assert.equal(after.mtimeMs, before.mtimeMs);
+    assert.equal(after.ctimeMs, before.ctimeMs);
     assert.equal(readFileSync(path, 'utf8'), bodyBefore);
   } finally {
     teardown(fixture);

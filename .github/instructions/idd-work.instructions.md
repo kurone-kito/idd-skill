@@ -43,8 +43,11 @@ Before creating, check for local conflicts in this order:
 
 2. Run `git worktree list` — if a worktree for the branch already
    exists, inspect and acquire its worktree-local claim lock before
-   reusing or removing it. Run `claim-lock --acquire` against the exact
-   path shown in the list with the current `{agent-id}` / `{claim-id}`;
+   reusing or removing it. Run the profile-selected claim-lock helper
+   against the exact path shown in the list with the current
+   `{agent-id}` / `{claim-id}`: `node scripts/claim-lock.mjs` in the
+   source/vendored runtime, or `idd-claim-lock` / `idd:claim-lock` in
+   imported package-manager runtimes;
    do not run `git worktree remove` while the lock check is still a
    collision. Resolve a collision through the Claim-state rule in
    `idd-claim.instructions.md`, and only remove the exact path after the
@@ -145,7 +148,7 @@ manual lock-then-install path above.
 are installed:
 
 - **WorkTrunk with a pre-start install hook** (e.g.,
-  `[pre-start].install` in `.config/wt.toml`): the hook must acquire the
+  `[pre-start].install` in `.config/wt.toml`): The hook must acquire the
   lock before installing, as described above; after the hook succeeds,
   skip this step.
 - **Manual `git worktree add` or WorkTrunk without a hook**: `cd` into
