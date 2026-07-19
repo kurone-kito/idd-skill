@@ -269,8 +269,26 @@ export function acquireClaimLock(
 
   // Exhausted retries on the narrow absent-then-raced-create loop above.
   // Re-read once after the final EEXIST so a well-formed winner is reported
-  // to the caller instead of being returned as an unexplained collision.
+  // to the caller instead of being returned as an unexplained collision. If
+  // the winner disappeared before this read, make one last create attempt so
+  // a transiently absent lock is not reported as a false collision.
   const finalRead = readLock(path);
+  if (finalRead.status === 'absent') {
+    try {
+      writeFileSync(path, renderLockBody(agentId, claimId), { flag: 'wx' });
+      return { mode: 'acquired', path };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw error;
+      }
+      const racedRead = readLock(path);
+      return {
+        mode: 'collision',
+        path,
+        holder: racedRead.status === 'present' ? racedRead.lock : undefined,
+      };
+    }
+  }
   return {
     mode: 'collision',
     path,
