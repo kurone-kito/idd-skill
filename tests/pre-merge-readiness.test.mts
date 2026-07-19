@@ -27,6 +27,7 @@ import {
   resolveRulesetDetailPath,
   selectCodeownersText,
   summarizeAdvisoryWaitMarkers,
+  summarizeBranchCurrency,
   summarizeClaimValidation,
   summarizeDispositionEvidenceForGate,
   summarizeExternalCheckWaivers,
@@ -5149,6 +5150,192 @@ test('buildPreMergeReadinessSummary reports the real blocking cause, not the unr
     /codeownerSelfApproval\.status="possible_deadlock"/,
   );
   assert.doesNotMatch(reviewBlocker?.detail ?? '', /ruleset detail unreadable/);
+});
+
+// #1513: branch-currency (up-to-date-head) evidence and gate.
+test('summarizeBranchCurrency: a ruleset strict_required_status_checks_policy resolves requiresUpToDateHead via "ruleset"', () => {
+  const result = summarizeBranchCurrency(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          strict_required_status_checks_policy: true,
+          required_status_checks: [{ context: 'lint' }],
+        },
+      },
+    ],
+    {},
+    { mergeStateStatus: 'behind', mergeable: 'mergeable' },
+  );
+  assert.equal(result.requiresUpToDateHead, true);
+  assert.equal(result.requiresUpToDateHeadSource, 'ruleset');
+  // Raw GitHub enum values are normalized to uppercase.
+  assert.equal(result.mergeStateStatus, 'BEHIND');
+  assert.equal(result.mergeable, 'MERGEABLE');
+});
+
+// #1513 (Copilot/Codex review on PR #1538): GitHub's ruleset docs state
+// strict_required_status_checks_policy "will not take effect unless at
+// least one status check is enabled" -- an empty required-check list must
+// not resolve requiresUpToDateHead via the ruleset path even when the
+// strict flag itself is true, or a BEHIND PR under that empty-check
+// ruleset would be falsely blocked when GitHub would actually allow it.
+test('summarizeBranchCurrency: a ruleset strict flag with an EMPTY required-check list does not set requiresUpToDateHead', () => {
+  const result = summarizeBranchCurrency(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          strict_required_status_checks_policy: true,
+          required_status_checks: [],
+        },
+      },
+    ],
+    {},
+    { protectionReadsUnreadable: false },
+  );
+  assert.equal(result.requiresUpToDateHead, false);
+  assert.equal(result.requiresUpToDateHeadSource, 'none');
+});
+
+test('summarizeBranchCurrency: classic protection required_status_checks.strict resolves via "classic-protection"', () => {
+  const result = summarizeBranchCurrency(
+    [],
+    { required_status_checks: { strict: true } },
+    {},
+  );
+  assert.equal(result.requiresUpToDateHead, true);
+  assert.equal(result.requiresUpToDateHeadSource, 'classic-protection');
+});
+
+test('summarizeBranchCurrency: a readable "no rule found" resolves requiresUpToDateHead to false, source "none"', () => {
+  const result = summarizeBranchCurrency(
+    [{ type: 'required_status_checks', parameters: {} }],
+    { required_status_checks: {} },
+    { protectionReadsUnreadable: false },
+  );
+  assert.equal(result.requiresUpToDateHead, false);
+  assert.equal(result.requiresUpToDateHeadSource, 'none');
+});
+
+test('summarizeBranchCurrency: an unreadable protection/ruleset read fails closed to requiresUpToDateHead=true', () => {
+  const result = summarizeBranchCurrency(
+    [],
+    {},
+    {
+      protectionReadsUnreadable: true,
+    },
+  );
+  assert.equal(result.requiresUpToDateHead, true);
+  assert.equal(result.requiresUpToDateHeadSource, 'unreadable-fail-closed');
+});
+
+test('summarizeBranchCurrency: a non-boolean strict-flag value is never coerced true (strict === true check)', () => {
+  const result = summarizeBranchCurrency(
+    [
+      {
+        type: 'required_status_checks',
+        parameters: { strict_required_status_checks_policy: 'true' },
+      },
+    ],
+    { required_status_checks: { strict: 1 } },
+    { protectionReadsUnreadable: false },
+  );
+  assert.equal(result.requiresUpToDateHead, false);
+  assert.equal(result.requiresUpToDateHeadSource, 'none');
+});
+
+// End-to-end regression, confirmed-ruleset path: this repository's own live
+// `main` (verified via `gh api repos/kurone-kito/idd-skill/rules/branches/main`)
+// resolves via this exact branch -- a readable ruleset carrying
+// `strict_required_status_checks_policy: true` -- not the unreadable-fail-closed
+// path below. Covering both end to end (not just summarizeBranchCurrency in
+// isolation) guards against a wiring slip where branchRules/mergeStateStatus
+// never actually reach summarizeBranchCurrency inside buildPreMergeReadinessSummary.
+test('buildPreMergeReadinessSummary: a confirmed ruleset requirement + live BEHIND blocks on branch-currency', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const branchRules = (
+    fixture.input.branchRules as Record<string, unknown>[]
+  ).map((rule) =>
+    rule.type === 'required_status_checks'
+      ? {
+          ...rule,
+          parameters: {
+            ...(rule.parameters as Record<string, unknown>),
+            strict_required_status_checks_policy: true,
+          },
+        }
+      : rule,
+  );
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      branchRules,
+      mergeStateStatus: 'BEHIND',
+      mergeable: 'MERGEABLE',
+    },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+  const branchCurrency = summary.branchCurrency as Record<string, unknown>;
+  assert.equal(branchCurrency.requiresUpToDateHead, true);
+  assert.equal(branchCurrency.requiresUpToDateHeadSource, 'ruleset');
+  assert.deepEqual(summary.blockers, computePreMergeReadinessBlockers(summary));
+  assert.deepEqual(
+    (summary.blockers as { gate: string }[]).map((b) => b.gate),
+    ['branch-currency'],
+  );
+  assert.equal(summary.ready, false);
+});
+
+// End-to-end regression, unreadable-fail-closed path: this is the exact
+// field-evidence shape from the issue -- `mergeStateStatus: BEHIND`,
+// `mergeable: MERGEABLE`, and a protection/ruleset read that could not be
+// confirmed at all (not merely a rule that was read but found absent).
+test('buildPreMergeReadinessSummary: BEHIND + unreadable protection/ruleset reads fails closed to a branch-currency blocker', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const branchRules = (fixture.input.branchRules as { type: string }[]).filter(
+    (rule) => rule.type !== 'required_status_checks',
+  );
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      branchRules,
+      protectionReadsUnreadable: true,
+      mergeStateStatus: 'BEHIND',
+      mergeable: 'MERGEABLE',
+    },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+  const branchCurrency = summary.branchCurrency as Record<string, unknown>;
+  assert.equal(branchCurrency.requiresUpToDateHead, true);
+  assert.equal(
+    branchCurrency.requiresUpToDateHeadSource,
+    'unreadable-fail-closed',
+  );
+  assert.deepEqual(summary.blockers, computePreMergeReadinessBlockers(summary));
+  const blockerGates = (summary.blockers as { gate: string }[]).map(
+    (b) => b.gate,
+  );
+  assert.ok(blockerGates.includes('branch-currency'));
+  assert.equal(summary.ready, false);
+});
+
+test('buildPreMergeReadinessSummary: BEHIND with no up-to-date-head requirement does not block on branch-currency', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      mergeStateStatus: 'BEHIND',
+      mergeable: 'MERGEABLE',
+    },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+  const branchCurrency = summary.branchCurrency as Record<string, unknown>;
+  assert.equal(branchCurrency.requiresUpToDateHead, false);
+  const blockerGates = (summary.blockers as { gate: string }[]).map(
+    (b) => b.gate,
+  );
+  assert.ok(!blockerGates.includes('branch-currency'));
 });
 
 test('a trusted machine-disposition clears the notice/summary in both merge gates without promoting the author to a global IDD agent (#1182)', () => {

@@ -53,9 +53,10 @@ This check is read-only — F1 does not rebase, merge, or push.
   `baseAdvancedSinceMergeBase: true`, prefer a fresh CI result over an
   old green check (base may have moved since the merge-base).
 - **`behind-no-conflict`** when branch protection or recorded repository
-  policy requires an up-to-date head, or **`content-conflict`**
-  (`mergeable` is `CONFLICTING`): return to the E-phase branch-sync check
-  in `idd-review-triage.instructions.md`. Before returning, update the PR
+  policy requires an up-to-date head, or unreadable/ambiguous (fails
+  closed per the shared default), or **`content-conflict`** (`mergeable`
+  is `CONFLICTING`): return to the E-phase branch-sync check in
+  `idd-review-triage.instructions.md`. Before returning, update the PR
   live status digest with `Phase: F1 sync-required`, the branch state in
   `Open blockers`, and `Next action: E-phase branch-sync`.
 - **`computing`** (`syncRecommendation` is `recheck`): `mergeable` is
@@ -309,9 +310,8 @@ condition is satisfied, do **not** edit the digest before F3; carry the
 F2 snapshot forward unchanged so the final F3 freshness check can use
 the same activity universe.
 
-Note: `required_approvals` is fetched at runtime from the ruleset. The
-practical blockers are `CHANGES_REQUESTED` states and missing CODEOWNER
-approvals only. When all conditions above are satisfied, record the
+Note: `required_approvals` is ruleset-fetched; only `CHANGES_REQUESTED`
+and missing CODEOWNER approvals block. When satisfied, record the
 live-fetch result as the **F2 snapshot**: the current PR HEAD SHA
 (`{f2-head-SHA}`), the highest `updatedAt` across all fetched items
 (`{f2-max-activity-updatedAt}`, written as `none` if the snapshot is

@@ -32,6 +32,12 @@ function readyReport(): Record<string, unknown> {
     },
     claim: { matchesExpectedClaim: true, reason: 'match' },
     dispositionEvidence: { route: 'proceed', blockingCount: 0 },
+    branchCurrency: {
+      mergeStateStatus: 'CLEAN',
+      mergeable: 'MERGEABLE',
+      requiresUpToDateHead: false,
+      requiresUpToDateHeadSource: 'none',
+    },
   };
 }
 
@@ -175,6 +181,16 @@ test('every F3 gate maps to its own blocker', () => {
         (r.dispositionEvidence = {
           route: 'return-to-e1',
           blockingCount: 1,
+        }),
+    ],
+    [
+      'branch-currency',
+      (r) =>
+        (r.branchCurrency = {
+          mergeStateStatus: 'BEHIND',
+          mergeable: 'MERGEABLE',
+          requiresUpToDateHead: true,
+          requiresUpToDateHeadSource: 'ruleset',
         }),
     ],
   ];
@@ -399,6 +415,83 @@ test('--apply fails closed when a new blocker appears at re-validation', () => {
   assert.deepEqual(calls.merged, []);
   assert.equal(verdict.ready, false);
   assert.match(verdict.mergeResult, /new blockers/);
+  assert.equal(exitCode, 1);
+});
+
+// #1513: the exact field-evidence scenario -- `pre-merge-readiness` reported
+// `ready: true` for a PR GitHub itself already reported as
+// `mergeStateStatus: BEHIND`. `--apply` must fail closed with a structured
+// blocker BEFORE ever calling `deps.mergePr`, not attempt the merge and
+// crash on GitHub's rejection.
+test('--apply fails closed on a BEHIND head that requires an up-to-date head, without attempting the merge', () => {
+  const report = readyReport();
+  report.branchCurrency = {
+    mergeStateStatus: 'BEHIND',
+    mergeable: 'MERGEABLE',
+    requiresUpToDateHead: true,
+    requiresUpToDateHeadSource: 'ruleset',
+  };
+  const { deps, calls } = depsFor(report);
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.ready, false);
+  assert.deepEqual(
+    verdict.blockers.map((b) => b.gate),
+    ['branch-currency'],
+  );
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.merged, [], 'gh pr merge must never be invoked');
+  assert.match(verdict.mergeResult, /not-ready/);
+  assert.equal(exitCode, 1);
+});
+
+// #1513: previously, any `gh pr merge` rejection (not only a BEHIND head --
+// for example a race where the head drifted between the F3 re-validation
+// and the merge call itself) propagated as an uncaught exception instead of
+// this function's normal structured verdict shape.
+test('a mergePr rejection produces the normal structured verdict instead of an uncaught exception', () => {
+  const { deps, calls } = depsFor(readyReport(), {
+    mergePr: () => {
+      const error = new Error(
+        'Command failed with exit code 1: gh pr merge 994 --merge --match-head-commit 1111111111111111111111111111111111111111',
+      ) as Error & { stderr?: string };
+      error.stderr =
+        'X Pull request kurone-kito/idd-skill#994 is not mergeable: the head branch is not up to date with the base branch.\n';
+      throw error;
+    },
+  });
+
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.ready, true);
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.merged, []);
+  assert.match(verdict.mergeResult, /merge command failed/);
+  assert.match(verdict.mergeResult, /not up to date with the base branch/);
+  assert.equal(exitCode, 1);
+});
+
+test('a mergePr rejection without a stderr field falls back to the error message', () => {
+  const { deps } = depsFor(readyReport(), {
+    mergePr: () => {
+      throw new Error('boom: no stderr on this error');
+    },
+  });
+
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  assert.match(verdict.mergeResult, /merge command failed/);
+  assert.match(verdict.mergeResult, /boom: no stderr on this error/);
   assert.equal(exitCode, 1);
 });
 
