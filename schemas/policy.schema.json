@@ -242,7 +242,7 @@
         "convergenceScope": {
           "type": "string",
           "enum": ["all-prs", "idd-claimed"],
-          "description": "Controls whether advisory convergence applies to every PR or only verified IDD-owned PRs. Invalid values are rejected by schema; runtime normalization falls back to all-prs for untrusted config reads."
+          "description": "Controls whether advisory convergence applies to every PR or only verified IDD-owned PRs. Default: all-prs. Invalid values are rejected by schema."
         },
         "requestCap": {
           "type": "integer",
