@@ -42,6 +42,7 @@
 // regardless of what this local lock file happens to contain.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { devNull } from 'node:os';
 import { join } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 
@@ -60,6 +61,28 @@ if (import.meta.main) {
   runCli();
 }
 /**
+ * Keep repository discovery tied to the requested worktree rather than to
+ * ambient Git overrides inherited from a hook, wrapper, or parent process.
+ * Config overrides are cleared as well so a caller cannot redirect
+ * repository discovery through user-provided Git configuration.
+ */
+function sanitizedGitEnvironment() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_CONFIG')) {
+      delete env[key];
+    }
+  }
+  delete env.GIT_DIR;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_OBJECT_DIRECTORY;
+  env.GIT_CONFIG_GLOBAL = devNull;
+  env.GIT_CONFIG_SYSTEM = devNull;
+  return env;
+}
+/**
  * Resolve the lock file's path inside `worktree`'s own private git-admin
  * directory (`git rev-parse --absolute-git-dir`), never a literal
  * `.git/idd-claim.lock` — inside a linked worktree, `.git` is a *file*
@@ -72,7 +95,7 @@ export function resolveClaimLockPath(worktree) {
   const gitDir = execFileSync(
     'git',
     ['-C', worktree, 'rev-parse', '--absolute-git-dir'],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', env: sanitizedGitEnvironment() },
   ).trim();
   return join(gitDir, CLAIM_LOCK_FILE_NAME);
 }
@@ -187,7 +210,14 @@ export function acquireClaimLock(worktree, agentId, claimId, takeover) {
     return { mode: 'acquired', path, forcedTakeover: true, holder };
   }
   // Exhausted retries on the narrow absent-then-raced-create loop above.
-  return { mode: 'collision', path };
+  // Re-read once after the final EEXIST so a well-formed winner is reported
+  // to the caller instead of being returned as an unexplained collision.
+  const finalRead = readLock(path);
+  return {
+    mode: 'collision',
+    path,
+    holder: finalRead.status === 'present' ? finalRead.lock : undefined,
+  };
 }
 /** Read-only lock inspection: never creates, mutates, or deletes the lock. */
 export function checkClaimLock(worktree) {

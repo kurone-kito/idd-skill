@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -85,12 +85,47 @@ test('resolveClaimLockPath resolves inside the linked worktree private git-dir, 
   const fixture = setupLinkedWorktree();
   try {
     const path = resolveClaimLockPath(fixture.worktree);
-    assert.ok(path.endsWith('/idd-claim.lock'));
+    assert.equal(basename(path), 'idd-claim.lock');
     assert.ok(
-      path.includes('/worktrees/'),
+      path.split(sep).includes('worktrees'),
       `expected the linked worktree's private admin dir, got: ${path}`,
     );
   } finally {
+    teardown(fixture);
+  }
+});
+
+test('resolveClaimLockPath ignores ambient Git repository override variables', () => {
+  const fixture = setupLinkedWorktree();
+  const keys = [
+    'GIT_DIR',
+    'GIT_INDEX_FILE',
+    'GIT_WORK_TREE',
+    'GIT_COMMON_DIR',
+    'GIT_OBJECT_DIRECTORY',
+  ] as const;
+  const previous = new Map(keys.map((key) => [key, process.env[key]]));
+  try {
+    process.env.GIT_DIR = join(fixture.primary, '.git');
+    process.env.GIT_INDEX_FILE = join(fixture.primary, '.git', 'index');
+    process.env.GIT_WORK_TREE = fixture.primary;
+    process.env.GIT_COMMON_DIR = join(fixture.primary, '.git');
+    process.env.GIT_OBJECT_DIRECTORY = join(fixture.primary, '.git', 'objects');
+
+    const path = resolveClaimLockPath(fixture.worktree);
+    assert.ok(
+      path.split(sep).includes('worktrees'),
+      `expected the requested worktree's private admin dir, got: ${path}`,
+    );
+  } finally {
+    for (const key of keys) {
+      const value = previous.get(key);
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
     teardown(fixture);
   }
 });
