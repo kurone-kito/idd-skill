@@ -42,7 +42,6 @@
 // regardless of what this local lock file happens to contain.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { devNull } from 'node:os';
 import { join } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 
@@ -63,8 +62,10 @@ if (import.meta.main) {
 /**
  * Keep repository discovery tied to the requested worktree rather than to
  * ambient Git overrides inherited from a hook, wrapper, or parent process.
- * Config overrides are cleared as well so a caller cannot redirect
- * repository discovery through user-provided Git configuration.
+ * Config override variables are cleared as well so a caller cannot redirect
+ * repository discovery through an injected config path or parameter. Git's
+ * normal system/global config remains available because it may contain a
+ * required `safe.directory` exception for shared or mounted worktrees.
  */
 function sanitizedGitEnvironment() {
   const env = { ...process.env };
@@ -78,8 +79,6 @@ function sanitizedGitEnvironment() {
   delete env.GIT_WORK_TREE;
   delete env.GIT_COMMON_DIR;
   delete env.GIT_OBJECT_DIRECTORY;
-  env.GIT_CONFIG_GLOBAL = devNull;
-  env.GIT_CONFIG_SYSTEM = devNull;
   return env;
 }
 /**
@@ -172,8 +171,8 @@ function overwriteLockAtomically(path, agentId, claimId) {
  * lock and returns `acquired`/`reacquired` without writing anything (the
  * fast path — no GitHub round-trip, and no window where the lock briefly
  * disappears). A different `claimId` is always a `collision` unless
- * `takeover` is set, regardless of how long the lock has existed: GitHub's
- * 24h claim-stale-age is the sole staleness authority, so the caller must
+ * `takeover` is set, regardless of how long the lock has existed: the
+ * configured GitHub `claim-stale-age` is the sole staleness authority, so the caller must
  * independently re-verify live claim state (e.g.
  * `resume-claim-routing.mjs --fresh-claim-gate`) before retrying with
  * `takeover: true`.

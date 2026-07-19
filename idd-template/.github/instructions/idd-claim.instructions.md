@@ -553,10 +553,14 @@ A matching `{claim-id}` re-acquires as a read-only check (no write, no
 GitHub round-trip). A
 different `{claim-id}` is always a collision, regardless of lock age —
 run `resume-claim-routing.mjs --issue <n> --fresh-claim-gate`:
-`already-claimed` stops (claim lost); `claimable`/`stale-reclaimable`
-retries with `--takeover`. If that helper is unavailable or its output
-is malformed, fall back to this file's written Claim-state parsing rules
-below to determine the same verdict before retrying. No release step:
+if the result is `already-claimed` for a different active claim, stop
+(claim lost); if the active claim's `{claim-id}` is the current claim,
+the current session owns the GitHub claim and may retry the local lock
+with `--takeover`; `claimable`/`stale-reclaimable` also retries with
+`--takeover` after the claim transition is complete. If that helper is
+unavailable or its output is malformed, fall back to this file's written
+Claim-state parsing rules below to determine the same verdict before
+retrying. No release step:
 `git worktree remove` at F4
 deletes the lock with the worktree, so a crashed session's leftover lock
 resolves the same way (collision, then an authorized takeover once

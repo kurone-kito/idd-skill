@@ -37,8 +37,15 @@ Before creating, check for local conflicts in this order:
    the issue branch. See Anti-patterns below.
 
 2. Run `git worktree list` — if a worktree for the branch already
-   exists, either reuse it (takeover) or remove it first using the exact
-   path shown in the list: `git worktree remove <path-from-list>`. (Must
+   exists, inspect and acquire its worktree-local claim lock before
+   reusing or removing it. Run `claim-lock --acquire` against the exact
+   path shown in the list with the current `{agent-id}` / `{claim-id}`;
+   do not run `git worktree remove` while the lock check is still a
+   collision. Resolve a collision through the Claim-state rule in
+   `idd-claim.instructions.md`, and only remove the exact path after the
+   current claim is authorized to take it over. If reusing it, keep the
+   acquired lock. If removing it, recreate the path and acquire the new
+   worktree's lock again before any install or other mutation. (Must
    remove the worktree before deleting the branch — git prevents
    deleting a branch checked out in a worktree.)
 3. Run `git branch --list {branch-name}` — if the branch still exists
@@ -113,18 +120,29 @@ If WorkTrunk is not available, choose the correct case:
 | Takeover — neither local nor remote (rare) | treat as fresh claim; preserve the inherited branch name |
 <!-- dprint-ignore-end -->
 
-Immediately after the worktree exists — **before Step 3** —, acquire the
-[worktree-local lock file](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision).
+For manual `git worktree add` and WorkTrunk without an install hook,
+immediately after the worktree exists — **before Step 3** —, acquire
+the [worktree-local lock file](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision).
 `install-deps` below can itself write into the worktree and run lifecycle
 hooks, so acquiring the lock only after it (or only after the B1
 self-check below) would leave that install unprotected.
+
+WorkTrunk runs a configured pre-start hook before the create command
+returns. If that hook installs dependencies, its **first** command must
+acquire the lock for the new worktree with the current `{agent-id}` /
+`{claim-id}`, and only then run the install command. Acquiring the lock
+after `wt switch --create` returns is too late for that hook. If the
+pre-start hook cannot be changed to acquire the lock first, do not use
+the automatic install hook; create the worktree without it and follow the
+manual lock-then-install path above.
 
 **Step 3 — Install deps**: after worktree creation, ensure dependencies
 are installed:
 
 - **WorkTrunk with a pre-start install hook** (e.g.,
-  `[pre-start].install` in `.config/wt.toml`): dependencies are
-  installed automatically — skip this step.
+  `[pre-start].install` in `.config/wt.toml`): the hook must acquire the
+  lock before installing, as described above; after the hook succeeds,
+  skip this step.
 - **Manual `git worktree add` or WorkTrunk without a hook**: `cd` into
   the newly created worktree, then run **install-deps**.
 

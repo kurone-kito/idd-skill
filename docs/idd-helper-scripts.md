@@ -908,6 +908,13 @@ Interpretation rules:
 - Same-machine fast path complementing the cross-machine claim check (see
   the [worktree-local lock file](../.github/instructions/idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
   subsection of `idd-claim.instructions.md` for the full protocol)
+- Before removing an existing linked worktree, acquire/check its lock and
+  resolve any collision through the current claim. A worktree must not be
+  removed while another claim still holds its lock.
+- WorkTrunk pre-start install hooks run before `wt switch --create` returns;
+  configure the hook to acquire the lock as its first command, before the
+  install. If the hook cannot do that, disable its automatic install and
+  acquire the lock immediately after worktree creation.
 - Stable `--acquire` `mode` values: `acquired` (fresh create, a read-only
   same-`claim-id` reacquire that writes nothing, or an authorized
   `--takeover` override — disambiguated by the optional `reacquired` /
@@ -922,7 +929,7 @@ Interpretation rules:
 - Deliberately has no local staleness judgment (no PID-liveness check):
   the process invoking this CLI exits the moment the call returns, so a
   recorded PID would never usefully represent a live competing session.
-  GitHub's `claim-stale-age` stays the sole staleness authority; this
+  the configured GitHub `claim-stale-age` stays the sole staleness authority; this
   lock only ever reports `collision` or acquires
 - No explicit release verb: the lock lives inside the worktree's own
   private git-admin directory (`git rev-parse --absolute-git-dir`), so
