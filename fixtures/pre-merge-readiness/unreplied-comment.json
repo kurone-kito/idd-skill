@@ -284,6 +284,12 @@
       "malformed": [],
       "notConfigured": []
     },
+    "branchCurrency": {
+      "mergeStateStatus": "",
+      "mergeable": "",
+      "requiresUpToDateHead": false,
+      "requiresUpToDateHeadSource": "none"
+    },
     "ready": false,
     "blockers": [
       {

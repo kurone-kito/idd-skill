@@ -407,7 +407,11 @@ export function collectPreMergeReadiness(
     '-R',
     repoRef,
     '--json',
-    'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup',
+    // #1513: `mergeable,mergeStateStatus` added to this existing call (no
+    // new network round-trip) so the branch-currency gate below can pair a
+    // live `BEHIND` state with the up-to-date-head requirement resolved
+    // from `branchRules`/`branchProtection`.
+    'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus',
     '--jq',
     '.',
   ]) as {
@@ -417,12 +421,16 @@ export function collectPreMergeReadiness(
     author?: { login?: unknown } | null;
     reviewDecision?: unknown;
     statusCheckRollup?: StatusCheckRollupPayload[] | null;
+    mergeable?: unknown;
+    mergeStateStatus?: unknown;
   };
   const prHeadSha = String(pr.headRefOid ?? '');
   const baseRefName = String(pr.baseRefName ?? '');
   const prUrl = String(pr.url ?? '');
   const prAuthorLogin = String(pr.author?.login ?? '').toLowerCase();
   const reviewDecision = String(pr.reviewDecision ?? '');
+  const mergeable = String(pr.mergeable ?? '');
+  const mergeStateStatus = String(pr.mergeStateStatus ?? '');
   const encodedBaseRefName = encodeURIComponent(baseRefName);
 
   // #1483: sourced from the same `gh pr view` call above (the
@@ -586,6 +594,8 @@ export function collectPreMergeReadiness(
       eligibleCodeownerUserLogins,
       eligibleCodeownerUserLoginsUnreadable,
       reviewDecision,
+      mergeStateStatus,
+      mergeable,
     },
     {
       now: args.now || new Date().toISOString().replace('.000Z', 'Z'),

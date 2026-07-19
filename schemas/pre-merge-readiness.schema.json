@@ -17,6 +17,7 @@
     "ci",
     "claim",
     "waiverEvidence",
+    "branchCurrency",
     "ready",
     "blockers"
   ],
@@ -1153,6 +1154,55 @@
               }
             }
           }
+        }
+      }
+    },
+    "branchCurrency": {
+      "description": "#1513: whether the base branch's protection or ruleset requires an up-to-date head before merge, paired with the PR's live mergeable/mergeStateStatus.",
+      "type": "object",
+      "required": [
+        "mergeStateStatus",
+        "mergeable",
+        "requiresUpToDateHead",
+        "requiresUpToDateHeadSource"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mergeStateStatus": {
+          "type": "string",
+          "enum": [
+            "",
+            "BEHIND",
+            "BLOCKED",
+            "CLEAN",
+            "DIRTY",
+            "DRAFT",
+            "HAS_HOOKS",
+            "UNKNOWN",
+            "UNSTABLE"
+          ]
+        },
+        "mergeable": {
+          "type": "string",
+          "enum": [
+            "",
+            "CONFLICTING",
+            "MERGEABLE",
+            "UNKNOWN"
+          ]
+        },
+        "requiresUpToDateHead": {
+          "type": "boolean"
+        },
+        "requiresUpToDateHeadSource": {
+          "description": "Provenance of requiresUpToDateHead: a confirmed ruleset or classic-protection read, an unreadable read that fails closed to true, or a genuinely readable 'no rule found'.",
+          "type": "string",
+          "enum": [
+            "ruleset",
+            "classic-protection",
+            "unreadable-fail-closed",
+            "none"
+          ]
         }
       }
     },
