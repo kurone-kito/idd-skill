@@ -728,11 +728,24 @@ test('isSafeSoloCodeownerAdminMergeState rejects unsettled or blocked live state
     true,
   );
   assert.equal(
-    isSafeSoloCodeownerAdminMergeState({
-      mergeable: 'MERGEABLE',
-      mergeStateStatus: 'BEHIND',
-    }),
+    isSafeSoloCodeownerAdminMergeState(
+      {
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'BEHIND',
+      },
+      { requiresUpToDateHead: false },
+    ),
     true,
+  );
+  assert.equal(
+    isSafeSoloCodeownerAdminMergeState(
+      {
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'BEHIND',
+      },
+      { requiresUpToDateHead: true },
+    ),
+    false,
   );
   for (const mergeState of [
     { mergeable: 'MERGEABLE', mergeStateStatus: 'BLOCKED' },
@@ -988,5 +1001,34 @@ test('--apply aborts the admin fallback when live merge state is blocked', () =>
   assert.equal(verdict.adminFallbackUsed, false);
   assert.deepEqual(calls.adminMerged, []);
   assert.match(verdict.mergeResult, /live merge state/);
+  assert.equal(exitCode, 1);
+});
+
+test('--apply aborts a BEHIND admin fallback when an up-to-date head is required', () => {
+  const report = soloCodeownerDeadlockReport();
+  report.branchCurrency = {
+    mergeStateStatus: 'CLEAN',
+    mergeable: 'MERGEABLE',
+    requiresUpToDateHead: true,
+    requiresUpToDateHeadSource: 'branch-protection',
+  };
+  const { deps, calls } = depsFor(report, {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+    fetchMergeState: () => ({
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'BEHIND',
+    }),
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  assert.equal(verdict.adminFallbackUsed, false);
+  assert.deepEqual(calls.adminMerged, []);
+  assert.match(verdict.mergeResult, /admin-fallback aborted/);
   assert.equal(exitCode, 1);
 });

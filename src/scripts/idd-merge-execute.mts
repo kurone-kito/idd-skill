@@ -154,12 +154,15 @@ export function isEligibleForSoloCodeownerAdminFallback(
  */
 export function isSafeSoloCodeownerAdminMergeState(
   mergeState: Record<string, unknown>,
+  branchCurrency: Record<string, unknown> = {},
 ): boolean {
   const mergeable = String(mergeState.mergeable ?? '');
   const mergeStateStatus = String(mergeState.mergeStateStatus ?? '');
   return (
     mergeable === 'MERGEABLE' &&
-    (mergeStateStatus === 'CLEAN' || mergeStateStatus === 'BEHIND')
+    (mergeStateStatus === 'CLEAN' ||
+      (mergeStateStatus === 'BEHIND' &&
+        branchCurrency.requiresUpToDateHead === false))
   );
 }
 
@@ -435,7 +438,12 @@ export function runMergeExecute(
       }`;
       return { verdict, exitCode: 1 };
     }
-    if (!isSafeSoloCodeownerAdminMergeState(mergeState)) {
+    if (
+      !isSafeSoloCodeownerAdminMergeState(
+        mergeState,
+        asRecord(adminRevalidation.report.branchCurrency),
+      )
+    ) {
       verdict.mergeResult =
         'admin-fallback aborted: live merge state is not settled and mergeable; no merge';
       return { verdict, exitCode: 1 };
@@ -659,6 +667,10 @@ function printHelp(): void {
   PR author is the sole eligible codeowner (status "clear", a bypass-actor
   reason, and prAuthorIsSoleEligibleCodeowner true). A genuinely
   outstanding review from any other codeowner never triggers this retry.
+  The retry also requires a second immediate head/claim/readiness
+  re-validation and a live MERGEABLE state; a BEHIND state is accepted only
+  when the fresh branch-currency evidence says an up-to-date head is not
+  required. Unreadable or unsafe live state aborts the retry.
   The verdict's adminFallbackUsed field records whether this path fired.
 `);
 }

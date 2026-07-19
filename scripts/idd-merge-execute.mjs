@@ -92,12 +92,17 @@ export function isEligibleForSoloCodeownerAdminFallback(reviewerStates) {
  * settled and mergeable before an administrator retry; unknown or blocked
  * state must never be bypassed by `--admin`.
  */
-export function isSafeSoloCodeownerAdminMergeState(mergeState) {
+export function isSafeSoloCodeownerAdminMergeState(
+  mergeState,
+  branchCurrency = {},
+) {
   const mergeable = String(mergeState.mergeable ?? '');
   const mergeStateStatus = String(mergeState.mergeStateStatus ?? '');
   return (
     mergeable === 'MERGEABLE' &&
-    (mergeStateStatus === 'CLEAN' || mergeStateStatus === 'BEHIND')
+    (mergeStateStatus === 'CLEAN' ||
+      (mergeStateStatus === 'BEHIND' &&
+        branchCurrency.requiresUpToDateHead === false))
   );
 }
 // Prepend `-R <repoRef>` to a `gh` argument array only when a repo scope is
@@ -301,7 +306,12 @@ export function runMergeExecute(argv, deps = defaultDeps) {
       verdict.mergeResult = `admin-fallback aborted: live merge state unreadable: ${ghErrorText(mergeStateError) || 'unknown error'}`;
       return { verdict, exitCode: 1 };
     }
-    if (!isSafeSoloCodeownerAdminMergeState(mergeState)) {
+    if (
+      !isSafeSoloCodeownerAdminMergeState(
+        mergeState,
+        asRecord(adminRevalidation.report.branchCurrency),
+      )
+    ) {
       verdict.mergeResult =
         'admin-fallback aborted: live merge state is not settled and mergeable; no merge';
       return { verdict, exitCode: 1 };
@@ -502,6 +512,10 @@ function printHelp() {
   PR author is the sole eligible codeowner (status "clear", a bypass-actor
   reason, and prAuthorIsSoleEligibleCodeowner true). A genuinely
   outstanding review from any other codeowner never triggers this retry.
+  The retry also requires a second immediate head/claim/readiness
+  re-validation and a live MERGEABLE state; a BEHIND state is accepted only
+  when the fresh branch-currency evidence says an up-to-date head is not
+  required. Unreadable or unsafe live state aborts the retry.
   The verdict's adminFallbackUsed field records whether this path fired.
 `);
 }

@@ -355,7 +355,7 @@ test('policy schema accepts the mergeGate.soloCodeownerAdminFallback opt-in obje
   assert.deepEqual(validate(instance, schema), []);
 });
 
-test('policy schema treats missing mergeGate as the auto-admin-retry default (#1521)', () => {
+test('policy schema accepts missing mergeGate (runtime normalization supplies the default) (#1521)', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(
     JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
