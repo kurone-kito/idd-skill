@@ -1,13 +1,27 @@
 # IDD — Resume Phase (Lite)
 
 Lite profile for weak / local models. Same semantics as
-`idd-resume.instructions.md`. Prefer helpers over prose. If a helper is
-missing, fails, or disagrees with live GitHub state: **stop and ask**.
+`idd-resume.instructions.md`. Prefer helpers over prose.
 
 **Load this file alone** for resume routing. Do not open the standard
 resume file in the same turn.
 
-## Always run helpers first
+## Helper runtime contract
+
+1. **When helper runtime is enabled** (`package-manager`, vendored-node,
+   or any profile that ships the helpers): run the commands below first.
+   If a helper is **missing, fails, returns invalid JSON, or disagrees
+   with live GitHub state** → **stop and ask**. Do **not** fall through
+   to the written tables in that situation.
+2. **When the repository is `instructions-only`** (no helper runtime
+   shipped): skip the helper commands and use the written tables only.
+   That is the sole path where the tables below are the primary control
+   surface.
+
+Never invent forced-handoff markers. Unattended sessions only
+**consume** already-recorded human-gated forced-handoff evidence.
+
+## Always run helpers first (helper-enabled profiles)
 
 ```sh
 # Claim state (required before any mutation)
@@ -20,9 +34,7 @@ node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
 node scripts/resume-route-selection.mjs --issue <N>
 ```
 
-Map helper fields to actions below. Never invent forced-handoff markers.
-Unattended sessions only **consume** already-recorded human-gated
-forced-handoff evidence.
+Map helper fields to actions below.
 
 ## Required signals (collect once)
 
@@ -51,7 +63,8 @@ Quiet-window evidence never bypasses the 24 h stale threshold.
 
 ## Step 1 — Claim state (helper-first)
 
-Run `resume-claim-routing.mjs --issue <N>`. Map:
+On helper-enabled profiles, run `resume-claim-routing.mjs --issue <N>`
+(and stop-and-ask on failure — do not use the written table). Map:
 
 | Helper `state` / `action`  | Action                                             |
 | -------------------------- | -------------------------------------------------- |
@@ -61,7 +74,7 @@ Run `resume-claim-routing.mjs --issue <N>`. Map:
 | `non_inheritable` / `stop` | STOP — live competitor claim                       |
 | `disputed` / `stop`        | STOP — contested claim                             |
 
-Written fallback (helper unavailable): first matching row.
+Written table (`instructions-only` profile only): first matching row.
 
 | Claim state                                                                                 | Action                                          |
 | ------------------------------------------------------------------------------------------- | ----------------------------------------------- |
@@ -97,7 +110,8 @@ the issue branch.
 
 ## Step 3 — PR / CI / review route (helper-first)
 
-Run `resume-route-selection.mjs --issue <N>`. Map `route`:
+On helper-enabled profiles, run `resume-route-selection.mjs --issue <N>`
+(and stop-and-ask on failure — do not use the written table). Map `route`:
 
 | `route`                | Next phase                                       |
 | ---------------------- | ------------------------------------------------ |
@@ -109,7 +123,7 @@ Run `resume-route-selection.mjs --issue <N>`. Map `route`:
 Before any mutation after routing: re-validate claim ownership, PR HEAD,
 and CI live state.
 
-Written fallback when helper is unavailable:
+Written table (`instructions-only` profile only):
 
 | CI      | Reviews                                    | Action                |
 | ------- | ------------------------------------------ | --------------------- |

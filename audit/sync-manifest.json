@@ -546,13 +546,13 @@
       ]
     },
     {
-      "id": "idd-resume-lite-instruction",
+      "id": "idd-resume-lite-instructions",
       "source": "idd-template/.github/instructions/lite/idd-resume-lite.instructions.md",
       "target": ".github/instructions/lite/idd-resume-lite.instructions.md",
       "mode": "exact"
     },
     {
-      "id": "idd-resume-stall-lite-instruction",
+      "id": "idd-resume-stall-lite-instructions",
       "source": "idd-template/.github/instructions/lite/idd-resume-stall-lite.instructions.md",
       "target": ".github/instructions/lite/idd-resume-stall-lite.instructions.md",
       "mode": "exact"

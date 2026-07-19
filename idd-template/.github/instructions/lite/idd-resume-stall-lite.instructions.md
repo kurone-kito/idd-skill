@@ -2,14 +2,20 @@
 
 Lite profile for weak / local models. Same semantics as
 `idd-resume-stall.instructions.md`. Use only for a **non-owned** active
-claim with **no** valid human-gated forced-handoff. Prefer helpers over
-prose. If a helper is missing, fails, or disagrees with live GitHub
-state: **hold and stop** (do not claim).
+claim with **no** valid human-gated forced-handoff.
 
 Enter from `idd-resume-lite.instructions.md` Step 0. After a successful
 takeover, return to resume lite Step 1.
 
-## Helper-first commands
+## Helper runtime contract
+
+- **Helper-enabled profiles**: run the commands below. If a required
+  helper is missing, fails, or disagrees with live state → **hold and
+  stop** (do not claim). Do not invent a silent prose takeover path.
+- **`instructions-only`**: use the written S1–S5 steps without helpers,
+  still with a server-anchored `now` for the quiet window.
+
+## Helper-first commands (helper-enabled profiles)
 
 ```sh
 # Confirm non-owned claim
