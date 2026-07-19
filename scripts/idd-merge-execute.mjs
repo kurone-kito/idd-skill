@@ -162,8 +162,37 @@ const defaultDeps = {
         '--admin',
       ]),
     ),
-  resolveSoloCodeownerAdminFallbackMode: () =>
-    normalizePolicyConfig(loadIddConfig()).mergeGate.soloCodeownerAdminFallback,
+  resolveSoloCodeownerAdminFallbackMode: (prNumber, repoRef, headSha) => {
+    let config;
+    if (!repoRef) {
+      config = loadIddConfig();
+    } else {
+      const encodedConfig = ghText(
+        scopedGhArgs(repoRef, [
+          'api',
+          `repos/${repoRef}/contents/.github/idd/config.json`,
+          '--field',
+          `ref=${headSha}`,
+          '--jq',
+          '.content',
+        ]),
+      );
+      if (!encodedConfig) {
+        throw new Error(
+          `target repository policy is empty for PR #${prNumber} at ${headSha}`,
+        );
+      }
+      config = JSON.parse(
+        Buffer.from(encodedConfig, 'base64').toString('utf8'),
+      );
+    }
+    if (repoRef && config === null) {
+      throw new Error(
+        `target repository policy is unreadable for PR #${prNumber} at ${headSha}`,
+      );
+    }
+    return normalizePolicyConfig(config).mergeGate.soloCodeownerAdminFallback;
+  },
 };
 /**
  * Build the F3 verdict and, under `--apply`, execute the merge. The
@@ -257,11 +286,25 @@ export function runMergeExecute(argv, deps = defaultDeps) {
     // `resolveSoloCodeownerAdminFallbackMode` config read: both the regex
     // test and the eligibility check are pure/in-memory and short-circuit
     // `&&` before that call ever runs.
-    const eligibleForAdminFallback =
+    const eligibleByMergeEvidence =
       BASE_BRANCH_POLICY_MERGE_FAILURE_RE.test(mergeErrorText) &&
-      isEligibleForSoloCodeownerAdminFallback(revalidatedReviewerStates) &&
-      deps.resolveSoloCodeownerAdminFallbackMode() !== 'hold-and-report';
-    if (!eligibleForAdminFallback) {
+      isEligibleForSoloCodeownerAdminFallback(revalidatedReviewerStates);
+    if (!eligibleByMergeEvidence) {
+      verdict.mergeResult = `merge command failed: ${mergeErrorText || 'unknown error'}`;
+      return { verdict, exitCode: 1 };
+    }
+    let fallbackMode;
+    try {
+      fallbackMode = deps.resolveSoloCodeownerAdminFallbackMode(
+        args.prNumber,
+        args.repoRef,
+        prHeadSha,
+      );
+    } catch (policyError) {
+      verdict.mergeResult = `admin-fallback aborted: target repository policy unreadable: ${ghErrorText(policyError) || 'unknown error'}; no merge`;
+      return { verdict, exitCode: 1 };
+    }
+    if (fallbackMode === 'hold-and-report') {
       verdict.mergeResult = `merge command failed: ${mergeErrorText || 'unknown error'}`;
       return { verdict, exitCode: 1 };
     }

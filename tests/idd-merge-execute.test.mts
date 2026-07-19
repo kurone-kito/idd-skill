@@ -830,6 +830,52 @@ test('--apply does not retry with --admin when the repository opts into hold-and
   assert.equal(exitCode, 1);
 });
 
+test('--apply scopes admin-fallback policy resolution to the target repository', () => {
+  const report = soloCodeownerDeadlockReport();
+  let policyArgs: [number, string | null, string][] | undefined;
+  const { deps, calls } = depsFor(report, {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+    resolveSoloCodeownerAdminFallbackMode: (prNumber, repoRef, headSha) => {
+      policyArgs = [[prNumber, repoRef, headSha]];
+      return 'hold-and-report';
+    },
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--owner', 'acme', '--repo', 'widget', '--apply'],
+    deps,
+  );
+
+  assert.deepEqual(policyArgs, [[994, 'acme/widget', HEAD]]);
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.adminMerged, []);
+  assert.match(verdict.mergeResult, /base branch policy prohibits the merge/);
+  assert.equal(exitCode, 1);
+});
+
+test('--apply fails closed when the target admin-fallback policy is unreadable', () => {
+  const { deps, calls } = depsFor(soloCodeownerDeadlockReport(), {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+    resolveSoloCodeownerAdminFallbackMode: () => {
+      throw Object.assign(new Error('Command failed'), {
+        stderr: 'gh: target repository policy is unreadable\n',
+      });
+    },
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.adminMerged, []);
+  assert.match(verdict.mergeResult, /target repository policy unreadable/);
+  assert.equal(exitCode, 1);
+});
+
 test('--apply does not retry with --admin for an unrelated merge failure (e.g. a real conflict)', () => {
   const report = soloCodeownerDeadlockReport();
   const { deps, calls } = depsFor(report, {
