@@ -2967,6 +2967,78 @@ export function summarizeBranchReviewRequirements(
     requiredCheckNames: [...requiredCheckNames].sort(),
   };
 }
+/**
+ * #1513: resolve whether the base branch's protection or ruleset requires
+ * an up-to-date head before merge, and pair that with the PR's live
+ * `mergeStateStatus` / `mergeable`. Neither `pre-merge-readiness.mts` nor
+ * `idd-merge-execute.mts` previously read this at all -- a live `BEHIND`
+ * PR could report `ready: true` right up to the uncaught `gh pr merge`
+ * rejection (the field incident this issue documents).
+ *
+ * Resolution order mirrors `summarizeRequiredChecks`'s existing
+ * ruleset-then-classic precedence: a ruleset's `required_status_checks`
+ * rule carries `strict_required_status_checks_policy` (confirmed
+ * empirically against this repository's own `main`: classic protection
+ * returns a genuine 404 "Branch not protected", while
+ * `rules/branches/main` returns this field as `true`); classic
+ * protection's equivalent field is `required_status_checks.strict`. When
+ * neither source resolves `true` AND the branch-protection/ruleset reads
+ * were unreadable (a masked 403-as-404, see `protectionReadsUnreadable`
+ * in `pre-merge-readiness.mts`), fail closed per
+ * `idd-overview-core.instructions.md`'s fail-closed default: assume the
+ * requirement is present rather than silently reporting "no requirement."
+ * Only a genuinely readable "no rule found" resolves to `none`.
+ *
+ * Strict `=== true` checks throughout (not `Boolean(...)` coercion) per
+ * the write-side mutation-helper critique lens
+ * (`idd-overview-appendix.instructions.md`): a non-boolean or missing
+ * value must never be silently coerced into "requirement satisfied."
+ */
+export function summarizeBranchCurrency(
+  branchRules = [],
+  branchProtection = {},
+  options = {},
+) {
+  // #1513 (Copilot/Codex review on PR #1538): GitHub's ruleset docs state
+  // `strict_required_status_checks_policy` "will not take effect unless at
+  // least one status check is enabled" -- confirmed against
+  // https://docs.github.com/en/rest/repos/rules. Treating the flag alone as
+  // authoritative would false-positive block a BEHIND PR under an
+  // empty-required-check ruleset that GitHub itself would allow to merge, so
+  // also require a non-empty required-check list (reusing the same
+  // extraction `summarizeRequiredChecks` already uses for check names).
+  // Classic branch protection's `required_status_checks.strict` carries no
+  // equivalent documented caveat, so it is left unconditional.
+  const rulesetRequires = (branchRules ?? []).some(
+    (rule) =>
+      rule?.type === 'required_status_checks' &&
+      rule.parameters?.strict_required_status_checks_policy === true &&
+      summarizeRequiredCheckMetadata(rule.parameters ?? {}).names.length > 0,
+  );
+  const classicRequires =
+    branchProtection.required_status_checks?.strict === true;
+  let requiresUpToDateHead;
+  let requiresUpToDateHeadSource;
+  if (rulesetRequires) {
+    requiresUpToDateHead = true;
+    requiresUpToDateHeadSource = 'ruleset';
+  } else if (classicRequires) {
+    requiresUpToDateHead = true;
+    requiresUpToDateHeadSource = 'classic-protection';
+  } else if (options.protectionReadsUnreadable === true) {
+    requiresUpToDateHead = true;
+    requiresUpToDateHeadSource = 'unreadable-fail-closed';
+  } else {
+    requiresUpToDateHead = false;
+    requiresUpToDateHeadSource = 'none';
+  }
+  return {
+    mergeStateStatus: String(options.mergeStateStatus ?? '').toUpperCase(),
+    mergeable: String(options.mergeable ?? '').toUpperCase(),
+    requiresUpToDateHead,
+    requiresUpToDateHeadSource,
+  };
+}
 export function summarizeRequiredChecks(
   checks = [],
   branchRules = [],
@@ -3157,6 +3229,7 @@ export function summarizeReviewerStates(
     codeownersText = '',
     changedFiles = [],
     eligibleCodeownerUserLogins = null,
+    eligibleCodeownerUserLoginsUnreadable = false,
     advisoryBotLogins = [],
     prAuthorLogin = '',
     viewerLogin = '',
@@ -3265,6 +3338,7 @@ export function summarizeReviewerStates(
       eligibleCodeownerUserLogins === null
         ? null
         : [...eligibleCodeownerUsers].sort(),
+    eligibleCodeownerUserLoginsUnreadable,
     codeownerTeamSlugs: codeowners.codeownerTeamSlugs,
     codeownerEmailAddresses: codeowners.codeownerEmailAddresses,
     prAuthorLogin,
@@ -3320,6 +3394,7 @@ function summarizeCodeownerSelfApproval({
   hasExplicitCodeownerMatches,
   codeownerUserLogins = [],
   eligibleCodeownerUserLogins = null,
+  eligibleCodeownerUserLoginsUnreadable = false,
   codeownerTeamSlugs = [],
   codeownerEmailAddresses = [],
   prAuthorLogin = '',
@@ -3392,6 +3467,44 @@ function summarizeCodeownerSelfApproval({
       ? bypass.mode
       : 'pull_request'
     : 'none';
+  // Hoisted above `base` (moved up from its original position further down,
+  // right before the `deadlock` branch that also consumes it) so the #1521
+  // `prAuthorIsSoleEligibleCodeowner` field below can reuse this exact
+  // expression instead of recomputing an equivalent one. Pure and
+  // side-effect-free, so hoisting it earlier changes nothing about the
+  // later branches that also read it.
+  const allDirectUsersAreAuthor =
+    eligibleDirectCodeownerUserLogins.length > 0 &&
+    eligibleDirectCodeownerUserLogins.every(
+      (login) => login === normalizedAuthor,
+    );
+  // #1521: additive topology fact, computed independently of `status` /
+  // `applicableBypassDetected` below and exposed on every branch (not just
+  // the `deadlock` one). This is the ONLY safe discriminator an F3 caller
+  // may use to gate an automatic `--admin` retry: `status: 'clear'` alone
+  // (whether via `applicableBypassDetected` or `hasNonAuthorDirectUser`
+  // further down) does NOT prove the PR author is the sole codeowner --
+  // `applicableBypassDetected` fires whenever a bypass actor is configured
+  // for the viewer, regardless of whether a genuinely distinct non-author
+  // codeowner's review is separately outstanding. Deliberately NOT folded
+  // into `status`/`reason` themselves (that general gate intentionally
+  // keeps its existing pass/fail shape for every adopter repo -- see the
+  // #1521 review discussion); a caller that needs the narrow self-deadlock
+  // fact must check this field explicitly alongside `status`/`reason`.
+  //
+  // Requires `!eligibleCodeownerUserLoginsUnreadable` (Codex review, #1521):
+  // `eligibleDirectCodeownerUserLogins` can be silently NARROWED by a
+  // transient permission-lookup failure for some OTHER direct codeowner
+  // (see `resolveEligibleCodeownerUserLogins` in pre-merge-readiness.mts),
+  // which would make the author look like the sole eligible codeowner even
+  // though a real co-owner's eligibility simply could not be confirmed.
+  // Fail closed rather than trust a possibly-incomplete narrowed set.
+  const prAuthorIsSoleEligibleCodeowner =
+    Boolean(normalizedAuthor) &&
+    normalizedCodeownerTeamSlugs.length === 0 &&
+    normalizedCodeownerEmailAddresses.length === 0 &&
+    !eligibleCodeownerUserLoginsUnreadable &&
+    allDirectUsersAreAuthor;
   const base = {
     status: 'not_applicable',
     reason: 'codeowner-review-not-required',
@@ -3409,6 +3522,14 @@ function summarizeCodeownerSelfApproval({
     // to `clear` on its own -- but downgrades a would-be certain `deadlock`
     // below to the already-documented `possible_deadlock`.
     rulesetBypassUnreadable: bypass.unreadable,
+    prAuthorIsSoleEligibleCodeowner,
+    // #1521: true when at least one direct-user codeowner's
+    // collaborator-permission lookup was unreadable (see
+    // `prAuthorIsSoleEligibleCodeowner` above). Diagnostic only, mirroring
+    // `rulesetBypassUnreadable`'s shape -- never flips `status` on its own.
+    codeownerEligibilityUnreadable: Boolean(
+      eligibleCodeownerUserLoginsUnreadable,
+    ),
   };
   if (!requireCodeOwnerReview) {
     return base;
@@ -3442,11 +3563,8 @@ function summarizeCodeownerSelfApproval({
       reason: 'pr-author-unknown',
     };
   }
-  const allDirectUsersAreAuthor =
-    eligibleDirectCodeownerUserLogins.length > 0 &&
-    eligibleDirectCodeownerUserLogins.every(
-      (login) => login === normalizedAuthor,
-    );
+  // `allDirectUsersAreAuthor` is computed above (hoisted next to
+  // `prAuthorIsSoleEligibleCodeowner` in `base`); reused here unchanged.
   const hasNonAuthorDirectUser = eligibleDirectCodeownerUserLogins.some(
     (login) => login !== normalizedAuthor,
   );
@@ -3950,6 +4068,26 @@ export function computePreMergeReadinessBlockers(report) {
       detail: `dispositionEvidence.route is "${dispositionRoute || 'missing'}" (expected "proceed"), blockingCount=${dispositionBlockingCount} (expected 0)`,
     });
   }
+  // #1513: fail closed on a missing/garbled `requiresUpToDateHead` -- only
+  // an explicit `false` counts as "not required" (matching every gate
+  // above's fail-closed promise); an absent/non-boolean value defaults to
+  // "required." Scoped to the literal `BEHIND` value only: `UNKNOWN`/null
+  // is the async-still-computing state that `idd-pre-merge.instructions.md`
+  // F1 and `idd-review-triage.instructions.md`'s E-phase branch-sync check
+  // already re-poll as transient, not terminal -- out of this gate's scope.
+  // Every other non-BEHIND `gh pr merge` rejection is caught by
+  // `idd-merge-execute.mts`'s `deps.mergePr` try/catch instead.
+  const branchCurrency = preMergeAsRecord(report.branchCurrency);
+  const requiresUpToDateHead = branchCurrency.requiresUpToDateHead !== false;
+  const mergeStateStatus = String(
+    branchCurrency.mergeStateStatus ?? '',
+  ).toUpperCase();
+  if (requiresUpToDateHead && mergeStateStatus === 'BEHIND') {
+    blockers.push({
+      gate: 'branch-currency',
+      detail: `mergeStateStatus is "BEHIND" and the base branch requires an up-to-date head before merge (requiresUpToDateHeadSource="${String(branchCurrency.requiresUpToDateHeadSource ?? 'unknown')}")`,
+    });
+  }
   return blockers;
 }
 export function buildPreMergeReadinessSummary(
@@ -3970,7 +4108,10 @@ export function buildPreMergeReadinessSummary(
     changedFiles = [],
     codeownersText = '',
     eligibleCodeownerUserLogins = null,
+    eligibleCodeownerUserLoginsUnreadable = false,
     reviewDecision = '',
+    mergeStateStatus = '',
+    mergeable = '',
   },
   options = {},
 ) {
@@ -3996,6 +4137,15 @@ export function buildPreMergeReadinessSummary(
   const branchReviewRequirements = summarizeBranchReviewRequirements(
     branchRules,
     branchProtection,
+  );
+  const branchCurrency = summarizeBranchCurrency(
+    branchRules,
+    branchProtection,
+    {
+      mergeStateStatus,
+      mergeable,
+      protectionReadsUnreadable,
+    },
   );
   const liveSnapshot = buildActivitySnapshotSummary(
     {
@@ -4055,6 +4205,7 @@ export function buildPreMergeReadinessSummary(
     codeownersText,
     changedFiles,
     eligibleCodeownerUserLogins,
+    eligibleCodeownerUserLoginsUnreadable,
     advisoryBotLogins,
     prAuthorLogin,
     viewerLogin: options.viewerLogin,
@@ -4179,6 +4330,7 @@ export function buildPreMergeReadinessSummary(
     ci,
     claim,
     waiverEvidence,
+    branchCurrency,
   };
   if (dispositionEvidence) {
     summary.dispositionEvidence = dispositionEvidence;

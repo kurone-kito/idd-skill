@@ -214,7 +214,9 @@
         "bypassDetected": false,
         "bypassMode": "none",
         "currentUserCanBypass": "unknown",
-        "rulesetBypassUnreadable": false
+        "rulesetBypassUnreadable": false,
+        "prAuthorIsSoleEligibleCodeowner": false,
+        "codeownerEligibilityUnreadable": false
       },
       "humanChangesRequestedCount": 0,
       "blockingChangesRequestedLogins": []
@@ -281,6 +283,12 @@
       "unauthorized": [],
       "malformed": [],
       "notConfigured": []
+    },
+    "branchCurrency": {
+      "mergeStateStatus": "",
+      "mergeable": "",
+      "requiresUpToDateHead": false,
+      "requiresUpToDateHeadSource": "none"
     },
     "ready": false,
     "blockers": [

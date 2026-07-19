@@ -184,6 +184,42 @@ legitimate relay use-case. Any future change here must preserve the single
 resolver (do not fork `resolveActiveClaim`) and the resume-side
 self-signed-hijack block.
 
+### Activation-nonce: why a separate marker, and what stays deferred
+
+kurone-kito/idd-skill#1480 found a verified near-miss: two independent
+sessions can both adopt-verbatim the identical forced-handoff sticky
+successor pair and both pass every `claim-id`-based check identically,
+because nothing is posted at adopt-verbatim time to distinguish "the
+session that legitimately adopted this pair" from "a second session that
+also adopted it." kurone-kito/idd-skill#1522 closes that gap with a
+standalone `activation-nonce` marker (`idd-claim.instructions.md`)
+rather than a new field on `claimed-by`: adopt-verbatim posts no
+`claimed-by` at all, so a field living inside `claimed-by`'s body could
+never appear on the one path that motivates the mechanism. The winner rule
+— lexicographically earliest `{nonce}` among however many trusted markers
+exist for a `{claim-id}` — is a pure function of the observed nonce set
+(mirroring the existing `{claim-id}` same-second tie-break), so two
+colliding sessions compute the identical winner independently, with no
+"both back off" livelock.
+
+**Scope for #1522**: the issue's acceptance criteria name the **Claim
+revalidation gate** (`idd-overview-core.instructions.md`) as the enforcement
+point, and that gate is fully wired: it fires before any mutating step for a
+live session holding its own posted nonce, and — since adopt-verbatim posts
+no `claimed-by` and so never enters _Claim verification_ at all — the
+adopt-verbatim paragraph in `idd-claim.instructions.md` carries its own
+inline verify-then-compare instruction, the one path #1480 actually
+exercises. Beyond the AC's letter, `evaluateResumeClaimRouting`
+(`resume-claim-routing.mts`) also accepts `--claim-id`/`--nonce` and is
+unit-tested, anticipating Resume Step 1 wiring — but the documented Resume
+Step 1 invocation (`idd-resume.instructions.md`) never threads either flag
+through, and a resumed process has no local memory of which nonce was its
+own to compare against in the first place. That cold-recovery design
+(kurone-kito/idd-skill#1529), plus the still-unwired merge write-gate
+(`summarizeClaimValidation`, kurone-kito/idd-skill#1528), are natural
+fast-follows (the same shared parse/render primitives already support them)
+— not silent design gaps.
+
 ## Advisory wait
 
 ### Non-Copilot advisory convergence is intentionally not a merge gate

@@ -3,6 +3,8 @@ import { test } from 'node:test';
 
 import {
   evaluateMergeGates,
+  isEligibleForSoloCodeownerAdminFallback,
+  isSafeSoloCodeownerAdminMergeState,
   type MergeExecuteDeps,
   runMergeExecute,
 } from '../src/scripts/idd-merge-execute.mts';
@@ -32,6 +34,12 @@ function readyReport(): Record<string, unknown> {
     },
     claim: { matchesExpectedClaim: true, reason: 'match' },
     dispositionEvidence: { route: 'proceed', blockingCount: 0 },
+    branchCurrency: {
+      mergeStateStatus: 'CLEAN',
+      mergeable: 'MERGEABLE',
+      requiresUpToDateHead: false,
+      requiresUpToDateHeadSource: 'none',
+    },
   };
 }
 
@@ -46,12 +54,14 @@ function depsFor(
     merged: string[];
     fetchRepoRefs: (string | null)[];
     mergeRepoRefs: (string | null)[];
+    adminMerged: string[];
   };
 } {
   const calls = {
     merged: [] as string[],
     fetchRepoRefs: [] as (string | null)[],
     mergeRepoRefs: [] as (string | null)[],
+    adminMerged: [] as string[],
   };
   const deps: MergeExecuteDeps = {
     collect: () => report,
@@ -59,14 +69,55 @@ function depsFor(
       calls.fetchRepoRefs.push(repoRef);
       return String(report.prHeadSha ?? '');
     },
+    fetchMergeState: () => ({
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'CLEAN',
+    }),
     mergePr: (prNumber, headSha, repoRef) => {
       calls.merged.push(`${prNumber}:${headSha}`);
       calls.mergeRepoRefs.push(repoRef);
       return 'Merged PR.';
     },
+    // #1521: default admin-fallback deps are never exercised unless a test
+    // overrides `mergePr` to throw the base-branch-policy error AND opts
+    // into a fallback-eligible report, so a plain success/failure test
+    // never touches these.
+    mergePrAdmin: (prNumber, headSha, repoRef) => {
+      calls.adminMerged.push(`${prNumber}:${headSha}`);
+      calls.mergeRepoRefs.push(repoRef);
+      return 'Merged PR (admin).';
+    },
+    resolveSoloCodeownerAdminFallbackMode: () => 'auto-admin-retry',
     ...overrides,
   };
   return { deps, calls };
+}
+
+/** A `gh`-shaped thrown error carrying the #1494 "base branch policy
+ * prohibits the merge" text on stderr, matching how `execFileSync` reports
+ * a non-zero `gh pr merge` exit under `{ encoding: 'utf8' }`. */
+function baseBranchPolicyMergeError(): Error & { stderr: string } {
+  return Object.assign(new Error('Command failed'), {
+    stderr:
+      'X Pull request kurone-kito/idd-skill#1487 is not mergeable: the base branch policy prohibits the merge.\nTo use administrator privileges to immediately merge the pull request, add the `--admin` flag.\n',
+  });
+}
+
+/** A report whose `reviewerStates` proves the genuine solo-CODEOWNER
+ * self-approval deadlock: `status: 'clear'` via the pull-request bypass
+ * AND `prAuthorIsSoleEligibleCodeowner: true`. */
+function soloCodeownerDeadlockReport(): Record<string, unknown> {
+  const report = readyReport();
+  report.reviewerStates = {
+    requiredApprovalsSatisfied: true,
+    codeownerApprovalSatisfied: false,
+    codeownerSelfApproval: {
+      status: 'clear',
+      reason: 'pull-request-bypass-available',
+      prAuthorIsSoleEligibleCodeowner: true,
+    },
+  };
+  return report;
 }
 
 const BASE_ARGS = ['--pr', '994', '--claim-issue', '309', '--claim-id', 'c-1'];
@@ -175,6 +226,16 @@ test('every F3 gate maps to its own blocker', () => {
         (r.dispositionEvidence = {
           route: 'return-to-e1',
           blockingCount: 1,
+        }),
+    ],
+    [
+      'branch-currency',
+      (r) =>
+        (r.branchCurrency = {
+          mergeStateStatus: 'BEHIND',
+          mergeable: 'MERGEABLE',
+          requiresUpToDateHead: true,
+          requiresUpToDateHeadSource: 'ruleset',
         }),
     ],
   ];
@@ -331,6 +392,26 @@ test('--apply fails closed when the head drifts before merge', () => {
   assert.equal(exitCode, 1);
 });
 
+test('--apply returns a structured verdict when head re-validation fails', () => {
+  const { deps, calls } = depsFor(readyReport(), {
+    fetchHeadSha: () => {
+      throw Object.assign(new Error('Command failed'), {
+        stderr: 'gh: API rate limit exceeded\n',
+      });
+    },
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.merged, []);
+  assert.match(verdict.mergeResult, /head re-validation failed/);
+  assert.match(verdict.mergeResult, /API rate limit exceeded/);
+  assert.equal(exitCode, 1);
+});
+
 test('--apply fails closed when re-validation finds head drift', () => {
   // Head re-fetch agrees, but the re-validation collect reports a moved head.
   let collectCount = 0;
@@ -352,6 +433,31 @@ test('--apply fails closed when re-validation finds head drift', () => {
   assert.equal(verdict.merged, false);
   assert.deepEqual(calls.merged, []);
   assert.match(verdict.mergeResult, /head drift on re-validation/);
+  assert.equal(exitCode, 1);
+});
+
+test('--apply returns a structured verdict when readiness re-validation fails', () => {
+  let collectCount = 0;
+  const { deps, calls } = depsFor(readyReport(), {
+    collect: () => {
+      collectCount += 1;
+      if (collectCount >= 2) {
+        throw Object.assign(new Error('Command failed'), {
+          stderr: 'gh: authentication required\n',
+        });
+      }
+      return readyReport();
+    },
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.merged, []);
+  assert.match(verdict.mergeResult, /readiness re-validation failed/);
+  assert.match(verdict.mergeResult, /authentication required/);
   assert.equal(exitCode, 1);
 });
 
@@ -399,6 +505,83 @@ test('--apply fails closed when a new blocker appears at re-validation', () => {
   assert.deepEqual(calls.merged, []);
   assert.equal(verdict.ready, false);
   assert.match(verdict.mergeResult, /new blockers/);
+  assert.equal(exitCode, 1);
+});
+
+// #1513: the exact field-evidence scenario -- `pre-merge-readiness` reported
+// `ready: true` for a PR GitHub itself already reported as
+// `mergeStateStatus: BEHIND`. `--apply` must fail closed with a structured
+// blocker BEFORE ever calling `deps.mergePr`, not attempt the merge and
+// crash on GitHub's rejection.
+test('--apply fails closed on a BEHIND head that requires an up-to-date head, without attempting the merge', () => {
+  const report = readyReport();
+  report.branchCurrency = {
+    mergeStateStatus: 'BEHIND',
+    mergeable: 'MERGEABLE',
+    requiresUpToDateHead: true,
+    requiresUpToDateHeadSource: 'ruleset',
+  };
+  const { deps, calls } = depsFor(report);
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.ready, false);
+  assert.deepEqual(
+    verdict.blockers.map((b) => b.gate),
+    ['branch-currency'],
+  );
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.merged, [], 'gh pr merge must never be invoked');
+  assert.match(verdict.mergeResult, /not-ready/);
+  assert.equal(exitCode, 1);
+});
+
+// #1513: previously, any `gh pr merge` rejection (not only a BEHIND head --
+// for example a race where the head drifted between the F3 re-validation
+// and the merge call itself) propagated as an uncaught exception instead of
+// this function's normal structured verdict shape.
+test('a mergePr rejection produces the normal structured verdict instead of an uncaught exception', () => {
+  const { deps, calls } = depsFor(readyReport(), {
+    mergePr: () => {
+      const error = new Error(
+        'Command failed with exit code 1: gh pr merge 994 --merge --match-head-commit 1111111111111111111111111111111111111111',
+      ) as Error & { stderr?: string };
+      error.stderr =
+        'X Pull request kurone-kito/idd-skill#994 is not mergeable: the head branch is not up to date with the base branch.\n';
+      throw error;
+    },
+  });
+
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.ready, true);
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.merged, []);
+  assert.match(verdict.mergeResult, /merge command failed/);
+  assert.match(verdict.mergeResult, /not up to date with the base branch/);
+  assert.equal(exitCode, 1);
+});
+
+test('a mergePr rejection without a stderr field falls back to the error message', () => {
+  const { deps } = depsFor(readyReport(), {
+    mergePr: () => {
+      throw new Error('boom: no stderr on this error');
+    },
+  });
+
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  assert.match(verdict.mergeResult, /merge command failed/);
+  assert.match(verdict.mergeResult, /boom: no stderr on this error/);
   assert.equal(exitCode, 1);
 });
 
@@ -457,4 +640,441 @@ test('protectionReadsUnreadable blocks the ci gate even when requiredChecksPassi
     ciBlocker?.detail,
     'cannot determine required checks: protection/ruleset unreadable',
   );
+});
+
+// ---------------------------------------------------------------------------
+// #1521: solo-CODEOWNER autonomous `--admin` merge fallback.
+// ---------------------------------------------------------------------------
+
+test('isEligibleForSoloCodeownerAdminFallback requires status clear, a bypass reason, AND the sole-eligible-codeowner topology fact', () => {
+  assert.equal(
+    isEligibleForSoloCodeownerAdminFallback({
+      codeownerSelfApproval: {
+        status: 'clear',
+        reason: 'pull-request-bypass-available',
+        prAuthorIsSoleEligibleCodeowner: true,
+      },
+    }),
+    true,
+  );
+  assert.equal(
+    isEligibleForSoloCodeownerAdminFallback({
+      codeownerSelfApproval: {
+        status: 'clear',
+        reason: 'ruleset-bypass-available',
+        prAuthorIsSoleEligibleCodeowner: true,
+      },
+    }),
+    true,
+  );
+  // #1521 crux: `status: 'clear'` alone (even with a bypass reason) is NOT
+  // enough -- a genuinely outstanding non-author codeowner review must
+  // never satisfy this.
+  assert.equal(
+    isEligibleForSoloCodeownerAdminFallback({
+      codeownerSelfApproval: {
+        status: 'clear',
+        reason: 'pull-request-bypass-available',
+        prAuthorIsSoleEligibleCodeowner: false,
+      },
+    }),
+    false,
+  );
+  // The 'non-author-codeowner-available' reason is never eligible either,
+  // regardless of the topology field (defense in depth).
+  assert.equal(
+    isEligibleForSoloCodeownerAdminFallback({
+      codeownerSelfApproval: {
+        status: 'clear',
+        reason: 'non-author-codeowner-available',
+        prAuthorIsSoleEligibleCodeowner: false,
+      },
+    }),
+    false,
+  );
+  // Real approval already happened -- no fallback needed, and 'reason'
+  // does not match either bypass reason.
+  assert.equal(
+    isEligibleForSoloCodeownerAdminFallback({
+      codeownerSelfApproval: {
+        status: 'not_applicable',
+        reason: 'codeowner-approval-satisfied',
+        prAuthorIsSoleEligibleCodeowner: false,
+      },
+    }),
+    false,
+  );
+  // deadlock / possible_deadlock never qualify even with the topology flag.
+  assert.equal(
+    isEligibleForSoloCodeownerAdminFallback({
+      codeownerSelfApproval: {
+        status: 'deadlock',
+        reason: 'pr-author-is-only-direct-codeowner',
+        prAuthorIsSoleEligibleCodeowner: true,
+      },
+    }),
+    false,
+  );
+  // Missing/malformed reviewerStates fails closed (not eligible).
+  assert.equal(isEligibleForSoloCodeownerAdminFallback({}), false);
+});
+
+test('isSafeSoloCodeownerAdminMergeState rejects unsettled or blocked live state', () => {
+  assert.equal(
+    isSafeSoloCodeownerAdminMergeState({
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'CLEAN',
+    }),
+    true,
+  );
+  assert.equal(
+    isSafeSoloCodeownerAdminMergeState(
+      {
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'BEHIND',
+      },
+      { requiresUpToDateHead: false },
+    ),
+    true,
+  );
+  assert.equal(
+    isSafeSoloCodeownerAdminMergeState(
+      {
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'BEHIND',
+      },
+      { requiresUpToDateHead: true },
+    ),
+    false,
+  );
+  for (const mergeState of [
+    { mergeable: 'MERGEABLE', mergeStateStatus: 'BLOCKED' },
+    { mergeable: 'UNKNOWN', mergeStateStatus: 'CLEAN' },
+    { mergeable: 'MERGEABLE', mergeStateStatus: 'UNKNOWN' },
+    {},
+  ]) {
+    assert.equal(isSafeSoloCodeownerAdminMergeState(mergeState), false);
+  }
+});
+
+test('--apply retries with --admin and succeeds for the genuine solo-CODEOWNER deadlock', () => {
+  const report = soloCodeownerDeadlockReport();
+  const { deps, calls } = depsFor(report, {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, true);
+  assert.equal(verdict.adminFallbackUsed, true);
+  assert.match(verdict.mergeResult, /admin-fallback/);
+  assert.deepEqual(calls.merged, []);
+  assert.deepEqual(calls.adminMerged, [`994:${HEAD}`]);
+  assert.equal(exitCode, 0);
+});
+
+test('--apply does NOT retry with --admin when a non-author codeowner review is genuinely outstanding (#1521 multi-CODEOWNER safety property)', () => {
+  const report = readyReport();
+  // Same GitHub error text and same status: 'clear' as the eligible case
+  // above -- the ONLY difference is the topology fact, proving a real
+  // non-author codeowner exists and this is NOT the self-approval deadlock.
+  report.reviewerStates = {
+    requiredApprovalsSatisfied: true,
+    codeownerApprovalSatisfied: false,
+    codeownerSelfApproval: {
+      status: 'clear',
+      reason: 'pull-request-bypass-available',
+      prAuthorIsSoleEligibleCodeowner: false,
+    },
+  };
+  const { deps, calls } = depsFor(report, {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  assert.equal(verdict.adminFallbackUsed, false);
+  assert.deepEqual(calls.merged, []);
+  assert.deepEqual(calls.adminMerged, []);
+  assert.match(verdict.mergeResult, /merge command failed/);
+  assert.match(verdict.mergeResult, /base branch policy prohibits the merge/);
+  assert.equal(exitCode, 1);
+});
+
+test('--apply does not retry with --admin when the repository opts into hold-and-report', () => {
+  const report = soloCodeownerDeadlockReport();
+  const { deps, calls } = depsFor(report, {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+    resolveSoloCodeownerAdminFallbackMode: () => 'hold-and-report',
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  assert.equal(verdict.adminFallbackUsed, false);
+  assert.deepEqual(calls.adminMerged, []);
+  assert.match(verdict.mergeResult, /merge command failed/);
+  assert.equal(exitCode, 1);
+});
+
+test('--apply scopes admin-fallback policy resolution to the target repository', () => {
+  const report = soloCodeownerDeadlockReport();
+  let policyArgs: [number, string | null, string][] | undefined;
+  const { deps, calls } = depsFor(report, {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+    resolveSoloCodeownerAdminFallbackMode: (prNumber, repoRef, headSha) => {
+      policyArgs = [[prNumber, repoRef, headSha]];
+      return 'hold-and-report';
+    },
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--owner', 'acme', '--repo', 'widget', '--apply'],
+    deps,
+  );
+
+  assert.deepEqual(policyArgs, [[994, 'acme/widget', HEAD]]);
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.adminMerged, []);
+  assert.match(verdict.mergeResult, /base branch policy prohibits the merge/);
+  assert.equal(exitCode, 1);
+});
+
+test('--apply fails closed when the target admin-fallback policy is unreadable', () => {
+  const { deps, calls } = depsFor(soloCodeownerDeadlockReport(), {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+    resolveSoloCodeownerAdminFallbackMode: () => {
+      throw Object.assign(new Error('Command failed'), {
+        stderr: 'gh: target repository policy is unreadable\n',
+      });
+    },
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.adminMerged, []);
+  assert.match(verdict.mergeResult, /target repository policy unreadable/);
+  assert.equal(exitCode, 1);
+});
+
+test('--apply does not retry with --admin for an unrelated merge failure (e.g. a real conflict)', () => {
+  const report = soloCodeownerDeadlockReport();
+  const { deps, calls } = depsFor(report, {
+    mergePr: () => {
+      throw Object.assign(new Error('Command failed'), {
+        stderr:
+          'X Pull request kurone-kito/idd-skill#1487 is not mergeable: conflicts must be resolved.\n',
+      });
+    },
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  assert.equal(verdict.adminFallbackUsed, false);
+  assert.deepEqual(calls.adminMerged, []);
+  assert.match(verdict.mergeResult, /conflicts must be resolved/);
+  assert.equal(exitCode, 1);
+});
+
+test('--apply surfaces a distinct failure when the --admin retry itself fails', () => {
+  const report = soloCodeownerDeadlockReport();
+  const { deps, calls } = depsFor(report, {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+    mergePrAdmin: () => {
+      throw Object.assign(new Error('Command failed'), {
+        stderr: 'X insufficient permissions to use --admin\n',
+      });
+    },
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  // adminFallbackUsed still records that the fallback was ATTEMPTED, even
+  // though it did not succeed -- distinct from never having attempted it.
+  assert.equal(verdict.adminFallbackUsed, true);
+  assert.deepEqual(calls.merged, []);
+  assert.match(verdict.mergeResult, /admin-fallback merge also failed/);
+  assert.match(verdict.mergeResult, /insufficient permissions/);
+  assert.equal(exitCode, 1);
+});
+
+test('dry-run never invokes the --admin fallback even when the report is fallback-eligible', () => {
+  const report = soloCodeownerDeadlockReport();
+  const { deps, calls } = depsFor(report, {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+  });
+  const { verdict, exitCode } = runMergeExecute(BASE_ARGS, deps);
+
+  assert.equal(verdict.mode, 'dry-run');
+  assert.equal(verdict.ready, true);
+  assert.equal(verdict.merged, false);
+  assert.equal(verdict.adminFallbackUsed, false);
+  assert.deepEqual(calls.merged, []);
+  assert.deepEqual(calls.adminMerged, []);
+  assert.equal(exitCode, 0);
+});
+
+// #1521 (Codex review on PR #1537): the admin-fallback path re-validates a
+// SECOND time, immediately before `mergePrAdmin`, rather than trusting the
+// snapshot collected before the (failed) plain merge attempt. `--admin`
+// bypasses the entire ruleset, so a blocker that appeared in the interim
+// (a required check turning red, a review dismissal, etc.) must abort the
+// fallback instead of being silently bypassed.
+test('--apply aborts the admin fallback when a new blocker appears on the second re-validation', () => {
+  let collectCount = 0;
+  const { deps, calls } = depsFor(soloCodeownerDeadlockReport(), {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+    collect: () => {
+      collectCount += 1;
+      const report = soloCodeownerDeadlockReport();
+      // 1st collect() = the initial dry-run-equivalent report (ready).
+      // 2nd collect() = the pre-plain-merge revalidation (still ready).
+      // 3rd collect() = the pre-admin-merge revalidation: a required
+      // check has since turned red.
+      if (collectCount >= 3) {
+        report.ci = {
+          status: 'failure',
+          requiredChecksPassing: false,
+          noRequiredChecksConfigured: false,
+          presentRunConclusion: 'failure',
+        };
+      }
+      return report;
+    },
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  assert.equal(verdict.adminFallbackUsed, false);
+  assert.deepEqual(calls.merged, []);
+  assert.deepEqual(calls.adminMerged, []);
+  assert.match(verdict.mergeResult, /admin-fallback aborted/);
+  assert.match(verdict.mergeResult, /new blockers/);
+  assert.equal(verdict.ready, false);
+  assert.ok(verdict.blockers.some((b) => b.gate === 'ci'));
+  assert.equal(exitCode, 1);
+});
+
+test('--apply aborts the admin fallback when solo-CODEOWNER eligibility no longer holds on re-validation', () => {
+  let collectCount = 0;
+  const { deps, calls } = depsFor(soloCodeownerDeadlockReport(), {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+    collect: () => {
+      collectCount += 1;
+      const report = soloCodeownerDeadlockReport();
+      // On the pre-admin-merge revalidation (3rd collect), a non-author
+      // codeowner's review arrived in the interim -- the general gate
+      // still reports `status: 'clear'` (still bypass-available), but
+      // the topology fact now correctly reports this is NOT the
+      // solo-author deadlock.
+      if (collectCount >= 3) {
+        (
+          report.reviewerStates as Record<string, unknown>
+        ).codeownerSelfApproval = {
+          status: 'clear',
+          reason: 'pull-request-bypass-available',
+          prAuthorIsSoleEligibleCodeowner: false,
+        };
+      }
+      return report;
+    },
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  assert.equal(verdict.adminFallbackUsed, false);
+  assert.deepEqual(calls.merged, []);
+  assert.deepEqual(calls.adminMerged, []);
+  assert.match(verdict.mergeResult, /eligibility no longer holds/);
+  assert.equal(exitCode, 1);
+});
+
+test('--apply aborts the admin fallback when live merge state is blocked', () => {
+  const { deps, calls } = depsFor(soloCodeownerDeadlockReport(), {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+    fetchMergeState: () => ({
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'BLOCKED',
+    }),
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  assert.equal(verdict.adminFallbackUsed, false);
+  assert.deepEqual(calls.adminMerged, []);
+  assert.match(verdict.mergeResult, /live merge state/);
+  assert.equal(exitCode, 1);
+});
+
+test('--apply aborts a BEHIND admin fallback when an up-to-date head is required', () => {
+  const report = soloCodeownerDeadlockReport();
+  report.branchCurrency = {
+    mergeStateStatus: 'CLEAN',
+    mergeable: 'MERGEABLE',
+    requiresUpToDateHead: true,
+    requiresUpToDateHeadSource: 'branch-protection',
+  };
+  const { deps, calls } = depsFor(report, {
+    mergePr: () => {
+      throw baseBranchPolicyMergeError();
+    },
+    fetchMergeState: () => ({
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'BEHIND',
+    }),
+  });
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+
+  assert.equal(verdict.merged, false);
+  assert.equal(verdict.adminFallbackUsed, false);
+  assert.deepEqual(calls.adminMerged, []);
+  assert.match(verdict.mergeResult, /admin-fallback aborted/);
+  assert.equal(exitCode, 1);
 });

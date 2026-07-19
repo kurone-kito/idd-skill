@@ -173,10 +173,15 @@ post further operational comments, and report the handoff or race. If
 loss came from handoff, the displaced session must not push,
 comment, resolve reviews, request reviewers, or merge.
 
+If you posted an activation nonce, confirm it still wins for this
+claim-id (`idd-claim.instructions.md`) -- a different winner means a lost
+claim-id.
+
 In addition to the `{claim-id}` check, verify that the mutation is
 about to run from the worktree named in the active claim's `branch:`
 field. This **cwd-vs-claim check** applies only to mutations made
-from inside the implementation worktree contract (B3, D, E phases):
+from inside the implementation worktree contract (B3, D, E, and F2/F3
+phases):
 
 Scope — the check runs **only** when **all** of the following are
 true:
@@ -210,6 +215,14 @@ When in scope, run:
    switched onto a different branch; if the current branch differs, stop
    and report — do not `add`, `commit`, or `push` from a worktree that is
    not on the claimed branch.
+5. Acquire the worktree-local claim lock immediately before the mutation:
+   use the profile-selected `claim-lock` helper (`node
+   scripts/claim-lock.mjs`, `idd-claim-lock`, or `idd:claim-lock`) with
+   the current `{agent-id}` and `{claim-id}`. Under the
+   `instructions-only` profile, use the helper-free fallback in
+   `idd-work.instructions.md`, which uses the same `idd-claim.lock`
+   namespace. A `collision` is fail-closed: stop unless the active claim
+   revalidation authorizes an explicit takeover.
 
 **Recovery if a commit already landed on the wrong branch.** If this gate
 or `idd-doctor` finds that a commit already landed on the wrong branch —
@@ -235,9 +248,10 @@ Out of scope and explicitly **not** blocked:
   itself; subsequent local `main` updates run from the primary
   worktree by design).
 
-This check is read-only and pre-mutation. When in scope, it must run
-before any local commit, push, rebase, comment, label change, reply,
-resolve, reviewer request, or merge.
+The claim and cwd checks are read-only and pre-mutation; the lock
+acquisition is the final local guard. When in scope, all of these checks
+must complete before any local commit, push, rebase, comment, label
+change, reply, resolve, reviewer request, or merge.
 
 A1.5 roadmap completion audit side effects use the roadmap issue itself
 as the claim target (see `idd-roadmap-audit.instructions.md`). Even

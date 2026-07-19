@@ -205,7 +205,11 @@ export function collectPreMergeReadiness(argv) {
     '-R',
     repoRef,
     '--json',
-    'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup',
+    // #1513: `mergeable,mergeStateStatus` added to this existing call (no
+    // new network round-trip) so the branch-currency gate below can pair a
+    // live `BEHIND` state with the up-to-date-head requirement resolved
+    // from `branchRules`/`branchProtection`.
+    'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus',
     '--jq',
     '.',
   ]);
@@ -214,6 +218,8 @@ export function collectPreMergeReadiness(argv) {
   const prUrl = String(pr.url ?? '');
   const prAuthorLogin = String(pr.author?.login ?? '').toLowerCase();
   const reviewDecision = String(pr.reviewDecision ?? '');
+  const mergeable = String(pr.mergeable ?? '');
+  const mergeStateStatus = String(pr.mergeStateStatus ?? '');
   const encodedBaseRefName = encodeURIComponent(baseRefName);
   // #1483: sourced from the same `gh pr view` call above (the
   // `statusCheckRollup` field), not a separate `gh pr checks` call --
@@ -293,7 +299,10 @@ export function collectPreMergeReadiness(argv) {
     .map((file) => String(file.filename ?? ''))
     .filter(Boolean);
   const codeownersText = fetchCodeownersText(owner, repo, baseRefName);
-  const eligibleCodeownerUserLogins = resolveEligibleCodeownerUserLogins(
+  const {
+    eligible: eligibleCodeownerUserLogins,
+    unreadable: eligibleCodeownerUserLoginsUnreadable,
+  } = resolveEligibleCodeownerUserLogins(
     owner,
     repo,
     resolveCodeownersForFiles(codeownersText, changedFiles).codeownerUserLogins,
@@ -368,7 +377,10 @@ export function collectPreMergeReadiness(argv) {
       changedFiles,
       codeownersText,
       eligibleCodeownerUserLogins,
+      eligibleCodeownerUserLoginsUnreadable,
       reviewDecision,
+      mergeStateStatus,
+      mergeable,
     },
     {
       now: args.now || new Date().toISOString().replace('.000Z', 'Z'),
@@ -619,9 +631,19 @@ function resolveTrustedCollaboratorMarkerLogins(owner, repo, comments) {
     );
   });
 }
-function resolveEligibleCodeownerUserLogins(owner, repo, logins) {
-  return normalizeTrustedMarkerLogins(logins).filter((login) => {
-    const permission = safeGhText(
+/**
+ * Exported for direct unit testing (matching this file's established
+ * `fetchBranchRulesets`/`fetchGovernanceJson` injectable-fetch pattern) --
+ * `fetchPermission` defaults to the real live `gh api .../permission` call
+ * and is overridden in tests to simulate a 404 vs. a transient failure
+ * without mocking `execFileSync`.
+ */
+export function resolveEligibleCodeownerUserLogins(
+  owner,
+  repo,
+  logins,
+  fetchPermission = (login) =>
+    ghText(
       [
         'api',
         `repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
@@ -629,13 +651,34 @@ function resolveEligibleCodeownerUserLogins(owner, repo, logins) {
         '.permission',
       ],
       GH_TEXT_LOOP_OPTIONS,
-    ).toLowerCase();
+    ),
+) {
+  let unreadable = false;
+  const eligible = normalizeTrustedMarkerLogins(logins).filter((login) => {
+    let permission;
+    try {
+      permission = fetchPermission(login).toLowerCase();
+    } catch (error) {
+      // A 404 means this login genuinely has no collaborator record on
+      // this repository (e.g. a stale CODEOWNERS entry for someone who
+      // was removed) -- the pre-#1521 behavior of excluding it is correct
+      // and unchanged. Any OTHER failure (403 permission denial, 5xx,
+      // timeout, network) cannot be told apart from "genuinely not a
+      // collaborator" by the caller, so it must not silently narrow the
+      // eligible set the same way -- flag `unreadable` instead.
+      if (deriveGhHttpStatus(error) === 404) {
+        return false;
+      }
+      unreadable = true;
+      return false;
+    }
     return (
       permission === 'admin' ||
       permission === 'maintain' ||
       permission === 'write'
     );
   });
+  return { eligible, unreadable };
 }
 function fetchCodeownersText(owner, repo, ref) {
   const payloads = ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'].map(

@@ -141,8 +141,8 @@ and must not be re-entered (no A1 ↔ A0-O or A4 ↔ A0-O loop).
   internal repositories, continue with A0-O.
 - For `none` and `maintainer-approved`, continue with A0-O.
 
-Search all open issues in the repository. Collect every issue whose
-body satisfies **all** of the following:
+Search all open issues in the repository. Collect every issue that
+satisfies **all** of the following:
 
 - Does NOT contain any `<!-- idd-skill-roadmap-id: … -->` marker
   (the issue is not itself a roadmap).
@@ -150,6 +150,10 @@ body satisfies **all** of the following:
 - Does NOT have the configured blocked-by-human or needs-decision
   label.
 - Does NOT have the configured authoring label.
+- Does NOT have open dependent issues, except parent epics or
+  aggregate issues that are acceptable under A3. If a dependent-issue
+  reference cannot be resolved (issue not found or inaccessible),
+  treat as blocked (fail-safe).
 - Does NOT contain visible `Blocked by #NNN` lines where the referenced
   issue is open (apply the same fail-safe as A3: if a reference cannot
   be resolved, treat as blocked).

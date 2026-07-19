@@ -55,9 +55,10 @@ In the idd-skill source repository, the following optional helpers were adopted:
   network write; referenced in
   [kurone-kito/idd-skill#900](https://github.com/kurone-kito/idd-skill/issues/900))
 - `scripts/post-idd-marker.mjs` for rendering and POSTing any operational
-  marker (`claim` / `unclaim` / `watermark` / `baseline` / `advisory` /
-  `advisory-recovery`) via the reliable JSON path that HTML-comment-first
-  bodies require (referenced in
+  marker (`claim` / `unclaim` / `activation-nonce` / `watermark` /
+  `baseline` / `advisory` / `advisory-recovery` / `advisory-reroll`) via
+  the reliable JSON path that HTML-comment-first bodies require
+  (referenced in
   [kurone-kito/idd-skill#1047](https://github.com/kurone-kito/idd-skill/issues/1047))
 - `scripts/resume-claim-routing.mjs` for Resume Step 1 claim-state
   evaluation and takeover routing (referenced in
@@ -896,6 +897,52 @@ Interpretation rules:
   and linked-issue exceptions do not yet have a supported helper
   contract
 
+### Worktree-local claim lock
+
+- Source repo / vendored-node commands:
+  `node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id <id>
+  --claim-id <id> [--takeover]`
+  and `node scripts/claim-lock.mjs --check --worktree <path>`
+- Package-manager / ephemeral-npx command: use the profile-selected
+  `idd:claim-lock` command from the helper runtime manifest wiring above
+- Same-machine fast path complementing the cross-machine claim check (see
+  the [worktree-local lock file](../.github/instructions/idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
+  subsection of `idd-claim.instructions.md` for the full protocol)
+- Before removing an existing linked worktree, acquire/check its lock and
+  resolve any collision through the current claim. A worktree must not be
+  removed while another claim still holds its lock.
+- WorkTrunk pre-start install hooks run before `wt switch --create` returns;
+  configure the hook to acquire the lock as its first command, before the
+  install. Under `package-manager`, the new worktree's bin may not exist
+  until that install completes, so invoke a pre-install-available helper
+  from the primary worktree with the new path as its explicit target, or
+  use the helper-free exclusive file-create fallback. If neither is
+  available, disable the automatic install and acquire the lock immediately
+  after worktree creation.
+- Stable `--acquire` `mode` values: `acquired` (fresh create, a read-only
+  same-`claim-id` reacquire that writes nothing, or an authorized
+  `--takeover` override — disambiguated by the optional `reacquired` /
+  `forcedTakeover` boolean fields) or `collision` (a different `claim-id`
+  already holds the lock, or the existing path is malformed/unreadable —
+  retry with `--takeover` only after
+  `resume-claim-routing.mjs --fresh-claim-gate` authorizes it). A `holder`
+  snapshot of the previous occupant is reported on **both** a plain
+  `collision` and an authorized takeover, not only on takeover.
+- The `--acquire` CLI exits `0` only for `acquired` and exits `2` for
+  `collision`, so a hook can safely chain installation or another mutation
+  with `&&`; `--check` remains read-only and exits `0` for a reported state.
+- `--check` reports `{ path, present, holder?, malformed? }` read-only,
+  never creating, mutating, or deleting the lock; `malformed: true` means
+  a lock file exists but could not be parsed as a well-formed lock body
+- Deliberately has no local staleness judgment (no PID-liveness check):
+  the process invoking this CLI exits the moment the call returns, so a
+  recorded PID would never usefully represent a live competing session.
+  The configured GitHub `claim-stale-age` stays the sole staleness
+  authority; this lock only ever reports `collision` or acquires.
+- No explicit release verb: the lock lives inside the worktree's own
+  private git-admin directory (`git rev-parse --absolute-git-dir`), so
+  `git worktree remove` at F4 deletes it together with the worktree
+
 ### Canonical branch name
 
 - Source repo / vendored-node command:
@@ -956,24 +1003,29 @@ Interpretation rules:
 - Package-manager / ephemeral-npx command: use the profile-selected
   `idd:post-idd-marker` command from the helper runtime manifest wiring above
 - Write-side companion to `emit-marker`: it renders the canonical body for
-  each operational marker `<type>` (`claim`, `unclaim`, `watermark`,
-  `baseline`, `advisory`, `advisory-recovery`) by reusing the single-sourced
-  `protocol-helpers` renderers, then POSTs it as a JSON document
-  (`{"body": …}`) via `gh api --method POST .../comments --input -`. The JSON
-  path is mandatory because `gh issue comment` / `gh api -f body=` silently
+  each operational marker `<type>` (`claim`, `unclaim`, `activation-nonce`,
+  `watermark`, `baseline`, `advisory`, `advisory-recovery`,
+  `advisory-reroll`) by reusing the single-sourced `protocol-helpers`
+  renderers, then POSTs it as a JSON document (`{"body": …}`) via
+  `gh api --method POST .../comments --input -`. The JSON path is
+  mandatory because `gh issue comment` / `gh api -f body=` silently
   reject the HTML-comment-first claim-family bodies. `-f` also treats a
   leading `@` as a literal character — only `-F` reads `@file` contents.
-- The `claim` / `unclaim` / `watermark` / `baseline` bodies are
-  HTML-comment-first with a visible "Do not edit" note; `advisory` /
-  `advisory-recovery` are the **plain-text** `advisory-wait:` /
-  `advisory-wait-recovery:` forms (no visible note) so the AW2 / shell-fallback
+- The `claim` / `unclaim` / `activation-nonce` / `watermark` / `baseline`
+  bodies are HTML-comment-first with a visible "Do not edit" note;
+  `advisory` / `advisory-recovery` / `advisory-reroll` are the
+  **plain-text** `advisory-wait:` / `advisory-wait-recovery:` /
+  `advisory-reroll:` forms (no visible note) so the AW2 / shell-fallback
   recognizers still match.
 - Fields per type: `claim` takes `--agent-id --claim-id --supersedes
   --timestamp --branch`; `unclaim` takes `--agent-id --claim-id --timestamp`;
+  `activation-nonce` takes `--agent-id --claim-id --nonce --timestamp` (see
+  `idd-claim.instructions.md`'s Activation-nonce format for when to
+  post it and the collision it detects, kurone-kito/idd-skill#1522);
   `watermark` takes `--agent-id --claim-id --head-sha --max-activity-at
   --total-item-count --ci-completed-at`; `baseline` takes `--agent-id
-  --claim-id --sha`; `advisory` / `advisory-recovery` take `--agent-id
-  --head-sha --timestamp`.
+  --claim-id --sha`; `advisory` / `advisory-recovery` / `advisory-reroll`
+  take `--agent-id --head-sha --timestamp`.
 - One-command watermark (`watermark` only): `--from-pr <n>` derives
   `--head-sha` / `--max-activity-at` / `--total-item-count` /
   `--ci-completed-at` from a fresh `review-activity-snapshot` of PR `<n>` and
@@ -1013,6 +1065,12 @@ Interpretation rules:
   - `state`:
     `unclaimed|already_owned|stale|non_inheritable|disputed`
   - `action`: `re_claim|takeover|keep|stop`
+- Optional `--nonce <token>` (kurone-kito/idd-skill#1522): when `--claim-id`
+  matches the active claim, also requires it to equal the winning trusted
+  `activation-nonce` marker for that claim-id (`evidence.activation_nonce_winner`);
+  a mismatch routes `state`/`reason` to `disputed` /
+  `activation-nonce-mismatch` instead of `already_owned`. Omit it (or leave
+  the claim-id's nonce not posted) to skip the comparison unchanged.
 
 - Step 3 route command:
   `node scripts/resume-route-selection.mjs --issue <issue-number>`
@@ -1144,7 +1202,19 @@ Interpretation rules:
 - Stable sections consumed by the instructions: `reviewCurrency`,
   `threads`, `unrepliedComments`, `reviewerStates`,
   `advisoryWait` (including the effective advisory policy fields), `ci`,
-  `claim`, and optional `dispositionEvidence`
+  `claim`, `branchCurrency`, and optional `dispositionEvidence`
+- `branchCurrency` (#1513) pairs the PR's live `mergeable` /
+  `mergeStateStatus` with whether the base branch's protection or ruleset
+  requires an up-to-date head before merge. `requiresUpToDateHead` is
+  `true` when a readable ruleset or classic-protection rule confirms it,
+  or when the underlying protection/ruleset read is unreadable (fails
+  closed to `true` rather than reporting "no requirement");
+  `requiresUpToDateHeadSource` records which (`ruleset`,
+  `classic-protection`, `unreadable-fail-closed`, or `none`). A live
+  `mergeStateStatus: "BEHIND"` paired with `requiresUpToDateHead: true`
+  is a `branch-currency` merge-gate blocker (see below); `UNKNOWN` is the
+  async-still-computing state F1 and the E-phase branch-sync check
+  already re-poll, not a blocker here.
 - Authoritative phase role: the live `pre-merge-readiness` run on the
   current HEAD is the **authoritative source for the final-merge CI and
   activity fields** at F2/F3. The `review-activity-snapshot` helper builds
@@ -1163,7 +1233,28 @@ Interpretation rules:
   appears satisfiable for the current actor; it is still evidence for
   the written F2/F3 gates, not an IDD policy override or permission to
   skip review, CI, freshness, advisory, unresolved-thread, or claim
-  checks.
+  checks. Note that `clear` alone does not distinguish the genuine
+  solo-CODEOWNER self-approval deadlock from a topology where a
+  distinct non-author codeowner simply has not reviewed yet (both can
+  report `status: "clear"`) — see `prAuthorIsSoleEligibleCodeowner`
+  below for the field that does distinguish them.
+- `prAuthorIsSoleEligibleCodeowner` (#1521) is an additive topology
+  fact, independent of `status`/`reason`: `true` only when the PR
+  author is the sole eligible codeowner (no team codeowners, no email
+  codeowners, at least one eligible direct-user codeowner, and every
+  eligible direct-user codeowner equals the author). This is the only
+  field the F3 solo-CODEOWNER `--admin` fallback (below) may key on; a
+  genuinely outstanding review from a different, non-author codeowner
+  reports this as `false` even when `status` is `"clear"` via the
+  bypass-actor carve-out.
+- `codeownerEligibilityUnreadable` (#1521) is `true` when at least one
+  direct-user codeowner's collaborator-permission lookup failed for a
+  reason OTHER than "not a collaborator" (403/5xx/network/timeout).
+  `prAuthorIsSoleEligibleCodeowner` is forced to `false` whenever this
+  is `true`, regardless of how narrow the (possibly incomplete)
+  eligible set otherwise looks: a transient lookup failure for a
+  genuinely eligible non-author codeowner must never be silently
+  treated the same as that codeowner having no write access at all.
 - `reviewCurrency.comparisonRoute` remains advisory evidence only. Agents
   must still apply written instruction checks against live GitHub state.
 - Fail closed: if helper execution fails, output is invalid JSON,
@@ -1188,10 +1279,14 @@ Interpretation rules:
   `comparisonRoute == "proceed"`, `threads.actionableCount == 0`,
   advisory `f3Outcome == "SATISFIED"`, CI all-passing (the F2/F3
   no-required-checks fallback included), required/CODEOWNER reviews
-  satisfied, claim ownership matches, and disposition evidence both
+  satisfied, claim ownership matches, disposition evidence both
   routes proceed and is unblocked (`dispositionEvidence.route ==
   "proceed"` **and** `dispositionEvidence.blockingCount == 0`; `route`
-  alone is not sufficient). Each failing gate is listed in `blockers[]`
+  alone is not sufficient), and branch currency does not block (#1513: a
+  live `mergeStateStatus: "BEHIND"` paired with a confirmed-or-assumed
+  `branchCurrency.requiresUpToDateHead: true` fails closed as a
+  `branch-currency` blocker before `--apply` ever calls `gh pr merge`).
+  Each failing gate is listed in `blockers[]`
   as `{ gate, detail }`.
 - Dry-run (default) is read-only: it prints `ready`, `blockers`, and
   `mergeCommand` (a `gh pr merge <pr> --merge --match-head-commit
@@ -1203,6 +1298,46 @@ Interpretation rules:
   non-zero, no merge, clear message) on any head drift or lost claim.
   Otherwise it runs the merge commit bound to the validated head and
   reports the result. It never squash- or rebase-merges.
+- **Solo-CODEOWNER `--admin` fallback (#1521).** If the plain merge
+  command fails with GitHub's "base branch policy prohibits the merge"
+  error, the helper checks `mergeGate.soloCodeownerAdminFallback` in
+  `.github/idd/config.json` (distributed default `auto-admin-retry`;
+  absent behaves the same). Unless the repository has set it to
+  `hold-and-report`, it retries exactly once with `--admin`, bound to
+  the same validated head, but ONLY when the freshly re-validated
+  report's `reviewerStates.codeownerSelfApproval` has `status: "clear"`
+  with `reason` `"pull-request-bypass-available"` or
+  `"ruleset-bypass-available"` **and**
+  `prAuthorIsSoleEligibleCodeowner: true` **and**
+  `codeownerEligibilityUnreadable: false`. Those last two fields are
+  the multi-CODEOWNER safety property: additive to `status`/`reason`,
+  they prove the PR author is the sole eligible codeowner (no team or
+  email codeowners, every eligible direct-user codeowner is the
+  author, and every direct-user codeowner's permission lookup actually
+  succeeded). A genuinely outstanding review from a different,
+  non-author codeowner reports `prAuthorIsSoleEligibleCodeowner: false`
+  even when `status` is still `"clear"` via the bypass-actor carve-out
+  (that carve-out resolves before the non-author-owner check runs in
+  `summarizeCodeownerSelfApproval`), and a transient/auth/rate-limit
+  permission-lookup failure reports `codeownerEligibilityUnreadable:
+  true` rather than silently narrowing the eligible set — both
+  register as their own unmet condition and never trigger this retry.
+  The helper also re-validates the SAME gate and eligibility fact a
+  SECOND time, immediately before the `--admin` call itself: real time
+  passes between the plain merge's failure and the retry, and
+  `--admin` bypasses the entire ruleset (not just the CODEOWNER rule),
+  so a blocker that appeared in that interval must still abort the
+  fallback rather than being silently bypassed. Immediately before the
+  retry it also requires live GitHub merge state
+  `mergeable: "MERGEABLE"` and `mergeStateStatus: "CLEAN"` or
+  `"BEHIND"`; blocked, unknown, or unreadable state aborts the fallback
+  rather than allowing a generic policy error to trigger `--admin`. The verdict's
+  `adminFallbackUsed` field records whether the fallback fired
+  (`true`) whenever it was attempted, regardless of whether the
+  `--admin` retry itself ultimately succeeded. Any merge failure that
+  does not match this exact shape — a different error, an ineligible
+  topology, or the opt-in `hold-and-report` policy — falls through
+  unchanged to the pre-#1521 hold-and-report path.
 - Fail closed: if helper execution fails, output is invalid JSON,
   required fields are missing, or helper evidence conflicts with live
   GitHub state, discard helper output and run the manual F3 gate +

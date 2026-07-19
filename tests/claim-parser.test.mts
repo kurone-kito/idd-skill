@@ -8,6 +8,7 @@ import {
   isStaleAt,
   isStaleByAge,
   operationalMarkerPrefix,
+  parseActivationNonceComment,
   parseClaimComment,
   parseReleaseComment,
   parseReviewWatermarkComment,
@@ -272,6 +273,29 @@ test('unclaimed-by with appended prose stays null in parseReleaseComment but is 
     'Releasing early: blocked on a decision from the maintainer.';
   assert.equal(parseReleaseComment(body), null);
   assert.equal(detectMalformedOperationalMarker(body), '<!-- unclaimed-by:');
+});
+
+test('activation-nonce with appended prose stays null in parseActivationNonceComment but is flagged malformed', () => {
+  const body =
+    '<!-- activation-nonce: copilot claim-A nonce-1 2026-05-23T10:00:00Z -->\n\n' +
+    '_copilot: claim activation nonce — IDD automation marker. Do not edit._\n\n' +
+    'Posted at activation time alongside the fresh claim.';
+  assert.equal(parseActivationNonceComment(body, '2026-05-23T10:00:00Z'), null);
+  assert.equal(
+    detectMalformedOperationalMarker(body),
+    '<!-- activation-nonce:',
+  );
+});
+
+test('a well-formed activation-nonce marker is not flagged malformed (no regression to the happy path)', () => {
+  const body =
+    '<!-- activation-nonce: copilot claim-A nonce-1 2026-05-23T10:00:00Z -->\n\n' +
+    '_copilot: claim activation nonce — IDD automation marker. Do not edit._';
+  assert.notEqual(
+    parseActivationNonceComment(body, '2026-05-23T10:00:00Z'),
+    null,
+  );
+  assert.equal(detectMalformedOperationalMarker(body), null);
 });
 
 test('review-watermark with appended prose stays null in parseReviewWatermarkComment but is flagged malformed', () => {
