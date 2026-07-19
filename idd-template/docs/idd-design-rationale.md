@@ -42,21 +42,49 @@ Three guards keep it safe:
   candidates but keeps others.
 - **At most once per pass.** A0-O runs at most once as the
   roadmap-first fallback per Discover pass. Once spent (via trigger
-  (a) or (b)), a later A4 Step 1 / Step 1.5 exhaustion reports and
-  stops (not an abort) without re-entering A0-O. A **trigger (a)**
-  A0-O run that finds no orphan routes to the A3 decision tree (both
-  paths genuinely empty); a **trigger (b)** one reports and stops
-  instead, because roadmap candidates reached A4 — an exhaustion the
-  A3 tree's A2/A3-empty cases do not describe. This prevents an
+  (a), (b), or (c)), any later A4 Step 1 / Step 1.5 exhaustion —
+  reachable only after trigger (b) — reports and stops (not an abort)
+  without re-entering A0-O. A **trigger (a)** or **trigger (c)** A0-O
+  run that finds no orphan routes to the A3 decision tree (both paths
+  genuinely empty); a **trigger (b)** one reports and stops instead,
+  because roadmap candidates reached A4 — an exhaustion the A3 tree's
+  A2/A3-empty cases do not describe. This prevents an
   A1 ↔ A0-O or A4 ↔ A0-O loop.
 
 When **trigger (a)** (zero A3.5-reaching candidates) and the orphan
 fallback both yield nothing, discovery lands in the A3 decision tree,
 exactly as the zero-reach-A3.5 case did before. **Trigger (b)** instead
 reports and stops (not an abort): roadmap candidates reached A4, so the
-A3 tree's A2/A3-empty reports would misdescribe the exhaustion. The
-fallback is also scoped to roadmap traversal (A2→A3→A4) — the A0-T
-explicit-target gate keeps its own no-fallback stop.
+A3 tree's A2/A3-empty reports would misdescribe the exhaustion.
+Triggers (a) and (b) are scoped to roadmap traversal (A2→A3→A4) — the
+A0-T explicit-target gate keeps its own no-fallback stop.
+
+**Trigger (c)** closes a third gap, one step earlier than (a)/(b):
+triggers (a) and (b) both presuppose A1 already found a roadmap to
+traverse. When A1 itself finds **zero open roadmap issues** — not "the
+roadmap's graph is exhausted" but "no roadmap exists at all" — the
+original text still hard-aborted immediately, even though
+`roadmap-first`'s whole purpose is to fall back to orphan work when
+roadmap work runs dry. Before trigger (c), this surfaced naturally whenever
+a repository drained its last open roadmap: the final tracked issue shipped,
+the roadmap closed, and the next Discover pass found zero open roadmaps —
+Discover correctly identified A1's documented abort condition and stopped,
+a harder stop than (a)/(b) impose for what was, from an
+operator's perspective, the same underlying situation (no roadmap work
+available right now).
+
+Trigger (c) fires at A1, before A1.5/A2/A3 ever run. Like trigger (a),
+an A0-O run it invokes that finds no orphan candidates routes to
+the A3 decision tree — the **true zero** and **at most once** guards
+above apply unchanged. The **approval hold precedence** guard doesn't apply
+to trigger (c) the same way: only the roadmap-side A3.5 pass is
+absent, since there is no roadmap candidate for it to run on — A0-O's
+own A3.5 pass on any orphan candidates it finds still runs and can
+still produce its own approval-needed bucket. Because
+(a)/(b) require A1 to have found a roadmap and (c) requires it to have
+found none, the three triggers are mutually exclusive within one
+Discover pass — so "at most once per pass" holds automatically across
+all three, not only within the (a)/(b) pair.
 
 The `orphan-first` symmetric case — orphan candidates all failing A4,
 which would fall back to the roadmap path — is a separate concern and
