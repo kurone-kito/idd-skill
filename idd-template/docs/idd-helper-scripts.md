@@ -55,9 +55,10 @@ In the idd-skill source repository, the following optional helpers were adopted:
   network write; referenced in
   [kurone-kito/idd-skill#900](https://github.com/kurone-kito/idd-skill/issues/900))
 - `scripts/post-idd-marker.mjs` for rendering and POSTing any operational
-  marker (`claim` / `unclaim` / `watermark` / `baseline` / `advisory` /
-  `advisory-recovery`) via the reliable JSON path that HTML-comment-first
-  bodies require (referenced in
+  marker (`claim` / `unclaim` / `activation-nonce` / `watermark` /
+  `baseline` / `advisory` / `advisory-recovery` / `advisory-reroll`) via
+  the reliable JSON path that HTML-comment-first bodies require
+  (referenced in
   [kurone-kito/idd-skill#1047](https://github.com/kurone-kito/idd-skill/issues/1047))
 - `scripts/resume-claim-routing.mjs` for Resume Step 1 claim-state
   evaluation and takeover routing (referenced in
@@ -987,24 +988,29 @@ Interpretation rules:
 - Package-manager / ephemeral-npx command: use the profile-selected
   `idd:post-idd-marker` command from the helper runtime manifest wiring above
 - Write-side companion to `emit-marker`: it renders the canonical body for
-  each operational marker `<type>` (`claim`, `unclaim`, `watermark`,
-  `baseline`, `advisory`, `advisory-recovery`) by reusing the single-sourced
-  `protocol-helpers` renderers, then POSTs it as a JSON document
-  (`{"body": …}`) via `gh api --method POST .../comments --input -`. The JSON
-  path is mandatory because `gh issue comment` / `gh api -f body=` silently
+  each operational marker `<type>` (`claim`, `unclaim`, `activation-nonce`,
+  `watermark`, `baseline`, `advisory`, `advisory-recovery`,
+  `advisory-reroll`) by reusing the single-sourced `protocol-helpers`
+  renderers, then POSTs it as a JSON document (`{"body": …}`) via
+  `gh api --method POST .../comments --input -`. The JSON path is
+  mandatory because `gh issue comment` / `gh api -f body=` silently
   reject the HTML-comment-first claim-family bodies. `-f` also treats a
   leading `@` as a literal character — only `-F` reads `@file` contents.
-- The `claim` / `unclaim` / `watermark` / `baseline` bodies are
-  HTML-comment-first with a visible "Do not edit" note; `advisory` /
-  `advisory-recovery` are the **plain-text** `advisory-wait:` /
-  `advisory-wait-recovery:` forms (no visible note) so the AW2 / shell-fallback
+- The `claim` / `unclaim` / `activation-nonce` / `watermark` / `baseline`
+  bodies are HTML-comment-first with a visible "Do not edit" note;
+  `advisory` / `advisory-recovery` / `advisory-reroll` are the
+  **plain-text** `advisory-wait:` / `advisory-wait-recovery:` /
+  `advisory-reroll:` forms (no visible note) so the AW2 / shell-fallback
   recognizers still match.
 - Fields per type: `claim` takes `--agent-id --claim-id --supersedes
   --timestamp --branch`; `unclaim` takes `--agent-id --claim-id --timestamp`;
+  `activation-nonce` takes `--agent-id --claim-id --nonce --timestamp` (see
+  `idd-claim.instructions.md`'s Activation-nonce format for when to
+  post it and the collision it detects, kurone-kito/idd-skill#1522);
   `watermark` takes `--agent-id --claim-id --head-sha --max-activity-at
   --total-item-count --ci-completed-at`; `baseline` takes `--agent-id
-  --claim-id --sha`; `advisory` / `advisory-recovery` take `--agent-id
-  --head-sha --timestamp`.
+  --claim-id --sha`; `advisory` / `advisory-recovery` / `advisory-reroll`
+  take `--agent-id --head-sha --timestamp`.
 - One-command watermark (`watermark` only): `--from-pr <n>` derives
   `--head-sha` / `--max-activity-at` / `--total-item-count` /
   `--ci-completed-at` from a fresh `review-activity-snapshot` of PR `<n>` and
@@ -1044,6 +1050,12 @@ Interpretation rules:
   - `state`:
     `unclaimed|already_owned|stale|non_inheritable|disputed`
   - `action`: `re_claim|takeover|keep|stop`
+- Optional `--nonce <token>` (kurone-kito/idd-skill#1522): when `--claim-id`
+  matches the active claim, also requires it to equal the winning trusted
+  `activation-nonce` marker for that claim-id (`evidence.activation_nonce_winner`);
+  a mismatch routes `state`/`reason` to `disputed` /
+  `activation-nonce-mismatch` instead of `already_owned`. Omit it (or leave
+  the claim-id's nonce not posted) to skip the comparison unchanged.
 
 - Step 3 route command:
   `node scripts/resume-route-selection.mjs --issue <issue-number>`
@@ -1175,7 +1187,19 @@ Interpretation rules:
 - Stable sections consumed by the instructions: `reviewCurrency`,
   `threads`, `unrepliedComments`, `reviewerStates`,
   `advisoryWait` (including the effective advisory policy fields), `ci`,
-  `claim`, and optional `dispositionEvidence`
+  `claim`, `branchCurrency`, and optional `dispositionEvidence`
+- `branchCurrency` (#1513) pairs the PR's live `mergeable` /
+  `mergeStateStatus` with whether the base branch's protection or ruleset
+  requires an up-to-date head before merge. `requiresUpToDateHead` is
+  `true` when a readable ruleset or classic-protection rule confirms it,
+  or when the underlying protection/ruleset read is unreadable (fails
+  closed to `true` rather than reporting "no requirement");
+  `requiresUpToDateHeadSource` records which (`ruleset`,
+  `classic-protection`, `unreadable-fail-closed`, or `none`). A live
+  `mergeStateStatus: "BEHIND"` paired with `requiresUpToDateHead: true`
+  is a `branch-currency` merge-gate blocker (see below); `UNKNOWN` is the
+  async-still-computing state F1 and the E-phase branch-sync check
+  already re-poll, not a blocker here.
 - Authoritative phase role: the live `pre-merge-readiness` run on the
   current HEAD is the **authoritative source for the final-merge CI and
   activity fields** at F2/F3. The `review-activity-snapshot` helper builds
@@ -1219,10 +1243,14 @@ Interpretation rules:
   `comparisonRoute == "proceed"`, `threads.actionableCount == 0`,
   advisory `f3Outcome == "SATISFIED"`, CI all-passing (the F2/F3
   no-required-checks fallback included), required/CODEOWNER reviews
-  satisfied, claim ownership matches, and disposition evidence both
+  satisfied, claim ownership matches, disposition evidence both
   routes proceed and is unblocked (`dispositionEvidence.route ==
   "proceed"` **and** `dispositionEvidence.blockingCount == 0`; `route`
-  alone is not sufficient). Each failing gate is listed in `blockers[]`
+  alone is not sufficient), and branch currency does not block (#1513: a
+  live `mergeStateStatus: "BEHIND"` paired with a confirmed-or-assumed
+  `branchCurrency.requiresUpToDateHead: true` fails closed as a
+  `branch-currency` blocker before `--apply` ever calls `gh pr merge`).
+  Each failing gate is listed in `blockers[]`
   as `{ gate, detail }`.
 - Dry-run (default) is read-only: it prints `ready`, `blockers`, and
   `mergeCommand` (a `gh pr merge <pr> --merge --match-head-commit

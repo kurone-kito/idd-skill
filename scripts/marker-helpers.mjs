@@ -38,6 +38,13 @@ const OPERATIONAL_MARKERS = [
       /^<!--\s*unclaimed-by:\s+\S+\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->/i,
   },
   {
+    label: '<!-- activation-nonce:',
+    pattern:
+      /^<!--\s*activation-nonce:\s+\S+\s+\S+\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    malformedPrefixPattern:
+      /^<!--\s*activation-nonce:\s+\S+\s+\S+\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->/i,
+  },
+  {
     label: '<!-- review-watermark:',
     pattern:
       /^<!--\s*review-watermark:\s+\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+\S+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
@@ -93,6 +100,7 @@ const OPERATIONAL_MARKERS = [
 export const IDD_AGENT_DERIVED_MARKERS = new Set([
   '<!-- claimed-by:',
   '<!-- unclaimed-by:',
+  '<!-- activation-nonce:',
   '<!-- review-watermark:',
   '<!-- review-baseline:',
   'advisory-wait:',
@@ -119,6 +127,25 @@ export function parseClaimComment(body, createdAt) {
     claimId: match[2],
     supersedes: match[3],
     branch: match[5],
+    createdAt,
+  };
+}
+export function parseActivationNonceComment(body, createdAt) {
+  const match = body
+    .trimEnd()
+    .match(
+      new RegExp(
+        `^<!--\\s*activation-nonce:\\s+(\\S+)\\s+(\\S+)\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+        'i',
+      ),
+    );
+  if (!match || !isValidIsoTimestamp(match[4])) {
+    return null;
+  }
+  return {
+    agentId: match[1],
+    claimId: match[2],
+    nonce: match[3],
     createdAt,
   };
 }
@@ -415,6 +442,20 @@ export function renderClaimedByMarker(payload) {
     `_${agentId}: issue claim — IDD automation marker. Do not edit._`,
   ].join('\n');
 }
+export function renderActivationNonceMarker(payload) {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const claimId = normalizeNonWhitespaceToken(payload?.claimId);
+  const nonce = normalizeNonWhitespaceToken(payload?.nonce);
+  const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
+  if (!agentId || !claimId || !nonce || !timestamp) {
+    throw new Error('invalid activation-nonce marker payload');
+  }
+  return [
+    `<!-- activation-nonce: ${agentId} ${claimId} ${nonce} ${timestamp} -->`,
+    '',
+    `_${agentId}: claim activation nonce — IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
 export function renderReviewWatermarkMarker(payload) {
   const agentId = normalizeNonWhitespaceToken(payload?.agentId);
   const claimId = normalizeNonWhitespaceToken(payload?.claimId);
@@ -614,9 +655,10 @@ export function operationalMarkerPrefixByStart(body) {
   return marker.label;
 }
 /**
- * Detects a `claimed-by` / `unclaimed-by` / `review-watermark` /
- * `review-baseline` comment whose body starts with a structurally valid
- * marker token but whose whole body does not match the canonical, strict
+ * Detects a `claimed-by` / `unclaimed-by` / `activation-nonce` /
+ * `review-watermark` / `review-baseline` comment whose body starts with a
+ * structurally valid marker token but whose whole body does not match the
+ * canonical, strict
  * `pattern` -- for **any** reason: content appended directly after the
  * token with no note, a well-intentioned human rationale appended after an
  * otherwise-canonical token + note (the motivating case), a note that does

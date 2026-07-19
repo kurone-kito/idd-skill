@@ -139,10 +139,28 @@ export function runMergeExecute(argv, deps = defaultDeps) {
     return { verdict, exitCode: 1 };
   }
   // Always a merge commit — never squash/rebase. Bind to the validated head.
-  const mergeOutput = deps.mergePr(args.prNumber, prHeadSha, args.repoRef);
-  verdict.merged = true;
-  verdict.mergeResult = mergeOutput || 'merge command completed';
-  return { verdict, exitCode: 0 };
+  // #1513: every other failure path in this function returns the same
+  // `{ verdict, exitCode: 1 }` shape; this call is the sole exception --
+  // `gh pr merge` rejecting (for example a BEHIND head, a stale
+  // `--match-head-commit` binding, or any other transient GitHub-side
+  // refusal) previously propagated as an uncaught exception instead of a
+  // structured verdict. Catch it and report the same way every sibling
+  // gate already does.
+  try {
+    const mergeOutput = deps.mergePr(args.prNumber, prHeadSha, args.repoRef);
+    verdict.merged = true;
+    verdict.mergeResult = mergeOutput || 'merge command completed';
+    return { verdict, exitCode: 0 };
+  } catch (error) {
+    const stderr =
+      error && typeof error === 'object' && 'stderr' in error
+        ? String(error.stderr ?? '').trim()
+        : '';
+    const message =
+      stderr || (error instanceof Error ? error.message : String(error));
+    verdict.mergeResult = `merge command failed: ${message}`;
+    return { verdict, exitCode: 1 };
+  }
 }
 // Excluded from the #1446 cli-args.mts wrapper: `passthrough` below
 // collects every unrecognized flag (plus its value, when present) into an
