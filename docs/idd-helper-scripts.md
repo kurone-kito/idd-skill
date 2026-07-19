@@ -937,8 +937,8 @@ Interpretation rules:
 - Deliberately has no local staleness judgment (no PID-liveness check):
   the process invoking this CLI exits the moment the call returns, so a
   recorded PID would never usefully represent a live competing session.
-  the configured GitHub `claim-stale-age` stays the sole staleness authority; this
-  lock only ever reports `collision` or acquires.
+  The configured GitHub `claim-stale-age` stays the sole staleness
+  authority; this lock only ever reports `collision` or acquires.
 - No explicit release verb: the lock lives inside the worktree's own
   private git-admin directory (`git rev-parse --absolute-git-dir`), so
   `git worktree remove` at F4 deletes it together with the worktree
