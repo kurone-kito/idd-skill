@@ -133,11 +133,12 @@ When a lightweight-tier model runs any part of this loop:
   retry once with a short example before treating the attempt as failed.
   This applies only to weak-model output readers and does not change the
   byte-exact marker verification used for published IDD markers.
-- See the repository's lite-profile roadmap/design note for the E9-E15
+- See the upstream IDD repository's lite-profile roadmap/design note
+  (`docs/weak-model-lite-profile-design.md`) for the E9-E15
   upstream-triage boundary; the E4 narrow-rubric result is recorded
   there as future nuance, not as a scope change here. This note does not
-  change the repository's Copilot advisory-review convergence scope
-  decision or the lite-profile exclusion of
+  change the upstream repository's Copilot advisory-review convergence
+  scope decision or the lite-profile exclusion of
   `idd-review-triage.instructions.md`.
 - Do not run the autonomous merge phases (F3 onward) on this tier. See
   the merge-policy recommendation for weak-model sessions in
