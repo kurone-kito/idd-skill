@@ -14,7 +14,7 @@
 // head + claim re-validate immediately before the merge.
 
 import { ghText } from './gh-exec.mts';
-import { ghErrorText } from './gh-http-status.mts';
+import { deriveGhHttpStatus, ghErrorText } from './gh-http-status.mts';
 import { type IddConfig, loadIddConfig } from './idd-config.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import { collectPreMergeReadiness } from './pre-merge-readiness.mts';
@@ -283,31 +283,37 @@ const defaultDeps: MergeExecuteDeps = {
     if (!repoRef) {
       config = loadIddConfig();
     } else {
-      const encodedConfig = ghText(
-        scopedGhArgs(repoRef, [
-          'api',
-          `repos/${repoRef}/contents/.github/idd/config.json`,
-          '--method',
-          'GET',
-          '--field',
-          `ref=${headSha}`,
-          '--jq',
-          '.content',
-        ]),
-      );
-      if (!encodedConfig) {
-        throw new Error(
-          `target repository policy is empty for PR #${prNumber} at ${headSha}`,
+      try {
+        const encodedConfig = ghText(
+          scopedGhArgs(repoRef, [
+            'api',
+            `repos/${repoRef}/contents/.github/idd/config.json`,
+            '--method',
+            'GET',
+            '--field',
+            `ref=${headSha}`,
+            '--jq',
+            '.content',
+          ]),
         );
+        if (!encodedConfig) {
+          throw new Error(
+            `target repository policy is empty for PR #${prNumber} at ${headSha}`,
+          );
+        }
+        config = JSON.parse(
+          Buffer.from(encodedConfig, 'base64').toString('utf8'),
+        ) as IddConfig;
+      } catch (error) {
+        // The config file is optional. A confirmed Contents-API 404 means
+        // this target ref has no policy file, so use the distributed
+        // defaults just as local loadIddConfig() does. Any other failure is
+        // ambiguous or malformed and must remain fail-closed.
+        if (deriveGhHttpStatus(error) !== 404) {
+          throw error;
+        }
+        config = null;
       }
-      config = JSON.parse(
-        Buffer.from(encodedConfig, 'base64').toString('utf8'),
-      ) as IddConfig;
-    }
-    if (repoRef && config === null) {
-      throw new Error(
-        `target repository policy is unreadable for PR #${prNumber} at ${headSha}`,
-      );
     }
     return normalizePolicyConfig(config).mergeGate.soloCodeownerAdminFallback;
   },
